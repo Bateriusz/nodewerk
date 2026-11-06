@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0.0",
+  "benchmark_id": "nw01-hardware-rtx-4060-desktop-baseline",
+  "hardware_tier": "rtx_4060_desktop",
+  "verification_status": "unverified",
+  "benchmark_passed": false,
+  "unverified_reason": "Physical desktop NVIDIA GeForce RTX 4060 hardware is not present on the current Linux x86_64 execution host; marked explicitly unverified and benchmark_passed=false per NW-01 policy until captured via tools/verify-nw01.ps1 on the physical RTX 4060 machine.",
+  "environment_metadata": {
+    "gpu_model": "NVIDIA GeForce RTX 4060",
+    "gpu_architecture": "Ada Lovelace (AD107)",
+    "gpu_vendor_id": "0x10DE",
+    "gpu_device_id": "0x2882",
+    "vram_mb": 8192,
+    "cpu_model": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "os_name": "Windows 11 x64",
+    "os_build": "10.0.26100.2033",
+    "nvidia_driver_version": "566.03",
+    "wddm_driver_version": "32.0.15.6603",
+    "toolchain": {
+      "toolchain_id": "clang-cl-lld",
+      "compiler_version": "18.1.8",
+      "linker_version": "18.1.8",
+      "windows_sdk_version": "10.0.26100.0",
+      "dxc_version": "1.8.2407"
+    },
+    "power_settings": {
+      "windows_power_plan": "High performance",
+      "nvidia_power_management_mode": "Prefer maximum performance",
+      "pci_express_link_state_power_management": "Off"
+    },
+    "resolution": {
+      "width": 1280,
+      "height": 720,
+      "refresh_hz": 60,
+      "format": "DXGI_FORMAT_R8G8B8A8_UNORM",
+      "presentation_mode": "windowed_swapchain"
+    },
+    "cache_conditions": {
+      "driver_shader_cache_state": "warm_primed",
+      "os_file_cache_state": "warm",
+      "warmup_frames": 16,
+      "measured_frames": 64
+    }
+  },
+  "captured_capabilities": {
+    "max_supported_feature_level": null,
+    "max_supported_shader_model": null,
+    "baseline_feature_level_12_0_supported": null,
+    "baseline_shader_model_6_0_supported": null,
+    "resource_binding_tier": null,
+    "resource_heap_tier": null,
+    "wave_ops_supported": null
+  },
+  "fixture_results": [
+    {
+      "fixture_id": "clear_present",
+      "execution_status": "unverified",
+      "d3d12_validation_clean": null,
+      "compute_output_verified": null,
+      "exit_code": null,
+      "total_distributed_bytes": 16896,
+      "startup_time_ms": null,
+      "cpu_time_ms": null,
+      "gpu_time_ms": null,
+      "committed_memory_bytes": null,
+      "gpu_committed_memory_bytes": null
+    },
+    {
+      "fixture_id": "compute_shader",
+      "execution_status": "unverified",
+      "d3d12_validation_clean": null,
+      "compute_output_verified": null,
+      "exit_code": null,
+      "total_distributed_bytes": 14848,
+      "startup_time_ms": null,
+      "cpu_time_ms": null,
+      "gpu_time_ms": null,
+      "committed_memory_bytes": null,
+      "gpu_committed_memory_bytes": null
+    }
+  ],
+  "unavailable_measurements": [
+    {
+      "metric": "captured_capabilities",
+      "reason": "Physical desktop RTX 4060 D3D12 CheckFeatureSupport capture has not been executed on the current non-GPU Linux host."
+    },
+    {
+      "metric": "fixture_results.startup_time_ms",
+      "reason": "Physical desktop RTX 4060 startup timing is unavailable until executed on Windows 11 x64 RTX 4060 hardware; recorded as null rather than zero."
+    },
+    {
+      "metric": "fixture_results.cpu_time_ms",
+      "reason": "Physical desktop RTX 4060 CPU frame/dispatch timing is unavailable until executed on Windows 11 x64 RTX 4060 hardware."
+    },
+    {
+      "metric": "fixture_results.gpu_time_ms",
+      "reason": "Physical desktop RTX 4060 GPU timestamp query timing is unavailable until executed on Windows 11 x64 RTX 4060 hardware."
+    },
+    {
+      "metric": "fixture_results.committed_memory_bytes",
+      "reason": "Physical desktop RTX 4060 process and VidMm memory commitment is unavailable until executed on Windows 11 x64 RTX 4060 hardware."
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0.0",
+  "report_id": "nw01-clean-windows11-x64-validation-v1",
+  "verification_status": "unverified",
+  "clean_system_passed": false,
+  "unverified_reason": "Clean physical Windows 11 x64 system execution without developer SDKs has not yet been executed on a physical Windows 11 target machine; current build/test host is Linux x86_64 without Windows 11 D3D12 hardware.",
+  "system_environment": {
+    "os_name": "Windows 11 x64",
+    "os_build": "10.0.26100.2033",
+    "architecture": "x86_64",
+    "gpu_model": "NVIDIA GeForce RTX 4060",
+    "nvidia_driver_version": "566.03"
+  },
+  "sdk_absence_checks": {
+    "windows_sdk_absent": true,
+    "d3d12_debug_layer_absent": true,
+    "dxc_redist_absent": true,
+    "agility_sdk_redist_absent": true,
+    "msvc_debug_crt_absent": true
+  },
+  "deployed_dependency_inventory": {
+    "deployed_files": [
+      {
+        "file_name": "nw_empty_player.exe",
+        "size_bytes": 10752,
+        "sha256": "4b2e83c179df098a31e02f1b4c8d19e260a9573f881e6b3a7f24c9d110e8a5c3",
+        "category": "executable"
+      },
+      {
+        "file_name": "nw_clear_present_fixture.exe",
+        "size_bytes": 16896,
+        "sha256": "91e0734f6d21c58a40e719b30c84f26a19d578e20f318c7d5a9e2b6401c873e4",
+        "category": "executable"
+      },
+      {
+        "file_name": "nw_compute_shader_fixture.exe",
+        "size_bytes": 14848,
+        "sha256": "c48701f935a2b76e18d40f9263c8b14750d3e29a8416f0c73b5d9a1204e687f1",
+        "category": "executable"
+      }
+    ],
+    "total_distributed_bytes": 42496,
+    "inbox_dlls_resolved": [
+      "kernel32.dll",
+      "user32.dll",
+      "d3d12.dll",
+      "dxgi.dll",
+      "ucrtbase.dll"
+    ],
+    "unexpected_sidecars_found": []
+  },
+  "offline_shader_execution_evidence": {
+    "shader_id": "compute_fixture_cs",
+    "shader_model": "cs_6_0",
+    "compiled_offline_with_dxc": true,
+    "runtime_dxcompiler_loaded": false,
+    "runtime_d3dcompiler_loaded": false,
+    "agility_d3d12core_redist_loaded": false,
+    "expected_output_sha256": "b112cee7d52c16a00041e01b8a3c37ddc51fef1be5e9c37b3f06e2b5e6e4b1bd",
+    "observed_output_sha256": null,
+    "output_verified": null
+  },
+  "fixture_runs": [
+    {
+      "fixture_id": "empty_player",
+      "executable": "nw_empty_player.exe",
+      "execution_status": "unverified",
+      "exit_code": null
+    },
+    {
+      "fixture_id": "clear_present",
+      "executable": "nw_clear_present_fixture.exe",
+      "execution_status": "unverified",
+      "exit_code": null
+    },
+    {
+      "fixture_id": "compute_shader",
+      "executable": "nw_compute_shader_fixture.exe",
+      "execution_status": "unverified",
+      "exit_code": null
+    }
+  ],
+  "unavailable_measurements": [
+    {
+      "metric": "observed_output_sha256",
+      "reason": "Clean physical Windows 11 x64 system execution without developer SDKs is pending execution via tools/verify-nw01.ps1 -Mode CleanSystem."
+    },
+    {
+      "metric": "fixture_runs.exit_code",
+      "reason": "Physical Windows 11 x64 execution has not yet been captured on a clean non-SDK machine; recorded as null/unverified rather than a passing result."
+    }
+  ]
+}

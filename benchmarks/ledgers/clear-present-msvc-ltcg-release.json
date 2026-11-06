@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0.0",
+  "ledger_id": "clear-present-msvc-ltcg-release-v1",
+  "fixture_id": "clear_present",
+  "build_profile": "release",
+  "toolchain_id": "msvc-ltcg",
+  "compiler_version": "19.40.33813",
+  "linker_version": "14.40.33813.0",
+  "verification_status": "reference_baseline",
+  "total_distributed_bytes": 19456,
+  "distributed_components": [
+    {
+      "name": "nw_clear_present_fixture.exe",
+      "category": "executable",
+      "size_bytes": 19456,
+      "sha256": "61d8392a54f0c18e73b690d42a15f8c30e7b4912d68a5c30f4e19b72a83c65d0",
+      "counted_in_total_distributed_bytes": true
+    }
+  ],
+  "excluded_system_components": [
+    {
+      "name": "kernel32.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    },
+    {
+      "name": "user32.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    },
+    {
+      "name": "d3d12.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    },
+    {
+      "name": "dxgi.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    },
+    {
+      "name": "ucrtbase.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    },
+    {
+      "name": "nvwgf2umx.dll",
+      "exclusion_basis": "installed_display_driver_component",
+      "counted_in_total_distributed_bytes": false
+    }
+  ],
+  "executable_sections": [
+    {
+      "name": ".text",
+      "virtual_size_bytes": 9648,
+      "raw_size_bytes": 9728,
+      "characteristics": "CNT_CODE|MEM_EXECUTE|MEM_READ"
+    },
+    {
+      "name": ".rdata",
+      "virtual_size_bytes": 5216,
+      "raw_size_bytes": 5632,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".data",
+      "virtual_size_bytes": 416,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
+    },
+    {
+      "name": ".pdata",
+      "virtual_size_bytes": 840,
+      "raw_size_bytes": 1024,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".reloc",
+      "virtual_size_bytes": 336,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_DISCARDABLE|MEM_READ"
+    }
+  ],
+  "imports": [
+    {
+      "dll_name": "kernel32.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "CloseHandle",
+        "CreateEventA",
+        "ExitProcess",
+        "GetCurrentProcess",
+        "GetLastError",
+        "GetModuleHandleA",
+        "QueryPerformanceCounter",
+        "WaitForSingleObject"
+      ]
+    },
+    {
+      "dll_name": "user32.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "CreateWindowExA",
+        "DefWindowProcA",
+        "DestroyWindow",
+        "RegisterClassA"
+      ]
+    },
+    {
+      "dll_name": "d3d12.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "D3D12CreateDevice"
+      ]
+    },
+    {
+      "dll_name": "dxgi.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "CreateDXGIFactory2"
+      ]
+    },
+    {
+      "dll_name": "ucrtbase.dll",
+      "classification": "ucrt_inbox",
+      "symbols": [
+        "_cexit",
+        "_configure_narrow_argv",
+        "_crt_atexit",
+        "_exit",
+        "_initialize_narrow_environment",
+        "_initialize_onexit_table",
+        "_initterm",
+        "_initterm_e",
+        "exit",
+        "strcmp",
+        "strtol"
+      ]
+    }
+  ],
+  "shaders": [],
+  "decoder_overhead": {
+    "packer_or_decoder_used": false,
+    "decoder_overhead_bytes": null,
+    "notes": "No executable packer or payload decompressor is permitted in the NW-01 baseline."
+  },
+  "runtime_metrics": {
+    "startup_time_ms": null,
+    "cpu_time_ms": null,
+    "gpu_time_ms": null,
+    "committed_memory_bytes": null,
+    "gpu_committed_memory_bytes": null
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "startup_time_ms",
+      "reason": "Physical Windows 11 x64 D3D12 swapchain initialization timing is unverified on the current Linux build host."
+    },
+    {
+      "metric": "cpu_time_ms",
+      "reason": "Physical Windows 11 x64 CPU frame recording timing is unverified on the current Linux build host."
+    },
+    {
+      "metric": "gpu_time_ms",
+      "reason": "Physical Windows 11 x64 D3D12 clear/present GPU timestamp timing is unverified on the current Linux build host."
+    },
+    {
+      "metric": "committed_memory_bytes",
+      "reason": "Physical Windows 11 x64 process working-set/commit measurement is unverified on the current Linux build host."
+    },
+    {
+      "metric": "gpu_committed_memory_bytes",
+      "reason": "Physical Windows 11 D3D12 VidMm swapchain/heap commitment is unverified on the current Linux build host."
+    }
+  ],
+  "budget_claim_policy": {
+    "claims_64kib_achievable": false,
+    "defer_minimum_size_claim_until_task": "NW-10",
+    "statement": "MSVC/LTCG comparison ledger (+2560 bytes vs clang-cl/lld-link) retained for toolchain comparison without claiming a 64 KiB budget."
+  }
+}

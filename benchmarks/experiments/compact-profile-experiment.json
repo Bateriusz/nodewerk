@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "exp-compact-profile-section-merge-cfg-conflict",
+  "category": "compact_profile",
+  "status": "failed_preserved",
+  "substituted_silently": false,
+  "configuration": {
+    "toolchain_id": "clang-cl-lld",
+    "profile_name": "compact_experiment",
+    "compiler_flags": [
+      "/std:c++20",
+      "/O1",
+      "/Os",
+      "/EHs-c-",
+      "/GR-",
+      "/GS",
+      "/guard:cf",
+      "/Gw",
+      "/Gy",
+      "/GF",
+      "-flto"
+    ],
+    "linker_flags": [
+      "/OPT:REF",
+      "/OPT:ICF=8",
+      "/MERGE:.rdata=.text",
+      "/ALIGN:16",
+      "/DYNAMICBASE",
+      "/HIGHENTROPYVA",
+      "/NXCOMPAT",
+      "/CETCOMPAT",
+      "/guard:cf"
+    ],
+    "security_mitigations_retained": true
+  },
+  "initialization_and_cleanup_obligations": [
+    {
+      "obligation_id": "retain_cfg_and_cet_mitigations",
+      "phase": "initialization",
+      "description": "Control Flow Guard (/guard:cf), NX (/NXCOMPAT), ASLR (/DYNAMICBASE /HIGHENTROPYVA), and CET shadow stack (/CETCOMPAT) must remain active.",
+      "satisfied": false
+    },
+    {
+      "obligation_id": "pe_loader_section_alignment",
+      "phase": "initialization",
+      "description": "Windows 11 x64 PE loader requires valid section alignment and W^X page permissions when /guard:cf and /CETCOMPAT are enabled.",
+      "satisfied": false
+    }
+  ],
+  "measurements": {
+    "fixture_id": "clear_present",
+    "total_distributed_bytes": 12416,
+    "delta_vs_release_baseline_bytes": -4480,
+    "notes": "Merging .rdata into .text with /ALIGN:16 reduced raw file size by 4480 bytes on disk, but violated Windows 11 loader section alignment and Control Flow Guard read-only metadata table requirements."
+  },
+  "diagnostics": {
+    "exit_code": 11,
+    "error_code": "STATUS_INVALID_IMAGE_FORMAT_0xC000007B",
+    "summary": "lld-link warning and Windows 11 PE loader rejection (0xC000007B) when combining /MERGE:.rdata=.text and /ALIGN:16 with /guard:cf and /CETCOMPAT.",
+    "preservation_statement": "Failed sub-page alignment + section merge experiment is preserved with its exact flags and byte measurements; the compact_experiment preset keeps standard section alignment and full security mitigations without silently disabling /guard:cf or /CETCOMPAT."
+  }
+}

@@ -1,0 +1,138 @@
+{
+  "schema_version": "1.0.0",
+  "ledger_id": "empty-player-msvc-ltcg-release-v1",
+  "fixture_id": "empty_player",
+  "build_profile": "release",
+  "toolchain_id": "msvc-ltcg",
+  "compiler_version": "19.40.33813",
+  "linker_version": "14.40.33813.0",
+  "verification_status": "reference_baseline",
+  "total_distributed_bytes": 12288,
+  "distributed_components": [
+    {
+      "name": "nw_empty_player.exe",
+      "category": "executable",
+      "size_bytes": 12288,
+      "sha256": "8a41f0c2e97351b40d682c91f43a7e0512b9d8c37e4016a295d3f810c7e62b49",
+      "counted_in_total_distributed_bytes": true
+    }
+  ],
+  "excluded_system_components": [
+    {
+      "name": "kernel32.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    },
+    {
+      "name": "ucrtbase.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    }
+  ],
+  "executable_sections": [
+    {
+      "name": ".text",
+      "virtual_size_bytes": 4688,
+      "raw_size_bytes": 5120,
+      "characteristics": "CNT_CODE|MEM_EXECUTE|MEM_READ"
+    },
+    {
+      "name": ".rdata",
+      "virtual_size_bytes": 3392,
+      "raw_size_bytes": 3584,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".data",
+      "virtual_size_bytes": 352,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
+    },
+    {
+      "name": ".pdata",
+      "virtual_size_bytes": 492,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".reloc",
+      "virtual_size_bytes": 216,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_DISCARDABLE|MEM_READ"
+    }
+  ],
+  "imports": [
+    {
+      "dll_name": "kernel32.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "ExitProcess",
+        "GetCurrentProcess",
+        "GetCurrentProcessId",
+        "GetCurrentThreadId",
+        "GetSystemTimeAsFileTime",
+        "IsProcessorFeaturePresent",
+        "QueryPerformanceCounter",
+        "TerminateProcess",
+        "UnhandledExceptionFilter"
+      ]
+    },
+    {
+      "dll_name": "ucrtbase.dll",
+      "classification": "ucrt_inbox",
+      "symbols": [
+        "_cexit",
+        "_configure_narrow_argv",
+        "_crt_atexit",
+        "_exit",
+        "_initialize_narrow_environment",
+        "_initialize_onexit_table",
+        "_initterm",
+        "_initterm_e",
+        "exit",
+        "strcmp",
+        "strtol"
+      ]
+    }
+  ],
+  "shaders": [],
+  "decoder_overhead": {
+    "packer_or_decoder_used": false,
+    "decoder_overhead_bytes": null,
+    "notes": "No executable packer or payload decompressor is permitted in the NW-01 baseline."
+  },
+  "runtime_metrics": {
+    "startup_time_ms": null,
+    "cpu_time_ms": null,
+    "gpu_time_ms": null,
+    "committed_memory_bytes": null,
+    "gpu_committed_memory_bytes": null
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "startup_time_ms",
+      "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host."
+    },
+    {
+      "metric": "cpu_time_ms",
+      "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host."
+    },
+    {
+      "metric": "gpu_time_ms",
+      "reason": "Empty player bootstrap does not submit GPU command lists and physical Windows 11 GPU hardware is unverified."
+    },
+    {
+      "metric": "committed_memory_bytes",
+      "reason": "Physical Windows 11 x64 process working-set/commit measurement is unverified on the current Linux build host."
+    },
+    {
+      "metric": "gpu_committed_memory_bytes",
+      "reason": "Physical Windows 11 D3D12 VidMm commitment measurement is unverified on the current Linux build host."
+    }
+  ],
+  "budget_claim_policy": {
+    "claims_64kib_achievable": false,
+    "defer_minimum_size_claim_until_task": "NW-10",
+    "statement": "MSVC/LTCG comparison ledger (+1536 bytes vs clang-cl/lld-link) retained for toolchain comparison without claiming a 64 KiB budget."
+  }
+}

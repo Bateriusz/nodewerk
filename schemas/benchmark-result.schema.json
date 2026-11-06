@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.dev/schemas/benchmark-result.schema.json",
+  "title": "Nodewerk Benchmark & Hardware Capability Capture Schema",
+  "description": "Defines benchmark metadata (GPU hardware, CPU, OS build, driver version, toolchain, power settings, resolution, cache conditions) and fixture execution metrics. Missing hardware coverage must be marked unverified and never a passing benchmark.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "benchmark_id",
+    "hardware_tier",
+    "verification_status",
+    "benchmark_passed",
+    "environment_metadata",
+    "captured_capabilities",
+    "fixture_results",
+    "unavailable_measurements"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "benchmark_id": { "type": "string", "minLength": 3 },
+    "hardware_tier": {
+      "type": "string",
+      "enum": ["rtx_4060_desktop", "rtx_50_series_desktop"]
+    },
+    "verification_status": {
+      "type": "string",
+      "enum": ["verified", "unverified"]
+    },
+    "benchmark_passed": {
+      "type": "boolean"
+    },
+    "unverified_reason": {
+      "type": "string"
+    },
+    "environment_metadata": {
+      "type": "object",
+      "required": [
+        "gpu_model",
+        "gpu_architecture",
+        "gpu_vendor_id",
+        "gpu_device_id",
+        "vram_mb",
+        "cpu_model",
+        "os_name",
+        "os_build",
+        "nvidia_driver_version",
+        "wddm_driver_version",
+        "toolchain",
+        "power_settings",
+        "resolution",
+        "cache_conditions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "gpu_model": { "type": "string", "minLength": 3 },
+        "gpu_architecture": { "type": "string", "minLength": 3 },
+        "gpu_vendor_id": { "type": "string", "pattern": "^0x[0-9A-Fa-f]{4}$" },
+        "gpu_device_id": { "type": "string", "pattern": "^0x[0-9A-Fa-f]{4}$" },
+        "vram_mb": { "type": "integer", "minimum": 1024 },
+        "cpu_model": { "type": "string", "minLength": 3 },
+        "os_name": { "type": "string", "const": "Windows 11 x64" },
+        "os_build": { "type": "string", "pattern": "^10\\.0\\.(22[0-9]{3}|26[0-9]{3})\\.[0-9]+$" },
+        "nvidia_driver_version": { "type": "string", "pattern": "^[0-9]{3}\\.[0-9]{2}$" },
+        "wddm_driver_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "toolchain": {
+          "type": "object",
+          "required": ["toolchain_id", "compiler_version", "linker_version", "windows_sdk_version", "dxc_version"],
+          "additionalProperties": false,
+          "properties": {
+            "toolchain_id": { "type": "string" },
+            "compiler_version": { "type": "string" },
+            "linker_version": { "type": "string" },
+            "windows_sdk_version": { "type": "string" },
+            "dxc_version": { "type": "string" }
+          }
+        },
+        "power_settings": {
+          "type": "object",
+          "required": ["windows_power_plan", "nvidia_power_management_mode", "pci_express_link_state_power_management"],
+          "additionalProperties": false,
+          "properties": {
+            "windows_power_plan": { "type": "string" },
+            "nvidia_power_management_mode": { "type": "string" },
+            "pci_express_link_state_power_management": { "type": "string" }
+          }
+        },
+        "resolution": {
+          "type": "object",
+          "required": ["width", "height", "refresh_hz", "format", "presentation_mode"],
+          "additionalProperties": false,
+          "properties": {
+            "width": { "type": "integer", "minimum": 64 },
+            "height": { "type": "integer", "minimum": 64 },
+            "refresh_hz": { "type": "integer", "minimum": 30 },
+            "format": { "type": "string", "const": "DXGI_FORMAT_R8G8B8A8_UNORM" },
+            "presentation_mode": { "type": "string", "enum": ["windowed_swapchain", "borderless_fullscreen"] }
+          }
+        },
+        "cache_conditions": {
+          "type": "object",
+          "required": ["driver_shader_cache_state", "os_file_cache_state", "warmup_frames", "measured_frames"],
+          "additionalProperties": false,
+          "properties": {
+            "driver_shader_cache_state": { "type": "string", "enum": ["cold_cleared", "warm_primed"] },
+            "os_file_cache_state": { "type": "string", "enum": ["cold", "warm"] },
+            "warmup_frames": { "type": "integer", "minimum": 0 },
+            "measured_frames": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "captured_capabilities": {
+      "type": "object",
+      "required": [
+        "max_supported_feature_level",
+        "max_supported_shader_model",
+        "baseline_feature_level_12_0_supported",
+        "baseline_shader_model_6_0_supported",
+        "resource_binding_tier",
+        "resource_heap_tier",
+        "wave_ops_supported"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "max_supported_feature_level": { "type": ["string", "null"] },
+        "max_supported_shader_model": { "type": ["string", "null"] },
+        "baseline_feature_level_12_0_supported": { "type": ["boolean", "null"] },
+        "baseline_shader_model_6_0_supported": { "type": ["boolean", "null"] },
+        "resource_binding_tier": { "type": ["integer", "null"] },
+        "resource_heap_tier": { "type": ["integer", "null"] },
+        "wave_ops_supported": { "type": ["boolean", "null"] }
+      }
+    },
+    "fixture_results": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "fixture_id",
+          "execution_status",
+          "d3d12_validation_clean",
+          "exit_code",
+          "total_distributed_bytes",
+          "startup_time_ms",
+          "cpu_time_ms",
+          "gpu_time_ms",
+          "committed_memory_bytes",
+          "gpu_committed_memory_bytes"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "fixture_id": { "type": "string", "enum": ["clear_present", "compute_shader"] },
+          "execution_status": { "type": "string", "enum": ["passed", "failed", "unverified"] },
+          "d3d12_validation_clean": { "type": ["boolean", "null"] },
+          "compute_output_verified": { "type": ["boolean", "null"] },
+          "exit_code": { "type": ["integer", "null"] },
+          "total_distributed_bytes": { "type": "integer", "minimum": 512 },
+          "startup_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+          "cpu_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+          "gpu_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+          "committed_memory_bytes": { "type": ["integer", "null"], "minimum": 1 },
+          "gpu_committed_memory_bytes": { "type": ["integer", "null"], "minimum": 1 }
+        }
+      }
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "metric": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
+      }
+    }
+  }
+}

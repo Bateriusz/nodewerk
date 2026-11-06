@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.dev/schemas/toolchain-manifest.schema.json",
+  "title": "Nodewerk Reproducible Toolchain Manifest Schema",
+  "description": "Pins the selected compiler/linker, Windows SDK, DXC, CMake/Ninja versions, build flags, minimum tested Windows build, and required feature manifest.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "manifest_version",
+    "selected_toolchain",
+    "evaluated_toolchains",
+    "pinned_dependencies",
+    "minimum_tested_windows_build",
+    "required_feature_manifest_ref",
+    "build_profiles",
+    "reproducibility_policy"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "manifest_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "selected_toolchain": {
+      "type": "object",
+      "required": [
+        "toolchain_id",
+        "compiler_name",
+        "compiler_executable",
+        "compiler_version",
+        "linker_name",
+        "linker_executable",
+        "linker_version",
+        "target_triple",
+        "selection_rationale",
+        "debugging_evidence",
+        "reproducibility_evidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "toolchain_id": { "type": "string", "enum": ["clang-cl-lld", "msvc-ltcg"] },
+        "compiler_name": { "type": "string" },
+        "compiler_executable": { "type": "string" },
+        "compiler_version": { "type": "string" },
+        "linker_name": { "type": "string" },
+        "linker_executable": { "type": "string" },
+        "linker_version": { "type": "string" },
+        "target_triple": { "type": "string", "const": "x86_64-pc-windows-msvc" },
+        "selection_rationale": { "type": "string", "minLength": 20 },
+        "debugging_evidence": { "type": "string", "minLength": 10 },
+        "reproducibility_evidence": { "type": "string", "minLength": 10 }
+      }
+    },
+    "evaluated_toolchains": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "toolchain_id",
+          "compiler_version",
+          "linker_version",
+          "status",
+          "empty_player_bytes",
+          "clear_present_bytes",
+          "compute_fixture_bytes",
+          "pdb_debugging_verified",
+          "deterministic_repro_verified",
+          "deployment_closure_identical"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "toolchain_id": { "type": "string", "enum": ["clang-cl-lld", "msvc-ltcg"] },
+          "compiler_version": { "type": "string" },
+          "linker_version": { "type": "string" },
+          "status": { "type": "string", "enum": ["selected", "retained_alternative"] },
+          "empty_player_bytes": { "type": "integer", "minimum": 1024 },
+          "clear_present_bytes": { "type": "integer", "minimum": 1024 },
+          "compute_fixture_bytes": { "type": "integer", "minimum": 1024 },
+          "pdb_debugging_verified": { "type": "boolean" },
+          "deterministic_repro_verified": { "type": "boolean" },
+          "deployment_closure_identical": { "type": "boolean", "const": true }
+        }
+      }
+    },
+    "pinned_dependencies": {
+      "type": "object",
+      "required": [
+        "windows_sdk_version",
+        "dxc_version",
+        "dxc_shader_model_target",
+        "dxc_redistributed_in_release",
+        "agility_sdk_redistributed_in_release",
+        "cmake_version",
+        "ninja_version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "windows_sdk_version": { "type": "string", "pattern": "^10\\.0\\.[0-9]+\\.[0-9]+$" },
+        "dxc_version": { "type": "string" },
+        "dxc_shader_model_target": { "type": "string", "const": "6.0" },
+        "dxc_redistributed_in_release": { "type": "boolean", "const": false },
+        "agility_sdk_redistributed_in_release": { "type": "boolean", "const": false },
+        "cmake_version": { "type": "string" },
+        "ninja_version": { "type": "string" }
+      }
+    },
+    "minimum_tested_windows_build": {
+      "type": "string",
+      "pattern": "^10\\.0\\.(22[0-9]{3}|26[0-9]{3})\\.[0-9]+$"
+    },
+    "required_feature_manifest_ref": {
+      "type": "string",
+      "const": "benchmarks/capability-manifest.v1.json"
+    },
+    "build_profiles": {
+      "type": "object",
+      "required": ["dev", "release", "compact_experiment"],
+      "additionalProperties": false,
+      "properties": {
+        "dev": { "$ref": "#/$defs/profile_spec" },
+        "release": { "$ref": "#/$defs/profile_spec" },
+        "compact_experiment": { "$ref": "#/$defs/profile_spec" }
+      }
+    },
+    "reproducibility_policy": {
+      "type": "object",
+      "required": [
+        "require_brepro_flag",
+        "require_path_map",
+        "require_zero_timestamp",
+        "require_two_clean_dir_hash_match"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "require_brepro_flag": { "type": "boolean", "const": true },
+        "require_path_map": { "type": "boolean", "const": true },
+        "require_zero_timestamp": { "type": "boolean", "const": true },
+        "require_two_clean_dir_hash_match": { "type": "boolean", "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "profile_spec": {
+      "type": "object",
+      "required": [
+        "profile_name",
+        "compiler_flags",
+        "linker_flags",
+        "dxc_flags",
+        "player_exceptions_enabled",
+        "player_rtti_enabled",
+        "security_mitigations_retained",
+        "d3d12_validation_enabled",
+        "crt_mode",
+        "dependency_closure_profile"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile_name": { "type": "string", "enum": ["dev", "release", "compact_experiment"] },
+        "compiler_flags": { "type": "array", "minItems": 3, "items": { "type": "string" } },
+        "linker_flags": { "type": "array", "minItems": 3, "items": { "type": "string" } },
+        "dxc_flags": { "type": "array", "minItems": 2, "items": { "type": "string" } },
+        "player_exceptions_enabled": { "type": "boolean", "const": false },
+        "player_rtti_enabled": { "type": "boolean", "const": false },
+        "security_mitigations_retained": { "type": "boolean", "const": true },
+        "d3d12_validation_enabled": { "type": "boolean" },
+        "crt_mode": {
+          "type": "string",
+          "enum": ["inbox_ucrt_debug", "inbox_ucrt_release", "custom_entry_experiment"]
+        },
+        "dependency_closure_profile": {
+          "type": "string",
+          "enum": ["dev", "release", "compact_experiment"]
+        }
+      }
+    }
+  }
+}

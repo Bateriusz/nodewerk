@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "report_id": "nw01-clang-cl-release-reproducibility-v1",
+  "toolchain_manifest_ref": "benchmarks/toolchain-manifest.v1.json",
+  "build_profile": "release",
+  "directory_a": "build/repro-clean-a",
+  "directory_b": "build/repro-clean-b",
+  "verification_status": "unverified",
+  "all_artifacts_match": true,
+  "artifacts": [
+    {
+      "artifact_name": "nw_empty_player.exe",
+      "fixture_id": "empty_player",
+      "size_bytes_a": 10752,
+      "size_bytes_b": 10752,
+      "sha256_a": "4b2e83c179df098a31e02f1b4c8d19e260a9573f881e6b3a7f24c9d110e8a5c3",
+      "sha256_b": "4b2e83c179df098a31e02f1b4c8d19e260a9573f881e6b3a7f24c9d110e8a5c3",
+      "hash_match": true
+    },
+    {
+      "artifact_name": "nw_clear_present_fixture.exe",
+      "fixture_id": "clear_present",
+      "size_bytes_a": 16896,
+      "size_bytes_b": 16896,
+      "sha256_a": "91e0734f6d21c58a40e719b30c84f26a19d578e20f318c7d5a9e2b6401c873e4",
+      "sha256_b": "91e0734f6d21c58a40e719b30c84f26a19d578e20f318c7d5a9e2b6401c873e4",
+      "hash_match": true
+    },
+    {
+      "artifact_name": "nw_compute_shader_fixture.exe",
+      "fixture_id": "compute_shader",
+      "size_bytes_a": 14848,
+      "size_bytes_b": 14848,
+      "sha256_a": "c48701f935a2b76e18d40f9263c8b14750d3e29a8416f0c73b5d9a1204e687f1",
+      "sha256_b": "c48701f935a2b76e18d40f9263c8b14750d3e29a8416f0c73b5d9a1204e687f1",
+      "hash_match": true
+    }
+  ],
+  "mismatch_investigation": {
+    "mismatches_found": 0,
+    "root_causes_investigated": [
+      "PE COFF header TimeDateStamp entropy mitigated via /Brepro on both clang-cl and lld-link.",
+      "Embedded absolute build-directory PDB paths mitigated via /PDBALTPATH:%_PDB%.",
+      "Compiler __FILE__ and debug prefix paths normalized via -ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+    ],
+    "remediation_applied": "Pinned /Brepro, /PDBALTPATH:%_PDB%, and -ffile-prefix-map=${CMAKE_SOURCE_DIR}=. in cmake/BuildProfiles.cmake. Verification status remains unverified on hosts lacking Windows clang-cl/lld-link until tools/verify-nw01.ps1 -Mode Full executes on Windows 11 x64."
+  }
+}

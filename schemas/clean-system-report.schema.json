@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.dev/schemas/clean-system-report.schema.json",
+  "title": "Nodewerk Clean Physical System Execution Report Schema",
+  "description": "Records execution of release fixtures on a clean physical Windows 11 x64 machine without developer SDKs, DXC redistribution, or Agility SDK redistribution.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_id",
+    "verification_status",
+    "clean_system_passed",
+    "system_environment",
+    "sdk_absence_checks",
+    "deployed_dependency_inventory",
+    "offline_shader_execution_evidence",
+    "fixture_runs",
+    "unavailable_measurements"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "report_id": { "type": "string", "minLength": 3 },
+    "verification_status": {
+      "type": "string",
+      "enum": ["verified", "unverified"]
+    },
+    "clean_system_passed": { "type": "boolean" },
+    "unverified_reason": { "type": "string" },
+    "system_environment": {
+      "type": "object",
+      "required": ["os_name", "os_build", "architecture", "gpu_model", "nvidia_driver_version"],
+      "additionalProperties": false,
+      "properties": {
+        "os_name": { "type": "string", "const": "Windows 11 x64" },
+        "os_build": { "type": "string", "pattern": "^10\\.0\\.(22[0-9]{3}|26[0-9]{3})\\.[0-9]+$" },
+        "architecture": { "type": "string", "const": "x86_64" },
+        "gpu_model": { "type": "string" },
+        "nvidia_driver_version": { "type": "string" }
+      }
+    },
+    "sdk_absence_checks": {
+      "type": "object",
+      "required": [
+        "windows_sdk_absent",
+        "d3d12_debug_layer_absent",
+        "dxc_redist_absent",
+        "agility_sdk_redist_absent",
+        "msvc_debug_crt_absent"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "windows_sdk_absent": { "type": "boolean", "const": true },
+        "d3d12_debug_layer_absent": { "type": "boolean", "const": true },
+        "dxc_redist_absent": { "type": "boolean", "const": true },
+        "agility_sdk_redist_absent": { "type": "boolean", "const": true },
+        "msvc_debug_crt_absent": { "type": "boolean", "const": true }
+      }
+    },
+    "deployed_dependency_inventory": {
+      "type": "object",
+      "required": [
+        "deployed_files",
+        "total_distributed_bytes",
+        "inbox_dlls_resolved",
+        "unexpected_sidecars_found"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "deployed_files": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "required": ["file_name", "size_bytes", "sha256", "category"],
+            "additionalProperties": false,
+            "properties": {
+              "file_name": { "type": "string" },
+              "size_bytes": { "type": "integer", "minimum": 1 },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "category": { "type": "string", "enum": ["executable", "shader_payload"] }
+            }
+          }
+        },
+        "total_distributed_bytes": { "type": "integer", "minimum": 1024 },
+        "inbox_dlls_resolved": {
+          "type": "array",
+          "minItems": 4,
+          "items": { "type": "string" }
+        },
+        "unexpected_sidecars_found": {
+          "type": "array",
+          "maxItems": 0,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "offline_shader_execution_evidence": {
+      "type": "object",
+      "required": [
+        "shader_id",
+        "shader_model",
+        "compiled_offline_with_dxc",
+        "runtime_dxcompiler_loaded",
+        "runtime_d3dcompiler_loaded",
+        "agility_d3d12core_redist_loaded",
+        "expected_output_sha256",
+        "observed_output_sha256",
+        "output_verified"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shader_id": { "type": "string" },
+        "shader_model": { "type": "string", "const": "cs_6_0" },
+        "compiled_offline_with_dxc": { "type": "boolean", "const": true },
+        "runtime_dxcompiler_loaded": { "type": "boolean", "const": false },
+        "runtime_d3dcompiler_loaded": { "type": "boolean", "const": false },
+        "agility_d3d12core_redist_loaded": { "type": "boolean", "const": false },
+        "expected_output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "observed_output_sha256": { "type": ["string", "null"] },
+        "output_verified": { "type": ["boolean", "null"] }
+      }
+    },
+    "fixture_runs": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["fixture_id", "executable", "execution_status", "exit_code"],
+        "additionalProperties": false,
+        "properties": {
+          "fixture_id": { "type": "string", "enum": ["empty_player", "clear_present", "compute_shader"] },
+          "executable": { "type": "string" },
+          "execution_status": { "type": "string", "enum": ["passed", "failed", "unverified"] },
+          "exit_code": { "type": ["integer", "null"] }
+        }
+      }
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "metric": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
+      }
+    }
+  }
+}

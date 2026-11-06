@@ -1,0 +1,138 @@
+{
+  "schema_version": "1.0.0",
+  "ledger_id": "empty-player-clang-cl-release-v1",
+  "fixture_id": "empty_player",
+  "build_profile": "release",
+  "toolchain_id": "clang-cl-lld",
+  "compiler_version": "18.1.8",
+  "linker_version": "18.1.8",
+  "verification_status": "reference_baseline",
+  "total_distributed_bytes": 10752,
+  "distributed_components": [
+    {
+      "name": "nw_empty_player.exe",
+      "category": "executable",
+      "size_bytes": 10752,
+      "sha256": "4b2e83c179df098a31e02f1b4c8d19e260a9573f881e6b3a7f24c9d110e8a5c3",
+      "counted_in_total_distributed_bytes": true
+    }
+  ],
+  "excluded_system_components": [
+    {
+      "name": "kernel32.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    },
+    {
+      "name": "ucrtbase.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    }
+  ],
+  "executable_sections": [
+    {
+      "name": ".text",
+      "virtual_size_bytes": 3840,
+      "raw_size_bytes": 4096,
+      "characteristics": "CNT_CODE|MEM_EXECUTE|MEM_READ"
+    },
+    {
+      "name": ".rdata",
+      "virtual_size_bytes": 2912,
+      "raw_size_bytes": 3072,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".data",
+      "virtual_size_bytes": 320,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
+    },
+    {
+      "name": ".pdata",
+      "virtual_size_bytes": 432,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".reloc",
+      "virtual_size_bytes": 184,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_DISCARDABLE|MEM_READ"
+    }
+  ],
+  "imports": [
+    {
+      "dll_name": "kernel32.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "ExitProcess",
+        "GetCurrentProcess",
+        "GetCurrentProcessId",
+        "GetCurrentThreadId",
+        "GetSystemTimeAsFileTime",
+        "IsProcessorFeaturePresent",
+        "QueryPerformanceCounter",
+        "TerminateProcess",
+        "UnhandledExceptionFilter"
+      ]
+    },
+    {
+      "dll_name": "ucrtbase.dll",
+      "classification": "ucrt_inbox",
+      "symbols": [
+        "_cexit",
+        "_configure_narrow_argv",
+        "_crt_atexit",
+        "_exit",
+        "_initialize_narrow_environment",
+        "_initialize_onexit_table",
+        "_initterm",
+        "_initterm_e",
+        "exit",
+        "strcmp",
+        "strtol"
+      ]
+    }
+  ],
+  "shaders": [],
+  "decoder_overhead": {
+    "packer_or_decoder_used": false,
+    "decoder_overhead_bytes": null,
+    "notes": "No executable packer or payload decompressor is permitted in the NW-01 baseline; decoder overhead will be measured in NW-10."
+  },
+  "runtime_metrics": {
+    "startup_time_ms": null,
+    "cpu_time_ms": null,
+    "gpu_time_ms": null,
+    "committed_memory_bytes": null,
+    "gpu_committed_memory_bytes": null
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "startup_time_ms",
+      "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host; recorded as null rather than zero."
+    },
+    {
+      "metric": "cpu_time_ms",
+      "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host; recorded as null rather than zero."
+    },
+    {
+      "metric": "gpu_time_ms",
+      "reason": "Empty player bootstrap does not submit GPU command lists and physical Windows 11 GPU hardware is unverified."
+    },
+    {
+      "metric": "committed_memory_bytes",
+      "reason": "Physical Windows 11 x64 process working-set/commit measurement is unverified on the current Linux build host."
+    },
+    {
+      "metric": "gpu_committed_memory_bytes",
+      "reason": "Physical Windows 11 D3D12 VidMm commitment measurement is unverified on the current Linux build host."
+    }
+  ],
+  "budget_claim_policy": {
+    "claims_64kib_achievable": false,
+    "defer_minimum_size_claim_until_task": "NW-10",
+    "statement": "This ledger establishes the reproducible empty-player byte baseline without claiming that a 64 KiB full demo budget is achievable before NW-10 supplies package and compression evidence."
+  }
+}

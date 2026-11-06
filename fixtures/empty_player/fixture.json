@@ -1,0 +1,16 @@
+{
+  "fixture_id": "empty_player",
+  "target_name": "nw_empty_player",
+  "executable_name": "nw_empty_player.exe",
+  "description": "Minimal standalone player bootstrap fixture establishing fixed Win32 + exit-code/capability check overhead.",
+  "entry_point": "fixtures/empty_player/main.cpp",
+  "baseline_feature_level": "12_0",
+  "baseline_shader_model": "6.0",
+  "requires_offline_shaders": false,
+  "requires_dxc_at_runtime": false,
+  "requires_agility_sdk_redist": false,
+  "expected_release_imports": [
+    "kernel32.dll",
+    "ucrtbase.dll"
+  ]
+}

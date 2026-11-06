@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "exp-toolchain-msvc-ltcg-vs-clang-cl",
+  "category": "toolchain_comparison",
+  "status": "rejected_preserved",
+  "substituted_silently": false,
+  "configuration": {
+    "toolchain_id": "msvc-ltcg",
+    "profile_name": "release",
+    "compiler_flags": [
+      "/std:c++20",
+      "/O1",
+      "/Os",
+      "/GL",
+      "/EHs-c-",
+      "/GR-",
+      "/GS",
+      "/guard:cf",
+      "/Gw",
+      "/Gy",
+      "/GF",
+      "/Brepro",
+      "/MD"
+    ],
+    "linker_flags": [
+      "/LTCG",
+      "/OPT:REF",
+      "/OPT:ICF=4",
+      "/DYNAMICBASE",
+      "/HIGHENTROPYVA",
+      "/NXCOMPAT",
+      "/CETCOMPAT",
+      "/guard:cf",
+      "/Brepro"
+    ],
+    "security_mitigations_retained": true
+  },
+  "initialization_and_cleanup_obligations": [
+    {
+      "obligation_id": "identical_inbox_import_closure",
+      "phase": "initialization",
+      "description": "Must resolve only inbox Windows 11 DLLs (kernel32.dll, user32.dll, d3d12.dll, dxgi.dll, ucrtbase.dll) without requiring vcruntime140.dll sidecars.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "deterministic_com_teardown",
+      "phase": "cleanup",
+      "description": "Wait on direct queue fence and release all COM interfaces prior to process exit.",
+      "satisfied": true
+    }
+  ],
+  "measurements": {
+    "fixture_id": "clear_present",
+    "total_distributed_bytes": 19456,
+    "delta_vs_release_baseline_bytes": 2560,
+    "notes": "MSVC 19.40.33813 /LTCG produced working executables across all three fixtures (+1536B on empty_player, +2560B on clear_present, +2048B on compute_shader vs clang-cl/lld-link). Retained clang-cl/lld-link as primary toolchain per smaller working configuration rule."
+  },
+  "diagnostics": {
+    "exit_code": 0,
+    "error_code": "NONE_LARGER_FOOTPRINT",
+    "summary": "MSVC/LTCG succeeded functionally and passed PDB/reproducibility checks, but produced 1.5 KiB to 2.5 KiB larger binaries than clang-cl/lld-link.",
+    "preservation_statement": "Preserved full MSVC/LTCG CMake preset (msvc-release-ltcg) and byte ledgers without silent substitution."
+  }
+}

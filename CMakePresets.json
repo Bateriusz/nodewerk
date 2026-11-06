@@ -1,0 +1,90 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "clang-cl-dev",
+      "displayName": "Windows 11 x64 clang-cl/lld-link (dev)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/clang-cl-dev",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/clang-cl-x64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NW_BUILD_PROFILE": "dev",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF"
+      }
+    },
+    {
+      "name": "clang-cl-release",
+      "displayName": "Windows 11 x64 clang-cl/lld-link (release baseline)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/clang-cl-release",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/clang-cl-x64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel",
+        "NW_BUILD_PROFILE": "release",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF"
+      }
+    },
+    {
+      "name": "clang-cl-compact-experiment",
+      "displayName": "Windows 11 x64 clang-cl/lld-link (experimental compact)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/clang-cl-compact-experiment",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/clang-cl-x64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel",
+        "NW_BUILD_PROFILE": "compact_experiment",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF"
+      }
+    },
+    {
+      "name": "msvc-dev",
+      "displayName": "Windows 11 x64 MSVC/link (dev)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msvc-dev",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/msvc-x64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NW_BUILD_PROFILE": "dev",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF"
+      }
+    },
+    {
+      "name": "msvc-release-ltcg",
+      "displayName": "Windows 11 x64 MSVC/LTCG (release comparison)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msvc-release-ltcg",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/msvc-x64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel",
+        "NW_BUILD_PROFILE": "release",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF"
+      }
+    },
+    {
+      "name": "msvc-compact-experiment",
+      "displayName": "Windows 11 x64 MSVC/LTCG (experimental compact)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msvc-compact-experiment",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/msvc-x64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel",
+        "NW_BUILD_PROFILE": "compact_experiment",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "clang-cl-dev", "configurePreset": "clang-cl-dev" },
+    { "name": "clang-cl-release", "configurePreset": "clang-cl-release" },
+    { "name": "clang-cl-compact-experiment", "configurePreset": "clang-cl-compact-experiment" },
+    { "name": "msvc-dev", "configurePreset": "msvc-dev" },
+    { "name": "msvc-release-ltcg", "configurePreset": "msvc-release-ltcg" },
+    { "name": "msvc-compact-experiment", "configurePreset": "msvc-compact-experiment" }
+  ]
+}

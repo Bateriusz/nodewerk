@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "exp-crt-elimination-nodefaultlib",
+  "category": "crt_elimination",
+  "status": "failed_preserved",
+  "substituted_silently": false,
+  "configuration": {
+    "toolchain_id": "clang-cl-lld",
+    "profile_name": "compact_experiment",
+    "compiler_flags": [
+      "/std:c++20",
+      "/O1",
+      "/Os",
+      "/EHs-c-",
+      "/GR-",
+      "/GS",
+      "/guard:cf",
+      "/Gw",
+      "/Gy",
+      "/GF",
+      "-flto",
+      "-DNW_CRT_EXPERIMENT=1"
+    ],
+    "linker_flags": [
+      "/NODEFAULTLIB",
+      "/ENTRY:mainCRTStartup",
+      "/OPT:REF",
+      "/OPT:ICF=8",
+      "/DYNAMICBASE",
+      "/HIGHENTROPYVA",
+      "/NXCOMPAT",
+      "/CETCOMPAT",
+      "/guard:cf"
+    ],
+    "security_mitigations_retained": true
+  },
+  "initialization_and_cleanup_obligations": [
+    {
+      "obligation_id": "entry_stack_alignment_16b",
+      "phase": "initialization",
+      "description": "Custom mainCRTStartup / WinMainCRTStartup must align RSP to 16-byte boundary before SSE2/AVX2 instructions.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "security_cookie_init",
+      "phase": "initialization",
+      "description": "Must invoke __security_init_cookie() and provide __security_check_cookie + __guard_check_icall_fptr when /GS and /guard:cf are retained with /NODEFAULTLIB.",
+      "satisfied": false
+    },
+    {
+      "obligation_id": "fltused_abi_symbol",
+      "phase": "initialization",
+      "description": "Must define extern \"C\" int _fltused = 0x9875 for floating-point codegen under Windows x64 ABI.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "freestanding_memory_intrinsics",
+      "phase": "runtime",
+      "description": "Must supply freestanding memcpy, memset, and memcmp compiled with -fno-builtin so LTO does not emit unresolved UCRT symbol references.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "static_initializers_and_tls",
+      "phase": "initialization",
+      "description": "Must walk .CRT$XCA through .CRT$XCZ or statically forbid non-trivial global constructors and thread_local variables.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "deterministic_gpu_com_exitprocess",
+      "phase": "cleanup",
+      "description": "Must drain D3D12 direct queue fence, release all COM pointers, destroy HWND, and call ExitProcess(exit_code) explicitly.",
+      "satisfied": true
+    }
+  ],
+  "measurements": {
+    "fixture_id": "empty_player",
+    "total_distributed_bytes": 6656,
+    "delta_vs_release_baseline_bytes": -4096,
+    "notes": "Omitting ucrtbase.dll imports via /NODEFAULTLIB reduced empty_player from 10752 bytes to 6656 bytes (-4096 bytes), but naive /NODEFAULTLIB without linking vcruntime security-cookie/CFG stubs fails linker resolution for __security_cookie and __guard_check_icall_fptr when platform security mitigations (/GS, /guard:cf) are retained."
+  },
+  "diagnostics": {
+    "exit_code": 1,
+    "error_code": "LLD_LINK_UNDEFINED_SECURITY_COOKIE_AND_CFG_SYMBOLS",
+    "summary": "lld-link error: undefined symbol: __security_check_cookie, __security_cookie, __guard_check_icall_fptr when /NODEFAULTLIB is enabled alongside /GS and /guard:cf without custom security support stubs.",
+    "preservation_statement": "CRT elimination remains disabled by default (NW_ENABLE_CRT_ELIMINATION_EXPERIMENT=OFF); this record preserves the exact /NODEFAULTLIB obligations, byte measurements, and linker failure diagnostics without silently falling back or stripping security mitigations."
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.dev/schemas/dependency-inventory.schema.json",
+  "title": "Nodewerk Dependency Inventory & Closure Schema",
+  "description": "Separates development and release dependency closures and enforces distribution byte accounting rules.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "inventory_version",
+    "accounting_policy",
+    "inbox_windows_allowlist",
+    "installed_display_driver_allowlist",
+    "forbidden_release_imports",
+    "forbidden_release_sidecars",
+    "closures"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "inventory_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "accounting_policy": {
+      "type": "object",
+      "required": [
+        "exclude_documented_windows_inbox_dlls",
+        "exclude_installed_display_driver_components",
+        "count_all_other_dlls",
+        "count_all_payloads_models_and_sidecars",
+        "fail_on_unexpected_import_or_sidecar",
+        "forbid_silent_compiler_closure_change"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "exclude_documented_windows_inbox_dlls": { "type": "boolean", "const": true },
+        "exclude_installed_display_driver_components": { "type": "boolean", "const": true },
+        "count_all_other_dlls": { "type": "boolean", "const": true },
+        "count_all_payloads_models_and_sidecars": { "type": "boolean", "const": true },
+        "fail_on_unexpected_import_or_sidecar": { "type": "boolean", "const": true },
+        "forbid_silent_compiler_closure_change": { "type": "boolean", "const": true }
+      }
+    },
+    "inbox_windows_allowlist": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["dll_name", "role", "minimum_windows_build", "counted_in_distributed_bytes"],
+        "additionalProperties": false,
+        "properties": {
+          "dll_name": { "type": "string", "pattern": "^[a-z0-9_-]+\\.dll$" },
+          "role": { "type": "string" },
+          "minimum_windows_build": { "type": "string" },
+          "counted_in_distributed_bytes": { "type": "boolean", "const": false }
+        }
+      }
+    },
+    "installed_display_driver_allowlist": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["dll_name", "vendor", "role", "counted_in_distributed_bytes"],
+        "additionalProperties": false,
+        "properties": {
+          "dll_name": { "type": "string", "pattern": "^[a-z0-9_-]+\\.dll$" },
+          "vendor": { "type": "string" },
+          "role": { "type": "string" },
+          "counted_in_distributed_bytes": { "type": "boolean", "const": false }
+        }
+      }
+    },
+    "forbidden_release_imports": {
+      "type": "array",
+      "minItems": 6,
+      "items": { "type": "string" }
+    },
+    "forbidden_release_sidecars": {
+      "type": "array",
+      "minItems": 6,
+      "items": { "type": "string" }
+    },
+    "closures": {
+      "type": "object",
+      "required": ["dev", "release", "compact_experiment"],
+      "additionalProperties": false,
+      "properties": {
+        "dev": { "$ref": "#/$defs/closure_spec" },
+        "release": { "$ref": "#/$defs/closure_spec" },
+        "compact_experiment": { "$ref": "#/$defs/closure_spec" }
+      }
+    }
+  },
+  "$defs": {
+    "closure_spec": {
+      "type": "object",
+      "required": [
+        "profile_name",
+        "allowed_import_dlls",
+        "allowed_optional_dev_dlls",
+        "allowed_sidecar_categories",
+        "allow_runtime_shader_compiler",
+        "allow_agility_sdk_redist",
+        "allow_executable_packer"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile_name": { "type": "string", "enum": ["dev", "release", "compact_experiment"] },
+        "allowed_import_dlls": { "type": "array", "minItems": 3, "items": { "type": "string" } },
+        "allowed_optional_dev_dlls": { "type": "array", "items": { "type": "string" } },
+        "allowed_sidecar_categories": { "type": "array", "items": { "type": "string" } },
+        "allow_runtime_shader_compiler": { "type": "boolean", "const": false },
+        "allow_agility_sdk_redist": { "type": "boolean", "const": false },
+        "allow_executable_packer": { "type": "boolean", "const": false }
+      }
+    }
+  }
+}
