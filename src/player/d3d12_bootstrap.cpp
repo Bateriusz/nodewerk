@@ -419,14 +419,224 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         device->Release();
         return DiagnosticRecord{ExitCode::DescriptorHeapCreationFailed, static_cast<std::uint32_t>(hr), "uav_heap", "CreateDescriptorHeap(CBV_SRV_UAV) failed", {}};
     }
+
+    // Root signature: parameter 0 = bounded UAV descriptor table (u0, space0),
+    // parameter 1 = 4x 32-bit root constants (b0, space0)
+    D3D12_DESCRIPTOR_RANGE uav_range{};
+    uav_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uav_range.NumDescriptors = 1;
+    uav_range.BaseShaderRegister = 0;
+    uav_range.RegisterSpace = 0;
+    uav_range.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER root_params[2]{};
+    root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_params[0].DescriptorTable.NumDescriptorRanges = 1;
+    root_params[0].DescriptorTable.pDescriptorRanges = &uav_range;
+    root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    root_params[1].Constants.ShaderRegister = 0;
+    root_params[1].Constants.RegisterSpace = 0;
+    root_params[1].Constants.Num32BitValues = 4;
+    root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rs_desc{};
+    rs_desc.NumParameters = 2;
+    rs_desc.pParameters = root_params;
+    rs_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ID3DBlob* rs_blob = nullptr;
+    ID3DBlob* rs_error = nullptr;
+    hr = D3D12SerializeRootSignature(&rs_desc, D3D_ROOT_SIGNATURE_VERSION_1, &rs_blob, &rs_error);
+    if (rs_error) {
+        rs_error->Release();
+    }
+    if (FAILED(hr) || !rs_blob) {
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::RootSignatureCreationFailed, static_cast<std::uint32_t>(hr), "root_signature_serialize", "D3D12SerializeRootSignature failed", {}};
+    }
+
+    ID3D12RootSignature* root_sig = nullptr;
+    hr = device->CreateRootSignature(0, rs_blob->GetBufferPointer(), rs_blob->GetBufferSize(), __uuidof(ID3D12RootSignature), reinterpret_cast<void**>(&root_sig));
+    rs_blob->Release();
+    if (FAILED(hr) || !root_sig) {
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::RootSignatureCreationFailed, static_cast<std::uint32_t>(hr), "root_signature", "CreateRootSignature failed", {}};
+    }
+
+    // Create compute PSO from embedded offline SM 6.0 DXIL container (zero runtime DXC)
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc{};
+    pso_desc.pRootSignature = root_sig;
+    pso_desc.CS.pShaderBytecode = nw::shaders::kComputeFixtureDxil;
+    pso_desc.CS.BytecodeLength = nw::shaders::kComputeFixtureDxilSize;
+    ID3D12PipelineState* pso = nullptr;
+    hr = device->CreateComputePipelineState(&pso_desc, __uuidof(ID3D12PipelineState), reinterpret_cast<void**>(&pso));
+    if (FAILED(hr) || !pso) {
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::PipelineStateCreationFailed, static_cast<std::uint32_t>(hr), "compute_pso", "CreateComputePipelineState failed for offline cs_6_0 DXIL", {}};
+    }
+
+    const UINT64 buffer_bytes = static_cast<UINT64>(kElementCount) * sizeof(std::uint32_t);
+    D3D12_HEAP_PROPERTIES default_heap{};
+    default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC buf_desc{};
+    buf_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buf_desc.Width = buffer_bytes;
+    buf_desc.Height = 1;
+    buf_desc.DepthOrArraySize = 1;
+    buf_desc.MipLevels = 1;
+    buf_desc.Format = DXGI_FORMAT_UNKNOWN;
+    buf_desc.SampleDesc.Count = 1;
+    buf_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    buf_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    ID3D12Resource* uav_buffer = nullptr;
+    hr = device->CreateCommittedResource(
+        &default_heap,
+        D3D12_HEAP_FLAG_NONE,
+        &buf_desc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        nullptr,
+        __uuidof(ID3D12Resource),
+        reinterpret_cast<void**>(&uav_buffer));
+    if (FAILED(hr) || !uav_buffer) {
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "uav_buffer", "CreateCommittedResource(UAV) failed", {}};
+    }
+
+    D3D12_HEAP_PROPERTIES readback_heap{};
+    readback_heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC rb_desc = buf_desc;
+    rb_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    ID3D12Resource* rb_resource = nullptr;
+    hr = device->CreateCommittedResource(
+        &readback_heap,
+        D3D12_HEAP_FLAG_NONE,
+        &rb_desc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        __uuidof(ID3D12Resource),
+        reinterpret_cast<void**>(&rb_resource));
+    if (FAILED(hr) || !rb_resource) {
+        uav_buffer->Release();
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "readback_buffer", "CreateCommittedResource(READBACK) failed", {}};
+    }
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_view{};
+    uav_view.Format = DXGI_FORMAT_UNKNOWN;
+    uav_view.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uav_view.Buffer.FirstElement = 0;
+    uav_view.Buffer.NumElements = kElementCount;
+    uav_view.Buffer.StructureByteStride = sizeof(std::uint32_t);
+    device->CreateUnorderedAccessView(uav_buffer, nullptr, &uav_view, uav_heap->GetCPUDescriptorHandleForHeapStart());
+
+    ID3D12CommandAllocator* allocator = nullptr;
+    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), reinterpret_cast<void**>(&allocator));
+    ID3D12GraphicsCommandList* cmd_list = nullptr;
+    device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, pso, __uuidof(ID3D12GraphicsCommandList), reinterpret_cast<void**>(&cmd_list));
+
+    cmd_list->SetComputeRootSignature(root_sig);
+    ID3D12DescriptorHeap* heaps[] = {uav_heap};
+    cmd_list->SetDescriptorHeaps(1, heaps);
+    cmd_list->SetComputeRootDescriptorTable(0, uav_heap->GetGPUDescriptorHandleForHeapStart());
+    const std::uint32_t constants[4] = {kElementCount, kSeedMask, 0u, 0u};
+    cmd_list->SetComputeRoot32BitConstants(1, 4, constants, 0);
+    cmd_list->Dispatch(kElementCount / 64u, 1, 1);
+
+    // Ordinary resource transition barrier: UNORDERED_ACCESS -> COPY_SOURCE
+    D3D12_RESOURCE_BARRIER to_copy{};
+    to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    to_copy.Transition.pResource = uav_buffer;
+    to_copy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    to_copy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    to_copy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    cmd_list->ResourceBarrier(1, &to_copy);
+
+    cmd_list->CopyResource(rb_resource, uav_buffer);
+    cmd_list->Close();
+
+    ID3D12CommandList* lists[] = {cmd_list};
+    queue->ExecuteCommandLists(1, lists);
+
+    ID3D12Fence* fence = nullptr;
+    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&fence));
+    HANDLE fence_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    queue->Signal(fence, 1);
+    if (fence->GetCompletedValue() < 1) {
+        fence->SetEventOnCompletion(1, fence_event);
+        if (WaitForSingleObject(fence_event, 5000) == WAIT_TIMEOUT) {
+            CloseHandle(fence_event);
+            fence->Release();
+            cmd_list->Release();
+            allocator->Release();
+            rb_resource->Release();
+            uav_buffer->Release();
+            pso->Release();
+            root_sig->Release();
+            uav_heap->Release();
+            queue->Release();
+            device->Release();
+            return DiagnosticRecord{ExitCode::ExecutionFenceTimeout, 0x80070102u, "compute_fence_wait", "Compute dispatch fence wait timed out", {}};
+        }
+    }
+
+    const HRESULT removed_hr = device->GetDeviceRemovedReason();
+    if (FAILED(removed_hr)) {
+        CloseHandle(fence_event);
+        fence->Release();
+        cmd_list->Release();
+        allocator->Release();
+        rb_resource->Release();
+        uav_buffer->Release();
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::DeviceRemoved, static_cast<std::uint32_t>(removed_hr), "device_removed", "ID3D12Device::GetDeviceRemovedReason reported device removal", {}};
+    }
+
+    void* mapped_ptr = nullptr;
+    D3D12_RANGE read_range{0, static_cast<SIZE_T>(buffer_bytes)};
+    if (SUCCEEDED(rb_resource->Map(0, &read_range, &mapped_ptr)) && mapped_ptr) {
+        std::memcpy(readback_buffer, mapped_ptr, static_cast<std::size_t>(buffer_bytes));
+        D3D12_RANGE empty_range{0, 0};
+        rb_resource->Unmap(0, &empty_range);
+    }
+
+    CloseHandle(fence_event);
+    fence->Release();
+    cmd_list->Release();
+    allocator->Release();
+    rb_resource->Release();
+    uav_buffer->Release();
+    pso->Release();
+    root_sig->Release();
     uav_heap->Release();
     queue->Release();
     device->Release();
-#endif
-
+#else
     for (std::uint32_t i = 0; i < kElementCount; ++i) {
         readback_buffer[i] = EvaluateReferenceComputeElement(i, kSeedMask);
     }
+#endif
     for (std::uint32_t i = 0; i < kElementCount; ++i) {
         const std::uint32_t expected = ((i * 1664525u + 1013904223u) ^ kSeedMask);
         if (readback_buffer[i] != expected) {
