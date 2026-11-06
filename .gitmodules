@@ -1,0 +1,3 @@
+[submodule "references/farbrausch/fr_public"]
+	path = references/farbrausch/fr_public
+	url = https://github.com/farbrausch/fr_public.git
