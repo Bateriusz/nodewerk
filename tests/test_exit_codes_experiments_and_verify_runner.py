@@ -813,6 +813,14 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
     assert dbg_fail_summary["checks"]["msvc_ltcg_build"]["passed"] is True
     assert dbg_fail_summary["checks"]["clang_debug_symbols"]["passed"] is False
     assert dbg_fail_summary["checks"]["msvc_debug_symbols"]["passed"] is False
+    assert dbg_fail_summary["checks"]["size_ledgers"]["contracts_valid"] is True
+    assert dbg_fail_summary["checks"]["size_ledgers"]["comparison_verified"] is False
+    assert dbg_fail_summary["checks"]["size_ledgers"]["passed"] is False
+    assert dbg_fail_summary["checks"]["schemas"]["passed"] is True
+    for ledger_file in (sim_repo / "benchmarks" / "ledgers").glob("*.json"):
+        ldata = json.loads(ledger_file.read_text(encoding="utf-8"))
+        assert ldata["verification_status"] == "unverified"
+        assert ldata["total_distributed_bytes"] is not None
 
 
 def test_run_full_mode_runs_clang_path_without_msvc_tools(

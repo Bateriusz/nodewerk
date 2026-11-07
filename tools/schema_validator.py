@@ -197,18 +197,34 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
         unavailable_metrics = {m["metric"] for m in instance.get("unavailable_measurements", [])}
 
         if status == "unverified":
-            if total_bytes is not None:
-                raise SchemaValidationError(
-                    f"{doc_path}: unverified size ledger must have total_distributed_bytes=null"
-                )
-            if "total_distributed_bytes" not in unavailable_metrics:
-                raise SchemaValidationError(
-                    f"{doc_path}: unverified size ledger must list 'total_distributed_bytes' in unavailable_measurements"
-                )
-            for comp in components:
-                if comp.get("size_bytes") is not None or comp.get("sha256") is not None:
+            if total_bytes is None:
+                if "total_distributed_bytes" not in unavailable_metrics:
                     raise SchemaValidationError(
-                        f"{doc_path}: unverified size ledger component '{comp.get('name')}' must have size_bytes=null and sha256=null"
+                        f"{doc_path}: unverified size ledger must list 'total_distributed_bytes' in unavailable_measurements"
+                    )
+                for comp in components:
+                    if comp.get("size_bytes") is not None or comp.get("sha256") is not None:
+                        raise SchemaValidationError(
+                            f"{doc_path}: unmeasured size ledger component '{comp.get('name')}' must have size_bytes=null and sha256=null"
+                        )
+            else:
+                reason = instance.get("unverified_reason")
+                if not isinstance(reason, str) or len(reason.strip()) < 10:
+                    raise SchemaValidationError(
+                        f"{doc_path}: unverified size ledger retaining measured bytes must include a descriptive unverified_reason"
+                    )
+                for comp in components:
+                    if comp.get("size_bytes") is None or comp.get("sha256") is None:
+                        raise SchemaValidationError(
+                            f"{doc_path}: measured size ledger component '{comp.get('name')}' must have non-null size_bytes and sha256"
+                        )
+                computed_sum = sum(
+                    c["size_bytes"] for c in components if c.get("counted_in_total_distributed_bytes")
+                )
+                if computed_sum != total_bytes:
+                    raise SchemaValidationError(
+                        f"{doc_path}: total_distributed_bytes ({total_bytes}) "
+                        f"!= sum of counted distributed_components ({computed_sum})"
                     )
         else:
             if total_bytes is None:
@@ -368,19 +384,22 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 )
 
     elif schema_name == "toolchain-manifest.schema.json":
-        for et in instance.get("evaluated_toolchains", []):
+        selected_id = instance.get("selected_toolchain", {}).get("toolchain_id")
+        evaluated = instance.get("evaluated_toolchains", [])
+        for et in evaluated:
             tid = et.get("toolchain_id")
             et_status = et.get("verification_status")
+            expected_role = "selected" if tid == selected_id else "retained_alternative"
+            if et.get("status") != expected_role:
+                raise SchemaValidationError(
+                    f"{doc_path}: evaluated_toolchain '{tid}' status must be '{expected_role}' when selected_toolchain is '{selected_id}'"
+                )
             byte_fields = (
                 et.get("empty_player_bytes"),
                 et.get("clear_present_bytes"),
                 et.get("compute_fixture_bytes"),
             )
             if et_status == "unverified":
-                if any(v is not None for v in byte_fields):
-                    raise SchemaValidationError(
-                        f"{doc_path}: unverified evaluated_toolchain '{tid}' must have null byte measurements"
-                    )
                 if et.get("deterministic_repro_verified") is True:
                     raise SchemaValidationError(
                         f"{doc_path}: unverified evaluated_toolchain '{tid}' must not have deterministic_repro_verified=true"
@@ -394,6 +413,31 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     raise SchemaValidationError(
                         f"{doc_path}: verified evaluated_toolchain '{tid}' must have non-null byte measurements"
                     )
+                if et.get("deterministic_repro_verified") is not True:
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified evaluated_toolchain '{tid}' must have deterministic_repro_verified=true"
+                    )
+                if et.get("pdb_debugging_verified") is not True:
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified evaluated_toolchain '{tid}' must have pdb_debugging_verified=true"
+                    )
+
+        if evaluated and all(et.get("verification_status") == "verified" for et in evaluated):
+            totals = {
+                et["toolchain_id"]: (
+                    int(et["empty_player_bytes"])
+                    + int(et["clear_present_bytes"])
+                    + int(et["compute_fixture_bytes"])
+                )
+                for et in evaluated
+            }
+            min_total = min(totals.values())
+            if totals.get(selected_id, min_total + 1) > min_total:
+                smaller_ids = [tid for tid, tot in totals.items() if tot == min_total]
+                raise SchemaValidationError(
+                    f"{doc_path}: selected_toolchain '{selected_id}' ({totals.get(selected_id)} B total) "
+                    f"is larger than verified alternative {smaller_ids} ({min_total} B total)"
+                )
 
 
 ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [

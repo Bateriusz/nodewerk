@@ -1276,12 +1276,16 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
     # 3. Dependency closure & size ledger checks
     dep_reports = verify_all_recorded_ledgers(repo_root)
     ledger_comparison = generate_size_comparison_report(repo_root)
-    comparison_verified = bool(ledger_comparison.get("fixture_comparisons")) and all(
-        c.get("verification_status") == "verified"
-        and c.get("clang_cl_lld_bytes") is not None
-        and c.get("msvc_ltcg_bytes") is not None
-        and c["clang_cl_lld_bytes"] < c["msvc_ltcg_bytes"]
-        for c in ledger_comparison.get("fixture_comparisons", [])
+    comparison_verified = (
+        bool(ledger_comparison.get("fixture_comparisons"))
+        and all(
+            c.get("verification_status") == "verified"
+            and c.get("clang_cl_lld_bytes") is not None
+            and c.get("msvc_ltcg_bytes") is not None
+            for c in ledger_comparison.get("fixture_comparisons", [])
+        )
+        and ledger_comparison.get("smaller_verified_toolchain")
+        == ledger_comparison.get("selected_toolchain")
     )
     report["checks"]["dependency_closures"] = {"passed": True, "verified_ledgers": len(dep_reports)}
     report["checks"]["size_ledgers"] = {
@@ -1517,12 +1521,16 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         }
         try:
             ledger_comparison = generate_size_comparison_report(repo_root)
-            comparison_verified = bool(ledger_comparison.get("fixture_comparisons")) and all(
-                c.get("verification_status") == "verified"
-                and c.get("clang_cl_lld_bytes") is not None
-                and c.get("msvc_ltcg_bytes") is not None
-                and c["clang_cl_lld_bytes"] < c["msvc_ltcg_bytes"]
-                for c in ledger_comparison.get("fixture_comparisons", [])
+            comparison_verified = (
+                bool(ledger_comparison.get("fixture_comparisons"))
+                and all(
+                    c.get("verification_status") == "verified"
+                    and c.get("clang_cl_lld_bytes") is not None
+                    and c.get("msvc_ltcg_bytes") is not None
+                    for c in ledger_comparison.get("fixture_comparisons", [])
+                )
+                and ledger_comparison.get("smaller_verified_toolchain")
+                == ledger_comparison.get("selected_toolchain")
             )
             report["checks"]["size_ledgers"] = {
                 "passed": comparison_verified,
