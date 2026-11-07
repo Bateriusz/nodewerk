@@ -4,10 +4,10 @@
   "fixture_id": "empty_player",
   "build_profile": "release",
   "toolchain_id": "msvc-ltcg",
-  "compiler_version": "19.40.33813",
-  "linker_version": "14.40.33813.0",
+  "compiler_version": "19.40.33821",
+  "linker_version": "14.40.33821.0",
   "verification_status": "unverified",
-  "unverified_reason": "Windows 11 x64 MSVC cl.exe 19.40.33813 and link.exe 14.40.33813.0 are not installed on the current Linux host; executable byte size, PE section sizes, and SHA-256 digest are recorded as null until populated on Windows 11 x64.",
+  "unverified_reason": "Windows 11 x64 MSVC cl.exe 19.40.33821 and link.exe 14.40.33821.0 are not installed on the current Linux host; executable byte size, PE section sizes, and SHA-256 digest are recorded as null until populated on Windows 11 x64.",
   "total_distributed_bytes": null,
   "distributed_components": [
     {
@@ -94,7 +94,7 @@
   "unavailable_measurements": [
     {
       "metric": "total_distributed_bytes",
-      "reason": "Windows 11 x64 MSVC 19.40.33813 toolchain is not installed on the current Linux host; recorded as null rather than claiming an unmeasured byte size."
+      "reason": "Windows 11 x64 MSVC 19.40.33821 toolchain is not installed on the current Linux host; recorded as null rather than claiming an unmeasured byte size."
     },
     {
       "metric": "executable_sections",

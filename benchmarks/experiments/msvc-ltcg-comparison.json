@@ -55,7 +55,7 @@
     "fixture_id": "clear_present",
     "total_distributed_bytes": null,
     "delta_vs_release_baseline_bytes": null,
-    "notes": "MSVC 19.40.33813 /LTCG preset (msvc-release-ltcg) is configured identically to clang-cl-release; exact PE byte counts are null (unverified) on the current Linux host until compiled on a Windows 11 x64 host with Visual Studio Build Tools 2022 and DXC 1.8.2407."
+    "notes": "MSVC 19.40.33821 /LTCG preset (msvc-release-ltcg) is configured identically to clang-cl-release; exact PE byte counts are null (unverified) on the current Linux host until compiled on a Windows 11 x64 host with Visual Studio Build Tools 2022 and DXC 1.8.2407."
   },
   "diagnostics": {
     "exit_code": null,
@@ -66,7 +66,7 @@
   "unavailable_measurements": [
     {
       "metric": "measurements.total_distributed_bytes",
-      "reason": "Windows 11 x64 MSVC cl.exe 19.40.33813 and link.exe 14.40.33813.0 are not installed on the current Linux host; recorded as null rather than unmeasured byte counts."
+      "reason": "Windows 11 x64 MSVC cl.exe 19.40.33821 and link.exe 14.40.33821.0 are not installed on the current Linux host; recorded as null rather than unmeasured byte counts."
     },
     {
       "metric": "measurements.delta_vs_release_baseline_bytes",

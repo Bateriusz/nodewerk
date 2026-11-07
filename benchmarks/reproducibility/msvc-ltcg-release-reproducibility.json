@@ -6,7 +6,7 @@
   "directory_a": "build/msvc-release-ltcg-clean-a",
   "directory_b": "build/msvc-release-ltcg-clean-b",
   "verification_status": "unverified",
-  "unverified_reason": "MSVC 19.40.33813, link.exe 14.40.33813.0, Windows SDK 10.0.26100.0, and DXC 1.8.2407 are not installed on the current Linux host; two-clean-directory MSVC/LTCG comparison builds have not yet been executed. Run pwsh ./tools/verify-nw01.ps1 -Mode Full on Windows 11 x64 to build and record measured SHA-256 hashes.",
+  "unverified_reason": "MSVC 19.40.33821, link.exe 14.40.33821.0, Windows SDK 10.0.26100.0, and DXC 1.8.2407 are not installed on the current Linux host; two-clean-directory MSVC/LTCG comparison builds have not yet been executed. Run pwsh ./tools/verify-nw01.ps1 -Mode Full on Windows 11 x64 to build and record measured SHA-256 hashes.",
   "all_artifacts_match": false,
   "missing_files": [
     "nw_empty_player.exe",

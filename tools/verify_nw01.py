@@ -2307,9 +2307,9 @@ def run_full_mode(
     if not lld_link_bin:
         report["missing_prerequisites"].append("lld-link (pinned 18.1.8) not found in PATH")
     if not cl_bin:
-        report["missing_prerequisites"].append("cl (pinned MSVC 19.40.33813) not found in PATH for toolchain comparison")
+        report["missing_prerequisites"].append("cl (pinned MSVC 19.40.33821) not found in PATH for toolchain comparison")
     if not link_bin:
-        report["missing_prerequisites"].append("link (pinned MSVC 14.40.33813.0) not found in PATH for toolchain comparison")
+        report["missing_prerequisites"].append("link (pinned MSVC 14.40.33821.0) not found in PATH for toolchain comparison")
     if not dxc_bin:
         report["missing_prerequisites"].append("dxc (pinned 1.8.2407) not found in PATH")
 

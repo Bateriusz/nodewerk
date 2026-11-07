@@ -4,8 +4,8 @@
 
 set(NW_PINNED_TOOLCHAIN_ID "clang-cl-lld" CACHE STRING "Primary selected toolchain ID")
 set(NW_PINNED_CLANG_VERSION "18.1.8" CACHE STRING "Pinned LLVM clang-cl/lld-link version")
-set(NW_PINNED_MSVC_VERSION "19.40.33813" CACHE STRING "Pinned MSVC cl.exe/link.exe comparison version")
-set(NW_PINNED_MSVC_LINKER_VERSION "14.40.33813.0" CACHE STRING "Pinned MSVC link.exe comparison version")
+set(NW_PINNED_MSVC_VERSION "19.40.33821" CACHE STRING "Pinned MSVC cl.exe/link.exe comparison version")
+set(NW_PINNED_MSVC_LINKER_VERSION "14.40.33821.0" CACHE STRING "Pinned MSVC link.exe comparison version")
 set(NW_PINNED_WINDOWS_SDK_VERSION "10.0.26100.0" CACHE STRING "Pinned Windows 11 SDK version")
 set(NW_WINDOWS_SDK_VERSION "" CACHE STRING "Explicit Windows SDK version override or detected version (e.g. 10.0.26100.0)")
 set(NW_WINDOWS_SDK_ROOT "" CACHE PATH "Explicit Windows Kits 10 root directory (e.g. C:/Program Files (x86)/Windows Kits/10)")

@@ -24,7 +24,7 @@ We standardize on **C++20** for `nodewerk-studio`, `nodewerkc`, and `nodewerk-pl
 
 ### 2. Toolchain Comparison & Selection: `clang-cl` + `lld-link` vs `MSVC` + `LTCG`
 
-We configure and maintain identical CMake/Ninja toolchain presets for **LLVM `clang-cl` 18.1.8 + `lld-link` 18.1.8** (ThinLTO `-flto=thin`, `/O1 /Os /Gw /Gy /GF /OPT:REF /OPT:ICF=4`) and **MSVC `cl.exe` 19.40.33813 + `link.exe` 14.40.33813.0** (`/O1 /Os /GL /Gw /Gy /GF /LTCG /OPT:REF /OPT:ICF=4`) across all three identical C++20 measurement fixtures:
+We configure and maintain identical CMake/Ninja toolchain presets for **LLVM `clang-cl` 18.1.8 + `lld-link` 18.1.8** (ThinLTO `-flto=thin`, `/O1 /Os /Gw /Gy /GF /OPT:REF /OPT:ICF=4`) and **MSVC `cl.exe` 19.40.33821 + `link.exe` 14.40.33821.0** (`/O1 /Os /GL /Gw /Gy /GF /LTCG /OPT:REF /OPT:ICF=4`) across all three identical C++20 measurement fixtures:
 
 | Fixture | `clang-cl` + `lld-link` Ledger | `MSVC` + `LTCG` Ledger | Identical Import Closure | Current Measurement Status |
 | :--- | :--- | :--- | :---: | :--- |

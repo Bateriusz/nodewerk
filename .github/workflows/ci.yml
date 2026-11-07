@@ -224,12 +224,12 @@ jobs:
           $clBanner = (& $clPath 2>&1 | Out-String)
           $linkBanner = (& $linkPath 2>&1 | Out-String)
 
-          if ($clBanner -notmatch "Compiler Version 19\.40\.33813") {
-            Write-Error "Selected cl.exe does not report pinned MSVC 19.40.33813: $clBanner"
+          if ($clBanner -notmatch "Compiler Version 19\.40\.33821") {
+            Write-Error "Selected cl.exe does not report pinned MSVC 19.40.33821: $clBanner"
             exit 1
           }
-          if ($linkBanner -notmatch "Linker Version 14\.40\.33813\.0") {
-            Write-Error "Selected link.exe does not report pinned MSVC linker 14.40.33813.0: $linkBanner"
+          if ($linkBanner -notmatch "Linker Version 14\.40\.33821\.0") {
+            Write-Error "Selected link.exe does not report pinned MSVC linker 14.40.33821.0: $linkBanner"
             exit 1
           }
           if ($env:WindowsSDKVersion.TrimEnd('\') -ne "10.0.26100.0") {
