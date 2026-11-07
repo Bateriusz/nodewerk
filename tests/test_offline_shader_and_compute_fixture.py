@@ -406,7 +406,7 @@ def test_compute_fixture_expected_output_matches_reference_formula() -> None:
 
 def test_verified_shader_manifest_does_not_break_unverified_size_ledgers(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    for subdir in ("benchmarks", "shaders", "fixtures"):
+    for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
         shutil.copytree(REPO_ROOT / subdir, repo / subdir)
 
     manifest_path = repo / "shaders" / "manifest.json"
@@ -425,7 +425,7 @@ def test_verified_shader_manifest_does_not_break_unverified_size_ledgers(tmp_pat
 
 def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    for subdir in ("benchmarks", "shaders", "fixtures"):
+    for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
         shutil.copytree(REPO_ROOT / subdir, repo / subdir)
 
     dxil_blob = make_test_signed_dxil_container()
@@ -521,8 +521,10 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
 
 
 def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_path: Path) -> None:
+    from size_ledger import _derive_toolchain_evidence_text
+
     repo = tmp_path / "repo"
-    for subdir in ("benchmarks", "shaders", "fixtures"):
+    for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
         shutil.copytree(REPO_ROOT / subdir, repo / subdir)
 
     dxil_blob = make_test_signed_dxil_container()
@@ -550,7 +552,8 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
         + dxil_blob
     )
 
-    # Missing CodeView/PDB evidence must never yield a verified toolchain or ledger.
+    # Missing CodeView/PDB evidence must never yield a verified toolchain or ledger,
+    # nor leave deterministic_repro_verified=True on an unverified toolchain entry.
     recorded = record_release_ledgers(
         repo,
         bin_dir,
@@ -559,6 +562,8 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
     )
     assert recorded["verification_status"] == "unverified"
     assert recorded["recorded_fixtures"] == {}
+    assert recorded["deterministic_repro_verified"] is False
+    assert recorded["pdb_debugging_verified"] is False
 
     toolchain = json.loads(
         (repo / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
@@ -568,7 +573,7 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
     )
     assert clang_entry["verification_status"] == "unverified"
     assert clang_entry["pdb_debugging_verified"] is False
-    assert clang_entry["deterministic_repro_verified"] is True
+    assert clang_entry["deterministic_repro_verified"] is False
 
     ledger = json.loads(
         (
@@ -577,3 +582,47 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
     )
     assert ledger["verification_status"] == "unverified"
     assert ledger["total_distributed_bytes"] is None
+
+    # Even when both repro and PDB flags are True, if not all three fixture executables
+    # exist in binary_dir, the toolchain and ledgers must remain unverified with false flags.
+    partial_dir = tmp_path / "partial_bin"
+    partial_dir.mkdir()
+    (partial_dir / "nw_empty_player.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
+    )
+    partial_recorded = record_release_ledgers(
+        repo,
+        partial_dir,
+        deterministic_repro_verified=True,
+        pdb_debugging_verified=True,
+    )
+    assert partial_recorded["verification_status"] == "unverified"
+    assert partial_recorded["recorded_fixtures"] == {}
+    assert partial_recorded["deterministic_repro_verified"] is False
+    assert partial_recorded["pdb_debugging_verified"] is False
+
+    # Verify _derive_toolchain_evidence_text refreshes selection_rationale when both toolchains
+    # have complete byte measurements but the comparison toolchain is still unverified.
+    toolchain_partial = json.loads(
+        (repo / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
+    )
+    for t in toolchain_partial["evaluated_toolchains"]:
+        if t["toolchain_id"] == "clang-cl-lld":
+            t["verification_status"] = "verified"
+            t["empty_player_bytes"] = 1536
+            t["clear_present_bytes"] = 1536
+            t["compute_fixture_bytes"] = 1712
+            t["deterministic_repro_verified"] = True
+            t["pdb_debugging_verified"] = True
+        else:
+            t["verification_status"] = "unverified"
+            t["empty_player_bytes"] = 2048
+            t["clear_present_bytes"] = 2048
+            t["compute_fixture_bytes"] = 2224
+            t["deterministic_repro_verified"] = False
+            t["pdb_debugging_verified"] = False
+    _derive_toolchain_evidence_text(toolchain_partial)
+    rationale = toolchain_partial["selected_toolchain"]["selection_rationale"]
+    assert "empty_player=1536 B" in rationale
+    assert "empty_player=2048 B" in rationale
+    assert "byte counts remain null" not in rationale

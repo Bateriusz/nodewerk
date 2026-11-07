@@ -27,7 +27,7 @@ import shutil
 import struct
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable
 
 from dependency_check import (
@@ -753,8 +753,83 @@ DEBUG_FIXTURE_EXECUTABLES = (
 )
 
 
+def parse_pdb_guid_and_age(pdb_bytes: bytes) -> dict[str, Any] | None:
+    """Parse the PDB Info Stream (Stream 1) GUID and age from a Microsoft MSF 7.00 PDB file."""
+    if len(pdb_bytes) < 56 or not pdb_bytes.startswith(PDB_MSF_SIGNATURE):
+        return None
+    (
+        block_size,
+        _free_block_map,
+        num_blocks,
+        num_dir_bytes,
+        _unknown,
+        block_map_addr,
+    ) = struct.unpack_from("<6I", pdb_bytes, 32)
+    if (
+        block_size < 64
+        or (block_size & (block_size - 1)) != 0
+        or num_blocks < 3
+        or num_dir_bytes < 12
+        or block_map_addr == 0
+        or block_map_addr >= num_blocks
+        or block_size * num_blocks > len(pdb_bytes)
+    ):
+        return None
+
+    num_dir_blocks = (num_dir_bytes + block_size - 1) // block_size
+    block_map_offset = block_map_addr * block_size
+    if block_map_offset + num_dir_blocks * 4 > len(pdb_bytes):
+        return None
+    dir_block_indices = struct.unpack_from(f"<{num_dir_blocks}I", pdb_bytes, block_map_offset)
+    dir_buf = bytearray()
+    for blk_idx in dir_block_indices:
+        if blk_idx >= num_blocks:
+            return None
+        blk_off = blk_idx * block_size
+        dir_buf.extend(pdb_bytes[blk_off : blk_off + block_size])
+    dir_bytes = bytes(dir_buf[:num_dir_bytes])
+
+    num_streams = struct.unpack_from("<I", dir_bytes, 0)[0]
+    if num_streams < 2 or 4 + num_streams * 4 > len(dir_bytes):
+        return None
+    stream_sizes = struct.unpack_from(f"<{num_streams}I", dir_bytes, 4)
+    stream0_size = stream_sizes[0]
+    stream1_size = stream_sizes[1]
+    if stream1_size == 0xFFFFFFFF or stream1_size < 28:
+        return None
+    stream0_blocks = (
+        0 if stream0_size == 0xFFFFFFFF else (stream0_size + block_size - 1) // block_size
+    )
+    stream1_blocks = (stream1_size + block_size - 1) // block_size
+    stream1_block_list_off = 4 + (num_streams + stream0_blocks) * 4
+    if stream1_blocks < 1 or stream1_block_list_off + stream1_blocks * 4 > len(dir_bytes):
+        return None
+    stream1_block_indices = struct.unpack_from(
+        f"<{stream1_blocks}I", dir_bytes, stream1_block_list_off
+    )
+    stream1_buf = bytearray()
+    for blk_idx in stream1_block_indices:
+        if blk_idx >= num_blocks:
+            return None
+        blk_off = blk_idx * block_size
+        stream1_buf.extend(pdb_bytes[blk_off : blk_off + block_size])
+        if len(stream1_buf) >= 28:
+            break
+    if len(stream1_buf) < 28:
+        return None
+
+    version, signature, age = struct.unpack_from("<III", stream1_buf, 0)
+    guid_bytes = bytes(stream1_buf[12:28])
+    return {
+        "version": version,
+        "signature": signature,
+        "age": age,
+        "guid": guid_bytes.hex(),
+    }
+
+
 def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
-    """Verify that each fixture PE carries CodeView/RSDS records and resolves to a real MSF PDB."""
+    """Verify that each fixture PE carries CodeView/RSDS records and resolves to a matching MSF PDB."""
     artifacts: list[dict[str, Any]] = []
     missing: list[str] = []
 
@@ -765,6 +840,7 @@ def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
             "codeview_rsds": False,
             "pdb_file": None,
             "pdb_msf_signature": False,
+            "pdb_guid_age_match": False,
         }
         if not exe_path.exists():
             record["missing"] = True
@@ -773,29 +849,52 @@ def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
             continue
 
         pe_info = parse_pe64_sections_and_imports(exe_path.read_bytes())
-        codeview = pe_info.get("codeview_entries") or []
-        record["codeview_rsds"] = any(entry.get("signature") == "RSDS" for entry in codeview)
+        codeview = [
+            entry
+            for entry in (pe_info.get("codeview_entries") or [])
+            if entry.get("signature") == "RSDS"
+            and entry.get("guid")
+            and entry.get("guid") != "00" * 16
+            and int(entry.get("age") or 0) > 0
+            and (entry.get("pdb_path") or "").strip()
+        ]
+        record["codeview_rsds"] = len(codeview) > 0
 
-        pdb_candidates: list[Path] = []
         for entry in codeview:
-            pdb_path = entry.get("pdb_path") or ""
-            if pdb_path:
-                pdb_candidates.append(binary_dir / Path(pdb_path).name)
-        pdb_candidates.append(binary_dir / (Path(exe_name).stem + ".pdb"))
-        resolved = next((p for p in pdb_candidates if p.is_file()), None)
-        if resolved is None:
-            recovered = next(
-                (p for p in binary_dir.rglob(Path(exe_name).stem + ".pdb") if p.is_file()),
-                None,
-            )
-            resolved = recovered
-        if resolved is not None:
-            record["pdb_file"] = resolved.name
-            try:
-                record["pdb_msf_signature"] = resolved.read_bytes().startswith(PDB_MSF_SIGNATURE)
-            except OSError:
-                record["pdb_msf_signature"] = False
-        if not record["codeview_rsds"] or not record["pdb_msf_signature"]:
+            raw_pdb_path = (entry.get("pdb_path") or "").strip()
+            win_path = PureWindowsPath(raw_pdb_path)
+            pdb_candidates: list[Path] = []
+            if Path(raw_pdb_path).is_absolute():
+                pdb_candidates.append(Path(raw_pdb_path))
+            pdb_candidates.append(binary_dir / Path(win_path.as_posix()))
+            pdb_candidates.append(binary_dir / win_path.name)
+
+            for cand in pdb_candidates:
+                if not cand.is_file():
+                    continue
+                record["pdb_file"] = cand.name
+                try:
+                    pdb_bytes = cand.read_bytes()
+                except OSError:
+                    continue
+                if pdb_bytes.startswith(PDB_MSF_SIGNATURE):
+                    record["pdb_msf_signature"] = True
+                    pdb_info = parse_pdb_guid_and_age(pdb_bytes)
+                    if (
+                        pdb_info is not None
+                        and pdb_info["guid"] == entry.get("guid")
+                        and pdb_info["age"] == entry.get("age")
+                    ):
+                        record["pdb_guid_age_match"] = True
+                        break
+            if record["pdb_guid_age_match"]:
+                break
+
+        if (
+            not record["codeview_rsds"]
+            or not record["pdb_msf_signature"]
+            or not record["pdb_guid_age_match"]
+        ):
             missing.append(exe_name)
         artifacts.append(record)
 
@@ -1198,6 +1297,7 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
 
     # 4a. clang-cl/lld-link path runs independently of MSVC availability.
     if clang_prereqs_ready:
+        repro_cmp: dict[str, Any] | None = None
         try:
             repro_cmp = build_and_compare_two_clean_directories(
                 repo_root,
@@ -1209,15 +1309,38 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                 "all_artifacts_match": repro_cmp["all_artifacts_match"],
                 "recorded_to": "benchmarks/reproducibility/release-build-reproducibility.json",
             }
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            report["checks"]["reproducibility_build"] = {
+                "passed": False,
+                "reason": f"Pinned clang-cl Windows build failed: {exc}",
+            }
+            report["checks"]["clang_debug_symbols"] = {
+                "passed": False,
+                "reason": "Skipped because the pinned clang-cl release reproducibility build failed",
+            }
+            report["checks"]["fixture_validation"] = {
+                "passed": False,
+                "reason": "Skipped because the pinned clang-cl Windows build failed",
+            }
+
+        if repro_cmp is not None:
             if repro_cmp["all_artifacts_match"]:
-                clang_symbols = build_and_verify_debug_symbols(repo_root, "clang-cl-lld")
-                report["checks"]["clang_debug_symbols"] = {
-                    "passed": clang_symbols["verified"],
-                    "built": clang_symbols["built"],
-                    "output_dir": clang_symbols["output_dir"],
-                    "missing_or_invalid": clang_symbols.get("missing_or_invalid", []),
-                    "missing_toolchain_tools": clang_symbols.get("missing_toolchain_tools", []),
-                }
+                clang_symbols: dict[str, Any] = {"verified": False, "built": False}
+                try:
+                    clang_symbols = build_and_verify_debug_symbols(repo_root, "clang-cl-lld")
+                    report["checks"]["clang_debug_symbols"] = {
+                        "passed": clang_symbols["verified"],
+                        "built": clang_symbols["built"],
+                        "output_dir": clang_symbols["output_dir"],
+                        "missing_or_invalid": clang_symbols.get("missing_or_invalid", []),
+                        "missing_toolchain_tools": clang_symbols.get("missing_toolchain_tools", []),
+                    }
+                except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+                    report["checks"]["clang_debug_symbols"] = {
+                        "passed": False,
+                        "built": False,
+                        "reason": f"Pinned clang-cl dev /DEBUG:FULL build failed: {exc}",
+                    }
 
                 # The clean build is the authoritative source of offline DXC evidence.
                 offline_shader = evaluate_offline_shader(
@@ -1260,19 +1383,6 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                     "passed": False,
                     "reason": "Skipped because two clang-cl clean-directory hashes did not match",
                 }
-        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
-            report["checks"]["reproducibility_build"] = {
-                "passed": False,
-                "reason": f"Pinned clang-cl Windows build failed: {exc}",
-            }
-            report["checks"]["clang_debug_symbols"] = {
-                "passed": False,
-                "reason": f"Pinned clang-cl Windows build failed: {exc}",
-            }
-            report["checks"]["fixture_validation"] = {
-                "passed": False,
-                "reason": "Skipped because the pinned clang-cl Windows build failed",
-            }
     else:
         report["checks"]["reproducibility_build"] = {
             "passed": False,
@@ -1289,6 +1399,7 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
 
     # 4b. MSVC/LTCG comparison path is independent: missing cl.exe only removes that evidence.
     if msvc_prereqs_ready:
+        msvc_repro_cmp: dict[str, Any] | None = None
         try:
             msvc_repro_cmp = build_and_compare_two_msvc_clean_directories(
                 repo_root,
@@ -1300,15 +1411,34 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                 "all_artifacts_match": msvc_repro_cmp["all_artifacts_match"],
                 "recorded_to": "benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json",
             }
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            report["checks"]["msvc_ltcg_build"] = {
+                "passed": False,
+                "reason": f"Pinned MSVC/LTCG Windows build failed: {exc}",
+            }
+            report["checks"]["msvc_debug_symbols"] = {
+                "passed": False,
+                "reason": "Skipped because the pinned MSVC/LTCG release reproducibility build failed",
+            }
+
+        if msvc_repro_cmp is not None:
             if msvc_repro_cmp["all_artifacts_match"]:
-                msvc_symbols = build_and_verify_debug_symbols(repo_root, "msvc-ltcg")
-                report["checks"]["msvc_debug_symbols"] = {
-                    "passed": msvc_symbols["verified"],
-                    "built": msvc_symbols["built"],
-                    "output_dir": msvc_symbols["output_dir"],
-                    "missing_or_invalid": msvc_symbols.get("missing_or_invalid", []),
-                    "missing_toolchain_tools": msvc_symbols.get("missing_toolchain_tools", []),
-                }
+                msvc_symbols: dict[str, Any] = {"verified": False, "built": False}
+                try:
+                    msvc_symbols = build_and_verify_debug_symbols(repo_root, "msvc-ltcg")
+                    report["checks"]["msvc_debug_symbols"] = {
+                        "passed": msvc_symbols["verified"],
+                        "built": msvc_symbols["built"],
+                        "output_dir": msvc_symbols["output_dir"],
+                        "missing_or_invalid": msvc_symbols.get("missing_or_invalid", []),
+                        "missing_toolchain_tools": msvc_symbols.get("missing_toolchain_tools", []),
+                    }
+                except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+                    report["checks"]["msvc_debug_symbols"] = {
+                        "passed": False,
+                        "built": False,
+                        "reason": f"Pinned MSVC dev /DEBUG:FULL build failed: {exc}",
+                    }
                 try:
                     msvc_recording = record_release_ledgers(
                         repo_root,
@@ -1328,15 +1458,6 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                     "passed": False,
                     "reason": "Skipped because two MSVC/LTCG clean-directory hashes did not match",
                 }
-        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
-            report["checks"]["msvc_ltcg_build"] = {
-                "passed": False,
-                "reason": f"Pinned MSVC/LTCG Windows build failed: {exc}",
-            }
-            report["checks"]["msvc_debug_symbols"] = {
-                "passed": False,
-                "reason": f"Pinned MSVC/LTCG Windows build failed: {exc}",
-            }
     else:
         report["checks"]["msvc_ltcg_build"] = {
             "passed": False,

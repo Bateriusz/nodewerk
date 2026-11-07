@@ -27,12 +27,37 @@ from size_ledger import (  # noqa: E402
 )
 
 
+def build_synthetic_msf_pdb(
+    guid: bytes = bytes(range(1, 17)),
+    age: int = 1,
+) -> bytes:
+    """Construct a minimal valid Microsoft MSF 7.00 PDB file with Stream 1 (PDB Info Stream)."""
+    assert len(guid) == 16
+    block_size = 512
+    num_blocks = 5
+    pdb = bytearray(block_size * num_blocks)
+    msf_sig = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00"
+    pdb[0:32] = msf_sig
+    # SuperBlock: block_size=512, free_block_map=1, num_blocks=5, num_dir_bytes=16, unknown=0, block_map_addr=2
+    struct.pack_into("<6I", pdb, 32, block_size, 1, num_blocks, 16, 0, 2)
+    # Block 2 (offset 1024): Block map for Stream Directory -> points to Block 3
+    struct.pack_into("<I", pdb, 2 * block_size, 3)
+    # Block 3 (offset 1536): Stream Directory -> num_streams=2, sizes=[0, 28], stream1_blocks=[4]
+    struct.pack_into("<IIII", pdb, 3 * block_size, 2, 0, 28, 4)
+    # Block 4 (offset 2048): Stream 1 (PDB Info Stream) -> version=20000404, signature=0, age=age, guid=guid
+    struct.pack_into("<III", pdb, 4 * block_size, 20000404, 0, age)
+    pdb[4 * block_size + 12 : 4 * block_size + 28] = guid
+    return bytes(pdb)
+
+
 def build_synthetic_pe64(
     imported_dlls: list[str],
     *,
     time_date_stamp: int = 0,
     extra_text_bytes: int = 0,
     pdb_path: str | None = None,
+    pdb_guid: bytes = bytes(range(1, 17)),
+    pdb_age: int = 1,
 ) -> bytes:
     """Construct a minimal valid PE32+ (x64) binary image with the specified import table."""
     pe_offset = 0x80
@@ -64,8 +89,8 @@ def build_synthetic_pe64(
         rsds_offset = debug_dir_offset + 28
         rsds = (
             b"RSDS"
-            + bytes(range(16))
-            + struct.pack("<I", 1)
+            + pdb_guid
+            + struct.pack("<I", pdb_age)
             + pdb_path.encode("utf-8")
             + b"\x00"
         )

@@ -164,6 +164,7 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
                     if codeview_offset > 0 and codeview_offset + 24 <= len(pe_bytes):
                         signature = pe_bytes[codeview_offset : codeview_offset + 4]
                         if signature == b"RSDS":
+                            guid_bytes = pe_bytes[codeview_offset + 4 : codeview_offset + 20]
                             age = struct.unpack_from("<I", pe_bytes, codeview_offset + 20)[0]
                             path_start = codeview_offset + 24
                             path_end = pe_bytes.find(b"\x00", path_start, codeview_offset + data_size)
@@ -172,6 +173,7 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
                             codeview_entries.append(
                                 {
                                     "signature": "RSDS",
+                                    "guid": guid_bytes.hex(),
                                     "age": age,
                                     "pdb_path": pe_bytes[path_start:path_end].decode(
                                         "utf-8", errors="replace"

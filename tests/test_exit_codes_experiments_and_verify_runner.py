@@ -13,7 +13,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
-from test_dependency_closure_and_accounting import build_synthetic_pe64  # noqa: E402
+from test_dependency_closure_and_accounting import (  # noqa: E402
+    build_synthetic_msf_pdb,
+    build_synthetic_pe64,
+)
 from test_offline_shader_and_compute_fixture import make_test_signed_dxil_container  # noqa: E402
 from verify_nw01 import (  # noqa: E402
     _format_nvidia_driver_version,
@@ -485,7 +488,7 @@ def test_find_embedded_dxil_container_validates_candidate_bytes() -> None:
 
 
 def test_debug_symbol_evidence_requires_codeview_and_msf_pdb(tmp_path: Path) -> None:
-    pdb_bytes = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00" + b"\x00" * 64
+    pdb_bytes = build_synthetic_msf_pdb()
     for exe_name, imported in (
         ("nw_empty_player.exe", ["kernel32.dll", "ucrtbase.dll"]),
         (
@@ -510,6 +513,21 @@ def test_debug_symbol_evidence_requires_codeview_and_msf_pdb(tmp_path: Path) -> 
     bad = verify_debug_symbol_evidence(tmp_path)
     assert bad["verified"] is False
     assert "nw_empty_player.exe" in bad["missing_or_invalid"]
+
+    # A stale MSF PDB from another build with a mismatched GUID or age must be rejected.
+    (tmp_path / "nw_empty_player.pdb").write_bytes(
+        build_synthetic_msf_pdb(guid=b"\xff" * 16, age=1)
+    )
+    stale_guid = verify_debug_symbol_evidence(tmp_path)
+    assert stale_guid["verified"] is False
+    assert "nw_empty_player.exe" in stale_guid["missing_or_invalid"]
+
+    (tmp_path / "nw_empty_player.pdb").write_bytes(
+        build_synthetic_msf_pdb(guid=bytes(range(1, 17)), age=2)
+    )
+    stale_age = verify_debug_symbol_evidence(tmp_path)
+    assert stale_age["verified"] is False
+    assert "nw_empty_player.exe" in stale_age["missing_or_invalid"]
 
     # A PE without a CodeView debug directory must not count either.
     (tmp_path / "nw_empty_player.pdb").write_bytes(pdb_bytes)
@@ -664,10 +682,7 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
                     (build_dir / name).write_bytes(
                         build_synthetic_pe64(imported, pdb_path=pdb_name)
                     )
-                    (build_dir / pdb_name).write_bytes(
-                        b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00"
-                        + b"\x00" * 128
-                    )
+                    (build_dir / pdb_name).write_bytes(build_synthetic_msf_pdb())
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             (build_dir / "shaders").mkdir(parents=True, exist_ok=True)
@@ -721,6 +736,24 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
     assert bad_code == 2
     assert bad_summary["checks"]["schemas"]["passed"] is False
     assert "simulated post-recording schema error" in bad_summary["checks"]["schemas"]["reason"]
+
+    # Verify that if build_and_verify_debug_symbols raises after a passing two-clean-directory
+    # reproducibility build, reproducibility_build.passed and msvc_ltcg_build.passed stay True
+    # while clang_debug_symbols.passed and msvc_debug_symbols.passed become False.
+    monkeypatch.setattr(verify_module, "validate_all_repository_artifacts", orig_validate)
+    monkeypatch.setattr(
+        verify_module,
+        "build_and_verify_debug_symbols",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, ["cmake", "--build", "debug-symbols"])
+        ),
+    )
+    dbg_fail_code, dbg_fail_summary = run_full_mode(sim_repo)
+    assert dbg_fail_code == 2
+    assert dbg_fail_summary["checks"]["reproducibility_build"]["passed"] is True
+    assert dbg_fail_summary["checks"]["msvc_ltcg_build"]["passed"] is True
+    assert dbg_fail_summary["checks"]["clang_debug_symbols"]["passed"] is False
+    assert dbg_fail_summary["checks"]["msvc_debug_symbols"]["passed"] is False
 
 
 def test_run_full_mode_runs_clang_path_without_msvc_tools(
@@ -789,9 +822,7 @@ def test_run_full_mode_runs_clang_path_without_msvc_tools(
                     (build_dir / name).write_bytes(
                         build_synthetic_pe64(imported, pdb_path=pdb_name)
                     )
-                    (build_dir / pdb_name).write_bytes(
-                        b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00" + b"\x00" * 128
-                    )
+                    (build_dir / pdb_name).write_bytes(build_synthetic_msf_pdb())
                 return subprocess.CompletedProcess(command, 0, "", "")
             (build_dir / "shaders").mkdir(parents=True, exist_ok=True)
             (build_dir / "shaders" / "compute_fixture.dxil").write_bytes(dxil_blob)

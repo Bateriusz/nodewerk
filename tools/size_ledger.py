@@ -294,12 +294,40 @@ def _derive_toolchain_evidence_text(toolchain_manifest: dict[str, Any]) -> None:
             f"{details}. {other_label} is larger on every fixture, and both toolchains have verified "
             "CodeView/PDB debugging evidence plus bit-for-bit two-clean-directory reproducibility."
         )
-    elif selected_summary and not other_bytes_complete:
+    elif selected_summary and other_summary:
+        other_status = other.get("verification_status", "unverified") if other else "unverified"
+        pin["selection_rationale"] = (
+            f"Selected {selected_name} + {selected_linker} as the primary toolchain configuration "
+            f"paired against {other_label}. Measured distributed bytes for {selected_id} "
+            f"({selected.get('verification_status', 'unverified')}): {selected_summary}; "
+            f"for {other_label} ({other_status}): {other_summary}. Full toolchain comparison "
+            "verification remains incomplete until both toolchains have verified CodeView/PDB "
+            "debugging and two-clean-directory reproducibility evidence."
+        )
+    elif selected_summary:
         pin["selection_rationale"] = (
             f"Selected {selected_name} + {selected_linker} as the primary toolchain configuration. "
-            f"Measured distributed bytes for the selected toolchain: {selected_summary}. "
+            f"Measured distributed bytes for the selected toolchain "
+            f"({selected.get('verification_status', 'unverified')}): {selected_summary}. "
             f"The {other_label} comparison fixtures remain unverified, so no completed size comparison "
             "is claimed in this manifest."
+        )
+    elif other_summary:
+        other_status = other.get("verification_status", "unverified") if other else "unverified"
+        pin["selection_rationale"] = (
+            f"Selected {selected_name} + {selected_linker} as the primary toolchain configuration "
+            f"paired against {other_label}. Measured distributed bytes for {other_label} "
+            f"({other_status}): {other_summary}. Selected toolchain {selected_id} byte counts "
+            "remain null (unverified), so no completed size comparison is claimed in this manifest."
+        )
+    else:
+        pin["selection_rationale"] = (
+            f"Selected {selected_name} + {selected_linker} with ThinLTO (-flto=thin, /O1 /Os /Gw /Gy /GF "
+            "/OPT:REF /OPT:ICF=4) as the primary toolchain configuration paired against "
+            f"{other_label} across identical empty_player, clear_present, and compute_shader fixtures. "
+            "Both toolchains share identical Windows 11 inbox DLL import closures, CodeView PDB symbol "
+            "support, and /Brepro deterministic linking; exact PE byte counts remain null (unverified) "
+            "until compiled on a Windows 11 x64 toolchain host."
         )
 
     if selected_pdb and other_pdb:
@@ -314,6 +342,18 @@ def _derive_toolchain_evidence_text(toolchain_manifest: dict[str, Any]) -> None:
             "/DEBUG:FULL build produced MSF PDB files and RSDS CodeView records. "
             f"Live PDB verification for {other_label} remains pending."
         )
+    elif other_pdb:
+        pin["debugging_evidence"] = (
+            f"Verified CodeView/PDB debug symbol evidence for {other_label}: a dev-profile "
+            "/DEBUG:FULL build produced MSF PDB files and RSDS CodeView records. "
+            f"Live PDB verification for {selected_id} remains pending."
+        )
+    else:
+        pin["debugging_evidence"] = (
+            "Configured with CodeView /DEBUG:FULL (dev) and /PDBALTPATH:%_PDB% (release) symbol "
+            "emission for WinDbg, Visual Studio Debugger, and PIX for Windows GPU captures; "
+            "live Windows debugger verification is pending Windows 11 x64 host execution."
+        )
 
     if selected_repro and other_repro:
         pin["reproducibility_evidence"] = (
@@ -327,6 +367,43 @@ def _derive_toolchain_evidence_text(toolchain_manifest: dict[str, Any]) -> None:
             f"directories for {selected_id}. Two-clean-directory evidence for {other_label} remains "
             "pending and is not claimed."
         )
+    elif other_repro:
+        pin["reproducibility_evidence"] = (
+            f"Verified bit-for-bit identical release artifacts across two independent clean build "
+            f"directories for {other_label}. Two-clean-directory evidence for {selected_id} remains "
+            "pending and is not claimed."
+        )
+    else:
+        pin["reproducibility_evidence"] = (
+            "Configured for bit-for-bit identical PE executables across independent clean build "
+            "directories using /Brepro, -ffile-prefix-map=${CMAKE_SOURCE_DIR}=., and /PDBALTPATH:%_PDB%, "
+            "enforced by cmake/ToolchainManifest.cmake and tools/verify_nw01.py."
+        )
+
+
+def _refresh_toolchain_unavailable_measurements(toolchain_manifest: dict[str, Any]) -> None:
+    unavailable = [
+        m
+        for m in toolchain_manifest.get("unavailable_measurements", [])
+        if not m["metric"].startswith("evaluated_toolchains")
+    ]
+    for field, _ in _BYTE_FIELDS:
+        missing = [
+            t["toolchain_id"]
+            for t in toolchain_manifest.get("evaluated_toolchains", [])
+            if t.get(field) is None
+        ]
+        if missing:
+            unavailable.append(
+                {
+                    "metric": f"evaluated_toolchains[{','.join(missing)}].{field}",
+                    "reason": (
+                        "This toolchain fixture has not been built and measured on the pinned "
+                        "Windows 11 x64 host; recorded as null rather than interpolated."
+                    ),
+                }
+            )
+    toolchain_manifest["unavailable_measurements"] = unavailable
 
 
 def record_release_ledgers(
@@ -381,13 +458,25 @@ def record_release_ledgers(
     verification_complete = (
         deterministic_repro_verified is True and pdb_debugging_verified is True
     )
-    if deterministic_repro_verified is not None:
-        eval_entry["deterministic_repro_verified"] = bool(deterministic_repro_verified)
-    if pdb_debugging_verified is not None:
-        eval_entry["pdb_debugging_verified"] = bool(pdb_debugging_verified)
+    ready_specs = [
+        (fixture_id, exe_path, ledger_path, ledger_name, manifest_field, dxil_bytes)
+        for fixture_id, exe_name, ledger_name, manifest_field, dxil_bytes in specs
+        for exe_path, ledger_path in [
+            (binary_dir / exe_name, repo_root / "benchmarks" / "ledgers" / ledger_name)
+        ]
+        if exe_path.exists()
+        and ledger_path.exists()
+        and (fixture_id != "compute_shader" or dxil_bytes is not None)
+    ]
+    all_three_ready = len(ready_specs) == len(specs)
 
-    if not verification_complete:
+    if not verification_complete or not all_three_ready:
+        for field, _ in _BYTE_FIELDS:
+            eval_entry[field] = None
+        eval_entry["deterministic_repro_verified"] = False
+        eval_entry["pdb_debugging_verified"] = False
         eval_entry["verification_status"] = "unverified"
+        _refresh_toolchain_unavailable_measurements(toolchain_manifest)
         _derive_toolchain_evidence_text(toolchain_manifest)
         toolchain_schema_path = repo_root / "schemas" / "toolchain-manifest.schema.json"
         if toolchain_schema_path.exists():
@@ -395,6 +484,11 @@ def record_release_ledgers(
             validate_instance(toolchain_manifest, toolchain_schema, toolchain_schema, path=toolchain_path.name)
             validate_semantic_invariants(toolchain_manifest, toolchain_schema_path.name, toolchain_path)
         toolchain_path.write_text(json.dumps(toolchain_manifest, indent=2) + "\n", encoding="utf-8")
+        other_toolchains_unverified = any(
+            t.get("verification_status") != "verified"
+            for t in toolchain_manifest.get("evaluated_toolchains", [])
+            if t["toolchain_id"] != toolchain_id
+        )
         return {
             "toolchain_id": toolchain_id,
             "verification_status": "unverified",
@@ -402,21 +496,17 @@ def record_release_ledgers(
             "reason": (
                 "Refusing to record verified ledgers: two-clean-directory reproducibility and "
                 "CodeView/PDB debugging evidence must both be explicitly verified."
+                if not verification_complete
+                else "Refusing to record verified ledgers: not all three fixture executables "
+                "and offline DXIL measurements were available."
             ),
-            "deterministic_repro_verified": deterministic_repro_verified,
-            "pdb_debugging_verified": pdb_debugging_verified,
-            "comparison_toolchain_bytes_remain_unverified": True,
+            "deterministic_repro_verified": False,
+            "pdb_debugging_verified": False,
+            "comparison_toolchain_bytes_remain_unverified": other_toolchains_unverified,
         }
 
     measured_bytes_by_field: dict[str, int] = {}
-    for fixture_id, exe_name, ledger_name, manifest_field, dxil_bytes in specs:
-        exe_path = binary_dir / exe_name
-        ledger_path = repo_root / "benchmarks" / "ledgers" / ledger_name
-        if not exe_path.exists() or not ledger_path.exists():
-            continue
-        if fixture_id == "compute_shader" and dxil_bytes is None:
-            # Do not claim a verified compute ledger without measured offline DXIL evidence.
-            continue
+    for fixture_id, exe_path, ledger_path, ledger_name, manifest_field, dxil_bytes in ready_specs:
         ledger = record_ledger_from_pe_binary(
             exe_path,
             ledger_path,
@@ -431,49 +521,20 @@ def record_release_ledgers(
             "sha256": ledger["distributed_components"][0]["sha256"],
         }
 
-    all_three_measured = all(
-        field in measured_bytes_by_field
-        for field in ("empty_player_bytes", "clear_present_bytes", "compute_fixture_bytes")
-    )
-    if all_three_measured:
-        for field, total_bytes in measured_bytes_by_field.items():
-            eval_entry[field] = total_bytes
-        eval_entry["deterministic_repro_verified"] = bool(deterministic_repro_verified)
-        eval_entry["pdb_debugging_verified"] = bool(pdb_debugging_verified)
-        eval_entry["verification_status"] = "verified"
-    else:
-        eval_entry["verification_status"] = "unverified"
+    for field, total_bytes in measured_bytes_by_field.items():
+        eval_entry[field] = total_bytes
+    eval_entry["deterministic_repro_verified"] = True
+    eval_entry["pdb_debugging_verified"] = True
+    eval_entry["verification_status"] = "verified"
 
-    if recorded:
-        unavailable = [
-            m
-            for m in toolchain_manifest.get("unavailable_measurements", [])
-            if not m["metric"].startswith("evaluated_toolchains")
-        ]
-        for field in ("empty_player_bytes", "clear_present_bytes", "compute_fixture_bytes"):
-            missing = [
-                t["toolchain_id"]
-                for t in toolchain_manifest.get("evaluated_toolchains", [])
-                if t.get(field) is None
-            ]
-            if missing:
-                unavailable.append(
-                    {
-                        "metric": f"evaluated_toolchains[{','.join(missing)}].{field}",
-                        "reason": (
-                            "This toolchain fixture has not been built and measured on the pinned "
-                            "Windows 11 x64 host; recorded as null rather than interpolated."
-                        ),
-                    }
-                )
-        toolchain_manifest["unavailable_measurements"] = unavailable
-        _derive_toolchain_evidence_text(toolchain_manifest)
-        toolchain_schema_path = (repo_root or Path(__file__).resolve().parent.parent) / "schemas" / "toolchain-manifest.schema.json"
-        if toolchain_schema_path.exists():
-            toolchain_schema = json.loads(toolchain_schema_path.read_text(encoding="utf-8"))
-            validate_instance(toolchain_manifest, toolchain_schema, toolchain_schema, path=toolchain_path.name)
-            validate_semantic_invariants(toolchain_manifest, toolchain_schema_path.name, toolchain_path)
-        toolchain_path.write_text(json.dumps(toolchain_manifest, indent=2) + "\n", encoding="utf-8")
+    _refresh_toolchain_unavailable_measurements(toolchain_manifest)
+    _derive_toolchain_evidence_text(toolchain_manifest)
+    toolchain_schema_path = (repo_root or Path(__file__).resolve().parent.parent) / "schemas" / "toolchain-manifest.schema.json"
+    if toolchain_schema_path.exists():
+        toolchain_schema = json.loads(toolchain_schema_path.read_text(encoding="utf-8"))
+        validate_instance(toolchain_manifest, toolchain_schema, toolchain_schema, path=toolchain_path.name)
+        validate_semantic_invariants(toolchain_manifest, toolchain_schema_path.name, toolchain_path)
+    toolchain_path.write_text(json.dumps(toolchain_manifest, indent=2) + "\n", encoding="utf-8")
 
     other_toolchains_unverified = any(
         t.get("verification_status") != "verified"
