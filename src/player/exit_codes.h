@@ -30,6 +30,7 @@ enum class ExitCode : int {
     ResourceAllocationFailed = 33,
     CommandListRecordingFailed = 34,
     PresentationFailed = 35,
+    PresentationOccluded = 36,
 
     // Offline Shader / RootSignature / Pipeline State (40-49)
     OfflineShaderPayloadInvalid = 40,
@@ -63,6 +64,7 @@ constexpr const char* ExitCodeName(ExitCode code) noexcept {
         case ExitCode::ResourceAllocationFailed: return "ResourceAllocationFailed";
         case ExitCode::CommandListRecordingFailed: return "CommandListRecordingFailed";
         case ExitCode::PresentationFailed: return "PresentationFailed";
+        case ExitCode::PresentationOccluded: return "PresentationOccluded";
         case ExitCode::OfflineShaderPayloadInvalid: return "OfflineShaderPayloadInvalid";
         case ExitCode::RootSignatureCreationFailed: return "RootSignatureCreationFailed";
         case ExitCode::PipelineStateCreationFailed: return "PipelineStateCreationFailed";
@@ -100,6 +102,8 @@ constexpr const char* ExitCodeRecoverySemantics(ExitCode code) noexcept {
             return "Development validation requested (--validation), but Graphics Tools (d3d12sdklayers.dll) is not installed.";
         case ExitCode::D3D12ValidationError:
             return "STOP: the D3D12 debug layer emitted error/corruption messages; preserve the info-queue diagnostics and fix the offending API usage before treating the run as passing.";
+        case ExitCode::PresentationOccluded:
+            return "Treat the run as unmeasured: ensure the fixture window is visible and unoccluded, then rerun. DXGI_STATUS_OCCLUDED must never be accepted as a successful visible-present measurement.";
         case ExitCode::OfflineShaderPayloadInvalid:
             return "Abort pipeline creation; do NOT fall back to runtime shader compilation (dxcompiler.dll / D3DCompile).";
         default:

@@ -31,6 +31,7 @@
         "os",
         "architecture",
         "minimum_tested_windows_build",
+        "minimum_tested_windows_build_status",
         "tested_windows_builds",
         "tested_nvidia_drivers",
         "unsupported_platforms"
@@ -42,6 +43,10 @@
         "minimum_tested_windows_build": {
           "type": "string",
           "pattern": "^10\\.0\\.(22[0-9]{3}|26[0-9]{3})\\.[0-9]+$"
+        },
+        "minimum_tested_windows_build_status": {
+          "type": "string",
+          "enum": ["verified", "target_pinned_unverified"]
         },
         "tested_windows_builds": {
           "type": "array",

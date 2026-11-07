@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nodewerk.dev/schemas/toolchain-manifest.schema.json",
   "title": "Nodewerk Reproducible Toolchain Manifest Schema",
-  "description": "Pins the selected compiler/linker, Windows SDK, DXC, CMake/Ninja versions, build flags, minimum tested Windows build, and required feature manifest.",
+  "description": "Pins the selected compiler/linker, Windows SDK, DXC, CMake/Ninja versions, build flags, minimum target Windows build and its evidence status, and required feature manifest.",
   "type": "object",
   "required": [
     "schema_version",
@@ -11,6 +11,7 @@
     "evaluated_toolchains",
     "pinned_dependencies",
     "minimum_tested_windows_build",
+    "minimum_tested_windows_build_status",
     "required_feature_manifest_ref",
     "build_profiles",
     "reproducibility_policy",
@@ -111,6 +112,10 @@
     "minimum_tested_windows_build": {
       "type": "string",
       "pattern": "^10\\.0\\.(22[0-9]{3}|26[0-9]{3})\\.[0-9]+$"
+    },
+    "minimum_tested_windows_build_status": {
+      "type": "string",
+      "enum": ["verified", "target_pinned_unverified"]
     },
     "required_feature_manifest_ref": {
       "type": "string",

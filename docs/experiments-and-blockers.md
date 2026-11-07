@@ -54,5 +54,5 @@ values.
 
 ## Inbox-Runtime Blocker Log
 
-- **Current Status:** No inbox-runtime blocker encountered on the stated Feature Level `12_0` + Shader Model `6.0` baseline (`d3d12.dll` inbox on Windows 11 x64 `>= 10.0.22631.4317` natively supports FL `12_0`, SM `6.0` DXIL, bounded descriptor tables, ordinary barriers, and single direct queue without `D3D12Core.dll` Agility SDK redistribution).
+- **Current Status:** No inbox-runtime blocker has been *observed or recorded* yet. The stated Feature Level `12_0` + Shader Model `6.0` baseline assumes that the Windows 11 x64 inbox `d3d12.dll` supports bounded descriptor tables, ordinary barriers, and one direct queue without `D3D12Core.dll` Agility SDK redistribution. That assumption remains **unverified** until the physical RTX 4060 and RTX 50-series captures run; if it fails, the exact `win_build`, `d3d12_dll` version, HRESULT, and failed feature must be recorded here before any profile or redistributable change.
 - **Blocker Reporting Mechanism:** Verified via `nw_empty_player --simulate-failure InboxRuntimeBlocker --diagnostics`, which returns exit code `25` (`InboxRuntimeBlocker`) and emits the structured blocker diagnostic required before any profile change.

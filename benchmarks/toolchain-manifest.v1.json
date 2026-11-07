@@ -54,6 +54,7 @@
     "ninja_version": "1.12.1"
   },
   "minimum_tested_windows_build": "10.0.22631.4317",
+  "minimum_tested_windows_build_status": "target_pinned_unverified",
   "required_feature_manifest_ref": "benchmarks/capability-manifest.v1.json",
   "build_profiles": {
     "dev": {

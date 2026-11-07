@@ -101,6 +101,10 @@
       "reason": "PE32+ section virtual/raw sizes require linking nw_empty_player.exe with MSVC link.exe /LTCG on a Windows 11 SDK host."
     },
     {
+      "metric": "imports[*].symbols",
+      "reason": "Imported function names were not measured from the PE import lookup table on the current Linux host; the baseline symbol lists are expected-import targets, not verified measurements. Recording a PE with tools/size_ledger.py replaces them with measured symbols."
+    },
+    {
       "metric": "startup_time_ms",
       "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host."
     },

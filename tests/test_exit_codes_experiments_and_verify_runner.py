@@ -13,6 +13,33 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
+FAILURE_INJECTION_CODES = {
+    "OsVersionUnsupported": (11, "platform_bootstrap"),
+    "InboxRuntimeBlocker": (25, "device_and_capability"),
+    "PresentationOccluded": (36, "resource_and_queue_init"),
+    "ComputeVerificationFailed": (60, "gpu_execution_and_validation"),
+    "D3D12ValidationError": (61, "gpu_execution_and_validation"),
+}
+
+
+def failure_injection_process(command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Return the same structured diagnostic the fixture emits for --simulate-failure."""
+    name = command[command.index("--simulate-failure") + 1]
+    code, category = FAILURE_INJECTION_CODES[name]
+    blocker_fields = (
+        " win_build=22631 d3d12_dll=10.0.22631.4317"
+        " feature=D3D12CreateDevice(D3D_FEATURE_LEVEL_12_0)"
+        ' summary="synthetic blocker" recovery="Record blocker before changing profile."'
+        if name == "InboxRuntimeBlocker"
+        else ""
+    )
+    diagnostic = (
+        f"[NW-DIAG][exit_code={code}][name={name}][category={category}]"
+        f"[stage=simulated_failure_injection][hr=0x80004005]{blocker_fields}\n"
+    )
+    return subprocess.CompletedProcess(command, code, "", diagnostic)
+
+
 from test_dependency_closure_and_accounting import (  # noqa: E402
     build_synthetic_msf_pdb,
     build_synthetic_pe64,
@@ -34,9 +61,12 @@ from verify_nw01 import (  # noqa: E402
     parse_loaded_modules,
     probe_sdk_absence,
     record_shader_manifest_evidence,
+    run_build_checks_mode,
+    run_failure_recovery_checks,
     run_clean_system_mode,
     run_full_mode,
     verify_debug_symbol_evidence,
+    _provenance_reconciliation_problems,
 )
 
 
@@ -258,7 +288,10 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
         shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
 
     full_code, full_summary = run_full_mode(sim_repo)
-    assert full_code == 2
+    # Missing host tools mean required build coverage is absent; that is an exit 3,
+    # not the exit 2 "only physical evidence missing" state.
+    assert full_code == 3
+    assert full_summary["gate_status"] == "build_coverage_missing"
     assert full_summary["full_baseline_passed"] is False
     assert full_summary["checks"]["schemas"]["passed"] is True
     assert isinstance(full_summary["checks"]["offline_shader"]["passed"], bool)
@@ -326,7 +359,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     )
 
     def passing_executor(_exe: Path, fixture_id: str) -> int | tuple[int, str]:
-        if fixture_id == "compute_shader":
+        if fixture_id in {"clear_present", "compute_shader"}:
             return 0, observed_stdout
         return 0
 
@@ -419,6 +452,30 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
         recorded_clean["offline_shader_execution_evidence"]["observed_output_sha256"]
         == expected["output_sha256"]
     )
+
+    # Operator-supplied GPU metadata must be reconciled with the executing adapter.
+    mismatched_system_env = dict(measured_system_env)
+    mismatched_system_env["gpu_model"] = "NVIDIA GeForce RTX 4060"
+    mismatch_code, mismatch_summary = run_clean_system_mode(
+        sim_repo,
+        bin_dir,
+        allow_non_windows_simulation=True,
+        env=clean_env,
+        system32_dir=clean_sys32,
+        system_environment=mismatched_system_env,
+        executor=passing_executor,
+    )
+    assert mismatch_code == 1
+    assert mismatch_summary["clean_system_passed"] is False
+    assert mismatch_summary["system_environment_measured"] is False
+    recorded_mismatch = json.loads(
+        (sim_repo / "benchmarks" / "clean-system" / "clean-system-validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    # The report must not attribute the run to the operator-supplied RTX 4060.
+    assert recorded_mismatch["system_environment"]["gpu_model"] == "NVIDIA GeForce RTX 5080"
+    assert recorded_mismatch["system_environment"]["nvidia_driver_version"] == "unverified"
 
     # Any uncounted release payload/sidecar must fail the clean-system dependency closure.
     payload = bin_dir / "demo_payload.bin"
@@ -757,6 +814,8 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
 
     def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
         command = [str(c) for c in cmd]
+        if "--simulate-failure" in command:
+            return failure_injection_process(command)
         if any(c.endswith("mock_dxc.py") for c in command):
             return subprocess.CompletedProcess(command, 0, "dxcompiler.dll: 1.8 - 1.8.2407.12\n", "")
         if "--build" in command:
@@ -918,6 +977,8 @@ def test_run_full_mode_runs_clang_path_without_msvc_tools(
 
     def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
         command = [str(c) for c in cmd]
+        if "--simulate-failure" in command:
+            return failure_injection_process(command)
         if any(c.endswith("mock_dxc.py") for c in command):
             return subprocess.CompletedProcess(command, 0, "dxcompiler.dll: 1.8 - 1.8.2407.12\n", "")
         if "--build" in command:
@@ -961,7 +1022,11 @@ def test_run_full_mode_runs_clang_path_without_msvc_tools(
     monkeypatch.setattr(verify_module.subprocess, "run", fake_run)
 
     code, summary = run_full_mode(sim_repo)
-    assert code == 2
+    # The clang path built and executed, but the required MSVC/LTCG comparison coverage
+    # is missing, so this must not be reported as an evidence-only exit 2.
+    assert code == 3
+    assert summary["gate_status"] == "build_coverage_missing"
+    assert "msvc_ltcg_build" in summary["missing_build_coverage"]
     assert summary["checks"]["reproducibility_build"]["passed"] is True
     assert summary["checks"]["clang_debug_symbols"]["passed"] is True
     assert summary["checks"]["fixture_validation"]["passed"] is True
@@ -1326,3 +1391,205 @@ def test_explicit_benchmark_capture_failure_affects_command_exit(
         ["--mode", "ContractsOnly", "--record-benchmark", "rtx_50_series_desktop"]
     )
     assert code == 1
+
+
+def test_failure_recovery_checks_execute_distinct_exit_codes_and_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "nw_empty_player.exe").write_bytes(b"MZ")
+
+    def good_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        return failure_injection_process([str(c) for c in cmd])
+
+    monkeypatch.setattr(verify_module.subprocess, "run", good_run)
+    result = run_failure_recovery_checks(deploy)
+    assert result["passed"] is True
+    assert result["distinct_exit_codes"] is True
+    assert {
+        case["observed_exit_code"] for case in result["cases"]
+    } == {11, 25, 36, 60, 61}
+    assert all(case["diagnostic_line_matched"] for case in result["cases"])
+
+    # InboxRuntimeBlocker must carry every mandatory blocker field.
+    def missing_blocker_fields_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        command = [str(c) for c in cmd]
+        name = command[command.index("--simulate-failure") + 1]
+        code, category = FAILURE_INJECTION_CODES[name]
+        diagnostic = (
+            f"[NW-DIAG][exit_code={code}][name={name}][category={category}]"
+            "[stage=simulated_failure_injection][hr=0x80004005]\n"
+        )
+        return subprocess.CompletedProcess(command, code, "", diagnostic)
+
+    monkeypatch.setattr(
+        verify_module.subprocess, "run", missing_blocker_fields_run
+    )
+    result = run_failure_recovery_checks(deploy)
+    assert result["passed"] is False
+    blocker_case = next(
+        case for case in result["cases"] if case["name"] == "InboxRuntimeBlocker"
+    )
+    assert blocker_case["missing_blocker_fields"]
+
+    missing = run_failure_recovery_checks(tmp_path / "missing")
+    assert missing["passed"] is False
+    assert missing["skipped"] is True
+
+
+def test_build_checks_mode_requires_actual_build_coverage(tmp_path: Path) -> None:
+    sim_repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
+
+    code, summary = run_build_checks_mode(sim_repo)
+    assert code == 1
+    assert summary["mode"] == "BuildChecks"
+    assert summary["build_checks_passed"] is False
+    assert summary["full_baseline_passed"] is False
+    assert "reproducibility_build" in summary["missing_required_checks"]
+    assert "failure_recovery" in summary["missing_required_checks"]
+
+
+def test_evidence_completeness_requires_matching_artifact_hashes_and_toolchain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+
+    hashes = {
+        "empty_player": "a" * 64,
+        "clear_present": "b" * 64,
+        "compute_shader": "c" * 64,
+    }
+    ledger_names = {
+        "empty_player": "nw_empty_player.exe",
+        "clear_present": "nw_clear_present_fixture.exe",
+        "compute_shader": "nw_compute_shader_fixture.exe",
+    }
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        fixture_id = ledger["fixture_id"]
+        ledger["verification_status"] = "verified"
+        ledger.pop("unverified_reason", None)
+        ledger["total_distributed_bytes"] = 2048
+        for component in ledger["distributed_components"]:
+            if component["category"] == "executable":
+                component["size_bytes"] = 2048
+                component["sha256"] = hashes[fixture_id]
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
+    toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
+    toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    for entry in toolchain["evaluated_toolchains"]:
+        entry["verification_status"] = "verified"
+        entry["pdb_debugging_verified"] = True
+        entry["deterministic_repro_verified"] = True
+        entry["fixture_execution_verified"] = True
+    toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
+
+    hlsl_path = repo / "shaders" / "compute_fixture.hlsl"
+    hlsl_bytes = hlsl_path.read_bytes()
+    manifest_path = repo / "shaders" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["verification_status"] = "verified"
+    manifest.pop("unverified_reason", None)
+    shader = manifest["shaders"][0]
+    shader["compiled_offline_with_dxc"] = True
+    shader["hlsl_source_bytes"] = len(hlsl_bytes)
+    shader["hlsl_sha256"] = hashlib.sha256(hlsl_bytes).hexdigest()
+    shader["offline_dxil_bytes"] = 1024
+    shader["offline_dxil_sha256"] = "e" * 64
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    for repro_name in (
+        "release-build-reproducibility.json",
+        "msvc-ltcg-release-reproducibility.json",
+    ):
+        repro_path = repo / "benchmarks" / "reproducibility" / repro_name
+        repro = json.loads(repro_path.read_text(encoding="utf-8"))
+        repro["verification_status"] = "verified"
+        repro["all_artifacts_match"] = True
+        repro_path.write_text(json.dumps(repro, indent=2) + "\n", encoding="utf-8")
+
+    provenance = {
+        "toolchain_id": "clang-cl-lld",
+        "artifact_sha256": hashes,
+        "source": "recorded_ledger_artifact_hash",
+    }
+    hardware_paths = [
+        repo / "benchmarks" / "hardware" / "rtx-4060-baseline.json",
+        repo / "benchmarks" / "hardware" / "rtx-50-series-baseline.json",
+    ]
+    for hardware_path in hardware_paths:
+        hardware = json.loads(hardware_path.read_text(encoding="utf-8"))
+        hardware["verification_status"] = "verified"
+        hardware["benchmark_passed"] = True
+        hardware["artifact_provenance"] = provenance
+        hardware_path.write_text(
+            json.dumps(hardware, indent=2) + "\n", encoding="utf-8"
+        )
+
+    clean_path = repo / "benchmarks" / "clean-system" / "clean-system-validation.json"
+    clean = json.loads(clean_path.read_text(encoding="utf-8"))
+    clean["verification_status"] = "verified"
+    clean["clean_system_passed"] = True
+    clean["artifact_provenance"] = provenance
+    for item in clean["deployed_dependency_inventory"]["deployed_files"]:
+        base = item["file_name"].replace("\\", "/").rsplit("/", 1)[-1]
+        fixture_id = next(
+            key for key, value in ledger_names.items() if value == base
+        )
+        item["size_bytes"] = 2048
+        item["sha256"] = hashes[fixture_id]
+    clean_path.write_text(json.dumps(clean, indent=2) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        verify_module,
+        "generate_size_comparison_report",
+        lambda _root: {
+            "fixture_comparisons": [
+                {"fixture_id": fixture_id, "verification_status": "verified"}
+                for fixture_id in ("empty_player", "clear_present", "compute_shader")
+            ]
+        },
+    )
+
+    evidence = check_evidence_completeness(repo)
+    assert evidence["complete"] is True, evidence["unmet_requirements"]
+
+    hardware = json.loads(hardware_paths[0].read_text(encoding="utf-8"))
+    hardware["artifact_provenance"]["artifact_sha256"]["clear_present"] = "f" * 64
+    hardware_paths[0].write_text(
+        json.dumps(hardware, indent=2) + "\n", encoding="utf-8"
+    )
+    evidence = check_evidence_completeness(repo)
+    assert evidence["complete"] is False
+    assert any("does not match" in item for item in evidence["unmet_requirements"])
+
+    hardware["artifact_provenance"]["artifact_sha256"]["clear_present"] = hashes[
+        "clear_present"
+    ]
+    hardware["artifact_provenance"]["toolchain_id"] = "msvc-ltcg"
+    hardware_paths[0].write_text(
+        json.dumps(hardware, indent=2) + "\n", encoding="utf-8"
+    )
+    evidence = check_evidence_completeness(repo)
+    assert evidence["complete"] is False
+    assert any("toolchain" in item for item in evidence["unmet_requirements"])
+
+    problems = _provenance_reconciliation_problems(
+        evidence_kind="synthetic evidence",
+        evidence_hash="0" * 64,
+        evidence_toolchain=None,
+        selected_toolchain="clang-cl-lld",
+        expected_hash="1" * 64,
+        fixture_id="clear_present",
+    )
+    assert len(problems) >= 2

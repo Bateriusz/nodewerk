@@ -21,7 +21,9 @@ pwsh ./tools/verify-nw01.ps1 -Mode Full
 
 This must execute both toolchains' fixtures, produce verified
 `benchmarks/ledgers/*.json`, `benchmarks/reproducibility/*.json`, and a verified
-`benchmarks/toolchain-manifest.v1.json`. Exit code `2` means evidence is still incomplete.
+`benchmarks/toolchain-manifest.v1.json`. Exit code `2` means concrete checks passed and only
+physical evidence is still incomplete; exit code `3` means required build/toolchain coverage
+was skipped or unavailable and must not be treated as an evidence-only gap.
 
 ## 2. Clean Physical-System Execution
 
@@ -37,7 +39,9 @@ pwsh ./tools/verify-nw01.ps1 -Mode CleanSystem `
 ```
 
 The report must show SDK/redistributable absence, complete deployment-tree accounting,
-offline DXIL execution, observed module paths, and a matching compute readback hash.
+offline DXIL execution, observed module paths, and a matching compute readback hash. Operator
+GPU metadata is accepted only when it matches the adapter description emitted by both the
+raster and compute fixtures.
 
 ## 3. Hardware Baseline Capture
 
@@ -65,10 +69,14 @@ pwsh ./tools/verify-nw01.ps1 -Mode Full `
 Repeat with `-RecordBenchmark rtx_50_series_desktop` and the corresponding desktop RTX
 50-series adapter. The command records `benchmarks/hardware/rtx-4060-baseline.json` or
 `benchmarks/hardware/rtx-50-series-baseline.json` only after fixture execution, adapter
-tier matching, environment measurement, and artifact-hash provenance all verify.
+tier matching, environment measurement, and artifact-hash provenance all verify. The
+evidence-completeness gate additionally requires those recorded executable hashes and the
+toolchain ID to match the selected toolchain's verified release ledgers; stale physical
+results from older binaries cannot certify newly built artifacts.
 
 ## Current Status
 
 No measured Windows, RTX 4060, RTX 50-series, reproducibility, compiler-comparison, offline
 GPU, or clean-system results are present in this workspace. Those acceptance requirements
-remain explicitly unverified.
+remain explicitly unverified. The pinned minimum Windows build and selected clang-cl/lld-link
+toolchain are therefore *targets*, not tested claims, until this evidence is captured.

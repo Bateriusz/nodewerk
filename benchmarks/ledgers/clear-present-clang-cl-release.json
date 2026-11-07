@@ -145,6 +145,10 @@
       "reason": "PE32+ section virtual/raw sizes require linking nw_clear_present_fixture.exe with lld-link 18.1.8 on a Windows 11 SDK host."
     },
     {
+      "metric": "imports[*].symbols",
+      "reason": "Imported function names were not measured from the PE import lookup table on the current Linux host; the baseline symbol lists are expected-import targets, not verified measurements. Recording a PE with tools/size_ledger.py replaces them with measured symbols."
+    },
+    {
       "metric": "startup_time_ms",
       "reason": "Physical Windows 11 x64 D3D12 swapchain initialization timing is unverified on the current Linux build host."
     },

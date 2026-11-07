@@ -13,6 +13,7 @@
     "sdk_absence_checks",
     "deployed_dependency_inventory",
     "offline_shader_execution_evidence",
+    "artifact_provenance",
     "fixture_runs",
     "unavailable_measurements"
   ],
@@ -137,6 +138,35 @@
         "expected_output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "observed_output_sha256": { "type": ["string", "null"] },
         "output_verified": { "type": ["boolean", "null"] }
+      }
+    },
+    "artifact_provenance": {
+      "type": "object",
+      "required": ["toolchain_id", "artifact_sha256", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "toolchain_id": { "type": ["string", "null"] },
+        "artifact_sha256": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "null"] }
+        },
+        "source": {
+          "type": "string",
+          "enum": ["recorded_ledger_artifact_hash", "unavailable"]
+        }
+      }
+    },
+    "adapter_execution_evidence": {
+      "type": "object",
+      "required": ["executing_adapter", "consistent", "fixture_descriptions"],
+      "additionalProperties": false,
+      "properties": {
+        "executing_adapter": { "type": ["string", "null"] },
+        "consistent": { "type": "boolean" },
+        "fixture_descriptions": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "null"] }
+        }
       }
     },
     "fixture_runs": {

@@ -89,6 +89,7 @@ bool TryParseSimulatedFailure(const char* name, ExitCode* out_code) noexcept {
         ExitCode::ResourceAllocationFailed,
         ExitCode::CommandListRecordingFailed,
         ExitCode::PresentationFailed,
+        ExitCode::PresentationOccluded,
         ExitCode::OfflineShaderPayloadInvalid,
         ExitCode::RootSignatureCreationFailed,
         ExitCode::PipelineStateCreationFailed,

@@ -21,6 +21,7 @@ from dependency_check import (  # noqa: E402
 )
 from size_ledger import (  # noqa: E402
     SizeLedgerError,
+    _measured_import_entries,
     compute_distribution_accounting,
     generate_size_comparison_report,
     record_ledger_from_pe_binary,
@@ -344,6 +345,58 @@ def test_recorded_ledgers_pass_dependency_and_toolchain_comparison(tmp_path: Pat
         record_ledger_from_pe_binary(pe_path, bad_ledger_copy, inventory, repo_root=None)
     with pytest.raises(SizeLedgerError, match="Missing required fixture import contract"):
         record_ledger_from_pe_binary(pe_path, bad_ledger_copy, inventory, repo_root=tmp_path)
+
+
+def test_size_ledger_rebuilds_sections_and_imports_from_inspected_pe(tmp_path: Path) -> None:
+    """Measured ledgers must not inherit template sections or stale imported symbols."""
+    inventory = json.loads(
+        (REPO_ROOT / "benchmarks" / "dependency-inventory.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ledger_copy = tmp_path / "empty-player-clang-cl-release.json"
+    shutil.copyfile(
+        REPO_ROOT / "benchmarks" / "ledgers" / "empty-player-clang-cl-release.json",
+        ledger_copy,
+    )
+    template = json.loads(ledger_copy.read_text(encoding="utf-8"))
+    template_symbols = template["imports"][0]["symbols"]
+
+    pe_path = tmp_path / "nw_empty_player.exe"
+    pe_path.write_bytes(build_synthetic_pe64(["kernel32.dll"]))
+    updated = record_ledger_from_pe_binary(
+        pe_path, ledger_copy, inventory, repo_root=REPO_ROOT
+    )
+
+    # The template lists .text/.rdata/.data/.pdata/.reloc; the inspected PE has only two.
+    assert [section["name"] for section in updated["executable_sections"]] == [
+        ".text",
+        ".rdata",
+    ]
+    # The synthetic import table has no named thunks, so no template symbol leaks through.
+    assert updated["imports"][0]["symbols"] == []
+    assert updated["imports"][0]["symbols"] != template_symbols
+    assert "imports[*].symbols" not in {
+        item["metric"] for item in updated["unavailable_measurements"]
+    }
+    for section in updated["executable_sections"]:
+        assert section["virtual_size_bytes"] is not None
+        assert section["raw_size_bytes"] is not None
+        assert section["characteristics"]
+
+    measured = _measured_import_entries(
+        {
+            "imports": ["kernel32.dll"],
+            "imports_by_dll": {"kernel32.dll": ["CreateEventA", "WaitForSingleObject"]},
+            "delay_imports": ["user32.dll"],
+            "delay_imports_by_dll": {"user32.dll": ["RegisterClassA"]},
+        },
+        inventory,
+    )
+    assert measured[0]["symbols"] == ["CreateEventA", "WaitForSingleObject"]
+    assert measured[1]["dll_name"] == "user32.dll"
+    assert measured[1]["delay_load"] is True
+    assert measured[1]["symbols"] == ["RegisterClassA"]
 
 
 def test_synthetic_pe64_and_elf64_import_parsers_and_closure_gates(tmp_path: Path) -> None:

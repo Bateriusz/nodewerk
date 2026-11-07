@@ -51,6 +51,15 @@
     "resource_heap_tier": null,
     "wave_ops_supported": null
   },
+  "artifact_provenance": {
+    "toolchain_id": null,
+    "artifact_sha256": {
+      "empty_player": null,
+      "clear_present": null,
+      "compute_shader": null
+    },
+    "source": "unavailable"
+  },
   "fixture_results": [
     {
       "fixture_id": "clear_present",

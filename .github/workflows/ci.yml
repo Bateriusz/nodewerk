@@ -29,49 +29,142 @@ jobs:
         run: python tools/verify_nw01.py --mode ContractsOnly
 
   windows-reproducibility-and-fixtures:
-    name: Windows 11 x64 Build, Reproducibility & Verify Gate
+    name: Windows 11 x64 Build, Reproducibility & Concrete Check Gate
     runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Initialize MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install pytest
-        run: python -m pip install pytest
+      - name: Install pinned CMake, Ninja, and pytest
+        run: python -m pip install --upgrade "cmake==3.30.2" "ninja==1.12.1" pytest
 
-      - name: Add Windows Kits DXC and LLVM to PATH
+      - name: Provision pinned LLVM clang-cl/lld-link 18.1.8
         shell: pwsh
         run: |
-          $kitsDxc = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\10.0.*\x64\dxc.exe" -ErrorAction SilentlyContinue |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-          if ($kitsDxc) {
-            Add-Content -Path $env:GITHUB_PATH -Value $kitsDxc.DirectoryName
+          $llvmRoot = "C:\Tools\LLVM-18.1.8"
+          if (-not (Test-Path "$llvmRoot\bin\clang-cl.exe")) {
+            $installer = Join-Path $env:RUNNER_TEMP "LLVM-18.1.8-win64.exe"
+            Invoke-WebRequest `
+              -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe" `
+              -OutFile $installer
+            Start-Process -Wait -FilePath $installer -ArgumentList '/S', "/D=$llvmRoot"
           }
-          if (Test-Path "C:\Program Files\LLVM\bin") {
-            Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\LLVM\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "$llvmRoot\bin"
+
+      - name: Provision pinned offline DXC 1.8.2407
+        shell: pwsh
+        run: |
+          $dxcRoot = "C:\Tools\dxc-1.8.2407"
+          if (-not (Test-Path "$dxcRoot\bin\x64\dxc.exe")) {
+            $archive = Join-Path $env:RUNNER_TEMP "dxc_2024_07_31.zip"
+            Invoke-WebRequest `
+              -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2407/dxc_2024_07_31.zip" `
+              -OutFile $archive
+            Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
           }
+          Add-Content -Path $env:GITHUB_PATH -Value "$dxcRoot\bin\x64"
+
+      - name: Report provisioned toolchain versions
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          clang-cl --version
+          lld-link --version
+          dxc --version
+          cl 2>&1 | Select-Object -First 2
+          link 2>&1 | Select-Object -First 2
 
       - name: Run NW-01 contract test suite on Windows
         run: pytest -v
 
-      - name: Verify NW-01 Full mode gate behavior
+      - name: Verify NW-01 concrete build, reproducibility, dependency, and failure-recovery checks
         shell: pwsh
         run: |
-          $reportPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
-          & ./tools/verify-nw01.ps1 -Mode Full *>&1 | Tee-Object -FilePath $reportPath
+          $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-build-checks.json"
+          python tools/verify_nw01.py --mode BuildChecks --summary-json $summaryPath
           $code = $LASTEXITCODE
+          if (-not (Test-Path $summaryPath)) {
+            Write-Error "BuildChecks did not produce a summary JSON (exit code $code)."
+            exit 1
+          }
+          $summary = Get-Content -Raw -Path $summaryPath | ConvertFrom-Json
+          if ($code -ne 0 -or $summary.build_checks_passed -ne $true) {
+            Write-Error "BuildChecks failed concrete checks (exit code $code, concrete_failures=$($summary.concrete_failures -join ','))."
+            exit 1
+          }
+          $requiredChecks = @(
+            "reproducibility_build",
+            "msvc_ltcg_build",
+            "clang_debug_symbols",
+            "msvc_debug_symbols",
+            "failure_recovery"
+          )
+          foreach ($name in $requiredChecks) {
+            if ($summary.checks.$name.passed -ne $true) {
+              Write-Error "Required concrete check '$name' did not pass."
+              exit 1
+            }
+          }
+          Write-Host "BuildChecks passed all concrete build/reproducibility/dependency/failure-recovery checks."
+          Write-Host "Physical RTX 4060/RTX 50-series and clean-system evidence remain unverified and are NOT claimed by this job."
+
+      - name: Full physical-evidence gate (declared physical target only)
+        if: vars.NW_PHYSICAL_TARGET == 'true'
+        shell: pwsh
+        run: |
+          $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
+          python tools/verify_nw01.py --mode Full --summary-json $summaryPath
+          $code = $LASTEXITCODE
+          if (-not (Test-Path $summaryPath)) {
+            Write-Error "Full mode did not produce a summary JSON (exit code $code)."
+            exit 1
+          }
+          $summary = Get-Content -Raw -Path $summaryPath | ConvertFrom-Json
           if ($code -eq 0) {
-            Write-Host "verify-nw01.ps1 -Mode Full passed."
+            Write-Host "Full mode passed every concrete and physical-evidence check."
             exit 0
           }
           if ($code -eq 2) {
-            Write-Host "verify-nw01.ps1 -Mode Full exited 2: concrete build/schema/dependency/reproducibility/validation checks passed, but physical hardware or clean-system evidence remains unverified."
+            $requiredChecks = @(
+              "reproducibility_build",
+              "msvc_ltcg_build",
+              "clang_debug_symbols",
+              "msvc_debug_symbols",
+              "fixture_validation",
+              "msvc_fixture_validation",
+              "failure_recovery"
+            )
+            foreach ($name in $requiredChecks) {
+              if ($summary.checks.$name.passed -ne $true) {
+                Write-Error "Full mode exited 2 but required concrete check '$name' did not pass."
+                exit 1
+              }
+            }
+            Write-Host "Full mode passed all concrete checks; only physical evidence remains unverified."
             exit 0
           }
-          Write-Error "verify-nw01.ps1 -Mode Full detected concrete build, schema, dependency, reproducibility, or fixture-validation failure (exit code $code)."
-          exit $code
+          Write-Error "Full mode failed or skipped required build coverage (exit code $code)."
+          exit 1
+
+      - name: Upload NW-01 build-check evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw01-windows-build-checks
+          path: |
+            ${{ runner.temp }}/nw01-build-checks.json
+            benchmarks/reproducibility/*.json
+            benchmarks/ledgers/*.json
+            benchmarks/toolchain-manifest.v1.json
+          if-no-files-found: warn

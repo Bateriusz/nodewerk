@@ -129,6 +129,72 @@ def _classify_imported_dll(dll_name: str, inventory: dict[str, Any]) -> str:
     raise SizeLedgerError(f"Imported DLL '{dll_name}' has no valid schema classification in dependency inventory")
 
 
+_SECTION_CHARACTERISTIC_NAMES = (
+    (0x00000020, "CNT_CODE"),
+    (0x00000040, "CNT_INITIALIZED_DATA"),
+    (0x00000080, "CNT_UNINITIALIZED_DATA"),
+    (0x00000200, "LNK_INFO"),
+    (0x00000800, "LNK_REMOVE"),
+    (0x00001000, "LNK_COMDAT"),
+    (0x00002000, "MEM_DISCARDABLE"),
+    (0x00004000, "MEM_NOT_CACHED"),
+    (0x00008000, "MEM_NOT_PAGED"),
+    (0x00010000, "MEM_SHARED"),
+    (0x00020000, "MEM_EXECUTE"),
+    (0x00040000, "MEM_READ"),
+    (0x00080000, "MEM_WRITE"),
+)
+
+
+def _format_section_characteristics(characteristics_flags: int) -> str:
+    """Render the measured PE section characteristics deterministically."""
+    names = [
+        name
+        for mask, name in _SECTION_CHARACTERISTIC_NAMES
+        if characteristics_flags & mask
+    ]
+    known_mask = 0
+    for mask, _name in _SECTION_CHARACTERISTIC_NAMES:
+        known_mask |= mask
+    unknown = characteristics_flags & ~known_mask
+    if unknown:
+        names.append(f"0x{unknown:08X}")
+    return "|".join(names) if names else "0x00000000"
+
+
+def _measured_import_entries(pe_info: dict[str, Any], inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build import records exclusively from the inspected PE import and delay-import tables."""
+    entries: list[dict[str, Any]] = []
+    imports_by_dll = {
+        str(name).lower(): list(symbols)
+        for name, symbols in (pe_info.get("imports_by_dll") or {}).items()
+    }
+    delay_imports_by_dll = {
+        str(name).lower(): list(symbols)
+        for name, symbols in (pe_info.get("delay_imports_by_dll") or {}).items()
+    }
+    for dll_name in pe_info.get("imports", []):
+        lower_dll = str(dll_name).lower()
+        entries.append(
+            {
+                "dll_name": lower_dll,
+                "classification": _classify_imported_dll(lower_dll, inventory),
+                "symbols": imports_by_dll.get(lower_dll, []),
+            }
+        )
+    for dll_name in pe_info.get("delay_imports", []):
+        lower_dll = str(dll_name).lower()
+        entries.append(
+            {
+                "dll_name": lower_dll,
+                "classification": _classify_imported_dll(lower_dll, inventory),
+                "delay_load": True,
+                "symbols": delay_imports_by_dll.get(lower_dll, []),
+            }
+        )
+    return entries
+
+
 def record_ledger_from_pe_binary(
     binary_path: Path,
     ledger_path: Path,
@@ -151,10 +217,6 @@ def record_ledger_from_pe_binary(
 
     profile = ledger.get("build_profile", "release")
     fixture_id = ledger["fixture_id"]
-    existing_imports = {
-        imp["dll_name"].lower(): imp for imp in ledger.get("imports", [])
-    }
-
     expected_imports: list[str] | None = None
     if profile in ("release", "compact_experiment"):
         fx_json = repo_root / "fixtures" / fixture_id / "fixture.json"
@@ -218,41 +280,20 @@ def record_ledger_from_pe_binary(
     ledger["total_distributed_bytes"] = acct["total_distributed_bytes"]
     ledger["distributed_components"] = acct["distributed_components"]
 
-    updated_imports: list[dict[str, Any]] = []
-    for dll_name in pe_info["imports"]:
-        lower_dll = dll_name.lower()
-        if lower_dll in existing_imports:
-            updated_imports.append(existing_imports[lower_dll])
-        else:
-            updated_imports.append(
-                {
-                    "dll_name": lower_dll,
-                    "classification": _classify_imported_dll(lower_dll, inventory),
-                    "symbols": ["<imported>"],
-                }
-            )
-    for dll_name in pe_info.get("delay_imports", []):
-        lower_dll = dll_name.lower()
-        entry = existing_imports.get(lower_dll)
-        if entry is None:
-            entry = {
-                "dll_name": lower_dll,
-                "classification": _classify_imported_dll(lower_dll, inventory),
-                "symbols": ["<delay-loaded>"],
-                "delay_load": True,
-            }
-        else:
-            entry = dict(entry)
-            entry["delay_load"] = True
-        updated_imports.append(entry)
-    ledger["imports"] = updated_imports
-
-    sec_by_name = {s["name"]: s for s in pe_info["sections"]}
-    for sec_entry in ledger.get("executable_sections", []):
-        measured_sec = sec_by_name.get(sec_entry["name"])
-        if measured_sec:
-            sec_entry["virtual_size_bytes"] = measured_sec["virtual_size_bytes"]
-            sec_entry["raw_size_bytes"] = measured_sec["raw_size_bytes"]
+    # Rebuild section and import records from the inspected PE. Never carry forward
+    # template section names, stale measurements, or previously recorded symbols.
+    ledger["imports"] = _measured_import_entries(pe_info, inventory)
+    ledger["executable_sections"] = [
+        {
+            "name": section["name"],
+            "virtual_size_bytes": section["virtual_size_bytes"],
+            "raw_size_bytes": section["raw_size_bytes"],
+            "characteristics": _format_section_characteristics(
+                int(section.get("characteristics_flags", 0))
+            ),
+        }
+        for section in pe_info.get("sections", [])
+    ]
 
     if offline_dxil_bytes is not None:
         for sh in ledger.get("shaders", []):
@@ -278,7 +319,11 @@ def record_ledger_from_pe_binary(
             )
         }
 
-    removed_metrics = {"total_distributed_bytes", "executable_sections"}
+    removed_metrics = {
+        "total_distributed_bytes",
+        "executable_sections",
+        "imports[*].symbols",
+    }
     if offline_dxil_bytes is not None:
         removed_metrics.add("shaders[0].offline_dxil_bytes")
     if runtime_metrics is not None:

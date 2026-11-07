@@ -140,6 +140,10 @@
       "reason": "PE32+ section virtual/raw sizes require linking nw_compute_shader_fixture.exe with lld-link 18.1.8 on a Windows 11 SDK host."
     },
     {
+      "metric": "imports[*].symbols",
+      "reason": "Imported function names were not measured from the PE import lookup table on the current Linux host; the baseline symbol lists are expected-import targets, not verified measurements. Recording a PE with tools/size_ledger.py replaces them with measured symbols."
+    },
+    {
       "metric": "shaders[0].offline_dxil_bytes",
       "reason": "Offline DXC 1.8.2407 shader compiler is not installed on the current Linux host; recorded as null rather than synthesizing a fake DXBC container."
     },

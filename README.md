@@ -21,6 +21,10 @@ See [`docs/README.md`](docs/README.md) for the full NW-01 Architecture Decision 
   pwsh ./tools/verify-nw01.ps1 -Mode Full
   pwsh ./tools/verify-nw01.ps1 -Mode CleanSystem
   ```
+- **GPU-less CI concrete build gate (no physical-evidence claim):**
+  ```powershell
+  python tools/verify_nw01.py --mode BuildChecks --summary-json build-checks.json
+  ```
 
 `Full` records two-clean-directory reproducibility results, validated offline DXC DXIL
 evidence, measured size ledgers, and D3D12-validation fixture runs. `CleanSystem` records
@@ -28,6 +32,12 @@ SDK-absence checks and the observed GPU compute readback hash on the target mach
 
 `Full` exits `0` only when the complete baseline and physical evidence are verified, `2` when
 concrete checks pass but RTX 4060/RTX 50-series or clean-system evidence remains unavailable,
-and `1` when a build, schema, dependency, reproducibility, or fixture-validation check fails.
+`3` when required build/toolchain coverage (including MSVC/LTCG and failure-recovery
+diagnostics) was skipped or unavailable, and `1` when a build, schema, dependency,
+reproducibility, or fixture-validation check fails. Physical evidence is accepted only when
+its recorded executable hashes and toolchain provenance match the selected, verified release
+ledgers. `BuildChecks` performs the concrete build/reproducibility/dependency/failure-recovery
+checks without claiming physical coverage; it exits non-zero if any required build check was
+skipped.
 Measured benchmark capture (timing, committed memory, capabilities) is available through
 `python tools/verify_nw01.py --record-benchmark <tier> --binary-dir <deployment-dir>`.

@@ -174,7 +174,32 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
             end = len(pe_bytes)
         return pe_bytes[offset:end].decode("ascii", errors="replace")
 
+    def read_import_symbols(thunk_rva: int) -> list[str]:
+        """Read IMAGE_IMPORT_BY_NAME entries from an ILT/INT for measured import accounting."""
+        if thunk_rva == 0:
+            return []
+        thunk_offset = rva_to_offset(thunk_rva)
+        if thunk_offset is None:
+            return []
+        symbols: list[str] = []
+        pos = thunk_offset
+        while pos + 8 <= len(pe_bytes):
+            thunk = struct.unpack_from("<Q", pe_bytes, pos)[0]
+            if thunk == 0:
+                break
+            if thunk & 0x8000000000000000:
+                symbols.append(f"#{thunk & 0xFFFF}")
+            else:
+                hint_name_offset = rva_to_offset(thunk & 0x7FFFFFFF)
+                if hint_name_offset is not None and hint_name_offset + 2 <= len(pe_bytes):
+                    symbols.append(read_cstring(hint_name_offset + 2))
+            pos += 8
+            if len(symbols) >= 65536:
+                break
+        return symbols
+
     imports: list[str] = []
+    imports_by_dll: dict[str, list[str]] = {}
     if import_dir_rva != 0 and import_dir_size >= 20:
         imp_offset = rva_to_offset(import_dir_rva)
         if imp_offset is not None:
@@ -187,9 +212,19 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
                 if name_off is not None:
                     dll_name = read_cstring(name_off)
                     imports.append(dll_name)
+                    # Prefer the Import Lookup Table. A zero ILT usually means the
+                    # import table has no names that can be measured without loading
+                    # the image, so leave the measured symbol list empty.
+                    symbols = read_import_symbols(ilt_rva)
+                    key = dll_name.lower()
+                    existing = imports_by_dll.setdefault(key, [])
+                    for symbol in symbols:
+                        if symbol not in existing:
+                            existing.append(symbol)
                 pos += 20
 
     delay_imports: list[str] = []
+    delay_imports_by_dll: dict[str, list[str]] = {}
     if delay_dir_rva != 0 and delay_dir_size >= 32:
         delay_offset = rva_to_offset(delay_dir_rva)
         if delay_offset is not None:
@@ -218,7 +253,17 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
                     name_rva = name_rva_or_va - image_base
                 name_off = rva_to_offset(name_rva)
                 if name_off is not None:
-                    delay_imports.append(read_cstring(name_off))
+                    dll_name = read_cstring(name_off)
+                    delay_imports.append(dll_name)
+                    int_rva = _int
+                    if not (attributes & 1):
+                        int_rva = _int - image_base if _int >= image_base else 0
+                    symbols = read_import_symbols(int_rva)
+                    key = dll_name.lower()
+                    existing = delay_imports_by_dll.setdefault(key, [])
+                    for symbol in symbols:
+                        if symbol not in existing:
+                            existing.append(symbol)
                 pos += 32
                 remaining -= 32
 
@@ -273,7 +318,9 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
         "dll_characteristics": dll_characteristics,
         "sections": sections,
         "imports": imports,
+        "imports_by_dll": imports_by_dll,
         "delay_imports": delay_imports,
+        "delay_imports_by_dll": delay_imports_by_dll,
         "codeview_entries": codeview_entries,
     }
 

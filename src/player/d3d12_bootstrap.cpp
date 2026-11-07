@@ -124,6 +124,14 @@ double NwNowMs() noexcept {
 }
 
 #if defined(_WIN32)
+void PumpPendingWindowMessages(HWND hwnd) noexcept {
+    MSG message{};
+    while (PeekMessageA(&message, hwnd, 0u, 0u, PM_REMOVE)) {
+        TranslateMessage(&message);
+        DispatchMessageA(&message);
+    }
+}
+
 struct ComReleaseGuard {
     IUnknown* ptr = nullptr;
     explicit ComReleaseGuard(IUnknown* value) noexcept : ptr(value) {}
@@ -559,7 +567,7 @@ DiagnosticRecord ExecuteEmptyPlayerBootstrap(const BootstrapConfig& config) noex
             ExitCode::OsVersionUnsupported,
             0x8007047Eu,
             "os_version_check",
-            "OS build is older than minimum tested Windows 11 x64 build 22631",
+            "OS build is older than the pinned minimum target Windows 11 x64 build 22631",
             {}};
     }
 
@@ -731,7 +739,7 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
             ExitCode::OsVersionUnsupported,
             0x8007047Eu,
             "os_version_check",
-            "OS build is older than minimum tested Windows 11 x64 build 22631",
+            "OS build is older than the pinned minimum target Windows 11 x64 build 22631",
             {}};
     }
 
@@ -761,7 +769,7 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         0,
         wc.lpszClassName,
         "Nodewerk NW-01 Clear/Present Fixture",
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         static_cast<int>(config.width),
@@ -773,6 +781,12 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     if (!hwnd) {
         return DiagnosticRecord{ExitCode::WindowCreationFailed, GetLastError(), "win32_window", "CreateWindowExA failed", {}};
     }
+    // A hidden or never-pumped window can make Present return DXGI_STATUS_OCCLUDED,
+    // which is a success status. Show and pump the window so the fixture actually
+    // exercises visible presentation rather than silently accepting an occluded run.
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+    PumpPendingWindowMessages(hwnd);
 
     UINT dxgi_flags = config.enable_d3d12_validation ? DXGI_CREATE_FACTORY_DEBUG : 0u;
     IDXGIFactory4* factory = nullptr;
@@ -835,8 +849,11 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     DXGI_ADAPTER_DESC1 selected_desc{};
     if (SUCCEEDED(selected_adapter->GetDesc1(&selected_desc))) {
         for (std::size_t c = 0; c < 127u && selected_desc.Description[c] != L'\0'; ++c) {
-            const wchar_t wc = selected_desc.Description[c];
-            adapter_name[c] = (wc >= 0x20 && wc <= 0x7E) ? static_cast<char>(wc) : '?';
+            const wchar_t wide_char = selected_desc.Description[c];
+            adapter_name[c] =
+                (wide_char >= 0x20 && wide_char <= 0x7E)
+                    ? static_cast<char>(wide_char)
+                    : '?';
         }
     }
     AdapterCapabilitySnapshot cap_snapshot{};
@@ -1067,6 +1084,7 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     static constexpr float kClearColor[4] = {0.05f, 0.10f, 0.20f, 1.0f};
 
     for (std::uint32_t frame = 0; frame < config.frame_count; ++frame) {
+        PumpPendingWindowMessages(hwnd);
         const UINT backbuffer_idx = swapchain->GetCurrentBackBufferIndex();
         HRESULT loop_hr = allocator->Reset();
         if (FAILED(loop_hr)) {
@@ -1136,6 +1154,15 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         ID3D12CommandList* lists[] = {cmd_list};
         queue->ExecuteCommandLists(1, lists);
         const HRESULT present_hr = swapchain->Present(0, 0);
+        if (present_hr == DXGI_STATUS_OCCLUDED) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::PresentationOccluded,
+                static_cast<std::uint32_t>(present_hr),
+                "swapchain_present_occluded",
+                "IDXGISwapChain3::Present returned DXGI_STATUS_OCCLUDED; the window was not visibly presented and the run cannot certify visible clear/present execution",
+                {}};
+        }
         if (FAILED(present_hr)) {
             const HRESULT removed = device->GetDeviceRemovedReason();
             const HRESULT failure = FAILED(removed) ? removed : present_hr;
@@ -1255,7 +1282,7 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
             ExitCode::OsVersionUnsupported,
             0x8007047Eu,
             "os_version_check",
-            "OS build is older than minimum tested Windows 11 x64 build 22631",
+            "OS build is older than the pinned minimum target Windows 11 x64 build 22631",
             {}};
     }
 
@@ -1331,8 +1358,11 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         }
         if (SUCCEEDED(D3D12CreateDevice(candidate, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
             for (std::size_t c = 0; c < 127u && desc.Description[c] != L'\0'; ++c) {
-                const wchar_t wc = desc.Description[c];
-                adapter_name[c] = (wc >= 0x20 && wc <= 0x7E) ? static_cast<char>(wc) : '?';
+                const wchar_t wide_char = desc.Description[c];
+                adapter_name[c] =
+                    (wide_char >= 0x20 && wide_char <= 0x7E)
+                        ? static_cast<char>(wide_char)
+                        : '?';
             }
             selected_adapter = candidate;
             break;

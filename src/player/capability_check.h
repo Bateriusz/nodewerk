@@ -6,7 +6,7 @@
 namespace nw::player {
 
 // Baseline capability contract pinned for NW-01 through NW-12:
-// - Windows 11 x64 (minimum tested build 22631)
+// - Windows 11 x64 (pinned minimum target build 22631; execution evidence pending)
 // - D3D12 Feature Level 12_0 (0xc000)
 // - Shader Model 6.0 (0x60)
 // - Resource Binding Tier 2 & Resource Heap Tier 2 (matching benchmarks/capability-manifest.v1.json)

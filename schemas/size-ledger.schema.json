@@ -103,7 +103,7 @@
         "required": ["name", "virtual_size_bytes", "raw_size_bytes", "characteristics"],
         "additionalProperties": false,
         "properties": {
-          "name": { "type": "string", "pattern": "^\\.[a-z0-9$_]+$" },
+          "name": { "type": "string", "pattern": "^\\.[A-Za-z0-9$_]+$" },
           "virtual_size_bytes": { "type": ["integer", "null"], "minimum": 0 },
           "raw_size_bytes": { "type": ["integer", "null"], "minimum": 0 },
           "characteristics": { "type": "string" }
@@ -126,7 +126,7 @@
           "delay_load": { "type": "boolean" },
           "symbols": {
             "type": "array",
-            "minItems": 1,
+            "minItems": 0,
             "items": { "type": "string" }
           }
         }

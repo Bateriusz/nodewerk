@@ -11,7 +11,7 @@ Because player and measurement fixture builds disable C++ exceptions (`/EHs-c-`,
 | ---: | :--- | :--- | :--- |
 | `0` | `Success` | `ok` | Normal completion; all GPU/Win32 resources released cleanly. |
 | `10` | `InvalidArguments` | `platform_bootstrap` | Unrecognized CLI flag or invalid argument value. |
-| `11` | `OsVersionUnsupported` | `platform_bootstrap` | OS build is older than minimum tested Windows 11 x64 build (`10.0.22631`). |
+| `11` | `OsVersionUnsupported` | `platform_bootstrap` | OS build is older than the pinned minimum target Windows 11 x64 build (`10.0.22631`). |
 | `12` | `WindowCreationFailed` | `platform_bootstrap` | Win32 `RegisterClassA` or `CreateWindowExA` failed. |
 | `20` | `DxgiFactoryCreationFailed` | `device_and_capability` | `CreateDXGIFactory2` failed. |
 | `21` | `AdapterEnumerationFailed` | `device_and_capability` | No hardware DXGI adapter supporting `D3D_FEATURE_LEVEL_12_0` was found. |
@@ -26,6 +26,7 @@ Because player and measurement fixture builds disable C++ exceptions (`/EHs-c-`,
 | `33` | `ResourceAllocationFailed` | `resource_and_queue_init` | `CreateCommittedResource` failed for default UAV or readback buffer. |
 | `34` | `CommandListRecordingFailed` | `resource_and_queue_init` | `ID3D12CommandAllocator::Reset`, `ID3D12GraphicsCommandList::Reset`, or `Close` returned a failing HRESULT. |
 | `35` | `PresentationFailed` | `resource_and_queue_init` | `IDXGISwapChain3::Present` failed without a reported device removal. |
+| `36` | `PresentationOccluded` | `resource_and_queue_init` | `IDXGISwapChain3::Present` returned `DXGI_STATUS_OCCLUDED`; the window was not visibly presented, so the run cannot certify visible clear/present execution. |
 | `40` | `OfflineShaderPayloadInvalid` | `offline_shader_and_pipeline` | Embedded offline DXBC/DXIL container failed header or chunk integrity check. |
 | `41` | `RootSignatureCreationFailed` | `offline_shader_and_pipeline` | `D3D12SerializeRootSignature` or `CreateRootSignature` failed. |
 | `42` | `PipelineStateCreationFailed` | `offline_shader_and_pipeline` | `CreateComputePipelineState` / graphics PSO creation failed for offline DXIL. |

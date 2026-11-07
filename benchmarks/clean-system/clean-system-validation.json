@@ -60,6 +60,15 @@
     "observed_output_sha256": null,
     "output_verified": null
   },
+  "artifact_provenance": {
+    "toolchain_id": null,
+    "artifact_sha256": {
+      "empty_player": null,
+      "clear_present": null,
+      "compute_shader": null
+    },
+    "source": "unavailable"
+  },
   "fixture_runs": [
     {
       "fixture_id": "empty_player",

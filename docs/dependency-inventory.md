@@ -9,7 +9,7 @@
 To prevent hidden deployment overhead or uncounted redistributables from distorting size budgets:
 
 1. **Excluded Components (Counted as `0` Distributed Bytes):**
-   - **Documented Windows 11 Inbox OS DLLs** (present on all Windows 11 x64 installations `>= 10.0.22631.4317`):
+   - **Documented Windows 11 Inbox OS DLLs** (inbox components for the pinned Windows 11 x64 target build; physical absence/version evidence remains unverified until the CleanSystem capture runs):
      - `kernel32.dll` — Win32 process, synchronization, timing, and module management
      - `user32.dll` — Win32 window registration and message loop for swapchain presentation
      - `gdi32.dll` — Win32 display subsystem support

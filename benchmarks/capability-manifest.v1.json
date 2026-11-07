@@ -5,6 +5,7 @@
     "os": "windows_11_x64",
     "architecture": "x86_64",
     "minimum_tested_windows_build": "10.0.22631.4317",
+    "minimum_tested_windows_build_status": "target_pinned_unverified",
     "tested_windows_builds": [
       {
         "build_number": "10.0.22631.4317",

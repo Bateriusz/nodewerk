@@ -60,6 +60,11 @@ NW_METRIC_LINE_RE = re.compile(r"^NW_([A-Z0-9_]+)=(.+)$", re.MULTILINE)
 NW_VALIDATION_ERROR_RE = re.compile(r"^NW_D3D12_VALIDATION_ERROR=(.+)$", re.MULTILINE)
 NW_VALIDATION_MESSAGE_RE = re.compile(r"^NW_D3D12_VALIDATION_MESSAGE=(.+)$", re.MULTILINE)
 NW_LOADED_MODULE_RE = re.compile(r"^NW_LOADED_MODULE=(.+)$", re.MULTILINE)
+NW_DIAGNOSTIC_LINE_RE = re.compile(
+    r"^\[NW-DIAG\]\[exit_code=([0-9]+)\]\[name=([A-Za-z0-9_]+)\]"
+    r"\[category=([a-z_]+)\]\[stage=([A-Za-z0-9_]+)\]\[hr=0x([0-9A-Fa-f]{8})\]",
+    re.MULTILINE,
+)
 
 
 def resolve_fixture_executable(directory: Path, fixture_id: str, executable_name: str) -> Path | None:
@@ -1276,8 +1281,82 @@ def probe_sdk_absence(
     }
 
 
+def load_selected_toolchain_artifact_hashes(
+    repo_root: Path,
+) -> tuple[str | None, dict[str, str]]:
+    """Return the selected toolchain and the verified ledger hashes for its release fixtures."""
+    toolchain_path = repo_root / "benchmarks" / "toolchain-manifest.v1.json"
+    toolchain_data = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    selected_toolchain = (
+        toolchain_data.get("selected_toolchain", {}).get("toolchain_id")
+    )
+    hashes: dict[str, str] = {}
+    if not selected_toolchain:
+        return None, hashes
+    for ledger_path in sorted((repo_root / "benchmarks" / "ledgers").glob("*.json")):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        if ledger.get("verification_status") != "verified":
+            continue
+        if ledger.get("build_profile") != "release":
+            continue
+        if ledger.get("toolchain_id") != selected_toolchain:
+            continue
+        fixture_id = str(ledger.get("fixture_id"))
+        for component in ledger.get("distributed_components", []):
+            if (
+                component.get("category") == "executable"
+                and component.get("sha256")
+            ):
+                hashes[fixture_id] = str(component["sha256"]).lower()
+                break
+    return selected_toolchain, hashes
+
+
+def _provenance_reconciliation_problems(
+    *,
+    evidence_kind: str,
+    evidence_hash: str | None,
+    evidence_toolchain: str | None,
+    selected_toolchain: str | None,
+    expected_hash: str | None,
+    fixture_id: str,
+) -> list[str]:
+    """Return concrete reasons a physical-evidence artifact is not bound to the selected build."""
+    problems: list[str] = []
+    if not evidence_toolchain:
+        problems.append(
+            f"{evidence_kind} does not record toolchain provenance, so its {fixture_id} "
+            "measurement cannot be bound to the selected build"
+        )
+    elif selected_toolchain and evidence_toolchain != selected_toolchain:
+        problems.append(
+            f"{evidence_kind} was recorded with toolchain '{evidence_toolchain}', but the "
+            f"selected toolchain is '{selected_toolchain}'"
+        )
+    if expected_hash is None:
+        problems.append(
+            f"{evidence_kind} cannot be verified because the selected toolchain has no "
+            f"verified release-ledger artifact hash for {fixture_id}"
+        )
+    elif not evidence_hash:
+        problems.append(
+            f"{evidence_kind} does not record the executed {fixture_id} artifact hash"
+        )
+    elif evidence_hash.lower() != expected_hash:
+        problems.append(
+            f"{evidence_kind} {fixture_id} artifact hash {evidence_hash.lower()} does not "
+            f"match the selected toolchain ledger hash {expected_hash}"
+        )
+    return problems
+
+
 def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
-    """Check whether all physical hardware, reproducibility, and clean-system evidence is verified."""
+    """Check whether all physical hardware, reproducibility, and clean-system evidence is verified.
+
+    Verification flags alone are insufficient: physical-machine results must also name the
+    selected toolchain and carry executable hashes that match the currently recorded,
+    verified release ledgers. This prevents new binaries from inheriting stale evidence.
+    """
     unmet_requirements: list[str] = []
 
     shader_evidence = check_shader_manifest_evidence(repo_root)
@@ -1287,6 +1366,18 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
             f"(verification_status={shader_evidence['manifest_verification_status']}, "
             f"compiled_offline_with_dxc={shader_evidence['compiled_offline_with_dxc']})"
         )
+
+    selected_toolchain, expected_hashes = load_selected_toolchain_artifact_hashes(
+        repo_root
+    )
+    required_artifact_fixtures = ("empty_player", "clear_present", "compute_shader")
+    for fixture_id in required_artifact_fixtures:
+        if expected_hashes.get(fixture_id) is None:
+            unmet_requirements.append(
+                f"Selected toolchain '{selected_toolchain}' has no verified release-ledger "
+                f"artifact hash for fixture '{fixture_id}'; physical evidence cannot be bound "
+                "to a reproducible build"
+            )
 
     hw_files = [
         ("rtx_4060_desktop", repo_root / "benchmarks" / "hardware" / "rtx-4060-baseline.json"),
@@ -1299,6 +1390,31 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
                 f"Hardware baseline '{tier}' ({hw_path.name}) is '{data.get('verification_status')}' "
                 f"(benchmark_passed={data.get('benchmark_passed')})"
             )
+            continue
+        provenance = data.get("artifact_provenance") or {}
+        if provenance.get("source") != "recorded_ledger_artifact_hash":
+            unmet_requirements.append(
+                f"Hardware baseline '{tier}' does not certify its artifact provenance "
+                "source as a recorded ledger hash"
+            )
+        evidence_hashes = provenance.get("artifact_sha256") or {}
+        results_by_fixture = {
+            str(result.get("fixture_id")): result.get("sha256")
+            for result in data.get("fixture_results", [])
+        }
+        for fixture_id in ("clear_present", "compute_shader"):
+            evidence_hash = evidence_hashes.get(fixture_id)
+            if not evidence_hash:
+                evidence_hash = results_by_fixture.get(fixture_id)
+            for problem in _provenance_reconciliation_problems(
+                evidence_kind=f"Hardware baseline '{tier}'",
+                evidence_hash=evidence_hash,
+                evidence_toolchain=provenance.get("toolchain_id"),
+                selected_toolchain=selected_toolchain,
+                expected_hash=expected_hashes.get(fixture_id),
+                fixture_id=fixture_id,
+            ):
+                unmet_requirements.append(problem)
 
     repro_files = [
         ("clang-cl-lld", repo_root / "benchmarks" / "reproducibility" / "release-build-reproducibility.json"),
@@ -1323,6 +1439,36 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
             f"Clean physical Windows 11 validation ({clean_path.name}) is '{clean_data.get('verification_status')}' "
             f"(clean_system_passed={clean_data.get('clean_system_passed')})"
         )
+    else:
+        provenance = clean_data.get("artifact_provenance") or {}
+        if provenance.get("source") != "recorded_ledger_artifact_hash":
+            unmet_requirements.append(
+                "Clean-system report does not certify its artifact provenance source as "
+                "a recorded ledger hash"
+            )
+        deployed_files = (
+            clean_data.get("deployed_dependency_inventory", {}).get("deployed_files", [])
+        )
+        deployed_hashes = {
+            str(item.get("file_name", "")).replace("\\", "/").rsplit("/", 1)[-1].lower(): item.get("sha256")
+            for item in deployed_files
+            if item.get("category") == "executable"
+        }
+        executable_names = {
+            "empty_player": "nw_empty_player.exe",
+            "clear_present": "nw_clear_present_fixture.exe",
+            "compute_shader": "nw_compute_shader_fixture.exe",
+        }
+        for fixture_id in required_artifact_fixtures:
+            for problem in _provenance_reconciliation_problems(
+                evidence_kind="Clean-system report",
+                evidence_hash=deployed_hashes.get(executable_names[fixture_id]),
+                evidence_toolchain=provenance.get("toolchain_id"),
+                selected_toolchain=selected_toolchain,
+                expected_hash=expected_hashes.get(fixture_id),
+                fixture_id=fixture_id,
+            ):
+                unmet_requirements.append(problem)
 
     toolchain_path = repo_root / "benchmarks" / "toolchain-manifest.v1.json"
     toolchain_data = json.loads(toolchain_path.read_text(encoding="utf-8"))
@@ -1481,6 +1627,131 @@ def execute_release_fixture_validation(
         "runtime_module_evidence_source": (
             "observed_fixture_module_inventory" if observed_modules else "unavailable"
         ),
+    }
+
+
+FAILURE_RECOVERY_CASES = (
+    ("OsVersionUnsupported", "platform_bootstrap", 11),
+    ("InboxRuntimeBlocker", "device_and_capability", 25),
+    ("PresentationOccluded", "resource_and_queue_init", 36),
+    ("ComputeVerificationFailed", "gpu_execution_and_validation", 60),
+    ("D3D12ValidationError", "gpu_execution_and_validation", 61),
+)
+
+
+def run_failure_recovery_checks(
+    binary_dir: Path,
+    *,
+    timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    """Execute fixture failure injections and verify distinct exit codes plus diagnostic fields.
+
+    This is an executable check, not a source-text inspection. Each simulated failure must
+    return its documented numeric exit code and emit one structured NW-DIAG line whose
+    name/category/stage/HRESULT fields match the contract. Inbox-runtime blockers must also
+    carry every mandatory blocker field.
+    """
+    exe_path = resolve_fixture_executable(
+        binary_dir, "empty_player", "nw_empty_player.exe"
+    )
+    if exe_path is None:
+        return {
+            "passed": False,
+            "skipped": True,
+            "reason": (
+                "Failure-recovery diagnostics were not executed because "
+                f"nw_empty_player.exe is absent from {binary_dir}."
+            ),
+            "cases": [],
+        }
+
+    observed_codes: set[int] = set()
+    cases: list[dict[str, Any]] = []
+    all_passed = True
+    for name, category, expected_code in FAILURE_RECOVERY_CASES:
+        command = [
+            str(exe_path),
+            "--simulate-failure",
+            name,
+            "--diagnostics",
+        ]
+        try:
+            proc = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            all_passed = False
+            cases.append(
+                {
+                    "name": name,
+                    "expected_exit_code": expected_code,
+                    "passed": False,
+                    "failure_reason": f"failed to execute diagnostic injection: {exc}",
+                }
+            )
+            continue
+
+        diagnostics = proc.stderr or ""
+        match = NW_DIAGNOSTIC_LINE_RE.search(diagnostics)
+        required_blocker_fields = (
+            "win_build=",
+            "d3d12_dll=",
+            "feature=",
+            "summary=",
+            "recovery=",
+        )
+        missing_blocker_fields = (
+            [
+                field
+                for field in required_blocker_fields
+                if field not in diagnostics
+            ]
+            if name == "InboxRuntimeBlocker"
+            else []
+        )
+        line_ok = bool(
+            match
+            and int(match.group(1)) == expected_code
+            and match.group(2) == name
+            and match.group(3) == category
+            and match.group(4)
+            and match.group(5)
+        )
+        code_ok = proc.returncode == expected_code
+        case_passed = bool(
+            code_ok and line_ok and not missing_blocker_fields
+        )
+        observed_codes.add(proc.returncode)
+        if not case_passed:
+            all_passed = False
+        cases.append(
+            {
+                "name": name,
+                "expected_exit_code": expected_code,
+                "observed_exit_code": proc.returncode,
+                "diagnostic_line_matched": line_ok,
+                "missing_blocker_fields": missing_blocker_fields,
+                "passed": case_passed,
+                "stderr_tail": (
+                    diagnostics.strip().splitlines()[-1][:500]
+                    if diagnostics.strip()
+                    else None
+                ),
+            }
+        )
+
+    distinct_exit_codes = len(observed_codes) == len(FAILURE_RECOVERY_CASES)
+    if not distinct_exit_codes:
+        all_passed = False
+    return {
+        "passed": all_passed,
+        "distinct_exit_codes": distinct_exit_codes,
+        "observed_exit_codes": sorted(observed_codes),
+        "cases": cases,
     }
 
 
@@ -1968,7 +2239,11 @@ def extract_runtime_metrics_by_fixture(
     return result
 
 
-def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
+def run_full_mode(
+    repo_root: Path,
+    *,
+    gpu_fixtures_available: bool = True,
+) -> tuple[int, dict[str, Any]]:
     """Execute Mode=Full verification checks and record reproducibility evidence when built."""
     report: dict[str, Any] = {
         "mode": "Full",
@@ -2078,6 +2353,11 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                 "passed": False,
                 "reason": "Skipped because the pinned clang-cl Windows build failed",
             }
+            report["checks"]["failure_recovery"] = {
+                "passed": False,
+                "skipped": True,
+                "reason": "Skipped because the pinned clang-cl Windows build failed",
+            }
 
         if repro_cmp is not None:
             if repro_cmp["all_artifacts_match"]:
@@ -2112,11 +2392,25 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                 )
                 shader_ok = offline_shader["passed"]
                 report["checks"]["offline_shader"] = offline_shader
-                fixture_validation = execute_release_fixture_validation(
-                    repo_root, repo_root / "build" / "repro-clean-a"
+                if gpu_fixtures_available:
+                    fixture_validation = execute_release_fixture_validation(
+                        repo_root, repo_root / "build" / "repro-clean-a"
+                    )
+                    fixture_validation_passed = fixture_validation["passed"]
+                    report["checks"]["fixture_validation"] = fixture_validation
+                else:
+                    fixture_validation = {"passed": False}
+                    report["checks"]["fixture_validation"] = {
+                        "passed": False,
+                        "skipped": True,
+                        "reason": (
+                            "Skipped because this host exposes no target D3D12 hardware; "
+                            "run Mode=Full on the physical validation machine."
+                        ),
+                    }
+                report["checks"]["failure_recovery"] = run_failure_recovery_checks(
+                    repo_root / "build" / "repro-clean-a"
                 )
-                fixture_validation_passed = fixture_validation["passed"]
-                report["checks"]["fixture_validation"] = fixture_validation
 
                 try:
                     clang_recording = record_release_ledgers(
@@ -2147,6 +2441,11 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                     "skipped": True,
                     "reason": "Skipped because two clang-cl clean-directory hashes did not match",
                 }
+                report["checks"]["failure_recovery"] = {
+                    "passed": False,
+                    "skipped": True,
+                    "reason": "Skipped because two clang-cl clean-directory hashes did not match",
+                }
     else:
         report["checks"]["reproducibility_build"] = {
             "passed": False,
@@ -2162,6 +2461,11 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
             "passed": False,
             "skipped": True,
             "reason": "Skipped release fixture execution because clang-cl host prerequisites are missing",
+        }
+        report["checks"]["failure_recovery"] = {
+            "passed": False,
+            "skipped": True,
+            "reason": "Skipped failure-recovery diagnostics because clang-cl host prerequisites are missing",
         }
 
     # 4b. MSVC/LTCG comparison path is independent: missing cl.exe only removes that evidence.
@@ -2214,12 +2518,23 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                     }
                 # The MSVC/LTCG comparison is only eligible for selection when its identical
                 # clear/present and compute fixtures actually execute successfully.
-                msvc_fixture_validation = execute_release_fixture_validation(
-                    repo_root,
-                    repo_root / "build" / "msvc-release-ltcg-clean-a",
-                )
-                msvc_fixture_validation_passed = msvc_fixture_validation["passed"]
-                report["checks"]["msvc_fixture_validation"] = msvc_fixture_validation
+                if gpu_fixtures_available:
+                    msvc_fixture_validation = execute_release_fixture_validation(
+                        repo_root,
+                        repo_root / "build" / "msvc-release-ltcg-clean-a",
+                    )
+                    msvc_fixture_validation_passed = msvc_fixture_validation["passed"]
+                    report["checks"]["msvc_fixture_validation"] = msvc_fixture_validation
+                else:
+                    msvc_fixture_validation = {"passed": False}
+                    report["checks"]["msvc_fixture_validation"] = {
+                        "passed": False,
+                        "skipped": True,
+                        "reason": (
+                            "Skipped because this host exposes no target D3D12 hardware; "
+                            "run Mode=Full on the physical validation machine."
+                        ),
+                    }
 
                 try:
                     msvc_recording = record_release_ledgers(
@@ -2353,6 +2668,7 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         "msvc_debug_symbols",
         "fixture_validation",
         "msvc_fixture_validation",
+        "failure_recovery",
         "clang_ledger_recording",
         "msvc_ledger_recording",
     )
@@ -2405,6 +2721,7 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         and report["checks"].get("msvc_ltcg_build", {}).get("passed") is True
         and report["checks"].get("fixture_validation", {}).get("passed") is True
         and report["checks"].get("msvc_fixture_validation", {}).get("passed") is True
+                and report["checks"].get("failure_recovery", {}).get("passed") is True
         and report["checks"].get("clang_debug_symbols", {}).get("passed") is True
         and report["checks"].get("msvc_debug_symbols", {}).get("passed") is True
     ):
@@ -2412,7 +2729,33 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         report["gate_status"] = "passed"
         return 0, report
 
-    return (1 if concrete_failures else 2), report
+    if concrete_failures:
+        report["gate_status"] = "failed"
+        return 1, report
+
+    # Distinguish "concrete checks passed, physical evidence still missing" (2) from
+    # "the required build/toolchain coverage was skipped or unavailable" (3). CI must
+    # never treat missing build coverage as an acceptable evidence-only gap.
+    build_coverage_checks = (
+        "offline_shader",
+        "reproducibility_build",
+        "msvc_ltcg_build",
+        "clang_debug_symbols",
+        "msvc_debug_symbols",
+        "failure_recovery",
+    )
+    missing_build_coverage = [
+        name
+        for name in build_coverage_checks
+        if report["checks"].get(name, {}).get("passed") is not True
+    ]
+    report["missing_build_coverage"] = missing_build_coverage
+    if missing_build_coverage:
+        report["gate_status"] = "build_coverage_missing"
+        return 3, report
+
+    report["gate_status"] = "evidence_incomplete"
+    return 2, report
 
 
 def run_clean_system_mode(
@@ -2490,6 +2833,7 @@ def run_clean_system_mode(
     deployed_files: list[dict[str, Any]] = []
     resolved_inbox_dlls: set[str] = set()
     fixture_runs: list[dict[str, Any]] = []
+    fixture_stdout: dict[str, str] = {}
     all_runs_passed = True
     compute_readback: dict[str, Any] | None = None
     compute_stdout = ""
@@ -2568,6 +2912,7 @@ def run_clean_system_mode(
             ret_code = proc.returncode
             stdout = proc.stdout
             stderr = proc.stderr
+        fixture_stdout[fixture_id] = stdout
 
         passed = ret_code == 0
         validation = parse_validation_evidence(stdout, stderr)
@@ -2626,12 +2971,65 @@ def run_clean_system_mode(
 
     detected_sys_env = detect_host_system_environment(compute_stdout)
     override_env = system_environment or {}
+    adapter_evidence = reconcile_fixture_adapter_descriptions(
+        [
+            {"fixture_id": fixture_id, "stdout": stdout}
+            for fixture_id, stdout in fixture_stdout.items()
+        ]
+    )
+    observed_adapter = adapter_evidence["executing_adapter"]
+    override_gpu_model = override_env.get("gpu_model")
+    detected_gpu_model = detected_sys_env.get("gpu_model")
+    detected_driver = detected_sys_env.get("nvidia_driver_version")
+    adapter_reconciliation_failures: list[str] = []
+    if not observed_adapter:
+        adapter_reconciliation_failures.append(
+            "executing fixtures did not report an adapter description"
+        )
+    elif not adapter_evidence["consistent"]:
+        adapter_reconciliation_failures.append(
+            "raster and compute fixtures did not report the same executing adapter"
+        )
+    if (
+        observed_adapter
+        and override_gpu_model
+        and str(override_gpu_model).strip().lower()
+        != str(observed_adapter).strip().lower()
+    ):
+        adapter_reconciliation_failures.append(
+            "operator-provided GPU model does not match the adapter reported by the executing fixtures"
+        )
+    if (
+        observed_adapter
+        and detected_gpu_model
+        and str(detected_gpu_model).strip().lower()
+        != str(observed_adapter).strip().lower()
+    ):
+        adapter_reconciliation_failures.append(
+            "host-registry GPU model does not match the adapter reported by the executing fixtures"
+        )
+        detected_gpu_model = None
+        detected_driver = None
+    adapter_bound = bool(
+        observed_adapter
+        and adapter_evidence["consistent"]
+        and not adapter_reconciliation_failures
+    )
     measured_os_build = override_env.get("os_build") or detected_sys_env.get("os_build")
-    measured_gpu_model = override_env.get("gpu_model") or detected_sys_env.get("gpu_model")
-    measured_driver_ver = override_env.get("nvidia_driver_version") or detected_sys_env.get("nvidia_driver_version")
+    measured_gpu_model = (
+        observed_adapter or override_gpu_model or detected_gpu_model
+    )
+    measured_driver_ver = (
+        (override_env.get("nvidia_driver_version") or detected_driver)
+        if adapter_bound
+        else None
+    )
     system_env_measured = bool(
         measured_os_build
         and re.match(r"^10\.0\.(22[0-9]{3}|26[0-9]{3})\.[0-9]+$", str(measured_os_build))
+        and observed_adapter
+        and adapter_evidence["consistent"]
+        and not adapter_reconciliation_failures
         and _is_supported_nvidia_gpu_and_driver(
             str(measured_gpu_model) if measured_gpu_model else None,
             str(measured_driver_ver) if measured_driver_ver else None,
@@ -2684,8 +3082,14 @@ def run_clean_system_mode(
         and not d3d12core_classification_unknown
     )
     expected_sha256 = expected_compute["output_sha256"]
+    artifact_provenance = resolve_artifact_provenance(repo_root, search_dir)
 
-    if measured_os_build or measured_gpu_model or measured_driver_ver:
+    if (
+        measured_os_build
+        or measured_gpu_model
+        or measured_driver_ver
+        or adapter_reconciliation_failures
+    ):
         recorded_system_environment = {
             "os_name": "Windows 11 x64",
             "os_build": str(
@@ -2693,11 +3097,10 @@ def run_clean_system_mode(
             ),
             "architecture": "x86_64",
             "gpu_model": str(
-                measured_gpu_model or existing_report["system_environment"].get("gpu_model")
+                measured_gpu_model or "unverified"
             ),
             "nvidia_driver_version": str(
-                measured_driver_ver
-                or existing_report["system_environment"].get("nvidia_driver_version")
+                measured_driver_ver or "unverified"
             ),
         }
     else:
@@ -2737,6 +3140,12 @@ def run_clean_system_mode(
             ),
             "output_verified": compute_output_verified,
         },
+        "adapter_execution_evidence": {
+            "executing_adapter": observed_adapter,
+            "consistent": adapter_evidence["consistent"],
+            "fixture_descriptions": adapter_evidence["descriptions"],
+        },
+        "artifact_provenance": artifact_provenance,
         "fixture_runs": fixture_runs,
         "unavailable_measurements": (
             []
@@ -2767,7 +3176,12 @@ def run_clean_system_mode(
         if not system_env_measured:
             reasons.append(
                 "target system_environment (os_build, gpu_model, nvidia_driver_version) could not be "
-                "detected from host and was not provided"
+                "reconciled with the adapter reported by the executing fixtures: "
+                + (
+                    "; ".join(adapter_reconciliation_failures)
+                    if adapter_reconciliation_failures
+                    else "missing or unsupported measured fields"
+                )
             )
         if d3d12core_classification_unknown:
             reasons.append(
@@ -2796,6 +3210,7 @@ def run_clean_system_mode(
         "system_environment": recorded_system_environment,
         "sdk_absence_checks": sdk_checks,
         "embedded_dxil_verified": embedded_dxil_verified,
+        "artifact_provenance": artifact_provenance,
         "dependency_closure_failures": closure_failures,
         "total_distributed_bytes": total_distributed_bytes,
         "fixture_runs": fixture_runs,
@@ -2803,13 +3218,51 @@ def run_clean_system_mode(
     }
 
 
+def run_build_checks_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
+    """Execute concrete build/schema/dependency checks without requiring target GPU hardware.
+
+    This mode exists for GPU-less CI builders. It performs the same build, two-clean-directory
+    reproducibility, MSVC/LTCG comparison, CodeView/PDB, schema, dependency, size-ledger and
+    executable failure-injection checks as Full, but explicitly skips physical fixture
+    execution and physical-evidence certification. It never claims a passing full baseline.
+    """
+    _code, report = run_full_mode(repo_root, gpu_fixtures_available=False)
+    report["mode"] = "BuildChecks"
+    concrete_failures = report.get("concrete_failures", [])
+    required_check_names = (
+        "schemas",
+        "dependency_closures",
+        "offline_shader",
+        "reproducibility_build",
+        "msvc_ltcg_build",
+        "clang_debug_symbols",
+        "msvc_debug_symbols",
+        "failure_recovery",
+    )
+    missing_required_checks = [
+        name
+        for name in required_check_names
+        if report["checks"].get(name, {}).get("passed") is not True
+    ]
+    size_ledgers = report["checks"].get("size_ledgers", {})
+    if size_ledgers.get("contracts_valid") is not True:
+        missing_required_checks.append("size_ledgers.contracts_valid")
+    report["required_check_names"] = list(required_check_names)
+    report["missing_required_checks"] = missing_required_checks
+    build_checks_passed = not concrete_failures and not missing_required_checks
+    report["build_checks_passed"] = build_checks_passed
+    report["full_baseline_passed"] = False
+    report["gate_status"] = "build_checks_passed" if build_checks_passed else "failed"
+    return (0 if build_checks_passed else 1), report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Nodewerk NW-01 verification entry point.")
     parser.add_argument(
         "--mode",
-        choices=["Full", "CleanSystem", "ContractsOnly"],
+        choices=["Full", "CleanSystem", "ContractsOnly", "BuildChecks"],
         default="Full",
-        help="Verification mode: Full, CleanSystem, or ContractsOnly",
+        help="Verification mode: Full, CleanSystem, ContractsOnly, or BuildChecks",
     )
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--binary-dir", type=Path, default=None)
@@ -2830,6 +3283,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=sorted(BENCHMARK_CAPTURE_FILES),
         default=None,
         help="Execute fixtures and record measured benchmark/hardware evidence for the selected tier",
+    )
+    parser.add_argument(
+        "--summary-json",
+        type=Path,
+        default=None,
+        help="Write the verification summary JSON to this path (used by CI to separate logs from results)",
     )
     args = parser.parse_args(argv)
 
@@ -2874,6 +3333,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.binary_dir,
                 system_environment=sys_env or None,
             )
+        elif args.mode == "BuildChecks":
+            code, summary = run_build_checks_mode(args.repo_root)
         elif args.mode == "ContractsOnly":
             schema_res = validate_all_repository_artifacts(args.repo_root)
             dep_res = verify_all_recorded_ledgers(args.repo_root)
@@ -2903,6 +3364,11 @@ def main(argv: list[str] | None = None) -> int:
                     code = 1
 
         print(json.dumps(summary, indent=2))
+        if args.summary_json is not None:
+            args.summary_json.parent.mkdir(parents=True, exist_ok=True)
+            args.summary_json.write_text(
+                json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+            )
         return code
     except Exception as exc:
         print(f"[NW-VERIFY-ERR] {exc}", file=sys.stderr)

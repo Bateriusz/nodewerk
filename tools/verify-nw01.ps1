@@ -24,8 +24,10 @@
          reproducibility, and clean-system reports.
       NOTE: Missing prerequisites or unverified physical hardware/clean-system evidence NEVER
       produce a passing Full baseline result. Exit code 2 means no concrete check failed but
-      physical hardware/clean-system evidence is still unavailable; exit code 1 means a build,
-      schema, dependency, reproducibility, or fixture-validation check failed.
+      physical hardware/clean-system evidence is still unavailable. Exit code 3 means required
+      build/toolchain coverage (including the MSVC/LTCG comparison and executable failure-recovery
+      diagnostics) was skipped or unavailable; exit code 1 means a build, schema, dependency,
+      reproducibility, or fixture-validation check failed.
 
     - CleanSystem:
       Executes and records release-fixture validation (nw_empty_player.exe,
@@ -181,6 +183,8 @@ $ExitCode = $LASTEXITCODE
 if ($ExitCode -ne 0) {
     if ($ExitCode -eq 2) {
         Write-Host "[NW-VERIFY] Mode=$Mode exited 2: concrete checks passed but physical hardware/clean-system evidence is unverified. This is not a passing full-baseline result." -ForegroundColor Yellow
+    } elseif ($ExitCode -eq 3) {
+        Write-Host "[NW-VERIFY] Mode=$Mode exited 3: required build/toolchain coverage was skipped or unavailable. This is not an evidence-only gap." -ForegroundColor Red
     } else {
         Write-Host "[NW-VERIFY] Mode=$Mode detected a concrete build, schema, dependency, reproducibility, or fixture-validation failure (exit code $ExitCode)." -ForegroundColor Red
     }

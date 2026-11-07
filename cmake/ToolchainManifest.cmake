@@ -1,6 +1,6 @@
 # Nodewerk NW-01 Reproducible Toolchain Manifest Contract
 # Pins and actively verifies the selected compiler/linker, Windows SDK, DXC,
-# CMake/Ninja versions, minimum tested Windows 11 build, and required feature manifest.
+# CMake/Ninja versions, minimum target Windows 11 build, and required feature manifest.
 
 set(NW_PINNED_TOOLCHAIN_ID "clang-cl-lld" CACHE STRING "Primary selected toolchain ID")
 set(NW_PINNED_CLANG_VERSION "18.1.8" CACHE STRING "Pinned LLVM clang-cl/lld-link version")
