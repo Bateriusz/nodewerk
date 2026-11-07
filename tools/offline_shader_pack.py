@@ -61,6 +61,120 @@ def find_windows_kits_dxc_executable() -> str | None:
     return None
 
 
+def find_host_cpp_compiler() -> tuple[str, str] | None:
+    """Locate a host C++ compiler capable of compiling src/player/capability_check.cpp for DXIL validation."""
+    for gnu_name in ("clang++", "g++", "c++", "clang++.exe", "g++.exe"):
+        found = shutil.which(gnu_name)
+        if found:
+            return found, "gnu"
+    llvm_clangpp = Path("C:/Program Files/LLVM/bin/clang++.exe")
+    if llvm_clangpp.is_file():
+        return str(llvm_clangpp), "gnu"
+
+    for msvc_name in ("clang-cl", "clang-cl.exe", "cl", "cl.exe"):
+        found = shutil.which(msvc_name)
+        if found:
+            return found, "msvc"
+    llvm_clang_cl = Path("C:/Program Files/LLVM/bin/clang-cl.exe")
+    if llvm_clang_cl.is_file():
+        return str(llvm_clang_cl), "msvc"
+    return None
+
+
+def compile_cpp_dxil_validator_harness(
+    out_dir: Path,
+    repo_root: Path | None = None,
+    compiler_info: tuple[str, str] | None = None,
+) -> Path:
+    """Compile src/player/capability_check.cpp into a standalone executable that runs ValidateOfflineDxilContainer."""
+    resolved_root = repo_root or Path(__file__).resolve().parent.parent
+    comp = compiler_info or find_host_cpp_compiler()
+    if comp is None:
+        raise OfflineShaderCompilerError("No host C++ compiler found to compile ValidateOfflineDxilContainer harness")
+
+    compiler_bin, compiler_kind = comp
+    out_dir.mkdir(parents=True, exist_ok=True)
+    harness_src = out_dir / "dxil_validator_harness.cpp"
+    exe_suffix = ".exe" if sys.platform.startswith("win") else ""
+    harness_exe = out_dir / f"dxil_validator_harness{exe_suffix}"
+
+    if not harness_exe.exists():
+        harness_src.write_text(
+            '#include "capability_check.h"\n'
+            "#include <cstdio>\n"
+            "#include <cstdint>\n"
+            "#include <vector>\n\n"
+            "int main(int argc, char** argv) {\n"
+            "    if (argc < 2) {\n"
+            "        return 2;\n"
+            "    }\n"
+            '    std::FILE* f = std::fopen(argv[1], "rb");\n'
+            "    if (!f) {\n"
+            "        return 3;\n"
+            "    }\n"
+            "    std::fseek(f, 0, SEEK_END);\n"
+            "    const long sz = std::ftell(f);\n"
+            "    std::fseek(f, 0, SEEK_SET);\n"
+            "    if (sz <= 0) {\n"
+            "        std::fclose(f);\n"
+            "        return static_cast<int>(nw::player::ValidateOfflineDxilContainer(nullptr, 0));\n"
+            "    }\n"
+            "    std::vector<std::uint8_t> buf(static_cast<std::size_t>(sz));\n"
+            "    const std::size_t nread = std::fread(buf.data(), 1, buf.size(), f);\n"
+            "    std::fclose(f);\n"
+            "    return static_cast<int>(nw::player::ValidateOfflineDxilContainer(buf.data(), nread));\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        cap_cpp = resolved_root / "src" / "player" / "capability_check.cpp"
+        include_dir = resolved_root / "src" / "player"
+        if compiler_kind == "msvc":
+            cmd = [
+                compiler_bin,
+                "/nologo",
+                "/std:c++20",
+                "/EHsc",
+                f"/I{include_dir}",
+                str(harness_src),
+                str(cap_cpp),
+                f"/Fe:{harness_exe}",
+            ]
+        else:
+            cmd = [
+                compiler_bin,
+                "-std=c++20",
+                "-O2",
+                f"-I{include_dir}",
+                str(harness_src),
+                str(cap_cpp),
+                "-o",
+                str(harness_exe),
+            ]
+        proc = subprocess.run(cmd, cwd=str(out_dir), capture_output=True, text=True, check=False)
+        if proc.returncode != 0 or not harness_exe.exists():
+            raise OfflineShaderCompilerError(
+                f"Failed to compile C++ ValidateOfflineDxilContainer harness ({compiler_bin}, exit {proc.returncode}): "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+    return harness_exe
+
+
+def verify_dxil_blob_with_cpp_validator(
+    blob: bytes,
+    work_dir: Path,
+    repo_root: Path | None = None,
+    *,
+    harness_exe: Path | None = None,
+) -> int:
+    """Execute the compiled C++ nw::player::ValidateOfflineDxilContainer on blob and return its ExitCode int."""
+    exe = harness_exe or compile_cpp_dxil_validator_harness(work_dir, repo_root=repo_root)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    blob_path = work_dir / f"candidate_{hashlib.sha256(blob).hexdigest()[:12]}.dxil"
+    blob_path.write_bytes(blob)
+    proc = subprocess.run([str(exe), str(blob_path)], capture_output=True, text=True, check=False)
+    return int(proc.returncode)
+
+
 def _dxc_command_prefix(dxc_bin: str | Path) -> list[str]:
     """Build subprocess command prefix for DXC, wrapping .py test mocks with sys.executable on all OSes."""
     dxc_str = str(dxc_bin)
@@ -296,6 +410,21 @@ def compile_shader_with_dxc(
     validation = validate_dxil_container(dxil_blob, allow_test_container=is_mock_script)
     validation["dxc_executable"] = dxc_bin
     validation["measured_dxc_version"] = query_dxc_version(dxc_bin)
+    cpp_comp = find_host_cpp_compiler() if not is_mock_script else None
+    if cpp_comp is not None:
+        cpp_exit_code = verify_dxil_blob_with_cpp_validator(
+            dxil_blob,
+            output_dxil_path.parent / "cpp_validator_check",
+            compiler_info=cpp_comp,
+        )
+        if cpp_exit_code != 0:
+            raise OfflineShaderCompilerError(
+                f"C++ ValidateOfflineDxilContainer rejected DXC output with ExitCode={cpp_exit_code}"
+            )
+        validation["cpp_validator_verified"] = True
+        validation["cpp_validator_exit_code"] = cpp_exit_code
+    else:
+        validation["cpp_validator_verified"] = False
     return validation
 
 

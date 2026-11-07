@@ -215,6 +215,13 @@ def test_recorded_ledgers_pass_dependency_and_toolchain_comparison(tmp_path: Pat
         record_ledger_from_pe_binary(bad_pe_path, bad_ledger_copy, inventory, repo_root=REPO_ROOT)
     assert json.loads(bad_ledger_copy.read_text(encoding="utf-8"))["verification_status"] == "unverified"
 
+    # Missing repo_root or missing fixtures/<fixture_id>/fixture.json must fail closed
+    # rather than falling back to the ledger's own existing imports list.
+    with pytest.raises(SizeLedgerError, match="repo_root is required"):
+        record_ledger_from_pe_binary(pe_path, bad_ledger_copy, inventory, repo_root=None)
+    with pytest.raises(SizeLedgerError, match="Missing required fixture import contract"):
+        record_ledger_from_pe_binary(pe_path, bad_ledger_copy, inventory, repo_root=tmp_path)
+
 
 def test_synthetic_pe64_and_elf64_import_parsers_and_closure_gates(tmp_path: Path) -> None:
     inventory = json.loads((REPO_ROOT / "benchmarks" / "dependency-inventory.v1.json").read_text(encoding="utf-8"))

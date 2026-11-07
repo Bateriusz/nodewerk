@@ -367,6 +367,30 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     f"{doc_path}: unverified experiment record must have null measurements and null exit_code"
                 )
 
+    elif schema_name == "toolchain-manifest.schema.json":
+        for et in instance.get("evaluated_toolchains", []):
+            tid = et.get("toolchain_id")
+            et_status = et.get("verification_status")
+            byte_fields = (
+                et.get("empty_player_bytes"),
+                et.get("clear_present_bytes"),
+                et.get("compute_fixture_bytes"),
+            )
+            if et_status == "unverified":
+                if any(v is not None for v in byte_fields):
+                    raise SchemaValidationError(
+                        f"{doc_path}: unverified evaluated_toolchain '{tid}' must have null byte measurements"
+                    )
+                if et.get("deterministic_repro_verified") is True:
+                    raise SchemaValidationError(
+                        f"{doc_path}: unverified evaluated_toolchain '{tid}' must not have deterministic_repro_verified=true"
+                    )
+            elif et_status == "verified":
+                if any(v is None for v in byte_fields):
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified evaluated_toolchain '{tid}' must have non-null byte measurements"
+                    )
+
 
 ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
     ("benchmarks/capability-manifest.v1.json", "schemas/capability-manifest.schema.json"),

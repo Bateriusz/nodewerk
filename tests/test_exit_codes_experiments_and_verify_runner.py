@@ -185,7 +185,9 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     assert full_summary["checks"]["schemas"]["passed"] is True
     assert isinstance(full_summary["checks"]["offline_shader"]["passed"], bool)
     assert full_summary["checks"]["dependency_closures"]["passed"] is True
-    assert full_summary["checks"]["size_ledgers"]["passed"] is True
+    assert full_summary["checks"]["size_ledgers"]["contracts_valid"] is True
+    assert full_summary["checks"]["size_ledgers"]["comparison_verified"] is False
+    assert full_summary["checks"]["size_ledgers"]["passed"] is False
     assert isinstance(full_summary["checks"]["fixture_validation"]["passed"], bool)
 
     # Simulate the state after a successful offline DXC build recorded by Full mode.
@@ -253,6 +255,31 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     assert _format_nvidia_driver_version("32.0.15.7216") == "572.16"
     parsed_host_env = detect_host_system_environment(observed_stdout)
     assert parsed_host_env["gpu_model"] is not None
+
+    # Non-NVIDIA adapters in observed_stdout or system_environment must be rejected
+    intel_stdout = (
+        "NW_WINDOWS_BUILD=26100\n"
+        "NW_ADAPTER_DESCRIPTION=Intel(R) UHD Graphics 770\n"
+    )
+    assert detect_host_system_environment(intel_stdout)["gpu_model"] is None or (
+        "nvidia" in (detect_host_system_environment(intel_stdout)["gpu_model"] or "").lower()
+    )
+    non_nv_code, non_nv_summary = run_clean_system_mode(
+        sim_repo,
+        bin_dir,
+        allow_non_windows_simulation=True,
+        env=clean_env,
+        system32_dir=clean_sys32,
+        system_environment={
+            "os_build": "10.0.26100.3194",
+            "gpu_model": "Intel(R) UHD Graphics 770",
+            "nvidia_driver_version": "572.16",
+        },
+        executor=passing_executor,
+    )
+    assert non_nv_code == 1
+    assert non_nv_summary["clean_system_passed"] is False
+    assert non_nv_summary["system_environment_measured"] is False
 
     # Without measured or operator-provided system_environment (e.g. missing driver version on non-Windows),
     # CleanSystem must NOT copy the static template into a verified report.
@@ -514,3 +541,109 @@ def test_build_runner_invokes_pinned_two_clean_directory_builds(
     recorded = json.loads(report_path.read_text(encoding="utf-8"))
     assert recorded["verification_status"] == "verified"
     assert all(a["hash_match"] is True for a in recorded["artifacts"])
+
+
+def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    sim_repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
+
+    mock_dxc = tmp_path / "mock_dxc.py"
+    mock_dxc.write_text(
+        "import sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('dxcompiler.dll: 1.8 - 1.8.2407.12')\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(verify_module.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        verify_module.shutil,
+        "which",
+        lambda name, **_kw: f"/fake/{name}"
+        if name in {"cmake", "ninja", "clang-cl", "lld-link", "cl", "link"}
+        else None,
+    )
+    monkeypatch.setattr(verify_module, "find_dxc_executable", lambda: str(mock_dxc))
+
+    dxil_blob = make_test_signed_dxil_container()
+    clang_artifacts = {
+        "nw_empty_player.exe": build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]),
+        "nw_clear_present_fixture.exe": build_synthetic_pe64(
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+        ),
+        "nw_compute_shader_fixture.exe": build_synthetic_pe64(
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+        )
+        + dxil_blob,
+    }
+    msvc_artifacts = {
+        "nw_empty_player.exe": build_synthetic_pe64(
+            ["kernel32.dll", "ucrtbase.dll"], extra_text_bytes=512
+        ),
+        "nw_clear_present_fixture.exe": build_synthetic_pe64(
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            extra_text_bytes=512,
+        ),
+        "nw_compute_shader_fixture.exe": build_synthetic_pe64(
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            extra_text_bytes=512,
+        )
+        + dxil_blob,
+    }
+
+    expected = load_compute_expected_output(sim_repo)
+    compute_stdout = (
+        f"NW_READBACK_ELEMENT_COUNT={expected['element_count']}\n"
+        "NW_READBACK_U32=" + ",".join(f"{v:08X}" for v in expected["elements_u32"]) + "\n"
+    )
+
+    def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        command = [str(c) for c in cmd]
+        if any(c.endswith("mock_dxc.py") for c in command):
+            return subprocess.CompletedProcess(command, 0, "dxcompiler.dll: 1.8 - 1.8.2407.12\n", "")
+        if "--build" in command:
+            build_dir = Path(command[command.index("--build") + 1])
+            build_dir.mkdir(parents=True, exist_ok=True)
+            (build_dir / "shaders").mkdir(parents=True, exist_ok=True)
+            (build_dir / "shaders" / "compute_fixture.dxil").write_bytes(dxil_blob)
+            source_map = msvc_artifacts if "msvc-release-ltcg" in str(build_dir) else clang_artifacts
+            for name, payload in source_map.items():
+                (build_dir / name).write_bytes(payload)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if any(c.endswith("nw_compute_shader_fixture.exe") for c in command):
+            return subprocess.CompletedProcess(command, 0, compute_stdout, "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(verify_module.subprocess, "run", fake_run)
+
+    code, summary = run_full_mode(sim_repo)
+    # Physical hardware and clean-system evidence are still unverified, so Full returns 2,
+    # while reproducibility, MSVC build, and toolchain comparison are all verified!
+    assert code == 2
+    assert summary["checks"]["reproducibility_build"]["passed"] is True
+    assert summary["checks"]["msvc_ltcg_build"]["passed"] is True
+    assert summary["checks"]["size_ledgers"]["comparison_verified"] is True
+    assert summary["checks"]["size_ledgers"]["passed"] is True
+    assert summary["checks"]["dependency_closures"]["passed"] is True
+    assert summary["checks"]["schemas"]["passed"] is True
+
+    # Verify that a post-recording schema validation failure sets checks.schemas.passed=False
+    call_count = {"n": 0}
+    orig_validate = verify_module.validate_all_repository_artifacts
+
+    def failing_post_validate(root: Path):  # type: ignore[no-untyped-def]
+        call_count["n"] += 1
+        if call_count["n"] >= 2:
+            raise ValueError("simulated post-recording schema error")
+        return orig_validate(root)
+
+    monkeypatch.setattr(verify_module, "validate_all_repository_artifacts", failing_post_validate)
+    bad_code, bad_summary = run_full_mode(sim_repo)
+    assert bad_code == 2
+    assert bad_summary["checks"]["schemas"]["passed"] is False
+    assert "simulated post-recording schema error" in bad_summary["checks"]["schemas"]["reason"]

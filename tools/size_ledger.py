@@ -135,6 +135,9 @@ def record_ledger_from_pe_binary(
     sha256_hex = hashlib.sha256(raw).hexdigest()
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
 
+    if repo_root is None:
+        raise SizeLedgerError("repo_root is required to resolve fixture import contracts and schemas")
+
     profile = ledger.get("build_profile", "release")
     fixture_id = ledger["fixture_id"]
     existing_imports = {
@@ -143,11 +146,15 @@ def record_ledger_from_pe_binary(
 
     expected_imports: list[str] | None = None
     if profile in ("release", "compact_experiment"):
-        fx_json = (repo_root / "fixtures" / fixture_id / "fixture.json") if repo_root else None
-        if fx_json and fx_json.exists():
-            expected_imports = json.loads(fx_json.read_text(encoding="utf-8")).get("expected_release_imports")
-        elif existing_imports:
-            expected_imports = list(existing_imports.keys())
+        fx_json = repo_root / "fixtures" / fixture_id / "fixture.json"
+        if not fx_json.is_file():
+            raise SizeLedgerError(f"Missing required fixture import contract at {fx_json}")
+        fx_data = json.loads(fx_json.read_text(encoding="utf-8"))
+        expected_imports = fx_data.get("expected_release_imports")
+        if not isinstance(expected_imports, list) or not expected_imports:
+            raise SizeLedgerError(
+                f"Fixture contract {fx_json} is missing non-empty 'expected_release_imports'"
+            )
 
     sidecars = [
         p.name
@@ -271,9 +278,8 @@ def record_release_ledgers(
     )
     if eval_entry is None:
         raise SizeLedgerError(f"Toolchain manifest has no evaluated entry for '{toolchain_id}'")
-    if deterministic_repro_verified is not None:
-        eval_entry["deterministic_repro_verified"] = deterministic_repro_verified
 
+    measured_bytes_by_field: dict[str, int] = {}
     for fixture_id, exe_name, ledger_name, manifest_field, dxil_bytes in specs:
         exe_path = binary_dir / exe_name
         ledger_path = repo_root / "benchmarks" / "ledgers" / ledger_name
@@ -289,12 +295,23 @@ def record_release_ledgers(
             offline_dxil_bytes=dxil_bytes,
             repo_root=repo_root,
         )
-        eval_entry[manifest_field] = ledger["total_distributed_bytes"]
+        measured_bytes_by_field[manifest_field] = ledger["total_distributed_bytes"]
         recorded[fixture_id] = {
             "ledger": ledger_name,
             "total_distributed_bytes": ledger["total_distributed_bytes"],
             "sha256": ledger["distributed_components"][0]["sha256"],
         }
+
+    all_three_measured = all(
+        field in measured_bytes_by_field
+        for field in ("empty_player_bytes", "clear_present_bytes", "compute_fixture_bytes")
+    )
+    if all_three_measured:
+        for field, total_bytes in measured_bytes_by_field.items():
+            eval_entry[field] = total_bytes
+        if deterministic_repro_verified is not None:
+            eval_entry["deterministic_repro_verified"] = deterministic_repro_verified
+        eval_entry["verification_status"] = "verified"
 
     if recorded:
         unavailable = [
@@ -319,12 +336,23 @@ def record_release_ledgers(
                     }
                 )
         toolchain_manifest["unavailable_measurements"] = unavailable
+        toolchain_schema_path = (repo_root or Path(__file__).resolve().parent.parent) / "schemas" / "toolchain-manifest.schema.json"
+        if toolchain_schema_path.exists():
+            toolchain_schema = json.loads(toolchain_schema_path.read_text(encoding="utf-8"))
+            validate_instance(toolchain_manifest, toolchain_schema, toolchain_schema, path=toolchain_path.name)
+            validate_semantic_invariants(toolchain_manifest, toolchain_schema_path.name, toolchain_path)
         toolchain_path.write_text(json.dumps(toolchain_manifest, indent=2) + "\n", encoding="utf-8")
 
+    other_toolchains_unverified = any(
+        t.get("verification_status") != "verified"
+        for t in toolchain_manifest.get("evaluated_toolchains", [])
+        if t["toolchain_id"] != toolchain_id
+    )
     return {
         "toolchain_id": toolchain_id,
+        "verification_status": eval_entry["verification_status"],
         "recorded_fixtures": recorded,
-        "comparison_toolchain_bytes_remain_unverified": True,
+        "comparison_toolchain_bytes_remain_unverified": other_toolchains_unverified,
     }
 
 
@@ -472,6 +500,17 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
 
     # Cross-check against toolchain-manifest.v1.json evaluated_toolchains
     eval_by_id = {t["toolchain_id"]: t for t in toolchain_manifest.get("evaluated_toolchains", [])}
+    for tid in ("clang-cl-lld", "msvc-ltcg"):
+        all_tid_ledgers_verified = all(
+            ledgers_by_key[(fx, tid)]["verification_status"] == "verified"
+            for fx in fixtures
+        )
+        expected_tid_status = "verified" if all_tid_ledgers_verified else "unverified"
+        if eval_by_id[tid].get("verification_status") != expected_tid_status:
+            raise SizeLedgerError(
+                f"Toolchain manifest verification_status mismatch for {tid}: "
+                f"expected '{expected_tid_status}', got '{eval_by_id[tid].get('verification_status')}'"
+            )
     for comp in comparisons:
         fx = comp["fixture_id"]
         field = "compute_fixture_bytes" if fx == "compute_shader" else f"{fx}_bytes"

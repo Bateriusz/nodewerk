@@ -20,12 +20,15 @@ from offline_shader_pack import (  # noqa: E402
     OfflineShaderCompilerError,
     check_hlsl_source_constraints,
     compile_and_record_manifest,
+    compile_cpp_dxil_validator_harness,
     compile_shader_with_dxc,
     find_dxc_executable,
+    find_host_cpp_compiler,
     find_windows_kits_dxc_executable,
     format_cpp_dxil_header,
     pack_dxil_to_header,
     validate_dxil_container,
+    verify_dxil_blob_with_cpp_validator,
 )
 from size_ledger import generate_size_comparison_report, record_release_ledgers  # noqa: E402
 from test_dependency_closure_and_accounting import build_synthetic_pe64  # noqa: E402
@@ -226,6 +229,53 @@ def test_real_dxc_compilation_and_chunk_layout_when_available(tmp_path: Path) ->
     assert packed["sha256"] == res["sha256"]
     assert out_header.exists()
 
+    # Exercise C++ nw::player::ValidateOfflineDxilContainer against the real DXC-compiled blob
+    cpp_comp = find_host_cpp_compiler()
+    if cpp_comp is not None:
+        assert res["cpp_validator_verified"] is True
+        assert res["cpp_validator_exit_code"] == 0
+        cpp_dir = tmp_path / "cpp_real_dxc"
+        harness_exe = compile_cpp_dxil_validator_harness(cpp_dir, repo_root=REPO_ROOT, compiler_info=cpp_comp)
+        real_blob = out_dxil.read_bytes()
+        assert verify_dxil_blob_with_cpp_validator(real_blob, cpp_dir, harness_exe=harness_exe) == 0
+
+        # Mutate the real DXC blob and verify C++ ValidateOfflineDxilContainer returns 40 (OfflineShaderPayloadInvalid)
+        unsigned_real = bytearray(real_blob)
+        unsigned_real[4:20] = b"\x00" * 16
+        assert verify_dxil_blob_with_cpp_validator(bytes(unsigned_real), cpp_dir, harness_exe=harness_exe) == 40
+
+        bad_magic_real = bytearray(real_blob)
+        bad_magic_real[0:4] = b"BAD!"
+        assert verify_dxil_blob_with_cpp_validator(bytes(bad_magic_real), cpp_dir, harness_exe=harness_exe) == 40
+
+
+def test_cpp_validate_offline_dxil_container_harness_and_parser_parity(tmp_path: Path) -> None:
+    cap_cpp = (REPO_ROOT / "src" / "player" / "capability_check.cpp").read_text(encoding="utf-8")
+    # Verify C++ parser enforces the same structural invariants as validate_dxil_container
+    assert "size_in_uint32 < 6u ||" in cap_cpp
+    assert "static_cast<std::size_t>(size_in_uint32) * 4u > chunk_size" in cap_cpp
+    assert "dxil_major != 1u || dxil_minor > 8u" in cap_cpp
+    assert "block_id == 0u || block_id == 8u || block_id == 13u" in cap_cpp
+
+    cpp_comp = find_host_cpp_compiler()
+    if cpp_comp is None:
+        return
+    cpp_dir = tmp_path / "cpp_unit"
+    harness_exe = compile_cpp_dxil_validator_harness(cpp_dir, repo_root=REPO_ROOT, compiler_info=cpp_comp)
+    for word1 in (0x00000021, 0x00000801, 0x00000C21, 0x00000C35):
+        valid_blob = make_test_signed_dxil_container(first_bitstream_word=word1)
+        assert verify_dxil_blob_with_cpp_validator(valid_blob, cpp_dir, harness_exe=harness_exe) == 0
+
+    for invalid_blob in (
+        b"DXBCshort",
+        make_test_signed_dxil_container(unsigned_digest=True),
+        make_test_signed_dxil_container(include_psv0=False),
+        make_test_signed_dxil_container(feature_flags=FORBIDDEN_SM66_HEAP_INDEXING_MASK),
+        make_test_signed_dxil_container(prog_version=(5 << 16) | (6 << 4) | 6),
+        make_test_signed_dxil_container(first_bitstream_word=0xDEADBEEF),
+    ):
+        assert verify_dxil_blob_with_cpp_validator(invalid_blob, cpp_dir, harness_exe=harness_exe) == 40
+
 
 def test_offline_dxc_compile_and_pack_into_build_dir(tmp_path: Path) -> None:
     hlsl_path = REPO_ROOT / "shaders" / "compute_fixture.hlsl"
@@ -336,8 +386,10 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
     (bin_dir / "nw_clear_present_fixture.exe").write_bytes(clear_pe)
     (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(compute_pe)
 
-    recorded = record_release_ledgers(repo, bin_dir)
+    recorded = record_release_ledgers(repo, bin_dir, deterministic_repro_verified=True)
     assert set(recorded["recorded_fixtures"]) == {"empty_player", "clear_present", "compute_shader"}
+    assert recorded["verification_status"] == "verified"
+    assert recorded["comparison_toolchain_bytes_remain_unverified"] is True
 
     empty_ledger = json.loads(
         (repo / "benchmarks" / "ledgers" / "empty-player-clang-cl-release.json").read_text(encoding="utf-8")
@@ -350,9 +402,44 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
         (repo / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
     )
     clang_entry = next(t for t in toolchain["evaluated_toolchains"] if t["toolchain_id"] == "clang-cl-lld")
+    msvc_entry = next(t for t in toolchain["evaluated_toolchains"] if t["toolchain_id"] == "msvc-ltcg")
+    assert clang_entry["verification_status"] == "verified"
+    assert clang_entry["deterministic_repro_verified"] is True
     assert clang_entry["empty_player_bytes"] == len(empty_pe)
     assert clang_entry["clear_present_bytes"] == len(clear_pe)
     assert clang_entry["compute_fixture_bytes"] == len(compute_pe)
+    assert msvc_entry["verification_status"] == "unverified"
 
     comparison = generate_size_comparison_report(repo)
     assert comparison["fixture_comparisons"][0]["clang_cl_lld_bytes"] == len(empty_pe)
+    assert all(c["verification_status"] == "unverified" for c in comparison["fixture_comparisons"])
+
+    # Now record larger MSVC/LTCG binaries and verify both toolchains and all comparisons become verified
+    msvc_dir = tmp_path / "msvc_bin"
+    msvc_dir.mkdir()
+    (msvc_dir / "nw_empty_player.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], extra_text_bytes=512)
+    )
+    (msvc_dir / "nw_clear_present_fixture.exe").write_bytes(
+        build_synthetic_pe64(
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            extra_text_bytes=512,
+        )
+    )
+    (msvc_dir / "nw_compute_shader_fixture.exe").write_bytes(
+        build_synthetic_pe64(
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            extra_text_bytes=512,
+        )
+        + dxil_blob
+    )
+    msvc_recorded = record_release_ledgers(
+        repo, msvc_dir, toolchain_id="msvc-ltcg", deterministic_repro_verified=True
+    )
+    assert msvc_recorded["verification_status"] == "verified"
+    assert msvc_recorded["comparison_toolchain_bytes_remain_unverified"] is False
+    full_comparison = generate_size_comparison_report(repo)
+    assert all(
+        c["verification_status"] == "verified" and c["delta_msvc_minus_clang_bytes"] == 512
+        for c in full_comparison["fixture_comparisons"]
+    )

@@ -70,8 +70,23 @@ def _format_nvidia_driver_version(raw_version: str) -> str:
     return cleaned
 
 
+def _is_supported_nvidia_gpu_and_driver(
+    gpu_model: str | None,
+    nvidia_driver_version: str | None,
+) -> bool:
+    """Verify that gpu_model describes an NVIDIA GPU and nvidia_driver_version has 'NNN.NN' NVIDIA format."""
+    if not gpu_model or not nvidia_driver_version:
+        return False
+    lower_gpu = gpu_model.strip().lower()
+    if "nvidia" not in lower_gpu:
+        return False
+    if any(non_nv in lower_gpu for non_nv in ("microsoft basic", "intel(", "intel ", "amd ", "radeon")):
+        return False
+    return bool(re.match(r"^[0-9]{3}\.[0-9]{2}$", nvidia_driver_version.strip()))
+
+
 def detect_host_system_environment(observed_stdout: str = "") -> dict[str, str | None]:
-    """Detect the actual OS build, GPU model, and NVIDIA driver version from the host and/or fixture output."""
+    """Detect the actual OS build, NVIDIA GPU model, and NVIDIA driver version from the host and/or fixture output."""
     os_build: str | None = None
     gpu_model: str | None = None
     nvidia_driver_version: str | None = None
@@ -120,8 +135,6 @@ def detect_host_system_environment(observed_stdout: str = "") -> dict[str, str |
             class_path = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, class_path) as class_key:
                 idx = 0
-                fallback_gpu: str | None = None
-                fallback_drv: str | None = None
                 while True:
                     try:
                         sub_name = winreg.EnumKey(class_key, idx)
@@ -136,18 +149,12 @@ def detect_host_system_environment(observed_stdout: str = "") -> dict[str, str |
                             drv_ver, _ = winreg.QueryValueEx(dev_key, "DriverVersion")
                             desc_str = str(desc).strip()
                             drv_str = _format_nvidia_driver_version(str(drv_ver))
-                            if "nvidia" in desc_str.lower():
+                            if _is_supported_nvidia_gpu_and_driver(desc_str, drv_str):
                                 gpu_model = desc_str
                                 nvidia_driver_version = drv_str
                                 break
-                            if fallback_gpu is None and desc_str:
-                                fallback_gpu = desc_str
-                                fallback_drv = drv_str
                     except OSError:
                         continue
-                if gpu_model is None and fallback_gpu is not None:
-                    gpu_model = fallback_gpu
-                    nvidia_driver_version = fallback_drv
         except Exception:
             pass
 
@@ -166,15 +173,20 @@ def detect_host_system_environment(observed_stdout: str = "") -> dict[str, str |
                         first_line = proc.stdout.strip().splitlines()[0]
                         parts = [p.strip() for p in first_line.split(",", 1)]
                         if len(parts) == 2:
-                            gpu_model = gpu_model or parts[0]
-                            nvidia_driver_version = nvidia_driver_version or _format_nvidia_driver_version(parts[1])
+                            cand_gpu = gpu_model or parts[0]
+                            cand_drv = nvidia_driver_version or _format_nvidia_driver_version(parts[1])
+                            if _is_supported_nvidia_gpu_and_driver(cand_gpu, cand_drv):
+                                gpu_model = cand_gpu
+                                nvidia_driver_version = cand_drv
                 except Exception:
                     pass
 
     if observed_stdout:
         adapter_match = ADAPTER_DESC_LINE_RE.search(observed_stdout)
         if adapter_match and not gpu_model:
-            gpu_model = adapter_match.group(1).strip()
+            cand_gpu = adapter_match.group(1).strip()
+            if "nvidia" in cand_gpu.lower():
+                gpu_model = cand_gpu
         build_match = WINDOWS_BUILD_LINE_RE.search(observed_stdout)
         if build_match and not os_build:
             os_build = f"10.0.{build_match.group(1)}.0"
@@ -574,6 +586,83 @@ def build_and_compare_two_clean_directories(
     return report
 
 
+def build_msvc_ltcg_release_directory(
+    repo_root: Path,
+    out_dir: Path | None = None,
+    *,
+    enforce_pinned_toolchain: bool = True,
+) -> dict[str, Any]:
+    """Build identical release fixtures with the MSVC/LTCG comparison toolchain in a clean directory."""
+    msvc_dir = out_dir or (repo_root / "build" / "msvc-release-ltcg")
+    cmake_bin = shutil.which("cmake")
+    ninja_bin = shutil.which("ninja")
+    cl_bin = shutil.which("cl") or shutil.which("cl.exe")
+    link_bin = shutil.which("link") or shutil.which("link.exe")
+    dxc_bin = find_dxc_executable()
+
+    missing_tools: list[str] = []
+    if not cmake_bin:
+        missing_tools.append("cmake")
+    if not ninja_bin:
+        missing_tools.append("ninja")
+    if not cl_bin:
+        missing_tools.append("cl")
+    if not link_bin:
+        missing_tools.append("link")
+    if not dxc_bin:
+        missing_tools.append("dxc")
+
+    if missing_tools:
+        if msvc_dir.exists():
+            shutil.rmtree(msvc_dir)
+        return {
+            "built": False,
+            "output_dir": str(msvc_dir),
+            "missing_toolchain_tools": missing_tools,
+        }
+
+    if msvc_dir.exists():
+        shutil.rmtree(msvc_dir)
+
+    subprocess.run(
+        [
+            cmake_bin,
+            "-S",
+            str(repo_root),
+            "-B",
+            str(msvc_dir),
+            "-G",
+            "Ninja",
+            f"-DCMAKE_TOOLCHAIN_FILE={repo_root / 'cmake/toolchains/msvc-x64.cmake'}",
+            "-DCMAKE_BUILD_TYPE=MinSizeRel",
+            "-DNW_BUILD_PROFILE=release",
+            f"-DNW_ENFORCE_PINNED_TOOLCHAIN={'ON' if enforce_pinned_toolchain else 'OFF'}",
+        ],
+        check=True,
+    )
+    subprocess.run([cmake_bin, "--build", str(msvc_dir)], check=True)
+
+    for exe_name in (
+        "nw_empty_player.exe",
+        "nw_clear_present_fixture.exe",
+        "nw_compute_shader_fixture.exe",
+    ):
+        exe_path = msvc_dir / exe_name
+        if not exe_path.exists():
+            raise ValueError(f"MSVC/LTCG build did not produce required release executable '{exe_name}'")
+        pe_info = parse_pe64_sections_and_imports(exe_path.read_bytes())
+        if pe_info["time_date_stamp"] != 0:
+            raise ValueError(
+                f"MSVC/LTCG PE32+ artifact '{exe_name}' violates /Brepro zero TimeDateStamp policy "
+                f"(time_date_stamp={pe_info['time_date_stamp']})"
+            )
+
+    return {
+        "built": True,
+        "output_dir": str(msvc_dir),
+    }
+
+
 def probe_sdk_absence(
     search_dir: Path,
     env: dict[str, str] | None = None,
@@ -683,6 +772,24 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
             f"Clean physical Windows 11 validation ({clean_path.name}) is '{clean_data.get('verification_status')}' "
             f"(clean_system_passed={clean_data.get('clean_system_passed')})"
         )
+
+    toolchain_path = repo_root / "benchmarks" / "toolchain-manifest.v1.json"
+    toolchain_data = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    for et in toolchain_data.get("evaluated_toolchains", []):
+        if et.get("verification_status") != "verified":
+            unmet_requirements.append(
+                f"Evaluated toolchain '{et.get('toolchain_id')}' in {toolchain_path.name} is '{et.get('verification_status')}'"
+            )
+
+    try:
+        ledger_comparison = generate_size_comparison_report(repo_root)
+        for comp in ledger_comparison.get("fixture_comparisons", []):
+            if comp.get("verification_status") != "verified":
+                unmet_requirements.append(
+                    f"Toolchain byte comparison for fixture '{comp.get('fixture_id')}' is '{comp.get('verification_status')}'"
+                )
+    except Exception as exc:
+        unmet_requirements.append(f"Size-ledger comparison report invalid: {exc}")
 
     return {
         "complete": len(unmet_requirements) == 0,
@@ -804,15 +911,29 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
     # 3. Dependency closure & size ledger checks
     dep_reports = verify_all_recorded_ledgers(repo_root)
     ledger_comparison = generate_size_comparison_report(repo_root)
+    comparison_verified = bool(ledger_comparison.get("fixture_comparisons")) and all(
+        c.get("verification_status") == "verified"
+        and c.get("clang_cl_lld_bytes") is not None
+        and c.get("msvc_ltcg_bytes") is not None
+        and c["clang_cl_lld_bytes"] < c["msvc_ltcg_bytes"]
+        for c in ledger_comparison.get("fixture_comparisons", [])
+    )
     report["checks"]["dependency_closures"] = {"passed": True, "verified_ledgers": len(dep_reports)}
-    report["checks"]["size_ledgers"] = {"passed": True, "comparison": ledger_comparison}
+    report["checks"]["size_ledgers"] = {
+        "passed": comparison_verified,
+        "contracts_valid": True,
+        "comparison_verified": comparison_verified,
+        "comparison": ledger_comparison,
+    }
 
-    # 4. Build & two-clean-directory reproducibility prerequisites check
+    # 4. Build, two-clean-directory reproducibility & MSVC/LTCG comparison prerequisites check
     is_windows = platform.system().lower() == "windows"
     cmake_bin = shutil.which("cmake")
     ninja_bin = shutil.which("ninja")
     clang_cl_bin = shutil.which("clang-cl") or shutil.which("clang-cl.exe")
     lld_link_bin = shutil.which("lld-link") or shutil.which("lld-link.exe")
+    cl_bin = shutil.which("cl") or shutil.which("cl.exe")
+    link_bin = shutil.which("link") or shutil.which("link.exe")
 
     if not is_windows:
         report["missing_prerequisites"].append("Windows 11 x64 OS host required for native D3D12 build and execution")
@@ -824,11 +945,24 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         report["missing_prerequisites"].append("clang-cl (pinned 18.1.8) not found in PATH")
     if not lld_link_bin:
         report["missing_prerequisites"].append("lld-link (pinned 18.1.8) not found in PATH")
+    if not cl_bin:
+        report["missing_prerequisites"].append("cl (pinned MSVC 19.40.33813) not found in PATH for toolchain comparison")
+    if not link_bin:
+        report["missing_prerequisites"].append("link (pinned MSVC 14.40.33813.0) not found in PATH for toolchain comparison")
     if not dxc_bin:
         report["missing_prerequisites"].append("dxc (pinned 1.8.2407) not found in PATH")
 
     fixture_validation_passed = False
-    if is_windows and cmake_bin and ninja_bin and clang_cl_bin and lld_link_bin and dxc_bin:
+    if (
+        is_windows
+        and cmake_bin
+        and ninja_bin
+        and clang_cl_bin
+        and lld_link_bin
+        and cl_bin
+        and link_bin
+        and dxc_bin
+    ):
         try:
             repro_cmp = build_and_compare_two_clean_directories(repo_root)
             report["checks"]["reproducibility_build"] = {
@@ -836,7 +970,15 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                 "all_artifacts_match": repro_cmp["all_artifacts_match"],
                 "recorded_to": "benchmarks/reproducibility/release-build-reproducibility.json",
             }
-            if repro_cmp["all_artifacts_match"]:
+            msvc_build = build_msvc_ltcg_release_directory(
+                repo_root,
+                repo_root / "build" / "msvc-release-ltcg",
+            )
+            report["checks"]["msvc_ltcg_build"] = {
+                "passed": msvc_build["built"],
+                "output_dir": msvc_build["output_dir"],
+            }
+            if repro_cmp["all_artifacts_match"] and msvc_build["built"]:
                 # The clean build is the authoritative source of offline DXC evidence.
                 offline_shader = evaluate_offline_shader(
                     repo_root,
@@ -854,40 +996,96 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                 )
                 fixture_validation_passed = fixture_validation["passed"]
                 report["checks"]["fixture_validation"] = fixture_validation
+
+                # Clear pre-recording flags so any post-recording failure leaves the corresponding check false.
+                report["checks"]["schemas"] = {
+                    "passed": False,
+                    "reason": "Pending post-recording schema validation",
+                }
+                report["checks"]["dependency_closures"] = {
+                    "passed": False,
+                    "reason": "Pending post-recording dependency closure validation",
+                }
+                report["checks"]["size_ledgers"] = {
+                    "passed": False,
+                    "contracts_valid": False,
+                    "comparison_verified": False,
+                    "reason": "Pending post-recording size-ledger comparison",
+                }
+
                 try:
-                    ledger_recording = record_release_ledgers(
+                    clang_recording = record_release_ledgers(
                         repo_root,
                         repo_root / "build" / "repro-clean-a",
+                        toolchain_id="clang-cl-lld",
                         deterministic_repro_verified=repro_cmp["all_artifacts_match"],
                     )
-                    dep_reports = verify_all_recorded_ledgers(repo_root)
+                    msvc_recording = record_release_ledgers(
+                        repo_root,
+                        repo_root / "build" / "msvc-release-ltcg",
+                        toolchain_id="msvc-ltcg",
+                        deterministic_repro_verified=True,
+                    )
                     ledger_comparison = generate_size_comparison_report(repo_root)
-                    schema_res = validate_all_repository_artifacts(repo_root)
-                    report["checks"]["schemas"] = {
-                        "passed": True,
-                        "validated_count": schema_res["validated_count"],
-                    }
-                    report["checks"]["dependency_closures"] = {
-                        "passed": True,
-                        "verified_ledgers": len(dep_reports),
-                    }
+                    comparison_verified = bool(ledger_comparison.get("fixture_comparisons")) and all(
+                        c.get("verification_status") == "verified"
+                        and c.get("clang_cl_lld_bytes") is not None
+                        and c.get("msvc_ltcg_bytes") is not None
+                        and c["clang_cl_lld_bytes"] < c["msvc_ltcg_bytes"]
+                        for c in ledger_comparison.get("fixture_comparisons", [])
+                    )
                     report["checks"]["size_ledgers"] = {
-                        "passed": True,
-                        "recorded": ledger_recording,
+                        "passed": comparison_verified,
+                        "contracts_valid": True,
+                        "comparison_verified": comparison_verified,
+                        "recorded": {
+                            "clang-cl-lld": clang_recording,
+                            "msvc-ltcg": msvc_recording,
+                        },
                         "comparison": ledger_comparison,
                     }
                 except Exception as exc:
                     report["checks"]["size_ledgers"] = {
                         "passed": False,
+                        "contracts_valid": False,
+                        "comparison_verified": False,
                         "reason": f"Measured size-ledger recording failed: {exc}",
+                    }
+
+                try:
+                    dep_reports = verify_all_recorded_ledgers(repo_root)
+                    report["checks"]["dependency_closures"] = {
+                        "passed": True,
+                        "verified_ledgers": len(dep_reports),
+                    }
+                except Exception as exc:
+                    report["checks"]["dependency_closures"] = {
+                        "passed": False,
+                        "reason": f"Post-recording dependency closure verification failed: {exc}",
+                    }
+
+                try:
+                    schema_res = validate_all_repository_artifacts(repo_root)
+                    report["checks"]["schemas"] = {
+                        "passed": True,
+                        "validated_count": schema_res["validated_count"],
+                    }
+                except Exception as exc:
+                    report["checks"]["schemas"] = {
+                        "passed": False,
+                        "reason": f"Post-recording schema validation failed: {exc}",
                     }
             else:
                 report["checks"]["fixture_validation"] = {
                     "passed": False,
-                    "reason": "Two-clean-directory builds did not produce matching artifacts",
+                    "reason": "Two-clean-directory clang-cl or MSVC/LTCG builds did not complete cleanly",
                 }
         except (subprocess.CalledProcessError, OSError, ValueError) as exc:
             report["checks"]["reproducibility_build"] = {
+                "passed": False,
+                "reason": f"Pinned Windows build failed: {exc}",
+            }
+            report["checks"]["msvc_ltcg_build"] = {
                 "passed": False,
                 "reason": f"Pinned Windows build failed: {exc}",
             }
@@ -900,12 +1098,16 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
             "passed": False,
             "reason": "Skipped live Windows clang-cl/DXC build due to missing host prerequisites",
         }
+        report["checks"]["msvc_ltcg_build"] = {
+            "passed": False,
+            "reason": "Skipped live Windows MSVC/LTCG comparison build due to missing host prerequisites",
+        }
         report["checks"]["fixture_validation"] = {
             "passed": False,
             "reason": "Skipped release fixture execution because host prerequisites are missing",
         }
 
-    # 5. Evidence completeness check (RTX 4060, RTX 50-series, clean-system, reproducibility)
+    # 5. Evidence completeness check (RTX 4060, RTX 50-series, clean-system, reproducibility, toolchain comparison)
     evidence = check_evidence_completeness(repo_root)
     report["unmet_evidence"] = evidence["unmet_requirements"]
     report["checks"]["evidence_completeness"] = {"passed": evidence["complete"]}
@@ -916,8 +1118,12 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         and evidence["complete"]
         and shader_ok
         and fixture_validation_passed
+        and report["checks"]["schemas"].get("passed") is True
+        and report["checks"]["dependency_closures"].get("passed") is True
         and report["checks"]["size_ledgers"].get("passed") is True
+        and report["checks"]["size_ledgers"].get("comparison_verified") is True
         and report["checks"]["reproducibility_build"].get("passed") is True
+        and report["checks"].get("msvc_ltcg_build", {}).get("passed") is True
     ):
         report["full_baseline_passed"] = True
         return 0, report
@@ -1074,9 +1280,11 @@ def run_clean_system_mode(
     measured_driver_ver = override_env.get("nvidia_driver_version") or detected_sys_env.get("nvidia_driver_version")
     system_env_measured = bool(
         measured_os_build
-        and measured_gpu_model
-        and measured_driver_ver
         and re.match(r"^10\.0\.(22[0-9]{3}|26[0-9]{3})\.[0-9]+$", str(measured_os_build))
+        and _is_supported_nvidia_gpu_and_driver(
+            str(measured_gpu_model) if measured_gpu_model else None,
+            str(measured_driver_ver) if measured_driver_ver else None,
+        )
     )
 
     total_distributed_bytes = sum(f["size_bytes"] for f in deployed_files)
