@@ -1259,7 +1259,7 @@ def test_benchmark_capture_missing_environment_is_valid_unverified(
                     "exit_code": 0,
                     "metrics": {},
                     "d3d12_validation_clean": True,
-                    "stdout": "",
+                    "stdout": "NW_WINDOWS_BUILD=26100\n",
                 },
                 {
                     "fixture_id": "compute_shader",
@@ -1285,6 +1285,11 @@ def test_benchmark_capture_missing_environment_is_valid_unverified(
     )
     assert result["verification_status"] == "unverified"
     assert result["benchmark_passed"] is False
+    assert result["environment_metadata"]["os_build"] is None
+    assert any(
+        item["metric"] == "environment_metadata.os_build"
+        for item in result["unavailable_measurements"]
+    )
     validate_file_against_schema(
         repo / "benchmarks" / "hardware" / "rtx-50-series-baseline.json",
         repo / "schemas" / "benchmark-result.schema.json",

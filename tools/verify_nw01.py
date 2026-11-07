@@ -160,14 +160,6 @@ def parse_fixture_adapter_description(stdout: str) -> str | None:
     return value or None
 
 
-def parse_fixture_windows_build(stdout: str) -> str | None:
-    """Read the Windows build number emitted by a single fixture execution."""
-    match = WINDOWS_BUILD_LINE_RE.search(stdout)
-    if not match:
-        return None
-    return f"10.0.{match.group(1)}.0"
-
-
 def reconcile_fixture_adapter_descriptions(
     fixture_runs: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -1604,10 +1596,10 @@ def capture_benchmark_result(
         validation["fixture_runs"]
     )
     override = system_environment or {}
-    fixture_os_build = parse_fixture_windows_build(
-        str(runs_by_fixture.get("compute_shader", {}).get("stdout", ""))
-    )
-    measured_os_build = override.get("os_build") or fixture_os_build
+    # The fixture emits only the major build number (e.g. 26100), not the installed
+    # update revision (UBR). A full os_build value therefore requires an explicit
+    # measured --os-build override; inferring ".0" would fabricate the revision.
+    measured_os_build = override.get("os_build")
     observed_gpu_model = adapter_evidence["executing_adapter"]
     measured_gpu_model = override.get("gpu_model") or observed_gpu_model
     # Driver metadata is accepted only with an execution-bound adapter observation;
