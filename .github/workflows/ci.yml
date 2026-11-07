@@ -215,20 +215,27 @@ jobs:
       - name: Verify pinned MSVC and Windows SDK selection
         shell: pwsh
         run: |
-          $clVersion = (cl 2>&1 | Select-Object -First 1 | Out-String)
-          if ($clVersion -notmatch "19\.40\.33813") {
-            Write-Error "Selected cl.exe is not the pinned MSVC 19.40.33813: $clVersion"
+          $clPath = (Get-Command cl.exe -ErrorAction Stop).Source
+          $linkPath = (Get-Command link.exe -ErrorAction Stop).Source
+          $clVersion = (Get-Item $clPath).VersionInfo.FileVersion
+          $linkVersion = (Get-Item $linkPath).VersionInfo.FileVersion
+
+          if ($clVersion -notmatch "^19\.40\.33813(?:\.0)?$") {
+            Write-Error "Selected cl.exe is not the pinned MSVC 19.40.33813: $clVersion ($clPath)"
             exit 1
           }
-          $linkVersion = (link 2>&1 | Select-Object -First 4 | Out-String)
-          if ($linkVersion -notmatch "14\.40\.33813\.0") {
-            Write-Error "Selected link.exe is not the pinned MSVC 14.40.33813.0: $linkVersion"
+          if ($linkVersion -notmatch "^14\.40\.33813\.0$") {
+            Write-Error "Selected link.exe is not the pinned MSVC 14.40.33813.0: $linkVersion ($linkPath)"
             exit 1
           }
-          if ($env:WindowsSDKVersion -notmatch "10\.0\.26100\.0") {
+          if ($env:WindowsSDKVersion.TrimEnd('\') -ne "10.0.26100.0") {
             Write-Error "Selected Windows SDK is not the pinned 10.0.26100.0: $env:WindowsSDKVersion"
             exit 1
           }
+
+          Write-Host "Verified cl.exe $clVersion at $clPath"
+          Write-Host "Verified link.exe $linkVersion at $linkPath"
+          Write-Host "Verified Windows SDK $env:WindowsSDKVersion"
 
       - name: Report provisioned toolchain versions
         shell: pwsh
