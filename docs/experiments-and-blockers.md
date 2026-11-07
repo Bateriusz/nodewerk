@@ -7,6 +7,8 @@
 
 Per NW-01 recovery semantics, any comparative toolchain evaluation, experimental compact-profile flag combination, or CRT-elimination experiment that is rejected or fails **must preserve its exact configuration, reproducible CMake command, obligations, byte measurements, and failure diagnostics**. Unexecuted or link-failing experiments on hosts without the Windows 11 x64 toolchain record `null` for unmeasured byte counts and list them in `unavailable_measurements` rather than presenting invented numbers. Failed experiments must never silently substitute a different configuration or strip platform security mitigations (`/GS`, `/guard:cf`, `/DYNAMICBASE`, `/HIGHENTROPYVA`, `/NXCOMPAT`, `/CETCOMPAT`) to reach a speculative size target.
 
+The same rule applies to a failed re-verification after an earlier success: `tools/size_ledger.py` leaves previously measured PE byte counts in place but marks those size ledgers `unverified` with the failure reason, clears the toolchain evidence flags, and keeps the manifest and ledgers consistent. A toolchain whose offline DXIL payload was not measured still retains its measured compute fixture PE bytes in an unverified experiment record instead of dropping the measurement.
+
 ## Summary of Recorded Experiments
 
 ### 1. Toolchain Comparison: `MSVC/LTCG` vs `clang-cl/lld-link`
@@ -14,7 +16,7 @@ Per NW-01 recovery semantics, any comparative toolchain evaluation, experimental
 - **Reproducible Command:** `cmake --preset msvc-release-ltcg && cmake --build --preset msvc-release-ltcg`
 - **Category:** `toolchain_comparison`
 - **Status:** `rejected_preserved` (`substituted_silently: false`, `verification_status: unverified` on Linux host)
-- **Outcome:** `clang-cl/lld-link` is selected as primary; `MSVC/LTCG` presets (`msvc-dev`, `msvc-release-ltcg`, `msvc-compact-experiment`) and ledger schemas remain preserved in `benchmarks/ledgers/*-msvc-ltcg-release.json` for identical-fixture comparison on Windows 11 x64.
+- **Outcome:** The experiment is preserved unverified because no Windows PE byte comparison has been executed. `clang-cl/lld-link` remains only the provisional default in `benchmarks/toolchain-manifest.v1.json`; `tools/size_ledger.py` selects the smaller verified aggregate footprint (or the only verified toolchain) from the recorded ledgers and updates `selected_toolchain` after measurement, including when `MSVC/LTCG` wins. The `MSVC/LTCG` presets (`msvc-dev`, `msvc-release-ltcg`, `msvc-compact-experiment`) and ledger schemas remain preserved in `benchmarks/ledgers/*-msvc-ltcg-release.json` for identical-fixture comparison on Windows 11 x64.
 
 ### 2. Compact Profile Experiment: Section Merging (`/MERGE:.rdata=.text`) + Sub-Page Alignment (`/ALIGN:16`)
 - **Record:** [`benchmarks/experiments/compact-profile-experiment.json`](../benchmarks/experiments/compact-profile-experiment.json)

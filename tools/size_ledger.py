@@ -188,16 +188,26 @@ def record_ledger_from_pe_binary(
         candidates.append({"name": exc["name"], "category": "dll", "size_bytes": 0})
 
     acct = compute_distribution_accounting(candidates, inventory)
-    if verified:
+    # A verified compute ledger must include a measured offline DXIL payload; a PE-only
+    # measurement is retained as unverified rather than claiming a complete shader ledger.
+    effective_verified = verified and (
+        offline_dxil_bytes is not None or not ledger.get("shaders")
+    )
+    if effective_verified:
         ledger["verification_status"] = "verified"
         ledger.pop("unverified_reason", None)
     else:
         ledger["verification_status"] = "unverified"
         ledger["unverified_reason"] = (
             unverified_reason
-            or "Measured PE32+ release binary retained as an unverified experiment record because "
-            "toolchain verification evidence (CodeView/PDB debugging and two-clean-directory "
-            "reproducibility across all fixtures) was incomplete."
+            or (
+                "Measured PE32+ release binary retained as an unverified experiment record because "
+                "the offline DXIL payload size was not measured."
+                if ledger.get("shaders") and offline_dxil_bytes is None
+                else "Measured PE32+ release binary retained as an unverified experiment record because "
+                "toolchain verification evidence (CodeView/PDB debugging and two-clean-directory "
+                "reproducibility across all fixtures) was incomplete."
+            )
         )
     ledger["total_distributed_bytes"] = acct["total_distributed_bytes"]
     ledger["distributed_components"] = acct["distributed_components"]
@@ -228,6 +238,13 @@ def record_ledger_from_pe_binary(
         for sh in ledger.get("shaders", []):
             sh["offline_dxil_bytes"] = offline_dxil_bytes
             sh["embedded_in_executable_bytes"] = offline_dxil_bytes
+    elif ledger.get("shaders"):
+        # The PE binary was measured but the offline DXIL payload was not. Preserve the
+        # executable measurement as an unverified experiment record instead of discarding
+        # it, and never leave stale DXIL bytes from a previous run on the ledger.
+        for sh in ledger.get("shaders", []):
+            sh["offline_dxil_bytes"] = None
+            sh["embedded_in_executable_bytes"] = None
 
     removed_metrics = {"total_distributed_bytes", "executable_sections"}
     if offline_dxil_bytes is not None:
@@ -237,6 +254,19 @@ def record_ledger_from_pe_binary(
         for m in ledger.get("unavailable_measurements", [])
         if m["metric"] not in removed_metrics
     ]
+    if offline_dxil_bytes is None and ledger.get("shaders"):
+        existing_metrics = {m["metric"] for m in ledger["unavailable_measurements"]}
+        if "shaders[0].offline_dxil_bytes" not in existing_metrics:
+            ledger["unavailable_measurements"].insert(
+                0,
+                {
+                    "metric": "shaders[0].offline_dxil_bytes",
+                    "reason": (
+                        "The compute fixture PE binary was measured, but the offline DXIL "
+                        "payload size was unavailable because DXC compilation was not verified."
+                    ),
+                },
+            )
 
     schema_root = repo_root or Path(__file__).resolve().parent.parent
     schema_path = schema_root / "schemas" / "size-ledger.schema.json"
@@ -319,6 +349,138 @@ _BYTE_FIELDS = (
     ("clear_present_bytes", "clear_present"),
     ("compute_fixture_bytes", "compute_shader"),
 )
+
+
+def _complete_byte_total(entry: dict[str, Any]) -> int | None:
+    """Return the aggregate measured bytes only when all three fixture counts are present."""
+    values = [entry.get(field) for field, _ in _BYTE_FIELDS]
+    if any(value is None for value in values):
+        return None
+    return sum(int(value) for value in values)
+
+
+def _winner_from_eligible(
+    toolchain_manifest: dict[str, Any],
+    eligible: list[tuple[str, int]],
+) -> str | None:
+    """Pick the smallest aggregate eligible toolchain, keeping an eligible current selection on ties."""
+    if not eligible:
+        return None
+    min_total = min(total for _, total in eligible)
+    winners = {toolchain_id for toolchain_id, total in eligible if total == min_total}
+    current_id = toolchain_manifest.get("selected_toolchain", {}).get("toolchain_id")
+    if current_id in winners:
+        return current_id
+    for entry in toolchain_manifest.get("evaluated_toolchains", []):
+        toolchain_id = entry.get("toolchain_id")
+        if toolchain_id in winners:
+            return toolchain_id
+    return sorted(winners)[0]
+
+
+def _select_measured_toolchain(toolchain_manifest: dict[str, Any]) -> str | None:
+    """Select the smaller fully measured, verified toolchain from the manifest itself.
+
+    No compiler name is preferred. Only toolchains with verified status and all three
+    recorded fixture byte counts are eligible; if exactly one toolchain qualifies it is
+    selected instead of leaving an unverified default in place.
+    """
+    eligible: list[tuple[str, int]] = []
+    for entry in toolchain_manifest.get("evaluated_toolchains", []):
+        if entry.get("verification_status") != "verified":
+            continue
+        total = _complete_byte_total(entry)
+        if total is None:
+            continue
+        eligible.append((entry["toolchain_id"], total))
+    return _winner_from_eligible(toolchain_manifest, eligible)
+
+
+def _select_toolchain_from_ledgers(
+    toolchain_manifest: dict[str, Any],
+    ledgers_by_key: dict[tuple[str, str], dict[str, Any]],
+    fixture_ids: list[str],
+) -> str | None:
+    """Select the smaller verified toolchain directly from the recorded size ledgers."""
+    eligible: list[tuple[str, int]] = []
+    for entry in toolchain_manifest.get("evaluated_toolchains", []):
+        toolchain_id = entry.get("toolchain_id")
+        if not toolchain_id:
+            continue
+        rows = [ledgers_by_key.get((fixture_id, toolchain_id)) for fixture_id in fixture_ids]
+        if any(
+            row is None
+            or row.get("verification_status") != "verified"
+            or row.get("total_distributed_bytes") is None
+            for row in rows
+        ):
+            continue
+        eligible.append(
+            (toolchain_id, sum(int(row["total_distributed_bytes"]) for row in rows))
+        )
+    return _winner_from_eligible(toolchain_manifest, eligible)
+
+
+def _sync_evaluated_toolchains_from_ledgers(
+    toolchain_manifest: dict[str, Any],
+    ledgers_by_key: dict[tuple[str, str], dict[str, Any]],
+) -> bool:
+    """Reconcile manifest byte fields and verification state with the size ledgers.
+
+    Returns True when the manifest changed. A verified manifest entry is downgraded if any
+    fixture ledger for that toolchain is unverified, so stale verified entries can never
+    disagree with the measured ledgers after a failed re-verification run.
+    """
+    changed = False
+    for entry in toolchain_manifest.get("evaluated_toolchains", []):
+        toolchain_id = entry.get("toolchain_id")
+        if not toolchain_id:
+            continue
+        statuses: list[str] = []
+        for fixture_id, field in _BYTE_FIELDS:
+            ledger = ledgers_by_key.get((fixture_id, toolchain_id))
+            if ledger is None:
+                continue
+            measured = ledger.get("total_distributed_bytes")
+            if entry.get(field) != measured:
+                entry[field] = measured
+                changed = True
+            statuses.append(str(ledger.get("verification_status", "unverified")))
+
+        if not statuses:
+            continue
+        if len(statuses) != len(_BYTE_FIELDS) or any(
+            status != "verified" for status in statuses
+        ):
+            if (
+                entry.get("verification_status") != "unverified"
+                or entry.get("pdb_debugging_verified") is not False
+                or entry.get("deterministic_repro_verified") is not False
+            ):
+                entry["verification_status"] = "unverified"
+                entry["pdb_debugging_verified"] = False
+                entry["deterministic_repro_verified"] = False
+                changed = True
+        elif (
+            entry.get("pdb_debugging_verified") is True
+            and entry.get("deterministic_repro_verified") is True
+        ):
+            if entry.get("verification_status") != "verified":
+                entry["verification_status"] = "verified"
+                changed = True
+        else:
+            # Verified ledgers without both evidence flags cannot be promoted to verified.
+            if (
+                entry.get("verification_status") != "unverified"
+                or entry.get("pdb_debugging_verified") is not False
+                or entry.get("deterministic_repro_verified") is not False
+            ):
+                entry["verification_status"] = "unverified"
+                entry["pdb_debugging_verified"] = False
+                entry["deterministic_repro_verified"] = False
+                changed = True
+    return changed
+
 
 _TOOLCHAIN_PIN_METADATA: dict[str, dict[str, str]] = {
     "clang-cl-lld": {
@@ -428,47 +590,40 @@ def _set_toolchain_unverified(
                     )
                 else:
                     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-                    if ledger.get("verification_status") != "unverified" or not ledger.get("unverified_reason"):
-                        ledger["verification_status"] = "unverified"
-                        ledger["unverified_reason"] = reason
-                        schema_path = repo_root / "schemas" / "size-ledger.schema.json"
-                        if schema_path.exists():
-                            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-                            validate_instance(ledger, schema, schema, path=ledger_path.name)
-                            validate_semantic_invariants(ledger, schema_path.name, ledger_path)
-                        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+                    # Preserve measured bytes, but never leave a ledger marked verified
+                    # after its toolchain entry has been downgraded to unverified.
+                    ledger["verification_status"] = "unverified"
+                    ledger["unverified_reason"] = reason
+                    schema_path = repo_root / "schemas" / "size-ledger.schema.json"
+                    if schema_path.exists():
+                        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                        validate_instance(ledger, schema, schema, path=ledger_path.name)
+                        validate_semantic_invariants(ledger, schema_path.name, ledger_path)
+                    ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
 
 
 def _derive_toolchain_evidence_text(toolchain_manifest: dict[str, Any]) -> None:
     """Refresh the selected toolchain and human-readable evidence from recorded state.
 
-    When both toolchains are verified with complete byte measurements, selects the smaller
-    working toolchain configuration and derives the rationale from the actual measured byte ordering.
+    Selection is measurement-driven: among toolchains whose verification is complete and whose
+    three fixture byte counts are recorded, the smaller aggregate distributed footprint is
+    selected (ties retain the eligible current selection). If only one toolchain is verified it
+    is selected instead of leaving an unverified default in place. Rationale text is always
+    derived from the recorded byte counts and evidence flags rather than from a fixed compiler
+    preference.
     """
     entries = {t["toolchain_id"]: t for t in toolchain_manifest.get("evaluated_toolchains", [])}
     if not entries:
         return
 
-    all_entries_verified_and_complete = len(entries) >= 2 and all(
-        t.get("verification_status") == "verified"
-        and all(t.get(field) is not None for field, _ in _BYTE_FIELDS)
-        for t in entries.values()
-    )
-    if all_entries_verified_and_complete and "clang-cl-lld" in entries and "msvc-ltcg" in entries:
-        clang_total = sum(int(entries["clang-cl-lld"][field]) for field, _ in _BYTE_FIELDS)
-        msvc_total = sum(int(entries["msvc-ltcg"][field]) for field, _ in _BYTE_FIELDS)
-        winner_id = "msvc-ltcg" if msvc_total < clang_total else "clang-cl-lld"
+    winner_id = _select_measured_toolchain(toolchain_manifest)
+    if winner_id is not None:
         _apply_selected_toolchain_pin(toolchain_manifest, winner_id)
     else:
         current_selected_id = toolchain_manifest.get("selected_toolchain", {}).get("toolchain_id")
-        current_selected = entries.get(current_selected_id) if current_selected_id else None
-        if (
-            current_selected_id == "msvc-ltcg"
-            and (current_selected is None or current_selected.get("verification_status") != "verified")
-            and "clang-cl-lld" in entries
-        ):
-            _apply_selected_toolchain_pin(toolchain_manifest, "clang-cl-lld")
-        elif current_selected_id in entries:
+        if current_selected_id not in entries:
+            _apply_selected_toolchain_pin(toolchain_manifest, next(iter(entries)))
+        else:
             for t in toolchain_manifest.get("evaluated_toolchains", []):
                 t["status"] = "selected" if t["toolchain_id"] == current_selected_id else "retained_alternative"
 
@@ -708,14 +863,11 @@ def record_release_ledgers(
         deterministic_repro_verified is True and pdb_debugging_verified is True
     )
     ready_by_fixture: dict[str, tuple[Path, Path, str, str, int | None]] = {}
+    missing_fixtures: list[str] = []
     for fixture_id, exe_name, ledger_name, manifest_field, dxil_bytes in specs:
         exe_path = binary_dir / exe_name
         ledger_path = repo_root / "benchmarks" / "ledgers" / ledger_name
-        if (
-            exe_path.exists()
-            and ledger_path.exists()
-            and (fixture_id != "compute_shader" or dxil_bytes is not None)
-        ):
+        if exe_path.exists() and ledger_path.exists():
             ready_by_fixture[fixture_id] = (
                 exe_path,
                 ledger_path,
@@ -723,20 +875,33 @@ def record_release_ledgers(
                 manifest_field,
                 dxil_bytes,
             )
+        else:
+            missing_fixtures.append(exe_name)
 
-    all_three_ready = len(ready_by_fixture) == len(specs)
-    toolchain_verified = verification_complete and all_three_ready
+    all_three_binaries_ready = len(ready_by_fixture) == len(specs)
+    offline_dxil_ready = shader_bytes is not None
+    all_measurements_complete = all_three_binaries_ready and offline_dxil_ready
+    toolchain_verified = verification_complete and all_measurements_complete
     unverified_reason = None
     if not toolchain_verified:
-        unverified_reason = (
-            "Refusing to mark ledgers verified: two-clean-directory reproducibility and "
-            "CodeView/PDB debugging evidence must both be explicitly verified; preserving "
-            "measured binary sizes in an unverified record."
-            if not verification_complete
-            else "Refusing to mark ledgers verified: not all three fixture executables "
-            "and offline DXIL measurements were available; preserving available measurements "
-            "in an unverified record."
-        )
+        if not verification_complete:
+            unverified_reason = (
+                "Refusing to mark ledgers verified: two-clean-directory reproducibility and "
+                "CodeView/PDB debugging evidence must both be explicitly verified; preserving "
+                "measured binary sizes in an unverified record."
+            )
+        elif not all_three_binaries_ready:
+            unverified_reason = (
+                "Refusing to mark ledgers verified: missing release fixture executables "
+                f"({', '.join(missing_fixtures)}); preserving every available measured binary "
+                "in an unverified experiment record rather than reporting a completed toolchain."
+            )
+        else:
+            unverified_reason = (
+                "Refusing to mark ledgers verified: the offline DXIL payload size was not "
+                "measured (DXC compilation unverified); the measured compute fixture PE bytes "
+                "and every other measured binary are preserved in an unverified record."
+            )
 
     for fixture_id, _exe_name, ledger_name, manifest_field, _dxil_bytes in specs:
         ledger_path = repo_root / "benchmarks" / "ledgers" / ledger_name
@@ -814,7 +979,8 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
     shader_manifest_path = repo_root / "shaders" / "manifest.json"
 
     inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    toolchain_manifest = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    original_manifest_text = toolchain_path.read_text(encoding="utf-8")
+    toolchain_manifest = json.loads(original_manifest_text)
     shader_manifest = json.loads(shader_manifest_path.read_text(encoding="utf-8"))
     shader_by_id = {s["shader_id"]: s for s in shader_manifest.get("shaders", [])}
 
@@ -968,9 +1134,41 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
             }
         )
 
+    # Reconcile the manifest with the actually recorded ledger measurements before
+    # cross-checking. A stale manifest must never force a fixed compiler choice or make a
+    # valid MSVC/LTCG-win comparison fail merely because the manifest still named clang-cl.
+    manifest_changed = _sync_evaluated_toolchains_from_ledgers(
+        toolchain_manifest, ledgers_by_key
+    )
+    measured_selection = _select_toolchain_from_ledgers(
+        toolchain_manifest, ledgers_by_key, fixtures
+    )
+    selection_reconciled = False
+    if measured_selection is not None:
+        previous_selection = toolchain_manifest.get("selected_toolchain", {}).get(
+            "toolchain_id"
+        )
+        _apply_selected_toolchain_pin(toolchain_manifest, measured_selection)
+        selection_reconciled = previous_selection != measured_selection
+    if measured_selection is not None or manifest_changed:
+        _derive_toolchain_evidence_text(toolchain_manifest)
+        updated_manifest_text = json.dumps(toolchain_manifest, indent=2) + "\n"
+        if updated_manifest_text != original_manifest_text:
+            toolchain_schema = repo_root / "schemas" / "toolchain-manifest.schema.json"
+            if toolchain_schema.exists():
+                schema = json.loads(toolchain_schema.read_text(encoding="utf-8"))
+                validate_instance(
+                    toolchain_manifest, schema, schema, path=toolchain_path.name
+                )
+                validate_semantic_invariants(
+                    toolchain_manifest, toolchain_schema.name, toolchain_path
+                )
+            toolchain_path.write_text(updated_manifest_text, encoding="utf-8")
+
     # Cross-check against toolchain-manifest.v1.json evaluated_toolchains
     eval_by_id = {t["toolchain_id"]: t for t in toolchain_manifest.get("evaluated_toolchains", [])}
-    for tid in ("clang-cl-lld", "msvc-ltcg"):
+    toolchain_ids = [t["toolchain_id"] for t in toolchain_manifest.get("evaluated_toolchains", [])]
+    for tid in toolchain_ids:
         all_tid_ledgers_verified = all(
             ledgers_by_key[(fx, tid)]["verification_status"] == "verified"
             for fx in fixtures
@@ -981,31 +1179,42 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
                 f"Toolchain manifest verification_status mismatch for {tid}: "
                 f"expected '{expected_tid_status}', got '{eval_by_id[tid].get('verification_status')}'"
             )
+    comparison_byte_key = {
+        "clang-cl-lld": "clang_cl_lld_bytes",
+        "msvc-ltcg": "msvc_ltcg_bytes",
+    }
     for comp in comparisons:
         fx = comp["fixture_id"]
         field = "compute_fixture_bytes" if fx == "compute_shader" else f"{fx}_bytes"
-        if eval_by_id["clang-cl-lld"][field] != comp["clang_cl_lld_bytes"]:
-            raise SizeLedgerError(f"Toolchain manifest mismatch for clang-cl-lld.{field}")
-        if eval_by_id["msvc-ltcg"][field] != comp["msvc_ltcg_bytes"]:
-            raise SizeLedgerError(f"Toolchain manifest mismatch for msvc-ltcg.{field}")
+        for tid, comparison_key in comparison_byte_key.items():
+            if eval_by_id[tid][field] != comp[comparison_key]:
+                raise SizeLedgerError(f"Toolchain manifest mismatch for {tid}.{field}")
 
     selected_id = toolchain_manifest["selected_toolchain"]["toolchain_id"]
     smaller_verified_toolchain: str | None = None
     if all(c["verification_status"] == "verified" for c in comparisons):
-        clang_total = sum(int(c["clang_cl_lld_bytes"]) for c in comparisons)
-        msvc_total = sum(int(c["msvc_ltcg_bytes"]) for c in comparisons)
-        smaller_verified_toolchain = "msvc-ltcg" if msvc_total < clang_total else "clang-cl-lld"
-        if clang_total != msvc_total and selected_id != smaller_verified_toolchain:
+        eligible = [
+            (
+                tid,
+                sum(
+                    int(eval_by_id[tid]["compute_fixture_bytes" if fx == "compute_shader" else f"{fx}_bytes"])
+                    for fx in fixtures
+                ),
+            )
+            for tid in toolchain_ids
+        ]
+        smaller_verified_toolchain = _winner_from_eligible(toolchain_manifest, eligible)
+        if selected_id != smaller_verified_toolchain:
             raise SizeLedgerError(
-                f"Toolchain manifest selected_toolchain is '{selected_id}', but measured comparison "
-                f"shows '{smaller_verified_toolchain}' is the smaller verified configuration "
-                f"(clang-cl-lld={clang_total} B vs msvc-ltcg={msvc_total} B total)"
+                f"Toolchain manifest selected_toolchain is '{selected_id}', but measured "
+                f"comparison shows '{smaller_verified_toolchain}' is the smaller verified "
+                "configuration after measurement reconciliation"
             )
         rationale = toolchain_manifest["selected_toolchain"].get("selection_rationale", "")
-        other_id = "msvc-ltcg" if selected_id == "clang-cl-lld" else "clang-cl-lld"
-        if f"{other_id} is larger on every fixture" in rationale:
-            selected_key = "clang_cl_lld_bytes" if selected_id == "clang-cl-lld" else "msvc_ltcg_bytes"
-            other_key = "msvc_ltcg_bytes" if selected_id == "clang-cl-lld" else "clang_cl_lld_bytes"
+        other_id = next((tid for tid in toolchain_ids if tid != selected_id), None)
+        if other_id and f"{other_id} is larger on every fixture" in rationale:
+            selected_key = comparison_byte_key[selected_id]
+            other_key = comparison_byte_key[other_id]
             if not all(int(c[selected_key]) < int(c[other_key]) for c in comparisons):
                 raise SizeLedgerError(
                     f"Toolchain manifest selection_rationale claims '{other_id} is larger on every fixture', "
@@ -1015,6 +1224,11 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
     return {
         "selected_toolchain": selected_id,
         "smaller_verified_toolchain": smaller_verified_toolchain,
+        "selection_reconciled": selection_reconciled,
+        "selection_basis": (
+            "smallest verified aggregate distributed bytes across empty_player, "
+            "clear_present, and compute_shader"
+        ),
         "claims_64kib_achievable": False,
         "defer_minimum_size_claim_until_task": "NW-10",
         "fixture_comparisons": comparisons,
