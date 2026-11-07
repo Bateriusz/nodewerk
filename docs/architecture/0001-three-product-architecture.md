@@ -55,4 +55,4 @@ Nodewerk is partitioned into **three separate products** with strict compilation
 
 ## Explicit Non-Claim on 64 KiB Budget
 
-NW-01 establishes reproducible empty-player (`10,752` bytes), clear/present (`16,896` bytes), and offline compute-shader (`14,848` bytes) byte ledgers on the uncompressed baseline. **No claim is made that a 64 KiB complete demo budget is achievable before NW-10 supplies whole-demo package and compression evidence.**
+NW-01 establishes the reproducible empty-player, clear/present, and offline compute-shader byte-ledger schemas (`schemas/size-ledger.schema.json`) and baseline ledgers (`benchmarks/ledgers/*.json`), recording unmeasured byte counts as `null` (`"verification_status": "unverified"`) until built and measured on a Windows 11 x64 toolchain host via `tools/size_ledger.py`. **No claim is made regarding an unmeasured minimum player size, and no claim is made that a 64 KiB complete demo budget is achievable before NW-10 supplies whole-demo package and compression evidence.**
