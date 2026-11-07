@@ -405,6 +405,7 @@ ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
     ("benchmarks/hardware/rtx-4060-baseline.json", "schemas/benchmark-result.schema.json"),
     ("benchmarks/hardware/rtx-50-series-baseline.json", "schemas/benchmark-result.schema.json"),
     ("benchmarks/reproducibility/release-build-reproducibility.json", "schemas/reproducibility-report.schema.json"),
+    ("benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json", "schemas/reproducibility-report.schema.json"),
     ("benchmarks/clean-system/clean-system-validation.json", "schemas/clean-system-report.schema.json"),
     ("benchmarks/experiments/msvc-ltcg-comparison.json", "schemas/experiment-record.schema.json"),
     ("benchmarks/experiments/compact-profile-experiment.json", "schemas/experiment-record.schema.json"),

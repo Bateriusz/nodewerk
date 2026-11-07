@@ -20,5 +20,5 @@ This directory contains the Architecture Decision Records (ADRs), dependency inv
 - Dependency Inventory: [`benchmarks/dependency-inventory.v1.json`](../benchmarks/dependency-inventory.v1.json) (validated by [`schemas/dependency-inventory.schema.json`](../schemas/dependency-inventory.schema.json))
 - Size Ledgers: [`benchmarks/ledgers/`](../benchmarks/ledgers/) (validated by [`schemas/size-ledger.schema.json`](../schemas/size-ledger.schema.json))
 - Hardware Capability & Benchmark Captures: [`benchmarks/hardware/`](../benchmarks/hardware/) (validated by [`schemas/benchmark-result.schema.json`](../schemas/benchmark-result.schema.json))
-- Clean-Directory Reproducibility Report: [`benchmarks/reproducibility/release-build-reproducibility.json`](../benchmarks/reproducibility/release-build-reproducibility.json)
+- Clean-Directory Reproducibility Reports: [`benchmarks/reproducibility/release-build-reproducibility.json`](../benchmarks/reproducibility/release-build-reproducibility.json) (clang-cl/lld-link) and [`benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json`](../benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json) (MSVC/LTCG)
 - Clean Physical System Validation Report: [`benchmarks/clean-system/clean-system-validation.json`](../benchmarks/clean-system/clean-system-validation.json)

@@ -27,7 +27,13 @@ from size_ledger import (  # noqa: E402
 )
 
 
-def build_synthetic_pe64(imported_dlls: list[str], *, time_date_stamp: int = 0, extra_text_bytes: int = 0) -> bytes:
+def build_synthetic_pe64(
+    imported_dlls: list[str],
+    *,
+    time_date_stamp: int = 0,
+    extra_text_bytes: int = 0,
+    pdb_path: str | None = None,
+) -> bytes:
     """Construct a minimal valid PE32+ (x64) binary image with the specified import table."""
     pe_offset = 0x80
     num_sections = 2
@@ -50,6 +56,35 @@ def build_synthetic_pe64(imported_dlls: list[str], *, time_date_stamp: int = 0, 
         rdata_buf[current_str_off : current_str_off + len(encoded)] = encoded
         current_str_off += len(encoded)
         struct.pack_into("<IIIII", rdata_buf, idx * 20, 0, 0, 0, name_rva, 0x2300 + idx * 8)
+
+    debug_dir_offset = current_str_off
+    debug_dir_size = 0
+    if pdb_path is not None:
+        # IMAGE_DEBUG_DIRECTORY (28 bytes) followed by a CodeView RSDS record.
+        rsds_offset = debug_dir_offset + 28
+        rsds = (
+            b"RSDS"
+            + bytes(range(16))
+            + struct.pack("<I", 1)
+            + pdb_path.encode("utf-8")
+            + b"\x00"
+        )
+        struct.pack_into(
+            "<IIHHIIII",
+            rdata_buf,
+            debug_dir_offset,
+            0,
+            0,
+            0,
+            0,
+            2,  # IMAGE_DEBUG_TYPE_CODEVIEW
+            len(rsds),
+            rdata_rva + rsds_offset,
+            rdata_raw_ptr + rsds_offset,
+        )
+        rdata_buf[rsds_offset : rsds_offset + len(rsds)] = rsds
+        current_str_off = rsds_offset + len(rsds)
+        debug_dir_size = 28
 
     image = bytearray(rdata_raw_ptr + rdata_raw_size)
     image[0:2] = b"MZ"
@@ -74,6 +109,14 @@ def build_synthetic_pe64(imported_dlls: list[str], *, time_date_stamp: int = 0, 
     struct.pack_into("<H", image, opt_offset + 70, 0x0020 | 0x0040 | 0x0100 | 0x4000)
     struct.pack_into("<I", image, opt_offset + 108, 16)
     struct.pack_into("<II", image, opt_offset + 120, rdata_rva, desc_table_size)
+    if debug_dir_size:
+        struct.pack_into(
+            "<II",
+            image,
+            opt_offset + 112 + 8 * 6,
+            rdata_rva + debug_dir_offset,
+            debug_dir_size,
+        )
 
     # Section 0: .text
     struct.pack_into(

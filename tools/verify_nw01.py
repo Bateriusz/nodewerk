@@ -396,6 +396,7 @@ def compare_two_build_directories(
     dir_b: Path,
     artifact_names: list[tuple[str, str]] | None = None,
     output_report_path: Path | None = None,
+    report_id: str = "nw01-clang-cl-release-reproducibility-v1",
 ) -> dict[str, Any]:
     """Compare release PE32+ artifacts across two independent clean build directories and optionally record the report."""
     if artifact_names is None:
@@ -479,7 +480,7 @@ def compare_two_build_directories(
 
     report: dict[str, Any] = {
         "schema_version": "1.0.0",
-        "report_id": "nw01-clang-cl-release-reproducibility-v1",
+        "report_id": report_id,
         "toolchain_manifest_ref": "benchmarks/toolchain-manifest.v1.json",
         "build_profile": "release",
         "directory_a": str(dir_a),
@@ -663,6 +664,219 @@ def build_msvc_ltcg_release_directory(
     }
 
 
+def build_and_compare_two_msvc_clean_directories(
+    repo_root: Path,
+    dir_a: Path | None = None,
+    dir_b: Path | None = None,
+    output_report_path: Path | None = None,
+    *,
+    enforce_pinned_toolchain: bool = True,
+) -> dict[str, Any]:
+    """Build MSVC/LTCG release fixtures twice in independent directories and compare hashes."""
+    out_dir_a = dir_a or (repo_root / "build" / "msvc-release-ltcg-clean-a")
+    out_dir_b = dir_b or (repo_root / "build" / "msvc-release-ltcg-clean-b")
+    repro_path = output_report_path or (
+        repo_root / "benchmarks" / "reproducibility" / "msvc-ltcg-release-reproducibility.json"
+    )
+    repro_schema = repo_root / "schemas" / "reproducibility-report.schema.json"
+
+    cmake_bin = shutil.which("cmake")
+    ninja_bin = shutil.which("ninja")
+    cl_bin = shutil.which("cl") or shutil.which("cl.exe")
+    link_bin = shutil.which("link") or shutil.which("link.exe")
+    dxc_bin = find_dxc_executable()
+
+    missing_tools: list[str] = []
+    if not cmake_bin:
+        missing_tools.append("cmake")
+    if not ninja_bin:
+        missing_tools.append("ninja")
+    if not cl_bin:
+        missing_tools.append("cl")
+    if not link_bin:
+        missing_tools.append("link")
+    if not dxc_bin:
+        missing_tools.append("dxc")
+
+    if missing_tools:
+        for d in (out_dir_a, out_dir_b):
+            if d.exists():
+                shutil.rmtree(d)
+        report = compare_two_build_directories(
+            out_dir_a,
+            out_dir_b,
+            output_report_path=repro_path,
+            report_id="nw01-msvc-ltcg-release-reproducibility-v1",
+        )
+        report["missing_toolchain_tools"] = missing_tools
+        if repro_schema.exists():
+            validate_file_against_schema(repro_path, repro_schema)
+        return report
+
+    for d in (out_dir_a, out_dir_b):
+        if d.exists():
+            shutil.rmtree(d)
+        subprocess.run(
+            [
+                cmake_bin,
+                "-S",
+                str(repo_root),
+                "-B",
+                str(d),
+                "-G",
+                "Ninja",
+                f"-DCMAKE_TOOLCHAIN_FILE={repo_root / 'cmake/toolchains/msvc-x64.cmake'}",
+                "-DCMAKE_BUILD_TYPE=MinSizeRel",
+                "-DNW_BUILD_PROFILE=release",
+                f"-DNW_ENFORCE_PINNED_TOOLCHAIN={'ON' if enforce_pinned_toolchain else 'OFF'}",
+            ],
+            check=True,
+        )
+        subprocess.run([cmake_bin, "--build", str(d)], check=True)
+
+    report = compare_two_build_directories(
+        out_dir_a,
+        out_dir_b,
+        output_report_path=repro_path,
+        report_id="nw01-msvc-ltcg-release-reproducibility-v1",
+    )
+    if repro_schema.exists():
+        validate_file_against_schema(repro_path, repro_schema)
+    return report
+
+
+PDB_MSF_SIGNATURE = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00"
+DEBUG_FIXTURE_EXECUTABLES = (
+    "nw_empty_player.exe",
+    "nw_clear_present_fixture.exe",
+    "nw_compute_shader_fixture.exe",
+)
+
+
+def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
+    """Verify that each fixture PE carries CodeView/RSDS records and resolves to a real MSF PDB."""
+    artifacts: list[dict[str, Any]] = []
+    missing: list[str] = []
+
+    for exe_name in DEBUG_FIXTURE_EXECUTABLES:
+        exe_path = binary_dir / exe_name
+        record: dict[str, Any] = {
+            "executable": exe_name,
+            "codeview_rsds": False,
+            "pdb_file": None,
+            "pdb_msf_signature": False,
+        }
+        if not exe_path.exists():
+            record["missing"] = True
+            missing.append(exe_name)
+            artifacts.append(record)
+            continue
+
+        pe_info = parse_pe64_sections_and_imports(exe_path.read_bytes())
+        codeview = pe_info.get("codeview_entries") or []
+        record["codeview_rsds"] = any(entry.get("signature") == "RSDS" for entry in codeview)
+
+        pdb_candidates: list[Path] = []
+        for entry in codeview:
+            pdb_path = entry.get("pdb_path") or ""
+            if pdb_path:
+                pdb_candidates.append(binary_dir / Path(pdb_path).name)
+        pdb_candidates.append(binary_dir / (Path(exe_name).stem + ".pdb"))
+        resolved = next((p for p in pdb_candidates if p.is_file()), None)
+        if resolved is None:
+            recovered = next(
+                (p for p in binary_dir.rglob(Path(exe_name).stem + ".pdb") if p.is_file()),
+                None,
+            )
+            resolved = recovered
+        if resolved is not None:
+            record["pdb_file"] = resolved.name
+            try:
+                record["pdb_msf_signature"] = resolved.read_bytes().startswith(PDB_MSF_SIGNATURE)
+            except OSError:
+                record["pdb_msf_signature"] = False
+        if not record["codeview_rsds"] or not record["pdb_msf_signature"]:
+            missing.append(exe_name)
+        artifacts.append(record)
+
+    verified = not missing
+    return {
+        "verified": verified,
+        "binary_dir": str(binary_dir),
+        "artifacts": artifacts,
+        "missing_or_invalid": missing,
+    }
+
+
+def build_and_verify_debug_symbols(
+    repo_root: Path,
+    toolchain_id: str,
+    out_dir: Path | None = None,
+    *,
+    enforce_pinned_toolchain: bool = True,
+) -> dict[str, Any]:
+    """Build the dev profile with /DEBUG:FULL and verify CodeView/PDB evidence for that toolchain."""
+    if toolchain_id == "clang-cl-lld":
+        toolchain_file = repo_root / "cmake/toolchains/clang-cl-x64.cmake"
+        debug_dir = out_dir or (repo_root / "build" / "clang-cl-debug-symbols")
+        required_tools = ("clang-cl", "lld-link")
+    elif toolchain_id == "msvc-ltcg":
+        toolchain_file = repo_root / "cmake/toolchains/msvc-x64.cmake"
+        debug_dir = out_dir or (repo_root / "build" / "msvc-debug-symbols")
+        required_tools = ("cl", "link")
+    else:
+        raise ValueError(f"Unknown toolchain_id '{toolchain_id}'")
+
+    cmake_bin = shutil.which("cmake")
+    ninja_bin = shutil.which("ninja")
+    dxc_bin = find_dxc_executable()
+    missing_tools: list[str] = []
+    if not cmake_bin:
+        missing_tools.append("cmake")
+    if not ninja_bin:
+        missing_tools.append("ninja")
+    for tool in required_tools:
+        found = shutil.which(tool) or shutil.which(f"{tool}.exe")
+        if not found:
+            missing_tools.append(tool)
+    if not dxc_bin:
+        missing_tools.append("dxc")
+
+    if missing_tools:
+        return {
+            "built": False,
+            "verified": False,
+            "output_dir": str(debug_dir),
+            "missing_toolchain_tools": missing_tools,
+        }
+
+    if debug_dir.exists():
+        shutil.rmtree(debug_dir)
+    subprocess.run(
+        [
+            cmake_bin,
+            "-S",
+            str(repo_root),
+            "-B",
+            str(debug_dir),
+            "-G",
+            "Ninja",
+            f"-DCMAKE_TOOLCHAIN_FILE={toolchain_file}",
+            "-DCMAKE_BUILD_TYPE=Debug",
+            "-DNW_BUILD_PROFILE=dev",
+            f"-DNW_ENFORCE_PINNED_TOOLCHAIN={'ON' if enforce_pinned_toolchain else 'OFF'}",
+        ],
+        check=True,
+    )
+    subprocess.run([cmake_bin, "--build", str(debug_dir)], check=True)
+    verification = verify_debug_symbol_evidence(debug_dir)
+    return {
+        "built": True,
+        "output_dir": str(debug_dir),
+        **verification,
+    }
+
+
 def probe_sdk_absence(
     search_dir: Path,
     env: dict[str, str] | None = None,
@@ -757,13 +971,21 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
                 f"(benchmark_passed={data.get('benchmark_passed')})"
             )
 
-    repro_path = repo_root / "benchmarks" / "reproducibility" / "release-build-reproducibility.json"
-    repro_data = json.loads(repro_path.read_text(encoding="utf-8"))
-    if repro_data.get("verification_status") != "verified" or repro_data.get("all_artifacts_match") is not True:
-        unmet_requirements.append(
-            f"Reproducibility report ({repro_path.name}) is '{repro_data.get('verification_status')}' "
-            f"(all_artifacts_match={repro_data.get('all_artifacts_match')})"
-        )
+    repro_files = [
+        ("clang-cl-lld", repo_root / "benchmarks" / "reproducibility" / "release-build-reproducibility.json"),
+        ("msvc-ltcg", repo_root / "benchmarks" / "reproducibility" / "msvc-ltcg-release-reproducibility.json"),
+    ]
+    for toolchain_id, repro_path in repro_files:
+        repro_data = json.loads(repro_path.read_text(encoding="utf-8"))
+        if (
+            repro_data.get("verification_status") != "verified"
+            or repro_data.get("all_artifacts_match") is not True
+        ):
+            unmet_requirements.append(
+                f"Reproducibility report for {toolchain_id} ({repro_path.name}) is "
+                f"'{repro_data.get('verification_status')}' "
+                f"(all_artifacts_match={repro_data.get('all_artifacts_match')})"
+            )
 
     clean_path = repo_root / "benchmarks" / "clean-system" / "clean-system-validation.json"
     clean_data = json.loads(clean_path.read_text(encoding="utf-8"))
@@ -779,6 +1001,16 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
         if et.get("verification_status") != "verified":
             unmet_requirements.append(
                 f"Evaluated toolchain '{et.get('toolchain_id')}' in {toolchain_path.name} is '{et.get('verification_status')}'"
+            )
+        if et.get("pdb_debugging_verified") is not True:
+            unmet_requirements.append(
+                f"Evaluated toolchain '{et.get('toolchain_id')}' lacks verified CodeView/PDB "
+                "debugging evidence"
+            )
+        if et.get("deterministic_repro_verified") is not True:
+            unmet_requirements.append(
+                f"Evaluated toolchain '{et.get('toolchain_id')}' lacks verified "
+                "two-clean-directory reproducibility evidence"
             )
 
     try:
@@ -926,7 +1158,7 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         "comparison": ledger_comparison,
     }
 
-    # 4. Build, two-clean-directory reproducibility & MSVC/LTCG comparison prerequisites check
+    # 4. Build, two-clean-directory reproducibility, PDB & MSVC/LTCG comparison checks.
     is_windows = platform.system().lower() == "windows"
     cmake_bin = shutil.which("cmake")
     ninja_bin = shutil.which("ninja")
@@ -952,33 +1184,41 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
     if not dxc_bin:
         report["missing_prerequisites"].append("dxc (pinned 1.8.2407) not found in PATH")
 
+    clang_prereqs_ready = bool(
+        is_windows and cmake_bin and ninja_bin and clang_cl_bin and lld_link_bin and dxc_bin
+    )
+    msvc_prereqs_ready = bool(
+        is_windows and cmake_bin and ninja_bin and cl_bin and link_bin and dxc_bin
+    )
+
     fixture_validation_passed = False
-    if (
-        is_windows
-        and cmake_bin
-        and ninja_bin
-        and clang_cl_bin
-        and lld_link_bin
-        and cl_bin
-        and link_bin
-        and dxc_bin
-    ):
+    clang_recording: dict[str, Any] | None = None
+    msvc_recording: dict[str, Any] | None = None
+    recorded_any = False
+
+    # 4a. clang-cl/lld-link path runs independently of MSVC availability.
+    if clang_prereqs_ready:
         try:
-            repro_cmp = build_and_compare_two_clean_directories(repo_root)
+            repro_cmp = build_and_compare_two_clean_directories(
+                repo_root,
+                repo_root / "build" / "repro-clean-a",
+                repo_root / "build" / "repro-clean-b",
+            )
             report["checks"]["reproducibility_build"] = {
                 "passed": repro_cmp["all_artifacts_match"],
                 "all_artifacts_match": repro_cmp["all_artifacts_match"],
                 "recorded_to": "benchmarks/reproducibility/release-build-reproducibility.json",
             }
-            msvc_build = build_msvc_ltcg_release_directory(
-                repo_root,
-                repo_root / "build" / "msvc-release-ltcg",
-            )
-            report["checks"]["msvc_ltcg_build"] = {
-                "passed": msvc_build["built"],
-                "output_dir": msvc_build["output_dir"],
-            }
-            if repro_cmp["all_artifacts_match"] and msvc_build["built"]:
+            if repro_cmp["all_artifacts_match"]:
+                clang_symbols = build_and_verify_debug_symbols(repo_root, "clang-cl-lld")
+                report["checks"]["clang_debug_symbols"] = {
+                    "passed": clang_symbols["verified"],
+                    "built": clang_symbols["built"],
+                    "output_dir": clang_symbols["output_dir"],
+                    "missing_or_invalid": clang_symbols.get("missing_or_invalid", []),
+                    "missing_toolchain_tools": clang_symbols.get("missing_toolchain_tools", []),
+                }
+
                 # The clean build is the authoritative source of offline DXC evidence.
                 offline_shader = evaluate_offline_shader(
                     repo_root,
@@ -997,115 +1237,176 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                 fixture_validation_passed = fixture_validation["passed"]
                 report["checks"]["fixture_validation"] = fixture_validation
 
-                # Clear pre-recording flags so any post-recording failure leaves the corresponding check false.
-                report["checks"]["schemas"] = {
-                    "passed": False,
-                    "reason": "Pending post-recording schema validation",
-                }
-                report["checks"]["dependency_closures"] = {
-                    "passed": False,
-                    "reason": "Pending post-recording dependency closure validation",
-                }
-                report["checks"]["size_ledgers"] = {
-                    "passed": False,
-                    "contracts_valid": False,
-                    "comparison_verified": False,
-                    "reason": "Pending post-recording size-ledger comparison",
-                }
-
                 try:
                     clang_recording = record_release_ledgers(
                         repo_root,
                         repo_root / "build" / "repro-clean-a",
                         toolchain_id="clang-cl-lld",
                         deterministic_repro_verified=repro_cmp["all_artifacts_match"],
+                        pdb_debugging_verified=clang_symbols["verified"],
                     )
-                    msvc_recording = record_release_ledgers(
-                        repo_root,
-                        repo_root / "build" / "msvc-release-ltcg",
-                        toolchain_id="msvc-ltcg",
-                        deterministic_repro_verified=True,
-                    )
-                    ledger_comparison = generate_size_comparison_report(repo_root)
-                    comparison_verified = bool(ledger_comparison.get("fixture_comparisons")) and all(
-                        c.get("verification_status") == "verified"
-                        and c.get("clang_cl_lld_bytes") is not None
-                        and c.get("msvc_ltcg_bytes") is not None
-                        and c["clang_cl_lld_bytes"] < c["msvc_ltcg_bytes"]
-                        for c in ledger_comparison.get("fixture_comparisons", [])
-                    )
-                    report["checks"]["size_ledgers"] = {
-                        "passed": comparison_verified,
-                        "contracts_valid": True,
-                        "comparison_verified": comparison_verified,
-                        "recorded": {
-                            "clang-cl-lld": clang_recording,
-                            "msvc-ltcg": msvc_recording,
-                        },
-                        "comparison": ledger_comparison,
-                    }
+                    recorded_any = True
                 except Exception as exc:
-                    report["checks"]["size_ledgers"] = {
+                    report["checks"]["clang_ledger_recording"] = {
                         "passed": False,
-                        "contracts_valid": False,
-                        "comparison_verified": False,
-                        "reason": f"Measured size-ledger recording failed: {exc}",
-                    }
-
-                try:
-                    dep_reports = verify_all_recorded_ledgers(repo_root)
-                    report["checks"]["dependency_closures"] = {
-                        "passed": True,
-                        "verified_ledgers": len(dep_reports),
-                    }
-                except Exception as exc:
-                    report["checks"]["dependency_closures"] = {
-                        "passed": False,
-                        "reason": f"Post-recording dependency closure verification failed: {exc}",
-                    }
-
-                try:
-                    schema_res = validate_all_repository_artifacts(repo_root)
-                    report["checks"]["schemas"] = {
-                        "passed": True,
-                        "validated_count": schema_res["validated_count"],
-                    }
-                except Exception as exc:
-                    report["checks"]["schemas"] = {
-                        "passed": False,
-                        "reason": f"Post-recording schema validation failed: {exc}",
+                        "reason": f"Measured clang-cl size-ledger recording failed: {exc}",
                     }
             else:
+                report["checks"]["clang_debug_symbols"] = {
+                    "passed": False,
+                    "reason": "Skipped because two clang-cl clean-directory hashes did not match",
+                }
                 report["checks"]["fixture_validation"] = {
                     "passed": False,
-                    "reason": "Two-clean-directory clang-cl or MSVC/LTCG builds did not complete cleanly",
+                    "reason": "Skipped because two clang-cl clean-directory hashes did not match",
                 }
         except (subprocess.CalledProcessError, OSError, ValueError) as exc:
             report["checks"]["reproducibility_build"] = {
                 "passed": False,
-                "reason": f"Pinned Windows build failed: {exc}",
+                "reason": f"Pinned clang-cl Windows build failed: {exc}",
             }
-            report["checks"]["msvc_ltcg_build"] = {
+            report["checks"]["clang_debug_symbols"] = {
                 "passed": False,
-                "reason": f"Pinned Windows build failed: {exc}",
+                "reason": f"Pinned clang-cl Windows build failed: {exc}",
             }
             report["checks"]["fixture_validation"] = {
                 "passed": False,
-                "reason": "Skipped because the pinned Windows build failed",
+                "reason": "Skipped because the pinned clang-cl Windows build failed",
             }
     else:
         report["checks"]["reproducibility_build"] = {
             "passed": False,
             "reason": "Skipped live Windows clang-cl/DXC build due to missing host prerequisites",
         }
+        report["checks"]["clang_debug_symbols"] = {
+            "passed": False,
+            "reason": "Skipped live clang-cl CodeView/PDB verification due to missing host prerequisites",
+        }
+        report["checks"]["fixture_validation"] = {
+            "passed": False,
+            "reason": "Skipped release fixture execution because clang-cl host prerequisites are missing",
+        }
+
+    # 4b. MSVC/LTCG comparison path is independent: missing cl.exe only removes that evidence.
+    if msvc_prereqs_ready:
+        try:
+            msvc_repro_cmp = build_and_compare_two_msvc_clean_directories(
+                repo_root,
+                repo_root / "build" / "msvc-release-ltcg-clean-a",
+                repo_root / "build" / "msvc-release-ltcg-clean-b",
+            )
+            report["checks"]["msvc_ltcg_build"] = {
+                "passed": msvc_repro_cmp["all_artifacts_match"],
+                "all_artifacts_match": msvc_repro_cmp["all_artifacts_match"],
+                "recorded_to": "benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json",
+            }
+            if msvc_repro_cmp["all_artifacts_match"]:
+                msvc_symbols = build_and_verify_debug_symbols(repo_root, "msvc-ltcg")
+                report["checks"]["msvc_debug_symbols"] = {
+                    "passed": msvc_symbols["verified"],
+                    "built": msvc_symbols["built"],
+                    "output_dir": msvc_symbols["output_dir"],
+                    "missing_or_invalid": msvc_symbols.get("missing_or_invalid", []),
+                    "missing_toolchain_tools": msvc_symbols.get("missing_toolchain_tools", []),
+                }
+                try:
+                    msvc_recording = record_release_ledgers(
+                        repo_root,
+                        repo_root / "build" / "msvc-release-ltcg-clean-a",
+                        toolchain_id="msvc-ltcg",
+                        deterministic_repro_verified=msvc_repro_cmp["all_artifacts_match"],
+                        pdb_debugging_verified=msvc_symbols["verified"],
+                    )
+                    recorded_any = True
+                except Exception as exc:
+                    report["checks"]["msvc_ledger_recording"] = {
+                        "passed": False,
+                        "reason": f"Measured MSVC/LTCG size-ledger recording failed: {exc}",
+                    }
+            else:
+                report["checks"]["msvc_debug_symbols"] = {
+                    "passed": False,
+                    "reason": "Skipped because two MSVC/LTCG clean-directory hashes did not match",
+                }
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            report["checks"]["msvc_ltcg_build"] = {
+                "passed": False,
+                "reason": f"Pinned MSVC/LTCG Windows build failed: {exc}",
+            }
+            report["checks"]["msvc_debug_symbols"] = {
+                "passed": False,
+                "reason": f"Pinned MSVC/LTCG Windows build failed: {exc}",
+            }
+    else:
         report["checks"]["msvc_ltcg_build"] = {
             "passed": False,
             "reason": "Skipped live Windows MSVC/LTCG comparison build due to missing host prerequisites",
         }
-        report["checks"]["fixture_validation"] = {
+        report["checks"]["msvc_debug_symbols"] = {
             "passed": False,
-            "reason": "Skipped release fixture execution because host prerequisites are missing",
+            "reason": "Skipped MSVC/LTCG CodeView/PDB verification due to missing host prerequisites",
         }
+
+    # 4c. Re-validate recorded evidence after any measured ledger updates.
+    if recorded_any:
+        report["checks"]["schemas"] = {
+            "passed": False,
+            "reason": "Pending post-recording schema validation",
+        }
+        report["checks"]["dependency_closures"] = {
+            "passed": False,
+            "reason": "Pending post-recording dependency closure validation",
+        }
+        try:
+            ledger_comparison = generate_size_comparison_report(repo_root)
+            comparison_verified = bool(ledger_comparison.get("fixture_comparisons")) and all(
+                c.get("verification_status") == "verified"
+                and c.get("clang_cl_lld_bytes") is not None
+                and c.get("msvc_ltcg_bytes") is not None
+                and c["clang_cl_lld_bytes"] < c["msvc_ltcg_bytes"]
+                for c in ledger_comparison.get("fixture_comparisons", [])
+            )
+            report["checks"]["size_ledgers"] = {
+                "passed": comparison_verified,
+                "contracts_valid": True,
+                "comparison_verified": comparison_verified,
+                "recorded": {
+                    "clang-cl-lld": clang_recording,
+                    "msvc-ltcg": msvc_recording,
+                },
+                "comparison": ledger_comparison,
+            }
+        except Exception as exc:
+            report["checks"]["size_ledgers"] = {
+                "passed": False,
+                "contracts_valid": False,
+                "comparison_verified": False,
+                "reason": f"Measured size-ledger recording failed: {exc}",
+            }
+
+        try:
+            dep_reports = verify_all_recorded_ledgers(repo_root)
+            report["checks"]["dependency_closures"] = {
+                "passed": True,
+                "verified_ledgers": len(dep_reports),
+            }
+        except Exception as exc:
+            report["checks"]["dependency_closures"] = {
+                "passed": False,
+                "reason": f"Post-recording dependency closure verification failed: {exc}",
+            }
+
+        try:
+            schema_res = validate_all_repository_artifacts(repo_root)
+            report["checks"]["schemas"] = {
+                "passed": True,
+                "validated_count": schema_res["validated_count"],
+            }
+        except Exception as exc:
+            report["checks"]["schemas"] = {
+                "passed": False,
+                "reason": f"Post-recording schema validation failed: {exc}",
+            }
 
     # 5. Evidence completeness check (RTX 4060, RTX 50-series, clean-system, reproducibility, toolchain comparison)
     evidence = check_evidence_completeness(repo_root)
@@ -1124,6 +1425,8 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         and report["checks"]["size_ledgers"].get("comparison_verified") is True
         and report["checks"]["reproducibility_build"].get("passed") is True
         and report["checks"].get("msvc_ltcg_build", {}).get("passed") is True
+        and report["checks"].get("clang_debug_symbols", {}).get("passed") is True
+        and report["checks"].get("msvc_debug_symbols", {}).get("passed") is True
     ):
         report["full_baseline_passed"] = True
         return 0, report

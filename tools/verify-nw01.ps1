@@ -7,7 +7,7 @@
     Executes deterministic verification for task NW-01 in one of two documented modes:
 
     - Full:
-      1. Validates all 16 JSON baseline manifests, ledgers, hardware captures, reproducibility
+      1. Validates all 17 JSON baseline manifests, ledgers, hardware captures, reproducibility
          reports, clean-system reports, and preserved experiment records against schemas/*.schema.json.
       2. Verifies offline Shader Model 6.0 (cs_6_0) DXIL container integrity, absence of SM 6.6
          direct heap indexing / enhanced barriers / mesh shaders / ray tracing, and expected

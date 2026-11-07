@@ -451,7 +451,12 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
     (bin_dir / "nw_clear_present_fixture.exe").write_bytes(clear_pe)
     (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(compute_pe)
 
-    recorded = record_release_ledgers(repo, bin_dir, deterministic_repro_verified=True)
+    recorded = record_release_ledgers(
+        repo,
+        bin_dir,
+        deterministic_repro_verified=True,
+        pdb_debugging_verified=True,
+    )
     assert set(recorded["recorded_fixtures"]) == {"empty_player", "clear_present", "compute_shader"}
     assert recorded["verification_status"] == "verified"
     assert recorded["comparison_toolchain_bytes_remain_unverified"] is True
@@ -470,6 +475,7 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
     msvc_entry = next(t for t in toolchain["evaluated_toolchains"] if t["toolchain_id"] == "msvc-ltcg")
     assert clang_entry["verification_status"] == "verified"
     assert clang_entry["deterministic_repro_verified"] is True
+    assert clang_entry["pdb_debugging_verified"] is True
     assert clang_entry["empty_player_bytes"] == len(empty_pe)
     assert clang_entry["clear_present_bytes"] == len(clear_pe)
     assert clang_entry["compute_fixture_bytes"] == len(compute_pe)
@@ -499,7 +505,11 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
         + dxil_blob
     )
     msvc_recorded = record_release_ledgers(
-        repo, msvc_dir, toolchain_id="msvc-ltcg", deterministic_repro_verified=True
+        repo,
+        msvc_dir,
+        toolchain_id="msvc-ltcg",
+        deterministic_repro_verified=True,
+        pdb_debugging_verified=True,
     )
     assert msvc_recorded["verification_status"] == "verified"
     assert msvc_recorded["comparison_toolchain_bytes_remain_unverified"] is False
@@ -508,3 +518,62 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
         c["verification_status"] == "verified" and c["delta_msvc_minus_clang_bytes"] == 512
         for c in full_comparison["fixture_comparisons"]
     )
+
+
+def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "shaders", "fixtures"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+
+    dxil_blob = make_test_signed_dxil_container()
+    manifest_path = repo / "shaders" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["verification_status"] = "verified"
+    manifest["shaders"][0]["compiled_offline_with_dxc"] = True
+    manifest["shaders"][0]["offline_dxil_bytes"] = len(dxil_blob)
+    manifest["shaders"][0]["offline_dxil_sha256"] = hashlib.sha256(dxil_blob).hexdigest()
+    manifest["unavailable_measurements"] = []
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "nw_empty_player.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
+    )
+    (bin_dir / "nw_clear_present_fixture.exe").write_bytes(
+        build_synthetic_pe64(
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+        )
+    )
+    (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
+        + dxil_blob
+    )
+
+    # Missing CodeView/PDB evidence must never yield a verified toolchain or ledger.
+    recorded = record_release_ledgers(
+        repo,
+        bin_dir,
+        deterministic_repro_verified=True,
+        pdb_debugging_verified=False,
+    )
+    assert recorded["verification_status"] == "unverified"
+    assert recorded["recorded_fixtures"] == {}
+
+    toolchain = json.loads(
+        (repo / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
+    )
+    clang_entry = next(
+        t for t in toolchain["evaluated_toolchains"] if t["toolchain_id"] == "clang-cl-lld"
+    )
+    assert clang_entry["verification_status"] == "unverified"
+    assert clang_entry["pdb_debugging_verified"] is False
+    assert clang_entry["deterministic_repro_verified"] is True
+
+    ledger = json.loads(
+        (
+            repo / "benchmarks" / "ledgers" / "empty-player-clang-cl-release.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert ledger["verification_status"] == "unverified"
+    assert ledger["total_distributed_bytes"] is None

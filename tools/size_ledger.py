@@ -235,17 +235,116 @@ def record_ledger_from_pe_binary(
     return ledger
 
 
+_BYTE_FIELDS = (
+    ("empty_player_bytes", "empty_player"),
+    ("clear_present_bytes", "clear_present"),
+    ("compute_fixture_bytes", "compute_shader"),
+)
+
+
+def _measured_byte_summary(entry: dict[str, Any]) -> str | None:
+    parts = [
+        f"{label}={entry[field]} B"
+        for field, label in _BYTE_FIELDS
+        if entry.get(field) is not None
+    ]
+    return "; ".join(parts) if parts else None
+
+
+def _derive_toolchain_evidence_text(toolchain_manifest: dict[str, Any]) -> None:
+    """Refresh the human-readable selection/debug/reproducibility evidence from recorded state.
+
+    Keeps the manifest from claiming that byte counts remain unverified (or that live PDB
+    verification is pending) after tools/verify_nw01.py has recorded measured evidence.
+    """
+    entries = {t["toolchain_id"]: t for t in toolchain_manifest.get("evaluated_toolchains", [])}
+    selected_id = toolchain_manifest.get("selected_toolchain", {}).get("toolchain_id")
+    selected = entries.get(selected_id)
+    if selected is None:
+        return
+    other_id = next((tid for tid in entries if tid != selected_id), None)
+    other = entries.get(other_id) if other_id else None
+
+    selected_summary = _measured_byte_summary(selected)
+    other_summary = _measured_byte_summary(other) if other else None
+    selected_bytes_complete = selected_summary is not None and all(
+        selected.get(field) is not None for field, _ in _BYTE_FIELDS
+    )
+    other_bytes_complete = bool(other) and all(other.get(field) is not None for field, _ in _BYTE_FIELDS)
+    selected_verified = selected.get("verification_status") == "verified"
+    other_verified = bool(other) and other.get("verification_status") == "verified"
+    selected_pdb = selected.get("pdb_debugging_verified") is True
+    other_pdb = bool(other) and other.get("pdb_debugging_verified") is True
+    selected_repro = selected.get("deterministic_repro_verified") is True
+    other_repro = bool(other) and other.get("deterministic_repro_verified") is True
+
+    pin = toolchain_manifest.get("selected_toolchain", {})
+    selected_name = f"{pin.get('compiler_name', selected_id)} {pin.get('compiler_version', '')}".strip()
+    selected_linker = f"{pin.get('linker_name', '')} {pin.get('linker_version', '')}".strip()
+    other_label = other_id or "comparison toolchain"
+
+    if selected_bytes_complete and other_bytes_complete and selected_verified and other_verified:
+        details = "; ".join(
+            f"{label} {selected.get(field)} B vs {other.get(field)} B"
+            for field, label in _BYTE_FIELDS
+        )
+        pin["selection_rationale"] = (
+            f"Selected {selected_name} + {selected_linker} as the primary toolchain configuration "
+            f"after identical-fixture comparison against {other_label}. Measured distributed bytes: "
+            f"{details}. {other_label} is larger on every fixture, and both toolchains have verified "
+            "CodeView/PDB debugging evidence plus bit-for-bit two-clean-directory reproducibility."
+        )
+    elif selected_summary and not other_bytes_complete:
+        pin["selection_rationale"] = (
+            f"Selected {selected_name} + {selected_linker} as the primary toolchain configuration. "
+            f"Measured distributed bytes for the selected toolchain: {selected_summary}. "
+            f"The {other_label} comparison fixtures remain unverified, so no completed size comparison "
+            "is claimed in this manifest."
+        )
+
+    if selected_pdb and other_pdb:
+        pin["debugging_evidence"] = (
+            f"Verified CodeView/PDB debug symbol evidence for both {selected_id} and {other_label}: "
+            "dev-profile /DEBUG:FULL builds produced PDB files with the Microsoft MSF signature and "
+            "PE debug directories containing RSDS CodeView records for every fixture executable."
+        )
+    elif selected_pdb:
+        pin["debugging_evidence"] = (
+            f"Verified CodeView/PDB debug symbol evidence for {selected_id}: a dev-profile "
+            "/DEBUG:FULL build produced MSF PDB files and RSDS CodeView records. "
+            f"Live PDB verification for {other_label} remains pending."
+        )
+
+    if selected_repro and other_repro:
+        pin["reproducibility_evidence"] = (
+            f"Verified bit-for-bit identical release artifacts across two independent clean build "
+            f"directories for both {selected_id} and {other_label} using /Brepro, "
+            "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=., and /PDBALTPATH:%_PDB%."
+        )
+    elif selected_repro:
+        pin["reproducibility_evidence"] = (
+            f"Verified bit-for-bit identical release artifacts across two independent clean build "
+            f"directories for {selected_id}. Two-clean-directory evidence for {other_label} remains "
+            "pending and is not claimed."
+        )
+
+
 def record_release_ledgers(
     repo_root: Path,
     binary_dir: Path,
     toolchain_id: str = "clang-cl-lld",
     *,
     deterministic_repro_verified: bool | None = None,
+    pdb_debugging_verified: bool | None = None,
 ) -> dict[str, Any]:
     """Record measured release artifacts into the toolchain-specific size ledgers.
 
     Updates only the selected toolchain's ledgers and byte fields. Unmeasured comparison
     toolchains remain explicitly unverified rather than being copied or interpolated.
+
+    A toolchain is only marked verified when its fixtures were measured AND both the two-clean-
+    directory reproducibility result and the CodeView/PDB debugging result are explicitly True.
+    Missing evidence therefore cannot silently produce a verified toolchain or ledger.
     """
     inventory_path = repo_root / "benchmarks" / "dependency-inventory.v1.json"
     toolchain_path = repo_root / "benchmarks" / "toolchain-manifest.v1.json"
@@ -279,6 +378,36 @@ def record_release_ledgers(
     if eval_entry is None:
         raise SizeLedgerError(f"Toolchain manifest has no evaluated entry for '{toolchain_id}'")
 
+    verification_complete = (
+        deterministic_repro_verified is True and pdb_debugging_verified is True
+    )
+    if deterministic_repro_verified is not None:
+        eval_entry["deterministic_repro_verified"] = bool(deterministic_repro_verified)
+    if pdb_debugging_verified is not None:
+        eval_entry["pdb_debugging_verified"] = bool(pdb_debugging_verified)
+
+    if not verification_complete:
+        eval_entry["verification_status"] = "unverified"
+        _derive_toolchain_evidence_text(toolchain_manifest)
+        toolchain_schema_path = repo_root / "schemas" / "toolchain-manifest.schema.json"
+        if toolchain_schema_path.exists():
+            toolchain_schema = json.loads(toolchain_schema_path.read_text(encoding="utf-8"))
+            validate_instance(toolchain_manifest, toolchain_schema, toolchain_schema, path=toolchain_path.name)
+            validate_semantic_invariants(toolchain_manifest, toolchain_schema_path.name, toolchain_path)
+        toolchain_path.write_text(json.dumps(toolchain_manifest, indent=2) + "\n", encoding="utf-8")
+        return {
+            "toolchain_id": toolchain_id,
+            "verification_status": "unverified",
+            "recorded_fixtures": {},
+            "reason": (
+                "Refusing to record verified ledgers: two-clean-directory reproducibility and "
+                "CodeView/PDB debugging evidence must both be explicitly verified."
+            ),
+            "deterministic_repro_verified": deterministic_repro_verified,
+            "pdb_debugging_verified": pdb_debugging_verified,
+            "comparison_toolchain_bytes_remain_unverified": True,
+        }
+
     measured_bytes_by_field: dict[str, int] = {}
     for fixture_id, exe_name, ledger_name, manifest_field, dxil_bytes in specs:
         exe_path = binary_dir / exe_name
@@ -309,9 +438,11 @@ def record_release_ledgers(
     if all_three_measured:
         for field, total_bytes in measured_bytes_by_field.items():
             eval_entry[field] = total_bytes
-        if deterministic_repro_verified is not None:
-            eval_entry["deterministic_repro_verified"] = deterministic_repro_verified
+        eval_entry["deterministic_repro_verified"] = bool(deterministic_repro_verified)
+        eval_entry["pdb_debugging_verified"] = bool(pdb_debugging_verified)
         eval_entry["verification_status"] = "verified"
+    else:
+        eval_entry["verification_status"] = "unverified"
 
     if recorded:
         unavailable = [
@@ -336,6 +467,7 @@ def record_release_ledgers(
                     }
                 )
         toolchain_manifest["unavailable_measurements"] = unavailable
+        _derive_toolchain_evidence_text(toolchain_manifest)
         toolchain_schema_path = (repo_root or Path(__file__).resolve().parent.parent) / "schemas" / "toolchain-manifest.schema.json"
         if toolchain_schema_path.exists():
             toolchain_schema = json.loads(toolchain_schema_path.read_text(encoding="utf-8"))
@@ -541,12 +673,28 @@ def main(argv: list[str] | None = None) -> int:
         choices=["clang-cl-lld", "msvc-ltcg"],
         default="clang-cl-lld",
     )
+    parser.add_argument(
+        "--deterministic-repro-verified",
+        action="store_true",
+        default=None,
+        help="Assert that two independent clean-directory builds produced identical hashes",
+    )
+    parser.add_argument(
+        "--pdb-debugging-verified",
+        action="store_true",
+        default=None,
+        help="Assert that dev /DEBUG:FULL CodeView/PDB evidence was verified for this toolchain",
+    )
     args = parser.parse_args(argv)
 
     try:
         if args.record_release_build is not None:
             recorded = record_release_ledgers(
-                args.repo_root, args.record_release_build, args.toolchain_id
+                args.repo_root,
+                args.record_release_build,
+                args.toolchain_id,
+                deterministic_repro_verified=args.deterministic_repro_verified,
+                pdb_debugging_verified=args.pdb_debugging_verified,
             )
             report = {"recorded": recorded, "comparison": generate_size_comparison_report(args.repo_root)}
         else:

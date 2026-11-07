@@ -85,6 +85,11 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
     if num_rva_and_sizes > 1:
         import_dir_rva, import_dir_size = struct.unpack_from("<II", pe_bytes, opt_offset + 112 + 8)
 
+    debug_dir_rva = 0
+    debug_dir_size = 0
+    if num_rva_and_sizes > 6:
+        debug_dir_rva, debug_dir_size = struct.unpack_from("<II", pe_bytes, opt_offset + 112 + 8 * 6)
+
     section_table_offset = opt_offset + opt_header_size
     sections: list[dict[str, Any]] = []
     for i in range(num_sections):
@@ -135,6 +140,48 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
                     imports.append(dll_name)
                 pos += 20
 
+    codeview_entries: list[dict[str, Any]] = []
+    if debug_dir_rva != 0 and debug_dir_size >= 28:
+        debug_offset = rva_to_offset(debug_dir_rva)
+        if debug_offset is not None:
+            pos = debug_offset
+            remaining = debug_dir_size
+            while remaining >= 28 and pos + 28 <= len(pe_bytes):
+                (
+                    _characteristics,
+                    _timestamp,
+                    _major,
+                    _minor,
+                    debug_type,
+                    data_size,
+                    data_rva,
+                    data_ptr,
+                ) = struct.unpack_from("<IIHHIIII", pe_bytes, pos)
+                if debug_type == 2 and data_size >= 24:  # IMAGE_DEBUG_TYPE_CODEVIEW
+                    codeview_offset = data_ptr
+                    if codeview_offset == 0 or codeview_offset + data_size > len(pe_bytes):
+                        codeview_offset = rva_to_offset(data_rva) or 0
+                    if codeview_offset > 0 and codeview_offset + 24 <= len(pe_bytes):
+                        signature = pe_bytes[codeview_offset : codeview_offset + 4]
+                        if signature == b"RSDS":
+                            age = struct.unpack_from("<I", pe_bytes, codeview_offset + 20)[0]
+                            path_start = codeview_offset + 24
+                            path_end = pe_bytes.find(b"\x00", path_start, codeview_offset + data_size)
+                            if path_end == -1:
+                                path_end = codeview_offset + data_size
+                            codeview_entries.append(
+                                {
+                                    "signature": "RSDS",
+                                    "age": age,
+                                    "pdb_path": pe_bytes[path_start:path_end].decode(
+                                        "utf-8", errors="replace"
+                                    ),
+                                    "data_size": data_size,
+                                }
+                            )
+                pos += 28
+                remaining -= 28
+
     return {
         "machine": machine,
         "time_date_stamp": time_date_stamp,
@@ -142,6 +189,7 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
         "dll_characteristics": dll_characteristics,
         "sections": sections,
         "imports": imports,
+        "codeview_entries": codeview_entries,
     }
 
 

@@ -436,8 +436,29 @@ def compile_shader_with_dxc(
     return validation
 
 
-def pack_dxil_to_header(hlsl_path: Path, dxil_path: Path, output_header_path: Path) -> dict[str, Any]:
-    """Validate an existing DXC-compiled DXIL file and emit the C++ byte-array header in the build tree."""
+def _classify_cpp_compiler(compiler_bin: str | Path) -> str:
+    """Classify a C++ compiler path as MSVC-style (clang-cl/cl) or GNU-style."""
+    name = Path(str(compiler_bin)).name.lower()
+    return "msvc" if name in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"} else "gnu"
+
+
+def pack_dxil_to_header(
+    hlsl_path: Path,
+    dxil_path: Path,
+    output_header_path: Path,
+    *,
+    repo_root: Path | None = None,
+    cxx_compiler: str | Path | None = None,
+    require_cpp_validator: bool = False,
+    work_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Validate an existing DXC-compiled DXIL file and emit the C++ byte-array header in the build tree.
+
+    When ``require_cpp_validator`` is set (as CMake does for the shader pack step), the same
+    nw::player::ValidateOfflineDxilContainer implementation linked into the player is compiled
+    and executed against the DXIL blob before the header is written. This keeps build-time
+    validation from drifting from player-side validation.
+    """
     hlsl_text = hlsl_path.read_text(encoding="utf-8")
     violations = check_hlsl_source_constraints(hlsl_text)
     if violations:
@@ -445,6 +466,39 @@ def pack_dxil_to_header(hlsl_path: Path, dxil_path: Path, output_header_path: Pa
 
     dxil_blob = dxil_path.read_bytes()
     validation = validate_dxil_container(dxil_blob)
+
+    if require_cpp_validator:
+        if cxx_compiler is not None:
+            compiler_info = (str(cxx_compiler), _classify_cpp_compiler(cxx_compiler))
+        else:
+            compiler_info = find_host_cpp_compiler()
+        if compiler_info is None:
+            raise OfflineShaderCompilerError(
+                "CMake requested C++ ValidateOfflineDxilContainer validation but no host C++ "
+                "compiler was found (pass --cxx-compiler or add clang-cl/cl/clang++/g++ to PATH)."
+            )
+        cpp_dir = work_dir or (output_header_path.parent / "cpp_validator_check")
+        harness_exe = compile_cpp_dxil_validator_harness(
+            cpp_dir,
+            repo_root=repo_root,
+            compiler_info=compiler_info,
+        )
+        cpp_exit_code = verify_dxil_blob_with_cpp_validator(
+            dxil_blob,
+            cpp_dir,
+            repo_root=repo_root,
+            harness_exe=harness_exe,
+        )
+        if cpp_exit_code != 0:
+            raise OfflineShaderCompilerError(
+                f"C++ ValidateOfflineDxilContainer rejected packed DXC output with "
+                f"ExitCode={cpp_exit_code}"
+            )
+        validation["cpp_validator_verified"] = True
+        validation["cpp_validator_exit_code"] = cpp_exit_code
+    else:
+        validation["cpp_validator_verified"] = False
+
     output_header_path.parent.mkdir(parents=True, exist_ok=True)
     output_header_path.write_text(
         format_cpp_dxil_header(dxil_blob, validation["sha256"]),
@@ -531,13 +585,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-header", type=Path, default=None)
     parser.add_argument("--build-dir", type=Path, default=None)
     parser.add_argument("--dxc-executable", type=str, default=None)
+    parser.add_argument(
+        "--cxx-compiler",
+        type=str,
+        default=None,
+        help="Host C++ compiler used for build-time ValidateOfflineDxilContainer verification",
+    )
+    parser.add_argument(
+        "--require-cpp-validator",
+        action="store_true",
+        help="Fail unless the shared C++ DXIL validator accepts the packed container",
+    )
     args = parser.parse_args(argv)
 
     try:
         if args.mode == "pack-header":
             if not args.hlsl or not args.dxil or not args.output_header:
                 raise ValueError("--mode pack-header requires --hlsl, --dxil, and --output-header")
-            res = pack_dxil_to_header(args.hlsl, args.dxil, args.output_header)
+            res = pack_dxil_to_header(
+                args.hlsl,
+                args.dxil,
+                args.output_header,
+                repo_root=args.repo_root,
+                cxx_compiler=args.cxx_compiler,
+                require_cpp_validator=args.require_cpp_validator,
+            )
             print(json.dumps(res, indent=2))
         elif args.mode == "compile-and-record":
             res = compile_and_record_manifest(args.repo_root, args.build_dir, args.dxc_executable)
