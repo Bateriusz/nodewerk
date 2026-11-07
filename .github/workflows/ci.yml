@@ -117,7 +117,7 @@ jobs:
           $cmdFile = Join-Path $env:RUNNER_TEMP "init-vs2022-msvc-14.40.cmd"
           @"
           @echo off
-          call "$vcvars" -vcvars_ver=14.40 -winsdk=10.0.26100.0
+          call "$vcvars" 10.0.26100.0 -vcvars_ver=14.40
           if errorlevel 1 exit /b %errorlevel%
           set
           "@ | Set-Content -Path $cmdFile -Encoding ascii

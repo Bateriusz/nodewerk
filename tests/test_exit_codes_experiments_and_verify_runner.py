@@ -1485,7 +1485,7 @@ def test_ci_provisions_pinned_msvc_toolset_and_windows_sdk() -> None:
     assert '-version "[17.0,18.0)"' in ci
     assert "vcvars64.bat" in ci
     assert "-vcvars_ver=14.40" in ci
-    assert "-winsdk=10.0.26100.0" in ci
+    assert 'call "$vcvars" 10.0.26100.0 -vcvars_ver=14.40' in ci
     assert 'VCToolsVersion -notmatch "^14\\.40\\."' in ci
     assert "cl.exe is outside the pinned VCToolsInstallDir" in ci
     assert "link.exe is outside the pinned VCToolsInstallDir" in ci
