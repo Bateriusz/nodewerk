@@ -124,6 +124,18 @@ double NwNowMs() noexcept {
 }
 
 #if defined(_WIN32)
+struct ComReleaseGuard {
+    IUnknown* ptr = nullptr;
+    explicit ComReleaseGuard(IUnknown* value) noexcept : ptr(value) {}
+    ~ComReleaseGuard() noexcept {
+        if (ptr) {
+            ptr->Release();
+        }
+    }
+    ComReleaseGuard(const ComReleaseGuard&) = delete;
+    ComReleaseGuard& operator=(const ComReleaseGuard&) = delete;
+};
+
 std::uint64_t QueryProcessCommittedBytes() noexcept {
     using K32GetProcessMemoryInfoFn =
         BOOL(WINAPI*)(HANDLE, PPROCESS_MEMORY_COUNTERS, DWORD);
@@ -810,11 +822,11 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         DestroyWindow(hwnd);
         return DiagnosticRecord{ExitCode::AdapterEnumerationFailed, 0x887A0004u, "adapter_enum", "No hardware adapter supporting Feature Level 12_0", {}};
     }
+    ComReleaseGuard adapter_guard(selected_adapter);
 
     ID3D12Device* device = nullptr;
     hr = D3D12CreateDevice(selected_adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), reinterpret_cast<void**>(&device));
     if (FAILED(hr) || !device) {
-        selected_adapter->Release();
         factory->Release();
         DestroyWindow(hwnd);
         return DiagnosticRecord{ExitCode::D3D12DeviceCreationFailed, static_cast<std::uint32_t>(hr), "d3d12_device", "D3D12CreateDevice(12_0) failed", {}};
@@ -879,7 +891,6 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     if (FAILED(hr) || !swapchain1) {
         queue->Release();
         device->Release();
-        if (selected_adapter) selected_adapter->Release();
         factory->Release();
         DestroyWindow(hwnd);
         return DiagnosticRecord{ExitCode::SwapChainCreationFailed, static_cast<std::uint32_t>(hr), "swapchain", "CreateSwapChainForHwnd failed", {}};
@@ -1332,11 +1343,11 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         factory->Release();
         return DiagnosticRecord{ExitCode::AdapterEnumerationFailed, 0x887A0004u, "adapter_enum", "No hardware adapter supporting Feature Level 12_0", {}};
     }
+    ComReleaseGuard adapter_guard(selected_adapter);
 
     ID3D12Device* device = nullptr;
     hr = D3D12CreateDevice(selected_adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), reinterpret_cast<void**>(&device));
     if (FAILED(hr) || !device) {
-        selected_adapter->Release();
         factory->Release();
         return DiagnosticRecord{ExitCode::D3D12DeviceCreationFailed, static_cast<std::uint32_t>(hr), "d3d12_device", "D3D12CreateDevice(12_0) failed", {}};
     }
@@ -1681,7 +1692,6 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         uav_heap->Release();
         queue->Release();
         device->Release();
-        if (selected_adapter) selected_adapter->Release();
     };
 
     const HRESULT signal_hr = queue->Signal(fence, 1);

@@ -151,6 +151,46 @@ def parse_loaded_modules(stdout: str) -> list[str]:
     return modules
 
 
+def parse_fixture_adapter_description(stdout: str) -> str | None:
+    """Read the adapter description emitted by a single fixture execution."""
+    match = ADAPTER_DESC_LINE_RE.search(stdout)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def parse_fixture_windows_build(stdout: str) -> str | None:
+    """Read the Windows build number emitted by a single fixture execution."""
+    match = WINDOWS_BUILD_LINE_RE.search(stdout)
+    if not match:
+        return None
+    return f"10.0.{match.group(1)}.0"
+
+
+def reconcile_fixture_adapter_descriptions(
+    fixture_runs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Require the raster and compute fixtures to report the same executing adapter."""
+    descriptions: dict[str, str | None] = {}
+    for run in fixture_runs:
+        fixture_id = run.get("fixture_id")
+        if fixture_id in {"clear_present", "compute_shader"}:
+            descriptions[str(fixture_id)] = parse_fixture_adapter_description(
+                str(run.get("stdout", ""))
+            )
+    present = [value for value in descriptions.values() if value]
+    unique = {value.strip().lower() for value in present}
+    consistent = (
+        len(present) == len(descriptions) and len(unique) == 1
+    )
+    return {
+        "descriptions": descriptions,
+        "executing_adapter": present[0] if consistent else None,
+        "consistent": consistent,
+    }
+
+
 def classify_loaded_module_evidence(
     module_paths: list[str],
     *,
@@ -1560,16 +1600,19 @@ def capture_benchmark_result(
     )
     runs_by_fixture = {run["fixture_id"]: run for run in validation["fixture_runs"]}
 
-    detected = detect_host_system_environment(
-        "\n".join(str(run.get("stdout", "")) for run in validation["fixture_runs"])
+    adapter_evidence = reconcile_fixture_adapter_descriptions(
+        validation["fixture_runs"]
     )
     override = system_environment or {}
-    measured_os_build = override.get("os_build") or detected.get("os_build")
-    measured_gpu_model = override.get("gpu_model") or detected.get("gpu_model")
-    measured_nvidia_driver = override.get("nvidia_driver_version") or detected.get(
-        "nvidia_driver_version"
+    fixture_os_build = parse_fixture_windows_build(
+        str(runs_by_fixture.get("compute_shader", {}).get("stdout", ""))
     )
-    observed_gpu_model = detected.get("gpu_model")
+    measured_os_build = override.get("os_build") or fixture_os_build
+    observed_gpu_model = adapter_evidence["executing_adapter"]
+    measured_gpu_model = override.get("gpu_model") or observed_gpu_model
+    # Driver metadata is accepted only with an execution-bound adapter observation;
+    # registry-only host enumeration is never sufficient for certification.
+    measured_nvidia_driver = override.get("nvidia_driver_version")
 
     first_metrics: dict[str, Any] = {}
     for fixture in ("clear_present", "compute_shader"):
@@ -1673,6 +1716,11 @@ def capture_benchmark_result(
         mark_unavailable(
             "environment_metadata.gpu_model",
             "No adapter description was emitted by the executing fixtures; tier coverage cannot be bound to the observed GPU.",
+        )
+    elif not adapter_evidence["consistent"]:
+        mark_unavailable(
+            "environment_metadata.gpu_model",
+            "Raster and compute fixtures did not report the same executing adapter.",
         )
     elif override.get("gpu_model") and str(override["gpu_model"]).strip().lower() != str(
         observed_gpu_model
