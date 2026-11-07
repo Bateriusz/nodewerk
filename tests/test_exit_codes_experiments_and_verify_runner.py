@@ -107,6 +107,27 @@ def test_exit_codes_and_d3d12_bootstrap_safety_contracts() -> None:
     assert 'std::strcmp(arg, "--emit-readback-values")' in bootstrap_cpp
     assert 'NW_READBACK_U32=' in bootstrap_cpp
 
+    # The clear/present window must be visible and pumped, and an occluded Present must
+    # drain the already-submitted command list through the fence before releasing resources.
+    assert "WS_VISIBLE" in bootstrap_cpp
+    assert "ShowWindow(hwnd, SW_SHOW)" in bootstrap_cpp
+    assert "PumpPendingWindowMessages(hwnd)" in bootstrap_cpp
+    assert "DXGI_STATUS_OCCLUDED" in bootstrap_cpp
+    occluded_return = bootstrap_cpp.index("if (presentation_occluded)")
+    assert (
+        bootstrap_cpp.rfind(
+            "WaitForFenceValue(fence, signal_val, fence_event, 5000)",
+            0,
+            occluded_return,
+        )
+        != -1
+    )
+    assert bootstrap_cpp.index("ExitCode::PresentationOccluded") > bootstrap_cpp.rfind(
+        "WaitForFenceValue(fence, signal_val, fence_event, 5000)",
+        0,
+        bootstrap_cpp.index("ExitCode::PresentationOccluded"),
+    )
+
 
 def test_preserved_experiments_retain_reproducible_commands_and_honest_unverified_state() -> None:
     exp_dir = REPO_ROOT / "benchmarks" / "experiments"
@@ -1452,6 +1473,23 @@ def test_build_checks_mode_requires_actual_build_coverage(tmp_path: Path) -> Non
     assert summary["full_baseline_passed"] is False
     assert "reproducibility_build" in summary["missing_required_checks"]
     assert "failure_recovery" in summary["missing_required_checks"]
+
+
+def test_ci_provisions_pinned_msvc_toolset_and_windows_sdk() -> None:
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "ilammy/msvc-dev-cmd@v1" in ci
+    assert "toolset: 14.40" in ci
+    assert "sdk: 10.0.26100.0" in ci
+    assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" in ci
+    assert "Microsoft.VisualStudio.Component.Windows11SDK.26100" in ci
+    assert "19\\.40\\.33813" in ci
+    assert "14\\.40\\.33813\\.0" in ci
+    assert "--mode BuildChecks" in ci
+    assert "build_checks_passed" in ci
+    # Exit 2 is tolerated only after explicit required concrete checks pass.
+    assert "Full mode exited 2 but required concrete check" in ci
 
 
 def test_evidence_completeness_requires_matching_artifact_hashes_and_toolchain(

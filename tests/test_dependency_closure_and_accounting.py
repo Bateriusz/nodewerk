@@ -383,6 +383,12 @@ def test_size_ledger_rebuilds_sections_and_imports_from_inspected_pe(tmp_path: P
         assert section["virtual_size_bytes"] is not None
         assert section["raw_size_bytes"] is not None
         assert section["characteristics"]
+    characteristics = {
+        section["name"]: section["characteristics"]
+        for section in updated["executable_sections"]
+    }
+    assert characteristics[".text"] == "CNT_CODE|MEM_EXECUTE|MEM_READ"
+    assert characteristics[".rdata"] == "CNT_INITIALIZED_DATA|MEM_READ"
 
     measured = _measured_import_entries(
         {

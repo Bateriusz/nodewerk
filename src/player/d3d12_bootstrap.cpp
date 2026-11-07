@@ -1154,15 +1154,7 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         ID3D12CommandList* lists[] = {cmd_list};
         queue->ExecuteCommandLists(1, lists);
         const HRESULT present_hr = swapchain->Present(0, 0);
-        if (present_hr == DXGI_STATUS_OCCLUDED) {
-            cleanup();
-            return DiagnosticRecord{
-                ExitCode::PresentationOccluded,
-                static_cast<std::uint32_t>(present_hr),
-                "swapchain_present_occluded",
-                "IDXGISwapChain3::Present returned DXGI_STATUS_OCCLUDED; the window was not visibly presented and the run cannot certify visible clear/present execution",
-                {}};
-        }
+        const bool presentation_occluded = (present_hr == DXGI_STATUS_OCCLUDED);
         if (FAILED(present_hr)) {
             const HRESULT removed = device->GetDeviceRemovedReason();
             const HRESULT failure = FAILED(removed) ? removed : present_hr;
@@ -1207,6 +1199,18 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
                 static_cast<std::uint32_t>(removed_hr),
                 "device_removed",
                 "ID3D12Device::GetDeviceRemovedReason reported device removal after Present",
+                {}};
+        }
+        // DXGI_STATUS_OCCLUDED is a success status. The command list has already been
+        // submitted, so drain it through the same fence before releasing backbuffers,
+        // the allocator, or the command list. Only then report the distinct occlusion code.
+        if (presentation_occluded) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::PresentationOccluded,
+                static_cast<std::uint32_t>(present_hr),
+                "swapchain_present_occluded",
+                "IDXGISwapChain3::Present returned DXGI_STATUS_OCCLUDED; the window was not visibly presented and the run cannot certify visible clear/present execution",
                 {}};
         }
     }
