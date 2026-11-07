@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -55,7 +56,46 @@ SIDECAR_SUFFIXES = {
     ".png",
     ".qoa",
     ".ogg",
+    ".nwpkg",
 }
+
+# Fixtures are built together for toolchain comparison. They are individually inspected for
+# imports, but the other fixture executables are expected siblings and must not be reported as
+# unexpected sidecars.
+KNOWN_FIXTURE_EXECUTABLES = {
+    "nw_empty_player.exe",
+    "nw_clear_present_fixture.exe",
+    "nw_compute_shader_fixture.exe",
+}
+
+# Build-system metadata found next to binaries in developer build trees. It is not part of the
+# distributed deployment and is excluded only when the caller points the scanner at a raw CMake
+# build directory. Dedicated deployment directories normally contain none of these files.
+BUILD_METADATA_NAMES = {
+    "CMakeCache.txt",
+    "build.ninja",
+    "rules.ninja",
+    "cmake_install.cmake",
+    "CTestTestfile.cmake",
+    "Makefile",
+    ".ninja_deps",
+    ".ninja_log",
+    ".cmake",
+}
+BUILD_METADATA_DIRS = {"CMakeFiles", ".cmake"}
+
+# The Windows 11 UCRT is exposed through inbox API-set forwarders
+# (api-ms-win-crt-*.dll) as well as ucrtbase.dll. Both are documented Windows
+# components and are canonicalized to ucrtbase.dll for closure comparison.
+UCRT_API_SET_PREFIX = "api-ms-win-crt-"
+
+
+def canonical_inbox_dll(dll_name: str) -> str:
+    """Canonicalize Windows inbox CRT aliases for allowlist and exact-set comparison."""
+    lower = dll_name.lower()
+    if lower.startswith(UCRT_API_SET_PREFIX):
+        return "ucrtbase.dll"
+    return lower
 
 
 def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
@@ -79,6 +119,7 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
 
     dll_characteristics = struct.unpack_from("<H", pe_bytes, opt_offset + 70)[0]
     num_rva_and_sizes = struct.unpack_from("<I", pe_bytes, opt_offset + 108)[0]
+    image_base = struct.unpack_from("<Q", pe_bytes, opt_offset + 24)[0]
 
     import_dir_rva = 0
     import_dir_size = 0
@@ -89,6 +130,14 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
     debug_dir_size = 0
     if num_rva_and_sizes > 6:
         debug_dir_rva, debug_dir_size = struct.unpack_from("<II", pe_bytes, opt_offset + 112 + 8 * 6)
+
+    delay_dir_rva = 0
+    delay_dir_size = 0
+    # IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT == 13
+    if num_rva_and_sizes > 13:
+        delay_dir_rva, delay_dir_size = struct.unpack_from(
+            "<II", pe_bytes, opt_offset + 112 + 8 * 13
+        )
 
     section_table_offset = opt_offset + opt_header_size
     sections: list[dict[str, Any]] = []
@@ -139,6 +188,39 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
                     dll_name = read_cstring(name_off)
                     imports.append(dll_name)
                 pos += 20
+
+    delay_imports: list[str] = []
+    if delay_dir_rva != 0 and delay_dir_size >= 32:
+        delay_offset = rva_to_offset(delay_dir_rva)
+        if delay_offset is not None:
+            pos = delay_offset
+            remaining = delay_dir_size
+            while remaining >= 32 and pos + 32 <= len(pe_bytes):
+                (
+                    attributes,
+                    name_rva_or_va,
+                    _hmod,
+                    _iat,
+                    _int,
+                    _bound_iat,
+                    _unload_iat,
+                    _timestamp,
+                ) = struct.unpack_from("<8I", pe_bytes, pos)
+                if attributes == 0 and name_rva_or_va == 0:
+                    break
+                name_rva = name_rva_or_va
+                # dlattrRva == 0x1. Some older linkers store VA-based descriptors.
+                if not (attributes & 1):
+                    if name_rva_or_va < image_base:
+                        pos += 32
+                        remaining -= 32
+                        continue
+                    name_rva = name_rva_or_va - image_base
+                name_off = rva_to_offset(name_rva)
+                if name_off is not None:
+                    delay_imports.append(read_cstring(name_off))
+                pos += 32
+                remaining -= 32
 
     codeview_entries: list[dict[str, Any]] = []
     if debug_dir_rva != 0 and debug_dir_size >= 28:
@@ -191,6 +273,7 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
         "dll_characteristics": dll_characteristics,
         "sections": sections,
         "imports": imports,
+        "delay_imports": delay_imports,
         "codeview_entries": codeview_entries,
     }
 
@@ -331,6 +414,7 @@ def verify_closure(
     profile: str,
     fixture_id: str,
     imported_dlls: list[str],
+    delay_imported_dlls: list[str] | None = None,
     sidecar_files: list[str],
     inventory: dict[str, Any],
     expected_fixture_release_imports: list[str] | None = None,
@@ -349,8 +433,13 @@ def verify_closure(
 
     violations: list[str] = []
     normalized_imports = [dll.lower() for dll in imported_dlls]
+    normalized_delay_imports = [dll.lower() for dll in (delay_imported_dlls or [])]
+    canonical_imports = sorted({
+        canonical_inbox_dll(dll)
+        for dll in (normalized_imports + normalized_delay_imports)
+    })
 
-    for dll in normalized_imports:
+    for dll in canonical_imports:
         if profile in ("release", "compact_experiment") and dll in forbidden_release_imports:
             violations.append(
                 f"Forbidden release import '{dll}' detected in {fixture_id} ({profile})"
@@ -364,21 +453,23 @@ def verify_closure(
                 f"Release import '{dll}' is not in documented Windows 11 inbox allowlist"
             )
 
-    # Check sidecar files in deployment folder
+    # Check sidecar files in the complete deployment tree. Paths are normalized to their
+    # basename for the inventory allowlists, but diagnostic messages preserve the relative path.
     allowed_sidecar_cats = set(closure_spec.get("allowed_sidecar_categories", []))
     for sidecar in sidecar_files:
         lower_sidecar = sidecar.lower()
-        if lower_sidecar in forbidden_release_sidecars and profile != "dev":
+        base_name = lower_sidecar.replace("\\", "/").rsplit("/", 1)[-1]
+        if base_name in forbidden_release_sidecars and profile != "dev":
             violations.append(
                 f"Forbidden release sidecar '{sidecar}' detected for {fixture_id} ({profile})"
             )
-        if lower_sidecar.endswith(".pdb"):
+        if base_name.endswith(".pdb"):
             if "pdb_symbols" not in allowed_sidecar_cats:
                 violations.append(
                     f"PDB sidecar '{sidecar}' is not permitted in {profile} deployment closure"
                 )
-        elif lower_sidecar.endswith(".dll"):
-            if profile != "dev" or lower_sidecar not in allowed_dev_dlls:
+        elif base_name.endswith(".dll"):
+            if profile != "dev" or base_name not in allowed_dev_dlls:
                 violations.append(
                     f"Unexpected required DLL sidecar '{sidecar}' detected for {fixture_id} ({profile})"
                 )
@@ -392,8 +483,8 @@ def verify_closure(
         profile in ("release", "compact_experiment")
         and expected_fixture_release_imports is not None
     ):
-        expected_set = {d.lower() for d in expected_fixture_release_imports}
-        actual_set = set(normalized_imports)
+        actual_set = set(canonical_imports)
+        expected_set = {canonical_inbox_dll(d) for d in expected_fixture_release_imports}
         if actual_set != expected_set:
             violations.append(
                 f"Compiler/linker import closure drift for {fixture_id}: "
@@ -407,9 +498,48 @@ def verify_closure(
         "fixture_id": fixture_id,
         "profile": profile,
         "imported_dlls": normalized_imports,
+        "delay_imported_dlls": normalized_delay_imports,
+        "canonical_imports": canonical_imports,
         "sidecar_files": sidecar_files,
         "closure_verified": True,
     }
+
+
+def collect_deployment_files(
+    deployment_root: Path,
+    *,
+    exclude_paths: set[Path] | None = None,
+    exclude_names: set[str] | None = None,
+    exclude_dir_names: set[str] | None = None,
+) -> list[str]:
+    """Return every file in the deployment tree as a normalized relative path.
+
+    The full tree is inventoried (not only selected suffixes and not only immediate children),
+    so payloads in nested directories cannot evade accounting. Known fixture executables and
+    build-system metadata may be excluded explicitly; everything else is reported.
+    """
+    root = deployment_root.resolve()
+    excluded_paths = {p.resolve() for p in (exclude_paths or set())}
+    excluded_names = {n.lower() for n in (exclude_names or set())}
+    metadata_names = {n.lower() for n in BUILD_METADATA_NAMES}
+    excluded_dirs = {d.lower() for d in BUILD_METADATA_DIRS} | {
+        d.lower() for d in (exclude_dir_names or set())
+    }
+    files: list[str] = []
+    if not root.exists():
+        return files
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d.lower() not in excluded_dirs)
+        for name in sorted(filenames):
+            full = Path(dirpath) / name
+            if full.resolve() in excluded_paths:
+                continue
+            if name.lower() in excluded_names:
+                continue
+            if name.lower() in metadata_names:
+                continue
+            files.append(full.relative_to(root).as_posix())
+    return files
 
 
 def verify_all_recorded_ledgers(repo_root: Path) -> list[dict[str, Any]]:
@@ -428,7 +558,12 @@ def verify_all_recorded_ledgers(repo_root: Path) -> list[dict[str, Any]]:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         fixture_id = ledger["fixture_id"]
         profile = ledger["build_profile"]
-        imported_dlls = [imp["dll_name"] for imp in ledger.get("imports", [])]
+        delay_imported_dlls = [
+            imp["dll_name"] for imp in ledger.get("imports", []) if imp.get("delay_load")
+        ]
+        imported_dlls = [
+            imp["dll_name"] for imp in ledger.get("imports", []) if not imp.get("delay_load")
+        ]
         sidecars = [
             comp["name"]
             for comp in ledger.get("distributed_components", [])
@@ -439,6 +574,7 @@ def verify_all_recorded_ledgers(repo_root: Path) -> list[dict[str, Any]]:
             profile=profile,
             fixture_id=fixture_id,
             imported_dlls=imported_dlls,
+            delay_imported_dlls=delay_imported_dlls,
             sidecar_files=sidecars,
             inventory=inventory,
             expected_fixture_release_imports=expected_imports,
@@ -456,18 +592,18 @@ def verify_binary_file(
     fixture_id: str,
     inventory: dict[str, Any],
     repo_root: Path,
+    deployment_root: Path | None = None,
 ) -> dict[str, Any]:
     """Inspect a built PE32+ or ELF64 binary file on disk and verify its dependency and sidecar closure."""
     if not binary_path.exists():
         raise DependencyClosureError(f"Binary not found: {binary_path}")
     raw = binary_path.read_bytes()
-    sidecars = [
-        p.name
-        for p in binary_path.parent.iterdir()
-        if p.is_file()
-        and p.name != binary_path.name
-        and p.suffix.lower() in SIDECAR_SUFFIXES
-    ]
+    deployment_dir = deployment_root or binary_path.parent
+    sidecars = collect_deployment_files(
+        deployment_dir,
+        exclude_paths={binary_path},
+        exclude_names=KNOWN_FIXTURE_EXECUTABLES,
+    )
 
     if raw[:2] == b"MZ":
         try:
@@ -483,6 +619,7 @@ def verify_binary_file(
             profile=profile,
             fixture_id=fixture_id,
             imported_dlls=imported_dlls,
+            delay_imported_dlls=pe_info.get("delay_imports", []),
             sidecar_files=sidecars,
             inventory=inventory,
             expected_fixture_release_imports=expected_imports,
@@ -509,6 +646,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify Nodewerk NW-01 dependency closure.")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--binary", type=Path, help="Path to built executable to inspect")
+    parser.add_argument(
+        "--deployment-root",
+        type=Path,
+        default=None,
+        help="Root of the full deployment tree to inventory (defaults to the binary directory)",
+    )
     parser.add_argument("--profile", type=str, default="release", help="Build profile (dev, release, compact_experiment)")
     parser.add_argument("--fixture", type=str, default="empty_player", help="Fixture ID")
     parser.add_argument(
@@ -530,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
                 fixture_id=args.fixture,
                 inventory=inventory,
                 repo_root=args.repo_root,
+                deployment_root=args.deployment_root,
             )
             print(json.dumps(res, indent=2))
         else:

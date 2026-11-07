@@ -17,17 +17,22 @@
       4. Builds release fixtures twice in independent clean directories (build/repro-clean-a
          and build/repro-clean-b) with the pinned clang-cl/lld-link configuration, compares
          SHA-256 artifact hashes, and runs clear_present and compute_shader fixtures with
-         D3D12 validation enabled (--validation) plus failure-recovery exit-code checks.
+         D3D12 validation enabled (--validation) plus failure-recovery exit-code checks. The
+         identical fixtures are also executed from the MSVC/LTCG clean build before either
+         toolchain can be selected.
       5. Performs evidence-completeness checks across desktop RTX 4060, representative RTX 50-series,
          reproducibility, and clean-system reports.
       NOTE: Missing prerequisites or unverified physical hardware/clean-system evidence NEVER
-      produce a passing Full baseline result (exits with non-zero code).
+      produce a passing Full baseline result. Exit code 2 means no concrete check failed but
+      physical hardware/clean-system evidence is still unavailable; exit code 1 means a build,
+      schema, dependency, reproducibility, or fixture-validation check failed.
 
     - CleanSystem:
       Executes and records release-fixture validation (nw_empty_player.exe,
       nw_clear_present_fixture.exe, nw_compute_shader_fixture.exe) on a clean physical
       Windows 11 x64 machine without requiring developer SDKs, DXC redistribution, or
-      Agility SDK redistribution. Verifies SDK absence and deployed dependency closure.
+      Agility SDK redistribution. Verifies SDK absence, inventories the complete deployment
+      tree, observes loaded runtime modules, and preserves measured failure evidence.
 
 .PARAMETER Mode
     Verification mode to execute: 'Full' or 'CleanSystem'.
@@ -38,11 +43,20 @@
 .PARAMETER BinaryDir
     Optional path to pre-built release binaries for CleanSystem mode.
 
+.PARAMETER RecordBenchmark
+    Optional measured benchmark capture tier: 'rtx_4060_desktop' or
+    'rtx_50_series_desktop'. Captures startup/CPU/GPU time, committed memory, and
+    capability metrics into benchmarks/hardware before running the selected mode.
+
 .EXAMPLE
     pwsh ./tools/verify-nw01.ps1 -Mode Full
 
 .EXAMPLE
     pwsh ./tools/verify-nw01.ps1 -Mode CleanSystem -BinaryDir ./build/clang-cl-release
+
+.EXAMPLE
+    # Optional measured benchmark capture (requires the target physical GPU host)
+    python tools/verify_nw01.py --mode Full --record-benchmark rtx_4060_desktop --binary-dir ./build/clang-cl-release/deploy
 #>
 
 [CmdletBinding()]
@@ -64,7 +78,11 @@ param(
     [string]$GpuModel = "",
 
     [Parameter(Mandatory = $false)]
-    [string]$NvidiaDriverVersion = ""
+    [string]$NvidiaDriverVersion = "",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("", "rtx_4060_desktop", "rtx_50_series_desktop")]
+    [string]$RecordBenchmark = ""
 )
 
 Set-StrictMode -Version Latest
@@ -98,11 +116,18 @@ if ($GpuModel -ne "") {
 if ($NvidiaDriverVersion -ne "") {
     $CmdArgs += @("--nvidia-driver-version", $NvidiaDriverVersion)
 }
+if ($RecordBenchmark -ne "") {
+    $CmdArgs += @("--record-benchmark", $RecordBenchmark)
+}
 
 & $PythonCmd.Source @CmdArgs
 $ExitCode = $LASTEXITCODE
 if ($ExitCode -ne 0) {
-    Write-Host "[NW-VERIFY] Mode=$Mode did not pass full baseline gate (exit code $ExitCode). Missing prerequisites or unverified hardware evidence cannot produce a passing full-baseline result." -ForegroundColor Yellow
+    if ($ExitCode -eq 2) {
+        Write-Host "[NW-VERIFY] Mode=$Mode exited 2: concrete checks passed but physical hardware/clean-system evidence is unverified. This is not a passing full-baseline result." -ForegroundColor Yellow
+    } else {
+        Write-Host "[NW-VERIFY] Mode=$Mode detected a concrete build, schema, dependency, reproducibility, or fixture-validation failure (exit code $ExitCode)." -ForegroundColor Red
+    }
     exit $ExitCode
 }
 

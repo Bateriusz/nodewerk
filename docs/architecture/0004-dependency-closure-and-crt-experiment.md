@@ -16,19 +16,36 @@ Nodewerk defines three explicit build profiles across both `clang-cl`/`lld-link`
 
 | Profile | CMake Value | Purpose | Exceptions / RTTI | Security Mitigations | D3D12 Validation | Dependency Closure |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Development** | `dev` | Local debugging, D3D12 debug layer validation, failure recovery testing | Disabled (`/EHs-c-`, `/GR-`) | Retained (`/GS`, `/guard:cf`, ASLR, NX, CET) | Enabled (`NW_ENABLE_D3D12_VALIDATION=1`) | `dev` (`ucrtbased.dll`, `d3d12sdklayers.dll`, `dxgidebug.dll`, PDBs) |
-| **Release Baseline** | `release` | Reproducible standalone player baseline & clean-system validation | Disabled (`/EHs-c-`, `/GR-`) | Retained (`/GS`, `/guard:cf`, ASLR, NX, CET) | Disabled (`NW_ENABLE_D3D12_VALIDATION=0`) | `release` (inbox Windows 11 DLLs only; zero sidecars) |
-| **Experimental Compact** | `compact_experiment` | Isolated sandbox for aggressive LTO/ICF and `/NODEFAULTLIB` CRT experiments | Disabled (`/EHs-c-`, `/GR-`) | Retained (`/GS`, `/guard:cf`, ASLR, NX, CET) | Disabled (`NW_ENABLE_D3D12_VALIDATION=0`) | `compact_experiment` (inbox Windows 11 DLLs only; zero sidecars) |
+| **Development** | `dev` | Local debugging, D3D12 debug layer validation, failure recovery testing | Disabled (`/EHs-c-`, `/GR-`) | Retained (`/GS`, `/guard:cf`, ASLR, NX, CET) | Enabled (`NW_ENABLE_D3D12_VALIDATION=1`) | `dev` (`ucrtbased.dll`, `vcruntime140d.dll`, `d3d12sdklayers.dll`, `dxgidebug.dll`, PDBs) |
+| **Release Baseline** | `release` | Reproducible standalone player baseline & clean-system validation | Disabled (`/EHs-c-`, `/GR-`) | Retained (`/GS`, `/guard:cf`, ASLR, NX, CET) | Disabled (`NW_ENABLE_D3D12_VALIDATION=0`) | `release` (inbox Windows 11 DLLs; static VCRuntime + dynamic `ucrtbase.dll`; zero sidecars) |
+| **Experimental Compact** | `compact_experiment` | Isolated sandbox for aggressive LTO/ICF and `/NODEFAULTLIB` CRT experiments | Disabled (`/EHs-c-`, `/GR-`) | Retained (`/GS`, `/guard:cf`, ASLR, NX, CET) | Disabled (`NW_ENABLE_D3D12_VALIDATION=0`) | `compact_experiment` (same CRT linkage as release; zero sidecars) |
 
 ### 2. Separate Development and Release Dependency Closures
 
-- **Release Closure (`release`):** May import **only** documented Windows 11 inbox OS DLLs (`kernel32.dll`, `user32.dll`, `gdi32.dll`, `d3d12.dll`, `dxgi.dll`, `ucrtbase.dll`). Installed display-driver user-mode DLLs (`nvwgf2umx.dll`, `nvldumdx.dll`) are loaded dynamically by `d3d12.dll`. Every other DLL (`dxcompiler.dll`, `dxil.dll`, `d3dcompiler_47.dll`, `D3D12Core.dll`, `vcruntime140.dll`, `msvcp140.dll`, `nvapi64.dll`), payload, model, or sidecar is either forbidden or counted byte-for-byte in `total_distributed_bytes`.
+- **Release Closure (`release`):** May import **only** documented Windows 11 inbox OS DLLs (`kernel32.dll`, `user32.dll`, `gdi32.dll`, `d3d12.dll`, `dxgi.dll`, `ucrtbase.dll`, and the inbox `api-ms-win-crt-*.dll` UCRT API-set forwarders, which are canonicalized to `ucrtbase.dll`). Installed display-driver user-mode DLLs (`nvwgf2umx.dll`, `nvldumdx.dll`) are loaded dynamically by `d3d12.dll`. Every other DLL (`dxcompiler.dll`, `dxil.dll`, `d3dcompiler_47.dll`, `D3D12Core.dll`, `vcruntime140.dll`, `msvcp140.dll`, `nvapi64.dll`), payload, model, or sidecar is either forbidden or counted byte-for-byte in `total_distributed_bytes`.
 - **Development Closure (`dev`):** Permits debug CRT imports (`ucrtbased.dll`, `vcruntime140d.dll`), optional D3D12/DXGI validation layers (`d3d12sdklayers.dll`, `dxgidebug.dll`, `winpixeventruntime.dll`), and `.pdb` symbol sidecars.
 - **Automated Enforcement:** `cmake/DependencyCheck.cmake` invokes `tools/dependency_check.py` as a `POST_BUILD` step on every fixture executable and fails the build if any unexpected DLL import or sidecar appears, or if compiler selection silently alters deployment requirements.
 
 ### 3. CRT Elimination (`/NODEFAULTLIB`) as an Explicit Experiment with Obligations
 
-CRT elimination is **never** a baseline assumption. In `release`, executables link dynamically against the Windows 11 inbox Universal CRT (`ucrtbase.dll`), which is a documented OS component present on every Windows 11 installation.
+CRT elimination is **never** a baseline assumption. In `release` and `compact_experiment`,
+executables keep the Windows 11 inbox Universal CRT dynamic (`ucrtbase.dll`) but link the MSVC
+VCRuntime **statically** (`libvcruntime.lib`) and suppress the `/MD` default import libraries
+(`/NODEFAULTLIB:msvcrt`, `/NODEFAULTLIB:vcruntime`, `/NODEFAULTLIB:vcruntime140*`). This is the
+measured reconciliation of the documented closure: the import table contains only inbox Windows
+DLLs, `vcruntime140.dll` / `vcruntime140_1.dll` are absent, and `/GS` security-cookie support still
+comes from the static `libvcruntime` implementation. Disabling exceptions and RTTI alone does not
+remove the dynamic VCRuntime; the explicit link configuration above does.
+
+`dev` retains the dynamic debug CRT (`ucrtbased.dll`, `vcruntime140d.dll`) because that closure
+permits debug-runtime diagnostics and PDBs. The dependency gate validates the actual PE import
+table for every profile, so a future toolchain or flag change that silently reintroduces a
+forbidden DLL fails the build.
+
+The post-build dependency gate inventories the complete deployment tree recursively (including
+nested payloads such as `demo.nwpkg`) and rejects both ordinary imports and PE delay-load imports.
+Each fixture is linked into an isolated `deploy/<fixture_id>/` directory; a flat `deploy/`
+staging directory is used for clean-system execution.
 
 Enabling `/NODEFAULTLIB` requires opting into `-DNW_BUILD_PROFILE=compact_experiment -DNW_ENABLE_CRT_ELIMINATION_EXPERIMENT=ON` and satisfying all six obligations codified in [`src/player/crt_experiment_obligations.h`](../../src/player/crt_experiment_obligations.h):
 

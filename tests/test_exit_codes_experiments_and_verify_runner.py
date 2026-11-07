@@ -21,6 +21,7 @@ from test_offline_shader_and_compute_fixture import make_test_signed_dxil_contai
 from verify_nw01 import (  # noqa: E402
     _format_nvidia_driver_version,
     build_and_compare_two_clean_directories,
+    capture_benchmark_result,
     check_evidence_completeness,
     compare_two_build_directories,
     detect_host_system_environment,
@@ -140,7 +141,19 @@ def test_reproducibility_comparison_and_pinned_toolchain_build_runner(
     with pytest.raises(ValueError, match="TimeDateStamp"):
         compare_two_build_directories(dir_a, dir_b)
 
+    # A deterministic hash-derived timestamp (lld-link /Brepro) is accepted when identical
+    # across both clean directories.
+    for d in (dir_a, dir_b):
+        (d / "nw_empty_player.exe").write_bytes(
+            build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], time_date_stamp=0x1234ABCD)
+        )
+    deterministic = compare_two_build_directories(dir_a, dir_b)
+    assert deterministic["all_artifacts_match"] is True
+
     # Restore valid PE with different section content in dir_b to verify mismatch detection
+    (dir_a / "nw_empty_player.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
+    )
     (dir_b / "nw_empty_player.exe").write_bytes(
         build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], extra_text_bytes=512)
     )
@@ -431,8 +444,13 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
         (sim_repo / "benchmarks" / "clean-system" / "clean-system-validation.json").read_text(encoding="utf-8")
     )
     assert recorded_bad["verification_status"] == "unverified"
-    assert recorded_bad["offline_shader_execution_evidence"]["compiled_offline_with_dxc"] is None
-    assert recorded_bad["offline_shader_execution_evidence"]["observed_output_sha256"] is None
+    # Failed runs preserve the measured/executed evidence separately from the pass flag.
+    assert recorded_bad["offline_shader_execution_evidence"]["compiled_offline_with_dxc"] is True
+    assert (
+        recorded_bad["offline_shader_execution_evidence"]["observed_output_sha256"]
+        != expected["output_sha256"]
+    )
+    assert recorded_bad["fixture_runs"][2]["exit_code"] == 0
 
     # Without verified offline DXC evidence, a clean run may not claim offline shader execution.
     shader_manifest["verification_status"] = "unverified"
@@ -454,7 +472,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     recorded_unverified = json.loads(
         (sim_repo / "benchmarks" / "clean-system" / "clean-system-validation.json").read_text(encoding="utf-8")
     )
-    assert recorded_unverified["offline_shader_execution_evidence"]["compiled_offline_with_dxc"] is None
+    assert recorded_unverified["offline_shader_execution_evidence"]["compiled_offline_with_dxc"] is False
 
 
 def test_observed_readback_parser_never_copies_expected_hash() -> None:
@@ -792,7 +810,8 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
 
     monkeypatch.setattr(verify_module, "validate_all_repository_artifacts", failing_post_validate)
     bad_code, bad_summary = run_full_mode(sim_repo)
-    assert bad_code == 2
+    assert bad_code == 1
+    assert bad_summary["gate_status"] == "failed"
     assert bad_summary["checks"]["schemas"]["passed"] is False
     assert "simulated post-recording schema error" in bad_summary["checks"]["schemas"]["reason"]
 
@@ -808,7 +827,8 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
         ),
     )
     dbg_fail_code, dbg_fail_summary = run_full_mode(sim_repo)
-    assert dbg_fail_code == 2
+    assert dbg_fail_code == 1
+    assert dbg_fail_summary["gate_status"] == "failed"
     assert dbg_fail_summary["checks"]["reproducibility_build"]["passed"] is True
     assert dbg_fail_summary["checks"]["msvc_ltcg_build"]["passed"] is True
     assert dbg_fail_summary["checks"]["clang_debug_symbols"]["passed"] is False
@@ -919,3 +939,140 @@ def test_run_full_mode_runs_clang_path_without_msvc_tools(
     )
     assert clang_entry["verification_status"] == "verified"
     assert clang_entry["pdb_debugging_verified"] is True
+
+
+def test_capture_benchmark_result_records_measured_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+    from schema_validator import validate_file_against_schema
+
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+
+    bin_dir = tmp_path / "deploy"
+    bin_dir.mkdir()
+    (bin_dir / "nw_clear_present_fixture.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
+    )
+    (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
+    )
+    expected = load_compute_expected_output(repo)
+    metrics = {
+        "startup_time_ms": 12.5,
+        "cpu_time_ms": 20.25,
+        "gpu_time_ms": 0.75,
+        "committed_memory_bytes": 12345678,
+        "gpu_committed_memory_bytes": 23456789,
+        "vendor_id": 0x10DE,
+        "device_id": 0x2C02,
+        "vram_mb": 16384,
+        "feature_level": "12_0",
+        "max_shader_model": "6_0",
+        "baseline_feature_level_12_0_supported": 1,
+        "baseline_shader_model_6_0_supported": 1,
+        "resource_binding_tier": 2,
+        "resource_heap_tier": 2,
+        "wave_ops_supported": 1,
+    }
+    fake_validation = {
+        "passed": True,
+        "fixture_runs": [
+            {
+                "fixture_id": "empty_player",
+                "execution_status": "passed",
+                "exit_code": 0,
+                "metrics": {},
+                "stdout": "",
+            },
+            {
+                "fixture_id": "clear_present",
+                "execution_status": "passed",
+                "exit_code": 0,
+                "metrics": metrics,
+                "d3d12_validation_clean": True,
+                "stdout": "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080\n",
+            },
+            {
+                "fixture_id": "compute_shader",
+                "execution_status": "passed",
+                "exit_code": 0,
+                "metrics": metrics,
+                "d3d12_validation_clean": True,
+                "stdout": "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080\n",
+                "readback": {
+                    "observed_output_sha256": expected["output_sha256"],
+                    "elements_match": True,
+                    "hash_match": True,
+                },
+            },
+        ],
+    }
+    monkeypatch.setattr(
+        verify_module,
+        "execute_release_fixture_validation",
+        lambda *_a, **_kw: fake_validation,
+    )
+    result = capture_benchmark_result(
+        repo,
+        bin_dir,
+        hardware_tier="rtx_50_series_desktop",
+        system_environment={
+            "os_build": "10.0.26100.3194",
+            "gpu_model": "NVIDIA GeForce RTX 5080",
+            "nvidia_driver_version": "572.16",
+        },
+    )
+    assert result["verification_status"] == "verified"
+    assert result["benchmark_passed"] is True
+    for fixture in result["fixture_results"]:
+        assert fixture["startup_time_ms"] == 12.5
+        assert fixture["gpu_time_ms"] == 0.75
+    validate_file_against_schema(
+        repo / "benchmarks" / "hardware" / "rtx-50-series-baseline.json",
+        repo / "schemas" / "benchmark-result.schema.json",
+    )
+
+
+def test_release_fixture_validation_fails_on_info_queue_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    binary_dir = tmp_path / "deploy"
+    binary_dir.mkdir()
+    for name in (
+        "nw_empty_player.exe",
+        "nw_clear_present_fixture.exe",
+        "nw_compute_shader_fixture.exe",
+    ):
+        (binary_dir / name).write_bytes(b"MZ")
+    expected = load_compute_expected_output(REPO_ROOT)
+    readback = (
+        f"NW_READBACK_ELEMENT_COUNT={expected['element_count']}\n"
+        "NW_READBACK_U32=" + ",".join(f"{v:08X}" for v in expected["elements_u32"]) + "\n"
+    )
+
+    def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        command = [str(c) for c in cmd]
+        if any(c.endswith("nw_clear_present_fixture.exe") for c in command):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                "",
+                "NW_D3D12_VALIDATION_ERROR=index=0 severity=2 id=1 description=bad barrier\n",
+            )
+        if any(c.endswith("nw_compute_shader_fixture.exe") for c in command):
+            return subprocess.CompletedProcess(command, 0, readback, "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(verify_module.subprocess, "run", fake_run)
+    result = verify_module.execute_release_fixture_validation(REPO_ROOT, binary_dir)
+    assert result["passed"] is False
+    clear_run = next(r for r in result["fixture_runs"] if r["fixture_id"] == "clear_present")
+    assert clear_run["exit_code"] == 0
+    assert clear_run["execution_status"] == "failed"
+    assert clear_run["d3d12_validation_clean"] is False
+    assert "bad barrier" in clear_run["d3d12_validation_errors"][0]

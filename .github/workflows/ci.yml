@@ -62,11 +62,16 @@ jobs:
       - name: Verify NW-01 Full mode gate behavior
         shell: pwsh
         run: |
-          & ./tools/verify-nw01.ps1 -Mode Full
+          $reportPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
+          & ./tools/verify-nw01.ps1 -Mode Full *>&1 | Tee-Object -FilePath $reportPath
           $code = $LASTEXITCODE
-          if ($code -ne 0 -and $code -ne 2) {
-            Write-Error "verify-nw01.ps1 -Mode Full failed with unexpected error exit code $code"
-            exit $code
+          if ($code -eq 0) {
+            Write-Host "verify-nw01.ps1 -Mode Full passed."
+            exit 0
           }
-          Write-Host "verify-nw01.ps1 -Mode Full exited with expected gate code $code"
-          exit 0
+          if ($code -eq 2) {
+            Write-Host "verify-nw01.ps1 -Mode Full exited 2: concrete build/schema/dependency/reproducibility/validation checks passed, but physical hardware or clean-system evidence remains unverified."
+            exit 0
+          }
+          Write-Error "verify-nw01.ps1 -Mode Full detected concrete build, schema, dependency, reproducibility, or fixture-validation failure (exit code $code)."
+          exit $code

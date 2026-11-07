@@ -58,6 +58,7 @@ def build_synthetic_pe64(
     pdb_path: str | None = None,
     pdb_guid: bytes = bytes(range(1, 17)),
     pdb_age: int = 1,
+    delay_imported_dlls: list[str] | None = None,
 ) -> bytes:
     """Construct a minimal valid PE32+ (x64) binary image with the specified import table."""
     pe_offset = 0x80
@@ -111,6 +112,32 @@ def build_synthetic_pe64(
         current_str_off = rsds_offset + len(rsds)
         debug_dir_size = 28
 
+    delay_dir_offset = current_str_off
+    delay_dir_size = 0
+    delay_dlls = delay_imported_dlls or []
+    if delay_dlls:
+        delay_dir_size = (len(delay_dlls) + 1) * 32
+        delay_name_cursor = delay_dir_offset + delay_dir_size
+        for idx, dll in enumerate(delay_dlls):
+            encoded = dll.encode("ascii") + b"\x00"
+            name_rva = rdata_rva + delay_name_cursor
+            rdata_buf[delay_name_cursor : delay_name_cursor + len(encoded)] = encoded
+            delay_name_cursor += len(encoded)
+            struct.pack_into(
+                "<8I",
+                rdata_buf,
+                delay_dir_offset + idx * 32,
+                1,  # dlattrRva
+                name_rva,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+        current_str_off = delay_name_cursor
+
     image = bytearray(rdata_raw_ptr + rdata_raw_size)
     image[0:2] = b"MZ"
     struct.pack_into("<I", image, 0x3C, pe_offset)
@@ -141,6 +168,14 @@ def build_synthetic_pe64(
             opt_offset + 112 + 8 * 6,
             rdata_rva + debug_dir_offset,
             debug_dir_size,
+        )
+    if delay_dir_size:
+        struct.pack_into(
+            "<II",
+            image,
+            opt_offset + 112 + 8 * 13,
+            rdata_rva + delay_dir_offset,
+            delay_dir_size,
         )
 
     # Section 0: .text
@@ -273,6 +308,26 @@ def test_recorded_ledgers_pass_dependency_and_toolchain_comparison(tmp_path: Pat
     )
     validate_file_against_schema(ledger_copy, REPO_ROOT / "schemas" / "size-ledger.schema.json")
 
+    measured_runtime = {
+        "startup_time_ms": 4.5,
+        "cpu_time_ms": 9.25,
+        "gpu_time_ms": 1.5,
+        "committed_memory_bytes": 1048576,
+        "gpu_committed_memory_bytes": 2097152,
+    }
+    updated = record_ledger_from_pe_binary(
+        pe_path,
+        ledger_copy,
+        inventory,
+        runtime_metrics=measured_runtime,
+        repo_root=REPO_ROOT,
+    )
+    assert updated["runtime_metrics"] == measured_runtime
+    unavailable = {m["metric"] for m in updated["unavailable_measurements"]}
+    for metric_key in measured_runtime:
+        assert metric_key not in unavailable
+    validate_file_against_schema(ledger_copy, REPO_ROOT / "schemas" / "size-ledger.schema.json")
+
     # An unexpected import in record_ledger_from_pe_binary must fail closure verification
     # and never produce a falsely verified or schema-invalid ledger.
     bad_ledger_copy = tmp_path / "bad-empty-player.json"
@@ -391,3 +446,88 @@ def test_distribution_byte_accounting_excludes_only_inbox_and_driver_dlls() -> N
             [{"name": "uncounted_sidecar.bin", "category": "sidecar", "size_bytes": 0}],
             inventory,
         )
+
+
+def test_known_fixture_siblings_are_not_unexpected_sidecars(tmp_path: Path) -> None:
+    inventory = json.loads(
+        (REPO_ROOT / "benchmarks" / "dependency-inventory.v1.json").read_text(encoding="utf-8")
+    )
+    empty = tmp_path / "nw_empty_player.exe"
+    empty.write_bytes(build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]))
+    clear = tmp_path / "nw_clear_present_fixture.exe"
+    clear.write_bytes(
+        build_synthetic_pe64(
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+        )
+    )
+
+    result = verify_binary_file(
+        empty,
+        profile="release",
+        fixture_id="empty_player",
+        inventory=inventory,
+        repo_root=REPO_ROOT,
+    )
+    assert result["closure_verified"] is True
+    assert "nw_clear_present_fixture.exe" not in result["sidecar_files"]
+
+    # Nested payloads must still be detected and rejected.
+    nested = tmp_path / "payloads" / "demo.nwpkg"
+    nested.parent.mkdir()
+    nested.write_bytes(b"payload")
+    with pytest.raises(DependencyClosureError, match="demo.nwpkg"):
+        verify_binary_file(
+            empty,
+            profile="release",
+            fixture_id="empty_player",
+            inventory=inventory,
+            repo_root=REPO_ROOT,
+        )
+
+
+def test_delay_load_imports_are_parsed_and_rejected(tmp_path: Path) -> None:
+    inventory = json.loads(
+        (REPO_ROOT / "benchmarks" / "dependency-inventory.v1.json").read_text(encoding="utf-8")
+    )
+    binary = build_synthetic_pe64(
+        ["kernel32.dll", "ucrtbase.dll"],
+        delay_imported_dlls=["dxcompiler.dll"],
+    )
+    parsed = parse_pe64_sections_and_imports(binary)
+    assert parsed["delay_imports"] == ["dxcompiler.dll"]
+
+    exe = tmp_path / "nw_empty_player.exe"
+    exe.write_bytes(binary)
+    with pytest.raises(DependencyClosureError, match="dxcompiler.dll"):
+        verify_binary_file(
+            exe,
+            profile="release",
+            fixture_id="empty_player",
+            inventory=inventory,
+            repo_root=REPO_ROOT,
+        )
+
+
+def test_ucrt_api_set_imports_canonicalize_to_inbox_ucrtbase(tmp_path: Path) -> None:
+    inventory = json.loads(
+        (REPO_ROOT / "benchmarks" / "dependency-inventory.v1.json").read_text(encoding="utf-8")
+    )
+    exe = tmp_path / "nw_empty_player.exe"
+    exe.write_bytes(
+        build_synthetic_pe64(
+            [
+                "kernel32.dll",
+                "api-ms-win-crt-runtime-l1-1-0.dll",
+                "api-ms-win-crt-heap-l1-1-0.dll",
+            ]
+        )
+    )
+    result = verify_binary_file(
+        exe,
+        profile="release",
+        fixture_id="empty_player",
+        inventory=inventory,
+        repo_root=REPO_ROOT,
+    )
+    assert result["closure_verified"] is True
+    assert result["canonical_imports"] == ["kernel32.dll", "ucrtbase.dll"]

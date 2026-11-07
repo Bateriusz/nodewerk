@@ -66,6 +66,7 @@
           "compute_fixture_bytes",
           "pdb_debugging_verified",
           "deterministic_repro_verified",
+          "fixture_execution_verified",
           "deployment_closure_identical"
         ],
         "additionalProperties": false,
@@ -80,6 +81,7 @@
           "compute_fixture_bytes": { "type": ["integer", "null"], "minimum": 1024 },
           "pdb_debugging_verified": { "type": "boolean" },
           "deterministic_repro_verified": { "type": "boolean" },
+          "fixture_execution_verified": { "type": "boolean" },
           "deployment_closure_identical": { "type": "boolean", "const": true }
         }
       }
@@ -129,14 +131,14 @@
       "required": [
         "require_brepro_flag",
         "require_path_map",
-        "require_zero_timestamp",
+        "require_deterministic_timestamp",
         "require_two_clean_dir_hash_match"
       ],
       "additionalProperties": false,
       "properties": {
         "require_brepro_flag": { "type": "boolean", "const": true },
         "require_path_map": { "type": "boolean", "const": true },
-        "require_zero_timestamp": { "type": "boolean", "const": true },
+        "require_deterministic_timestamp": { "type": "boolean", "const": true },
         "require_two_clean_dir_hash_match": { "type": "boolean", "const": true }
       }
     },
@@ -180,7 +182,12 @@
         "d3d12_validation_enabled": { "type": "boolean" },
         "crt_mode": {
           "type": "string",
-          "enum": ["inbox_ucrt_debug", "inbox_ucrt_release", "custom_entry_experiment"]
+          "enum": [
+            "inbox_ucrt_debug",
+            "inbox_ucrt_release",
+            "static_vcruntime_inbox_ucrt",
+            "custom_entry_experiment"
+          ]
         },
         "dependency_closure_profile": {
           "type": "string",

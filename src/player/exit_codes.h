@@ -28,6 +28,8 @@ enum class ExitCode : int {
     SwapChainCreationFailed = 31,
     DescriptorHeapCreationFailed = 32,
     ResourceAllocationFailed = 33,
+    CommandListRecordingFailed = 34,
+    PresentationFailed = 35,
 
     // Offline Shader / RootSignature / Pipeline State (40-49)
     OfflineShaderPayloadInvalid = 40,
@@ -37,7 +39,9 @@ enum class ExitCode : int {
     // Command Execution / Synchronization / Verification (50-69)
     ExecutionFenceTimeout = 50,
     DeviceRemoved = 51,
+    GpuSubmissionFailed = 52,
     ComputeVerificationFailed = 60,
+    D3D12ValidationError = 61,
 };
 
 constexpr const char* ExitCodeName(ExitCode code) noexcept {
@@ -57,12 +61,16 @@ constexpr const char* ExitCodeName(ExitCode code) noexcept {
         case ExitCode::SwapChainCreationFailed: return "SwapChainCreationFailed";
         case ExitCode::DescriptorHeapCreationFailed: return "DescriptorHeapCreationFailed";
         case ExitCode::ResourceAllocationFailed: return "ResourceAllocationFailed";
+        case ExitCode::CommandListRecordingFailed: return "CommandListRecordingFailed";
+        case ExitCode::PresentationFailed: return "PresentationFailed";
         case ExitCode::OfflineShaderPayloadInvalid: return "OfflineShaderPayloadInvalid";
         case ExitCode::RootSignatureCreationFailed: return "RootSignatureCreationFailed";
         case ExitCode::PipelineStateCreationFailed: return "PipelineStateCreationFailed";
         case ExitCode::ExecutionFenceTimeout: return "ExecutionFenceTimeout";
         case ExitCode::DeviceRemoved: return "DeviceRemoved";
+        case ExitCode::GpuSubmissionFailed: return "GpuSubmissionFailed";
         case ExitCode::ComputeVerificationFailed: return "ComputeVerificationFailed";
+        case ExitCode::D3D12ValidationError: return "D3D12ValidationError";
     }
     return "UnknownExitCode";
 }
@@ -90,6 +98,8 @@ constexpr const char* ExitCodeRecoverySemantics(ExitCode code) noexcept {
             return "Emitted package requested an optional queried feature unavailable on this adapter; abort or select fallback permutation if declared in manifest.";
         case ExitCode::DebugLayerUnavailable:
             return "Development validation requested (--validation), but Graphics Tools (d3d12sdklayers.dll) is not installed.";
+        case ExitCode::D3D12ValidationError:
+            return "STOP: the D3D12 debug layer emitted error/corruption messages; preserve the info-queue diagnostics and fix the offending API usage before treating the run as passing.";
         case ExitCode::OfflineShaderPayloadInvalid:
             return "Abort pipeline creation; do NOT fall back to runtime shader compilation (dxcompiler.dll / D3DCompile).";
         default:

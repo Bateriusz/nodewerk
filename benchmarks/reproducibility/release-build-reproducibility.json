@@ -45,7 +45,7 @@
   "mismatch_investigation": {
     "mismatches_found": 0,
     "root_causes_investigated": [
-      "PE COFF header TimeDateStamp entropy mitigated via /Brepro on both clang-cl and lld-link.",
+      "PE COFF header TimeDateStamp determinism achieved via /Brepro on both clang-cl/lld-link and MSVC; deterministic zero and hash-derived timestamps are both accepted.",
       "Embedded absolute build-directory PDB paths mitigated via /PDBALTPATH:%_PDB%.",
       "Compiler __FILE__ and debug prefix paths normalized via -ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
     ],

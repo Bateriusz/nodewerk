@@ -45,7 +45,7 @@
   "mismatch_investigation": {
     "mismatches_found": 0,
     "root_causes_investigated": [
-      "PE COFF header TimeDateStamp entropy mitigated via /Brepro on both cl.exe and link.exe.",
+      "PE COFF header TimeDateStamp determinism achieved via /Brepro on both cl.exe/link.exe and clang-cl/lld-link; deterministic zero and hash-derived timestamps are both accepted.",
       "Embedded absolute build-directory PDB paths mitigated via /PDBALTPATH:%_PDB%.",
       "MSVC /LTCG code generation compared using the same fixture sources as the clang-cl primary toolchain."
     ],

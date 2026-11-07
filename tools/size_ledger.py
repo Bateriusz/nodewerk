@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Any
 
 from dependency_check import (
-    SIDECAR_SUFFIXES,
+    KNOWN_FIXTURE_EXECUTABLES,
+    canonical_inbox_dll,
+    collect_deployment_files,
     parse_pe64_sections_and_imports,
     verify_closure,
 )
@@ -32,6 +34,19 @@ from schema_validator import validate_instance, validate_semantic_invariants
 
 class SizeLedgerError(ValueError):
     """Raised when a size ledger violates accounting or toolchain comparison contracts."""
+
+
+def resolve_fixture_executable(directory: Path, fixture_id: str, executable_name: str) -> Path | None:
+    """Locate a fixture executable in a raw build tree or an isolated deployment directory."""
+    candidates = (
+        directory / executable_name,
+        directory / "deploy" / executable_name,
+        directory / "deploy" / fixture_id / executable_name,
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def compute_distribution_accounting(
@@ -59,7 +74,7 @@ def compute_distribution_accounting(
         size_bytes = int(item.get("size_bytes", 0))
         category = item.get("category", "sidecar")
 
-        if lower_name in inbox_dlls:
+        if canonical_inbox_dll(lower_name) in inbox_dlls:
             excluded_system_components.append(
                 {
                     "name": name,
@@ -96,16 +111,9 @@ def compute_distribution_accounting(
     }
 
 
-KNOWN_FIXTURE_EXECUTABLES = {
-    "nw_empty_player.exe",
-    "nw_clear_present_fixture.exe",
-    "nw_compute_shader_fixture.exe",
-}
-
-
 def _classify_imported_dll(dll_name: str, inventory: dict[str, Any]) -> str:
     lower_dll = dll_name.lower()
-    if lower_dll == "ucrtbase.dll":
+    if canonical_inbox_dll(lower_dll) == "ucrtbase.dll":
         return "ucrt_inbox"
     inbox_dlls = {item["dll_name"].lower() for item in inventory.get("inbox_windows_allowlist", [])}
     if lower_dll in inbox_dlls:
@@ -127,6 +135,7 @@ def record_ledger_from_pe_binary(
     inventory: dict[str, Any],
     *,
     offline_dxil_bytes: int | None = None,
+    runtime_metrics: dict[str, Any] | None = None,
     repo_root: Path | None = None,
     verified: bool = True,
     unverified_reason: str | None = None,
@@ -158,19 +167,24 @@ def record_ledger_from_pe_binary(
                 f"Fixture contract {fx_json} is missing non-empty 'expected_release_imports'"
             )
 
-    sidecars = [
-        p.name
-        for p in binary_path.parent.iterdir()
-        if p.is_file()
-        and p.name != binary_path.name
-        and p.name not in KNOWN_FIXTURE_EXECUTABLES
-        and p.suffix.lower() in SIDECAR_SUFFIXES
-    ]
+    deployment_root = binary_path.parent / "deploy"
+    if not deployment_root.is_dir():
+        deployment_root = binary_path.parent
+    sidecars = collect_deployment_files(
+        deployment_root,
+        exclude_paths={binary_path, ledger_path},
+        exclude_names=KNOWN_FIXTURE_EXECUTABLES,
+        # In a raw CMake build tree, shaders/ and object directories are build
+        # intermediates, not deployment payloads. Dedicated deploy/ trees are scanned
+        # without this exclusion.
+        exclude_dir_names={"shaders"} if deployment_root == binary_path.parent else set(),
+    )
 
     verify_closure(
         profile=profile,
         fixture_id=fixture_id,
         imported_dlls=pe_info["imports"],
+        delay_imported_dlls=pe_info.get("delay_imports", []),
         sidecar_files=sidecars,
         inventory=inventory,
         expected_fixture_release_imports=expected_imports,
@@ -225,6 +239,20 @@ def record_ledger_from_pe_binary(
                     "symbols": ["<imported>"],
                 }
             )
+    for dll_name in pe_info.get("delay_imports", []):
+        lower_dll = dll_name.lower()
+        entry = existing_imports.get(lower_dll)
+        if entry is None:
+            entry = {
+                "dll_name": lower_dll,
+                "classification": _classify_imported_dll(lower_dll, inventory),
+                "symbols": ["<delay-loaded>"],
+                "delay_load": True,
+            }
+        else:
+            entry = dict(entry)
+            entry["delay_load"] = True
+        updated_imports.append(entry)
     ledger["imports"] = updated_imports
 
     sec_by_name = {s["name"]: s for s in pe_info["sections"]}
@@ -246,9 +274,37 @@ def record_ledger_from_pe_binary(
             sh["offline_dxil_bytes"] = None
             sh["embedded_in_executable_bytes"] = None
 
+    if runtime_metrics is not None:
+        ledger["runtime_metrics"] = {
+            key: runtime_metrics.get(key)
+            for key in (
+                "startup_time_ms",
+                "cpu_time_ms",
+                "gpu_time_ms",
+                "committed_memory_bytes",
+                "gpu_committed_memory_bytes",
+            )
+        }
+
     removed_metrics = {"total_distributed_bytes", "executable_sections"}
     if offline_dxil_bytes is not None:
         removed_metrics.add("shaders[0].offline_dxil_bytes")
+    if runtime_metrics is not None:
+        missing_runtime_metrics: list[str] = []
+        for metric_key in (
+            "startup_time_ms",
+            "cpu_time_ms",
+            "gpu_time_ms",
+            "committed_memory_bytes",
+            "gpu_committed_memory_bytes",
+        ):
+            if runtime_metrics.get(metric_key) is not None:
+                removed_metrics.add(f"runtime_metrics.{metric_key}")
+                removed_metrics.add(metric_key)
+            else:
+                missing_runtime_metrics.append(metric_key)
+    else:
+        missing_runtime_metrics = []
     ledger["unavailable_measurements"] = [
         m
         for m in ledger.get("unavailable_measurements", [])
@@ -267,6 +323,20 @@ def record_ledger_from_pe_binary(
                     ),
                 },
             )
+
+    if runtime_metrics is not None and missing_runtime_metrics:
+        existing_metric_names = {m["metric"] for m in ledger["unavailable_measurements"]}
+        for metric_key in missing_runtime_metrics:
+            if metric_key not in existing_metric_names:
+                ledger["unavailable_measurements"].append(
+                    {
+                        "metric": metric_key,
+                        "reason": (
+                            "The fixture did not emit a measured "
+                            f"{metric_key}; recorded as null rather than zero."
+                        ),
+                    }
+                )
 
     schema_root = repo_root or Path(__file__).resolve().parent.parent
     schema_path = schema_root / "schemas" / "size-ledger.schema.json"
@@ -387,7 +457,10 @@ def _select_measured_toolchain(toolchain_manifest: dict[str, Any]) -> str | None
     """
     eligible: list[tuple[str, int]] = []
     for entry in toolchain_manifest.get("evaluated_toolchains", []):
-        if entry.get("verification_status") != "verified":
+        if (
+            entry.get("verification_status") != "verified"
+            or entry.get("fixture_execution_verified") is not True
+        ):
             continue
         total = _complete_byte_total(entry)
         if total is None:
@@ -406,6 +479,8 @@ def _select_toolchain_from_ledgers(
     for entry in toolchain_manifest.get("evaluated_toolchains", []):
         toolchain_id = entry.get("toolchain_id")
         if not toolchain_id:
+            continue
+        if entry.get("fixture_execution_verified") is not True:
             continue
         rows = [ledgers_by_key.get((fixture_id, toolchain_id)) for fixture_id in fixture_ids]
         if any(
@@ -437,7 +512,7 @@ def _sync_evaluated_toolchains_from_ledgers(
         if not toolchain_id:
             continue
         statuses: list[str] = []
-        for fixture_id, field in _BYTE_FIELDS:
+        for field, fixture_id in _BYTE_FIELDS:
             ledger = ledgers_by_key.get((fixture_id, toolchain_id))
             if ledger is None:
                 continue
@@ -456,14 +531,17 @@ def _sync_evaluated_toolchains_from_ledgers(
                 entry.get("verification_status") != "unverified"
                 or entry.get("pdb_debugging_verified") is not False
                 or entry.get("deterministic_repro_verified") is not False
+                or entry.get("fixture_execution_verified") is not False
             ):
                 entry["verification_status"] = "unverified"
                 entry["pdb_debugging_verified"] = False
                 entry["deterministic_repro_verified"] = False
+                entry["fixture_execution_verified"] = False
                 changed = True
         elif (
             entry.get("pdb_debugging_verified") is True
             and entry.get("deterministic_repro_verified") is True
+            and entry.get("fixture_execution_verified") is True
         ):
             if entry.get("verification_status") != "verified":
                 entry["verification_status"] = "verified"
@@ -474,10 +552,12 @@ def _sync_evaluated_toolchains_from_ledgers(
                 entry.get("verification_status") != "unverified"
                 or entry.get("pdb_debugging_verified") is not False
                 or entry.get("deterministic_repro_verified") is not False
+                or entry.get("fixture_execution_verified") is not False
             ):
                 entry["verification_status"] = "unverified"
                 entry["pdb_debugging_verified"] = False
                 entry["deterministic_repro_verified"] = False
+                entry["fixture_execution_verified"] = False
                 changed = True
     return changed
 
@@ -536,7 +616,8 @@ def _evidence_state(entry: dict[str, Any] | None) -> str:
     return (
         f"verification_status={entry.get('verification_status', 'unverified')}, "
         f"pdb_debugging_verified={entry.get('pdb_debugging_verified') is True}, "
-        f"deterministic_repro_verified={entry.get('deterministic_repro_verified') is True}"
+        f"deterministic_repro_verified={entry.get('deterministic_repro_verified') is True}, "
+        f"fixture_execution_verified={entry.get('fixture_execution_verified') is True}"
     )
 
 
@@ -559,6 +640,7 @@ def _set_toolchain_unverified(
             eval_entry[field] = None
     eval_entry["deterministic_repro_verified"] = False
     eval_entry["pdb_debugging_verified"] = False
+    eval_entry["fixture_execution_verified"] = False
     eval_entry["verification_status"] = "unverified"
 
     if repo_root is not None:
@@ -815,17 +897,20 @@ def record_release_ledgers(
     *,
     deterministic_repro_verified: bool | None = None,
     pdb_debugging_verified: bool | None = None,
+    fixture_execution_verified: bool | None = None,
+    runtime_metrics_by_fixture: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Record measured release artifacts into the toolchain-specific size ledgers.
 
     Updates the specified toolchain's ledgers and byte fields. Unmeasured comparison
     toolchains remain explicitly unverified rather than being copied or interpolated.
 
-    A toolchain is only marked verified when all three fixtures were measured AND both the
-    two-clean-directory reproducibility result and the CodeView/PDB debugging result are
-    explicitly True. When verification is incomplete, measured PE binaries are still preserved
-    in the size ledgers and toolchain manifest with verification_status='unverified' and false
-    evidence flags rather than discarding the measurements or leaving stale verified ledgers.
+    A toolchain is only marked verified when all three fixtures were measured AND the
+    two-clean-directory reproducibility result, the CodeView/PDB debugging result, and
+    successful execution of the identical release fixtures are explicitly True. When
+    verification is incomplete, measured PE binaries are still preserved in the size ledgers
+    and toolchain manifest with verification_status='unverified' and false evidence flags
+    rather than discarding the measurements or leaving stale verified ledgers.
     """
     inventory_path = repo_root / "benchmarks" / "dependency-inventory.v1.json"
     toolchain_path = repo_root / "benchmarks" / "toolchain-manifest.v1.json"
@@ -860,14 +945,16 @@ def record_release_ledgers(
         raise SizeLedgerError(f"Toolchain manifest has no evaluated entry for '{toolchain_id}'")
 
     verification_complete = (
-        deterministic_repro_verified is True and pdb_debugging_verified is True
+        deterministic_repro_verified is True
+        and pdb_debugging_verified is True
+        and fixture_execution_verified is True
     )
     ready_by_fixture: dict[str, tuple[Path, Path, str, str, int | None]] = {}
     missing_fixtures: list[str] = []
     for fixture_id, exe_name, ledger_name, manifest_field, dxil_bytes in specs:
-        exe_path = binary_dir / exe_name
+        exe_path = resolve_fixture_executable(binary_dir, fixture_id, exe_name)
         ledger_path = repo_root / "benchmarks" / "ledgers" / ledger_name
-        if exe_path.exists() and ledger_path.exists():
+        if exe_path is not None and ledger_path.exists():
             ready_by_fixture[fixture_id] = (
                 exe_path,
                 ledger_path,
@@ -887,7 +974,8 @@ def record_release_ledgers(
         if not verification_complete:
             unverified_reason = (
                 "Refusing to mark ledgers verified: two-clean-directory reproducibility and "
-                "CodeView/PDB debugging evidence must both be explicitly verified; preserving "
+                "CodeView/PDB debugging evidence and successful execution of the identical "
+                "release fixtures must all be explicitly verified; preserving "
                 "measured binary sizes in an unverified record."
             )
         elif not all_three_binaries_ready:
@@ -912,6 +1000,7 @@ def record_release_ledgers(
                 ledger_path,
                 inventory,
                 offline_dxil_bytes=dxil_bytes,
+                runtime_metrics=(runtime_metrics_by_fixture or {}).get(fixture_id),
                 repo_root=repo_root,
                 verified=toolchain_verified,
                 unverified_reason=unverified_reason,
@@ -935,8 +1024,10 @@ def record_release_ledgers(
     if toolchain_verified:
         eval_entry["deterministic_repro_verified"] = True
         eval_entry["pdb_debugging_verified"] = True
+        eval_entry["fixture_execution_verified"] = True
         eval_entry["verification_status"] = "verified"
     else:
+        eval_entry["fixture_execution_verified"] = bool(fixture_execution_verified is True)
         _set_toolchain_unverified(
             eval_entry,
             repo_root,
@@ -965,6 +1056,7 @@ def record_release_ledgers(
         "recorded_fixtures": recorded,
         "deterministic_repro_verified": eval_entry["deterministic_repro_verified"],
         "pdb_debugging_verified": eval_entry["pdb_debugging_verified"],
+        "fixture_execution_verified": eval_entry.get("fixture_execution_verified", False),
         "comparison_toolchain_bytes_remain_unverified": other_toolchains_unverified,
     }
     if unverified_reason is not None:
@@ -1078,6 +1170,9 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
                 if sh["runtime_compilation_used"] or sh["agility_sdk_required"]:
                     raise SizeLedgerError(f"{ledger_path.name}: offline shader must not use runtime DXC or Agility SDK")
 
+    eval_by_id = {
+        t["toolchain_id"]: t for t in toolchain_manifest.get("evaluated_toolchains", [])
+    }
     fixtures = ["empty_player", "clear_present", "compute_shader"]
     comparisons: list[dict[str, Any]] = []
     for fixture_id in fixtures:
@@ -1098,8 +1193,12 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
             else:
                 smaller_on_fixture = "tie"
 
-        clang_imports = sorted(imp["dll_name"].lower() for imp in clang_ledger["imports"])
-        msvc_imports = sorted(imp["dll_name"].lower() for imp in msvc_ledger["imports"])
+        clang_imports = sorted(
+            {canonical_inbox_dll(imp["dll_name"]) for imp in clang_ledger["imports"]}
+        )
+        msvc_imports = sorted(
+            {canonical_inbox_dll(imp["dll_name"]) for imp in msvc_ledger["imports"]}
+        )
         if clang_imports != msvc_imports:
             raise SizeLedgerError(
                 f"Import closure mismatch between clang-cl-lld ({clang_imports}) and msvc-ltcg ({msvc_imports}) on {fixture_id}"
@@ -1121,6 +1220,8 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
                     "verified"
                     if clang_ledger["verification_status"] == "verified"
                     and msvc_ledger["verification_status"] == "verified"
+                    and eval_by_id["clang-cl-lld"].get("fixture_execution_verified") is True
+                    and eval_by_id["msvc-ltcg"].get("fixture_execution_verified") is True
                     else "unverified"
                 ),
                 "clang_cl_lld_bytes": clang_bytes,
@@ -1166,14 +1267,18 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
             toolchain_path.write_text(updated_manifest_text, encoding="utf-8")
 
     # Cross-check against toolchain-manifest.v1.json evaluated_toolchains
-    eval_by_id = {t["toolchain_id"]: t for t in toolchain_manifest.get("evaluated_toolchains", [])}
     toolchain_ids = [t["toolchain_id"] for t in toolchain_manifest.get("evaluated_toolchains", [])]
     for tid in toolchain_ids:
         all_tid_ledgers_verified = all(
             ledgers_by_key[(fx, tid)]["verification_status"] == "verified"
             for fx in fixtures
         )
-        expected_tid_status = "verified" if all_tid_ledgers_verified else "unverified"
+        expected_tid_status = (
+            "verified"
+            if all_tid_ledgers_verified
+            and eval_by_id[tid].get("fixture_execution_verified") is True
+            else "unverified"
+        )
         if eval_by_id[tid].get("verification_status") != expected_tid_status:
             raise SizeLedgerError(
                 f"Toolchain manifest verification_status mismatch for {tid}: "
@@ -1261,6 +1366,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Assert that dev /DEBUG:FULL CodeView/PDB evidence was verified for this toolchain",
     )
+    parser.add_argument(
+        "--fixture-execution-verified",
+        action="store_true",
+        default=None,
+        help="Assert that the identical release fixtures executed successfully for this toolchain",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1271,6 +1382,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.toolchain_id,
                 deterministic_repro_verified=args.deterministic_repro_verified,
                 pdb_debugging_verified=args.pdb_debugging_verified,
+                fixture_execution_verified=args.fixture_execution_verified,
             )
             report = {"recorded": recorded, "comparison": generate_size_comparison_report(args.repo_root)}
         else:

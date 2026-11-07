@@ -87,12 +87,16 @@ bool TryParseSimulatedFailure(const char* name, ExitCode* out_code) noexcept {
         ExitCode::SwapChainCreationFailed,
         ExitCode::DescriptorHeapCreationFailed,
         ExitCode::ResourceAllocationFailed,
+        ExitCode::CommandListRecordingFailed,
+        ExitCode::PresentationFailed,
         ExitCode::OfflineShaderPayloadInvalid,
         ExitCode::RootSignatureCreationFailed,
         ExitCode::PipelineStateCreationFailed,
         ExitCode::ExecutionFenceTimeout,
         ExitCode::DeviceRemoved,
+        ExitCode::GpuSubmissionFailed,
         ExitCode::ComputeVerificationFailed,
+        ExitCode::D3D12ValidationError,
     };
     for (ExitCode candidate : kAllCodes) {
         if (StringsEqual(name, ExitCodeName(candidate))) {

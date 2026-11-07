@@ -24,12 +24,16 @@ Because player and measurement fixture builds disable C++ exceptions (`/EHs-c-`,
 | `31` | `SwapChainCreationFailed` | `resource_and_queue_init` | `CreateSwapChainForHwnd` (`DXGI_SWAP_EFFECT_FLIP_DISCARD`) failed. |
 | `32` | `DescriptorHeapCreationFailed` | `resource_and_queue_init` | Bounded `RTV` or `CBV_SRV_UAV` descriptor heap creation failed. |
 | `33` | `ResourceAllocationFailed` | `resource_and_queue_init` | `CreateCommittedResource` failed for default UAV or readback buffer. |
+| `34` | `CommandListRecordingFailed` | `resource_and_queue_init` | `ID3D12CommandAllocator::Reset`, `ID3D12GraphicsCommandList::Reset`, or `Close` returned a failing HRESULT. |
+| `35` | `PresentationFailed` | `resource_and_queue_init` | `IDXGISwapChain3::Present` failed without a reported device removal. |
 | `40` | `OfflineShaderPayloadInvalid` | `offline_shader_and_pipeline` | Embedded offline DXBC/DXIL container failed header or chunk integrity check. |
 | `41` | `RootSignatureCreationFailed` | `offline_shader_and_pipeline` | `D3D12SerializeRootSignature` or `CreateRootSignature` failed. |
 | `42` | `PipelineStateCreationFailed` | `offline_shader_and_pipeline` | `CreateComputePipelineState` / graphics PSO creation failed for offline DXIL. |
 | `50` | `ExecutionFenceTimeout` | `gpu_execution_and_validation` | Direct queue fence wait exceeded timeout (`5000 ms`). |
 | `51` | `DeviceRemoved` | `gpu_execution_and_validation` | `ID3D12Device::GetDeviceRemovedReason` reported TDR / device removal. |
+| `52` | `GpuSubmissionFailed` | `gpu_execution_and_validation` | `ID3D12CommandQueue::Signal`, `ID3D12Fence::SetEventOnCompletion`, or a non-timeout event wait failed. |
 | `60` | `ComputeVerificationFailed` | `gpu_execution_and_validation` | GPU compute readback buffer did not match expected deterministic `LCG ^ SeedMask` output. |
+| `61` | `D3D12ValidationError` | `gpu_execution_and_validation` | The D3D12 debug layer stored an error or corruption message in `ID3D12InfoQueue`; the run fails even when the process otherwise returned zero. |
 
 ## 2. Development Diagnostics Format
 
@@ -38,6 +42,12 @@ In the `dev` build profile (or when `--diagnostics` is passed on the command lin
 ```text
 [NW-DIAG][exit_code=23][name=CapabilityBaselineUnmet][category=device_and_capability][stage=shader_model_check][hr=0x887A0004] detail="Shader Model 6.0 unsupported" recovery="Abort initialization; adapter does not satisfy D3D_FEATURE_LEVEL_12_0 + Shader Model 6.0 baseline."
 ```
+
+When `--validation` is used, the fixtures hold an `ID3D12InfoQueue` and drain every stored
+message after execution. Error and corruption messages are emitted as
+`NW_D3D12_VALIDATION_ERROR=...` lines and cause `ExitCode::D3D12ValidationError` (`61`), so a
+process that returns zero can never be treated as a clean validation run merely because the
+debug layer was enabled.
 
 ## 3. Inbox-Runtime Blocker Policy (`ExitCode::InboxRuntimeBlocker = 25`)
 

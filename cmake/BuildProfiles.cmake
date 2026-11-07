@@ -97,10 +97,30 @@ function(nw_apply_player_profile target_name)
         )
 
         if(NW_BUILD_PROFILE STREQUAL "dev")
-            target_compile_options(${target_name} PRIVATE /Od /Zi /MDd)
+            set_property(TARGET ${target_name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
+            target_compile_options(${target_name} PRIVATE /Od /Zi)
             target_link_options(${target_name} PRIVATE /DEBUG:FULL)
         elseif(NW_BUILD_PROFILE STREQUAL "release")
-            target_compile_options(${target_name} PRIVATE /O1 /Os /MD)
+            set_property(TARGET ${target_name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+            target_compile_options(${target_name} PRIVATE /O1 /Os)
+            # Keep the inbox Windows UCRT dynamic (ucrtbase.dll) while linking the
+            # MSVC VCRuntime statically. The dynamic-runtime default import libraries
+            # would otherwise import vcruntime140.dll /
+            # vcruntime140_1.dll, which the release dependency closure forbids.
+            # Static libvcruntime still supplies __security_init_cookie and
+            # __security_check_cookie for /GS; platform mitigations remain enabled.
+            target_compile_definitions(${target_name} PRIVATE
+                NW_CRT_LINKAGE_STATIC_VCRUNTIME_DYNAMIC_UCRT=1)
+            target_link_libraries(${target_name} PRIVATE
+                libvcruntime.lib
+                ucrt.lib
+            )
+            target_link_options(${target_name} PRIVATE
+                /NODEFAULTLIB:msvcrt
+                /NODEFAULTLIB:vcruntime
+                /NODEFAULTLIB:vcruntime140
+                /NODEFAULTLIB:vcruntime140_1
+            )
             if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
                 target_compile_options(${target_name} PRIVATE -flto=thin)
             else()
@@ -113,7 +133,22 @@ function(nw_apply_player_profile target_name)
                 /PDBALTPATH:%_PDB%
             )
         elseif(NW_BUILD_PROFILE STREQUAL "compact_experiment")
-            target_compile_options(${target_name} PRIVATE /O1 /Os /MD)
+            set_property(TARGET ${target_name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+            target_compile_options(${target_name} PRIVATE /O1 /Os)
+            target_compile_definitions(${target_name} PRIVATE
+                NW_CRT_LINKAGE_STATIC_VCRUNTIME_DYNAMIC_UCRT=1)
+            if(NOT NW_ENABLE_CRT_ELIMINATION_EXPERIMENT)
+                target_link_libraries(${target_name} PRIVATE
+                    libvcruntime.lib
+                    ucrt.lib
+                )
+                target_link_options(${target_name} PRIVATE
+                    /NODEFAULTLIB:msvcrt
+                    /NODEFAULTLIB:vcruntime
+                    /NODEFAULTLIB:vcruntime140
+                    /NODEFAULTLIB:vcruntime140_1
+                )
+            endif()
             if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
                 target_compile_options(${target_name} PRIVATE -flto)
             else()

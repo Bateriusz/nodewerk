@@ -123,6 +123,7 @@
             "type": "string",
             "enum": ["windows_inbox", "ucrt_inbox", "dev_only_diagnostic"]
           },
+          "delay_load": { "type": "boolean" },
           "symbols": {
             "type": "array",
             "minItems": 1,

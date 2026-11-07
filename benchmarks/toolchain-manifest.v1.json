@@ -12,7 +12,7 @@
     "target_triple": "x86_64-pc-windows-msvc",
     "selection_rationale": "Provisional default: clang-cl 18.1.8 + lld-link 18.1.8 with ThinLTO (-flto=thin, /O1 /Os /Gw /Gy /GF /OPT:REF /OPT:ICF=4) is configured for the identical empty_player, clear_present, and compute_shader fixtures paired against MSVC 19.40.33813 /LTCG. This is not a measured size winner: exact PE byte counts remain null (unverified) until compiled on a Windows 11 x64 toolchain host. tools/size_ledger.py selects and persists the smaller verified aggregate footprint (or the only verified toolchain) from the recorded ledgers and reconciles the manifest, so MSVC/LTCG can replace this default once its measurements and evidence are verified.",
     "debugging_evidence": "Configured with CodeView /DEBUG:FULL (dev) and /PDBALTPATH:%_PDB% (release) symbol emission for WinDbg, Visual Studio Debugger, and PIX for Windows GPU captures; live Windows debugger verification is pending Windows 11 x64 host execution.",
-    "reproducibility_evidence": "Configured for bit-for-bit identical PE executables across independent clean build directories using /Brepro, -ffile-prefix-map=${CMAKE_SOURCE_DIR}=., and /PDBALTPATH:%_PDB%, enforced by cmake/ToolchainManifest.cmake and tools/verify_nw01.py."
+    "reproducibility_evidence": "Configured for bit-for-bit identical PE executables across independent clean build directories using /Brepro, -ffile-prefix-map=${CMAKE_SOURCE_DIR}=., and /PDBALTPATH:%_PDB%, enforced by cmake/ToolchainManifest.cmake and tools/verify_nw01.py. /Brepro timestamps are accepted when deterministic (zero or hash-derived) and identical across both clean directories."
   },
   "evaluated_toolchains": [
     {
@@ -26,6 +26,7 @@
       "compute_fixture_bytes": null,
       "pdb_debugging_verified": false,
       "deterministic_repro_verified": false,
+      "fixture_execution_verified": false,
       "deployment_closure_identical": true
     },
     {
@@ -39,6 +40,7 @@
       "compute_fixture_bytes": null,
       "pdb_debugging_verified": false,
       "deterministic_repro_verified": false,
+      "fixture_execution_verified": false,
       "deployment_closure_identical": true
     }
   ],
@@ -71,7 +73,7 @@
         "/Gy",
         "/GF",
         "/Brepro",
-        "/MDd",
+        "MSVC_RUNTIME_LIBRARY=MultiThreadedDebugDLL",
         "-D_HAS_EXCEPTIONS=0",
         "-DNW_PROFILE_DEV=1",
         "-DNW_ENABLE_D3D12_VALIDATION=1"
@@ -120,7 +122,8 @@
         "/Gy",
         "/GF",
         "/Brepro",
-        "/MD",
+        "MSVC_RUNTIME_LIBRARY=MultiThreadedDLL",
+        "-DNW_CRT_LINKAGE_STATIC_VCRUNTIME_DYNAMIC_UCRT=1",
         "-flto=thin",
         "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.",
         "-D_HAS_EXCEPTIONS=0",
@@ -138,6 +141,10 @@
         "/guard:cf",
         "/Brepro",
         "/PDBALTPATH:%_PDB%",
+        "/NODEFAULTLIB:msvcrt",
+        "/NODEFAULTLIB:vcruntime",
+        "/NODEFAULTLIB:vcruntime140",
+        "/NODEFAULTLIB:vcruntime140_1",
         "/INCREMENTAL:NO"
       ],
       "dxc_flags": [
@@ -155,7 +162,7 @@
       "player_rtti_enabled": false,
       "security_mitigations_retained": true,
       "d3d12_validation_enabled": false,
-      "crt_mode": "inbox_ucrt_release",
+      "crt_mode": "static_vcruntime_inbox_ucrt",
       "dependency_closure_profile": "release"
     },
     "compact_experiment": {
@@ -175,7 +182,8 @@
         "/Gy",
         "/GF",
         "/Brepro",
-        "/MD",
+        "MSVC_RUNTIME_LIBRARY=MultiThreadedDLL",
+        "-DNW_CRT_LINKAGE_STATIC_VCRUNTIME_DYNAMIC_UCRT=1",
         "-flto",
         "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.",
         "-D_HAS_EXCEPTIONS=0",
@@ -193,6 +201,10 @@
         "/guard:cf",
         "/Brepro",
         "/PDBALTPATH:%_PDB%",
+        "/NODEFAULTLIB:msvcrt",
+        "/NODEFAULTLIB:vcruntime",
+        "/NODEFAULTLIB:vcruntime140",
+        "/NODEFAULTLIB:vcruntime140_1",
         "/INCREMENTAL:NO"
       ],
       "dxc_flags": [
@@ -210,14 +222,14 @@
       "player_rtti_enabled": false,
       "security_mitigations_retained": true,
       "d3d12_validation_enabled": false,
-      "crt_mode": "custom_entry_experiment",
+      "crt_mode": "static_vcruntime_inbox_ucrt",
       "dependency_closure_profile": "compact_experiment"
     }
   },
   "reproducibility_policy": {
     "require_brepro_flag": true,
     "require_path_map": true,
-    "require_zero_timestamp": true,
+    "require_deterministic_timestamp": true,
     "require_two_clean_dir_hash_match": true
   },
   "unavailable_measurements": [

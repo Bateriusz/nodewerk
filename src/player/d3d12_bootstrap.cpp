@@ -4,17 +4,28 @@
 #include <cstring>
 
 #if defined(_WIN32)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <psapi.h>
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
+#include <tlhelp32.h>
 #endif
 
 namespace nw::shaders {
 #include "compute_fixture_dxil.h"
 } // namespace nw::shaders
+
+// The release profile suppresses the dynamic VCRuntime import library while keeping the
+// static libvcruntime + inbox UCRT split. Define the floating-point ABI marker explicitly so
+// the linker does not depend on a CRT startup object to provide it.
+extern "C" int _fltused = 0x9875;
 
 namespace nw::player {
 
@@ -71,6 +82,10 @@ ExitCode ParseBootstrapArgs(int argc, char** argv, BootstrapConfig* out_config) 
             out_config->force_diagnostics = true;
         } else if (std::strcmp(arg, "--emit-readback-values") == 0) {
             out_config->emit_readback_values = true;
+        } else if (std::strcmp(arg, "--emit-benchmark-metrics") == 0) {
+            out_config->emit_benchmark_metrics = true;
+        } else if (std::strcmp(arg, "--emit-loaded-modules") == 0) {
+            out_config->emit_loaded_modules = true;
         } else if (std::strcmp(arg, "--frames") == 0) {
             if (i + 1 >= argc) return ExitCode::InvalidArguments;
             const long parsed = std::strtol(argv[++i], nullptr, 10);
@@ -97,6 +112,262 @@ ExitCode ParseBootstrapArgs(int argc, char** argv, BootstrapConfig* out_config) 
 }
 
 namespace {
+
+double NwNowMs() noexcept {
+#if defined(_WIN32)
+    LARGE_INTEGER frequency{};
+    LARGE_INTEGER counter{};
+    if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart == 0) {
+        return 0.0;
+    }
+    QueryPerformanceCounter(&counter);
+    return (1000.0 * static_cast<double>(counter.QuadPart)) /
+           static_cast<double>(frequency.QuadPart);
+#else
+    return 0.0;
+#endif
+}
+
+#if defined(_WIN32)
+std::uint64_t QueryProcessCommittedBytes() noexcept {
+    using K32GetProcessMemoryInfoFn =
+        BOOL(WINAPI*)(HANDLE, PPROCESS_MEMORY_COUNTERS, DWORD);
+    HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
+    if (!kernel32) {
+        return 0u;
+    }
+    auto get_process_memory_info = reinterpret_cast<K32GetProcessMemoryInfoFn>(
+        reinterpret_cast<void*>(GetProcAddress(kernel32, "K32GetProcessMemoryInfo")));
+    if (!get_process_memory_info) {
+        return 0u;
+    }
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    if (get_process_memory_info(
+            GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+            static_cast<DWORD>(sizeof(counters)))) {
+        return static_cast<std::uint64_t>(counters.PrivateUsage);
+    }
+    return 0u;
+}
+
+struct ValidationSummary {
+    bool has_error = false;
+    bool has_corruption = false;
+    unsigned int message_count = 0;
+};
+
+ValidationSummary DrainD3D12ValidationMessages(ID3D12InfoQueue* info_queue) noexcept {
+    ValidationSummary summary{};
+    if (!info_queue) {
+        return summary;
+    }
+    const UINT64 stored = info_queue->GetNumStoredMessages();
+    for (UINT64 index = 0; index < stored; ++index) {
+        SIZE_T message_bytes = 0;
+        if (FAILED(info_queue->GetMessage(index, nullptr, &message_bytes)) || message_bytes == 0) {
+            continue;
+        }
+        if (message_bytes > 16384u) {
+            std::printf(
+                "NW_D3D12_VALIDATION_MESSAGE=index=%llu truncated_bytes=%llu\n",
+                static_cast<unsigned long long>(index),
+                static_cast<unsigned long long>(message_bytes));
+            continue;
+        }
+        alignas(D3D12_MESSAGE) char buffer[16384]{};
+        auto* message = reinterpret_cast<D3D12_MESSAGE*>(buffer);
+        SIZE_T buffer_bytes = sizeof(buffer);
+        if (FAILED(info_queue->GetMessage(index, message, &buffer_bytes))) {
+            continue;
+        }
+        ++summary.message_count;
+        const bool is_error =
+            message->Severity == D3D12_MESSAGE_SEVERITY_ERROR ||
+            message->Severity == D3D12_MESSAGE_SEVERITY_CORRUPTION;
+        if (message->Severity == D3D12_MESSAGE_SEVERITY_CORRUPTION) {
+            summary.has_corruption = true;
+        }
+        if (is_error) {
+            summary.has_error = true;
+            std::printf(
+                "NW_D3D12_VALIDATION_ERROR=index=%llu severity=%d id=%d description=%s\n",
+                static_cast<unsigned long long>(index),
+                static_cast<int>(message->Severity),
+                static_cast<int>(message->ID),
+                message->pDescription ? message->pDescription : "");
+        } else {
+            std::printf(
+                "NW_D3D12_VALIDATION_MESSAGE=index=%llu severity=%d id=%d description=%s\n",
+                static_cast<unsigned long long>(index),
+                static_cast<int>(message->Severity),
+                static_cast<int>(message->ID),
+                message->pDescription ? message->pDescription : "");
+        }
+    }
+    std::fflush(stdout);
+    return summary;
+}
+
+struct FenceWaitResult {
+    ExitCode code = ExitCode::Success;
+    HRESULT hresult = S_OK;
+    const char* stage = "fence_wait";
+};
+
+FenceWaitResult WaitForFenceValue(
+    ID3D12Fence* fence,
+    UINT64 value,
+    HANDLE fence_event,
+    DWORD timeout_ms) noexcept {
+    if (!fence || !fence_event) {
+        return FenceWaitResult{ExitCode::GpuSubmissionFailed, E_INVALIDARG, "fence_wait_invalid"};
+    }
+    const UINT64 completed = fence->GetCompletedValue();
+    if (completed == UINT64_MAX) {
+        // A removed device reports UINT64_MAX. Never treat this as "already complete".
+        return FenceWaitResult{
+            ExitCode::DeviceRemoved,
+            static_cast<HRESULT>(0x887A0005u), // DXGI_ERROR_DEVICE_REMOVED
+            "fence_get_completed_value"};
+    }
+    if (completed >= value) {
+        return FenceWaitResult{ExitCode::Success, S_OK, "fence_wait"};
+    }
+    const HRESULT set_hr = fence->SetEventOnCompletion(value, fence_event);
+    if (FAILED(set_hr)) {
+        return FenceWaitResult{ExitCode::GpuSubmissionFailed, set_hr, "fence_set_event"};
+    }
+    const DWORD wait_result = WaitForSingleObject(fence_event, timeout_ms);
+    if (wait_result == WAIT_TIMEOUT) {
+        return FenceWaitResult{
+            ExitCode::ExecutionFenceTimeout,
+            static_cast<HRESULT>(0x80070102u),
+            "fence_wait_timeout"};
+    }
+    if (wait_result != WAIT_OBJECT_0) {
+        return FenceWaitResult{
+            ExitCode::GpuSubmissionFailed,
+            HRESULT_FROM_WIN32(GetLastError()),
+            "fence_wait_failed"};
+    }
+    return FenceWaitResult{ExitCode::Success, S_OK, "fence_wait"};
+}
+
+void EmitLoadedModuleInventory() noexcept {
+    const DWORD process_id = GetCurrentProcessId();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    MODULEENTRY32W entry{};
+    entry.dwSize = static_cast<DWORD>(sizeof(entry));
+    unsigned int module_count = 0;
+    if (Module32FirstW(snapshot, &entry)) {
+        do {
+            std::printf("NW_LOADED_MODULE=%ls\n", entry.szModule);
+            ++module_count;
+            entry.dwSize = static_cast<DWORD>(sizeof(entry));
+        } while (Module32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    std::printf("NW_MODULE_COUNT=%u\n", module_count);
+    std::fflush(stdout);
+}
+
+struct AdapterHardwareInfo {
+    bool valid = false;
+    unsigned int vendor_id = 0;
+    unsigned int device_id = 0;
+    std::uint64_t vram_mb = 0;
+    std::uint64_t gpu_committed_memory_bytes = 0;
+};
+
+AdapterHardwareInfo QueryAdapterHardwareInfo(IDXGIAdapter1* adapter) noexcept {
+    AdapterHardwareInfo info{};
+    if (!adapter) {
+        return info;
+    }
+    DXGI_ADAPTER_DESC1 desc{};
+    if (FAILED(adapter->GetDesc1(&desc))) {
+        return info;
+    }
+    info.valid = true;
+    info.vendor_id = desc.VendorId;
+    info.device_id = desc.DeviceId;
+    info.vram_mb = desc.DedicatedVideoMemory / (1024ull * 1024ull);
+    IDXGIAdapter3* adapter3 = nullptr;
+    if (SUCCEEDED(adapter->QueryInterface(
+            __uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&adapter3))) && adapter3) {
+        DXGI_QUERY_VIDEO_MEMORY_INFO memory_info{};
+        if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(
+                0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memory_info))) {
+            info.gpu_committed_memory_bytes = memory_info.CurrentUsage;
+        }
+        adapter3->Release();
+    }
+    return info;
+}
+
+void EmitBenchmarkMetrics(
+    const AdapterCapabilitySnapshot& snapshot,
+    const AdapterHardwareInfo& hardware,
+    const char* adapter_name,
+    double startup_ms,
+    double cpu_ms,
+    double gpu_ms) noexcept {
+    std::printf("NW_STARTUP_MS=%.3f\n", startup_ms > 0.0 ? startup_ms : 0.001);
+    std::printf("NW_CPU_TIME_MS=%.3f\n", cpu_ms > 0.0 ? cpu_ms : 0.001);
+    if (gpu_ms > 0.0) {
+        std::printf("NW_GPU_TIME_MS=%.3f\n", gpu_ms);
+    }
+    const std::uint64_t committed_bytes = QueryProcessCommittedBytes();
+    if (committed_bytes > 0u) {
+        std::printf("NW_COMMITTED_MEMORY_BYTES=%llu\n",
+            static_cast<unsigned long long>(committed_bytes));
+    }
+
+    if (hardware.valid) {
+        std::printf("NW_VENDOR_ID=%u\n", hardware.vendor_id);
+        std::printf("NW_DEVICE_ID=%u\n", hardware.device_id);
+        std::printf("NW_VRAM_MB=%llu\n",
+            static_cast<unsigned long long>(hardware.vram_mb));
+        if (hardware.gpu_committed_memory_bytes > 0) {
+            std::printf("NW_GPU_COMMITTED_MEMORY_BYTES=%llu\n",
+                static_cast<unsigned long long>(hardware.gpu_committed_memory_bytes));
+        }
+    }
+    if (adapter_name && adapter_name[0] != '\0') {
+        std::printf("NW_ADAPTER_DESCRIPTION=%s\n", adapter_name);
+    }
+    const char* feature_level_name = "unknown";
+    if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_12_1)) {
+        feature_level_name = "12_1";
+    } else if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_12_0)) {
+        feature_level_name = "12_0";
+    } else if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_11_1)) {
+        feature_level_name = "11_1";
+    } else if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_11_0)) {
+        feature_level_name = "11_0";
+    }
+    std::printf("NW_FEATURE_LEVEL=%s\n", feature_level_name);
+    char shader_model_name[16] = "unknown";
+    if (snapshot.max_shader_model >= BaselineCapabilityProfile::kRequiredShaderModel) {
+        const unsigned int major = (snapshot.max_shader_model >> 4u) & 0xFu;
+        const unsigned int minor = snapshot.max_shader_model & 0xFu;
+        std::snprintf(shader_model_name, sizeof(shader_model_name), "%u_%u", major, minor);
+    }
+    std::printf("NW_MAX_SHADER_MODEL=%s\n", shader_model_name);
+    std::printf("NW_BASELINE_FEATURE_LEVEL_12_0_SUPPORTED=%d\n",
+        snapshot.max_feature_level >= BaselineCapabilityProfile::kRequiredFeatureLevel ? 1 : 0);
+    std::printf("NW_BASELINE_SHADER_MODEL_6_0_SUPPORTED=%d\n",
+        snapshot.max_shader_model >= BaselineCapabilityProfile::kRequiredShaderModel ? 1 : 0);
+    std::printf("NW_RESOURCE_BINDING_TIER=%u\n", snapshot.resource_binding_tier);
+    std::printf("NW_RESOURCE_HEAP_TIER=%u\n", snapshot.resource_heap_tier);
+    std::printf("NW_WAVE_OPS_SUPPORTED=%d\n", snapshot.wave_ops_supported ? 1 : 0);
+    std::fflush(stdout);
+}
+#endif
 
 DiagnosticRecord MakeSimulatedFailureRecord(ExitCode code) noexcept {
     DiagnosticRecord rec{};
@@ -132,10 +403,31 @@ DiagnosticRecord PopulateAdapterCapabilitySnapshot(
     }
 
     out_snapshot->windows_build_number = windows_build_number;
-    out_snapshot->max_feature_level = BaselineCapabilityProfile::kRequiredFeatureLevel;
+
+    static constexpr D3D_FEATURE_LEVEL kRequestedFeatureLevels[] = {
+        D3D_FEATURE_LEVEL_12_1,
+        D3D_FEATURE_LEVEL_12_0,
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+    };
+    D3D12_FEATURE_DATA_FEATURE_LEVELS feature_levels{};
+    feature_levels.NumFeatureLevels =
+        static_cast<UINT>(sizeof(kRequestedFeatureLevels) / sizeof(kRequestedFeatureLevels[0]));
+    feature_levels.pFeatureLevelsRequested = kRequestedFeatureLevels;
+    HRESULT hr = device->CheckFeatureSupport(
+        D3D12_FEATURE_FEATURE_LEVELS, &feature_levels, sizeof(feature_levels));
+    if (FAILED(hr)) {
+        return DiagnosticRecord{
+            ExitCode::CapabilityBaselineUnmet,
+            static_cast<std::uint32_t>(hr),
+            "feature_level_check",
+            "CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS) failed",
+            {}};
+    }
+    out_snapshot->max_feature_level = static_cast<std::uint32_t>(feature_levels.MaxSupportedFeatureLevel);
 
     D3D12_FEATURE_DATA_SHADER_MODEL sm_data{D3D_SHADER_MODEL_6_0};
-    HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm_data, sizeof(sm_data));
+    hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm_data, sizeof(sm_data));
     if (FAILED(hr)) {
         return DiagnosticRecord{
             ExitCode::CapabilityBaselineUnmet,
@@ -363,6 +655,9 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         return MakeSimulatedFailureRecord(config.simulated_failure);
     }
 
+    const double start_ms = NwNowMs();
+    char adapter_name[128]{};
+
     const std::uint32_t win_build =
         config.os_build_override != 0u ? config.os_build_override : QueryWindowsBuildNumber();
     if (win_build < BaselineCapabilityProfile::kMinWindowsBuildNumber) {
@@ -464,12 +759,22 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
 
     ID3D12Device* device = nullptr;
     hr = D3D12CreateDevice(selected_adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), reinterpret_cast<void**>(&device));
-    selected_adapter->Release();
     if (FAILED(hr) || !device) {
+        selected_adapter->Release();
         factory->Release();
         DestroyWindow(hwnd);
         return DiagnosticRecord{ExitCode::D3D12DeviceCreationFailed, static_cast<std::uint32_t>(hr), "d3d12_device", "D3D12CreateDevice(12_0) failed", {}};
     }
+
+    DXGI_ADAPTER_DESC1 selected_desc{};
+    const AdapterHardwareInfo hardware_info = QueryAdapterHardwareInfo(selected_adapter);
+    if (SUCCEEDED(selected_adapter->GetDesc1(&selected_desc))) {
+        for (std::size_t c = 0; c < 127u && selected_desc.Description[c] != L'\0'; ++c) {
+            const wchar_t wc = selected_desc.Description[c];
+            adapter_name[c] = (wc >= 0x20 && wc <= 0x7E) ? static_cast<char>(wc) : '?';
+        }
+    }
+    selected_adapter->Release();
 
     AdapterCapabilitySnapshot cap_snapshot{};
     const DiagnosticRecord cap_rec = PopulateAdapterCapabilitySnapshot(device, win_build, config.optional_features, &cap_snapshot);
@@ -478,6 +783,22 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         factory->Release();
         DestroyWindow(hwnd);
         return cap_rec;
+    }
+
+    ID3D12InfoQueue* info_queue = nullptr;
+    if (config.enable_d3d12_validation) {
+        hr = device->QueryInterface(__uuidof(ID3D12InfoQueue), reinterpret_cast<void**>(&info_queue));
+        if (FAILED(hr) || !info_queue) {
+            device->Release();
+            factory->Release();
+            DestroyWindow(hwnd);
+            return DiagnosticRecord{
+                ExitCode::D3D12ValidationError,
+                static_cast<std::uint32_t>(hr),
+                "d3d12_info_queue",
+                "D3D12 debug layer enabled but ID3D12InfoQueue is unavailable; cannot verify validation cleanliness.",
+                {}};
+        }
     }
 
     // Single direct command queue (baseline contract)
@@ -618,14 +939,96 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         DestroyWindow(hwnd);
         return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(err), "fence_event", "CreateEventA failed", {}};
     }
+    const double setup_ms = NwNowMs() - start_ms;
     UINT64 fence_value = 1;
+
+    // Optional GPU timestamp queries. If the adapter/queue does not support them the
+    // measurement is reported as unavailable rather than zero.
+    ID3D12QueryHeap* timestamp_heap = nullptr;
+    ID3D12Resource* timestamp_readback = nullptr;
+    UINT64 timestamp_frequency = 0;
+    const UINT timestamp_count = config.frame_count * 2u;
+    D3D12_QUERY_HEAP_DESC query_heap_desc{};
+    query_heap_desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    query_heap_desc.Count = timestamp_count;
+    if (SUCCEEDED(device->CreateQueryHeap(
+            &query_heap_desc,
+            __uuidof(ID3D12QueryHeap),
+            reinterpret_cast<void**>(&timestamp_heap)))) {
+        D3D12_HEAP_PROPERTIES timestamp_heap_props{};
+        timestamp_heap_props.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC timestamp_desc{};
+        timestamp_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        timestamp_desc.Width = static_cast<UINT64>(timestamp_count) * sizeof(UINT64);
+        timestamp_desc.Height = 1;
+        timestamp_desc.DepthOrArraySize = 1;
+        timestamp_desc.MipLevels = 1;
+        timestamp_desc.Format = DXGI_FORMAT_UNKNOWN;
+        timestamp_desc.SampleDesc.Count = 1;
+        timestamp_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(device->CreateCommittedResource(
+                &timestamp_heap_props,
+                D3D12_HEAP_FLAG_NONE,
+                &timestamp_desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr,
+                __uuidof(ID3D12Resource),
+                reinterpret_cast<void**>(&timestamp_readback)))) {
+            timestamp_heap->Release();
+            timestamp_heap = nullptr;
+        }
+        if (FAILED(queue->GetTimestampFrequency(&timestamp_frequency)) ||
+            timestamp_frequency == 0) {
+            timestamp_frequency = 0;
+        }
+    }
+
+    auto cleanup = [&]() noexcept {
+        if (timestamp_readback) timestamp_readback->Release();
+        if (timestamp_heap) timestamp_heap->Release();
+        if (info_queue) info_queue->Release();
+        CloseHandle(fence_event);
+        fence->Release();
+        cmd_list->Release();
+        allocator->Release();
+        backbuffers[0]->Release();
+        backbuffers[1]->Release();
+        rtv_heap->Release();
+        swapchain->Release();
+        queue->Release();
+        device->Release();
+        factory->Release();
+        DestroyWindow(hwnd);
+    };
 
     static constexpr float kClearColor[4] = {0.05f, 0.10f, 0.20f, 1.0f};
 
     for (std::uint32_t frame = 0; frame < config.frame_count; ++frame) {
         const UINT backbuffer_idx = swapchain->GetCurrentBackBufferIndex();
-        allocator->Reset();
-        cmd_list->Reset(allocator, nullptr);
+        HRESULT loop_hr = allocator->Reset();
+        if (FAILED(loop_hr)) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::CommandListRecordingFailed,
+                static_cast<std::uint32_t>(loop_hr),
+                "command_allocator_reset",
+                "ID3D12CommandAllocator::Reset failed",
+                {}};
+        }
+        loop_hr = cmd_list->Reset(allocator, nullptr);
+        if (FAILED(loop_hr)) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::CommandListRecordingFailed,
+                static_cast<std::uint32_t>(loop_hr),
+                "command_list_reset",
+                "ID3D12GraphicsCommandList::Reset failed",
+                {}};
+        }
+        if (timestamp_heap && timestamp_readback) {
+            cmd_list->EndQuery(
+                timestamp_heap, D3D12_QUERY_TYPE_TIMESTAMP, frame * 2u);
+        }
 
         // Ordinary resource transition barrier: PRESENT -> RENDER_TARGET
         D3D12_RESOURCE_BARRIER to_rt{};
@@ -639,6 +1042,17 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         D3D12_CPU_DESCRIPTOR_HANDLE frame_rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
         frame_rtv.ptr += static_cast<SIZE_T>(backbuffer_idx) * rtv_stride;
         cmd_list->ClearRenderTargetView(frame_rtv, kClearColor, 0, nullptr);
+        if (timestamp_heap && timestamp_readback) {
+            cmd_list->EndQuery(
+                timestamp_heap, D3D12_QUERY_TYPE_TIMESTAMP, frame * 2u + 1u);
+            cmd_list->ResolveQueryData(
+                timestamp_heap,
+                D3D12_QUERY_TYPE_TIMESTAMP,
+                frame * 2u,
+                2u,
+                timestamp_readback,
+                static_cast<UINT64>(frame) * 2u * sizeof(UINT64));
+        }
 
         // Ordinary resource transition barrier: RENDER_TARGET -> PRESENT
         D3D12_RESOURCE_BARRIER to_present = to_rt;
@@ -646,45 +1060,111 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         to_present.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
         cmd_list->ResourceBarrier(1, &to_present);
 
-        cmd_list->Close();
+        loop_hr = cmd_list->Close();
+        if (FAILED(loop_hr)) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::CommandListRecordingFailed,
+                static_cast<std::uint32_t>(loop_hr),
+                "command_list_close",
+                "ID3D12GraphicsCommandList::Close failed",
+                {}};
+        }
         ID3D12CommandList* lists[] = {cmd_list};
         queue->ExecuteCommandLists(1, lists);
-        swapchain->Present(0, 0);
+        const HRESULT present_hr = swapchain->Present(0, 0);
+        if (FAILED(present_hr)) {
+            const HRESULT removed = device->GetDeviceRemovedReason();
+            const HRESULT failure = FAILED(removed) ? removed : present_hr;
+            cleanup();
+            return DiagnosticRecord{
+                FAILED(removed) ? ExitCode::DeviceRemoved : ExitCode::PresentationFailed,
+                static_cast<std::uint32_t>(failure),
+                FAILED(removed) ? "device_removed" : "swapchain_present",
+                "IDXGISwapChain3::Present failed",
+                {}};
+        }
 
         const UINT64 signal_val = fence_value++;
-        queue->Signal(fence, signal_val);
-        if (fence->GetCompletedValue() < signal_val) {
-            fence->SetEventOnCompletion(signal_val, fence_event);
-            if (WaitForSingleObject(fence_event, 5000) == WAIT_TIMEOUT) {
-                CloseHandle(fence_event);
-                fence->Release();
-                cmd_list->Release();
-                allocator->Release();
-                backbuffers[0]->Release();
-                backbuffers[1]->Release();
-                rtv_heap->Release();
-                swapchain->Release();
-                queue->Release();
-                device->Release();
-                factory->Release();
-                DestroyWindow(hwnd);
-                return DiagnosticRecord{ExitCode::ExecutionFenceTimeout, 0x80070102u, "clear_present_fence_wait", "Frame fence wait timed out", {}};
-            }
+        const HRESULT signal_hr = queue->Signal(fence, signal_val);
+        if (FAILED(signal_hr)) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::GpuSubmissionFailed,
+                static_cast<std::uint32_t>(signal_hr),
+                "queue_signal",
+                "ID3D12CommandQueue::Signal failed",
+                {}};
+        }
+        const FenceWaitResult wait_result =
+            WaitForFenceValue(fence, signal_val, fence_event, 5000);
+        if (wait_result.code != ExitCode::Success) {
+            cleanup();
+            return DiagnosticRecord{
+                wait_result.code,
+                static_cast<std::uint32_t>(wait_result.hresult),
+                wait_result.stage,
+                wait_result.code == ExitCode::DeviceRemoved
+                    ? "Device removal reported while waiting for clear/present frame completion"
+                    : "Clear/present frame fence wait failed",
+                {}};
+        }
+        const HRESULT removed_hr = device->GetDeviceRemovedReason();
+        if (FAILED(removed_hr)) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::DeviceRemoved,
+                static_cast<std::uint32_t>(removed_hr),
+                "device_removed",
+                "ID3D12Device::GetDeviceRemovedReason reported device removal after Present",
+                {}};
         }
     }
 
-    CloseHandle(fence_event);
-    fence->Release();
-    cmd_list->Release();
-    allocator->Release();
-    backbuffers[0]->Release();
-    backbuffers[1]->Release();
-    rtv_heap->Release();
-    swapchain->Release();
-    queue->Release();
-    device->Release();
-    factory->Release();
-    DestroyWindow(hwnd);
+    double gpu_ms = 0.0;
+    if (timestamp_heap && timestamp_readback && timestamp_frequency != 0) {
+        void* mapped = nullptr;
+        D3D12_RANGE read_range{0, static_cast<SIZE_T>(timestamp_count) * sizeof(UINT64)};
+        if (SUCCEEDED(timestamp_readback->Map(0, &read_range, &mapped)) && mapped) {
+            const auto* timestamps = static_cast<const UINT64*>(mapped);
+            UINT64 elapsed_ticks = 0;
+            for (UINT frame = 0; frame < config.frame_count; ++frame) {
+                const UINT64 begin = timestamps[frame * 2u];
+                const UINT64 end = timestamps[frame * 2u + 1u];
+                if (end >= begin) {
+                    elapsed_ticks += end - begin;
+                }
+            }
+            if (elapsed_ticks > 0) {
+                gpu_ms = (1000.0 * static_cast<double>(elapsed_ticks)) /
+                         static_cast<double>(timestamp_frequency);
+            }
+            D3D12_RANGE empty_range{0, 0};
+            timestamp_readback->Unmap(0, &empty_range);
+        }
+    }
+
+    if (config.enable_d3d12_validation && info_queue) {
+        const ValidationSummary validation = DrainD3D12ValidationMessages(info_queue);
+        if (validation.has_error || validation.has_corruption) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::D3D12ValidationError,
+                0x887A0001u,
+                "d3d12_validation_info_queue",
+                "D3D12 debug layer emitted error/corruption messages; see NW_D3D12_VALIDATION_ERROR lines.",
+                {}};
+        }
+    }
+
+    if (config.emit_benchmark_metrics) {
+        EmitBenchmarkMetrics(
+            cap_snapshot, hardware_info, adapter_name, setup_ms, NwNowMs() - start_ms, gpu_ms);
+    }
+    if (config.emit_loaded_modules) {
+        EmitLoadedModuleInventory();
+    }
+    cleanup();
 #endif
 
     return DiagnosticRecord{ExitCode::Success, 0u, "complete", "Clear/Present fixture succeeded", {}};
@@ -694,6 +1174,8 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     if (config.has_simulated_failure) {
         return MakeSimulatedFailureRecord(config.simulated_failure);
     }
+
+    const double start_ms = NwNowMs();
 
     const std::uint32_t win_build =
         config.os_build_override != 0u ? config.os_build_override : QueryWindowsBuildNumber();
@@ -793,17 +1275,34 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
 
     ID3D12Device* device = nullptr;
     hr = D3D12CreateDevice(selected_adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), reinterpret_cast<void**>(&device));
-    selected_adapter->Release();
-    factory->Release();
     if (FAILED(hr) || !device) {
+        selected_adapter->Release();
+        factory->Release();
         return DiagnosticRecord{ExitCode::D3D12DeviceCreationFailed, static_cast<std::uint32_t>(hr), "d3d12_device", "D3D12CreateDevice(12_0) failed", {}};
     }
+    const AdapterHardwareInfo hardware_info = QueryAdapterHardwareInfo(selected_adapter);
+    selected_adapter->Release();
+    factory->Release();
 
     AdapterCapabilitySnapshot cap_snapshot{};
     const DiagnosticRecord cap_rec = PopulateAdapterCapabilitySnapshot(device, win_build, config.optional_features, &cap_snapshot);
     if (cap_rec.exit_code != ExitCode::Success) {
         device->Release();
         return cap_rec;
+    }
+
+    ID3D12InfoQueue* info_queue = nullptr;
+    if (config.enable_d3d12_validation) {
+        hr = device->QueryInterface(__uuidof(ID3D12InfoQueue), reinterpret_cast<void**>(&info_queue));
+        if (FAILED(hr) || !info_queue) {
+            device->Release();
+            return DiagnosticRecord{
+                ExitCode::D3D12ValidationError,
+                static_cast<std::uint32_t>(hr),
+                "d3d12_info_queue",
+                "D3D12 debug layer enabled but ID3D12InfoQueue is unavailable; cannot verify validation cleanliness.",
+                {}};
+        }
     }
 
     // Single direct command queue handling both raster and compute (baseline contract)
@@ -948,6 +1447,44 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "readback_buffer", "CreateCommittedResource(READBACK) failed", {}};
     }
 
+    ID3D12QueryHeap* timestamp_heap = nullptr;
+    ID3D12Resource* timestamp_readback = nullptr;
+    UINT64 timestamp_frequency = 0;
+    D3D12_QUERY_HEAP_DESC timestamp_heap_desc{};
+    timestamp_heap_desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    timestamp_heap_desc.Count = 2;
+    if (SUCCEEDED(device->CreateQueryHeap(
+            &timestamp_heap_desc,
+            __uuidof(ID3D12QueryHeap),
+            reinterpret_cast<void**>(&timestamp_heap)))) {
+        D3D12_HEAP_PROPERTIES timestamp_props{};
+        timestamp_props.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC timestamp_desc{};
+        timestamp_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        timestamp_desc.Width = 2u * sizeof(UINT64);
+        timestamp_desc.Height = 1;
+        timestamp_desc.DepthOrArraySize = 1;
+        timestamp_desc.MipLevels = 1;
+        timestamp_desc.Format = DXGI_FORMAT_UNKNOWN;
+        timestamp_desc.SampleDesc.Count = 1;
+        timestamp_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(device->CreateCommittedResource(
+                &timestamp_props,
+                D3D12_HEAP_FLAG_NONE,
+                &timestamp_desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr,
+                __uuidof(ID3D12Resource),
+                reinterpret_cast<void**>(&timestamp_readback)))) {
+            timestamp_heap->Release();
+            timestamp_heap = nullptr;
+        }
+        if (FAILED(queue->GetTimestampFrequency(&timestamp_frequency)) ||
+            timestamp_frequency == 0) {
+            timestamp_frequency = 0;
+        }
+    }
+
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav_view{};
     uav_view.Format = DXGI_FORMAT_UNKNOWN;
     uav_view.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
@@ -989,7 +1526,20 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     cmd_list->SetComputeRootDescriptorTable(0, uav_heap->GetGPUDescriptorHandleForHeapStart());
     const std::uint32_t constants[4] = {kElementCount, kSeedMask, 0u, 0u};
     cmd_list->SetComputeRoot32BitConstants(1, 4, constants, 0);
+    if (timestamp_heap && timestamp_readback) {
+        cmd_list->EndQuery(timestamp_heap, D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    }
     cmd_list->Dispatch(kElementCount / 64u, 1, 1);
+    if (timestamp_heap && timestamp_readback) {
+        cmd_list->EndQuery(timestamp_heap, D3D12_QUERY_TYPE_TIMESTAMP, 1);
+        cmd_list->ResolveQueryData(
+            timestamp_heap,
+            D3D12_QUERY_TYPE_TIMESTAMP,
+            0,
+            2,
+            timestamp_readback,
+            0);
+    }
 
     // Ordinary resource transition barrier: UNORDERED_ACCESS -> COPY_SOURCE
     D3D12_RESOURCE_BARRIER to_copy{};
@@ -1001,7 +1551,27 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     cmd_list->ResourceBarrier(1, &to_copy);
 
     cmd_list->CopyResource(rb_resource, uav_buffer);
-    cmd_list->Close();
+    const HRESULT close_hr = cmd_list->Close();
+    if (FAILED(close_hr)) {
+        if (timestamp_readback) timestamp_readback->Release();
+        if (timestamp_heap) timestamp_heap->Release();
+        if (info_queue) info_queue->Release();
+        cmd_list->Release();
+        allocator->Release();
+        rb_resource->Release();
+        uav_buffer->Release();
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{
+            ExitCode::CommandListRecordingFailed,
+            static_cast<std::uint32_t>(close_hr),
+            "command_list_close",
+            "ID3D12GraphicsCommandList::Close failed",
+            {}};
+    }
 
     ID3D12CommandList* lists[] = {cmd_list};
     queue->ExecuteCommandLists(1, lists);
@@ -1037,27 +1607,11 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(err), "fence_event", "CreateEventA failed", {}};
     }
 
-    queue->Signal(fence, 1);
-    if (fence->GetCompletedValue() < 1) {
-        fence->SetEventOnCompletion(1, fence_event);
-        if (WaitForSingleObject(fence_event, 5000) == WAIT_TIMEOUT) {
-            CloseHandle(fence_event);
-            fence->Release();
-            cmd_list->Release();
-            allocator->Release();
-            rb_resource->Release();
-            uav_buffer->Release();
-            pso->Release();
-            root_sig->Release();
-            uav_heap->Release();
-            queue->Release();
-            device->Release();
-            return DiagnosticRecord{ExitCode::ExecutionFenceTimeout, 0x80070102u, "compute_fence_wait", "Compute dispatch fence wait timed out", {}};
-        }
-    }
-
-    const HRESULT removed_hr = device->GetDeviceRemovedReason();
-    if (FAILED(removed_hr)) {
+    const double setup_ms = NwNowMs() - start_ms;
+    auto cleanup = [&]() noexcept {
+        if (timestamp_readback) timestamp_readback->Release();
+        if (timestamp_heap) timestamp_heap->Release();
+        if (info_queue) info_queue->Release();
         CloseHandle(fence_event);
         fence->Release();
         cmd_list->Release();
@@ -1069,6 +1623,34 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         uav_heap->Release();
         queue->Release();
         device->Release();
+    };
+
+    const HRESULT signal_hr = queue->Signal(fence, 1);
+    if (FAILED(signal_hr)) {
+        cleanup();
+        return DiagnosticRecord{
+            ExitCode::GpuSubmissionFailed,
+            static_cast<std::uint32_t>(signal_hr),
+            "queue_signal",
+            "ID3D12CommandQueue::Signal failed",
+            {}};
+    }
+    const FenceWaitResult wait_result = WaitForFenceValue(fence, 1, fence_event, 5000);
+    if (wait_result.code != ExitCode::Success) {
+        cleanup();
+        return DiagnosticRecord{
+            wait_result.code,
+            static_cast<std::uint32_t>(wait_result.hresult),
+            wait_result.stage,
+            wait_result.code == ExitCode::DeviceRemoved
+                ? "Device removal reported while waiting for compute completion"
+                : "Compute dispatch fence wait failed",
+            {}};
+    }
+
+    const HRESULT removed_hr = device->GetDeviceRemovedReason();
+    if (FAILED(removed_hr)) {
+        cleanup();
         return DiagnosticRecord{ExitCode::DeviceRemoved, static_cast<std::uint32_t>(removed_hr), "device_removed", "ID3D12Device::GetDeviceRemovedReason reported device removal", {}};
     }
 
@@ -1076,34 +1658,50 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     D3D12_RANGE read_range{0, static_cast<SIZE_T>(buffer_bytes)};
     hr = rb_resource->Map(0, &read_range, &mapped_ptr);
     if (FAILED(hr) || !mapped_ptr) {
-        CloseHandle(fence_event);
-        fence->Release();
-        cmd_list->Release();
-        allocator->Release();
-        rb_resource->Release();
-        uav_buffer->Release();
-        pso->Release();
-        root_sig->Release();
-        uav_heap->Release();
-        queue->Release();
-        device->Release();
+        cleanup();
         return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "readback_map", "ID3D12Resource::Map(readback) failed", {}};
     }
     std::memcpy(readback_buffer, mapped_ptr, static_cast<std::size_t>(buffer_bytes));
     D3D12_RANGE empty_range{0, 0};
     rb_resource->Unmap(0, &empty_range);
 
-    CloseHandle(fence_event);
-    fence->Release();
-    cmd_list->Release();
-    allocator->Release();
-    rb_resource->Release();
-    uav_buffer->Release();
-    pso->Release();
-    root_sig->Release();
-    uav_heap->Release();
-    queue->Release();
-    device->Release();
+    double gpu_ms = 0.0;
+    if (timestamp_heap && timestamp_readback && timestamp_frequency != 0) {
+        void* timestamp_mapped = nullptr;
+        D3D12_RANGE timestamp_range{0, 2u * sizeof(UINT64)};
+        if (SUCCEEDED(timestamp_readback->Map(0, &timestamp_range, &timestamp_mapped)) &&
+            timestamp_mapped) {
+            const auto* timestamps = static_cast<const UINT64*>(timestamp_mapped);
+            if (timestamps[1] >= timestamps[0] && timestamps[1] > timestamps[0]) {
+                gpu_ms = (1000.0 * static_cast<double>(timestamps[1] - timestamps[0])) /
+                         static_cast<double>(timestamp_frequency);
+            }
+            D3D12_RANGE timestamp_empty{0, 0};
+            timestamp_readback->Unmap(0, &timestamp_empty);
+        }
+    }
+
+    if (config.enable_d3d12_validation && info_queue) {
+        const ValidationSummary validation = DrainD3D12ValidationMessages(info_queue);
+        if (validation.has_error || validation.has_corruption) {
+            cleanup();
+            return DiagnosticRecord{
+                ExitCode::D3D12ValidationError,
+                0x887A0001u,
+                "d3d12_validation_info_queue",
+                "D3D12 debug layer emitted error/corruption messages; see NW_D3D12_VALIDATION_ERROR lines.",
+                {}};
+        }
+    }
+
+    if (config.emit_benchmark_metrics) {
+        EmitBenchmarkMetrics(
+            cap_snapshot, hardware_info, adapter_name, setup_ms, NwNowMs() - start_ms, gpu_ms);
+    }
+    if (config.emit_loaded_modules) {
+        EmitLoadedModuleInventory();
+    }
+    cleanup();
 #else
     for (std::uint32_t i = 0; i < kElementCount; ++i) {
         readback_buffer[i] = EvaluateReferenceComputeElement(i, kSeedMask);

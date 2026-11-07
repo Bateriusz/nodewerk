@@ -9,6 +9,23 @@ Per NW-01 recovery semantics, any comparative toolchain evaluation, experimental
 
 The same rule applies to a failed re-verification after an earlier success: `tools/size_ledger.py` leaves previously measured PE byte counts in place but marks those size ledgers `unverified` with the failure reason, clears the toolchain evidence flags, and keeps the manifest and ledgers consistent. A toolchain whose offline DXIL payload was not measured still retains its measured compute fixture PE bytes in an unverified experiment record instead of dropping the measurement.
 
+Toolchain eligibility also requires `fixture_execution_verified=true`. Both clang-cl/lld-link and
+MSVC/LTCG must execute the identical clear/present and compute fixtures successfully (including a
+clean D3D12 info queue) before their measured bytes may participate in selection. Build hashes and
+PDB evidence alone are not sufficient.
+
+Normal release builds are **not** a CRT-elimination experiment: they link `libvcruntime.lib`
+statically while keeping `ucrtbase.dll` dynamic, so the release import table has no
+`vcruntime140.dll` and `/GS` remains active. `/NODEFAULTLIB` remains only the explicit
+`NW_ENABLE_CRT_ELIMINATION_EXPERIMENT` path documented below.
+
+Failed CleanSystem and Full runs preserve measured exit codes, deployed sizes/hashes, SDK-probe
+results, stderr hashes/tails, validation messages, and observed module inventories in their JSON
+reports; the overall `verification_status`/`clean_system_passed` remains false instead of
+replacing the measurements with nulls. `verify_nw01.py --record-benchmark <tier>` captures timing,
+committed memory, and capability metrics into the benchmark schema without interpolating missing
+values.
+
 ## Summary of Recorded Experiments
 
 ### 1. Toolchain Comparison: `MSVC/LTCG` vs `clang-cl/lld-link`

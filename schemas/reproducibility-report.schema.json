@@ -60,7 +60,10 @@
           "size_bytes_b": { "type": ["integer", "null"], "minimum": 1 },
           "sha256_a": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
           "sha256_b": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
-          "hash_match": { "type": ["boolean", "null"] }
+          "hash_match": { "type": ["boolean", "null"] },
+          "time_date_stamp_a": { "type": ["integer", "null"], "minimum": 0 },
+          "time_date_stamp_b": { "type": ["integer", "null"], "minimum": 0 },
+          "time_date_stamp_identical": { "type": ["boolean", "null"] }
         }
       }
     },

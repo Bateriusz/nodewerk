@@ -181,7 +181,12 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 val = fx.get(metric_key)
                 if val is None:
                     qualified = f"fixture_results.{metric_key}"
-                    if qualified not in unavailable_metrics and metric_key not in unavailable_metrics:
+                    per_fixture = f"fixture_results[{fx['fixture_id']}].{metric_key}"
+                    if (
+                        qualified not in unavailable_metrics
+                        and metric_key not in unavailable_metrics
+                        and per_fixture not in unavailable_metrics
+                    ):
                         raise SchemaValidationError(
                             f"{doc_path}: null metric '{qualified}' must be documented in unavailable_measurements"
                         )
@@ -264,18 +269,29 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 raise SchemaValidationError(
                     f"{doc_path}: unverified clean-system report must have clean_system_passed=false"
                 )
-            if any(v is not None for v in sdk_checks.values()):
-                raise SchemaValidationError(
-                    f"{doc_path}: unverified clean-system report must have null sdk_absence_checks"
+            # A failed-but-executed run must preserve measured evidence. Only an
+            # unexecuted template report is required to keep every measurement null.
+            executed = (
+                inv.get("total_distributed_bytes") is not None
+                or any(
+                    run.get("exit_code") is not None
+                    for run in instance.get("fixture_runs", [])
                 )
-            if inv.get("total_distributed_bytes") is not None:
-                raise SchemaValidationError(
-                    f"{doc_path}: unverified clean-system report must have total_distributed_bytes=null"
-                )
-            if shader_ev.get("compiled_offline_with_dxc") is True:
-                raise SchemaValidationError(
-                    f"{doc_path}: unverified clean-system report must not claim compiled_offline_with_dxc=true"
-                )
+                or any(v is not None for v in sdk_checks.values())
+            )
+            if not executed:
+                if any(v is not None for v in sdk_checks.values()):
+                    raise SchemaValidationError(
+                        f"{doc_path}: unexecuted unverified clean-system report must have null sdk_absence_checks"
+                    )
+                if inv.get("total_distributed_bytes") is not None:
+                    raise SchemaValidationError(
+                        f"{doc_path}: unexecuted unverified clean-system report must have total_distributed_bytes=null"
+                    )
+                if shader_ev.get("compiled_offline_with_dxc") is True:
+                    raise SchemaValidationError(
+                        f"{doc_path}: unexecuted unverified clean-system report must not claim compiled_offline_with_dxc=true"
+                    )
         else:
             if instance.get("clean_system_passed") is not True:
                 raise SchemaValidationError(

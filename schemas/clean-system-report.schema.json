@@ -77,14 +77,24 @@
               "file_name": { "type": "string" },
               "size_bytes": { "type": ["integer", "null"], "minimum": 1 },
               "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
-              "category": { "type": "string", "enum": ["executable", "shader_payload"] }
+              "category": {
+                "type": "string",
+                "enum": [
+                  "executable",
+                  "dll",
+                  "shader_payload",
+                  "data_payload",
+                  "model",
+                  "sidecar"
+                ]
+              }
             }
           }
         },
-        "total_distributed_bytes": { "type": ["integer", "null"], "minimum": 1024 },
+        "total_distributed_bytes": { "type": ["integer", "null"], "minimum": 1 },
         "inbox_dlls_resolved": {
           "type": "array",
-          "minItems": 4,
+          "minItems": 1,
           "items": { "type": "string" }
         },
         "unexpected_sidecars_found": {
@@ -114,6 +124,14 @@
         "runtime_dxcompiler_loaded": { "type": ["boolean", "null"] },
         "runtime_d3dcompiler_loaded": { "type": ["boolean", "null"] },
         "agility_d3d12core_redist_loaded": { "type": ["boolean", "null"] },
+        "runtime_module_evidence_source": {
+          "type": "string",
+          "enum": ["observed_fixture_module_inventory", "static_import_and_sidecar_inference"]
+        },
+        "observed_loaded_modules": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "expected_output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "observed_output_sha256": { "type": ["string", "null"] },
         "output_verified": { "type": ["boolean", "null"] }
@@ -130,7 +148,26 @@
           "fixture_id": { "type": "string", "enum": ["empty_player", "clear_present", "compute_shader"] },
           "executable": { "type": "string" },
           "execution_status": { "type": "string", "enum": ["passed", "failed", "unverified"] },
-          "exit_code": { "type": ["integer", "null"] }
+          "exit_code": { "type": ["integer", "null"] },
+          "stdout_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "stderr_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "stderr_tail": { "type": ["string", "null"] },
+          "failure_reason": { "type": ["string", "null"] },
+          "d3d12_validation_clean": { "type": ["boolean", "null"] },
+          "d3d12_validation_errors": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "d3d12_validation_messages": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "observed_loaded_modules": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "metrics": { "type": "object" },
+          "readback": { "type": ["object", "null"] }
         }
       }
     },

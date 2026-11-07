@@ -457,6 +457,7 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
         bin_dir,
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     assert set(recorded["recorded_fixtures"]) == {"empty_player", "clear_present", "compute_shader"}
     assert recorded["verification_status"] == "verified"
@@ -511,6 +512,7 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
         toolchain_id="msvc-ltcg",
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     assert msvc_recorded["verification_status"] == "verified"
     assert msvc_recorded["comparison_toolchain_bytes_remain_unverified"] is False
@@ -565,6 +567,7 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
         bin_dir,
         deterministic_repro_verified=True,
         pdb_debugging_verified=False,
+        fixture_execution_verified=True,
     )
     assert recorded["verification_status"] == "unverified"
     assert set(recorded["recorded_fixtures"]) == {"empty_player", "clear_present", "compute_shader"}
@@ -620,6 +623,7 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
         partial_dir,
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     assert partial_recorded["verification_status"] == "unverified"
     assert set(partial_recorded["recorded_fixtures"]) == {"empty_player"}
@@ -720,6 +724,7 @@ def test_smaller_msvc_ltcg_toolchain_is_selected_when_verified(tmp_path: Path) -
         toolchain_id="clang-cl-lld",
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     msvc_recorded = record_release_ledgers(
         repo,
@@ -727,6 +732,7 @@ def test_smaller_msvc_ltcg_toolchain_is_selected_when_verified(tmp_path: Path) -
         toolchain_id="msvc-ltcg",
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     assert msvc_recorded["selected_toolchain"] == "msvc-ltcg"
 
@@ -804,6 +810,7 @@ def test_only_verified_msvc_toolchain_is_selected_instead_of_clang_default(tmp_p
         toolchain_id="msvc-ltcg",
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     assert recorded["verification_status"] == "verified"
     assert recorded["selected_toolchain"] == "msvc-ltcg"
@@ -843,6 +850,7 @@ def test_incomplete_verification_preserves_measured_compute_binary_bytes(tmp_pat
         toolchain_id="clang-cl-lld",
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     assert recorded["verification_status"] == "unverified"
     assert set(recorded["recorded_fixtures"]) == {
@@ -896,6 +904,7 @@ def test_selection_rationale_uses_mixed_per_fixture_ordering(tmp_path: Path) -> 
         clear_present_bytes=5000,
         compute_fixture_bytes=1000,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
         deterministic_repro_verified=True,
     )
     msvc.update(
@@ -904,6 +913,7 @@ def test_selection_rationale_uses_mixed_per_fixture_ordering(tmp_path: Path) -> 
         clear_present_bytes=4000,
         compute_fixture_bytes=1100,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
         deterministic_repro_verified=True,
     )
 
@@ -927,6 +937,7 @@ def test_generate_report_reconciles_stale_manifest_toolchain_selection(tmp_path:
         toolchain_id="clang-cl-lld",
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     record_release_ledgers(
         repo,
@@ -934,6 +945,7 @@ def test_generate_report_reconciles_stale_manifest_toolchain_selection(tmp_path:
         toolchain_id="msvc-ltcg",
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
 
     toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
@@ -983,6 +995,7 @@ def test_failed_reverification_downgrades_previously_verified_ledgers(tmp_path: 
         toolchain_id="clang-cl-lld",
         deterministic_repro_verified=True,
         pdb_debugging_verified=True,
+        fixture_execution_verified=True,
     )
     assert first["verification_status"] == "verified"
 
@@ -992,6 +1005,7 @@ def test_failed_reverification_downgrades_previously_verified_ledgers(tmp_path: 
         toolchain_id="clang-cl-lld",
         deterministic_repro_verified=True,
         pdb_debugging_verified=False,
+        fixture_execution_verified=True,
     )
     assert second["verification_status"] == "unverified"
     for ledger_file in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
@@ -1009,3 +1023,65 @@ def test_failed_reverification_downgrades_previously_verified_ledgers(tmp_path: 
     assert clang_entry["deterministic_repro_verified"] is False
     # The report must not fail after a failed re-verification run.
     generate_size_comparison_report(repo)
+
+
+def test_sync_evaluated_toolchains_from_ledgers_updates_manifest_fields() -> None:
+    from size_ledger import _sync_evaluated_toolchains_from_ledgers
+
+    toolchain = json.loads(
+        (REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
+    )
+    ledgers_by_key = {
+        (fixture_id, "clang-cl-lld"): {
+            "total_distributed_bytes": 4096,
+            "verification_status": "verified",
+        }
+        for fixture_id in ("empty_player", "clear_present", "compute_shader")
+    }
+    # Make the entry eligible for promotion to exercise the evidence flags as well.
+    clang = next(t for t in toolchain["evaluated_toolchains"] if t["toolchain_id"] == "clang-cl-lld")
+    clang["pdb_debugging_verified"] = True
+    clang["deterministic_repro_verified"] = True
+    clang["fixture_execution_verified"] = True
+
+    changed = _sync_evaluated_toolchains_from_ledgers(toolchain, ledgers_by_key)
+    assert changed is True
+    assert clang["empty_player_bytes"] == 4096
+    assert clang["clear_present_bytes"] == 4096
+    assert clang["compute_fixture_bytes"] == 4096
+    assert clang["verification_status"] == "verified"
+
+    # An unverified ledger for a single fixture downgrades the whole toolchain.
+    ledgers_by_key[("clear_present", "clang-cl-lld")]["verification_status"] = "unverified"
+    assert _sync_evaluated_toolchains_from_ledgers(toolchain, ledgers_by_key) is True
+    assert clang["verification_status"] == "unverified"
+    assert clang["pdb_debugging_verified"] is False
+    assert clang["deterministic_repro_verified"] is False
+    assert clang["fixture_execution_verified"] is False
+
+
+def test_toolchain_is_not_selectable_without_fixture_execution_evidence(
+    tmp_path: Path,
+) -> None:
+    repo, dxil_blob = _copied_repo_with_verified_shader(tmp_path)
+    bin_dir = tmp_path / "clang_bin"
+    _write_fixture_binaries(bin_dir, dxil_blob)
+
+    recorded = record_release_ledgers(
+        repo,
+        bin_dir,
+        toolchain_id="clang-cl-lld",
+        deterministic_repro_verified=True,
+        pdb_debugging_verified=True,
+        fixture_execution_verified=False,
+    )
+    assert recorded["verification_status"] == "unverified"
+    assert recorded["fixture_execution_verified"] is False
+
+    toolchain = json.loads(
+        (repo / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
+    )
+    clang = next(t for t in toolchain["evaluated_toolchains"] if t["toolchain_id"] == "clang-cl-lld")
+    assert clang["verification_status"] == "unverified"
+    assert clang["fixture_execution_verified"] is False
+    assert toolchain["selected_toolchain"]["toolchain_id"] == "clang-cl-lld"
