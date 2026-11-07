@@ -81,7 +81,7 @@ function(nw_apply_player_profile target_name)
             target_compile_options(${target_name} PRIVATE
                 -Wno-c++98-compat
                 -Wno-c++98-compat-pedantic
-                -ffile-prefix-map=${CMAKE_SOURCE_DIR}=.
+                /clang:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.
             )
         endif()
 
