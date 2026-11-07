@@ -109,28 +109,83 @@ jobs:
             exit 1
           }
 
-          $cmdLine = '"' + $vcvars + '" -vcvars_ver=14.40 -winsdk=10.0.26100.0 >nul && set'
-          $envDump = cmd /s /c $cmdLine
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to initialize VS 2022 MSVC 14.40 / Windows SDK 10.0.26100.0 environment."
+          # Use a real cmd file so cmd.exe quoting cannot silently skip vcvars64.bat.
+          $cmdFile = Join-Path $env:RUNNER_TEMP "init-vs2022-msvc-14.40.cmd"
+          @"
+          @echo off
+          call "$vcvars" -vcvars_ver=14.40 -winsdk=10.0.26100.0
+          if errorlevel 1 exit /b %errorlevel%
+          set
+          "@ | Set-Content -Path $cmdFile -Encoding ascii
+
+          $envDump = & $env:ComSpec /d /c $cmdFile
+          $cmdExit = $LASTEXITCODE
+          if ($cmdExit -ne 0) {
+            Write-Error "vcvars64.bat failed with exit code $cmdExit."
             exit 1
           }
 
+          $requiredEnv = @(
+            "Path",
+            "INCLUDE",
+            "LIB",
+            "LIBPATH",
+            "VCINSTALLDIR",
+            "VCToolsInstallDir",
+            "VCToolsVersion",
+            "WindowsSdkDir",
+            "WindowsSDKVersion",
+            "WindowsSdkVerBinPath",
+            "UCRTVersion",
+            "UniversalCRTSdkDir"
+          )
+          $captured = @{}
           foreach ($line in $envDump) {
             if ($line -match "^([^=]+)=(.*)$") {
               $name = $matches[1]
               $value = $matches[2]
-              Set-Item -Path "Env:$name" -Value $value
-              Add-Content -Path $env:GITHUB_ENV -Value "$name=$value"
+              if ($requiredEnv -contains $name) {
+                $captured[$name] = $value
+                Set-Item -Path "Env:$name" -Value $value
+                Add-Content -Path $env:GITHUB_ENV -Value "$name=$value"
+              }
             }
           }
 
-          where.exe cl
-          where.exe link
+          foreach ($name in @("VCToolsInstallDir", "VCToolsVersion", "WindowsSDKVersion", "INCLUDE", "LIB")) {
+            if (-not $captured.ContainsKey($name) -or [string]::IsNullOrWhiteSpace($captured[$name])) {
+              Write-Error "vcvars64.bat did not export required environment variable $name."
+              exit 1
+            }
+          }
+
+          if ($env:VCToolsVersion -notmatch "^14\.40\.") {
+            Write-Error "Expected MSVC toolset 14.40, got VCToolsVersion=$env:VCToolsVersion"
+            exit 1
+          }
+          if ($env:WindowsSDKVersion.TrimEnd('\') -ne "10.0.26100.0") {
+            Write-Error "Expected Windows SDK 10.0.26100.0, got WindowsSDKVersion=$env:WindowsSDKVersion"
+            exit 1
+          }
+
+          $clPath = (Get-Command cl.exe -ErrorAction Stop).Source
+          $linkPath = (Get-Command link.exe -ErrorAction Stop).Source
+          $vcRoot = [System.IO.Path]::GetFullPath($env:VCToolsInstallDir)
+          if (-not $clPath.StartsWith($vcRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Error "cl.exe is outside the pinned VCToolsInstallDir: $clPath"
+            exit 1
+          }
+          if (-not $linkPath.StartsWith($vcRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Error "link.exe is outside the pinned VCToolsInstallDir: $linkPath"
+            exit 1
+          }
+
+          Write-Host "VS2022 Build Tools: $vsInstall"
+          Write-Host "cl.exe: $clPath"
+          Write-Host "link.exe: $linkPath"
           Write-Host "VCToolsVersion=$env:VCToolsVersion"
           Write-Host "VCToolsInstallDir=$env:VCToolsInstallDir"
           Write-Host "WindowsSDKVersion=$env:WindowsSDKVersion"
-
       - name: Provision pinned LLVM clang-cl/lld-link 18.1.8
         shell: pwsh
         run: |
