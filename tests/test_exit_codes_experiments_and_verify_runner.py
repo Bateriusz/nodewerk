@@ -1491,6 +1491,8 @@ def test_ci_provisions_pinned_msvc_toolset_and_windows_sdk() -> None:
     assert "link.exe is outside the pinned VCToolsInstallDir" in ci
     assert "19\\.40\\.33813" in ci
     assert "14\\.40\\.33813\\.0" in ci
+    assert "Compiler Version 19\\.40\\.33813" in ci
+    assert "Linker Version 14\\.40\\.33813\\.0" in ci
     assert "--mode BuildChecks" in ci
     assert "build_checks_passed" in ci
     # Exit 2 is tolerated only after explicit required concrete checks pass.

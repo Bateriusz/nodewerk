@@ -221,15 +221,15 @@ jobs:
         run: |
           $clPath = (Get-Command cl.exe -ErrorAction Stop).Source
           $linkPath = (Get-Command link.exe -ErrorAction Stop).Source
-          $clVersion = (Get-Item $clPath).VersionInfo.FileVersion
-          $linkVersion = (Get-Item $linkPath).VersionInfo.FileVersion
+          $clBanner = (& $clPath 2>&1 | Out-String)
+          $linkBanner = (& $linkPath 2>&1 | Out-String)
 
-          if ($clVersion -notmatch "^19\.40\.33813(?:\.0)?$") {
-            Write-Error "Selected cl.exe is not the pinned MSVC 19.40.33813: $clVersion ($clPath)"
+          if ($clBanner -notmatch "Compiler Version 19\.40\.33813") {
+            Write-Error "Selected cl.exe does not report pinned MSVC 19.40.33813: $clBanner"
             exit 1
           }
-          if ($linkVersion -notmatch "^14\.40\.33813\.0$") {
-            Write-Error "Selected link.exe is not the pinned MSVC 14.40.33813.0: $linkVersion ($linkPath)"
+          if ($linkBanner -notmatch "Linker Version 14\.40\.33813\.0") {
+            Write-Error "Selected link.exe does not report pinned MSVC linker 14.40.33813.0: $linkBanner"
             exit 1
           }
           if ($env:WindowsSDKVersion.TrimEnd('\') -ne "10.0.26100.0") {
@@ -237,8 +237,8 @@ jobs:
             exit 1
           }
 
-          Write-Host "Verified cl.exe $clVersion at $clPath"
-          Write-Host "Verified link.exe $linkVersion at $linkPath"
+          Write-Host "Verified cl.exe banner: $($clBanner.Trim())"
+          Write-Host "Verified link.exe banner: $($linkBanner.Trim())"
           Write-Host "Verified Windows SDK $env:WindowsSDKVersion"
 
       - name: Report provisioned toolchain versions
