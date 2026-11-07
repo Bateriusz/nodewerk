@@ -443,9 +443,16 @@ def find_embedded_dxil_container(binary_bytes: bytes) -> bytes | None:
         search_from = start + 4
 
 
-def check_shader_manifest_evidence(repo_root: Path) -> dict[str, Any]:
-    """Return the recorded offline DXC evidence state from shaders/manifest.json."""
-    manifest_path = repo_root / "shaders" / "manifest.json"
+def check_shader_manifest_evidence(
+    repo_root: Path,
+    evidence_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Return recorded offline DXC evidence from the repo or a CI evidence bundle."""
+    manifest_path = (
+        evidence_dir / "shaders-manifest.json"
+        if evidence_dir is not None
+        else repo_root / "shaders" / "manifest.json"
+    )
     hlsl_path = repo_root / "shaders" / "compute_fixture.hlsl"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     shader = manifest.get("shaders", [{}])[0]
@@ -1781,8 +1788,9 @@ _TOOLCHAIN_METADATA = {
 def resolve_artifact_provenance(
     repo_root: Path,
     binary_dir: Path,
+    evidence_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Match executed artifacts to recorded ledger hashes to establish build provenance."""
+    """Match executed artifacts to verified ledger hashes and optional CI package metadata."""
     fixture_specs = (
         ("empty_player", "nw_empty_player.exe"),
         ("clear_present", "nw_clear_present_fixture.exe"),
@@ -1790,29 +1798,44 @@ def resolve_artifact_provenance(
     )
     required_fixture_ids = ("clear_present", "compute_shader")
     hashes: dict[str, str | None] = {}
+    sizes: dict[str, int | None] = {}
     for fixture_id, exe_name in fixture_specs:
         exe_path = resolve_fixture_executable(binary_dir, fixture_id, exe_name)
-        hashes[fixture_id] = (
-            hashlib.sha256(exe_path.read_bytes()).hexdigest() if exe_path is not None else None
-        )
+        if exe_path is None:
+            hashes[fixture_id] = None
+            sizes[fixture_id] = None
+        else:
+            payload = exe_path.read_bytes()
+            hashes[fixture_id] = hashlib.sha256(payload).hexdigest()
+            sizes[fixture_id] = len(payload)
 
-    ledger_matches: dict[str, set[str]] = {fixture_id: set() for fixture_id, _ in fixture_specs}
-    for ledger_path in sorted((repo_root / "benchmarks" / "ledgers").glob("*.json")):
-        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-        fixture_id = str(ledger.get("fixture_id"))
-        if fixture_id not in ledger_matches:
-            continue
-        artifact_hash = hashes.get(fixture_id)
-        if not artifact_hash:
-            continue
-        for component in ledger.get("distributed_components", []):
-            if (
-                component.get("category") == "executable"
-                and str(component.get("sha256", "")).lower() == artifact_hash.lower()
-            ):
-                toolchain_id = ledger.get("toolchain_id")
-                if toolchain_id:
-                    ledger_matches[fixture_id].add(str(toolchain_id))
+    ledger_root = (
+        evidence_dir / "ledgers"
+        if evidence_dir is not None
+        else repo_root / "benchmarks" / "ledgers"
+    )
+    ledger_matches: dict[str, set[str]] = {
+        fixture_id: set() for fixture_id, _ in fixture_specs
+    }
+    if ledger_root.is_dir():
+        for ledger_path in sorted(ledger_root.glob("*.json")):
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            if ledger.get("verification_status") != "verified":
+                continue
+            fixture_id = str(ledger.get("fixture_id"))
+            if fixture_id not in ledger_matches:
+                continue
+            artifact_hash = hashes.get(fixture_id)
+            if not artifact_hash:
+                continue
+            for component in ledger.get("distributed_components", []):
+                if (
+                    component.get("category") == "executable"
+                    and str(component.get("sha256", "")).lower() == artifact_hash.lower()
+                ):
+                    toolchain_id = ledger.get("toolchain_id")
+                    if toolchain_id:
+                        ledger_matches[fixture_id].add(str(toolchain_id))
 
     matched_toolchains = set.intersection(
         *(ledger_matches[fixture_id] for fixture_id in required_fixture_ids)
@@ -1826,6 +1849,30 @@ def resolve_artifact_provenance(
         if complete and len(matched_toolchains) == 1
         else None
     )
+
+    if evidence_dir is not None:
+        package_manifest_path = evidence_dir / "artifact-manifest.json"
+        if not package_manifest_path.is_file():
+            toolchain_id = None
+        else:
+            package_manifest = json.loads(package_manifest_path.read_text(encoding="utf-8"))
+            package_files = {
+                str(item.get("name", "")).lower(): item
+                for item in package_manifest.get("files", [])
+            }
+            if package_manifest.get("toolchain") != toolchain_id:
+                toolchain_id = None
+            for fixture_id, exe_name in fixture_specs:
+                item = package_files.get(exe_name.lower())
+                if (
+                    item is None
+                    or str(item.get("sha256", "")).lower()
+                    != str(hashes.get(fixture_id) or "").lower()
+                    or int(item.get("bytes", -1)) != int(sizes.get(fixture_id) or -1)
+                ):
+                    toolchain_id = None
+                    break
+
     return {
         "toolchain_id": toolchain_id,
         "artifact_sha256": hashes,
@@ -1835,7 +1882,6 @@ def resolve_artifact_provenance(
             else "unavailable"
         ),
     }
-
 
 def capture_benchmark_result(
     repo_root: Path,
@@ -2762,6 +2808,7 @@ def run_clean_system_mode(
     repo_root: Path,
     binary_dir: Path | None = None,
     *,
+    evidence_dir: Path | None = None,
     allow_non_windows_simulation: bool = False,
     env: dict[str, str] | None = None,
     system32_dir: Path | None = None,
@@ -2783,6 +2830,11 @@ def run_clean_system_mode(
     search_dir = (
         requested_dir / "deploy" if (requested_dir / "deploy").is_dir() else requested_dir
     )
+    resolved_evidence_dir = evidence_dir
+    if resolved_evidence_dir is None:
+        bundled_evidence_dir = requested_dir / "evidence"
+        if bundled_evidence_dir.is_dir():
+            resolved_evidence_dir = bundled_evidence_dir
     required_exes = [
         ("empty_player", "nw_empty_player.exe"),
         ("clear_present", "nw_clear_present_fixture.exe"),
@@ -2810,8 +2862,27 @@ def run_clean_system_mode(
             "recorded_report_valid": True,
         }
 
+    if resolved_evidence_dir is not None:
+        required_evidence = (
+            resolved_evidence_dir / "artifact-manifest.json",
+            resolved_evidence_dir / "shaders-manifest.json",
+            resolved_evidence_dir / "toolchain-manifest.v1.json",
+            resolved_evidence_dir / "ledgers",
+        )
+        missing_evidence = [str(path) for path in required_evidence if not path.exists()]
+        if missing_evidence:
+            return 2, {
+                "mode": "CleanSystem",
+                "clean_system_passed": False,
+                "verification_status": existing_report["verification_status"],
+                "missing_prerequisites": [
+                    "CI evidence bundle is incomplete: " + ", ".join(missing_evidence)
+                ],
+                "recorded_report_valid": True,
+            }
+
     expected_compute = load_compute_expected_output(repo_root)
-    shader_evidence = check_shader_manifest_evidence(repo_root)
+    shader_evidence = check_shader_manifest_evidence(repo_root, resolved_evidence_dir)
 
     # 1. Actively probe SDK and redistributable absence on the target system
     sdk_checks = probe_sdk_absence(search_dir, env=env, system32_dir=system32_dir)
@@ -3082,7 +3153,9 @@ def run_clean_system_mode(
         and not d3d12core_classification_unknown
     )
     expected_sha256 = expected_compute["output_sha256"]
-    artifact_provenance = resolve_artifact_provenance(repo_root, search_dir)
+    artifact_provenance = resolve_artifact_provenance(
+        repo_root, search_dir, resolved_evidence_dir
+    )
 
     if (
         measured_os_build
@@ -3266,6 +3339,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--binary-dir", type=Path, default=None)
+    parser.add_argument(
+        "--evidence-dir",
+        type=Path,
+        default=None,
+        help="Optional CI evidence directory; inferred as <binary-dir>/evidence for packaged CleanSystem artifacts",
+    )
     parser.add_argument("--os-build", type=str, default=None, help="Measured Windows 11 OS build (e.g. 10.0.26100.2033)")
     parser.add_argument("--gpu-model", type=str, default=None, help="Measured GPU model name")
     parser.add_argument("--nvidia-driver-version", type=str, default=None, help="Measured NVIDIA driver version")
@@ -3331,6 +3410,7 @@ def main(argv: list[str] | None = None) -> int:
             code, summary = run_clean_system_mode(
                 args.repo_root,
                 args.binary_dir,
+                evidence_dir=args.evidence_dir,
                 system_environment=sys_env or None,
             )
         elif args.mode == "BuildChecks":
