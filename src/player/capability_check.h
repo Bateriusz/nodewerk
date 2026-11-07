@@ -9,6 +9,7 @@ namespace nw::player {
 // - Windows 11 x64 (minimum tested build 22631)
 // - D3D12 Feature Level 12_0 (0xc000)
 // - Shader Model 6.0 (0x60)
+// - Resource Binding Tier 2 & Resource Heap Tier 2 (matching benchmarks/capability-manifest.v1.json)
 // - Bounded descriptor tables
 // - Ordinary resource barriers
 // - Single direct command queue (D3D12_COMMAND_LIST_TYPE_DIRECT)
@@ -17,6 +18,8 @@ struct BaselineCapabilityProfile {
     static constexpr std::uint32_t kMinWindowsBuildNumber = 22631u;
     static constexpr std::uint32_t kRequiredFeatureLevel = 0xc000u; // D3D_FEATURE_LEVEL_12_0
     static constexpr std::uint32_t kRequiredShaderModel = 0x60u;    // D3D_SHADER_MODEL_6_0
+    static constexpr std::uint32_t kRequiredResourceBindingTier = 2u; // D3D12_RESOURCE_BINDING_TIER_2
+    static constexpr std::uint32_t kRequiredResourceHeapTier = 2u;    // D3D12_RESOURCE_HEAP_TIER_2
     static constexpr std::uint32_t kDirectQueueCount = 1u;
     static constexpr bool kRequireBoundedDescriptorTables = true;
     static constexpr bool kRequireOrdinaryBarriers = true;
@@ -55,7 +58,8 @@ ExitCode EvaluateCapabilityContract(
     const AdapterCapabilitySnapshot& snapshot,
     const EmittedContentFeatureRequest& optional_request) noexcept;
 
-// Validates offline DXBC/DXIL container header integrity before CreateComputePipelineState.
+// Validates offline DXBC/DXIL container header, retail signature, PSV0 chunk, SFI0 flags,
+// and LLVM 3.7 bitcode stream integrity before CreateComputePipelineState.
 // Ensures no runtime DXC compilation is needed or attempted.
 ExitCode ValidateOfflineDxilContainer(const std::uint8_t* data, std::size_t size_bytes) noexcept;
 

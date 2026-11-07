@@ -5,6 +5,8 @@
 #   and RTTI (/GR-), avoid heavy STL dependencies, and retain platform security mitigations.
 # - CRT elimination (/NODEFAULTLIB) is strictly an opt-in experiment
 #   (NW_ENABLE_CRT_ELIMINATION_EXPERIMENT=ON) with explicit initialization/cleanup obligations.
+# - Unsafe section merging (/MERGE:.rdata=.text /ALIGN:16) is strictly an opt-in experiment
+#   (NW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT=ON) preserved to reproduce CFG/CET loader conflict.
 
 set(NW_ALLOWED_PROFILES "dev" "release" "compact_experiment")
 if(NOT DEFINED NW_BUILD_PROFILE)
@@ -18,6 +20,10 @@ endif()
 
 option(NW_ENABLE_CRT_ELIMINATION_EXPERIMENT
     "Explicit opt-in experiment for /NODEFAULTLIB CRT elimination (requires custom entry and obligations)"
+    OFF)
+
+option(NW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT
+    "Explicit opt-in compact experiment testing /MERGE:.rdata=.text and /ALIGN:16 with /guard:cf and /CETCOMPAT retained"
     OFF)
 
 function(nw_apply_player_profile target_name)
@@ -119,6 +125,12 @@ function(nw_apply_player_profile target_name)
                 /OPT:ICF=8
                 /PDBALTPATH:%_PDB%
             )
+            if(NW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT)
+                target_link_options(${target_name} PRIVATE
+                    /MERGE:.rdata=.text
+                    /ALIGN:16
+                )
+            endif()
             if(NW_ENABLE_CRT_ELIMINATION_EXPERIMENT)
                 # Explicit CRT-elimination experiment obligations:
                 # Must provide WinMainCRTStartup / mainCRTStartup, __security_init_cookie, _fltused,

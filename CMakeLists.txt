@@ -15,8 +15,8 @@ nw_add_offline_compute_shader(
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/compute_fixture.hlsl"
     "CSMain"
     "cs_6_0"
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/compute_fixture.dxil"
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/generated/compute_fixture_dxil.h"
+    "${CMAKE_CURRENT_BINARY_DIR}/shaders/compute_fixture.dxil"
+    "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/compute_fixture_dxil.h"
 )
 
 add_library(nw_player_bootstrap STATIC
@@ -25,6 +25,7 @@ add_library(nw_player_bootstrap STATIC
     src/player/d3d12_bootstrap.cpp
 )
 target_include_directories(nw_player_bootstrap PUBLIC
+    "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/generated"
 )

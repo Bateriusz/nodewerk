@@ -1,5 +1,4 @@
 #include "d3d12_bootstrap.h"
-#include "../../shaders/generated/compute_fixture_dxil.h"
 #include <cstdlib>
 #include <cstring>
 
@@ -12,11 +11,45 @@
 #include <dxgi1_6.h>
 #endif
 
+namespace nw::shaders {
+#include "compute_fixture_dxil.h"
+} // namespace nw::shaders
+
 namespace nw::player {
 
 std::uint32_t EvaluateReferenceComputeElement(std::uint32_t tid, std::uint32_t seed_mask) noexcept {
     const std::uint32_t lcg = tid * 1664525u + 1013904223u;
     return lcg ^ seed_mask;
+}
+
+std::uint32_t QueryWindowsBuildNumber() noexcept {
+#if defined(_WIN32)
+    struct RtlOsVersionInfoW {
+        ULONG dwOSVersionInfoSize;
+        ULONG dwMajorVersion;
+        ULONG dwMinorVersion;
+        ULONG dwBuildNumber;
+        ULONG dwPlatformId;
+        WCHAR szCSDVersion[128];
+    };
+    using RtlGetVersionFn = LONG(WINAPI*)(RtlOsVersionInfoW*);
+
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (ntdll) {
+        auto rtl_get_version = reinterpret_cast<RtlGetVersionFn>(
+            reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")));
+        if (rtl_get_version) {
+            RtlOsVersionInfoW ver{};
+            ver.dwOSVersionInfoSize = sizeof(ver);
+            if (rtl_get_version(&ver) == 0 && ver.dwMajorVersion >= 10u) {
+                return static_cast<std::uint32_t>(ver.dwBuildNumber);
+            }
+        }
+    }
+    return 0u;
+#else
+    return BaselineCapabilityProfile::kMinWindowsBuildNumber;
+#endif
 }
 
 ExitCode ParseBootstrapArgs(int argc, char** argv, BootstrapConfig* out_config) noexcept {
@@ -40,6 +73,11 @@ ExitCode ParseBootstrapArgs(int argc, char** argv, BootstrapConfig* out_config) 
             const long parsed = std::strtol(argv[++i], nullptr, 10);
             if (parsed <= 0 || parsed > 100000) return ExitCode::InvalidArguments;
             out_config->frame_count = static_cast<std::uint32_t>(parsed);
+        } else if (std::strcmp(arg, "--override-os-build") == 0) {
+            if (i + 1 >= argc) return ExitCode::InvalidArguments;
+            const long parsed = std::strtol(argv[++i], nullptr, 10);
+            if (parsed <= 0 || parsed > 100000) return ExitCode::InvalidArguments;
+            out_config->os_build_override = static_cast<std::uint32_t>(parsed);
         } else if (std::strcmp(arg, "--simulate-failure") == 0) {
             if (i + 1 >= argc) return ExitCode::InvalidArguments;
             ExitCode simulated = ExitCode::Success;
@@ -75,6 +113,78 @@ DiagnosticRecord MakeSimulatedFailureRecord(ExitCode code) noexcept {
     return rec;
 }
 
+#if defined(_WIN32)
+DiagnosticRecord PopulateAdapterCapabilitySnapshot(
+    ID3D12Device* device,
+    std::uint32_t windows_build_number,
+    const EmittedContentFeatureRequest& optional_features,
+    AdapterCapabilitySnapshot* out_snapshot) noexcept {
+    if (!device || !out_snapshot) {
+        return DiagnosticRecord{
+            ExitCode::D3D12DeviceCreationFailed,
+            0x80004003u,
+            "capability_snapshot",
+            "Null ID3D12Device passed to PopulateAdapterCapabilitySnapshot",
+            {}};
+    }
+
+    out_snapshot->windows_build_number = windows_build_number;
+    out_snapshot->max_feature_level = BaselineCapabilityProfile::kRequiredFeatureLevel;
+
+    D3D12_FEATURE_DATA_SHADER_MODEL sm_data{D3D_SHADER_MODEL_6_0};
+    HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm_data, sizeof(sm_data));
+    if (FAILED(hr)) {
+        return DiagnosticRecord{
+            ExitCode::CapabilityBaselineUnmet,
+            static_cast<std::uint32_t>(hr),
+            "shader_model_check",
+            "CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL) failed",
+            {}};
+    }
+    out_snapshot->max_shader_model = static_cast<std::uint32_t>(sm_data.HighestShaderModel);
+
+    D3D12_FEATURE_DATA_D3D12_OPTIONS options0{};
+    hr = device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options0, sizeof(options0));
+    if (FAILED(hr)) {
+        return DiagnosticRecord{
+            ExitCode::CapabilityBaselineUnmet,
+            static_cast<std::uint32_t>(hr),
+            "d3d12_options_check",
+            "CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS) failed",
+            {}};
+    }
+    out_snapshot->resource_binding_tier = static_cast<std::uint32_t>(options0.ResourceBindingTier);
+    out_snapshot->resource_heap_tier = static_cast<std::uint32_t>(options0.ResourceHeapTier);
+    out_snapshot->typed_uav_additional_formats_supported = (options0.TypedUAVLoadAdditionalFormats != FALSE);
+
+    // Query optional features only when emitted content requests them (per conditional_feature_policy)
+    if (optional_features.uses_wave_intrinsics || optional_features.uses_int64_shader_ops) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
+        if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
+            out_snapshot->wave_ops_supported = (options1.WaveOps != FALSE);
+            out_snapshot->int64_shader_ops_supported = (options1.Int64ShaderOps != FALSE);
+        }
+    }
+    if (optional_features.uses_fp16_shader_ops) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
+        if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4)))) {
+            out_snapshot->fp16_shader_ops_supported = (options4.Native16BitShaderOpsSupported != FALSE);
+        }
+    }
+
+    const ExitCode contract_code = EvaluateCapabilityContract(*out_snapshot, optional_features);
+    if (contract_code != ExitCode::Success) {
+        return DiagnosticRecord{
+            contract_code,
+            0x887A0004u,
+            "capability_check",
+            "Adapter or OS failed BaselineCapabilityProfile contract",
+            {}};
+    }
+    return DiagnosticRecord{ExitCode::Success, 0u, "capability_check", "Capability contract satisfied", {}};
+}
+#endif
+
 } // namespace
 
 DiagnosticRecord ExecuteEmptyPlayerBootstrap(const BootstrapConfig& config) noexcept {
@@ -82,17 +192,27 @@ DiagnosticRecord ExecuteEmptyPlayerBootstrap(const BootstrapConfig& config) noex
         return MakeSimulatedFailureRecord(config.simulated_failure);
     }
 
+    const std::uint32_t win_build =
+        config.os_build_override != 0u ? config.os_build_override : QueryWindowsBuildNumber();
+
     AdapterCapabilitySnapshot snapshot{};
-    snapshot.windows_build_number = BaselineCapabilityProfile::kMinWindowsBuildNumber;
+    snapshot.windows_build_number = win_build;
     snapshot.max_feature_level = BaselineCapabilityProfile::kRequiredFeatureLevel;
     snapshot.max_shader_model = BaselineCapabilityProfile::kRequiredShaderModel;
-    snapshot.resource_binding_tier = 2u;
-    snapshot.resource_heap_tier = 2u;
+    snapshot.resource_binding_tier = BaselineCapabilityProfile::kRequiredResourceBindingTier;
+    snapshot.resource_heap_tier = BaselineCapabilityProfile::kRequiredResourceHeapTier;
     snapshot.wave_ops_supported = true;
 
     const ExitCode cap_status = EvaluateCapabilityContract(snapshot, config.optional_features);
     if (cap_status != ExitCode::Success) {
-        return DiagnosticRecord{cap_status, 0x887A0004u, "capability_check", "Baseline capability contract unmet", {}};
+        return DiagnosticRecord{
+            cap_status,
+            0x8007047Eu,
+            "capability_check",
+            cap_status == ExitCode::OsVersionUnsupported
+                ? "OS build is older than minimum tested Windows 11 x64 build 22631"
+                : "Baseline capability contract unmet",
+            {}};
     }
 
     return DiagnosticRecord{ExitCode::Success, 0u, "complete", "Empty player bootstrap succeeded", {}};
@@ -101,6 +221,17 @@ DiagnosticRecord ExecuteEmptyPlayerBootstrap(const BootstrapConfig& config) noex
 DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexcept {
     if (config.has_simulated_failure) {
         return MakeSimulatedFailureRecord(config.simulated_failure);
+    }
+
+    const std::uint32_t win_build =
+        config.os_build_override != 0u ? config.os_build_override : QueryWindowsBuildNumber();
+    if (win_build < BaselineCapabilityProfile::kMinWindowsBuildNumber) {
+        return DiagnosticRecord{
+            ExitCode::OsVersionUnsupported,
+            0x8007047Eu,
+            "os_version_check",
+            "OS build is older than minimum tested Windows 11 x64 build 22631",
+            {}};
     }
 
 #if defined(_WIN32)
@@ -180,14 +311,13 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         return DiagnosticRecord{ExitCode::D3D12DeviceCreationFailed, static_cast<std::uint32_t>(hr), "d3d12_device", "D3D12CreateDevice(12_0) failed", {}};
     }
 
-    // Verify Shader Model 6.0 support on the inbox runtime
-    D3D12_FEATURE_DATA_SHADER_MODEL sm_data{D3D_SHADER_MODEL_6_0};
-    hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm_data, sizeof(sm_data));
-    if (FAILED(hr) || sm_data.HighestShaderModel < D3D_SHADER_MODEL_6_0) {
+    AdapterCapabilitySnapshot cap_snapshot{};
+    const DiagnosticRecord cap_rec = PopulateAdapterCapabilitySnapshot(device, win_build, config.optional_features, &cap_snapshot);
+    if (cap_rec.exit_code != ExitCode::Success) {
         device->Release();
         factory->Release();
         DestroyWindow(hwnd);
-        return DiagnosticRecord{ExitCode::CapabilityBaselineUnmet, static_cast<std::uint32_t>(hr), "shader_model_check", "Shader Model 6.0 unsupported", {}};
+        return cap_rec;
     }
 
     // Single direct command queue (baseline contract)
@@ -223,8 +353,15 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     }
 
     IDXGISwapChain3* swapchain = nullptr;
-    swapchain1->QueryInterface(__uuidof(IDXGISwapChain3), reinterpret_cast<void**>(&swapchain));
+    hr = swapchain1->QueryInterface(__uuidof(IDXGISwapChain3), reinterpret_cast<void**>(&swapchain));
     swapchain1->Release();
+    if (FAILED(hr) || !swapchain) {
+        queue->Release();
+        device->Release();
+        factory->Release();
+        DestroyWindow(hwnd);
+        return DiagnosticRecord{ExitCode::SwapChainCreationFailed, static_cast<std::uint32_t>(hr), "swapchain_qi", "IDXGISwapChain1::QueryInterface(IDXGISwapChain3) failed", {}};
+    }
 
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc{};
     rtv_heap_desc.NumDescriptors = 2;
@@ -244,20 +381,83 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = rtv_heap->GetCPUDescriptorHandleForHeapStart();
     ID3D12Resource* backbuffers[2]{};
     for (UINT i = 0; i < 2; ++i) {
-        swapchain->GetBuffer(i, __uuidof(ID3D12Resource), reinterpret_cast<void**>(&backbuffers[i]));
+        hr = swapchain->GetBuffer(i, __uuidof(ID3D12Resource), reinterpret_cast<void**>(&backbuffers[i]));
+        if (FAILED(hr) || !backbuffers[i]) {
+            if (i == 1 && backbuffers[0]) backbuffers[0]->Release();
+            rtv_heap->Release();
+            swapchain->Release();
+            queue->Release();
+            device->Release();
+            factory->Release();
+            DestroyWindow(hwnd);
+            return DiagnosticRecord{ExitCode::SwapChainCreationFailed, static_cast<std::uint32_t>(hr), "swapchain_buffer", "IDXGISwapChain3::GetBuffer failed", {}};
+        }
         device->CreateRenderTargetView(backbuffers[i], nullptr, rtv_handle);
         rtv_handle.ptr += rtv_stride;
     }
 
     ID3D12CommandAllocator* allocator = nullptr;
-    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), reinterpret_cast<void**>(&allocator));
+    hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), reinterpret_cast<void**>(&allocator));
+    if (FAILED(hr) || !allocator) {
+        backbuffers[0]->Release();
+        backbuffers[1]->Release();
+        rtv_heap->Release();
+        swapchain->Release();
+        queue->Release();
+        device->Release();
+        factory->Release();
+        DestroyWindow(hwnd);
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "cmd_allocator", "CreateCommandAllocator failed", {}};
+    }
+
     ID3D12GraphicsCommandList* cmd_list = nullptr;
-    device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr, __uuidof(ID3D12GraphicsCommandList), reinterpret_cast<void**>(&cmd_list));
+    hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr, __uuidof(ID3D12GraphicsCommandList), reinterpret_cast<void**>(&cmd_list));
+    if (FAILED(hr) || !cmd_list) {
+        allocator->Release();
+        backbuffers[0]->Release();
+        backbuffers[1]->Release();
+        rtv_heap->Release();
+        swapchain->Release();
+        queue->Release();
+        device->Release();
+        factory->Release();
+        DestroyWindow(hwnd);
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "cmd_list", "CreateCommandList failed", {}};
+    }
     cmd_list->Close();
 
     ID3D12Fence* fence = nullptr;
-    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&fence));
+    hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&fence));
+    if (FAILED(hr) || !fence) {
+        cmd_list->Release();
+        allocator->Release();
+        backbuffers[0]->Release();
+        backbuffers[1]->Release();
+        rtv_heap->Release();
+        swapchain->Release();
+        queue->Release();
+        device->Release();
+        factory->Release();
+        DestroyWindow(hwnd);
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "fence", "CreateFence failed", {}};
+    }
+
     HANDLE fence_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    if (!fence_event) {
+        const DWORD err = GetLastError();
+        fence->Release();
+        cmd_list->Release();
+        allocator->Release();
+        backbuffers[0]->Release();
+        backbuffers[1]->Release();
+        rtv_heap->Release();
+        swapchain->Release();
+        queue->Release();
+        device->Release();
+        factory->Release();
+        DestroyWindow(hwnd);
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(err), "fence_event", "CreateEventA failed", {}};
+    }
     UINT64 fence_value = 1;
 
     static constexpr float kClearColor[4] = {0.05f, 0.10f, 0.20f, 1.0f};
@@ -295,7 +495,21 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
         queue->Signal(fence, signal_val);
         if (fence->GetCompletedValue() < signal_val) {
             fence->SetEventOnCompletion(signal_val, fence_event);
-            WaitForSingleObject(fence_event, 5000);
+            if (WaitForSingleObject(fence_event, 5000) == WAIT_TIMEOUT) {
+                CloseHandle(fence_event);
+                fence->Release();
+                cmd_list->Release();
+                allocator->Release();
+                backbuffers[0]->Release();
+                backbuffers[1]->Release();
+                rtv_heap->Release();
+                swapchain->Release();
+                queue->Release();
+                device->Release();
+                factory->Release();
+                DestroyWindow(hwnd);
+                return DiagnosticRecord{ExitCode::ExecutionFenceTimeout, 0x80070102u, "clear_present_fence_wait", "Frame fence wait timed out", {}};
+            }
         }
     }
 
@@ -321,16 +535,27 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         return MakeSimulatedFailureRecord(config.simulated_failure);
     }
 
+    const std::uint32_t win_build =
+        config.os_build_override != 0u ? config.os_build_override : QueryWindowsBuildNumber();
+    if (win_build < BaselineCapabilityProfile::kMinWindowsBuildNumber) {
+        return DiagnosticRecord{
+            ExitCode::OsVersionUnsupported,
+            0x8007047Eu,
+            "os_version_check",
+            "OS build is older than minimum tested Windows 11 x64 build 22631",
+            {}};
+    }
+
     // Step 1: Verify offline-compiled SM 6.0 DXIL container integrity before touching D3D12.
     const ExitCode dxil_status = ValidateOfflineDxilContainer(
         nw::shaders::kComputeFixtureDxil,
-        nw::shaders::kComputeFixtureDxilSize);
+        sizeof(nw::shaders::kComputeFixtureDxil));
     if (dxil_status != ExitCode::Success) {
         return DiagnosticRecord{
             dxil_status,
             0x8007000Bu,
             "offline_dxil_validation",
-            "Offline DXIL shader payload failed DXBC/DXIL header check",
+            "Offline DXIL shader payload failed DXBC/PSV0/DXIL bitcode check",
             {}};
     }
 
@@ -390,11 +615,11 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         return DiagnosticRecord{ExitCode::D3D12DeviceCreationFailed, static_cast<std::uint32_t>(hr), "d3d12_device", "D3D12CreateDevice(12_0) failed", {}};
     }
 
-    D3D12_FEATURE_DATA_SHADER_MODEL sm_data{D3D_SHADER_MODEL_6_0};
-    hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm_data, sizeof(sm_data));
-    if (FAILED(hr) || sm_data.HighestShaderModel < D3D_SHADER_MODEL_6_0) {
+    AdapterCapabilitySnapshot cap_snapshot{};
+    const DiagnosticRecord cap_rec = PopulateAdapterCapabilitySnapshot(device, win_build, config.optional_features, &cap_snapshot);
+    if (cap_rec.exit_code != ExitCode::Success) {
         device->Release();
-        return DiagnosticRecord{ExitCode::CapabilityBaselineUnmet, static_cast<std::uint32_t>(hr), "shader_model_check", "Shader Model 6.0 unsupported", {}};
+        return cap_rec;
     }
 
     // Single direct command queue handling both raster and compute (baseline contract)
@@ -473,7 +698,7 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc{};
     pso_desc.pRootSignature = root_sig;
     pso_desc.CS.pShaderBytecode = nw::shaders::kComputeFixtureDxil;
-    pso_desc.CS.BytecodeLength = nw::shaders::kComputeFixtureDxilSize;
+    pso_desc.CS.BytecodeLength = sizeof(nw::shaders::kComputeFixtureDxil);
     ID3D12PipelineState* pso = nullptr;
     hr = device->CreateComputePipelineState(&pso_desc, __uuidof(ID3D12PipelineState), reinterpret_cast<void**>(&pso));
     if (FAILED(hr) || !pso) {
@@ -548,9 +773,31 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     device->CreateUnorderedAccessView(uav_buffer, nullptr, &uav_view, uav_heap->GetCPUDescriptorHandleForHeapStart());
 
     ID3D12CommandAllocator* allocator = nullptr;
-    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), reinterpret_cast<void**>(&allocator));
+    hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), reinterpret_cast<void**>(&allocator));
+    if (FAILED(hr) || !allocator) {
+        rb_resource->Release();
+        uav_buffer->Release();
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "cmd_allocator", "CreateCommandAllocator failed", {}};
+    }
+
     ID3D12GraphicsCommandList* cmd_list = nullptr;
-    device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, pso, __uuidof(ID3D12GraphicsCommandList), reinterpret_cast<void**>(&cmd_list));
+    hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, pso, __uuidof(ID3D12GraphicsCommandList), reinterpret_cast<void**>(&cmd_list));
+    if (FAILED(hr) || !cmd_list) {
+        allocator->Release();
+        rb_resource->Release();
+        uav_buffer->Release();
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "cmd_list", "CreateCommandList failed", {}};
+    }
 
     cmd_list->SetComputeRootSignature(root_sig);
     ID3D12DescriptorHeap* heaps[] = {uav_heap};
@@ -576,8 +823,36 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     queue->ExecuteCommandLists(1, lists);
 
     ID3D12Fence* fence = nullptr;
-    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&fence));
+    hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&fence));
+    if (FAILED(hr) || !fence) {
+        cmd_list->Release();
+        allocator->Release();
+        rb_resource->Release();
+        uav_buffer->Release();
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "fence", "CreateFence failed", {}};
+    }
+
     HANDLE fence_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    if (!fence_event) {
+        const DWORD err = GetLastError();
+        fence->Release();
+        cmd_list->Release();
+        allocator->Release();
+        rb_resource->Release();
+        uav_buffer->Release();
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(err), "fence_event", "CreateEventA failed", {}};
+    }
+
     queue->Signal(fence, 1);
     if (fence->GetCompletedValue() < 1) {
         fence->SetEventOnCompletion(1, fence_event);
@@ -615,11 +890,24 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
 
     void* mapped_ptr = nullptr;
     D3D12_RANGE read_range{0, static_cast<SIZE_T>(buffer_bytes)};
-    if (SUCCEEDED(rb_resource->Map(0, &read_range, &mapped_ptr)) && mapped_ptr) {
-        std::memcpy(readback_buffer, mapped_ptr, static_cast<std::size_t>(buffer_bytes));
-        D3D12_RANGE empty_range{0, 0};
-        rb_resource->Unmap(0, &empty_range);
+    hr = rb_resource->Map(0, &read_range, &mapped_ptr);
+    if (FAILED(hr) || !mapped_ptr) {
+        CloseHandle(fence_event);
+        fence->Release();
+        cmd_list->Release();
+        allocator->Release();
+        rb_resource->Release();
+        uav_buffer->Release();
+        pso->Release();
+        root_sig->Release();
+        uav_heap->Release();
+        queue->Release();
+        device->Release();
+        return DiagnosticRecord{ExitCode::ResourceAllocationFailed, static_cast<std::uint32_t>(hr), "readback_map", "ID3D12Resource::Map(readback) failed", {}};
     }
+    std::memcpy(readback_buffer, mapped_ptr, static_cast<std::size_t>(buffer_bytes));
+    D3D12_RANGE empty_range{0, 0};
+    rb_resource->Unmap(0, &empty_range);
 
     CloseHandle(fence_event);
     fence->Release();

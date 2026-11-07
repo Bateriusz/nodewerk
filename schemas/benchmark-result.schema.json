@@ -156,7 +156,7 @@
           "d3d12_validation_clean": { "type": ["boolean", "null"] },
           "compute_output_verified": { "type": ["boolean", "null"] },
           "exit_code": { "type": ["integer", "null"] },
-          "total_distributed_bytes": { "type": "integer", "minimum": 512 },
+          "total_distributed_bytes": { "type": ["integer", "null"], "minimum": 512 },
           "startup_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },
           "cpu_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },
           "gpu_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },

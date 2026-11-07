@@ -1,14 +1,18 @@
 {
   "schema_version": "1.0.0",
+  "verification_status": "unverified",
+  "unverified_reason": "Offline DXC shader compiler (dxc 1.8.2407) is not installed on the current Linux host; execute CMake build or tools/offline_shader_pack.py --compile on Windows 11 x64 with DXC 1.8.2407 to compile shaders/compute_fixture.hlsl into build/clang-cl-release/shaders/compute_fixture.dxil and record measured DXIL bytes and SHA-256.",
   "shaders": [
     {
       "shader_id": "compute_fixture_cs",
       "source_path": "shaders/compute_fixture.hlsl",
-      "dxil_path": "shaders/compute_fixture.dxil",
-      "embedded_header_path": "shaders/generated/compute_fixture_dxil.h",
+      "dxil_build_output_path": "shaders/compute_fixture.dxil",
+      "embedded_header_build_output_path": "shaders/generated/compute_fixture_dxil.h",
       "entry_point": "CSMain",
       "target_profile": "cs_6_0",
-      "dxc_version": "1.8.2407",
+      "pinned_dxc_version": "1.8.2407",
+      "measured_dxc_version": null,
+      "compiled_offline_with_dxc": false,
       "dxc_flags": [
         "-T",
         "cs_6_0",
@@ -18,19 +22,28 @@
         "2021",
         "-O3",
         "-Qstrip_reflect",
-        "-Qstrip_debug",
-        "-Vd"
+        "-Qstrip_debug"
       ],
       "hlsl_source_bytes": 800,
       "hlsl_sha256": "b8c6597b9e5d0d8c4f403b51ff760cbec81f5176b0f6182c361d7c11238641af",
-      "offline_dxil_bytes": 392,
-      "offline_dxil_sha256": "55d1c7b0b95c1d0f5e5f073558d41d303b4f26dc5a3f3c40f731ebd6260a0602",
+      "offline_dxil_bytes": null,
+      "offline_dxil_sha256": null,
       "runtime_compilation_used": false,
       "agility_sdk_required": false,
       "requires_sm_6_6_heap_indexing": false,
       "requires_enhanced_barriers": false,
       "requires_mesh_shaders": false,
       "requires_ray_tracing": false
+    }
+  ],
+  "unavailable_measurements": [
+    {
+      "metric": "shaders[0].offline_dxil_bytes",
+      "reason": "Offline DXC shader compiler (dxc 1.8.2407) is not installed on the current Linux host; recorded as null rather than synthesizing a pseudo-DXBC container."
+    },
+    {
+      "metric": "shaders[0].offline_dxil_sha256",
+      "reason": "Offline DXC shader compiler (dxc 1.8.2407) is not installed on the current Linux host; recorded as null rather than synthesizing a pseudo-DXBC container."
     }
   ]
 }

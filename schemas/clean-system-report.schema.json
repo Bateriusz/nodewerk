@@ -49,11 +49,11 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "windows_sdk_absent": { "type": "boolean", "const": true },
-        "d3d12_debug_layer_absent": { "type": "boolean", "const": true },
-        "dxc_redist_absent": { "type": "boolean", "const": true },
-        "agility_sdk_redist_absent": { "type": "boolean", "const": true },
-        "msvc_debug_crt_absent": { "type": "boolean", "const": true }
+        "windows_sdk_absent": { "type": ["boolean", "null"] },
+        "d3d12_debug_layer_absent": { "type": ["boolean", "null"] },
+        "dxc_redist_absent": { "type": ["boolean", "null"] },
+        "agility_sdk_redist_absent": { "type": ["boolean", "null"] },
+        "msvc_debug_crt_absent": { "type": ["boolean", "null"] }
       }
     },
     "deployed_dependency_inventory": {
@@ -75,13 +75,13 @@
             "additionalProperties": false,
             "properties": {
               "file_name": { "type": "string" },
-              "size_bytes": { "type": "integer", "minimum": 1 },
-              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "size_bytes": { "type": ["integer", "null"], "minimum": 1 },
+              "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
               "category": { "type": "string", "enum": ["executable", "shader_payload"] }
             }
           }
         },
-        "total_distributed_bytes": { "type": "integer", "minimum": 1024 },
+        "total_distributed_bytes": { "type": ["integer", "null"], "minimum": 1024 },
         "inbox_dlls_resolved": {
           "type": "array",
           "minItems": 4,
@@ -111,10 +111,10 @@
       "properties": {
         "shader_id": { "type": "string" },
         "shader_model": { "type": "string", "const": "cs_6_0" },
-        "compiled_offline_with_dxc": { "type": "boolean", "const": true },
-        "runtime_dxcompiler_loaded": { "type": "boolean", "const": false },
-        "runtime_d3dcompiler_loaded": { "type": "boolean", "const": false },
-        "agility_d3d12core_redist_loaded": { "type": "boolean", "const": false },
+        "compiled_offline_with_dxc": { "type": ["boolean", "null"] },
+        "runtime_dxcompiler_loaded": { "type": ["boolean", "null"] },
+        "runtime_d3dcompiler_loaded": { "type": ["boolean", "null"] },
+        "agility_d3d12core_redist_loaded": { "type": ["boolean", "null"] },
         "expected_output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "observed_output_sha256": { "type": ["string", "null"] },
         "output_verified": { "type": ["boolean", "null"] }

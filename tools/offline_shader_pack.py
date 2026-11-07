@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Offline DXIL container verifier and embedded C++ header generator for NW-01.
+"""Offline DXC shader compiler wrapper, DXIL container verifier, and header generator for NW-01.
 
-Ensures that shaders are compiled offline targeting Shader Model 6.0 (cs_6_0)
-without runtime DXC (dxcompiler.dll) or D3D12 Agility SDK redistribution, and
-without SM 6.6 direct heap indexing, enhanced barriers, mesh shaders, or raytracing.
+Ensures that shaders are compiled offline via pinned DXC targeting Shader Model 6.0 (cs_6_0)
+without runtime DXC (dxcompiler.dll) or D3D12 Agility SDK redistribution, and without
+SM 6.6 direct heap indexing, enhanced barriers, mesh shaders, or raytracing.
+Never synthesizes fake or unsigned DXBC containers.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import re
+import shutil
 import struct
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -18,103 +24,137 @@ from typing import Any
 DXBC_MAGIC = b"DXBC"
 DXIL_CHUNK_FOURCC = b"DXIL"
 SFI0_CHUNK_FOURCC = b"SFI0"
+PSV0_CHUNK_FOURCC = b"PSV0"
 HASH_CHUNK_FOURCC = b"HASH"
 # D3D12 Compute Shader version token for SM 6.0: program_type=5 (CS), major=6, minor=0
 CS_6_0_PROGRAM_VERSION = (5 << 16) | (6 << 4) | 0
+# SFI0 bits 32 & 33: ResourceDescriptorHeapIndexing and SamplerDescriptorHeapIndexing (SM 6.6)
+FORBIDDEN_SM66_HEAP_INDEXING_MASK = (1 << 32) | (1 << 33)
 
 
-def build_deterministic_dxil_container(hlsl_source: bytes) -> bytes:
-    """Build a deterministic DXBC-wrapped SM 6.0 DXIL container blob from HLSL source."""
-    source_digest = hashlib.sha256(hlsl_source).digest()
+class OfflineShaderCompilerError(RuntimeError):
+    """Raised when offline DXC compilation fails or DXC is unavailable."""
 
-    # SFI0 chunk: 8-byte feature flags (0 = baseline SM 6.0, no SM 6.6 heap indexing, no raytracing/mesh)
-    sfi0_data = struct.pack("<Q", 0)
-    sfi0_chunk = SFI0_CHUNK_FOURCC + struct.pack("<I", len(sfi0_data)) + sfi0_data
 
-    # DXIL bitcode header + deterministic payload
-    bitcode_magic = b"BC\xc0\xde"
-    # Deterministic bitcode body encoding CSMain cs_6_0 LCG + XOR kernel
-    bitcode_body = (
-        bitcode_magic
-        + struct.pack("<IIII", 1, 6, 0, 64)
-        + b"CSMain\x00\x00"
-        + b"dx.op.threadId.i32\x00\x00"
-        + b"dx.op.bufferStore.i32\x00\x00\x00"
-        + struct.pack("<II", 1664525, 1013904223)
-        + source_digest
-        + (b"\x00" * 160)
-    )
-    dxil_program_header = struct.pack(
-        "<II4sIII",
-        CS_6_0_PROGRAM_VERSION,
-        (len(bitcode_body) + 24) // 4,
-        DXIL_CHUNK_FOURCC,
-        0x00000100,  # DXIL version 1.0 (SM 6.0)
-        16,          # bitcode offset
-        len(bitcode_body),
-    )
-    dxil_data = dxil_program_header + bitcode_body
-    dxil_chunk = DXIL_CHUNK_FOURCC + struct.pack("<I", len(dxil_data)) + dxil_data
+def find_dxc_executable(explicit_path: str | Path | None = None) -> str | None:
+    """Locate the offline DXC executable in PATH or from an explicit path."""
+    if explicit_path:
+        candidate = Path(explicit_path)
+        if candidate.is_file():
+            return str(candidate)
+        resolved = shutil.which(str(explicit_path))
+        if resolved:
+            return resolved
+        return None
+    return shutil.which("dxc") or shutil.which("dxc.exe")
 
-    # HASH chunk (20 bytes: flags + 16-byte retail digest)
-    hash_data = struct.pack("<I", 1) + source_digest[:16]
-    hash_chunk = HASH_CHUNK_FOURCC + struct.pack("<I", len(hash_data)) + hash_data
 
-    chunks = [sfi0_chunk, dxil_chunk, hash_chunk]
-    chunk_count = len(chunks)
-    header_size = 4 + 16 + 4 + 4 + 4 + (4 * chunk_count)
-
-    offsets = []
-    current_offset = header_size
-    for ch in chunks:
-        offsets.append(current_offset)
-        current_offset += len(ch)
-
-    total_size = current_offset
-    container_digest = hashlib.md5(b"".join(chunks)).digest()
-
-    header = (
-        DXBC_MAGIC
-        + container_digest
-        + struct.pack("<HHII", 1, 0, total_size, chunk_count)
-        + struct.pack(f"<{chunk_count}I", *offsets)
-    )
-    return header + b"".join(chunks)
+def query_dxc_version(dxc_bin: str) -> str:
+    """Query the version string reported by the offline DXC executable."""
+    proc = subprocess.run([dxc_bin, "--version"], capture_output=True, text=True, check=False)
+    combined = f"{proc.stdout}\n{proc.stderr}".strip()
+    match = re.search(r"([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)", combined)
+    return match.group(1) if match else (combined.splitlines()[0] if combined else "unknown")
 
 
 def validate_dxil_container(blob: bytes) -> dict[str, Any]:
-    """Validate that a DXIL container has valid DXBC magic, SM 6.0 DXIL chunk, and no forbidden features."""
-    if len(blob) < 32:
+    """Validate that a DXIL container has a genuine signed DXBC header, PSV0, SFI0, and SM 6.0 DXIL bitcode."""
+    if len(blob) < 44:
         raise ValueError(f"DXIL container too small ({len(blob)} bytes)")
     if blob[:4] != DXBC_MAGIC:
         raise ValueError("Invalid DXIL container magic (expected 'DXBC')")
 
+    retail_digest = blob[4:20]
+    if retail_digest == (b"\x00" * 16):
+        raise ValueError(
+            "DXIL container has an all-zero unsigned digest (compiled with -Vd or missing dxil.dll signing); "
+            "retail D3D12 CreateComputePipelineState will reject unsigned containers"
+        )
+
     major, minor, total_size, chunk_count = struct.unpack_from("<HHII", blob, 20)
+    if (major, minor) != (1, 0):
+        raise ValueError(f"Unsupported DXBC container version {major}.{minor} (expected 1.0)")
     if total_size != len(blob):
         raise ValueError(f"DXIL container size mismatch: header={total_size}, actual={len(blob)}")
+    if chunk_count < 2 or 32 + chunk_count * 4 > len(blob):
+        raise ValueError(f"Invalid DXBC chunk_count={chunk_count}")
 
     offsets = struct.unpack_from(f"<{chunk_count}I", blob, 32)
+    header_end = 32 + chunk_count * 4
+
+    raw_chunks: list[bytes] = []
     found_dxil = False
+    found_psv0 = False
     feature_flags = 0
     shader_model = None
+    bitcode_size = 0
 
     for offset in offsets:
+        if offset < header_end or offset + 8 > len(blob):
+            raise ValueError(f"Chunk offset {offset} out of bounds")
         fourcc = blob[offset : offset + 4]
         chunk_size = struct.unpack_from("<I", blob, offset + 4)[0]
+        if offset + 8 + chunk_size > len(blob):
+            raise ValueError(f"Chunk {fourcc!r} size {chunk_size} exceeds container bounds")
+        raw_chunks.append(blob[offset : offset + 8 + chunk_size])
         chunk_payload = blob[offset + 8 : offset + 8 + chunk_size]
-        if fourcc == SFI0_CHUNK_FOURCC and chunk_size >= 8:
+
+        if fourcc == SFI0_CHUNK_FOURCC:
+            if chunk_size != 8:
+                raise ValueError(f"Invalid SFI0 chunk size {chunk_size} (expected 8)")
             feature_flags = struct.unpack_from("<Q", chunk_payload, 0)[0]
-        elif fourcc == DXIL_CHUNK_FOURCC and chunk_size >= 24:
-            found_dxil = True
-            prog_ver = struct.unpack_from("<I", chunk_payload, 0)[0]
+            if (feature_flags & FORBIDDEN_SM66_HEAP_INDEXING_MASK) != 0:
+                raise ValueError("SFI0 chunk sets forbidden SM 6.6 descriptor heap indexing flags")
+        elif fourcc == PSV0_CHUNK_FOURCC:
+            if chunk_size < 28:
+                raise ValueError(f"PSV0 chunk too small ({chunk_size} bytes)")
+            psv_info_size = struct.unpack_from("<I", chunk_payload, 0)[0]
+            if psv_info_size < 24 or psv_info_size + 4 > chunk_size:
+                raise ValueError(f"Invalid PSV0 runtime info size {psv_info_size}")
+            found_psv0 = True
+        elif fourcc == DXIL_CHUNK_FOURCC:
+            if chunk_size < 32:
+                raise ValueError(f"DXIL chunk too small ({chunk_size} bytes)")
+            prog_ver, size_in_uint32, dxil_magic, dxil_ver, bc_offset, bc_size = struct.unpack_from(
+                "<II4sIII", chunk_payload, 0
+            )
+            sm_type = (prog_ver >> 16) & 0xFFFF
             sm_major = (prog_ver >> 4) & 0xF
             sm_minor = prog_ver & 0xF
-            shader_model = f"cs_{sm_major}_{sm_minor}"
+            shader_model = f"cs_{sm_major}_{sm_minor}" if sm_type == 5 else f"type{sm_type}_{sm_major}_{sm_minor}"
+            if prog_ver != CS_6_0_PROGRAM_VERSION:
+                raise ValueError(f"Unexpected shader model '{shader_model}', baseline requires 'cs_6_0'")
+            if size_in_uint32 * 4 != chunk_size:
+                raise ValueError(
+                    f"DXIL chunk SizeInUint32 mismatch ({size_in_uint32 * 4} != {chunk_size})"
+                )
+            if dxil_magic != DXIL_CHUNK_FOURCC:
+                raise ValueError(f"Invalid inner DXIL magic {dxil_magic!r}")
+            if (dxil_ver & 0xFFFF) != 0x0100:
+                raise ValueError(f"Unexpected DXIL version 0x{dxil_ver:08x}, expected 0x0100 for SM 6.0")
+            if bc_offset < 16 or bc_size < 64 or (bc_size % 4) != 0 or (8 + bc_offset + bc_size) > chunk_size:
+                raise ValueError(f"Invalid DXIL bitcode bounds (offset={bc_offset}, size={bc_size})")
+            bitcode = chunk_payload[8 + bc_offset : 8 + bc_offset + bc_size]
+            if bitcode[:4] != b"BC\xc0\xde":
+                raise ValueError("DXIL payload does not start with LLVM bitcode magic 'BC\\xc0\\xde'")
+            first_word = struct.unpack_from("<I", bitcode, 4)[0]
+            if (first_word & 0x3FF) != 0x21:
+                raise ValueError(
+                    "DXIL payload does not contain a valid LLVM 3.7 MODULE_BLOCK bitcode header "
+                    f"(got word1=0x{first_word:08x})"
+                )
+            found_dxil = True
+            bitcode_size = bc_size
+
+    # Reject synthetic containers whose header digest is just a plain MD5 or SHA-256 of the chunks
+    joined_chunks = b"".join(raw_chunks)
+    if retail_digest == hashlib.md5(joined_chunks).digest() or retail_digest == hashlib.sha256(joined_chunks).digest()[:16]:
+        raise ValueError("Rejected synthetic pseudo-DXBC container with unvalidated hash digest")
 
     if not found_dxil:
         raise ValueError("DXBC container is missing required DXIL chunk")
-    if shader_model != "cs_6_0":
-        raise ValueError(f"Unexpected shader model '{shader_model}', baseline requires 'cs_6_0'")
+    if not found_psv0:
+        raise ValueError("DXBC container is missing required PSV0 pipeline state validation chunk")
 
     return {
         "valid": True,
@@ -123,7 +163,9 @@ def validate_dxil_container(blob: bytes) -> dict[str, Any]:
         "size_bytes": len(blob),
         "sha256": hashlib.sha256(blob).hexdigest(),
         "shader_model": shader_model,
+        "bitcode_size_bytes": bitcode_size,
         "feature_flags": feature_flags,
+        "has_psv0": found_psv0,
         "requires_sm_6_6_heap_indexing": False,
         "requires_enhanced_barriers": False,
         "requires_mesh_shaders": False,
@@ -132,20 +174,12 @@ def validate_dxil_container(blob: bytes) -> dict[str, Any]:
 
 
 def format_cpp_dxil_header(blob: bytes, sha256_hex: str) -> str:
-    """Format the offline DXIL container as a C++20 header for zero-sidecar embedding."""
+    """Format the validated offline DXIL container as a C++ header compatible with dxc -Fh -Vn kComputeFixtureDxil."""
     lines = [
         "// Automatically generated by tools/offline_shader_pack.py — DO NOT EDIT MANUALLY",
         "// Offline-compiled Shader Model 6.0 (cs_6_0) DXIL container for compute_fixture.hlsl",
         f"// Size: {len(blob)} bytes | SHA-256: {sha256_hex}",
-        "#pragma once",
-        "#include <cstddef>",
-        "#include <cstdint>",
-        "",
-        "namespace nw::shaders {",
-        "",
-        f"inline constexpr std::size_t kComputeFixtureDxilSize = {len(blob)}u;",
-        f'inline constexpr const char kComputeFixtureDxilSha256[] = "{sha256_hex}";',
-        "alignas(16) inline constexpr std::uint8_t kComputeFixtureDxil[] = {",
+        "const unsigned char kComputeFixtureDxil[] = {",
     ]
     for i in range(0, len(blob), 12):
         chunk = blob[i : i + 12]
@@ -153,8 +187,6 @@ def format_cpp_dxil_header(blob: bytes, sha256_hex: str) -> str:
         lines.append(f"    {hex_bytes},")
     lines.extend([
         "};",
-        "",
-        "} // namespace nw::shaders",
         "",
     ])
     return "\n".join(lines)
@@ -182,48 +214,119 @@ def check_hlsl_source_constraints(hlsl_text: str) -> list[str]:
     return violations
 
 
-def generate_all(repo_root: Path) -> dict[str, Any]:
-    hlsl_path = repo_root / "shaders" / "compute_fixture.hlsl"
-    dxil_path = repo_root / "shaders" / "compute_fixture.dxil"
-    header_path = repo_root / "shaders" / "generated" / "compute_fixture_dxil.h"
-    manifest_path = repo_root / "shaders" / "manifest.json"
-    expected_out_path = repo_root / "fixtures" / "compute_shader" / "expected_output.json"
-
+def compile_shader_with_dxc(
+    hlsl_path: Path,
+    output_dxil_path: Path,
+    *,
+    entry_point: str = "CSMain",
+    target_profile: str = "cs_6_0",
+    dxc_executable: str | Path | None = None,
+) -> dict[str, Any]:
+    """Compile an HLSL shader offline using real DXC and validate the resulting DXIL container."""
     hlsl_bytes = hlsl_path.read_bytes()
-    hlsl_text = hlsl_bytes.decode("utf-8")
+    violations = check_hlsl_source_constraints(hlsl_bytes.decode("utf-8"))
+    if violations:
+        raise ValueError("; ".join(violations))
+
+    dxc_bin = find_dxc_executable(dxc_executable)
+    if not dxc_bin:
+        raise OfflineShaderCompilerError(
+            "Offline DXC shader compiler (dxc / dxc.exe) not found in PATH; "
+            "refusing to synthesize a fake DXBC/DXIL container."
+        )
+
+    output_dxil_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        dxc_bin,
+        "-T",
+        target_profile,
+        "-E",
+        entry_point,
+        "-HV",
+        "2021",
+        "-O3",
+        "-Qstrip_reflect",
+        "-Qstrip_debug",
+        "-Fo",
+        str(output_dxil_path),
+        str(hlsl_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0 or not output_dxil_path.exists():
+        raise OfflineShaderCompilerError(
+            f"DXC compilation failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+
+    dxil_blob = output_dxil_path.read_bytes()
+    validation = validate_dxil_container(dxil_blob)
+    validation["dxc_executable"] = dxc_bin
+    validation["measured_dxc_version"] = query_dxc_version(dxc_bin)
+    return validation
+
+
+def pack_dxil_to_header(hlsl_path: Path, dxil_path: Path, output_header_path: Path) -> dict[str, Any]:
+    """Validate an existing DXC-compiled DXIL file and emit the C++ byte-array header in the build tree."""
+    hlsl_text = hlsl_path.read_text(encoding="utf-8")
     violations = check_hlsl_source_constraints(hlsl_text)
     if violations:
         raise ValueError("; ".join(violations))
 
-    dxil_blob = build_deterministic_dxil_container(hlsl_bytes)
+    dxil_blob = dxil_path.read_bytes()
     validation = validate_dxil_container(dxil_blob)
-
-    dxil_path.write_bytes(dxil_blob)
-    header_path.parent.mkdir(parents=True, exist_ok=True)
-    header_path.write_text(
+    output_header_path.parent.mkdir(parents=True, exist_ok=True)
+    output_header_path.write_text(
         format_cpp_dxil_header(dxil_blob, validation["sha256"]),
         encoding="utf-8",
     )
+    return validation
+
+
+def compile_and_record_manifest(
+    repo_root: Path,
+    build_dir: Path | None = None,
+    dxc_executable: str | Path | None = None,
+) -> dict[str, Any]:
+    """Compile compute_fixture.hlsl via DXC into the build directory and update shaders/manifest.json."""
+    hlsl_path = repo_root / "shaders" / "compute_fixture.hlsl"
+    manifest_path = repo_root / "shaders" / "manifest.json"
+    out_root = build_dir or (repo_root / "build" / "clang-cl-release")
+    dxil_path = out_root / "shaders" / "compute_fixture.dxil"
+    header_path = out_root / "shaders" / "generated" / "compute_fixture_dxil.h"
+
+    hlsl_bytes = hlsl_path.read_bytes()
+    validation = compile_shader_with_dxc(
+        hlsl_path,
+        dxil_path,
+        entry_point="CSMain",
+        target_profile="cs_6_0",
+        dxc_executable=dxc_executable,
+    )
+    pack_dxil_to_header(hlsl_path, dxil_path, header_path)
 
     manifest = {
         "schema_version": "1.0.0",
+        "verification_status": "verified",
         "shaders": [
             {
                 "shader_id": "compute_fixture_cs",
                 "source_path": "shaders/compute_fixture.hlsl",
-                "dxil_path": "shaders/compute_fixture.dxil",
-                "embedded_header_path": "shaders/generated/compute_fixture_dxil.h",
+                "dxil_build_output_path": "shaders/compute_fixture.dxil",
+                "embedded_header_build_output_path": "shaders/generated/compute_fixture_dxil.h",
                 "entry_point": "CSMain",
                 "target_profile": "cs_6_0",
-                "dxc_version": "1.8.2407",
+                "pinned_dxc_version": "1.8.2407",
+                "measured_dxc_version": validation["measured_dxc_version"],
+                "compiled_offline_with_dxc": True,
                 "dxc_flags": [
-                    "-T", "cs_6_0",
-                    "-E", "CSMain",
-                    "-HV", "2021",
+                    "-T",
+                    "cs_6_0",
+                    "-E",
+                    "CSMain",
+                    "-HV",
+                    "2021",
                     "-O3",
                     "-Qstrip_reflect",
                     "-Qstrip_debug",
-                    "-Vd"
                 ],
                 "hlsl_source_bytes": len(hlsl_bytes),
                 "hlsl_sha256": hashlib.sha256(hlsl_bytes).hexdigest(),
@@ -234,35 +337,61 @@ def generate_all(repo_root: Path) -> dict[str, Any]:
                 "requires_sm_6_6_heap_indexing": False,
                 "requires_enhanced_barriers": False,
                 "requires_mesh_shaders": False,
-                "requires_ray_tracing": False
+                "requires_ray_tracing": False,
             }
-        ]
+        ],
+        "unavailable_measurements": [],
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-
-    seed_mask = 0xA5A55A5A
-    element_count = 256
-    values = [((i * 1664525 + 1013904223) & 0xFFFFFFFF) ^ seed_mask for i in range(element_count)]
-    raw_bytes = struct.pack(f"<{element_count}I", *values)
-    expected_out_path.parent.mkdir(parents=True, exist_ok=True)
-    expected_output = {
-        "fixture_id": "compute_shader",
-        "shader_id": "compute_fixture_cs",
-        "element_count": element_count,
-        "thread_group_size": [64, 1, 1],
-        "dispatch_groups": [4, 1, 1],
-        "seed_mask_hex": "0xA5A55A5A",
-        "formula": "((tid * 1664525u + 1013904223u) & 0xFFFFFFFFu) ^ 0xA5A55A5Au",
-        "output_byte_length": len(raw_bytes),
-        "output_sha256": hashlib.sha256(raw_bytes).hexdigest(),
-        "first_16_elements_u32": values[:16],
-        "elements_u32": values,
-    }
-    expected_out_path.write_text(json.dumps(expected_output, indent=2) + "\n", encoding="utf-8")
     return manifest
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Nodewerk NW-01 offline DXC shader verifier and header packer.")
+    parser.add_argument(
+        "--mode",
+        choices=["pack-header", "compile-and-record", "verify-source"],
+        default="verify-source",
+    )
+    parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument("--hlsl", type=Path, default=None)
+    parser.add_argument("--dxil", type=Path, default=None)
+    parser.add_argument("--output-header", type=Path, default=None)
+    parser.add_argument("--build-dir", type=Path, default=None)
+    parser.add_argument("--dxc-executable", type=str, default=None)
+    args = parser.parse_args(argv)
+
+    try:
+        if args.mode == "pack-header":
+            if not args.hlsl or not args.dxil or not args.output_header:
+                raise ValueError("--mode pack-header requires --hlsl, --dxil, and --output-header")
+            res = pack_dxil_to_header(args.hlsl, args.dxil, args.output_header)
+            print(json.dumps(res, indent=2))
+        elif args.mode == "compile-and-record":
+            res = compile_and_record_manifest(args.repo_root, args.build_dir, args.dxc_executable)
+            print(json.dumps(res, indent=2))
+        else:
+            hlsl_path = args.hlsl or (args.repo_root / "shaders" / "compute_fixture.hlsl")
+            hlsl_bytes = hlsl_path.read_bytes()
+            violations = check_hlsl_source_constraints(hlsl_bytes.decode("utf-8"))
+            if violations:
+                raise ValueError("; ".join(violations))
+            print(
+                json.dumps(
+                    {
+                        "hlsl": str(hlsl_path),
+                        "hlsl_source_bytes": len(hlsl_bytes),
+                        "hlsl_sha256": hashlib.sha256(hlsl_bytes).hexdigest(),
+                        "constraints_passed": True,
+                    },
+                    indent=2,
+                )
+            )
+        return 0
+    except Exception as exc:
+        print(f"[NW-SHADER-ERR] {exc}", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    root = Path(__file__).resolve().parent.parent
-    result = generate_all(root)
-    print(json.dumps(result, indent=2))
+    sys.exit(main())

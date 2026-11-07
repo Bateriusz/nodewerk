@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nodewerk.dev/schemas/size-ledger.schema.json",
   "title": "Nodewerk Size Ledger Schema",
-  "description": "Reusable size-ledger schema recording total distributed bytes, executable sections, imports, shaders, decoder overhead, startup time, CPU/GPU time, and committed memory.",
+  "description": "Reusable size-ledger schema recording total distributed bytes, executable sections, imports, shaders, decoder overhead, startup time, CPU/GPU time, and committed memory. Unavailable measurements must be null and listed in unavailable_measurements.",
   "type": "object",
   "required": [
     "schema_version",
@@ -44,10 +44,13 @@
     "linker_version": { "type": "string" },
     "verification_status": {
       "type": "string",
-      "enum": ["verified", "unverified", "reference_baseline"]
+      "enum": ["verified", "unverified"]
+    },
+    "unverified_reason": {
+      "type": "string"
     },
     "total_distributed_bytes": {
-      "type": "integer",
+      "type": ["integer", "null"],
       "minimum": 512
     },
     "distributed_components": {
@@ -69,8 +72,8 @@
             "type": "string",
             "enum": ["executable", "dll", "shader_payload", "data_payload", "model", "sidecar"]
           },
-          "size_bytes": { "type": "integer", "minimum": 1 },
-          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "size_bytes": { "type": ["integer", "null"], "minimum": 1 },
+          "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
           "counted_in_total_distributed_bytes": { "type": "boolean", "const": true }
         }
       }
@@ -101,8 +104,8 @@
         "additionalProperties": false,
         "properties": {
           "name": { "type": "string", "pattern": "^\\.[a-z0-9$_]+$" },
-          "virtual_size_bytes": { "type": "integer", "minimum": 0 },
-          "raw_size_bytes": { "type": "integer", "minimum": 0 },
+          "virtual_size_bytes": { "type": ["integer", "null"], "minimum": 0 },
+          "raw_size_bytes": { "type": ["integer", "null"], "minimum": 0 },
           "characteristics": { "type": "string" }
         }
       }
@@ -148,8 +151,8 @@
           "entry_point": { "type": "string" },
           "target_profile": { "type": "string", "pattern": "^(cs|vs|ps)_6_0$" },
           "hlsl_source_bytes": { "type": "integer", "minimum": 1 },
-          "offline_dxil_bytes": { "type": "integer", "minimum": 1 },
-          "embedded_in_executable_bytes": { "type": "integer", "minimum": 0 },
+          "offline_dxil_bytes": { "type": ["integer", "null"], "minimum": 1 },
+          "embedded_in_executable_bytes": { "type": ["integer", "null"], "minimum": 0 },
           "runtime_compilation_used": { "type": "boolean", "const": false },
           "agility_sdk_required": { "type": "boolean", "const": false }
         }

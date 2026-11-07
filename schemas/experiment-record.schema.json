@@ -2,18 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nodewerk.dev/schemas/experiment-record.schema.json",
   "title": "Nodewerk Experiment Preservation Schema",
-  "description": "Preserves failed or comparative toolchain, compact-profile, and CRT-elimination experiments with their exact configuration, obligations, measurements, and failure diagnostics without silent substitution.",
+  "description": "Preserves failed or comparative toolchain, compact-profile, and CRT-elimination experiments with their exact configuration, reproducible command, obligations, measurements, and failure diagnostics without silent substitution.",
   "type": "object",
   "required": [
     "schema_version",
     "experiment_id",
     "category",
     "status",
+    "verification_status",
     "substituted_silently",
+    "reproducible_command",
     "configuration",
     "initialization_and_cleanup_obligations",
     "measurements",
-    "diagnostics"
+    "diagnostics",
+    "unavailable_measurements"
   ],
   "additionalProperties": false,
   "properties": {
@@ -27,9 +30,17 @@
       "type": "string",
       "enum": ["retained_in_baseline", "rejected_preserved", "failed_preserved"]
     },
+    "verification_status": {
+      "type": "string",
+      "enum": ["verified", "unverified"]
+    },
     "substituted_silently": {
       "type": "boolean",
       "const": false
+    },
+    "reproducible_command": {
+      "type": "string",
+      "minLength": 10
     },
     "configuration": {
       "type": "object",
@@ -78,6 +89,18 @@
         "error_code": { "type": "string" },
         "summary": { "type": "string", "minLength": 10 },
         "preservation_statement": { "type": "string", "minLength": 10 }
+      }
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "metric": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
       }
     }
   }

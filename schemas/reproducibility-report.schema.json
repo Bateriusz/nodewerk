@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nodewerk.dev/schemas/reproducibility-report.schema.json",
   "title": "Nodewerk Clean-Directory Build Reproducibility Report Schema",
-  "description": "Records independent two-clean-directory release builds with the pinned toolchain and compares artifact SHA-256 hashes.",
+  "description": "Records independent two-clean-directory release builds with the pinned toolchain and compares artifact SHA-256 hashes. Unverified builds must not claim all_artifacts_match=true or copy self-referential hashes.",
   "type": "object",
   "required": [
     "schema_version",
@@ -14,7 +14,8 @@
     "verification_status",
     "all_artifacts_match",
     "artifacts",
-    "mismatch_investigation"
+    "mismatch_investigation",
+    "unavailable_measurements"
   ],
   "additionalProperties": false,
   "properties": {
@@ -31,7 +32,12 @@
       "type": "string",
       "enum": ["verified", "unverified", "mismatch_detected"]
     },
+    "unverified_reason": { "type": "string" },
     "all_artifacts_match": { "type": "boolean" },
+    "missing_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "artifacts": {
       "type": "array",
       "minItems": 3,
@@ -50,11 +56,11 @@
         "properties": {
           "artifact_name": { "type": "string" },
           "fixture_id": { "type": "string", "enum": ["empty_player", "clear_present", "compute_shader"] },
-          "size_bytes_a": { "type": "integer", "minimum": 1 },
-          "size_bytes_b": { "type": "integer", "minimum": 1 },
-          "sha256_a": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "sha256_b": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "hash_match": { "type": "boolean" }
+          "size_bytes_a": { "type": ["integer", "null"], "minimum": 1 },
+          "size_bytes_b": { "type": ["integer", "null"], "minimum": 1 },
+          "sha256_a": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "sha256_b": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "hash_match": { "type": ["boolean", "null"] }
         }
       }
     },
@@ -66,6 +72,18 @@
         "mismatches_found": { "type": "integer", "minimum": 0 },
         "root_causes_investigated": { "type": "array", "items": { "type": "string" } },
         "remediation_applied": { "type": "string" }
+      }
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "metric": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
       }
     }
   }

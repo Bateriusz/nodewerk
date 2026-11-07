@@ -13,7 +13,8 @@
     "minimum_tested_windows_build",
     "required_feature_manifest_ref",
     "build_profiles",
-    "reproducibility_policy"
+    "reproducibility_policy",
+    "unavailable_measurements"
   ],
   "additionalProperties": false,
   "properties": {
@@ -59,6 +60,7 @@
           "compiler_version",
           "linker_version",
           "status",
+          "verification_status",
           "empty_player_bytes",
           "clear_present_bytes",
           "compute_fixture_bytes",
@@ -72,9 +74,10 @@
           "compiler_version": { "type": "string" },
           "linker_version": { "type": "string" },
           "status": { "type": "string", "enum": ["selected", "retained_alternative"] },
-          "empty_player_bytes": { "type": "integer", "minimum": 1024 },
-          "clear_present_bytes": { "type": "integer", "minimum": 1024 },
-          "compute_fixture_bytes": { "type": "integer", "minimum": 1024 },
+          "verification_status": { "type": "string", "enum": ["verified", "unverified"] },
+          "empty_player_bytes": { "type": ["integer", "null"], "minimum": 1024 },
+          "clear_present_bytes": { "type": ["integer", "null"], "minimum": 1024 },
+          "compute_fixture_bytes": { "type": ["integer", "null"], "minimum": 1024 },
           "pdb_debugging_verified": { "type": "boolean" },
           "deterministic_repro_verified": { "type": "boolean" },
           "deployment_closure_identical": { "type": "boolean", "const": true }
@@ -135,6 +138,18 @@
         "require_path_map": { "type": "boolean", "const": true },
         "require_zero_timestamp": { "type": "boolean", "const": true },
         "require_two_clean_dir_hash_match": { "type": "boolean", "const": true }
+      }
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "metric": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
       }
     }
   },

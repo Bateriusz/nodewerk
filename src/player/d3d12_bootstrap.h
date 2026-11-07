@@ -11,6 +11,7 @@ struct BootstrapConfig {
     std::uint32_t width = 1280u;
     std::uint32_t height = 720u;
     std::uint32_t frame_count = 4u;
+    std::uint32_t os_build_override = 0u;
     bool enable_d3d12_validation = false;
     bool force_diagnostics = false;
     bool has_simulated_failure = false;
@@ -18,10 +19,15 @@ struct BootstrapConfig {
     EmittedContentFeatureRequest optional_features{};
 };
 
-// Parses common CLI flags (--validation, --diagnostics, --frames N, --simulate-failure <CodeName>).
+// Parses common CLI flags (--validation, --no-validation, --diagnostics, --frames N,
+// --override-os-build N, --simulate-failure <CodeName>).
 ExitCode ParseBootstrapArgs(int argc, char** argv, BootstrapConfig* out_config) noexcept;
 
-// Runs the empty-player platform/bootstrap verification (OS baseline, capability contract, exit code).
+// Queries the active Windows build number via RtlGetVersion (ntdll.dll) on Windows.
+std::uint32_t QueryWindowsBuildNumber() noexcept;
+
+// Runs the empty-player platform/bootstrap verification (real OS build check, adapter capability
+// contract evaluation, and deterministic exit code).
 DiagnosticRecord ExecuteEmptyPlayerBootstrap(const BootstrapConfig& config) noexcept;
 
 // Runs the minimal D3D12 clear/present measurement fixture (Feature Level 12_0, 1 direct queue,
