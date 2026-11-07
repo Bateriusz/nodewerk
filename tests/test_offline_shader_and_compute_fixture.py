@@ -32,6 +32,7 @@ from offline_shader_pack import (  # noqa: E402
     verify_dxil_blob_with_cpp_validator,
 )
 from size_ledger import generate_size_comparison_report, record_release_ledgers  # noqa: E402
+from schema_validator import validate_file_against_schema  # noqa: E402
 from test_dependency_closure_and_accounting import build_synthetic_pe64  # noqa: E402
 
 
@@ -574,6 +575,12 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
     assert clang_entry["verification_status"] == "unverified"
     assert clang_entry["pdb_debugging_verified"] is False
     assert clang_entry["deterministic_repro_verified"] is False
+    # With the real schemas present, the unverified gate must still return normally and
+    # write a manifest that satisfies the PDB/reproducibility consistency invariants.
+    validate_file_against_schema(
+        repo / "benchmarks" / "toolchain-manifest.v1.json",
+        repo / "schemas" / "toolchain-manifest.schema.json",
+    )
 
     ledger = json.loads(
         (

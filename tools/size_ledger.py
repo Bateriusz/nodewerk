@@ -251,6 +251,30 @@ def _measured_byte_summary(entry: dict[str, Any]) -> str | None:
     return "; ".join(parts) if parts else None
 
 
+def _evidence_state(entry: dict[str, Any] | None) -> str:
+    """Summarize measured/verification flags so evidence text never drifts from recorded state."""
+    if entry is None:
+        return "not evaluated"
+    return (
+        f"verification_status={entry.get('verification_status', 'unverified')}, "
+        f"pdb_debugging_verified={entry.get('pdb_debugging_verified') is True}, "
+        f"deterministic_repro_verified={entry.get('deterministic_repro_verified') is True}"
+    )
+
+
+def _set_toolchain_unverified(eval_entry: dict[str, Any]) -> None:
+    """Atomically clear measurements and both evidence flags for an unverified toolchain entry.
+
+    verification_status=unverified is only valid when no byte measurement is claimed and
+    neither the CodeView/PDB nor the two-clean-directory reproducibility evidence is asserted.
+    """
+    for field, _ in _BYTE_FIELDS:
+        eval_entry[field] = None
+    eval_entry["deterministic_repro_verified"] = False
+    eval_entry["pdb_debugging_verified"] = False
+    eval_entry["verification_status"] = "unverified"
+
+
 def _derive_toolchain_evidence_text(toolchain_manifest: dict[str, Any]) -> None:
     """Refresh the human-readable selection/debug/reproducibility evidence from recorded state.
 
@@ -283,17 +307,32 @@ def _derive_toolchain_evidence_text(toolchain_manifest: dict[str, Any]) -> None:
     selected_linker = f"{pin.get('linker_name', '')} {pin.get('linker_version', '')}".strip()
     other_label = other_id or "comparison toolchain"
 
-    if selected_bytes_complete and other_bytes_complete and selected_verified and other_verified:
-        details = "; ".join(
-            f"{label} {selected.get(field)} B vs {other.get(field)} B"
-            for field, label in _BYTE_FIELDS
-        )
-        pin["selection_rationale"] = (
-            f"Selected {selected_name} + {selected_linker} as the primary toolchain configuration "
-            f"after identical-fixture comparison against {other_label}. Measured distributed bytes: "
-            f"{details}. {other_label} is larger on every fixture, and both toolchains have verified "
-            "CodeView/PDB debugging evidence plus bit-for-bit two-clean-directory reproducibility."
-        )
+    if selected_bytes_complete and other_bytes_complete:
+        if selected_verified and other_verified:
+            details = "; ".join(
+                f"{label} {selected.get(field)} B vs {other.get(field)} B"
+                for field, label in _BYTE_FIELDS
+            )
+            pin["selection_rationale"] = (
+                f"Selected {selected_name} + {selected_linker} as the primary toolchain configuration "
+                f"after identical-fixture comparison against {other_label}. Measured distributed bytes: "
+                f"{details}. {other_label} is larger on every fixture, and both toolchains have verified "
+                "CodeView/PDB debugging evidence plus bit-for-bit two-clean-directory reproducibility."
+            )
+        else:
+            # Byte counts can be complete for both toolchains while one (or both) still lacks
+            # PDB or reproducibility evidence. Derive the rationale from the actual flags so a
+            # stale "bytes remain null" sentence cannot survive a partial comparison.
+            pin["selection_rationale"] = (
+                f"Selected {selected_name} + {selected_linker} as the primary toolchain configuration "
+                f"paired against {other_label}. Measured distributed bytes for {selected_id} "
+                f"({selected.get('verification_status', 'unverified')}): {selected_summary}; "
+                f"for {other_label} ({other.get('verification_status', 'unverified') if other else 'unverified'}): "
+                f"{other_summary}. Both toolchains have complete byte measurements, but the comparison "
+                "is not verified: "
+                f"{selected_id} [{_evidence_state(selected)}], "
+                f"{other_label} [{_evidence_state(other)}]. No completed size winner is claimed."
+            )
     elif selected_summary and other_summary:
         other_status = other.get("verification_status", "unverified") if other else "unverified"
         pin["selection_rationale"] = (
@@ -471,11 +510,7 @@ def record_release_ledgers(
     all_three_ready = len(ready_specs) == len(specs)
 
     if not verification_complete or not all_three_ready:
-        for field, _ in _BYTE_FIELDS:
-            eval_entry[field] = None
-        eval_entry["deterministic_repro_verified"] = False
-        eval_entry["pdb_debugging_verified"] = False
-        eval_entry["verification_status"] = "unverified"
+        _set_toolchain_unverified(eval_entry)
         _refresh_toolchain_unavailable_measurements(toolchain_manifest)
         _derive_toolchain_evidence_text(toolchain_manifest)
         toolchain_schema_path = repo_root / "schemas" / "toolchain-manifest.schema.json"

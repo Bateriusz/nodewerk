@@ -829,7 +829,12 @@ def parse_pdb_guid_and_age(pdb_bytes: bytes) -> dict[str, Any] | None:
 
 
 def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
-    """Verify that each fixture PE carries CodeView/RSDS records and resolves to a matching MSF PDB."""
+    """Verify that each fixture PE carries CodeView/RSDS records and resolves to its MSF PDB.
+
+    A PDB only counts when its Info Stream GUID and age match the PE CodeView RSDS record.
+    A stale PDB from another build/configuration whose filename happens to match the
+    executable stem is therefore rejected rather than reported as debugging evidence.
+    """
     artifacts: list[dict[str, Any]] = []
     missing: list[str] = []
 
@@ -841,6 +846,9 @@ def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
             "pdb_file": None,
             "pdb_msf_signature": False,
             "pdb_guid_age_match": False,
+            "pdb_guid": None,
+            "pdb_age": None,
+            "pdb_mismatches": [],
         }
         if not exe_path.exists():
             record["missing"] = True
@@ -860,6 +868,7 @@ def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
         ]
         record["codeview_rsds"] = len(codeview) > 0
 
+        matched_pdb: tuple[Path, dict[str, Any]] | None = None
         for entry in codeview:
             raw_pdb_path = (entry.get("pdb_path") or "").strip()
             win_path = PureWindowsPath(raw_pdb_path)
@@ -872,23 +881,48 @@ def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
             for cand in pdb_candidates:
                 if not cand.is_file():
                     continue
-                record["pdb_file"] = cand.name
+                if record["pdb_file"] is None:
+                    record["pdb_file"] = cand.name
                 try:
                     pdb_bytes = cand.read_bytes()
                 except OSError:
                     continue
-                if pdb_bytes.startswith(PDB_MSF_SIGNATURE):
-                    record["pdb_msf_signature"] = True
-                    pdb_info = parse_pdb_guid_and_age(pdb_bytes)
-                    if (
-                        pdb_info is not None
-                        and pdb_info["guid"] == entry.get("guid")
-                        and pdb_info["age"] == entry.get("age")
-                    ):
-                        record["pdb_guid_age_match"] = True
-                        break
-            if record["pdb_guid_age_match"]:
+                if not pdb_bytes.startswith(PDB_MSF_SIGNATURE):
+                    continue
+                record["pdb_msf_signature"] = True
+                pdb_info = parse_pdb_guid_and_age(pdb_bytes)
+                if pdb_info is None:
+                    record["pdb_mismatches"].append(
+                        {"file": cand.name, "reason": "unreadable_msf_info_stream"}
+                    )
+                    continue
+                expected_guid = str(entry.get("guid") or "").lower()
+                expected_age = int(entry.get("age") or 0)
+                if (
+                    str(pdb_info["guid"]).lower() == expected_guid
+                    and int(pdb_info["age"]) == expected_age
+                ):
+                    matched_pdb = (cand, pdb_info)
+                    break
+                record["pdb_mismatches"].append(
+                    {
+                        "file": cand.name,
+                        "reason": "guid_or_age_mismatch",
+                        "expected_guid": expected_guid,
+                        "expected_age": expected_age,
+                        "observed_guid": str(pdb_info["guid"]).lower(),
+                        "observed_age": int(pdb_info["age"]),
+                    }
+                )
+            if matched_pdb is not None:
                 break
+
+        if matched_pdb is not None:
+            matched_path, matched_info = matched_pdb
+            record["pdb_file"] = matched_path.name
+            record["pdb_guid_age_match"] = True
+            record["pdb_guid"] = str(matched_info["guid"]).lower()
+            record["pdb_age"] = int(matched_info["age"])
 
         if (
             not record["codeview_rsds"]
@@ -1335,7 +1369,9 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                         "missing_or_invalid": clang_symbols.get("missing_or_invalid", []),
                         "missing_toolchain_tools": clang_symbols.get("missing_toolchain_tools", []),
                     }
-                except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+                except Exception as exc:
+                    # Debug-symbol failures are isolated from the (already successful)
+                    # reproducibility comparison so they cannot clear its PASS result.
                     report["checks"]["clang_debug_symbols"] = {
                         "passed": False,
                         "built": False,
@@ -1433,7 +1469,8 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                         "missing_or_invalid": msvc_symbols.get("missing_or_invalid", []),
                         "missing_toolchain_tools": msvc_symbols.get("missing_toolchain_tools", []),
                     }
-                except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+                except Exception as exc:
+                    # Keep MSVC/LTCG reproducibility evidence independent of PDB failures.
                     report["checks"]["msvc_debug_symbols"] = {
                         "passed": False,
                         "built": False,

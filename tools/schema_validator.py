@@ -385,6 +385,10 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     raise SchemaValidationError(
                         f"{doc_path}: unverified evaluated_toolchain '{tid}' must not have deterministic_repro_verified=true"
                     )
+                if et.get("pdb_debugging_verified") is True:
+                    raise SchemaValidationError(
+                        f"{doc_path}: unverified evaluated_toolchain '{tid}' must not have pdb_debugging_verified=true"
+                    )
             elif et_status == "verified":
                 if any(v is None for v in byte_fields):
                     raise SchemaValidationError(

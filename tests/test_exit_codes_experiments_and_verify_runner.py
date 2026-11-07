@@ -165,6 +165,55 @@ def test_reproducibility_comparison_and_pinned_toolchain_build_runner(
     assert live_report["all_artifacts_match"] is False
 
 
+def test_run_full_mode_isolates_debug_symbol_failure_from_reproducibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    sim_repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
+
+    monkeypatch.setattr(verify_module.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(verify_module.shutil, "which", lambda name, **_kw: f"/fake/{name}")
+    monkeypatch.setattr(verify_module, "find_dxc_executable", lambda *_a, **_kw: "/fake/dxc")
+    monkeypatch.setattr(
+        verify_module,
+        "build_and_compare_two_clean_directories",
+        lambda *_a, **_kw: {"all_artifacts_match": True, "verification_status": "verified"},
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "build_and_compare_two_msvc_clean_directories",
+        lambda *_a, **_kw: {"all_artifacts_match": True, "verification_status": "verified"},
+    )
+
+    def fail_debug_symbols(*_args, **_kwargs):
+        # A raised PDB verification error must be contained to the debug-symbol check.
+        raise RuntimeError("synthetic PDB verification failure")
+
+    monkeypatch.setattr(verify_module, "build_and_verify_debug_symbols", fail_debug_symbols)
+    monkeypatch.setattr(
+        verify_module,
+        "evaluate_offline_shader",
+        lambda *_a, **_kw: {"passed": False, "reason": "synthetic test"},
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "execute_release_fixture_validation",
+        lambda *_a, **_kw: {"passed": False, "reason": "synthetic test"},
+    )
+
+    _code, report = run_full_mode(sim_repo)
+
+    assert report["checks"]["reproducibility_build"]["passed"] is True
+    assert report["checks"]["msvc_ltcg_build"]["passed"] is True
+    assert report["checks"]["clang_debug_symbols"]["passed"] is False
+    assert report["checks"]["msvc_debug_symbols"]["passed"] is False
+    assert "synthetic PDB verification failure" in report["checks"]["clang_debug_symbols"]["reason"]
+    assert "synthetic PDB verification failure" in report["checks"]["msvc_debug_symbols"]["reason"]
+
+
 def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path: Path) -> None:
     ps1_path = REPO_ROOT / "tools" / "verify-nw01.ps1"
     assert ps1_path.exists()
@@ -507,6 +556,10 @@ def test_debug_symbol_evidence_requires_codeview_and_msf_pdb(tmp_path: Path) -> 
     verified = verify_debug_symbol_evidence(tmp_path)
     assert verified["verified"] is True
     assert verified["missing_or_invalid"] == []
+    empty_record = next(a for a in verified["artifacts"] if a["executable"] == "nw_empty_player.exe")
+    assert empty_record["pdb_guid_age_match"] is True
+    assert empty_record["pdb_guid"] == bytes(range(1, 17)).hex()
+    assert empty_record["pdb_age"] == 1
 
     # A PDB without the MSF signature must not count as debugging evidence.
     (tmp_path / "nw_empty_player.pdb").write_bytes(b"not-a-pdb")
@@ -521,6 +574,12 @@ def test_debug_symbol_evidence_requires_codeview_and_msf_pdb(tmp_path: Path) -> 
     stale_guid = verify_debug_symbol_evidence(tmp_path)
     assert stale_guid["verified"] is False
     assert "nw_empty_player.exe" in stale_guid["missing_or_invalid"]
+    stale_record = next(
+        a for a in stale_guid["artifacts"] if a["executable"] == "nw_empty_player.exe"
+    )
+    assert stale_record["pdb_guid_age_match"] is False
+    assert stale_record["pdb_mismatches"][-1]["reason"] == "guid_or_age_mismatch"
+    assert stale_record["pdb_mismatches"][-1]["observed_guid"] == ("ff" * 16)
 
     (tmp_path / "nw_empty_player.pdb").write_bytes(
         build_synthetic_msf_pdb(guid=bytes(range(1, 17)), age=2)

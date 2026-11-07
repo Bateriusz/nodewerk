@@ -132,6 +132,37 @@ def test_schema_rejects_premature_64kib_claim_in_size_ledger() -> None:
         validate_instance(bad_ledger, schema, schema)
 
 
+def test_unverified_toolchain_cannot_claim_pdb_or_reproducibility_evidence() -> None:
+    manifest_path = REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # An unverified toolchain must never retain a PDB success flag after a partial
+    # evidence gate: otherwise bytes/status and the evidence flags contradict each other.
+    bad = copy.deepcopy(manifest)
+    entry = bad["evaluated_toolchains"][0]
+    entry["verification_status"] = "unverified"
+    for field in ("empty_player_bytes", "clear_present_bytes", "compute_fixture_bytes"):
+        entry[field] = None
+    entry["pdb_debugging_verified"] = True
+    entry["deterministic_repro_verified"] = False
+    with pytest.raises(SchemaValidationError, match="pdb_debugging_verified=true"):
+        validate_semantic_invariants(
+            bad, "toolchain-manifest.schema.json", manifest_path
+        )
+
+    bad_repro = copy.deepcopy(manifest)
+    entry = bad_repro["evaluated_toolchains"][0]
+    entry["verification_status"] = "unverified"
+    for field in ("empty_player_bytes", "clear_present_bytes", "compute_fixture_bytes"):
+        entry[field] = None
+    entry["pdb_debugging_verified"] = False
+    entry["deterministic_repro_verified"] = True
+    with pytest.raises(SchemaValidationError, match="deterministic_repro_verified=true"):
+        validate_semantic_invariants(
+            bad_repro, "toolchain-manifest.schema.json", manifest_path
+        )
+
+
 def test_verified_clean_report_requires_real_observed_readback_hash() -> None:
     good_hash = "a" * 64
     report = {
