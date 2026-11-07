@@ -33,6 +33,30 @@ ALLOWED_HOST_ELF_NEEDED_LIBS = {
     "ld-linux-x86-64.so.2",
 }
 
+# Release deployment closures may contain only the player/fixture executables themselves.
+# Any additional file with these suffixes is a required sidecar (DLL, shader, payload, model,
+# or executable) and must be counted or rejected rather than silently ignored.
+SIDECAR_SUFFIXES = {
+    ".dll",
+    ".exe",
+    ".so",
+    ".pdb",
+    ".dxil",
+    ".cso",
+    ".bin",
+    ".dat",
+    ".pak",
+    ".pack",
+    ".nwp",
+    ".model",
+    ".mesh",
+    ".dds",
+    ".ktx2",
+    ".png",
+    ".qoa",
+    ".ogg",
+}
+
 
 def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
     """Parse sections and imported DLL names from a Windows x64 PE32+ executable."""
@@ -392,7 +416,7 @@ def verify_binary_file(
         for p in binary_path.parent.iterdir()
         if p.is_file()
         and p.name != binary_path.name
-        and p.suffix.lower() in (".dll", ".so", ".pdb", ".dxil", ".cso")
+        and p.suffix.lower() in SIDECAR_SUFFIXES
     ]
 
     if raw[:2] == b"MZ":

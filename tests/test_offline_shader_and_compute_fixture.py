@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import stat
 import struct
 import sys
@@ -24,6 +25,8 @@ from offline_shader_pack import (  # noqa: E402
     pack_dxil_to_header,
     validate_dxil_container,
 )
+from size_ledger import generate_size_comparison_report, record_release_ledgers  # noqa: E402
+from test_dependency_closure_and_accounting import build_synthetic_pe64  # noqa: E402
 
 
 def make_test_signed_dxil_container(
@@ -113,11 +116,16 @@ def test_no_synthetic_dxil_generator_and_honest_unverified_manifest() -> None:
     assert shader_entry["pinned_dxc_version"] == "1.8.2407"
     assert shader_entry["runtime_compilation_used"] is False
     assert shader_entry["agility_sdk_required"] is False
-    # On Linux host without DXC, manifest must be honestly marked unverified with compiled_offline_with_dxc=False
-    assert manifest["verification_status"] == "unverified"
-    assert shader_entry["compiled_offline_with_dxc"] is False
-    assert shader_entry["offline_dxil_bytes"] is None
-    assert shader_entry["offline_dxil_sha256"] is None
+    # Evidence must be internally consistent: unverified means no DXC claim/hash, verified means measured.
+    if manifest["verification_status"] == "unverified":
+        assert shader_entry["compiled_offline_with_dxc"] is False
+        assert shader_entry["offline_dxil_bytes"] is None
+        assert shader_entry["offline_dxil_sha256"] is None
+    else:
+        assert manifest["verification_status"] == "verified"
+        assert shader_entry["compiled_offline_with_dxc"] is True
+        assert isinstance(shader_entry["offline_dxil_bytes"], int)
+        assert len(shader_entry["offline_dxil_sha256"]) == 64
 
 
 def test_hermetic_cmake_shader_compilation_rules() -> None:
@@ -127,6 +135,8 @@ def test_hermetic_cmake_shader_compilation_rules() -> None:
     # CMakeLists.txt must place DXIL and generated header inside ${CMAKE_CURRENT_BINARY_DIR}
     assert '"${CMAKE_CURRENT_BINARY_DIR}/shaders/compute_fixture.dxil"' in cmake_lists
     assert '"${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/compute_fixture_dxil.h"' in cmake_lists
+    # The tracked source-tree stub must never be on the CMake include path.
+    assert '"${CMAKE_CURRENT_SOURCE_DIR}/shaders/generated"' not in cmake_lists
 
     # CompileShaders.cmake must attach both outputs to the custom target and provide a Python-free DXC -Fh fallback
     assert 'OUTPUT "${output_dxil}" "${output_header}"' in compile_shaders
@@ -248,3 +258,72 @@ def test_compute_fixture_expected_output_matches_reference_formula() -> None:
     assert data["elements_u32"] == recomputed
     raw_bytes = struct.pack("<256I", *recomputed)
     assert data["output_sha256"] == hashlib.sha256(raw_bytes).hexdigest()
+
+
+def test_verified_shader_manifest_does_not_break_unverified_size_ledgers(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "shaders", "fixtures"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+
+    manifest_path = repo / "shaders" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["verification_status"] = "verified"
+    manifest["shaders"][0]["compiled_offline_with_dxc"] = True
+    manifest["shaders"][0]["offline_dxil_bytes"] = 4096
+    manifest["shaders"][0]["offline_dxil_sha256"] = "c" * 64
+    manifest["unavailable_measurements"] = []
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    report = generate_size_comparison_report(repo)
+    assert report["selected_toolchain"] == "clang-cl-lld"
+    assert all(c["verification_status"] == "unverified" for c in report["fixture_comparisons"])
+
+
+def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "shaders", "fixtures"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+
+    dxil_blob = make_test_signed_dxil_container()
+    manifest_path = repo / "shaders" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["verification_status"] = "verified"
+    manifest["shaders"][0]["compiled_offline_with_dxc"] = True
+    manifest["shaders"][0]["offline_dxil_bytes"] = len(dxil_blob)
+    manifest["shaders"][0]["offline_dxil_sha256"] = hashlib.sha256(dxil_blob).hexdigest()
+    manifest["unavailable_measurements"] = []
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    empty_pe = build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
+    clear_pe = build_synthetic_pe64(
+        ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+    )
+    compute_pe = build_synthetic_pe64(
+        ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+    ) + dxil_blob
+    (bin_dir / "nw_empty_player.exe").write_bytes(empty_pe)
+    (bin_dir / "nw_clear_present_fixture.exe").write_bytes(clear_pe)
+    (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(compute_pe)
+
+    recorded = record_release_ledgers(repo, bin_dir)
+    assert set(recorded["recorded_fixtures"]) == {"empty_player", "clear_present", "compute_shader"}
+
+    empty_ledger = json.loads(
+        (repo / "benchmarks" / "ledgers" / "empty-player-clang-cl-release.json").read_text(encoding="utf-8")
+    )
+    assert empty_ledger["verification_status"] == "verified"
+    assert empty_ledger["total_distributed_bytes"] == len(empty_pe)
+    assert empty_ledger["imports"][0]["dll_name"] == "kernel32.dll"
+
+    toolchain = json.loads(
+        (repo / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
+    )
+    clang_entry = next(t for t in toolchain["evaluated_toolchains"] if t["toolchain_id"] == "clang-cl-lld")
+    assert clang_entry["empty_player_bytes"] == len(empty_pe)
+    assert clang_entry["clear_present_bytes"] == len(clear_pe)
+    assert clang_entry["compute_fixture_bytes"] == len(compute_pe)
+
+    comparison = generate_size_comparison_report(repo)
+    assert comparison["fixture_comparisons"][0]["clang_cl_lld_bytes"] == len(empty_pe)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,11 +14,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 from test_dependency_closure_and_accounting import build_synthetic_pe64  # noqa: E402
+from test_offline_shader_and_compute_fixture import make_test_signed_dxil_container  # noqa: E402
 from verify_nw01 import (  # noqa: E402
     build_and_compare_two_clean_directories,
     check_evidence_completeness,
     compare_two_build_directories,
+    find_embedded_dxil_container,
+    load_compute_expected_output,
+    parse_observed_compute_readback,
     probe_sdk_absence,
+    record_shader_manifest_evidence,
     run_clean_system_mode,
     run_full_mode,
 )
@@ -51,6 +58,9 @@ def test_exit_codes_and_d3d12_bootstrap_safety_contracts() -> None:
     assert 'LoadLibraryExA("dxgi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)' in bootstrap_cpp
     assert 'LoadLibraryExA("d3d12.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)' in bootstrap_cpp
     assert "PopulateAdapterCapabilitySnapshot(device, win_build" in bootstrap_cpp
+    # Clean-system runs must emit observed GPU readback bytes, not a copied expected hash.
+    assert 'std::strcmp(arg, "--emit-readback-values")' in bootstrap_cpp
+    assert 'NW_READBACK_U32=' in bootstrap_cpp
 
 
 def test_preserved_experiments_retain_reproducible_commands_and_honest_unverified_state() -> None:
@@ -149,23 +159,37 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     assert '[ValidateSet("Full", "CleanSystem")]' in ps1_text
     assert "verify_nw01.py" in ps1_text
 
-    # On the unverified repository checkout, all 4 physical/toolchain evidence items are unmet
+    # On the unverified repository checkout, offline-shader plus all physical/toolchain evidence items are unmet.
     evidence = check_evidence_completeness(REPO_ROOT)
     assert evidence["complete"] is False
-    assert len(evidence["unmet_requirements"]) == 4
+    assert len(evidence["unmet_requirements"]) >= 4
 
     full_code, full_summary = run_full_mode(REPO_ROOT)
     assert full_code == 2
     assert full_summary["full_baseline_passed"] is False
     assert full_summary["checks"]["schemas"]["passed"] is True
-    assert full_summary["checks"]["offline_shader"]["passed"] is True
+    assert isinstance(full_summary["checks"]["offline_shader"]["passed"], bool)
     assert full_summary["checks"]["dependency_closures"]["passed"] is True
     assert full_summary["checks"]["size_ledgers"]["passed"] is True
+    assert isinstance(full_summary["checks"]["fixture_validation"]["passed"], bool)
 
     # Test active SDK-absence probing and CleanSystem recording in an isolated repo copy
     sim_repo = tmp_path / "repo"
-    for subdir in ("benchmarks", "schemas", "fixtures"):
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
         shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
+
+    # Simulate the state after a successful offline DXC build recorded by Full mode.
+    dxil_blob = make_test_signed_dxil_container()
+    manifest_path = sim_repo / "shaders" / "manifest.json"
+    shader_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    shader_manifest["verification_status"] = "verified"
+    shader_manifest.pop("unverified_reason", None)
+    shader_manifest["shaders"][0]["compiled_offline_with_dxc"] = True
+    shader_manifest["shaders"][0]["measured_dxc_version"] = "1.8.2407.12"
+    shader_manifest["shaders"][0]["offline_dxil_bytes"] = len(dxil_blob)
+    shader_manifest["shaders"][0]["offline_dxil_sha256"] = hashlib.sha256(dxil_blob).hexdigest()
+    shader_manifest["unavailable_measurements"] = []
+    manifest_path.write_text(json.dumps(shader_manifest, indent=2) + "\n", encoding="utf-8")
 
     bin_dir = sim_repo / "build" / "clang-cl-release"
     bin_dir.mkdir(parents=True)
@@ -174,7 +198,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
         build_synthetic_pe64(["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
     )
     (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
+        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]) + dxil_blob
     )
 
     clean_sys32 = tmp_path / "System32"
@@ -192,13 +216,24 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     )
     assert dirty_checks["windows_sdk_absent"] is False
 
+    expected = load_compute_expected_output(sim_repo)
+    observed_stdout = (
+        f"NW_READBACK_ELEMENT_COUNT={expected['element_count']}\n"
+        "NW_READBACK_U32=" + ",".join(f"{v:08X}" for v in expected["elements_u32"]) + "\n"
+    )
+
+    def passing_executor(_exe: Path, fixture_id: str) -> int | tuple[int, str]:
+        if fixture_id == "compute_shader":
+            return 0, observed_stdout
+        return 0
+
     clean_code, clean_summary = run_clean_system_mode(
         sim_repo,
         bin_dir,
         allow_non_windows_simulation=True,
         env=clean_env,
         system32_dir=clean_sys32,
-        executor=lambda _exe, _fx: 0,
+        executor=passing_executor,
     )
     assert clean_code == 0
     assert clean_summary["clean_system_passed"] is True
@@ -211,3 +246,179 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     assert recorded_clean["clean_system_passed"] is True
     assert all(recorded_clean["sdk_absence_checks"].values())
     assert recorded_clean["offline_shader_execution_evidence"]["output_verified"] is True
+    assert (
+        recorded_clean["offline_shader_execution_evidence"]["observed_output_sha256"]
+        == expected["output_sha256"]
+    )
+
+    # Any uncounted release payload/sidecar must fail the clean-system dependency closure.
+    payload = bin_dir / "demo_payload.bin"
+    payload.write_bytes(b"unexpected payload")
+    payload_code, payload_summary = run_clean_system_mode(
+        sim_repo,
+        bin_dir,
+        allow_non_windows_simulation=True,
+        env=clean_env,
+        system32_dir=clean_sys32,
+        executor=passing_executor,
+    )
+    assert payload_code == 1
+    assert payload_summary["clean_system_passed"] is False
+    payload.unlink()
+
+    # A wrong readback value must fail the clean-system gate rather than copying the expected hash.
+    wrong_values = list(expected["elements_u32"])
+    wrong_values[0] ^= 0xFFFFFFFF
+    wrong_stdout = (
+        f"NW_READBACK_ELEMENT_COUNT={expected['element_count']}\n"
+        "NW_READBACK_U32=" + ",".join(f"{v:08X}" for v in wrong_values) + "\n"
+    )
+
+    def wrong_executor(_exe: Path, fixture_id: str) -> int | tuple[int, str]:
+        if fixture_id == "compute_shader":
+            return 0, wrong_stdout
+        return 0
+
+    bad_code, bad_summary = run_clean_system_mode(
+        sim_repo,
+        bin_dir,
+        allow_non_windows_simulation=True,
+        env=clean_env,
+        system32_dir=clean_sys32,
+        executor=wrong_executor,
+    )
+    assert bad_code == 1
+    assert bad_summary["clean_system_passed"] is False
+    recorded_bad = json.loads(
+        (sim_repo / "benchmarks" / "clean-system" / "clean-system-validation.json").read_text(encoding="utf-8")
+    )
+    assert recorded_bad["verification_status"] == "unverified"
+    assert recorded_bad["offline_shader_execution_evidence"]["compiled_offline_with_dxc"] is None
+    assert recorded_bad["offline_shader_execution_evidence"]["observed_output_sha256"] is None
+
+    # Without verified offline DXC evidence, a clean run may not claim offline shader execution.
+    shader_manifest["verification_status"] = "unverified"
+    shader_manifest["shaders"][0]["compiled_offline_with_dxc"] = False
+    shader_manifest["shaders"][0]["offline_dxil_bytes"] = None
+    shader_manifest["shaders"][0]["offline_dxil_sha256"] = None
+    manifest_path.write_text(json.dumps(shader_manifest, indent=2) + "\n", encoding="utf-8")
+    unverified_code, unverified_summary = run_clean_system_mode(
+        sim_repo,
+        bin_dir,
+        allow_non_windows_simulation=True,
+        env=clean_env,
+        system32_dir=clean_sys32,
+        executor=passing_executor,
+    )
+    assert unverified_code == 1
+    assert unverified_summary["clean_system_passed"] is False
+    recorded_unverified = json.loads(
+        (sim_repo / "benchmarks" / "clean-system" / "clean-system-validation.json").read_text(encoding="utf-8")
+    )
+    assert recorded_unverified["offline_shader_execution_evidence"]["compiled_offline_with_dxc"] is None
+
+
+def test_observed_readback_parser_never_copies_expected_hash() -> None:
+    expected = load_compute_expected_output(REPO_ROOT)
+    good_stdout = "NW_READBACK_ELEMENT_COUNT=256\nNW_READBACK_U32=" + ",".join(
+        f"{v:08X}" for v in expected["elements_u32"]
+    )
+    good = parse_observed_compute_readback(good_stdout, expected)
+    assert good["elements_match"] is True
+    assert good["hash_match"] is True
+    assert good["observed_output_sha256"] == expected["output_sha256"]
+
+    missing = parse_observed_compute_readback("", expected)
+    assert missing["observed_output_sha256"] is None
+    assert missing["elements_match"] is False
+
+
+def test_record_shader_manifest_evidence_uses_validated_build_artifact(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "shaders").mkdir(parents=True)
+    shutil.copy(REPO_ROOT / "shaders" / "compute_fixture.hlsl", repo / "shaders" / "compute_fixture.hlsl")
+    shutil.copy(REPO_ROOT / "shaders" / "manifest.json", repo / "shaders" / "manifest.json")
+
+    dxil_blob = make_test_signed_dxil_container()
+    dxil_path = tmp_path / "build" / "shaders" / "compute_fixture.dxil"
+    dxil_path.parent.mkdir(parents=True)
+    dxil_path.write_bytes(dxil_blob)
+
+    record_shader_manifest_evidence(repo, dxil_path, dxc_executable=None)
+    recorded = json.loads((repo / "shaders" / "manifest.json").read_text(encoding="utf-8"))
+    shader = recorded["shaders"][0]
+    assert recorded["verification_status"] == "verified"
+    assert shader["compiled_offline_with_dxc"] is True
+    assert shader["offline_dxil_bytes"] == len(dxil_blob)
+    assert shader["offline_dxil_sha256"] == hashlib.sha256(dxil_blob).hexdigest()
+
+
+def test_find_embedded_dxil_container_validates_candidate_bytes() -> None:
+    dxil_blob = make_test_signed_dxil_container()
+    synthetic_player = b"MZ" + b"\x00" * 64 + dxil_blob + b"trailing-data"
+    assert find_embedded_dxil_container(synthetic_player) == dxil_blob
+    assert find_embedded_dxil_container(b"MZ-not-a-shader") is None
+
+    corrupted = bytearray(dxil_blob)
+    corrupted[24:28] = b"\x00\x00\x00\x00"
+    assert find_embedded_dxil_container(bytes(corrupted)) is None
+
+
+def test_build_runner_invokes_pinned_two_clean_directory_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    def fake_which(name: str) -> str | None:
+        if name in {"cmake", "ninja", "clang-cl", "lld-link"}:
+            return f"/fake/{name}"
+        return None
+
+    monkeypatch.setattr(verify_module.shutil, "which", fake_which)
+    monkeypatch.setattr(verify_module, "find_dxc_executable", lambda: "/fake/dxc")
+
+    artifacts = {
+        "nw_empty_player.exe": build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]),
+        "nw_clear_present_fixture.exe": build_synthetic_pe64(
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+        ),
+        "nw_compute_shader_fixture.exe": build_synthetic_pe64(
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+        ),
+    }
+    configure_calls: list[list[str]] = []
+    build_calls: list[list[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        command = list(cmd)
+        if "-B" in command:
+            configure_calls.append(command)
+        elif "--build" in command:
+            build_calls.append(command)
+            build_dir = Path(command[command.index("--build") + 1])
+            build_dir.mkdir(parents=True, exist_ok=True)
+            for name, payload in artifacts.items():
+                (build_dir / name).write_bytes(payload)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(verify_module.subprocess, "run", fake_run)
+
+    report_path = tmp_path / "release-build-reproducibility.json"
+    report = build_and_compare_two_clean_directories(
+        REPO_ROOT,
+        tmp_path / "clean-a",
+        tmp_path / "clean-b",
+        output_report_path=report_path,
+    )
+
+    assert len(configure_calls) == 2
+    assert len(build_calls) == 2
+    for command in configure_calls:
+        joined = " ".join(command)
+        assert "clang-cl-x64.cmake" in joined
+        assert "NW_ENFORCE_PINNED_TOOLCHAIN=ON" in joined
+        assert "NW_BUILD_PROFILE=release" in joined
+    assert report["all_artifacts_match"] is True
+    recorded = json.loads(report_path.read_text(encoding="utf-8"))
+    assert recorded["verification_status"] == "verified"
+    assert all(a["hash_match"] is True for a in recorded["artifacts"])

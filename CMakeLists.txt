@@ -27,7 +27,6 @@ add_library(nw_player_bootstrap STATIC
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/generated"
 )
 nw_apply_player_profile(nw_player_bootstrap)
 add_dependencies(nw_player_bootstrap nw_offline_shaders)

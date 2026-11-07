@@ -89,7 +89,6 @@
         },
         "unexpected_sidecars_found": {
           "type": "array",
-          "maxItems": 0,
           "items": { "type": "string" }
         }
       }

@@ -261,9 +261,48 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     f"{doc_path}: unverified clean-system report must not claim compiled_offline_with_dxc=true"
                 )
         else:
+            if instance.get("clean_system_passed") is not True:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report must have clean_system_passed=true"
+                )
+            if not all(v is True for v in sdk_checks.values()):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report requires every SDK-absence check to be true"
+                )
+            if shader_ev.get("compiled_offline_with_dxc") is not True:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report requires compiled_offline_with_dxc=true"
+                )
+            if shader_ev.get("output_verified") is not True:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report requires output_verified=true"
+                )
+            if shader_ev.get("observed_output_sha256") != shader_ev.get("expected_output_sha256"):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report must have observed_output_sha256 == "
+                    "expected_output_sha256 (observed readback bytes, never a copied placeholder)"
+                )
+            for runtime_key in (
+                "runtime_dxcompiler_loaded",
+                "runtime_d3dcompiler_loaded",
+                "agility_d3d12core_redist_loaded",
+            ):
+                if shader_ev.get(runtime_key) is not False:
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified clean-system report requires {runtime_key}=false"
+                    )
+            for run in instance.get("fixture_runs", []):
+                if run.get("execution_status") != "passed" or run.get("exit_code") != 0:
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified clean-system report requires every fixture run to pass with exit_code=0"
+                    )
             if any(f.get("size_bytes") is None for f in inv.get("deployed_files", [])):
                 raise SchemaValidationError(
                     f"{doc_path}: verified clean-system report must have non-null deployed_files size_bytes"
+                )
+            if inv.get("unexpected_sidecars_found"):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report must have no unexpected sidecars or payloads"
                 )
             deployed_sum = sum(f["size_bytes"] for f in inv.get("deployed_files", []))
             if deployed_sum != inv.get("total_distributed_bytes"):

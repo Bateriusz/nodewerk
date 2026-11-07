@@ -121,6 +121,17 @@ def record_ledger_from_pe_binary(
     ledger["total_distributed_bytes"] = acct["total_distributed_bytes"]
     ledger["distributed_components"] = acct["distributed_components"]
 
+    existing_imports = {
+        imp["dll_name"].lower(): imp for imp in ledger.get("imports", [])
+    }
+    ledger["imports"] = [
+        existing_imports.get(
+            dll_name.lower(),
+            {"dll_name": dll_name, "classification": "measured", "symbols": []},
+        )
+        for dll_name in pe_info["imports"]
+    ]
+
     sec_by_name = {s["name"]: s for s in pe_info["sections"]}
     for sec_entry in ledger.get("executable_sections", []):
         measured_sec = sec_by_name.get(sec_entry["name"])
@@ -140,6 +151,105 @@ def record_ledger_from_pe_binary(
     ]
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     return ledger
+
+
+def record_release_ledgers(
+    repo_root: Path,
+    binary_dir: Path,
+    toolchain_id: str = "clang-cl-lld",
+    *,
+    deterministic_repro_verified: bool | None = None,
+) -> dict[str, Any]:
+    """Record measured release artifacts into the toolchain-specific size ledgers.
+
+    Updates only the selected toolchain's ledgers and byte fields. Unmeasured comparison
+    toolchains remain explicitly unverified rather than being copied or interpolated.
+    """
+    inventory_path = repo_root / "benchmarks" / "dependency-inventory.v1.json"
+    toolchain_path = repo_root / "benchmarks" / "toolchain-manifest.v1.json"
+    shader_manifest_path = repo_root / "shaders" / "manifest.json"
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    toolchain_manifest = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    shader_manifest = json.loads(shader_manifest_path.read_text(encoding="utf-8"))
+    shader_bytes = (shader_manifest.get("shaders") or [{}])[0].get("offline_dxil_bytes")
+
+    suffix = {
+        "clang-cl-lld": "clang-cl",
+        "msvc-ltcg": "msvc-ltcg",
+    }.get(toolchain_id)
+    if suffix is None:
+        raise SizeLedgerError(f"Unknown toolchain_id '{toolchain_id}'")
+
+    specs = [
+        ("empty_player", "nw_empty_player.exe", f"empty-player-{suffix}-release.json",
+         "empty_player_bytes", None),
+        ("clear_present", "nw_clear_present_fixture.exe", f"clear-present-{suffix}-release.json",
+         "clear_present_bytes", None),
+        ("compute_shader", "nw_compute_shader_fixture.exe", f"compute-fixture-{suffix}-release.json",
+         "compute_fixture_bytes", shader_bytes),
+    ]
+
+    recorded: dict[str, Any] = {}
+    eval_entry = next(
+        (t for t in toolchain_manifest.get("evaluated_toolchains", []) if t["toolchain_id"] == toolchain_id),
+        None,
+    )
+    if eval_entry is None:
+        raise SizeLedgerError(f"Toolchain manifest has no evaluated entry for '{toolchain_id}'")
+    if deterministic_repro_verified is not None:
+        eval_entry["deterministic_repro_verified"] = deterministic_repro_verified
+
+    for fixture_id, exe_name, ledger_name, manifest_field, dxil_bytes in specs:
+        exe_path = binary_dir / exe_name
+        ledger_path = repo_root / "benchmarks" / "ledgers" / ledger_name
+        if not exe_path.exists() or not ledger_path.exists():
+            continue
+        if fixture_id == "compute_shader" and dxil_bytes is None:
+            # Do not claim a verified compute ledger without measured offline DXIL evidence.
+            continue
+        ledger = record_ledger_from_pe_binary(
+            exe_path,
+            ledger_path,
+            inventory,
+            offline_dxil_bytes=dxil_bytes,
+        )
+        eval_entry[manifest_field] = ledger["total_distributed_bytes"]
+        recorded[fixture_id] = {
+            "ledger": ledger_name,
+            "total_distributed_bytes": ledger["total_distributed_bytes"],
+            "sha256": ledger["distributed_components"][0]["sha256"],
+        }
+
+    if recorded:
+        unavailable = [
+            m
+            for m in toolchain_manifest.get("unavailable_measurements", [])
+            if not m["metric"].startswith("evaluated_toolchains")
+        ]
+        for field in ("empty_player_bytes", "clear_present_bytes", "compute_fixture_bytes"):
+            missing = [
+                t["toolchain_id"]
+                for t in toolchain_manifest.get("evaluated_toolchains", [])
+                if t.get(field) is None
+            ]
+            if missing:
+                unavailable.append(
+                    {
+                        "metric": f"evaluated_toolchains[{','.join(missing)}].{field}",
+                        "reason": (
+                            "This toolchain fixture has not been built and measured on the pinned "
+                            "Windows 11 x64 host; recorded as null rather than interpolated."
+                        ),
+                    }
+                )
+        toolchain_manifest["unavailable_measurements"] = unavailable
+        toolchain_path.write_text(json.dumps(toolchain_manifest, indent=2) + "\n", encoding="utf-8")
+
+    return {
+        "toolchain_id": toolchain_id,
+        "recorded_fixtures": recorded,
+        "comparison_toolchain_bytes_remain_unverified": True,
+    }
 
 
 def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
@@ -217,7 +327,16 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
                 ref_sh = shader_by_id.get(sh["shader_id"])
                 if not ref_sh:
                     raise SizeLedgerError(f"{ledger_path.name}: unknown shader_id '{sh['shader_id']}'")
-                if sh["offline_dxil_bytes"] != ref_sh["offline_dxil_bytes"]:
+                if status == "verified" and ref_sh["offline_dxil_bytes"] is None:
+                    raise SizeLedgerError(
+                        f"{ledger_path.name}: verified compute ledger requires measured "
+                        "shaders/manifest.json offline_dxil_bytes"
+                    )
+                if (
+                    sh["offline_dxil_bytes"] is not None
+                    and ref_sh["offline_dxil_bytes"] is not None
+                    and sh["offline_dxil_bytes"] != ref_sh["offline_dxil_bytes"]
+                ):
                     raise SizeLedgerError(
                         f"{ledger_path.name}: shader byte mismatch ({sh['offline_dxil_bytes']} != {ref_sh['offline_dxil_bytes']})"
                     )
@@ -296,10 +415,27 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate and verify NW-01 size ledgers and toolchain comparison.")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument(
+        "--record-release-build",
+        type=Path,
+        default=None,
+        help="Directory of built release executables to record into measured size ledgers",
+    )
+    parser.add_argument(
+        "--toolchain-id",
+        choices=["clang-cl-lld", "msvc-ltcg"],
+        default="clang-cl-lld",
+    )
     args = parser.parse_args(argv)
 
     try:
-        report = generate_size_comparison_report(args.repo_root)
+        if args.record_release_build is not None:
+            recorded = record_release_ledgers(
+                args.repo_root, args.record_release_build, args.toolchain_id
+            )
+            report = {"recorded": recorded, "comparison": generate_size_comparison_report(args.repo_root)}
+        else:
+            report = generate_size_comparison_report(args.repo_root)
         print(json.dumps(report, indent=2))
         return 0
     except Exception as exc:

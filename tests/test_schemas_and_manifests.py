@@ -130,3 +130,37 @@ def test_schema_rejects_premature_64kib_claim_in_size_ledger() -> None:
     bad_ledger["budget_claim_policy"]["claims_64kib_achievable"] = True
     with pytest.raises(SchemaValidationError, match="claims_64kib_achievable"):
         validate_instance(bad_ledger, schema, schema)
+
+
+def test_verified_clean_report_requires_real_observed_readback_hash() -> None:
+    good_hash = "a" * 64
+    report = {
+        "verification_status": "verified",
+        "clean_system_passed": True,
+        "deployed_dependency_inventory": {
+            "deployed_files": [{"size_bytes": 1024}],
+            "total_distributed_bytes": 1024,
+            "unexpected_sidecars_found": [],
+        },
+        "sdk_absence_checks": {
+            "windows_sdk_absent": True,
+            "d3d12_debug_layer_absent": True,
+            "dxc_redist_absent": True,
+            "agility_sdk_redist_absent": True,
+            "msvc_debug_crt_absent": True,
+        },
+        "offline_shader_execution_evidence": {
+            "compiled_offline_with_dxc": True,
+            "runtime_dxcompiler_loaded": False,
+            "runtime_d3dcompiler_loaded": False,
+            "agility_d3d12core_redist_loaded": False,
+            "expected_output_sha256": good_hash,
+            "observed_output_sha256": "b" * 64,
+            "output_verified": True,
+        },
+        "fixture_runs": [{"execution_status": "passed", "exit_code": 0}],
+    }
+    with pytest.raises(SchemaValidationError, match="observed_output_sha256"):
+        validate_semantic_invariants(
+            report, "clean-system-report.schema.json", REPO_ROOT / "clean.json"
+        )

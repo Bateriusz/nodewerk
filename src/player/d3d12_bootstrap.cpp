@@ -1,4 +1,5 @@
 #include "d3d12_bootstrap.h"
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -68,6 +69,8 @@ ExitCode ParseBootstrapArgs(int argc, char** argv, BootstrapConfig* out_config) 
             out_config->enable_d3d12_validation = false;
         } else if (std::strcmp(arg, "--diagnostics") == 0) {
             out_config->force_diagnostics = true;
+        } else if (std::strcmp(arg, "--emit-readback-values") == 0) {
+            out_config->emit_readback_values = true;
         } else if (std::strcmp(arg, "--frames") == 0) {
             if (i + 1 >= argc) return ExitCode::InvalidArguments;
             const long parsed = std::strtol(argv[++i], nullptr, 10);
@@ -1051,6 +1054,22 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
                 "Compute shader readback buffer mismatched expected LCG^Seed sequence",
                 {}};
         }
+    }
+
+    // Machine-readable readback evidence for clean-system verification. The runner parses these
+    // observed GPU values, recomputes SHA-256, and compares them against
+    // fixtures/compute_shader/expected_output.json. Never derived from static expected data.
+    if (config.emit_readback_values) {
+        std::printf("NW_READBACK_ELEMENT_COUNT=%u\n", kElementCount);
+        std::printf("NW_READBACK_U32=");
+        for (std::uint32_t i = 0; i < kElementCount; ++i) {
+            if (i != 0u) {
+                std::printf(",");
+            }
+            std::printf("%08X", readback_buffer[i]);
+        }
+        std::printf("\n");
+        std::fflush(stdout);
     }
 
     return DiagnosticRecord{ExitCode::Success, 0u, "complete", "Compute shader fixture succeeded", {}};

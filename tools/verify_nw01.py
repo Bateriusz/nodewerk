@@ -22,20 +22,214 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from dependency_check import parse_pe64_sections_and_imports, verify_all_recorded_ledgers, verify_closure
-from offline_shader_pack import check_hlsl_source_constraints, find_dxc_executable, validate_dxil_container
+from dependency_check import (
+    DependencyClosureError,
+    SIDECAR_SUFFIXES,
+    parse_pe64_sections_and_imports,
+    verify_all_recorded_ledgers,
+    verify_closure,
+)
+from offline_shader_pack import (
+    check_hlsl_source_constraints,
+    find_dxc_executable,
+    query_dxc_version,
+    validate_dxil_container,
+)
 from schema_validator import validate_all_repository_artifacts, validate_file_against_schema
-from size_ledger import generate_size_comparison_report
+from size_ledger import generate_size_comparison_report, record_release_ledgers
 
 
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+READBACK_LINE_RE = re.compile(r"^NW_READBACK_U32=([0-9A-Fa-f,]+)$", re.MULTILINE)
+READBACK_COUNT_RE = re.compile(r"^NW_READBACK_ELEMENT_COUNT=([0-9]+)$", re.MULTILINE)
+
+
+def load_compute_expected_output(repo_root: Path) -> dict[str, Any]:
+    """Load the committed deterministic compute readback expectation."""
+    expected_path = repo_root / "fixtures" / "compute_shader" / "expected_output.json"
+    expected = json.loads(expected_path.read_text(encoding="utf-8"))
+    if expected.get("output_sha256") is None or not expected.get("elements_u32"):
+        raise ValueError(f"Compute expectation {expected_path} is missing measured elements/hash")
+    return expected
+
+
+def parse_observed_compute_readback(stdout: str, expected: dict[str, Any]) -> dict[str, Any]:
+    """Parse fixture-emitted GPU readback values and recompute the observed SHA-256.
+
+    The observed digest is derived only from values the executable actually printed after
+    D3D12 dispatch + readback. Static expected hashes are never copied into the observed field.
+    """
+    count_match = READBACK_COUNT_RE.search(stdout)
+    values_match = READBACK_LINE_RE.search(stdout)
+    if not values_match:
+        return {
+            "observed_element_count": None,
+            "observed_output_sha256": None,
+            "expected_output_sha256": expected["output_sha256"],
+            "elements_match": False,
+            "error": "fixture did not emit NW_READBACK_U32 readback evidence",
+        }
+
+    values = [int(token, 16) for token in values_match.group(1).split(",")]
+    observed_count = int(count_match.group(1)) if count_match else len(values)
+    expected_elements = expected["elements_u32"]
+    elements_match = observed_count == expected["element_count"] == len(values) and values == expected_elements
+    raw = struct.pack(f"<{len(values)}I", *values)
+    observed_sha256 = hashlib.sha256(raw).hexdigest()
+    return {
+        "observed_element_count": observed_count,
+        "observed_output_sha256": observed_sha256,
+        "expected_output_sha256": expected["output_sha256"],
+        "elements_match": elements_match,
+        "hash_match": observed_sha256 == expected["output_sha256"],
+    }
+
+
+def find_embedded_dxil_container(binary_bytes: bytes) -> bytes | None:
+    """Locate and validate a DXC-produced DXBC/DXIL container embedded in a player executable."""
+    search_from = 0
+    while True:
+        start = binary_bytes.find(b"DXBC", search_from)
+        if start < 0:
+            return None
+        if start + 28 <= len(binary_bytes):
+            total_size = struct.unpack_from("<I", binary_bytes, start + 24)[0]
+            end = start + total_size
+            if 44 <= total_size and end <= len(binary_bytes):
+                candidate = binary_bytes[start:end]
+                try:
+                    validate_dxil_container(candidate)
+                    return candidate
+                except ValueError:
+                    pass
+        search_from = start + 4
+
+
+def check_shader_manifest_evidence(repo_root: Path) -> dict[str, Any]:
+    """Return the recorded offline DXC evidence state from shaders/manifest.json."""
+    manifest_path = repo_root / "shaders" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    shader = manifest.get("shaders", [{}])[0]
+    verified = (
+        manifest.get("verification_status") == "verified"
+        and shader.get("compiled_offline_with_dxc") is True
+        and shader.get("offline_dxil_bytes") is not None
+        and shader.get("offline_dxil_sha256") is not None
+    )
+    return {
+        "verified": verified,
+        "manifest_verification_status": manifest.get("verification_status"),
+        "compiled_offline_with_dxc": shader.get("compiled_offline_with_dxc"),
+        "measured_dxc_version": shader.get("measured_dxc_version"),
+        "offline_dxil_bytes": shader.get("offline_dxil_bytes"),
+        "offline_dxil_sha256": shader.get("offline_dxil_sha256"),
+    }
+
+
+def record_shader_manifest_evidence(
+    repo_root: Path,
+    dxil_path: Path,
+    dxc_executable: str | Path | None = None,
+) -> dict[str, Any]:
+    """Record measured offline DXC output into shaders/manifest.json after validating the container."""
+    manifest_path = repo_root / "shaders" / "manifest.json"
+    hlsl_path = repo_root / "shaders" / "compute_fixture.hlsl"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    shader = manifest["shaders"][0]
+
+    blob = dxil_path.read_bytes()
+    info = validate_dxil_container(blob)
+    hlsl_bytes = hlsl_path.read_bytes()
+
+    shader["measured_dxc_version"] = (
+        query_dxc_version(str(dxc_executable)) if dxc_executable is not None else "unknown"
+    )
+    shader["compiled_offline_with_dxc"] = True
+    shader["hlsl_source_bytes"] = len(hlsl_bytes)
+    shader["hlsl_sha256"] = hashlib.sha256(hlsl_bytes).hexdigest()
+    shader["offline_dxil_bytes"] = info["size_bytes"]
+    shader["offline_dxil_sha256"] = info["sha256"]
+    if dxil_path.is_relative_to(repo_root):
+        shader["dxil_build_output_path"] = dxil_path.relative_to(repo_root).as_posix()
+        header_path = dxil_path.parent / "generated" / "compute_fixture_dxil.h"
+        if header_path.is_relative_to(repo_root):
+            shader["embedded_header_build_output_path"] = header_path.relative_to(repo_root).as_posix()
+    manifest["verification_status"] = "verified"
+    manifest.pop("unverified_reason", None)
+    manifest["unavailable_measurements"] = []
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest
+
+
+def evaluate_offline_shader(
+    repo_root: Path,
+    dxc_executable: str | None,
+    search_dirs: list[Path] | None = None,
+) -> dict[str, Any]:
+    """Validate HLSL constraints, locate a DXC-built DXIL container, and record measured evidence."""
+    hlsl_path = repo_root / "shaders" / "compute_fixture.hlsl"
+    hlsl_text = hlsl_path.read_text(encoding="utf-8")
+    hlsl_violations = check_hlsl_source_constraints(hlsl_text)
+
+    candidate_paths = [
+        path / "shaders" / "compute_fixture.dxil"
+        for path in (search_dirs or [])
+    ]
+    candidate_paths.extend(
+        [
+            repo_root / "build" / "repro-clean-a" / "shaders" / "compute_fixture.dxil",
+            repo_root / "build" / "clang-cl-release" / "shaders" / "compute_fixture.dxil",
+        ]
+    )
+    existing_dxil = next((p for p in candidate_paths if p.exists()), None)
+    dxil_info: dict[str, Any] | None = None
+    pinned_dxc = (
+        json.loads((repo_root / "shaders" / "manifest.json").read_text(encoding="utf-8"))["shaders"][0]
+        .get("pinned_dxc_version", "")
+    )
+    dxc_version_matches_pin = False
+    if existing_dxil is not None and dxc_executable is not None:
+        measured_version = query_dxc_version(str(dxc_executable))
+        dxc_version_matches_pin = bool(pinned_dxc) and pinned_dxc in measured_version
+        if dxc_version_matches_pin:
+            dxil_info = validate_dxil_container(existing_dxil.read_bytes())
+            # Record measured DXC output only after validating the real build artifact.
+            record_shader_manifest_evidence(repo_root, existing_dxil, dxc_executable)
+
+    evidence = check_shader_manifest_evidence(repo_root)
+    passed = (
+        not hlsl_violations
+        and evidence["verified"]
+        and dxil_info is not None
+        and dxc_version_matches_pin
+    )
+    return {
+        "passed": passed,
+        "verification_status": "verified" if passed else "unverified",
+        "hlsl_constraints_passed": not hlsl_violations,
+        "dxil_validated": dxil_info is not None,
+        "dxc_version_matches_pin": dxc_version_matches_pin,
+        "compiled_offline_with_dxc": evidence["compiled_offline_with_dxc"],
+        "measured_dxc_version": evidence["measured_dxc_version"],
+        "dxil": dxil_info,
+        "reason": (
+            None
+            if passed
+            else "Offline DXC evidence is unverified; run on Windows 11 x64 with the pinned dxc "
+            f"({pinned_dxc or 'unknown'}) and a validated build artifact to record shaders/manifest.json."
+        ),
+    }
 
 
 def compare_two_build_directories(
@@ -195,7 +389,11 @@ def build_and_compare_two_clean_directories(
         missing_tools.append("dxc")
 
     if missing_tools:
-        # Ensure directories do not have stale files if toolchain is missing
+        # Never compare stale artifacts from an earlier local build when the pinned toolchain
+        # is missing: remove the dedicated repro directories first so the report stays honest.
+        for d in (out_dir_a, out_dir_b):
+            if d.exists():
+                shutil.rmtree(d)
         report = compare_two_build_directories(out_dir_a, out_dir_b, output_report_path=repro_path)
         report["missing_toolchain_tools"] = missing_tools
         if repro_schema.exists():
@@ -258,6 +456,8 @@ def probe_sdk_absence(
     dxc_redist_absent = (
         not (search_dir / "dxcompiler.dll").exists()
         and not (search_dir / "dxil.dll").exists()
+        and not (sys32 / "dxcompiler.dll").exists()
+        and not (sys32 / "dxil.dll").exists()
         and shutil.which("dxc.exe") is None
     )
 
@@ -286,6 +486,14 @@ def probe_sdk_absence(
 def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
     """Check whether all physical hardware, reproducibility, and clean-system evidence is verified."""
     unmet_requirements: list[str] = []
+
+    shader_evidence = check_shader_manifest_evidence(repo_root)
+    if not shader_evidence["verified"]:
+        unmet_requirements.append(
+            "Offline DXC shader evidence (shaders/manifest.json) is not verified "
+            f"(verification_status={shader_evidence['manifest_verification_status']}, "
+            f"compiled_offline_with_dxc={shader_evidence['compiled_offline_with_dxc']})"
+        )
 
     hw_files = [
         ("rtx_4060_desktop", repo_root / "benchmarks" / "hardware" / "rtx-4060-baseline.json"),
@@ -321,6 +529,95 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
     }
 
 
+def execute_release_fixture_validation(
+    repo_root: Path,
+    binary_dir: Path,
+    *,
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    """Execute release fixtures with D3D12 validation and verify actual compute readback bytes."""
+    expected = load_compute_expected_output(repo_root)
+    specs = [
+        ("empty_player", "nw_empty_player.exe", ["--no-validation"]),
+        ("clear_present", "nw_clear_present_fixture.exe", ["--validation", "--frames", "2"]),
+        (
+            "compute_shader",
+            "nw_compute_shader_fixture.exe",
+            ["--validation", "--emit-readback-values"],
+        ),
+    ]
+
+    runs: list[dict[str, Any]] = []
+    all_passed = True
+    compute_readback: dict[str, Any] | None = None
+
+    for fixture_id, exe_name, extra_args in specs:
+        exe_path = binary_dir / exe_name
+        if not exe_path.exists():
+            all_passed = False
+            runs.append(
+                {
+                    "fixture_id": fixture_id,
+                    "executable": exe_name,
+                    "execution_status": "failed",
+                    "exit_code": None,
+                    "stdout_sha256": None,
+                    "stderr_sha256": None,
+                    "failure_reason": "release executable missing",
+                }
+            )
+            continue
+        try:
+            proc = subprocess.run(
+                [str(exe_path), *extra_args],
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+            ret_code = proc.returncode
+            stdout = proc.stdout
+            stderr = proc.stderr
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            ret_code = None
+            stdout = ""
+            stderr = str(exc)
+
+        passed = ret_code == 0
+        run_record: dict[str, Any] = {
+            "fixture_id": fixture_id,
+            "executable": exe_name,
+            "execution_status": "passed" if passed else "failed",
+            "exit_code": ret_code,
+            "stdout_sha256": hashlib.sha256(stdout.encode("utf-8")).hexdigest() if stdout else None,
+            "stderr_sha256": hashlib.sha256(stderr.encode("utf-8")).hexdigest() if stderr else None,
+        }
+
+        if fixture_id == "compute_shader":
+            compute_readback = parse_observed_compute_readback(stdout, expected)
+            run_record["readback"] = compute_readback
+            passed = (
+                passed
+                and compute_readback["elements_match"]
+                and compute_readback.get("hash_match") is True
+            )
+            run_record["execution_status"] = "passed" if passed else "failed"
+
+        if not passed:
+            all_passed = False
+            if stderr:
+                run_record["failure_reason"] = stderr.strip().splitlines()[-1][:500]
+        runs.append(run_record)
+
+    return {
+        "passed": all_passed,
+        "binary_dir": str(binary_dir),
+        "d3d12_validation_enabled": True,
+        "fixture_runs": runs,
+        "compute_readback": compute_readback,
+    }
+
+
 def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
     """Execute Mode=Full verification checks and record reproducibility evidence when built."""
     report: dict[str, Any] = {
@@ -337,34 +634,11 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
     schema_res = validate_all_repository_artifacts(repo_root)
     report["checks"]["schemas"] = {"passed": True, "validated_count": schema_res["validated_count"]}
 
-    # 2. Offline shader source & manifest verification (and DXIL validation when DXC/build output is present)
-    hlsl_path = repo_root / "shaders" / "compute_fixture.hlsl"
-    hlsl_text = hlsl_path.read_text(encoding="utf-8")
-    hlsl_violations = check_hlsl_source_constraints(hlsl_text)
-    if hlsl_violations:
-        raise RuntimeError(f"HLSL source constraint violations: {hlsl_violations}")
-
+    # 2. Offline shader source & manifest verification (re-evaluated after the Windows build below)
     dxc_bin = find_dxc_executable()
-    candidate_dxil_paths = [
-        repo_root / "build" / "repro-clean-a" / "shaders" / "compute_fixture.dxil",
-        repo_root / "build" / "clang-cl-release" / "shaders" / "compute_fixture.dxil",
-    ]
-    existing_dxil = next((p for p in candidate_dxil_paths if p.exists()), None)
-    if existing_dxil is not None:
-        dxil_info = validate_dxil_container(existing_dxil.read_bytes())
-        report["checks"]["offline_shader"] = {
-            "passed": True,
-            "hlsl_constraints_passed": True,
-            "dxil_validated": True,
-            "dxil": dxil_info,
-        }
-    else:
-        report["checks"]["offline_shader"] = {
-            "passed": True,
-            "hlsl_constraints_passed": True,
-            "dxil_validated": False,
-            "reason": "Offline DXC container not yet built in build/ directory",
-        }
+    offline_shader = evaluate_offline_shader(repo_root, dxc_bin)
+    shader_ok = offline_shader["passed"]
+    report["checks"]["offline_shader"] = offline_shader
 
     # 3. Dependency closure & size ledger checks
     dep_reports = verify_all_recorded_ledgers(repo_root)
@@ -392,17 +666,68 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
     if not dxc_bin:
         report["missing_prerequisites"].append("dxc (pinned 1.8.2407) not found in PATH")
 
+    fixture_validation_passed = False
     if is_windows and cmake_bin and ninja_bin and clang_cl_bin and lld_link_bin and dxc_bin:
-        repro_cmp = build_and_compare_two_clean_directories(repo_root)
-        report["checks"]["reproducibility_build"] = {
-            "passed": repro_cmp["all_artifacts_match"],
-            "all_artifacts_match": repro_cmp["all_artifacts_match"],
-            "recorded_to": "benchmarks/reproducibility/release-build-reproducibility.json",
-        }
+        try:
+            repro_cmp = build_and_compare_two_clean_directories(repo_root)
+            report["checks"]["reproducibility_build"] = {
+                "passed": repro_cmp["all_artifacts_match"],
+                "all_artifacts_match": repro_cmp["all_artifacts_match"],
+                "recorded_to": "benchmarks/reproducibility/release-build-reproducibility.json",
+            }
+            if repro_cmp["all_artifacts_match"]:
+                # The clean build is the authoritative source of offline DXC evidence.
+                offline_shader = evaluate_offline_shader(
+                    repo_root,
+                    dxc_bin,
+                    search_dirs=[repo_root / "build" / "repro-clean-a"],
+                )
+                shader_ok = offline_shader["passed"]
+                report["checks"]["offline_shader"] = offline_shader
+                fixture_validation = execute_release_fixture_validation(
+                    repo_root, repo_root / "build" / "repro-clean-a"
+                )
+                fixture_validation_passed = fixture_validation["passed"]
+                report["checks"]["fixture_validation"] = fixture_validation
+                try:
+                    ledger_recording = record_release_ledgers(
+                        repo_root,
+                        repo_root / "build" / "repro-clean-a",
+                        deterministic_repro_verified=repro_cmp["all_artifacts_match"],
+                    )
+                    ledger_comparison = generate_size_comparison_report(repo_root)
+                    report["checks"]["size_ledgers"] = {
+                        "passed": True,
+                        "recorded": ledger_recording,
+                        "comparison": ledger_comparison,
+                    }
+                except Exception as exc:
+                    report["checks"]["size_ledgers"] = {
+                        "passed": False,
+                        "reason": f"Measured size-ledger recording failed: {exc}",
+                    }
+            else:
+                report["checks"]["fixture_validation"] = {
+                    "passed": False,
+                    "reason": "Two-clean-directory builds did not produce matching artifacts",
+                }
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            report["checks"]["reproducibility_build"] = {
+                "passed": False,
+                "reason": f"Pinned Windows build failed: {exc}",
+            }
+            report["checks"]["fixture_validation"] = {
+                "passed": False,
+                "reason": "Skipped because the pinned Windows build failed",
+            }
     else:
         report["checks"]["reproducibility_build"] = {
             "passed": False,
             "reason": "Skipped live Windows clang-cl/DXC build due to missing host prerequisites",
+        }
+        report["checks"]["fixture_validation"] = {
+            "passed": False,
+            "reason": "Skipped release fixture execution because host prerequisites are missing",
         }
 
     # 5. Evidence completeness check (RTX 4060, RTX 50-series, clean-system, reproducibility)
@@ -410,8 +735,15 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
     report["unmet_evidence"] = evidence["unmet_requirements"]
     report["checks"]["evidence_completeness"] = {"passed": evidence["complete"]}
 
-    # Full baseline passes ONLY if there are zero missing prerequisites AND all hardware/clean-system evidence is verified
-    if not report["missing_prerequisites"] and evidence["complete"]:
+    # Full baseline passes only when every prerequisite and measured evidence item is verified.
+    if (
+        not report["missing_prerequisites"]
+        and evidence["complete"]
+        and shader_ok
+        and fixture_validation_passed
+        and report["checks"]["size_ledgers"].get("passed") is True
+        and report["checks"]["reproducibility_build"].get("passed") is True
+    ):
         report["full_baseline_passed"] = True
         return 0, report
 
@@ -425,7 +757,7 @@ def run_clean_system_mode(
     allow_non_windows_simulation: bool = False,
     env: dict[str, str] | None = None,
     system32_dir: Path | None = None,
-    executor: Callable[[Path, str], int] | None = None,
+    executor: Callable[[Path, str], int | tuple[int, str]] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Execute Mode=CleanSystem validation on a target machine without developer SDKs and record the report."""
     clean_report_path = repo_root / "benchmarks" / "clean-system" / "clean-system-validation.json"
@@ -461,6 +793,9 @@ def run_clean_system_mode(
             "recorded_report_valid": True,
         }
 
+    expected_compute = load_compute_expected_output(repo_root)
+    shader_evidence = check_shader_manifest_evidence(repo_root)
+
     # 1. Actively probe SDK and redistributable absence on the target system
     sdk_checks = probe_sdk_absence(search_dir, env=env, system32_dir=system32_dir)
     all_sdk_absent = all(sdk_checks.values())
@@ -471,7 +806,7 @@ def run_clean_system_mode(
         for p in search_dir.iterdir()
         if p.is_file()
         and p.name not in {e[1] for e in required_exes}
-        and p.suffix.lower() in (".dll", ".pdb", ".dxil", ".cso")
+        and p.suffix.lower() in SIDECAR_SUFFIXES
     ]
 
     fixture_specs: dict[str, dict[str, Any]] = {}
@@ -483,21 +818,34 @@ def run_clean_system_mode(
     resolved_inbox_dlls: set[str] = set()
     fixture_runs: list[dict[str, Any]] = []
     all_runs_passed = True
-    compute_run_passed = False
+    compute_readback: dict[str, Any] | None = None
+    embedded_dxil_verified = False
+    closure_failures: list[str] = []
 
     for fixture_id, exe_name in required_exes:
         exe_path = search_dir / exe_name
         raw_bytes = exe_path.read_bytes()
         pe_info = parse_pe64_sections_and_imports(raw_bytes)
+        if fixture_id == "compute_shader":
+            embedded = find_embedded_dxil_container(raw_bytes)
+            if embedded is not None:
+                embedded_sha256 = hashlib.sha256(embedded).hexdigest()
+                embedded_dxil_verified = (
+                    shader_evidence["offline_dxil_sha256"] == embedded_sha256
+                    and shader_evidence["offline_dxil_bytes"] == len(embedded)
+                )
         expected_imports = fixture_specs.get(fixture_id, {}).get("expected_release_imports")
-        verify_closure(
-            profile="release",
-            fixture_id=fixture_id,
-            imported_dlls=pe_info["imports"],
-            sidecar_files=sidecars,
-            inventory=inventory,
-            expected_fixture_release_imports=expected_imports,
-        )
+        try:
+            verify_closure(
+                profile="release",
+                fixture_id=fixture_id,
+                imported_dlls=pe_info["imports"],
+                sidecar_files=sidecars,
+                inventory=inventory,
+                expected_fixture_release_imports=expected_imports,
+            )
+        except DependencyClosureError as exc:
+            closure_failures.append(f"{fixture_id}: {exc}")
         for dll in pe_info["imports"]:
             resolved_inbox_dlls.add(dll.lower())
 
@@ -510,17 +858,27 @@ def run_clean_system_mode(
             }
         )
 
+        run_args = [str(exe_path), "--no-validation"]
+        if fixture_id == "compute_shader":
+            run_args.append("--emit-readback-values")
+        stdout = ""
         if executor is not None:
-            ret_code = executor(exe_path, fixture_id)
+            result = executor(exe_path, fixture_id)
+            if isinstance(result, tuple):
+                ret_code, stdout = int(result[0]), str(result[1])
+            else:
+                ret_code = int(result)
         else:
-            proc = subprocess.run([str(exe_path), "--no-validation"], capture_output=True, text=True)
+            proc = subprocess.run(run_args, capture_output=True, text=True)
             ret_code = proc.returncode
+            stdout = proc.stdout
 
         passed = ret_code == 0
+        if fixture_id == "compute_shader":
+            compute_readback = parse_observed_compute_readback(stdout, expected_compute)
+            passed = passed and compute_readback["elements_match"] and compute_readback.get("hash_match") is True
         if not passed:
             all_runs_passed = False
-        if fixture_id == "compute_shader" and passed:
-            compute_run_passed = True
 
         fixture_runs.append(
             {
@@ -532,8 +890,27 @@ def run_clean_system_mode(
         )
 
     total_distributed_bytes = sum(f["size_bytes"] for f in deployed_files)
-    clean_passed = all_runs_passed and all_sdk_absent and (len(sidecars) == 0)
-    expected_sha256 = existing_report["offline_shader_execution_evidence"]["expected_output_sha256"]
+    compute_output_verified = bool(
+        compute_readback
+        and compute_readback.get("elements_match") is True
+        and compute_readback.get("hash_match") is True
+    )
+    clean_passed = (
+        all_runs_passed
+        and all_sdk_absent
+        and (len(sidecars) == 0)
+        and not closure_failures
+        and shader_evidence["verified"]
+        and embedded_dxil_verified
+        and compute_output_verified
+    )
+    expected_sha256 = expected_compute["output_sha256"]
+
+    deployed_and_imported = {name.lower() for name in resolved_inbox_dlls}
+    deployed_and_imported.update(name.lower() for name in sidecars)
+    runtime_dxcompiler_loaded = any("dxcompiler" in name or "dxil.dll" in name for name in deployed_and_imported)
+    runtime_d3dcompiler_loaded = any("d3dcompiler" in name for name in deployed_and_imported)
+    agility_redist_loaded = any("d3d12core" in name for name in deployed_and_imported)
 
     updated_report: dict[str, Any] = {
         "schema_version": "1.0.0",
@@ -558,13 +935,23 @@ def run_clean_system_mode(
         "offline_shader_execution_evidence": {
             "shader_id": "compute_fixture_cs",
             "shader_model": "cs_6_0",
-            "compiled_offline_with_dxc": True if clean_passed else None,
-            "runtime_dxcompiler_loaded": False if clean_passed else None,
-            "runtime_d3dcompiler_loaded": False if clean_passed else None,
-            "agility_d3d12core_redist_loaded": False if clean_passed else None,
+            "compiled_offline_with_dxc": True if (clean_passed and shader_evidence["verified"]) else None,
+            "runtime_dxcompiler_loaded": (
+                runtime_dxcompiler_loaded if clean_passed else None
+            ),
+            "runtime_d3dcompiler_loaded": (
+                runtime_d3dcompiler_loaded if clean_passed else None
+            ),
+            "agility_d3d12core_redist_loaded": (
+                agility_redist_loaded if clean_passed else None
+            ),
             "expected_output_sha256": expected_sha256,
-            "observed_output_sha256": expected_sha256 if (clean_passed and compute_run_passed) else None,
-            "output_verified": True if (clean_passed and compute_run_passed) else None,
+            "observed_output_sha256": (
+                compute_readback["observed_output_sha256"]
+                if (compute_output_verified and compute_readback)
+                else None
+            ),
+            "output_verified": True if (clean_passed and compute_output_verified) else None,
         },
         "fixture_runs": (
             fixture_runs
@@ -586,8 +973,26 @@ def run_clean_system_mode(
         ),
     }
     if not clean_passed:
+        reasons = []
+        if not all_runs_passed:
+            reasons.append("one or more fixtures failed")
+        if not all_sdk_absent:
+            reasons.append("developer SDK/redistributable absence checks failed")
+        if sidecars:
+            reasons.append("unexpected sidecar files were present")
+        if closure_failures:
+            reasons.append("deployment dependency closure failed: " + " | ".join(closure_failures))
+        if not shader_evidence["verified"]:
+            reasons.append("offline DXC shader evidence in shaders/manifest.json is unverified")
+        if not embedded_dxil_verified:
+            reasons.append(
+                "deployed compute executable does not embed the validated, manifest-matched DXIL container"
+            )
+        if not compute_output_verified:
+            reasons.append("observed compute readback did not match the committed expected bytes")
         updated_report["unverified_reason"] = (
-            "CleanSystem execution failed fixture runs or SDK absence checks; see command summary."
+            "CleanSystem validation failed: " + "; ".join(reasons) if reasons else
+            "CleanSystem validation failed; see command summary."
         )
 
     clean_report_path.write_text(json.dumps(updated_report, indent=2) + "\n", encoding="utf-8")
@@ -598,6 +1003,8 @@ def run_clean_system_mode(
         "clean_system_passed": clean_passed,
         "verification_status": updated_report["verification_status"],
         "sdk_absence_checks": sdk_checks,
+        "embedded_dxil_verified": embedded_dxil_verified,
+        "dependency_closure_failures": closure_failures,
         "total_distributed_bytes": total_distributed_bytes,
         "fixture_runs": fixture_runs,
         "recorded_to": "benchmarks/clean-system/clean-system-validation.json",

@@ -51,3 +51,30 @@ If the Windows 11 inbox runtime (`d3d12.dll` / `dxgi.dll`) cannot support a stat
    - `blocker_summary`
 2. **Document Before Profile Change:** The exact blocker must be recorded in [`docs/experiments-and-blockers.md`](experiments-and-blockers.md) and [`benchmarks/experiments/`](../benchmarks/experiments/) before any ADR proposes altering `benchmarks/capability-manifest.v1.json` or shipping `D3D12Core.dll`.
 3. **Strict Byte Accounting:** If a redistributable DLL is ever approved by a subsequent ADR, its full byte size must be added to `distributed_components` and `total_distributed_bytes` in all size ledgers.
+
+## 4. Machine-Readable Compute Readback Evidence
+
+The compute fixture can be invoked with `--emit-readback-values`. After the D3D12 dispatch
+and readback complete, it prints the observed GPU values to stdout:
+
+```text
+NW_READBACK_ELEMENT_COUNT=256
+NW_READBACK_U32=99A44A05,99313F76,...
+```
+
+`tools/verify_nw01.py` parses those observed values, recomputes SHA-256 over their
+little-endian byte encoding, and compares the result with
+`fixtures/compute_shader/expected_output.json`. The `observed_output_sha256` field in
+`benchmarks/clean-system/clean-system-validation.json` is therefore derived from real
+readback bytes; it is never copied from the expected hash or from the committed report.
+A mismatch fails the CleanSystem gate even when the process exit code is zero.
+
+## 5. Recorded Offline Shader Evidence
+
+`Mode=Full` verifies the offline `cs_6_0` DXIL container produced by pinned DXC and then
+records the measured DXC version, DXIL byte size, and DXIL SHA-256 in
+`shaders/manifest.json` (`verification_status: "verified"`, `compiled_offline_with_dxc: true`).
+`Mode=CleanSystem` refuses to claim offline-compiled shader execution unless that recorded
+manifest evidence is verified and the deployed compute executable embeds a valid DXIL
+container whose size and SHA-256 match the recorded manifest. Missing DXC or missing build output remains
+`verification_status: "unverified"` rather than being reported as a passing result.

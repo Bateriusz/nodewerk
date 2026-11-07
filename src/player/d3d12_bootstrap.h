@@ -14,13 +14,14 @@ struct BootstrapConfig {
     std::uint32_t os_build_override = 0u;
     bool enable_d3d12_validation = false;
     bool force_diagnostics = false;
+    bool emit_readback_values = false;
     bool has_simulated_failure = false;
     ExitCode simulated_failure = ExitCode::Success;
     EmittedContentFeatureRequest optional_features{};
 };
 
 // Parses common CLI flags (--validation, --no-validation, --diagnostics, --frames N,
-// --override-os-build N, --simulate-failure <CodeName>).
+// --override-os-build N, --emit-readback-values, --simulate-failure <CodeName>).
 ExitCode ParseBootstrapArgs(int argc, char** argv, BootstrapConfig* out_config) noexcept;
 
 // Queries the active Windows build number via RtlGetVersion (ntdll.dll) on Windows.

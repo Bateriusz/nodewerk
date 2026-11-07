@@ -6,8 +6,8 @@
     {
       "shader_id": "compute_fixture_cs",
       "source_path": "shaders/compute_fixture.hlsl",
-      "dxil_build_output_path": "shaders/compute_fixture.dxil",
-      "embedded_header_build_output_path": "shaders/generated/compute_fixture_dxil.h",
+      "dxil_build_output_path": "build/clang-cl-release/shaders/compute_fixture.dxil",
+      "embedded_header_build_output_path": "build/clang-cl-release/shaders/generated/compute_fixture_dxil.h",
       "entry_point": "CSMain",
       "target_profile": "cs_6_0",
       "pinned_dxc_version": "1.8.2407",

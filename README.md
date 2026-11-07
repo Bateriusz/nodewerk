@@ -21,3 +21,7 @@ See [`docs/README.md`](docs/README.md) for the full NW-01 Architecture Decision 
   pwsh ./tools/verify-nw01.ps1 -Mode Full
   pwsh ./tools/verify-nw01.ps1 -Mode CleanSystem
   ```
+
+`Full` records two-clean-directory reproducibility results, validated offline DXC DXIL
+evidence, measured size ledgers, and D3D12-validation fixture runs. `CleanSystem` records
+SDK-absence checks and the observed GPU compute readback hash on the target machine.

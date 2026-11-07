@@ -310,8 +310,16 @@ def compile_and_record_manifest(
             {
                 "shader_id": "compute_fixture_cs",
                 "source_path": "shaders/compute_fixture.hlsl",
-                "dxil_build_output_path": "shaders/compute_fixture.dxil",
-                "embedded_header_build_output_path": "shaders/generated/compute_fixture_dxil.h",
+                "dxil_build_output_path": (
+                    dxil_path.relative_to(repo_root).as_posix()
+                    if dxil_path.is_relative_to(repo_root)
+                    else str(dxil_path)
+                ),
+                "embedded_header_build_output_path": (
+                    header_path.relative_to(repo_root).as_posix()
+                    if header_path.is_relative_to(repo_root)
+                    else str(header_path)
+                ),
                 "entry_point": "CSMain",
                 "target_profile": "cs_6_0",
                 "pinned_dxc_version": "1.8.2407",
