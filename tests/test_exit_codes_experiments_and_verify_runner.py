@@ -317,7 +317,9 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
     import verify_nw01 as verify_module
 
     with monkeypatch.context() as m:
-        m.setattr(verify_module.shutil, "which", lambda _name: None)
+        m.setattr(verify_module.platform, "system", lambda: "Windows")
+        m.setattr(verify_module.shutil, "which", lambda _name, **_kw: None)
+        m.setattr(verify_module, "find_dxc_executable", lambda *_a, **_kw: None)
         full_code, full_summary = run_full_mode(sim_repo)
 
     # Missing host tools mean required build coverage is absent; that is an exit 3,
@@ -397,17 +399,42 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
 
     assert _format_nvidia_driver_version("32.0.15.6603") == "566.03"
     assert _format_nvidia_driver_version("32.0.15.7216") == "572.16"
-    parsed_host_env = detect_host_system_environment(observed_stdout)
-    assert parsed_host_env["gpu_model"] is not None
 
-    # Non-NVIDIA adapters in observed_stdout or system_environment must be rejected
+    # Exercise stdout parsing without allowing the test host's Windows registry,
+    # display adapter, or NVIDIA driver to influence the result.
     intel_stdout = (
         "NW_WINDOWS_BUILD=26100\n"
         "NW_ADAPTER_DESCRIPTION=Intel(R) UHD Graphics 770\n"
     )
-    assert detect_host_system_environment(intel_stdout)["gpu_model"] is None or (
-        "nvidia" in (detect_host_system_environment(intel_stdout)["gpu_model"] or "").lower()
+    with monkeypatch.context() as m:
+        m.setattr(verify_module.platform, "system", lambda: "Linux")
+        parsed_host_env = detect_host_system_environment(observed_stdout)
+        parsed_intel_env = detect_host_system_environment(intel_stdout)
+
+    assert parsed_host_env["os_build"] == "10.0.26100.0"
+    assert parsed_host_env["gpu_model"] == "NVIDIA GeForce RTX 5080"
+    assert parsed_host_env["nvidia_driver_version"] is None
+    assert parsed_intel_env["gpu_model"] is None
+
+    # Every CleanSystem scenario below is a simulation. Bind host detection only
+    # to the synthetic fixture stdout so the physical CI runner cannot leak its
+    # registry/adapter/driver state into these unit-test outcomes.
+    def simulated_host_environment(stdout: str = "") -> dict[str, str | None]:
+        return {
+            "os_build": "10.0.26100.0" if "NW_WINDOWS_BUILD=26100" in stdout else None,
+            "gpu_model": (
+                "NVIDIA GeForce RTX 5080"
+                if "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080" in stdout
+                else None
+            ),
+            "nvidia_driver_version": None,
+        }
+
+    monkeypatch.setattr(
+        verify_module, "detect_host_system_environment", simulated_host_environment
     )
+
+    # Non-NVIDIA adapters in observed_stdout or system_environment must be rejected
     non_nv_code, non_nv_summary = run_clean_system_mode(
         sim_repo,
         bin_dir,
@@ -1472,12 +1499,23 @@ def test_failure_recovery_checks_execute_distinct_exit_codes_and_fields(
     assert missing["skipped"] is True
 
 
-def test_build_checks_mode_requires_actual_build_coverage(tmp_path: Path) -> None:
+def test_build_checks_mode_requires_actual_build_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
     sim_repo = tmp_path / "repo"
     for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
         shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
 
-    code, summary = run_build_checks_mode(sim_repo)
+    # This synthetic repository intentionally has no build system. Force the
+    # "required build coverage unavailable" precondition instead of depending
+    # on what tools happen to be installed on the CI host.
+    with monkeypatch.context() as m:
+        m.setattr(verify_module.platform, "system", lambda: "Windows")
+        m.setattr(verify_module.shutil, "which", lambda _name, **_kw: None)
+        m.setattr(verify_module, "find_dxc_executable", lambda *_a, **_kw: None)
+        code, summary = run_build_checks_mode(sim_repo)
     assert code == 1
     assert summary["mode"] == "BuildChecks"
     assert summary["build_checks_passed"] is False
