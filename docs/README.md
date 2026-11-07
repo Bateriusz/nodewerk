@@ -12,6 +12,7 @@ This directory contains the Architecture Decision Records (ADRs), dependency inv
 6. [Dependency Inventory & Distribution Accounting Policy](dependency-inventory.md)
 7. [Initialization Exit Codes, Diagnostics & Inbox-Runtime Blocker Semantics](exit-codes-and-diagnostics.md)
 8. [Preserved Toolchain, Compact-Profile & CRT Experiments](experiments-and-blockers.md)
+9. [Measured Evidence Capture Requirements](evidence-capture.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
