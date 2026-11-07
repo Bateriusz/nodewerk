@@ -1497,6 +1497,19 @@ def test_ci_provisions_pinned_msvc_toolset_and_windows_sdk() -> None:
     assert "Full mode exited 2 but required concrete check" in ci
 
 
+def test_ci_cancels_superseded_runs_and_avoids_duplicate_agent_push_runs() -> None:
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert '"agent/**"' not in ci
+    assert "concurrency:" in ci
+    assert (
+        "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+        in ci
+    )
+    assert "cancel-in-progress: true" in ci
+
+
 def test_evidence_completeness_requires_matching_artifact_hashes_and_toolchain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
