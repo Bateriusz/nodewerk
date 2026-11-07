@@ -82,12 +82,54 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $ninjaRoot
           & $ninjaExe --version
 
-      - name: Initialize pinned MSVC developer environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-          toolset: 14.40
-          sdk: 10.0.26100.0
+      - name: Initialize pinned VS 2022 MSVC 14.40 developer environment
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere -PathType Leaf)) {
+            Write-Error "vswhere.exe not found at $vswhere"
+            exit 1
+          }
+
+          $vsInstall = & $vswhere `
+            -products Microsoft.VisualStudio.Product.BuildTools `
+            -version "[17.0,18.0)" `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath `
+            -latest
+
+          if (-not $vsInstall) {
+            Write-Error "Visual Studio 2022 Build Tools installation was not found."
+            exit 1
+          }
+
+          $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars -PathType Leaf)) {
+            Write-Error "vcvars64.bat not found at $vcvars"
+            exit 1
+          }
+
+          $cmdLine = '"' + $vcvars + '" -vcvars_ver=14.40 -winsdk=10.0.26100.0 >nul && set'
+          $envDump = cmd /s /c $cmdLine
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to initialize VS 2022 MSVC 14.40 / Windows SDK 10.0.26100.0 environment."
+            exit 1
+          }
+
+          foreach ($line in $envDump) {
+            if ($line -match "^([^=]+)=(.*)$") {
+              $name = $matches[1]
+              $value = $matches[2]
+              Set-Item -Path "Env:$name" -Value $value
+              Add-Content -Path $env:GITHUB_ENV -Value "$name=$value"
+            }
+          }
+
+          where.exe cl
+          where.exe link
+          Write-Host "VCToolsVersion=$env:VCToolsVersion"
+          Write-Host "VCToolsInstallDir=$env:VCToolsInstallDir"
+          Write-Host "WindowsSDKVersion=$env:WindowsSDKVersion"
 
       - name: Provision pinned LLVM clang-cl/lld-link 18.1.8
         shell: pwsh
