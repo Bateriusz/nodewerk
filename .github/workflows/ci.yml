@@ -162,6 +162,60 @@ jobs:
           Write-Host "BuildChecks passed all concrete build/reproducibility/dependency/failure-recovery checks."
           Write-Host "Physical RTX 4060/RTX 50-series and clean-system evidence remain unverified and are NOT claimed by this job."
 
+      - name: Prepare clean-system deployment artifact
+        shell: pwsh
+        run: |
+          $source = "build/repro-clean-a/deploy"
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "nw01-clean-system-deploy"
+          if (-not (Test-Path $source -PathType Container)) {
+            Write-Error "Expected clean-system deploy directory was not produced: $source"
+            exit 1
+          }
+
+          New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+          $requiredExecutables = @(
+            "nw_empty_player.exe",
+            "nw_clear_present_fixture.exe",
+            "nw_compute_shader_fixture.exe"
+          )
+          $files = @()
+          foreach ($name in $requiredExecutables) {
+            $sourcePath = Join-Path $source $name
+            if (-not (Test-Path $sourcePath -PathType Leaf)) {
+              Write-Error "Required clean-system executable is missing: $sourcePath"
+              exit 1
+            }
+            $destinationPath = Join-Path $artifactRoot $name
+            Copy-Item -Force $sourcePath $destinationPath
+            $item = Get-Item $destinationPath
+            $files += [ordered]@{
+              name = $name
+              bytes = $item.Length
+              sha256 = (Get-FileHash -Algorithm SHA256 $destinationPath).Hash.ToLowerInvariant()
+            }
+          }
+
+          $manifest = [ordered]@{
+            schema_version = "1"
+            source_commit = $env:GITHUB_SHA
+            source_build_directory = "build/repro-clean-a"
+            toolchain = "clang-cl-lld"
+            purpose = "NW-01 CleanSystem physical Windows execution"
+            files = $files
+          }
+          $manifest | ConvertTo-Json -Depth 4 |
+            Set-Content -Encoding utf8 (Join-Path $artifactRoot "artifact-manifest.json")
+
+          Copy-Item -Force "benchmarks/toolchain-manifest.v1.json" `
+            (Join-Path $artifactRoot "toolchain-manifest.v1.json")
+
+      - name: Upload NW-01 clean-system deployment
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw01-clean-system-deploy-${{ github.sha }}
+          path: ${{ runner.temp }}/nw01-clean-system-deploy/
+          if-no-files-found: error
+          retention-days: 14
       - name: Full physical-evidence gate (declared physical target only)
         if: vars.NW_PHYSICAL_TARGET == 'true'
         shell: pwsh
