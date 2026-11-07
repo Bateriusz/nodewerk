@@ -22,7 +22,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from dependency_check import parse_pe64_sections_and_imports
+from dependency_check import (
+    SIDECAR_SUFFIXES,
+    parse_pe64_sections_and_imports,
+    verify_closure,
+)
+from schema_validator import validate_instance, validate_semantic_invariants
 
 
 class SizeLedgerError(ValueError):
@@ -91,18 +96,76 @@ def compute_distribution_accounting(
     }
 
 
+KNOWN_FIXTURE_EXECUTABLES = {
+    "nw_empty_player.exe",
+    "nw_clear_present_fixture.exe",
+    "nw_compute_shader_fixture.exe",
+}
+
+
+def _classify_imported_dll(dll_name: str, inventory: dict[str, Any]) -> str:
+    lower_dll = dll_name.lower()
+    if lower_dll == "ucrtbase.dll":
+        return "ucrt_inbox"
+    inbox_dlls = {item["dll_name"].lower() for item in inventory.get("inbox_windows_allowlist", [])}
+    if lower_dll in inbox_dlls:
+        return "windows_inbox"
+    dev_closure = inventory.get("closures", {}).get("dev", {})
+    dev_dlls = {
+        *(d.lower() for d in dev_closure.get("allowed_optional_dev_dlls", [])),
+        "ucrtbased.dll",
+        "vcruntime140d.dll",
+    }
+    if lower_dll in dev_dlls:
+        return "dev_only_diagnostic"
+    raise SizeLedgerError(f"Imported DLL '{dll_name}' has no valid schema classification in dependency inventory")
+
+
 def record_ledger_from_pe_binary(
     binary_path: Path,
     ledger_path: Path,
     inventory: dict[str, Any],
     *,
     offline_dxil_bytes: int | None = None,
+    repo_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Update a size ledger JSON file from a real measured PE32+ executable."""
+    """Update a size ledger JSON file from a real measured PE32+ executable after verifying dependency closure and schema."""
     raw = binary_path.read_bytes()
     pe_info = parse_pe64_sections_and_imports(raw)
     sha256_hex = hashlib.sha256(raw).hexdigest()
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+
+    profile = ledger.get("build_profile", "release")
+    fixture_id = ledger["fixture_id"]
+    existing_imports = {
+        imp["dll_name"].lower(): imp for imp in ledger.get("imports", [])
+    }
+
+    expected_imports: list[str] | None = None
+    if profile in ("release", "compact_experiment"):
+        fx_json = (repo_root / "fixtures" / fixture_id / "fixture.json") if repo_root else None
+        if fx_json and fx_json.exists():
+            expected_imports = json.loads(fx_json.read_text(encoding="utf-8")).get("expected_release_imports")
+        elif existing_imports:
+            expected_imports = list(existing_imports.keys())
+
+    sidecars = [
+        p.name
+        for p in binary_path.parent.iterdir()
+        if p.is_file()
+        and p.name != binary_path.name
+        and p.name not in KNOWN_FIXTURE_EXECUTABLES
+        and p.suffix.lower() in SIDECAR_SUFFIXES
+    ]
+
+    verify_closure(
+        profile=profile,
+        fixture_id=fixture_id,
+        imported_dlls=pe_info["imports"],
+        sidecar_files=sidecars,
+        inventory=inventory,
+        expected_fixture_release_imports=expected_imports,
+    )
 
     candidates = [
         {
@@ -121,16 +184,20 @@ def record_ledger_from_pe_binary(
     ledger["total_distributed_bytes"] = acct["total_distributed_bytes"]
     ledger["distributed_components"] = acct["distributed_components"]
 
-    existing_imports = {
-        imp["dll_name"].lower(): imp for imp in ledger.get("imports", [])
-    }
-    ledger["imports"] = [
-        existing_imports.get(
-            dll_name.lower(),
-            {"dll_name": dll_name, "classification": "measured", "symbols": []},
-        )
-        for dll_name in pe_info["imports"]
-    ]
+    updated_imports: list[dict[str, Any]] = []
+    for dll_name in pe_info["imports"]:
+        lower_dll = dll_name.lower()
+        if lower_dll in existing_imports:
+            updated_imports.append(existing_imports[lower_dll])
+        else:
+            updated_imports.append(
+                {
+                    "dll_name": lower_dll,
+                    "classification": _classify_imported_dll(lower_dll, inventory),
+                    "symbols": ["<imported>"],
+                }
+            )
+    ledger["imports"] = updated_imports
 
     sec_by_name = {s["name"]: s for s in pe_info["sections"]}
     for sec_entry in ledger.get("executable_sections", []):
@@ -149,6 +216,14 @@ def record_ledger_from_pe_binary(
         for m in ledger.get("unavailable_measurements", [])
         if m["metric"] not in ("total_distributed_bytes", "executable_sections", "shaders[0].offline_dxil_bytes")
     ]
+
+    schema_root = repo_root or Path(__file__).resolve().parent.parent
+    schema_path = schema_root / "schemas" / "size-ledger.schema.json"
+    if schema_path.exists():
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        validate_instance(ledger, schema, schema, path=ledger_path.name)
+        validate_semantic_invariants(ledger, schema_path.name, ledger_path)
+
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     return ledger
 
@@ -212,6 +287,7 @@ def record_release_ledgers(
             ledger_path,
             inventory,
             offline_dxil_bytes=dxil_bytes,
+            repo_root=repo_root,
         )
         eval_entry[manifest_field] = ledger["total_distributed_bytes"]
         recorded[fixture_id] = {

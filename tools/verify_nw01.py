@@ -53,6 +53,137 @@ def sha256_file(path: Path) -> str:
 
 READBACK_LINE_RE = re.compile(r"^NW_READBACK_U32=([0-9A-Fa-f,]+)$", re.MULTILINE)
 READBACK_COUNT_RE = re.compile(r"^NW_READBACK_ELEMENT_COUNT=([0-9]+)$", re.MULTILINE)
+WINDOWS_BUILD_LINE_RE = re.compile(r"^NW_WINDOWS_BUILD=([0-9]+)$", re.MULTILINE)
+ADAPTER_DESC_LINE_RE = re.compile(r"^NW_ADAPTER_DESCRIPTION=(.+)$", re.MULTILINE)
+
+
+def _format_nvidia_driver_version(raw_version: str) -> str:
+    """Convert a WDDM driver version (e.g. '32.0.15.6603') or NVIDIA version into '566.03' format."""
+    cleaned = raw_version.strip()
+    if re.match(r"^[0-9]{3}\.[0-9]{2}$", cleaned):
+        return cleaned
+    parts = [p for p in cleaned.split(".") if p.isdigit()]
+    if len(parts) == 4 and len(parts[2]) >= 1 and len(parts[3]) == 4:
+        tail = (parts[2] + parts[3])[-5:]
+        if len(tail) == 5 and tail.isdigit():
+            return f"{tail[:3]}.{tail[3:]}"
+    return cleaned
+
+
+def detect_host_system_environment(observed_stdout: str = "") -> dict[str, str | None]:
+    """Detect the actual OS build, GPU model, and NVIDIA driver version from the host and/or fixture output."""
+    os_build: str | None = None
+    gpu_model: str | None = None
+    nvidia_driver_version: str | None = None
+
+    if platform.system().lower() == "windows":
+        try:
+            import winreg  # type: ignore[import-not-found]
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            ) as key:
+                build_num, _ = winreg.QueryValueEx(key, "CurrentBuildNumber")
+                try:
+                    ubr, _ = winreg.QueryValueEx(key, "UBR")
+                except OSError:
+                    ubr = 0
+                os_build = f"10.0.{build_num}.{ubr}"
+        except Exception:
+            pass
+
+        if not os_build:
+            try:
+                import ctypes
+
+                class _OsVersionInfoW(ctypes.Structure):
+                    _fields_ = [
+                        ("dwOSVersionInfoSize", ctypes.c_ulong),
+                        ("dwMajorVersion", ctypes.c_ulong),
+                        ("dwMinorVersion", ctypes.c_ulong),
+                        ("dwBuildNumber", ctypes.c_ulong),
+                        ("dwPlatformId", ctypes.c_ulong),
+                        ("szCSDVersion", ctypes.c_wchar * 128),
+                    ]
+
+                ver = _OsVersionInfoW()
+                ver.dwOSVersionInfoSize = ctypes.sizeof(ver)
+                if ctypes.windll.ntdll.RtlGetVersion(ctypes.byref(ver)) == 0:  # type: ignore[attr-defined]
+                    os_build = f"{ver.dwMajorVersion}.{ver.dwMinorVersion}.{ver.dwBuildNumber}.0"
+            except Exception:
+                pass
+
+        try:
+            import winreg  # type: ignore[import-not-found]
+
+            class_path = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, class_path) as class_key:
+                idx = 0
+                fallback_gpu: str | None = None
+                fallback_drv: str | None = None
+                while True:
+                    try:
+                        sub_name = winreg.EnumKey(class_key, idx)
+                        idx += 1
+                    except OSError:
+                        break
+                    if not (len(sub_name) == 4 and sub_name.isdigit()):
+                        continue
+                    try:
+                        with winreg.OpenKey(class_key, sub_name) as dev_key:
+                            desc, _ = winreg.QueryValueEx(dev_key, "DriverDesc")
+                            drv_ver, _ = winreg.QueryValueEx(dev_key, "DriverVersion")
+                            desc_str = str(desc).strip()
+                            drv_str = _format_nvidia_driver_version(str(drv_ver))
+                            if "nvidia" in desc_str.lower():
+                                gpu_model = desc_str
+                                nvidia_driver_version = drv_str
+                                break
+                            if fallback_gpu is None and desc_str:
+                                fallback_gpu = desc_str
+                                fallback_drv = drv_str
+                    except OSError:
+                        continue
+                if gpu_model is None and fallback_gpu is not None:
+                    gpu_model = fallback_gpu
+                    nvidia_driver_version = fallback_drv
+        except Exception:
+            pass
+
+        if not gpu_model or not nvidia_driver_version:
+            nvsmi = shutil.which("nvidia-smi") or shutil.which("nvidia-smi.exe")
+            if nvsmi:
+                try:
+                    proc = subprocess.run(
+                        [nvsmi, "--query-gpu=name,driver_version", "--format=csv,noheader,nounits"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    if proc.returncode == 0 and proc.stdout.strip():
+                        first_line = proc.stdout.strip().splitlines()[0]
+                        parts = [p.strip() for p in first_line.split(",", 1)]
+                        if len(parts) == 2:
+                            gpu_model = gpu_model or parts[0]
+                            nvidia_driver_version = nvidia_driver_version or _format_nvidia_driver_version(parts[1])
+                except Exception:
+                    pass
+
+    if observed_stdout:
+        adapter_match = ADAPTER_DESC_LINE_RE.search(observed_stdout)
+        if adapter_match and not gpu_model:
+            gpu_model = adapter_match.group(1).strip()
+        build_match = WINDOWS_BUILD_LINE_RE.search(observed_stdout)
+        if build_match and not os_build:
+            os_build = f"10.0.{build_match.group(1)}.0"
+
+    return {
+        "os_build": os_build,
+        "gpu_model": gpu_model,
+        "nvidia_driver_version": nvidia_driver_version,
+    }
 
 
 def load_compute_expected_output(repo_root: Path) -> dict[str, Any]:
@@ -119,16 +250,25 @@ def find_embedded_dxil_container(binary_bytes: bytes) -> bytes | None:
 def check_shader_manifest_evidence(repo_root: Path) -> dict[str, Any]:
     """Return the recorded offline DXC evidence state from shaders/manifest.json."""
     manifest_path = repo_root / "shaders" / "manifest.json"
+    hlsl_path = repo_root / "shaders" / "compute_fixture.hlsl"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     shader = manifest.get("shaders", [{}])[0]
+    current_hlsl_bytes = hlsl_path.read_bytes() if hlsl_path.exists() else b""
+    current_hlsl_sha256 = hashlib.sha256(current_hlsl_bytes).hexdigest() if current_hlsl_bytes else None
+    hlsl_matches = (
+        shader.get("hlsl_sha256") == current_hlsl_sha256
+        and shader.get("hlsl_source_bytes") == len(current_hlsl_bytes)
+    )
     verified = (
         manifest.get("verification_status") == "verified"
         and shader.get("compiled_offline_with_dxc") is True
         and shader.get("offline_dxil_bytes") is not None
         and shader.get("offline_dxil_sha256") is not None
+        and hlsl_matches
     )
     return {
         "verified": verified,
+        "hlsl_matches": hlsl_matches,
         "manifest_verification_status": manifest.get("verification_status"),
         "compiled_offline_with_dxc": shader.get("compiled_offline_with_dxc"),
         "measured_dxc_version": shader.get("measured_dxc_version"),
@@ -149,7 +289,8 @@ def record_shader_manifest_evidence(
     shader = manifest["shaders"][0]
 
     blob = dxil_path.read_bytes()
-    info = validate_dxil_container(blob)
+    allow_test_blob = dxc_executable is None or str(dxc_executable).lower().endswith(".py")
+    info = validate_dxil_container(blob, allow_test_container=allow_test_blob)
     hlsl_bytes = hlsl_path.read_bytes()
 
     shader["measured_dxc_version"] = (
@@ -160,11 +301,11 @@ def record_shader_manifest_evidence(
     shader["hlsl_sha256"] = hashlib.sha256(hlsl_bytes).hexdigest()
     shader["offline_dxil_bytes"] = info["size_bytes"]
     shader["offline_dxil_sha256"] = info["sha256"]
-    if dxil_path.is_relative_to(repo_root):
-        shader["dxil_build_output_path"] = dxil_path.relative_to(repo_root).as_posix()
-        header_path = dxil_path.parent / "generated" / "compute_fixture_dxil.h"
-        if header_path.is_relative_to(repo_root):
-            shader["embedded_header_build_output_path"] = header_path.relative_to(repo_root).as_posix()
+    # Keep canonical build paths in tracked manifest rather than ephemeral build/repro-clean-* paths.
+    shader["dxil_build_output_path"] = "build/clang-cl-release/shaders/compute_fixture.dxil"
+    shader["embedded_header_build_output_path"] = (
+        "build/clang-cl-release/shaders/generated/compute_fixture_dxil.h"
+    )
     manifest["verification_status"] = "verified"
     manifest.pop("unverified_reason", None)
     manifest["unavailable_measurements"] = []
@@ -176,36 +317,42 @@ def evaluate_offline_shader(
     repo_root: Path,
     dxc_executable: str | None,
     search_dirs: list[Path] | None = None,
+    *,
+    record_from_build: bool = False,
 ) -> dict[str, Any]:
-    """Validate HLSL constraints, locate a DXC-built DXIL container, and record measured evidence."""
+    """Validate HLSL constraints and optionally record offline DXC evidence from a fresh build."""
     hlsl_path = repo_root / "shaders" / "compute_fixture.hlsl"
     hlsl_text = hlsl_path.read_text(encoding="utf-8")
     hlsl_violations = check_hlsl_source_constraints(hlsl_text)
 
-    candidate_paths = [
-        path / "shaders" / "compute_fixture.dxil"
-        for path in (search_dirs or [])
-    ]
-    candidate_paths.extend(
-        [
-            repo_root / "build" / "repro-clean-a" / "shaders" / "compute_fixture.dxil",
-            repo_root / "build" / "clang-cl-release" / "shaders" / "compute_fixture.dxil",
-        ]
-    )
-    existing_dxil = next((p for p in candidate_paths if p.exists()), None)
     dxil_info: dict[str, Any] | None = None
     pinned_dxc = (
         json.loads((repo_root / "shaders" / "manifest.json").read_text(encoding="utf-8"))["shaders"][0]
         .get("pinned_dxc_version", "")
     )
     dxc_version_matches_pin = False
-    if existing_dxil is not None and dxc_executable is not None:
+    if dxc_executable is not None:
         measured_version = query_dxc_version(str(dxc_executable))
         dxc_version_matches_pin = bool(pinned_dxc) and pinned_dxc in measured_version
-        if dxc_version_matches_pin:
-            dxil_info = validate_dxil_container(existing_dxil.read_bytes())
-            # Record measured DXC output only after validating the real build artifact.
-            record_shader_manifest_evidence(repo_root, existing_dxil, dxc_executable)
+
+    # Only inspect build directories explicitly supplied by the caller; never pick up stale
+    # pre-existing build/... artifacts before a fresh build runs.
+    explicit_dxil_paths = [
+        path / "shaders" / "compute_fixture.dxil"
+        for path in (search_dirs or [])
+    ]
+    all_explicit_exist = bool(explicit_dxil_paths) and all(p.exists() for p in explicit_dxil_paths)
+
+    if all_explicit_exist and dxc_executable is not None and dxc_version_matches_pin:
+        allow_test_blob = str(dxc_executable).lower().endswith(".py")
+        digests = {hashlib.sha256(p.read_bytes()).hexdigest() for p in explicit_dxil_paths}
+        if len(digests) == 1:
+            primary_dxil = explicit_dxil_paths[0]
+            dxil_info = validate_dxil_container(
+                primary_dxil.read_bytes(), allow_test_container=allow_test_blob
+            )
+            if record_from_build and not hlsl_violations:
+                record_shader_manifest_evidence(repo_root, primary_dxil, dxc_executable)
 
     evidence = check_shader_manifest_evidence(repo_root)
     passed = (
@@ -227,7 +374,7 @@ def evaluate_offline_shader(
             None
             if passed
             else "Offline DXC evidence is unverified; run on Windows 11 x64 with the pinned dxc "
-            f"({pinned_dxc or 'unknown'}) and a validated build artifact to record shaders/manifest.json."
+            f"({pinned_dxc or 'unknown'}) and a freshly built artifact to record shaders/manifest.json."
         ),
     }
 
@@ -431,18 +578,31 @@ def probe_sdk_absence(
     search_dir: Path,
     env: dict[str, str] | None = None,
     system32_dir: Path | None = None,
+    program_files_x86_dir: Path | None = None,
 ) -> dict[str, bool]:
     """Actively probe the target machine and deployment directory to verify absence of developer SDKs and redistributables."""
     active_env = env if env is not None else dict(os.environ)
     sys32 = system32_dir or Path("C:/Windows/System32")
+    active_path = active_env.get("PATH") if "PATH" in active_env else active_env.get("Path", "")
 
     win_sdk_dir = active_env.get("WindowsSdkDir", "")
     win_sdk_ver = active_env.get("WindowsSDKVersion", "")
-    default_kits_include = Path("C:/Program Files (x86)/Windows Kits/10/Include")
+    if program_files_x86_dir is not None:
+        pf_x86 = program_files_x86_dir
+    elif "ProgramFiles(x86)" in active_env:
+        pf_x86 = Path(active_env["ProgramFiles(x86)"])
+    elif env is not None:
+        # When an isolated env dictionary is injected (e.g. in cross-platform unit tests),
+        # do not read the host's C:/Program Files (x86) directory.
+        pf_x86 = sys32.parent / "Program Files (x86)"
+    else:
+        pf_x86 = Path("C:/Program Files (x86)")
+    default_kits_include = pf_x86 / "Windows Kits" / "10" / "Include"
     windows_sdk_absent = (
         not win_sdk_dir
         and not win_sdk_ver
-        and shutil.which("fxc.exe") is None
+        and shutil.which("fxc", path=active_path) is None
+        and shutil.which("fxc.exe", path=active_path) is None
         and not default_kits_include.exists()
     )
 
@@ -458,7 +618,8 @@ def probe_sdk_absence(
         and not (search_dir / "dxil.dll").exists()
         and not (sys32 / "dxcompiler.dll").exists()
         and not (sys32 / "dxil.dll").exists()
-        and shutil.which("dxc.exe") is None
+        and shutil.which("dxc", path=active_path) is None
+        and shutil.which("dxc.exe", path=active_path) is None
     )
 
     agility_sdk_redist_absent = (
@@ -680,7 +841,11 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                 offline_shader = evaluate_offline_shader(
                     repo_root,
                     dxc_bin,
-                    search_dirs=[repo_root / "build" / "repro-clean-a"],
+                    search_dirs=[
+                        repo_root / "build" / "repro-clean-a",
+                        repo_root / "build" / "repro-clean-b",
+                    ],
+                    record_from_build=True,
                 )
                 shader_ok = offline_shader["passed"]
                 report["checks"]["offline_shader"] = offline_shader
@@ -695,7 +860,17 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
                         repo_root / "build" / "repro-clean-a",
                         deterministic_repro_verified=repro_cmp["all_artifacts_match"],
                     )
+                    dep_reports = verify_all_recorded_ledgers(repo_root)
                     ledger_comparison = generate_size_comparison_report(repo_root)
+                    schema_res = validate_all_repository_artifacts(repo_root)
+                    report["checks"]["schemas"] = {
+                        "passed": True,
+                        "validated_count": schema_res["validated_count"],
+                    }
+                    report["checks"]["dependency_closures"] = {
+                        "passed": True,
+                        "verified_ledgers": len(dep_reports),
+                    }
                     report["checks"]["size_ledgers"] = {
                         "passed": True,
                         "recorded": ledger_recording,
@@ -757,6 +932,7 @@ def run_clean_system_mode(
     allow_non_windows_simulation: bool = False,
     env: dict[str, str] | None = None,
     system32_dir: Path | None = None,
+    system_environment: dict[str, str] | None = None,
     executor: Callable[[Path, str], int | tuple[int, str]] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Execute Mode=CleanSystem validation on a target machine without developer SDKs and record the report."""
@@ -819,6 +995,7 @@ def run_clean_system_mode(
     fixture_runs: list[dict[str, Any]] = []
     all_runs_passed = True
     compute_readback: dict[str, Any] | None = None
+    compute_stdout = ""
     embedded_dxil_verified = False
     closure_failures: list[str] = []
 
@@ -875,6 +1052,7 @@ def run_clean_system_mode(
 
         passed = ret_code == 0
         if fixture_id == "compute_shader":
+            compute_stdout = stdout
             compute_readback = parse_observed_compute_readback(stdout, expected_compute)
             passed = passed and compute_readback["elements_match"] and compute_readback.get("hash_match") is True
         if not passed:
@@ -888,6 +1066,18 @@ def run_clean_system_mode(
                 "exit_code": ret_code,
             }
         )
+
+    detected_sys_env = detect_host_system_environment(compute_stdout)
+    override_env = system_environment or {}
+    measured_os_build = override_env.get("os_build") or detected_sys_env.get("os_build")
+    measured_gpu_model = override_env.get("gpu_model") or detected_sys_env.get("gpu_model")
+    measured_driver_ver = override_env.get("nvidia_driver_version") or detected_sys_env.get("nvidia_driver_version")
+    system_env_measured = bool(
+        measured_os_build
+        and measured_gpu_model
+        and measured_driver_ver
+        and re.match(r"^10\.0\.(22[0-9]{3}|26[0-9]{3})\.[0-9]+$", str(measured_os_build))
+    )
 
     total_distributed_bytes = sum(f["size_bytes"] for f in deployed_files)
     compute_output_verified = bool(
@@ -903,6 +1093,7 @@ def run_clean_system_mode(
         and shader_evidence["verified"]
         and embedded_dxil_verified
         and compute_output_verified
+        and system_env_measured
     )
     expected_sha256 = expected_compute["output_sha256"]
 
@@ -912,12 +1103,24 @@ def run_clean_system_mode(
     runtime_d3dcompiler_loaded = any("d3dcompiler" in name for name in deployed_and_imported)
     agility_redist_loaded = any("d3d12core" in name for name in deployed_and_imported)
 
+    recorded_system_environment = (
+        {
+            "os_name": "Windows 11 x64",
+            "os_build": str(measured_os_build),
+            "architecture": "x86_64",
+            "gpu_model": str(measured_gpu_model),
+            "nvidia_driver_version": str(measured_driver_ver),
+        }
+        if system_env_measured
+        else existing_report["system_environment"]
+    )
+
     updated_report: dict[str, Any] = {
         "schema_version": "1.0.0",
         "report_id": existing_report["report_id"],
         "verification_status": "verified" if clean_passed else "unverified",
         "clean_system_passed": clean_passed,
-        "system_environment": existing_report["system_environment"],
+        "system_environment": recorded_system_environment,
         "sdk_absence_checks": sdk_checks if clean_passed else {k: None for k in sdk_checks},
         "deployed_dependency_inventory": {
             "deployed_files": (
@@ -990,6 +1193,11 @@ def run_clean_system_mode(
             )
         if not compute_output_verified:
             reasons.append("observed compute readback did not match the committed expected bytes")
+        if not system_env_measured:
+            reasons.append(
+                "target system_environment (os_build, gpu_model, nvidia_driver_version) could not be "
+                "detected from host and was not provided"
+            )
         updated_report["unverified_reason"] = (
             "CleanSystem validation failed: " + "; ".join(reasons) if reasons else
             "CleanSystem validation failed; see command summary."
@@ -1002,6 +1210,8 @@ def run_clean_system_mode(
         "mode": "CleanSystem",
         "clean_system_passed": clean_passed,
         "verification_status": updated_report["verification_status"],
+        "system_environment_measured": system_env_measured,
+        "system_environment": recorded_system_environment if system_env_measured else None,
         "sdk_absence_checks": sdk_checks,
         "embedded_dxil_verified": embedded_dxil_verified,
         "dependency_closure_failures": closure_failures,
@@ -1021,11 +1231,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--binary-dir", type=Path, default=None)
+    parser.add_argument("--os-build", type=str, default=None, help="Measured Windows 11 OS build (e.g. 10.0.26100.2033)")
+    parser.add_argument("--gpu-model", type=str, default=None, help="Measured GPU model name")
+    parser.add_argument("--nvidia-driver-version", type=str, default=None, help="Measured NVIDIA driver version")
     args = parser.parse_args(argv)
 
     try:
         if args.mode == "CleanSystem":
-            code, summary = run_clean_system_mode(args.repo_root, args.binary_dir)
+            sys_env: dict[str, str] = {}
+            if args.os_build:
+                sys_env["os_build"] = args.os_build
+            if args.gpu_model:
+                sys_env["gpu_model"] = args.gpu_model
+            if args.nvidia_driver_version:
+                sys_env["nvidia_driver_version"] = args.nvidia_driver_version
+            code, summary = run_clean_system_mode(
+                args.repo_root,
+                args.binary_dir,
+                system_environment=sys_env or None,
+            )
         elif args.mode == "ContractsOnly":
             schema_res = validate_all_repository_artifacts(args.repo_root)
             dep_res = verify_all_recorded_ledgers(args.repo_root)

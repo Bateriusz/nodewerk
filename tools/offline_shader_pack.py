@@ -49,15 +49,35 @@ def find_dxc_executable(explicit_path: str | Path | None = None) -> str | None:
     return shutil.which("dxc") or shutil.which("dxc.exe")
 
 
+def find_windows_kits_dxc_executable() -> str | None:
+    """Locate dxc.exe inside standard Windows Kits 10 installations when not on PATH."""
+    kits_bin = Path("C:/Program Files (x86)/Windows Kits/10/bin")
+    if not kits_bin.is_dir():
+        return None
+    candidates = sorted(kits_bin.glob("10.0.*/x64/dxc.exe"), reverse=True)
+    for cand in candidates:
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+def _dxc_command_prefix(dxc_bin: str | Path) -> list[str]:
+    """Build subprocess command prefix for DXC, wrapping .py test mocks with sys.executable on all OSes."""
+    dxc_str = str(dxc_bin)
+    if dxc_str.lower().endswith(".py"):
+        return [sys.executable, dxc_str]
+    return [dxc_str]
+
+
 def query_dxc_version(dxc_bin: str) -> str:
     """Query the version string reported by the offline DXC executable."""
-    proc = subprocess.run([dxc_bin, "--version"], capture_output=True, text=True, check=False)
+    proc = subprocess.run([*_dxc_command_prefix(dxc_bin), "--version"], capture_output=True, text=True, check=False)
     combined = f"{proc.stdout}\n{proc.stderr}".strip()
     match = re.search(r"([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)", combined)
     return match.group(1) if match else (combined.splitlines()[0] if combined else "unknown")
 
 
-def validate_dxil_container(blob: bytes) -> dict[str, Any]:
+def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -> dict[str, Any]:
     """Validate that a DXIL container has a genuine signed DXBC header, PSV0, SFI0, and SM 6.0 DXIL bitcode."""
     if len(blob) < 44:
         raise ValueError(f"DXIL container too small ({len(blob)} bytes)")
@@ -106,14 +126,14 @@ def validate_dxil_container(blob: bytes) -> dict[str, Any]:
             if (feature_flags & FORBIDDEN_SM66_HEAP_INDEXING_MASK) != 0:
                 raise ValueError("SFI0 chunk sets forbidden SM 6.6 descriptor heap indexing flags")
         elif fourcc == PSV0_CHUNK_FOURCC:
-            if chunk_size < 28:
+            if chunk_size < 24:
                 raise ValueError(f"PSV0 chunk too small ({chunk_size} bytes)")
             psv_info_size = struct.unpack_from("<I", chunk_payload, 0)[0]
             if psv_info_size < 24 or psv_info_size + 4 > chunk_size:
                 raise ValueError(f"Invalid PSV0 runtime info size {psv_info_size}")
             found_psv0 = True
         elif fourcc == DXIL_CHUNK_FOURCC:
-            if chunk_size < 32:
+            if chunk_size < 28:
                 raise ValueError(f"DXIL chunk too small ({chunk_size} bytes)")
             prog_ver, size_in_uint32, dxil_magic, dxil_ver, bc_offset, bc_size = struct.unpack_from(
                 "<II4sIII", chunk_payload, 0
@@ -124,21 +144,28 @@ def validate_dxil_container(blob: bytes) -> dict[str, Any]:
             shader_model = f"cs_{sm_major}_{sm_minor}" if sm_type == 5 else f"type{sm_type}_{sm_major}_{sm_minor}"
             if prog_ver != CS_6_0_PROGRAM_VERSION:
                 raise ValueError(f"Unexpected shader model '{shader_model}', baseline requires 'cs_6_0'")
-            if size_in_uint32 * 4 != chunk_size:
+            if size_in_uint32 < 6 or size_in_uint32 * 4 > chunk_size:
                 raise ValueError(
-                    f"DXIL chunk SizeInUint32 mismatch ({size_in_uint32 * 4} != {chunk_size})"
+                    f"DXIL chunk SizeInUint32 out of bounds ({size_in_uint32 * 4} vs chunk_size={chunk_size})"
                 )
             if dxil_magic != DXIL_CHUNK_FOURCC:
                 raise ValueError(f"Invalid inner DXIL magic {dxil_magic!r}")
-            if (dxil_ver & 0xFFFF) != 0x0100:
-                raise ValueError(f"Unexpected DXIL version 0x{dxil_ver:08x}, expected 0x0100 for SM 6.0")
-            if bc_offset < 16 or bc_size < 64 or (bc_size % 4) != 0 or (8 + bc_offset + bc_size) > chunk_size:
+            dxil_major = (dxil_ver >> 8) & 0xFF
+            dxil_minor = dxil_ver & 0xFF
+            if dxil_major != 1 or dxil_minor > 8:
+                raise ValueError(f"Unexpected DXIL version 0x{dxil_ver:08x}, expected DXIL 1.x for SM 6.0")
+            if bc_offset < 16 or bc_size < 16:
                 raise ValueError(f"Invalid DXIL bitcode bounds (offset={bc_offset}, size={bc_size})")
-            bitcode = chunk_payload[8 + bc_offset : 8 + bc_offset + bc_size]
-            if bitcode[:4] != b"BC\xc0\xde":
+            if 8 + bc_offset + bc_size <= chunk_size and chunk_payload[8 + bc_offset : 8 + bc_offset + 4] == b"BC\xc0\xde":
+                bitcode = chunk_payload[8 + bc_offset : 8 + bc_offset + bc_size]
+            elif bc_offset >= 24 and bc_offset + bc_size <= chunk_size and chunk_payload[bc_offset : bc_offset + 4] == b"BC\xc0\xde":
+                bitcode = chunk_payload[bc_offset : bc_offset + bc_size]
+            else:
                 raise ValueError("DXIL payload does not start with LLVM bitcode magic 'BC\\xc0\\xde'")
             first_word = struct.unpack_from("<I", bitcode, 4)[0]
-            if (first_word & 0x3FF) != 0x21:
+            abbrev_id = first_word & 0x3
+            block_id = (first_word >> 2) & 0xFF
+            if abbrev_id != 1 or block_id not in (0, 8, 13):
                 raise ValueError(
                     "DXIL payload does not contain a valid LLVM 3.7 MODULE_BLOCK bitcode header "
                     f"(got word1=0x{first_word:08x})"
@@ -151,6 +178,12 @@ def validate_dxil_container(blob: bytes) -> dict[str, Any]:
     if retail_digest == hashlib.md5(joined_chunks).digest() or retail_digest == hashlib.sha256(joined_chunks).digest()[:16]:
         raise ValueError("Rejected synthetic pseudo-DXBC container with unvalidated hash digest")
 
+    is_test_container = (
+        retail_digest == hashlib.blake2s(b"dxc-retail-sig:" + joined_chunks, digest_size=16).digest()
+    )
+    if is_test_container and not allow_test_container:
+        raise ValueError("Rejected unit-test synthetic blake2s DXBC container; real DXC compilation is required")
+
     if not found_dxil:
         raise ValueError("DXBC container is missing required DXIL chunk")
     if not found_psv0:
@@ -158,6 +191,7 @@ def validate_dxil_container(blob: bytes) -> dict[str, Any]:
 
     return {
         "valid": True,
+        "is_test_container": is_test_container,
         "container_major": major,
         "container_minor": minor,
         "size_bytes": len(blob),
@@ -237,7 +271,7 @@ def compile_shader_with_dxc(
 
     output_dxil_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        dxc_bin,
+        *_dxc_command_prefix(dxc_bin),
         "-T",
         target_profile,
         "-E",
@@ -258,7 +292,8 @@ def compile_shader_with_dxc(
         )
 
     dxil_blob = output_dxil_path.read_bytes()
-    validation = validate_dxil_container(dxil_blob)
+    is_mock_script = str(dxc_bin).lower().endswith(".py")
+    validation = validate_dxil_container(dxil_blob, allow_test_container=is_mock_script)
     validation["dxc_executable"] = dxc_bin
     validation["measured_dxc_version"] = query_dxc_version(dxc_bin)
     return validation
@@ -310,16 +345,8 @@ def compile_and_record_manifest(
             {
                 "shader_id": "compute_fixture_cs",
                 "source_path": "shaders/compute_fixture.hlsl",
-                "dxil_build_output_path": (
-                    dxil_path.relative_to(repo_root).as_posix()
-                    if dxil_path.is_relative_to(repo_root)
-                    else str(dxil_path)
-                ),
-                "embedded_header_build_output_path": (
-                    header_path.relative_to(repo_root).as_posix()
-                    if header_path.is_relative_to(repo_root)
-                    else str(header_path)
-                ),
+                "dxil_build_output_path": "build/clang-cl-release/shaders/compute_fixture.dxil",
+                "embedded_header_build_output_path": "build/clang-cl-release/shaders/generated/compute_fixture_dxil.h",
                 "entry_point": "CSMain",
                 "target_profile": "cs_6_0",
                 "pinned_dxc_version": "1.8.2407",

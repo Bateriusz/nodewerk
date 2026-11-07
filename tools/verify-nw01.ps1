@@ -55,7 +55,16 @@ param(
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
 
     [Parameter(Mandatory = $false)]
-    [string]$BinaryDir = ""
+    [string]$BinaryDir = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$OsBuild = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$GpuModel = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$NvidiaDriverVersion = ""
 )
 
 Set-StrictMode -Version Latest
@@ -79,6 +88,15 @@ if (-not (Test-Path $VerifyPy)) {
 $CmdArgs = @($VerifyPy, "--mode", $Mode, "--repo-root", $RepoRoot)
 if ($BinaryDir -ne "") {
     $CmdArgs += @("--binary-dir", $BinaryDir)
+}
+if ($OsBuild -ne "") {
+    $CmdArgs += @("--os-build", $OsBuild)
+}
+if ($GpuModel -ne "") {
+    $CmdArgs += @("--gpu-model", $GpuModel)
+}
+if ($NvidiaDriverVersion -ne "") {
+    $CmdArgs += @("--nvidia-driver-version", $NvidiaDriverVersion)
 }
 
 & $PythonCmd.Source @CmdArgs

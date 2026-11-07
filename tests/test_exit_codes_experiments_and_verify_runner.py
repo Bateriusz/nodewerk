@@ -16,9 +16,12 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 from test_dependency_closure_and_accounting import build_synthetic_pe64  # noqa: E402
 from test_offline_shader_and_compute_fixture import make_test_signed_dxil_container  # noqa: E402
 from verify_nw01 import (  # noqa: E402
+    _format_nvidia_driver_version,
     build_and_compare_two_clean_directories,
     check_evidence_completeness,
     compare_two_build_directories,
+    detect_host_system_environment,
+    evaluate_offline_shader,
     find_embedded_dxil_container,
     load_compute_expected_output,
     parse_observed_compute_readback,
@@ -58,6 +61,10 @@ def test_exit_codes_and_d3d12_bootstrap_safety_contracts() -> None:
     assert 'LoadLibraryExA("dxgi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)' in bootstrap_cpp
     assert 'LoadLibraryExA("d3d12.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)' in bootstrap_cpp
     assert "PopulateAdapterCapabilitySnapshot(device, win_build" in bootstrap_cpp
+    # All three adapter enumeration loops must check FAILED(enum_hr) || !candidate before dereferencing
+    assert bootstrap_cpp.count("const HRESULT enum_hr = factory->EnumAdapters1(idx, &candidate);") == 3
+    assert bootstrap_cpp.count("if (FAILED(enum_hr) || !candidate)") == 3
+    assert bootstrap_cpp.count("if (FAILED(candidate->GetDesc1(&desc)))") == 3
     # Clean-system runs must emit observed GPU readback bytes, not a copied expected hash.
     assert 'std::strcmp(arg, "--emit-readback-values")' in bootstrap_cpp
     assert 'NW_READBACK_U32=' in bootstrap_cpp
@@ -90,7 +97,11 @@ def test_preserved_experiments_retain_reproducible_commands_and_honest_unverifie
     assert "NW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT=ON" in compact_rec["reproducible_command"]
 
 
-def test_reproducibility_comparison_and_pinned_toolchain_build_runner(tmp_path: Path) -> None:
+def test_reproducibility_comparison_and_pinned_toolchain_build_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
     dir_a = tmp_path / "repro-clean-a"
     dir_b = tmp_path / "repro-clean-b"
     dir_a.mkdir()
@@ -134,7 +145,9 @@ def test_reproducibility_comparison_and_pinned_toolchain_build_runner(tmp_path: 
     assert mismatch_report["verification_status"] == "mismatch_detected"
     assert mismatch_report["mismatch_investigation"]["mismatches_found"] == 1
 
-    # Invoke build_and_compare_two_clean_directories: on Linux without clang-cl/dxc, it must record unverified
+    # When pinned tools are absent, build_and_compare_two_clean_directories must record unverified
+    monkeypatch.setattr(verify_module.shutil, "which", lambda _name, **_kw: None)
+    monkeypatch.setattr(verify_module, "find_dxc_executable", lambda *_a, **_kw: None)
     live_repro_out = tmp_path / "live-repro.json"
     live_report = build_and_compare_two_clean_directories(
         REPO_ROOT,
@@ -143,12 +156,9 @@ def test_reproducibility_comparison_and_pinned_toolchain_build_runner(tmp_path: 
         output_report_path=live_repro_out,
     )
     assert live_repro_out.exists()
-    if "missing_toolchain_tools" in live_report:
-        assert live_report["verification_status"] == "unverified"
-        assert live_report["all_artifacts_match"] is False
-    else:
-        assert live_report["verification_status"] == "verified"
-        assert live_report["all_artifacts_match"] is True
+    assert "missing_toolchain_tools" in live_report
+    assert live_report["verification_status"] == "unverified"
+    assert live_report["all_artifacts_match"] is False
 
 
 def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path: Path) -> None:
@@ -164,7 +174,12 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     assert evidence["complete"] is False
     assert len(evidence["unmet_requirements"]) >= 4
 
-    full_code, full_summary = run_full_mode(REPO_ROOT)
+    # Test active SDK-absence probing and CleanSystem recording in an isolated repo copy
+    sim_repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
+
+    full_code, full_summary = run_full_mode(sim_repo)
     assert full_code == 2
     assert full_summary["full_baseline_passed"] is False
     assert full_summary["checks"]["schemas"]["passed"] is True
@@ -172,11 +187,6 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     assert full_summary["checks"]["dependency_closures"]["passed"] is True
     assert full_summary["checks"]["size_ledgers"]["passed"] is True
     assert isinstance(full_summary["checks"]["fixture_validation"]["passed"], bool)
-
-    # Test active SDK-absence probing and CleanSystem recording in an isolated repo copy
-    sim_repo = tmp_path / "repo"
-    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
-        shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
 
     # Simulate the state after a successful offline DXC build recorded by Full mode.
     dxil_blob = make_test_signed_dxil_container()
@@ -208,7 +218,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     sdk_checks = probe_sdk_absence(bin_dir, env=clean_env, system32_dir=clean_sys32)
     assert all(sdk_checks.values())
 
-    # If WindowsSdkDir is set or d3d12sdklayers.dll is present, probe_sdk_absence detects it
+    # If WindowsSdkDir is set or Windows Kits Include exists in ProgramFiles(x86), probe_sdk_absence detects it
     dirty_checks = probe_sdk_absence(
         bin_dir,
         env={"WindowsSdkDir": "C:/Program Files (x86)/Windows Kits/10/"},
@@ -216,8 +226,20 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     )
     assert dirty_checks["windows_sdk_absent"] is False
 
+    fake_pf_x86 = tmp_path / "FakeProgramFilesX86"
+    (fake_pf_x86 / "Windows Kits" / "10" / "Include").mkdir(parents=True)
+    kits_checks = probe_sdk_absence(
+        bin_dir,
+        env={},
+        system32_dir=clean_sys32,
+        program_files_x86_dir=fake_pf_x86,
+    )
+    assert kits_checks["windows_sdk_absent"] is False
+
     expected = load_compute_expected_output(sim_repo)
     observed_stdout = (
+        "NW_WINDOWS_BUILD=26100\n"
+        "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080\n"
         f"NW_READBACK_ELEMENT_COUNT={expected['element_count']}\n"
         "NW_READBACK_U32=" + ",".join(f"{v:08X}" for v in expected["elements_u32"]) + "\n"
     )
@@ -227,12 +249,43 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
             return 0, observed_stdout
         return 0
 
+    assert _format_nvidia_driver_version("32.0.15.6603") == "566.03"
+    assert _format_nvidia_driver_version("32.0.15.7216") == "572.16"
+    parsed_host_env = detect_host_system_environment(observed_stdout)
+    assert parsed_host_env["gpu_model"] is not None
+
+    # Without measured or operator-provided system_environment (e.g. missing driver version on non-Windows),
+    # CleanSystem must NOT copy the static template into a verified report.
+    no_env_stdout = (
+        f"NW_READBACK_ELEMENT_COUNT={expected['element_count']}\n"
+        "NW_READBACK_U32=" + ",".join(f"{v:08X}" for v in expected["elements_u32"]) + "\n"
+    )
+    if parsed_host_env.get("nvidia_driver_version") is None:
+        no_env_code, no_env_summary = run_clean_system_mode(
+            sim_repo,
+            bin_dir,
+            allow_non_windows_simulation=True,
+            env=clean_env,
+            system32_dir=clean_sys32,
+            executor=lambda _exe, fx: (0, no_env_stdout) if fx == "compute_shader" else 0,
+        )
+        assert no_env_code == 1
+        assert no_env_summary["clean_system_passed"] is False
+        assert no_env_summary["system_environment_measured"] is False
+
+    measured_system_env = {
+        "os_build": "10.0.26100.3194",
+        "gpu_model": "NVIDIA GeForce RTX 5080",
+        "nvidia_driver_version": "572.16",
+    }
+
     clean_code, clean_summary = run_clean_system_mode(
         sim_repo,
         bin_dir,
         allow_non_windows_simulation=True,
         env=clean_env,
         system32_dir=clean_sys32,
+        system_environment=measured_system_env,
         executor=passing_executor,
     )
     assert clean_code == 0
@@ -244,6 +297,9 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     )
     assert recorded_clean["verification_status"] == "verified"
     assert recorded_clean["clean_system_passed"] is True
+    assert recorded_clean["system_environment"]["os_build"] == "10.0.26100.3194"
+    assert recorded_clean["system_environment"]["gpu_model"] == "NVIDIA GeForce RTX 5080"
+    assert recorded_clean["system_environment"]["nvidia_driver_version"] == "572.16"
     assert all(recorded_clean["sdk_absence_checks"].values())
     assert recorded_clean["offline_shader_execution_evidence"]["output_verified"] is True
     assert (
@@ -260,6 +316,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
         allow_non_windows_simulation=True,
         env=clean_env,
         system32_dir=clean_sys32,
+        system_environment=measured_system_env,
         executor=passing_executor,
     )
     assert payload_code == 1
@@ -285,6 +342,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
         allow_non_windows_simulation=True,
         env=clean_env,
         system32_dir=clean_sys32,
+        system_environment=measured_system_env,
         executor=wrong_executor,
     )
     assert bad_code == 1
@@ -308,6 +366,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
         allow_non_windows_simulation=True,
         env=clean_env,
         system32_dir=clean_sys32,
+        system_environment=measured_system_env,
         executor=passing_executor,
     )
     assert unverified_code == 1
@@ -340,17 +399,50 @@ def test_record_shader_manifest_evidence_uses_validated_build_artifact(tmp_path:
     shutil.copy(REPO_ROOT / "shaders" / "manifest.json", repo / "shaders" / "manifest.json")
 
     dxil_blob = make_test_signed_dxil_container()
-    dxil_path = tmp_path / "build" / "shaders" / "compute_fixture.dxil"
-    dxil_path.parent.mkdir(parents=True)
-    dxil_path.write_bytes(dxil_blob)
+    stale_dxil = repo / "build" / "clang-cl-release" / "shaders" / "compute_fixture.dxil"
+    stale_dxil.parent.mkdir(parents=True)
+    stale_dxil.write_bytes(dxil_blob)
 
-    record_shader_manifest_evidence(repo, dxil_path, dxc_executable=None)
+    mock_dxc = tmp_path / "mock_dxc.py"
+    mock_dxc.write_text(
+        "import sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('dxcompiler.dll: 1.8 - 1.8.2407.12')\n",
+        encoding="utf-8",
+    )
+
+    # Pre-build evaluation (record_from_build=False) must NOT record from pre-existing build/... artifacts.
+    pre_eval = evaluate_offline_shader(repo, str(mock_dxc), record_from_build=False)
+    assert pre_eval["passed"] is False
+    unrecorded = json.loads((repo / "shaders" / "manifest.json").read_text(encoding="utf-8"))
+    assert unrecorded["verification_status"] == "unverified"
+
+    # Fresh two-clean-directory build evaluation records evidence and preserves canonical paths.
+    clean_a = repo / "build" / "repro-clean-a"
+    clean_b = repo / "build" / "repro-clean-b"
+    for d in (clean_a, clean_b):
+        p = d / "shaders" / "compute_fixture.dxil"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(dxil_blob)
+
+    post_eval = evaluate_offline_shader(
+        repo,
+        str(mock_dxc),
+        search_dirs=[clean_a, clean_b],
+        record_from_build=True,
+    )
+    assert post_eval["passed"] is True
     recorded = json.loads((repo / "shaders" / "manifest.json").read_text(encoding="utf-8"))
     shader = recorded["shaders"][0]
     assert recorded["verification_status"] == "verified"
     assert shader["compiled_offline_with_dxc"] is True
     assert shader["offline_dxil_bytes"] == len(dxil_blob)
     assert shader["offline_dxil_sha256"] == hashlib.sha256(dxil_blob).hexdigest()
+    assert shader["dxil_build_output_path"] == "build/clang-cl-release/shaders/compute_fixture.dxil"
+    assert (
+        shader["embedded_header_build_output_path"]
+        == "build/clang-cl-release/shaders/generated/compute_fixture_dxil.h"
+    )
 
 
 def test_find_embedded_dxil_container_validates_candidate_bytes() -> None:

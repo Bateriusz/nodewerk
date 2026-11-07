@@ -189,14 +189,31 @@ def test_recorded_ledgers_pass_dependency_and_toolchain_comparison(tmp_path: Pat
         assert by_fixture[fx]["identical_import_closure"] is True
 
     # Also test recording measured PE binaries into a copy of the ledgers and running comparison
+    from schema_validator import validate_file_against_schema
+
     inventory = json.loads((REPO_ROOT / "benchmarks" / "dependency-inventory.v1.json").read_text(encoding="utf-8"))
     ledger_copy = tmp_path / "empty-player-clang-cl-release.json"
     shutil.copyfile(REPO_ROOT / "benchmarks" / "ledgers" / "empty-player-clang-cl-release.json", ledger_copy)
     pe_path = tmp_path / "nw_empty_player.exe"
     pe_path.write_bytes(build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]))
-    updated = record_ledger_from_pe_binary(pe_path, ledger_copy, inventory)
+    updated = record_ledger_from_pe_binary(pe_path, ledger_copy, inventory, repo_root=REPO_ROOT)
     assert updated["verification_status"] == "verified"
     assert updated["total_distributed_bytes"] == len(pe_path.read_bytes())
+    assert all(
+        imp["classification"] in {"windows_inbox", "ucrt_inbox", "dev_only_diagnostic"}
+        for imp in updated["imports"]
+    )
+    validate_file_against_schema(ledger_copy, REPO_ROOT / "schemas" / "size-ledger.schema.json")
+
+    # An unexpected import in record_ledger_from_pe_binary must fail closure verification
+    # and never produce a falsely verified or schema-invalid ledger.
+    bad_ledger_copy = tmp_path / "bad-empty-player.json"
+    shutil.copyfile(REPO_ROOT / "benchmarks" / "ledgers" / "empty-player-clang-cl-release.json", bad_ledger_copy)
+    bad_pe_path = tmp_path / "bad_empty_player.exe"
+    bad_pe_path.write_bytes(build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll", "dxcompiler.dll"]))
+    with pytest.raises(DependencyClosureError):
+        record_ledger_from_pe_binary(bad_pe_path, bad_ledger_copy, inventory, repo_root=REPO_ROOT)
+    assert json.loads(bad_ledger_copy.read_text(encoding="utf-8"))["verification_status"] == "unverified"
 
 
 def test_synthetic_pe64_and_elf64_import_parsers_and_closure_gates(tmp_path: Path) -> None:

@@ -260,19 +260,40 @@ DiagnosticRecord ExecuteEmptyPlayerBootstrap(const BootstrapConfig& config) noex
     }
 
     IDXGIAdapter1* selected_adapter = nullptr;
-    for (UINT idx = 0; factory->EnumAdapters1(idx, &selected_adapter) != DXGI_ERROR_NOT_FOUND; ++idx) {
-        DXGI_ADAPTER_DESC1 desc{};
-        selected_adapter->GetDesc1(&desc);
-        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
-            selected_adapter->Release();
-            selected_adapter = nullptr;
-            continue;
-        }
-        if (SUCCEEDED(d3d12_create_device(selected_adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+    for (UINT idx = 0;; ++idx) {
+        IDXGIAdapter1* candidate = nullptr;
+        const HRESULT enum_hr = factory->EnumAdapters1(idx, &candidate);
+        if (enum_hr == DXGI_ERROR_NOT_FOUND) {
             break;
         }
-        selected_adapter->Release();
-        selected_adapter = nullptr;
+        if (FAILED(enum_hr) || !candidate) {
+            if (candidate) {
+                candidate->Release();
+            }
+            factory->Release();
+            FreeLibrary(d3d12_mod);
+            FreeLibrary(dxgi_mod);
+            return DiagnosticRecord{
+                ExitCode::AdapterEnumerationFailed,
+                static_cast<std::uint32_t>(enum_hr),
+                "adapter_enum",
+                "IDXGIFactory1::EnumAdapters1 failed in empty_player bootstrap",
+                {}};
+        }
+        DXGI_ADAPTER_DESC1 desc{};
+        if (FAILED(candidate->GetDesc1(&desc))) {
+            candidate->Release();
+            continue;
+        }
+        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+            candidate->Release();
+            continue;
+        }
+        if (SUCCEEDED(d3d12_create_device(candidate, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+            selected_adapter = candidate;
+            break;
+        }
+        candidate->Release();
     }
     if (!selected_adapter) {
         factory->Release();
@@ -401,19 +422,39 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     }
 
     IDXGIAdapter1* selected_adapter = nullptr;
-    for (UINT idx = 0; factory->EnumAdapters1(idx, &selected_adapter) != DXGI_ERROR_NOT_FOUND; ++idx) {
-        DXGI_ADAPTER_DESC1 desc{};
-        selected_adapter->GetDesc1(&desc);
-        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
-            selected_adapter->Release();
-            selected_adapter = nullptr;
-            continue;
-        }
-        if (SUCCEEDED(D3D12CreateDevice(selected_adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+    for (UINT idx = 0;; ++idx) {
+        IDXGIAdapter1* candidate = nullptr;
+        const HRESULT enum_hr = factory->EnumAdapters1(idx, &candidate);
+        if (enum_hr == DXGI_ERROR_NOT_FOUND) {
             break;
         }
-        selected_adapter->Release();
-        selected_adapter = nullptr;
+        if (FAILED(enum_hr) || !candidate) {
+            if (candidate) {
+                candidate->Release();
+            }
+            factory->Release();
+            DestroyWindow(hwnd);
+            return DiagnosticRecord{
+                ExitCode::AdapterEnumerationFailed,
+                static_cast<std::uint32_t>(enum_hr),
+                "adapter_enum",
+                "IDXGIFactory1::EnumAdapters1 failed in clear_present fixture",
+                {}};
+        }
+        DXGI_ADAPTER_DESC1 desc{};
+        if (FAILED(candidate->GetDesc1(&desc))) {
+            candidate->Release();
+            continue;
+        }
+        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+            candidate->Release();
+            continue;
+        }
+        if (SUCCEEDED(D3D12CreateDevice(candidate, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+            selected_adapter = candidate;
+            break;
+        }
+        candidate->Release();
     }
     if (!selected_adapter) {
         factory->Release();
@@ -682,6 +723,7 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     static constexpr std::uint32_t kElementCount = 256u;
     static constexpr std::uint32_t kSeedMask = 0xA5A55A5Au;
     std::uint32_t readback_buffer[kElementCount]{};
+    char adapter_name[128]{};
 
 #if defined(_WIN32)
     if (config.enable_d3d12_validation) {
@@ -707,19 +749,42 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     }
 
     IDXGIAdapter1* selected_adapter = nullptr;
-    for (UINT idx = 0; factory->EnumAdapters1(idx, &selected_adapter) != DXGI_ERROR_NOT_FOUND; ++idx) {
-        DXGI_ADAPTER_DESC1 desc{};
-        selected_adapter->GetDesc1(&desc);
-        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
-            selected_adapter->Release();
-            selected_adapter = nullptr;
-            continue;
-        }
-        if (SUCCEEDED(D3D12CreateDevice(selected_adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+    for (UINT idx = 0;; ++idx) {
+        IDXGIAdapter1* candidate = nullptr;
+        const HRESULT enum_hr = factory->EnumAdapters1(idx, &candidate);
+        if (enum_hr == DXGI_ERROR_NOT_FOUND) {
             break;
         }
-        selected_adapter->Release();
-        selected_adapter = nullptr;
+        if (FAILED(enum_hr) || !candidate) {
+            if (candidate) {
+                candidate->Release();
+            }
+            factory->Release();
+            return DiagnosticRecord{
+                ExitCode::AdapterEnumerationFailed,
+                static_cast<std::uint32_t>(enum_hr),
+                "adapter_enum",
+                "IDXGIFactory1::EnumAdapters1 failed in compute_shader fixture",
+                {}};
+        }
+        DXGI_ADAPTER_DESC1 desc{};
+        if (FAILED(candidate->GetDesc1(&desc))) {
+            candidate->Release();
+            continue;
+        }
+        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+            candidate->Release();
+            continue;
+        }
+        if (SUCCEEDED(D3D12CreateDevice(candidate, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+            for (std::size_t c = 0; c < 127u && desc.Description[c] != L'\0'; ++c) {
+                const wchar_t wc = desc.Description[c];
+                adapter_name[c] = (wc >= 0x20 && wc <= 0x7E) ? static_cast<char>(wc) : '?';
+            }
+            selected_adapter = candidate;
+            break;
+        }
+        candidate->Release();
     }
     if (!selected_adapter) {
         factory->Release();
@@ -1060,6 +1125,10 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     // observed GPU values, recomputes SHA-256, and compares them against
     // fixtures/compute_shader/expected_output.json. Never derived from static expected data.
     if (config.emit_readback_values) {
+        std::printf("NW_WINDOWS_BUILD=%u\n", win_build);
+        if (adapter_name[0] != '\0') {
+            std::printf("NW_ADAPTER_DESCRIPTION=%s\n", adapter_name);
+        }
         std::printf("NW_READBACK_ELEMENT_COUNT=%u\n", kElementCount);
         std::printf("NW_READBACK_U32=");
         for (std::uint32_t i = 0; i < kElementCount; ++i) {

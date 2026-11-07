@@ -21,6 +21,8 @@ from offline_shader_pack import (  # noqa: E402
     check_hlsl_source_constraints,
     compile_and_record_manifest,
     compile_shader_with_dxc,
+    find_dxc_executable,
+    find_windows_kits_dxc_executable,
     format_cpp_dxil_header,
     pack_dxil_to_header,
     validate_dxil_container,
@@ -193,9 +195,36 @@ def test_dxil_container_validator_enforces_signature_psv0_sfi0_and_bitcode() -> 
     with pytest.raises(ValueError, match="cs_6_6"):
         validate_dxil_container(make_test_signed_dxil_container(prog_version=prog_ver_cs_6_6))
 
-    # 6. Reject fake bitcode body lacking LLVM 3.7 MODULE_BLOCK (0x21)
+    # 6. Reject fake bitcode body lacking LLVM 3.7 MODULE_BLOCK / top-level ENTER_SUBBLOCK
     with pytest.raises(ValueError, match="MODULE_BLOCK"):
         validate_dxil_container(make_test_signed_dxil_container(first_bitstream_word=0xDEADBEEF))
+
+    # 7. Accept LLVM bitcode starting with BLOCKINFO_BLOCK (id=0 -> 0x0801),
+    #    MODULE_BLOCK with CodeLen=3 (id=8 -> 0x0C21), or IDENTIFICATION_BLOCK (id=13 -> 0x0C35)
+    for valid_word1 in (0x00000801, 0x00000C21, 0x00000C35):
+        variant_blob = make_test_signed_dxil_container(first_bitstream_word=valid_word1)
+        assert validate_dxil_container(variant_blob)["valid"] is True
+
+    # 8. Reject unit-test synthetic blake2s container when allow_test_container=False
+    with pytest.raises(ValueError, match="unit-test synthetic blake2s"):
+        validate_dxil_container(valid_blob, allow_test_container=False)
+
+
+def test_real_dxc_compilation_and_chunk_layout_when_available(tmp_path: Path) -> None:
+    real_dxc = find_dxc_executable() or find_windows_kits_dxc_executable()
+    if not real_dxc:
+        return
+    hlsl_path = REPO_ROOT / "shaders" / "compute_fixture.hlsl"
+    out_dxil = tmp_path / "real_dxc" / "compute_fixture.dxil"
+    out_header = tmp_path / "real_dxc" / "compute_fixture_dxil.h"
+    res = compile_shader_with_dxc(hlsl_path, out_dxil, dxc_executable=real_dxc)
+    assert res["valid"] is True
+    assert res["is_test_container"] is False
+    assert res["shader_model"] == "cs_6_0"
+    assert res["has_psv0"] is True
+    packed = pack_dxil_to_header(hlsl_path, out_dxil, out_header)
+    assert packed["sha256"] == res["sha256"]
+    assert out_header.exists()
 
 
 def test_offline_dxc_compile_and_pack_into_build_dir(tmp_path: Path) -> None:

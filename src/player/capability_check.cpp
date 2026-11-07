@@ -115,7 +115,7 @@ ExitCode ValidateOfflineDxilContainer(const std::uint8_t* data, std::size_t size
         // PSV0 chunk: Pipeline State Validation required by D3D12 CreateComputePipelineState
         else if (data[offset] == 'P' && data[offset + 1] == 'S' &&
                  data[offset + 2] == 'V' && data[offset + 3] == '0') {
-            if (chunk_size < 28u) {
+            if (chunk_size < 24u) {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
             std::uint32_t psv_info_size = 0;
@@ -125,10 +125,10 @@ ExitCode ValidateOfflineDxilContainer(const std::uint8_t* data, std::size_t size
             }
             has_psv0_chunk = true;
         }
-        // DXIL chunk: verify DxilProgramHeader (cs_6_0) and LLVM 3.7 bitcode MODULE_BLOCK
+        // DXIL chunk: verify DxilProgramHeader (cs_6_0) and LLVM 3.7 bitcode stream header
         else if (data[offset] == 'D' && data[offset + 1] == 'X' &&
                  data[offset + 2] == 'I' && data[offset + 3] == 'L') {
-            if (chunk_size < 32u) {
+            if (chunk_size < 28u) {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
             std::uint32_t prog_ver = 0;
@@ -147,31 +147,53 @@ ExitCode ValidateOfflineDxilContainer(const std::uint8_t* data, std::size_t size
             if (prog_ver != kCs60ProgramVersion) {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
-            if (static_cast<std::size_t>(size_in_uint32) * 4u != chunk_size) {
+            // SizeInUint32 covers DxilProgramHeader + bitcode in 32-bit words;
+            // the enclosing DXBC part (chunk_size) may include trailing alignment padding.
+            if (size_in_uint32 < 6u ||
+                static_cast<std::size_t>(size_in_uint32) * 4u > chunk_size) {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
             if (payload[8] != 'D' || payload[9] != 'X' || payload[10] != 'I' || payload[11] != 'L') {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
-            if ((dxil_version & 0xFFFFu) != 0x0100u) {
+            const std::uint32_t dxil_major = (dxil_version >> 8u) & 0xFFu;
+            const std::uint32_t dxil_minor = dxil_version & 0xFFu;
+            if (dxil_major != 1u || dxil_minor > 8u) {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
-            if (bitcode_offset < 16u || bitcode_size < 64u || (bitcode_size % 4u) != 0u) {
-                return ExitCode::OfflineShaderPayloadInvalid;
-            }
-            if (8u + static_cast<std::size_t>(bitcode_offset) + static_cast<std::size_t>(bitcode_size) > chunk_size) {
+            if (bitcode_offset < 16u || bitcode_size < 16u) {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
 
-            const std::uint8_t* bitcode = payload + 8u + bitcode_offset;
-            if (bitcode[0] != 'B' || bitcode[1] != 'C' || bitcode[2] != 0xC0u || bitcode[3] != 0xDEu) {
+            // In DxilContainer.h, BitcodeOffset is relative to DxilBitcodeHeader (payload + 8),
+            // typically 16 (so bitcode starts at payload + 24). Also support offsets relative
+            // to DxilProgramHeader (payload + 0) if the bitcode magic resides at that offset.
+            const std::uint8_t* bitcode = nullptr;
+            if (8u + static_cast<std::size_t>(bitcode_offset) + static_cast<std::size_t>(bitcode_size) <= chunk_size &&
+                payload[8u + bitcode_offset] == 'B' &&
+                payload[8u + bitcode_offset + 1u] == 'C' &&
+                payload[8u + bitcode_offset + 2u] == 0xC0u &&
+                payload[8u + bitcode_offset + 3u] == 0xDEu) {
+                bitcode = payload + 8u + bitcode_offset;
+            } else if (bitcode_offset >= 24u &&
+                       static_cast<std::size_t>(bitcode_offset) + static_cast<std::size_t>(bitcode_size) <= chunk_size &&
+                       payload[bitcode_offset] == 'B' &&
+                       payload[bitcode_offset + 1u] == 'C' &&
+                       payload[bitcode_offset + 2u] == 0xC0u &&
+                       payload[bitcode_offset + 3u] == 0xDEu) {
+                bitcode = payload + bitcode_offset;
+            } else {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
-            // LLVM 3.7 bitcode stream must begin with ENTER_SUBBLOCK (1) for MODULE_BLOCK (id=8):
-            // low 10 bits = (8 << 2) | 1 = 0x21
+
+            // LLVM bitcode stream after 'BC\xc0\xde' begins with ENTER_SUBBLOCK (2-bit abbrev ID == 1)
+            // for a top-level block: BLOCKINFO_BLOCK (0), MODULE_BLOCK (8), or IDENTIFICATION_BLOCK (13).
             std::uint32_t first_bitstream_word = 0;
             std::memcpy(&first_bitstream_word, bitcode + 4u, sizeof(std::uint32_t));
-            if ((first_bitstream_word & 0x3FFu) != 0x21u) {
+            const std::uint32_t abbrev_id = first_bitstream_word & 0x3u;
+            const std::uint32_t block_id = (first_bitstream_word >> 2u) & 0xFFu;
+            const bool valid_top_block = (block_id == 0u || block_id == 8u || block_id == 13u);
+            if (abbrev_id != 1u || !valid_top_block) {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
             has_dxil_chunk = true;

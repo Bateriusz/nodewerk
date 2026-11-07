@@ -120,4 +120,7 @@ def test_cmake_profiles_and_presets_contract() -> None:
     assert "NW_PINNED_CLANG_VERSION" in toolchain_cmake
     assert "NW_PINNED_MSVC_VERSION" in toolchain_cmake
     assert "NW_PINNED_WINDOWS_SDK_VERSION" in toolchain_cmake
+    assert "NW_WINDOWS_SDK_VERSION" in toolchain_cmake
+    assert "NW_WINDOWS_SDK_ROOT" in toolchain_cmake
+    assert "KitsRoot10" in toolchain_cmake
     assert "NW_PINNED_DXC_VERSION" in toolchain_cmake
