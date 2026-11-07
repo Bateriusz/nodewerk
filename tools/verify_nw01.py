@@ -222,10 +222,13 @@ def hardware_tier_matches(gpu_model: str | None, hardware_tier: str) -> bool:
     lower = gpu_model.strip().lower()
     if "nvidia" not in lower:
         return False
+    if "laptop" in lower or "mobile" in lower or "max-q" in lower:
+        return False
     if hardware_tier == "rtx_4060_desktop":
-        return "4060" in lower
+        # Reject RTX 4060 Ti and other non-desktop RTX 4060 variants.
+        return re.search(r"\brtx\s*4060\b(?!\s*ti)", lower) is not None
     if hardware_tier == "rtx_50_series_desktop":
-        return re.search(r"\brtx\s*50[0-9]{2}\b", lower) is not None
+        return re.search(r"\brtx\s*50[5-9]0(?:\s*ti)?\b", lower) is not None
     return False
 
 
@@ -1454,6 +1457,82 @@ BENCHMARK_CAPTURE_FILES = {
     "rtx_50_series_desktop": "rtx-50-series-baseline.json",
 }
 
+_TOOLCHAIN_METADATA = {
+    "clang-cl-lld": {
+        "toolchain_id": "clang-cl-lld",
+        "compiler_name": "LLVM clang-cl",
+        "compiler_executable": "clang-cl.exe",
+        "linker_name": "LLVM lld-link",
+        "linker_executable": "lld-link.exe",
+    },
+    "msvc-ltcg": {
+        "toolchain_id": "msvc-ltcg",
+        "compiler_name": "Microsoft C/C++ Optimizing Compiler (MSVC)",
+        "compiler_executable": "cl.exe",
+        "linker_name": "Microsoft Incremental Linker",
+        "linker_executable": "link.exe",
+    },
+}
+
+
+def resolve_artifact_provenance(
+    repo_root: Path,
+    binary_dir: Path,
+) -> dict[str, Any]:
+    """Match executed artifacts to recorded ledger hashes to establish build provenance."""
+    fixture_specs = (
+        ("empty_player", "nw_empty_player.exe"),
+        ("clear_present", "nw_clear_present_fixture.exe"),
+        ("compute_shader", "nw_compute_shader_fixture.exe"),
+    )
+    required_fixture_ids = ("clear_present", "compute_shader")
+    hashes: dict[str, str | None] = {}
+    for fixture_id, exe_name in fixture_specs:
+        exe_path = resolve_fixture_executable(binary_dir, fixture_id, exe_name)
+        hashes[fixture_id] = (
+            hashlib.sha256(exe_path.read_bytes()).hexdigest() if exe_path is not None else None
+        )
+
+    ledger_matches: dict[str, set[str]] = {fixture_id: set() for fixture_id, _ in fixture_specs}
+    for ledger_path in sorted((repo_root / "benchmarks" / "ledgers").glob("*.json")):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        fixture_id = str(ledger.get("fixture_id"))
+        if fixture_id not in ledger_matches:
+            continue
+        artifact_hash = hashes.get(fixture_id)
+        if not artifact_hash:
+            continue
+        for component in ledger.get("distributed_components", []):
+            if (
+                component.get("category") == "executable"
+                and str(component.get("sha256", "")).lower() == artifact_hash.lower()
+            ):
+                toolchain_id = ledger.get("toolchain_id")
+                if toolchain_id:
+                    ledger_matches[fixture_id].add(str(toolchain_id))
+
+    matched_toolchains = set.intersection(
+        *(ledger_matches[fixture_id] for fixture_id in required_fixture_ids)
+    )
+    complete = all(
+        hashes.get(fixture_id) and len(ledger_matches[fixture_id]) == 1
+        for fixture_id in required_fixture_ids
+    )
+    toolchain_id = (
+        next(iter(matched_toolchains))
+        if complete and len(matched_toolchains) == 1
+        else None
+    )
+    return {
+        "toolchain_id": toolchain_id,
+        "artifact_sha256": hashes,
+        "source": (
+            "recorded_ledger_artifact_hash"
+            if toolchain_id is not None
+            else "unavailable"
+        ),
+    }
+
 
 def capture_benchmark_result(
     repo_root: Path,
@@ -1490,6 +1569,7 @@ def capture_benchmark_result(
     measured_nvidia_driver = override.get("nvidia_driver_version") or detected.get(
         "nvidia_driver_version"
     )
+    observed_gpu_model = detected.get("gpu_model")
 
     first_metrics: dict[str, Any] = {}
     for fixture in ("clear_present", "compute_shader"):
@@ -1505,20 +1585,50 @@ def capture_benchmark_result(
     toolchain_manifest = json.loads(
         (repo_root / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
     )
-    pin = toolchain_manifest.get("selected_toolchain", {})
     pinned = toolchain_manifest.get("pinned_dependencies", {})
-    toolchain = {
-        "toolchain_id": str(pin.get("toolchain_id", "unverified")),
-        "compiler_version": str(pin.get("compiler_version", "unverified")),
-        "linker_version": str(pin.get("linker_version", "unverified")),
-        "windows_sdk_version": str(pinned.get("windows_sdk_version", "unverified")),
-        "dxc_version": str(pinned.get("dxc_version", "unverified")),
+    provenance = resolve_artifact_provenance(repo_root, binary_dir)
+    provenance_toolchain = provenance.get("toolchain_id")
+    evaluated = {
+        entry.get("toolchain_id"): entry
+        for entry in toolchain_manifest.get("evaluated_toolchains", [])
     }
+    if provenance_toolchain in _TOOLCHAIN_METADATA and provenance_toolchain in evaluated:
+        meta = _TOOLCHAIN_METADATA[provenance_toolchain]
+        entry = evaluated[provenance_toolchain]
+        toolchain = {
+            "toolchain_id": str(provenance_toolchain),
+            "compiler_name": meta["compiler_name"],
+            "compiler_executable": meta["compiler_executable"],
+            "compiler_version": str(entry.get("compiler_version", "unverified")),
+            "linker_name": meta["linker_name"],
+            "linker_executable": meta["linker_executable"],
+            "linker_version": str(entry.get("linker_version", "unverified")),
+            "windows_sdk_version": str(pinned.get("windows_sdk_version", "unverified")),
+            "dxc_version": str(pinned.get("dxc_version", "unverified")),
+        }
+    else:
+        toolchain = {
+            "toolchain_id": None,
+            "compiler_name": None,
+            "compiler_executable": None,
+            "compiler_version": None,
+            "linker_name": None,
+            "linker_executable": None,
+            "linker_version": None,
+            "windows_sdk_version": None,
+            "dxc_version": None,
+        }
+        mark_unavailable(
+            "environment_metadata.toolchain",
+            "Executed artifacts could not be matched to a recorded ledger hash, so compiler/linker provenance is unverified.",
+        )
 
-    gpu_model = measured_gpu_model
+    gpu_model = observed_gpu_model or measured_gpu_model
     nvidia_driver = measured_nvidia_driver
-    cpu_model = override.get("cpu_model") or platform.processor() or os.environ.get(
-        "PROCESSOR_IDENTIFIER"
+    cpu_model = (
+        override.get("cpu_model")
+        or os.environ.get("PROCESSOR_IDENTIFIER")
+        or platform.processor()
     )
     gpu_architecture = override.get("gpu_architecture")
     wddm_driver_version = override.get("wddm_driver_version")
@@ -1558,6 +1668,19 @@ def capture_benchmark_result(
     ):
         if value is None or value == "":
             mark_unavailable(metric_name, reason)
+
+    if not observed_gpu_model:
+        mark_unavailable(
+            "environment_metadata.gpu_model",
+            "No adapter description was emitted by the executing fixtures; tier coverage cannot be bound to the observed GPU.",
+        )
+    elif override.get("gpu_model") and str(override["gpu_model"]).strip().lower() != str(
+        observed_gpu_model
+    ).strip().lower():
+        mark_unavailable(
+            "environment_metadata.gpu_model",
+            "Operator-provided GPU model does not match the adapter reported by the executing fixtures.",
+        )
 
     environment_metadata = {
         "gpu_model": str(gpu_model) if gpu_model else None,
@@ -1644,6 +1767,7 @@ def capture_benchmark_result(
         fixture_results.append(
             {
                 "fixture_id": fixture_id,
+                "sha256": provenance["artifact_sha256"].get(fixture_id),
                 "execution_status": execution_status,
                 "d3d12_validation_clean": run.get("d3d12_validation_clean"),
                 "compute_output_verified": compute_ok,
@@ -1732,25 +1856,31 @@ def capture_benchmark_result(
         )
 
     hardware_verified = bool(
-        measured_gpu_model
+        observed_gpu_model
         and measured_nvidia_driver
-        and hardware_tier_matches(str(measured_gpu_model), hardware_tier)
+        and hardware_tier_matches(str(observed_gpu_model), hardware_tier)
         and _is_supported_nvidia_gpu_and_driver(
-            str(measured_gpu_model), str(measured_nvidia_driver)
+            str(observed_gpu_model), str(measured_nvidia_driver)
         )
         and measured_os_build
         and re.match(
             r"^10\.0\.(22[0-9]{3}|26[0-9]{3})\.[0-9]+$", str(measured_os_build)
         )
     )
-    if measured_gpu_model and not hardware_tier_matches(
-        str(measured_gpu_model), hardware_tier
+    if observed_gpu_model and not hardware_tier_matches(
+        str(observed_gpu_model), hardware_tier
     ):
         mark_unavailable(
             "environment_metadata.gpu_model",
-            f"Observed adapter '{measured_gpu_model}' does not match requested tier '{hardware_tier}'.",
+            f"Observed adapter '{observed_gpu_model}' does not match requested tier '{hardware_tier}'.",
         )
-    verified = hardware_verified and all_passed and capabilities_measured and not unavailable
+    verified = (
+        hardware_verified
+        and all_passed
+        and capabilities_measured
+        and provenance_toolchain is not None
+        and not unavailable
+    )
     result: dict[str, Any] = {
         "schema_version": "1.0.0",
         "benchmark_id": f"nw01-hardware-{hardware_tier.replace('_', '-')}-baseline",
@@ -1759,6 +1889,7 @@ def capture_benchmark_result(
         "benchmark_passed": bool(verified),
         "environment_metadata": environment_metadata,
         "captured_capabilities": captured_capabilities,
+        "artifact_provenance": provenance,
         "fixture_results": fixture_results,
         "unavailable_measurements": unavailable,
     }
@@ -2507,6 +2638,9 @@ def run_clean_system_mode(
         and embedded_dxil_verified
         and compute_output_verified
         and system_env_measured
+        and not runtime_dxcompiler_loaded
+        and not runtime_d3dcompiler_loaded
+        and not agility_redist_loaded
         and not d3d12core_classification_unknown
     )
     expected_sha256 = expected_compute["output_sha256"]
@@ -2600,6 +2734,12 @@ def run_clean_system_mode(
                 "observed D3D12Core.dll module path was unavailable, so inbox versus Agility "
                 "redistributable classification could not be determined"
             )
+        if runtime_dxcompiler_loaded:
+            reasons.append("observed runtime DXC/DXIL module in the executing fixture process")
+        if runtime_d3dcompiler_loaded:
+            reasons.append("observed d3dcompiler runtime module in the executing fixture process")
+        if agility_redist_loaded:
+            reasons.append("observed app-local D3D12Core.dll Agility redistributable module")
         updated_report["unverified_reason"] = (
             "CleanSystem validation failed: " + "; ".join(reasons) if reasons else
             "CleanSystem validation failed; see command summary."
@@ -2711,6 +2851,16 @@ def main(argv: list[str] | None = None) -> int:
         if benchmark_result is not None:
             summary = dict(summary)
             summary["benchmark_capture"] = benchmark_result
+            if not benchmark_result.get("benchmark_passed", False):
+                capture_execution_failed = any(
+                    run.get("execution_status") == "failed"
+                    for run in benchmark_result.get("fixture_results", [])
+                )
+                capture_code = 1 if capture_execution_failed else 2
+                if code == 0:
+                    code = capture_code
+                elif capture_code == 1:
+                    code = 1
 
         print(json.dumps(summary, indent=2))
         return code

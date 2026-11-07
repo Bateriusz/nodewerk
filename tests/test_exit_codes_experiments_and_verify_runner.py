@@ -23,6 +23,7 @@ from verify_nw01 import (  # noqa: E402
     build_and_compare_two_clean_directories,
     capture_benchmark_result,
     classify_loaded_module_evidence,
+    hardware_tier_matches,
     check_evidence_completeness,
     compare_two_build_directories,
     detect_host_system_environment,
@@ -990,12 +991,28 @@ def test_capture_benchmark_result_records_measured_metrics(
 
     bin_dir = tmp_path / "deploy"
     bin_dir.mkdir()
+    (bin_dir / "nw_empty_player.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll"])
+    )
     (bin_dir / "nw_clear_present_fixture.exe").write_bytes(
         build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"])
     )
     (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(
         build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"])
     )
+    ledger_exe = {
+        "empty_player": "nw_empty_player.exe",
+        "clear_present": "nw_clear_present_fixture.exe",
+        "compute_shader": "nw_compute_shader_fixture.exe",
+    }
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        fixture_id = ledger["fixture_id"]
+        ledger["distributed_components"][0]["sha256"] = hashlib.sha256(
+            (bin_dir / ledger_exe[fixture_id]).read_bytes()
+        ).hexdigest()
+        ledger["toolchain_id"] = "clang-cl-lld"
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     expected = load_compute_expected_output(repo)
     metrics = {
         "startup_time_ms": 12.5,
@@ -1152,6 +1169,14 @@ def test_loaded_module_paths_distinguish_inbox_d3d12core_from_redistributable() 
     assert basename_only["agility_d3d12core_redist_loaded"] is False
 
 
+def test_hardware_tier_requires_exact_desktop_class() -> None:
+    assert hardware_tier_matches("NVIDIA GeForce RTX 4060", "rtx_4060_desktop") is True
+    assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Ti", "rtx_4060_desktop") is False
+    assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Laptop GPU", "rtx_4060_desktop") is False
+    assert hardware_tier_matches("NVIDIA GeForce RTX 5080", "rtx_50_series_desktop") is True
+    assert hardware_tier_matches("NVIDIA GeForce RTX 5080 Laptop GPU", "rtx_50_series_desktop") is False
+
+
 def test_benchmark_capture_rejects_wrong_hardware_tier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1207,3 +1232,92 @@ def test_benchmark_capture_rejects_wrong_hardware_tier(
     assert result["verification_status"] == "unverified"
     assert result["benchmark_passed"] is False
     assert any("does not match requested tier" in m["reason"] for m in result["unavailable_measurements"])
+
+
+def test_benchmark_capture_missing_environment_is_valid_unverified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+    from schema_validator import validate_file_against_schema
+
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    bin_dir = tmp_path / "deploy"
+    bin_dir.mkdir()
+    for name in ("nw_clear_present_fixture.exe", "nw_compute_shader_fixture.exe"):
+        (bin_dir / name).write_bytes(build_synthetic_pe64(["kernel32.dll"]))
+    monkeypatch.setattr(
+        verify_module,
+        "execute_release_fixture_validation",
+        lambda *_a, **_kw: {
+            "passed": True,
+            "fixture_runs": [
+                {
+                    "fixture_id": "clear_present",
+                    "execution_status": "passed",
+                    "exit_code": 0,
+                    "metrics": {},
+                    "d3d12_validation_clean": True,
+                    "stdout": "",
+                },
+                {
+                    "fixture_id": "compute_shader",
+                    "execution_status": "passed",
+                    "exit_code": 0,
+                    "metrics": {},
+                    "d3d12_validation_clean": True,
+                    "stdout": "",
+                    "readback": {
+                        "observed_output_sha256": "a" * 64,
+                        "elements_match": True,
+                        "hash_match": True,
+                    },
+                },
+            ],
+        },
+    )
+    result = capture_benchmark_result(
+        repo,
+        bin_dir,
+        hardware_tier="rtx_50_series_desktop",
+        system_environment={},
+    )
+    assert result["verification_status"] == "unverified"
+    assert result["benchmark_passed"] is False
+    validate_file_against_schema(
+        repo / "benchmarks" / "hardware" / "rtx-50-series-baseline.json",
+        repo / "schemas" / "benchmark-result.schema.json",
+    )
+
+
+def test_explicit_benchmark_capture_failure_affects_command_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import verify_nw01 as verify_module
+
+    monkeypatch.setattr(
+        verify_module,
+        "capture_benchmark_result",
+        lambda *_a, **_kw: {
+            "benchmark_passed": False,
+            "fixture_results": [{"execution_status": "passed"}],
+        },
+    )
+    code = verify_module.main(
+        ["--mode", "ContractsOnly", "--record-benchmark", "rtx_50_series_desktop"]
+    )
+    assert code == 2
+
+    monkeypatch.setattr(
+        verify_module,
+        "capture_benchmark_result",
+        lambda *_a, **_kw: {
+            "benchmark_passed": False,
+            "fixture_results": [{"execution_status": "failed"}],
+        },
+    )
+    code = verify_module.main(
+        ["--mode", "ContractsOnly", "--record-benchmark", "rtx_50_series_desktop"]
+    )
+    assert code == 1

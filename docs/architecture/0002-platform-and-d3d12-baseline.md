@@ -31,6 +31,7 @@ Defined formally in [`benchmarks/capability-manifest.v1.json`](../../benchmarks/
 - **Conditional Feature Queries:** Additional optional features (such as `WaveOps`, `Int64ShaderOps`, `Native16BitShaderOpsSupported`, or `TypedUAVLoadAdditionalFormats`) are **required only when emitted content in the generated player link manifest declares that it uses them**. Benchmark capture may query them for measurement; the report records whether each optional feature was queried separately from whether it was supported.
 - **Capability Measurement:** Feature-level probing includes `12_2`/`12_1`/`12_0`/`11_1`/`11_0`; shader-model probing walks the highest available model rather than assuming 6.0. Baseline-support booleans, queried maxima, and unqueried optional features are kept distinct in the benchmark record.
 - **Runtime Module Evidence:** CleanSystem emits full module paths. `D3D12Core.dll` under the Windows system directory is classified as an inbox component; only a copy loaded from outside the system directory is an Agility SDK redistributable. Basename-only evidence is treated as unclassified rather than as a redistributable.
+- **Benchmark Provenance:** A benchmark is certifiable only when the executing fixture's reported adapter matches the requested desktop tier and every executed artifact hash matches a recorded size-ledger entry whose toolchain identifies the build. Missing environment fields, mismatched tiers, and unmatched artifact hashes remain explicitly unverified.
 
 ### 3. Explicit Baseline Exclusions
 

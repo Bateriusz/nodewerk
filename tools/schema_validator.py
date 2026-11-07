@@ -164,6 +164,54 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
             raise SchemaValidationError(
                 f"{doc_path}: unverified hardware coverage must have benchmark_passed=false"
             )
+        if status == "verified":
+            env = instance.get("environment_metadata", {})
+            required_env = (
+                "gpu_model",
+                "gpu_architecture",
+                "gpu_vendor_id",
+                "gpu_device_id",
+                "vram_mb",
+                "cpu_model",
+                "os_build",
+                "nvidia_driver_version",
+                "wddm_driver_version",
+            )
+            for key in required_env:
+                if env.get(key) in (None, "", "unverified"):
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified benchmark requires measured environment_metadata.{key}"
+                    )
+            toolchain = env.get("toolchain", {})
+            if toolchain.get("toolchain_id") in (None, "", "unverified"):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified benchmark requires artifact-bound toolchain provenance"
+                )
+            power = env.get("power_settings", {})
+            if any(value in (None, "", "unverified") for value in power.values()):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified benchmark requires measured power_settings"
+                )
+            resolution = env.get("resolution", {})
+            if resolution.get("refresh_hz") is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified benchmark requires measured refresh_hz"
+                )
+            cache = env.get("cache_conditions", {})
+            if cache.get("driver_shader_cache_state") == "unverified" or cache.get(
+                "os_file_cache_state"
+            ) == "unverified":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified benchmark requires measured cache conditions"
+                )
+            provenance = instance.get("artifact_provenance", {})
+            if (
+                provenance.get("toolchain_id") is None
+                or provenance.get("source") != "recorded_ledger_artifact_hash"
+            ):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified benchmark requires artifact hash provenance"
+                )
         unavailable_metrics = {m["metric"] for m in instance.get("unavailable_measurements", [])}
         for fx in instance.get("fixture_results", []):
             if fx.get("execution_status") == "unverified":

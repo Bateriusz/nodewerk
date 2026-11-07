@@ -322,32 +322,6 @@ AdapterHardwareInfo QueryAdapterHardwareInfo(IDXGIAdapter1* adapter) noexcept {
     return info;
 }
 
-AdapterHardwareInfo QueryDeviceAdapterHardwareInfo(ID3D12Device* device) noexcept {
-    if (!device) {
-        return AdapterHardwareInfo{};
-    }
-    IDXGIDevice* dxgi_device = nullptr;
-    if (FAILED(device->QueryInterface(
-            __uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi_device))) ||
-        !dxgi_device) {
-        return AdapterHardwareInfo{};
-    }
-    AdapterHardwareInfo info{};
-    IDXGIAdapter* adapter = nullptr;
-    if (SUCCEEDED(dxgi_device->GetAdapter(&adapter)) && adapter) {
-        IDXGIAdapter1* adapter1 = nullptr;
-        if (SUCCEEDED(adapter->QueryInterface(
-                __uuidof(IDXGIAdapter1), reinterpret_cast<void**>(&adapter1))) &&
-            adapter1) {
-            info = QueryAdapterHardwareInfo(adapter1);
-            adapter1->Release();
-        }
-        adapter->Release();
-    }
-    dxgi_device->Release();
-    return info;
-}
-
 void EmitBenchmarkMetrics(
     const AdapterCapabilitySnapshot& snapshot,
     const AdapterHardwareInfo& hardware,
@@ -853,8 +827,6 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
             adapter_name[c] = (wc >= 0x20 && wc <= 0x7E) ? static_cast<char>(wc) : '?';
         }
     }
-    selected_adapter->Release();
-
     AdapterCapabilitySnapshot cap_snapshot{};
     const DiagnosticRecord cap_rec = PopulateAdapterCapabilitySnapshot(device, win_build, config.optional_features, &cap_snapshot);
     if (cap_rec.exit_code != ExitCode::Success) {
@@ -907,6 +879,7 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     if (FAILED(hr) || !swapchain1) {
         queue->Release();
         device->Release();
+        if (selected_adapter) selected_adapter->Release();
         factory->Release();
         DestroyWindow(hwnd);
         return DiagnosticRecord{ExitCode::SwapChainCreationFailed, static_cast<std::uint32_t>(hr), "swapchain", "CreateSwapChainForHwnd failed", {}};
@@ -1239,7 +1212,7 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     if (config.emit_benchmark_metrics) {
         EmitBenchmarkMetrics(
             cap_snapshot,
-            QueryDeviceAdapterHardwareInfo(device),
+            QueryAdapterHardwareInfo(selected_adapter),
             adapter_name,
             setup_ms,
             QueryProcessCpuTimeMs() - cpu_start_ms,
@@ -1367,7 +1340,6 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         factory->Release();
         return DiagnosticRecord{ExitCode::D3D12DeviceCreationFailed, static_cast<std::uint32_t>(hr), "d3d12_device", "D3D12CreateDevice(12_0) failed", {}};
     }
-    selected_adapter->Release();
     factory->Release();
 
     AdapterCapabilitySnapshot cap_snapshot{};
@@ -1709,6 +1681,7 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         uav_heap->Release();
         queue->Release();
         device->Release();
+        if (selected_adapter) selected_adapter->Release();
     };
 
     const HRESULT signal_hr = queue->Signal(fence, 1);
@@ -1783,7 +1756,7 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     if (config.emit_benchmark_metrics) {
         EmitBenchmarkMetrics(
             cap_snapshot,
-            QueryDeviceAdapterHardwareInfo(device),
+            QueryAdapterHardwareInfo(selected_adapter),
             adapter_name,
             setup_ms,
             QueryProcessCpuTimeMs() - cpu_start_ms,
