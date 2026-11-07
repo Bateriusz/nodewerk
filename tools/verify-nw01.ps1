@@ -43,7 +43,11 @@
     Repository root path (defaults to parent directory of tools/).
 
 .PARAMETER BinaryDir
-    Optional path to pre-built release binaries for CleanSystem mode.
+    Optional path to pre-built release binaries or a CI CleanSystem package root.
+
+.PARAMETER EvidenceDir
+    Optional explicit path to CI build evidence. When BinaryDir contains deploy/ and evidence/,
+    the Python verifier discovers evidence/ automatically.
 
 .PARAMETER RecordBenchmark
     Optional measured benchmark capture tier: 'rtx_4060_desktop' or
@@ -72,6 +76,9 @@ param(
 
     [Parameter(Mandatory = $false)]
     [string]$BinaryDir = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$EvidenceDir = "",
 
     [Parameter(Mandatory = $false)]
     [string]$OsBuild = "",
@@ -137,6 +144,9 @@ if (-not (Test-Path $VerifyPy)) {
 $CmdArgs = @($VerifyPy, "--mode", $Mode, "--repo-root", $RepoRoot)
 if ($BinaryDir -ne "") {
     $CmdArgs += @("--binary-dir", $BinaryDir)
+}
+if ($EvidenceDir -ne "") {
+    $CmdArgs += @("--evidence-dir", $EvidenceDir)
 }
 if ($OsBuild -ne "") {
     $CmdArgs += @("--os-build", $OsBuild)
