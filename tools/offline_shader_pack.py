@@ -412,10 +412,18 @@ def compile_shader_with_dxc(
     validation["measured_dxc_version"] = query_dxc_version(dxc_bin)
     cpp_comp = find_host_cpp_compiler() if not is_mock_script else None
     if cpp_comp is not None:
+        cpp_dir = output_dxil_path.parent / "cpp_validator_check"
+        # Compile the real C++ parser against the same header/source the player uses, then run it
+        # on the exact DXC-produced container. This keeps the Python fixture validator and the
+        # player-side CreateComputePipelineState gate from drifting on chunk layout/offset rules.
+        harness_exe = compile_cpp_dxil_validator_harness(
+            cpp_dir,
+            compiler_info=cpp_comp,
+        )
         cpp_exit_code = verify_dxil_blob_with_cpp_validator(
             dxil_blob,
-            output_dxil_path.parent / "cpp_validator_check",
-            compiler_info=cpp_comp,
+            cpp_dir,
+            harness_exe=harness_exe,
         )
         if cpp_exit_code != 0:
             raise OfflineShaderCompilerError(

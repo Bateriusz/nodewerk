@@ -5,6 +5,7 @@ import json
 import shutil
 import stat
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -247,6 +248,70 @@ def test_real_dxc_compilation_and_chunk_layout_when_available(tmp_path: Path) ->
         bad_magic_real = bytearray(real_blob)
         bad_magic_real[0:4] = b"BAD!"
         assert verify_dxil_blob_with_cpp_validator(bytes(bad_magic_real), cpp_dir, harness_exe=harness_exe) == 40
+
+
+def test_compile_shader_with_dxc_always_runs_the_cpp_validator_on_the_emitted_blob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real-DXC path must validate the exact emitted container with the player's C++ parser."""
+    dxil_blob = bytearray(make_test_signed_dxil_container())
+    # Replace the blake2s unit-test digest so the container is accepted as a (mock) real
+    # DXC-signed artifact; the structural SFI0/PSV0/DXIL chunks remain unchanged.
+    dxil_blob[4:20] = b"\x5a" * 16
+    dxil_blob = bytes(dxil_blob)
+    fake_dxc = tmp_path / "fake_dxc"
+    fake_dxc.write_text("", encoding="utf-8")
+
+    def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        command = [str(c) for c in cmd]
+        if "--version" in command:
+            return subprocess.CompletedProcess(command, 0, "dxcompiler.dll: 1.8 - 1.8.2407.12\n", "")
+        output_index = command.index("-Fo") + 1
+        Path(command[output_index]).write_bytes(dxil_blob)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    calls: dict[str, object] = {}
+
+    def fake_compile_harness(out_dir: Path, repo_root=None, compiler_info=None):  # type: ignore[no-untyped-def]
+        calls["harness_compile"] = (out_dir, repo_root, compiler_info)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        harness_exe = out_dir / "dxil_validator_harness"
+        harness_exe.write_bytes(b"harness")
+        calls["harness_path"] = harness_exe
+        return harness_exe
+
+    def fake_verify(blob: bytes, work_dir: Path, repo_root=None, *, harness_exe=None):  # type: ignore[no-untyped-def]
+        calls["verify"] = (blob, work_dir, repo_root, harness_exe)
+        return 0
+
+    monkeypatch.setattr(offline_shader_pack.subprocess, "run", fake_run)
+    monkeypatch.setattr(offline_shader_pack, "find_host_cpp_compiler", lambda: ("fake-cxx", "gnu"))
+    monkeypatch.setattr(offline_shader_pack, "compile_cpp_dxil_validator_harness", fake_compile_harness)
+    monkeypatch.setattr(offline_shader_pack, "verify_dxil_blob_with_cpp_validator", fake_verify)
+
+    result = compile_shader_with_dxc(
+        REPO_ROOT / "shaders" / "compute_fixture.hlsl",
+        tmp_path / "out" / "compute_fixture.dxil",
+        dxc_executable=fake_dxc,
+    )
+    assert result["cpp_validator_verified"] is True
+    assert result["cpp_validator_exit_code"] == 0
+    verified_blob, verified_work_dir, _, verified_harness = calls["verify"]  # type: ignore[misc]
+    assert verified_blob == dxil_blob
+    assert verified_work_dir == tmp_path / "out" / "cpp_validator_check"
+    assert verified_harness == tmp_path / "out" / "cpp_validator_check" / "dxil_validator_harness"
+
+    # A C++ parser rejection must fail the offline compile rather than being ignored.
+    def rejecting_verify(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return 40
+
+    monkeypatch.setattr(offline_shader_pack, "verify_dxil_blob_with_cpp_validator", rejecting_verify)
+    with pytest.raises(OfflineShaderCompilerError, match="ExitCode=40"):
+        compile_shader_with_dxc(
+            REPO_ROOT / "shaders" / "compute_fixture.hlsl",
+            tmp_path / "out" / "rejected.dxil",
+            dxc_executable=fake_dxc,
+        )
 
 
 def test_cpp_validate_offline_dxil_container_harness_and_parser_parity(tmp_path: Path) -> None:
