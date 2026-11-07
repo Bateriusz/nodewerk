@@ -3,7 +3,9 @@
   "experiment_id": "exp-compact-profile-section-merge-cfg-conflict",
   "category": "compact_profile",
   "status": "failed_preserved",
+  "verification_status": "unverified",
   "substituted_silently": false,
+  "reproducible_command": "cmake --preset clang-cl-compact-experiment -DNW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT=ON && cmake --build --preset clang-cl-compact-experiment",
   "configuration": {
     "toolchain_id": "clang-cl-lld",
     "profile_name": "compact_experiment",
@@ -43,20 +45,34 @@
     {
       "obligation_id": "pe_loader_section_alignment",
       "phase": "initialization",
-      "description": "Windows 11 x64 PE loader requires valid section alignment and W^X page permissions when /guard:cf and /CETCOMPAT are enabled.",
+      "description": "Windows 11 x64 PE loader requires page-aligned section boundaries and separate W^X page permissions when /guard:cf and /CETCOMPAT are enabled.",
       "satisfied": false
     }
   ],
   "measurements": {
     "fixture_id": "clear_present",
-    "total_distributed_bytes": 12416,
-    "delta_vs_release_baseline_bytes": -4480,
-    "notes": "Merging .rdata into .text with /ALIGN:16 reduced raw file size by 4480 bytes on disk, but violated Windows 11 loader section alignment and Control Flow Guard read-only metadata table requirements."
+    "total_distributed_bytes": null,
+    "delta_vs_release_baseline_bytes": null,
+    "notes": "Combining /MERGE:.rdata=.text and /ALIGN:16 with /guard:cf and /CETCOMPAT is preserved behind -DNW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT=ON in cmake/BuildProfiles.cmake. Byte size and OS loader rejection diagnostics are null (unverified) on the current Linux host without Windows 11 clang-cl/lld-link."
   },
   "diagnostics": {
-    "exit_code": 11,
-    "error_code": "STATUS_INVALID_IMAGE_FORMAT_0xC000007B",
-    "summary": "lld-link warning and Windows 11 PE loader rejection (0xC000007B) when combining /MERGE:.rdata=.text and /ALIGN:16 with /guard:cf and /CETCOMPAT.",
-    "preservation_statement": "Failed sub-page alignment + section merge experiment is preserved with its exact flags and byte measurements; the compact_experiment preset keeps standard section alignment and full security mitigations without silently disabling /guard:cf or /CETCOMPAT."
-  }
+    "exit_code": null,
+    "error_code": "CFG_CET_SECTION_MERGE_INCOMPATIBLE",
+    "summary": "Merging read-only Control Flow Guard / exception unwind tables (.rdata) into executable code (.text) with sub-page /ALIGN:16 conflicts with Windows 11 x64 /guard:cf and /CETCOMPAT section alignment and W^X enforcement (which occurs in the OS PE loader prior to main(), not as an application ExitCode).",
+    "preservation_statement": "Failed sub-page alignment + section merge experiment is preserved behind -DNW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT=ON with null unmeasured fields rather than invented byte counts; the default compact_experiment preset retains standard section alignment and full security mitigations without silently disabling /guard:cf or /CETCOMPAT."
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "measurements.total_distributed_bytes",
+      "reason": "Windows 11 x64 clang-cl 18.1.8 and lld-link 18.1.8 are not installed on the current Linux host; recorded as null rather than an unsubstantiated byte count."
+    },
+    {
+      "metric": "measurements.delta_vs_release_baseline_bytes",
+      "reason": "Release baseline and experiment PE executables have not been linked on the current Linux host; recorded as null."
+    },
+    {
+      "metric": "diagnostics.exit_code",
+      "reason": "Windows 11 x64 PE loader / linker execution has not been captured on the current Linux host, and OS loader rejection occurs prior to application main()."
+    }
+  ]
 }

@@ -194,7 +194,124 @@ DiagnosticRecord ExecuteEmptyPlayerBootstrap(const BootstrapConfig& config) noex
 
     const std::uint32_t win_build =
         config.os_build_override != 0u ? config.os_build_override : QueryWindowsBuildNumber();
+    if (win_build < BaselineCapabilityProfile::kMinWindowsBuildNumber) {
+        return DiagnosticRecord{
+            ExitCode::OsVersionUnsupported,
+            0x8007047Eu,
+            "os_version_check",
+            "OS build is older than minimum tested Windows 11 x64 build 22631",
+            {}};
+    }
 
+#if defined(_WIN32)
+    using CreateDXGIFactory2Fn = HRESULT(WINAPI*)(UINT, REFIID, void**);
+    using D3D12CreateDeviceFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+
+    HMODULE dxgi_mod = LoadLibraryExA("dxgi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!dxgi_mod) {
+        return DiagnosticRecord{
+            ExitCode::DxgiFactoryCreationFailed,
+            static_cast<std::uint32_t>(GetLastError()),
+            "dxgi_load",
+            "LoadLibraryExA(dxgi.dll) failed",
+            {}};
+    }
+    HMODULE d3d12_mod = LoadLibraryExA("d3d12.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!d3d12_mod) {
+        const DWORD err = GetLastError();
+        FreeLibrary(dxgi_mod);
+        return DiagnosticRecord{
+            ExitCode::D3D12DeviceCreationFailed,
+            static_cast<std::uint32_t>(err),
+            "d3d12_load",
+            "LoadLibraryExA(d3d12.dll) failed",
+            {}};
+    }
+
+    auto create_dxgi_factory2 = reinterpret_cast<CreateDXGIFactory2Fn>(
+        reinterpret_cast<void*>(GetProcAddress(dxgi_mod, "CreateDXGIFactory2")));
+    auto d3d12_create_device = reinterpret_cast<D3D12CreateDeviceFn>(
+        reinterpret_cast<void*>(GetProcAddress(d3d12_mod, "D3D12CreateDevice")));
+    if (!create_dxgi_factory2 || !d3d12_create_device) {
+        FreeLibrary(d3d12_mod);
+        FreeLibrary(dxgi_mod);
+        return DiagnosticRecord{
+            ExitCode::InboxRuntimeBlocker,
+            0x8007007Fu,
+            "inbox_entrypoint_resolve",
+            "Missing CreateDXGIFactory2 or D3D12CreateDevice in inbox system DLLs",
+            {}};
+    }
+
+    IDXGIFactory4* factory = nullptr;
+    HRESULT hr = create_dxgi_factory2(0u, __uuidof(IDXGIFactory4), reinterpret_cast<void**>(&factory));
+    if (FAILED(hr) || !factory) {
+        FreeLibrary(d3d12_mod);
+        FreeLibrary(dxgi_mod);
+        return DiagnosticRecord{
+            ExitCode::DxgiFactoryCreationFailed,
+            static_cast<std::uint32_t>(hr),
+            "dxgi_factory",
+            "CreateDXGIFactory2 failed in empty_player bootstrap",
+            {}};
+    }
+
+    IDXGIAdapter1* selected_adapter = nullptr;
+    for (UINT idx = 0; factory->EnumAdapters1(idx, &selected_adapter) != DXGI_ERROR_NOT_FOUND; ++idx) {
+        DXGI_ADAPTER_DESC1 desc{};
+        selected_adapter->GetDesc1(&desc);
+        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+            selected_adapter->Release();
+            selected_adapter = nullptr;
+            continue;
+        }
+        if (SUCCEEDED(d3d12_create_device(selected_adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+            break;
+        }
+        selected_adapter->Release();
+        selected_adapter = nullptr;
+    }
+    if (!selected_adapter) {
+        factory->Release();
+        FreeLibrary(d3d12_mod);
+        FreeLibrary(dxgi_mod);
+        return DiagnosticRecord{
+            ExitCode::AdapterEnumerationFailed,
+            0x887A0004u,
+            "adapter_enum",
+            "No hardware adapter supporting Feature Level 12_0",
+            {}};
+    }
+
+    ID3D12Device* device = nullptr;
+    hr = d3d12_create_device(
+        selected_adapter,
+        D3D_FEATURE_LEVEL_12_0,
+        __uuidof(ID3D12Device),
+        reinterpret_cast<void**>(&device));
+    selected_adapter->Release();
+    factory->Release();
+    if (FAILED(hr) || !device) {
+        FreeLibrary(d3d12_mod);
+        FreeLibrary(dxgi_mod);
+        return DiagnosticRecord{
+            ExitCode::D3D12DeviceCreationFailed,
+            static_cast<std::uint32_t>(hr),
+            "d3d12_device",
+            "D3D12CreateDevice(12_0) failed in empty_player bootstrap",
+            {}};
+    }
+
+    AdapterCapabilitySnapshot snapshot{};
+    const DiagnosticRecord cap_rec =
+        PopulateAdapterCapabilitySnapshot(device, win_build, config.optional_features, &snapshot);
+    device->Release();
+    FreeLibrary(d3d12_mod);
+    FreeLibrary(dxgi_mod);
+    if (cap_rec.exit_code != ExitCode::Success) {
+        return cap_rec;
+    }
+#else
     AdapterCapabilitySnapshot snapshot{};
     snapshot.windows_build_number = win_build;
     snapshot.max_feature_level = BaselineCapabilityProfile::kRequiredFeatureLevel;
@@ -209,11 +326,10 @@ DiagnosticRecord ExecuteEmptyPlayerBootstrap(const BootstrapConfig& config) noex
             cap_status,
             0x8007047Eu,
             "capability_check",
-            cap_status == ExitCode::OsVersionUnsupported
-                ? "OS build is older than minimum tested Windows 11 x64 build 22631"
-                : "Baseline capability contract unmet",
+            "Baseline capability contract unmet",
             {}};
     }
+#endif
 
     return DiagnosticRecord{ExitCode::Success, 0u, "complete", "Empty player bootstrap succeeded", {}};
 }

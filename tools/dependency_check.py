@@ -4,9 +4,10 @@
 Enforces separate development ('dev') and release ('release', 'compact_experiment')
 dependency closures defined in benchmarks/dependency-inventory.v1.json.
 Fails immediately if:
-- An unexpected or forbidden DLL import is present in a binary or ledger;
+- An unexpected or forbidden DLL/shared-library import is present in a binary or ledger;
 - A forbidden or uncounted sidecar DLL/file is present in the deployment directory;
-- Compiler selection (clang-cl vs MSVC) silently changes the expected release import closure.
+- Compiler selection (clang-cl vs MSVC) silently changes the expected release import closure;
+- A binary passed for inspection is neither a valid PE32+ nor a valid ELF64 executable.
 """
 
 from __future__ import annotations
@@ -23,6 +24,16 @@ class DependencyClosureError(RuntimeError):
     """Raised when a binary, directory, or ledger violates the dependency closure contract."""
 
 
+ALLOWED_HOST_ELF_NEEDED_LIBS = {
+    "libc.so.6",
+    "libm.so.6",
+    "libgcc_s.so.1",
+    "libpthread.so.0",
+    "libdl.so.2",
+    "ld-linux-x86-64.so.2",
+}
+
+
 def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
     """Parse sections and imported DLL names from a Windows x64 PE32+ executable."""
     if len(pe_bytes) < 64 or pe_bytes[:2] != b"MZ":
@@ -36,6 +47,8 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
         "<HHIIIHH", pe_bytes, pe_offset + 4
     )
     opt_offset = pe_offset + 24
+    if opt_offset + opt_header_size > len(pe_bytes):
+        raise ValueError("Truncated PE optional header")
     magic = struct.unpack_from("<H", pe_bytes, opt_offset)[0]
     if magic != 0x20B:
         raise ValueError(f"Expected PE32+ (0x20B) x64 image, got magic 0x{magic:04x}")
@@ -52,6 +65,8 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
     sections: list[dict[str, Any]] = []
     for i in range(num_sections):
         sec_off = section_table_offset + i * 40
+        if sec_off + 40 > len(pe_bytes):
+            raise ValueError("Truncated PE section table")
         raw_name, virtual_size, virtual_address, raw_size, raw_ptr, _, _, _, _, sec_chars = struct.unpack_from(
             "<8sIIIIIIHHI", pe_bytes, sec_off
         )
@@ -60,8 +75,8 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
             {
                 "name": name,
                 "virtual_size_bytes": virtual_size,
-                "virtual_address": virtual_address,
                 "raw_size_bytes": raw_size,
+                "virtual_address": virtual_address,
                 "raw_ptr": raw_ptr,
                 "characteristics_flags": sec_chars,
             }
@@ -103,6 +118,137 @@ def parse_pe64_sections_and_imports(pe_bytes: bytes) -> dict[str, Any]:
         "dll_characteristics": dll_characteristics,
         "sections": sections,
         "imports": imports,
+    }
+
+
+def parse_elf64_needed_libraries(elf_bytes: bytes) -> dict[str, Any]:
+    """Parse section headers and DT_NEEDED shared libraries from a 64-bit little-endian ELF binary."""
+    if len(elf_bytes) < 64 or elf_bytes[:4] != b"\x7fELF":
+        raise ValueError("Not a valid ELF executable")
+    ei_class = elf_bytes[4]
+    ei_data = elf_bytes[5]
+    if ei_class != 2 or ei_data != 1:
+        raise ValueError(f"Expected 64-bit little-endian ELF (got class={ei_class}, data={ei_data})")
+
+    e_shoff = struct.unpack_from("<Q", elf_bytes, 40)[0]
+    e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", elf_bytes, 58)
+    if e_shoff == 0 or e_shnum == 0 or e_shoff + e_shnum * e_shentsize > len(elf_bytes):
+        raise ValueError("ELF binary is missing a valid section header table")
+
+    sections: list[dict[str, Any]] = []
+    for idx in range(e_shnum):
+        sh_pos = e_shoff + idx * e_shentsize
+        sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size, sh_link, sh_info, sh_addralign, sh_entsize = (
+            struct.unpack_from("<IIQQQQIIQQ", elf_bytes, sh_pos)
+        )
+        if sh_type != 8 and (sh_offset + sh_size > len(elf_bytes)):  # SHT_NOBITS == 8
+            raise ValueError(f"ELF section {idx} exceeds file bounds")
+        sections.append(
+            {
+                "index": idx,
+                "sh_name": sh_name,
+                "sh_type": sh_type,
+                "sh_offset": sh_offset,
+                "sh_size": sh_size,
+                "sh_link": sh_link,
+                "sh_entsize": sh_entsize,
+            }
+        )
+
+    def read_strtab(strtab_sec: dict[str, Any], str_offset: int) -> str:
+        base = strtab_sec["sh_offset"]
+        limit = base + strtab_sec["sh_size"]
+        pos = base + str_offset
+        if pos >= limit:
+            return ""
+        end = elf_bytes.find(b"\x00", pos, limit)
+        if end == -1:
+            end = limit
+        return elf_bytes[pos:end].decode("ascii", errors="replace")
+
+    shstr_sec = sections[e_shstrndx] if e_shstrndx < len(sections) else None
+    section_names: list[str] = []
+    for sec in sections:
+        sec_name = read_strtab(shstr_sec, sec["sh_name"]) if shstr_sec else ""
+        sec["name"] = sec_name
+        if sec_name:
+            section_names.append(sec_name)
+
+    needed_libs: list[str] = []
+    # SHT_DYNAMIC == 6
+    for sec in sections:
+        if sec["sh_type"] == 6:
+            strtab_idx = sec["sh_link"]
+            if strtab_idx >= len(sections):
+                raise ValueError("ELF .dynamic section has invalid sh_link string table index")
+            dynstr_sec = sections[strtab_idx]
+            ent_size = sec["sh_entsize"] or 16
+            pos = sec["sh_offset"]
+            end = pos + sec["sh_size"]
+            while pos + 16 <= end:
+                d_tag, d_val = struct.unpack_from("<qQ", elf_bytes, pos)
+                if d_tag == 0:  # DT_NULL
+                    break
+                if d_tag == 1:  # DT_NEEDED
+                    lib_name = read_strtab(dynstr_sec, d_val)
+                    if lib_name:
+                        needed_libs.append(lib_name)
+                pos += ent_size
+
+    return {
+        "format": "ELF64",
+        "sections": section_names,
+        "needed_libraries": needed_libs,
+    }
+
+
+def verify_elf64_host_closure(
+    *,
+    profile: str,
+    fixture_id: str,
+    needed_libs: list[str],
+    sidecar_files: list[str],
+) -> dict[str, Any]:
+    """Verify that a host ELF64 player binary does not link C++ stdlib/compiler libraries or carry sidecars."""
+    violations: list[str] = []
+    for lib in needed_libs:
+        lower_lib = lib.lower()
+        if "stdc++" in lower_lib or "libc++" in lower_lib:
+            violations.append(
+                f"Forbidden C++ standard library dependency '{lib}' in host ELF player binary {fixture_id} ({profile}); "
+                "player builds must disable exceptions/RTTI and avoid heavy C++ runtime dependencies"
+            )
+        elif "dxcompiler" in lower_lib or "d3dcompiler" in lower_lib:
+            violations.append(
+                f"Forbidden runtime shader compiler dependency '{lib}' in {fixture_id} ({profile})"
+            )
+        elif lower_lib not in ALLOWED_HOST_ELF_NEEDED_LIBS:
+            violations.append(
+                f"Unexpected shared library dependency '{lib}' in host ELF binary {fixture_id} ({profile}); "
+                f"allowed={sorted(ALLOWED_HOST_ELF_NEEDED_LIBS)}"
+            )
+
+    for sidecar in sidecar_files:
+        lower_sidecar = sidecar.lower()
+        if profile in ("release", "compact_experiment"):
+            violations.append(
+                f"Unexpected sidecar file '{sidecar}' detected in {fixture_id} ({profile}) deployment closure"
+            )
+        elif not lower_sidecar.endswith((".pdb", ".debug")):
+            violations.append(
+                f"Unexpected sidecar file '{sidecar}' detected in {fixture_id} ({profile}) closure"
+            )
+
+    if violations:
+        raise DependencyClosureError("; ".join(violations))
+
+    return {
+        "fixture_id": fixture_id,
+        "profile": profile,
+        "binary_format": "ELF64",
+        "needed_libraries": needed_libs,
+        "sidecar_files": sidecar_files,
+        "closure_verified": True,
     }
 
 
@@ -229,6 +375,62 @@ def verify_all_recorded_ledgers(repo_root: Path) -> list[dict[str, Any]]:
     return reports
 
 
+def verify_binary_file(
+    binary_path: Path,
+    *,
+    profile: str,
+    fixture_id: str,
+    inventory: dict[str, Any],
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Inspect a built PE32+ or ELF64 binary file on disk and verify its dependency and sidecar closure."""
+    if not binary_path.exists():
+        raise DependencyClosureError(f"Binary not found: {binary_path}")
+    raw = binary_path.read_bytes()
+    sidecars = [
+        p.name
+        for p in binary_path.parent.iterdir()
+        if p.is_file()
+        and p.name != binary_path.name
+        and p.suffix.lower() in (".dll", ".so", ".pdb", ".dxil", ".cso")
+    ]
+
+    if raw[:2] == b"MZ":
+        try:
+            pe_info = parse_pe64_sections_and_imports(raw)
+        except ValueError as exc:
+            raise DependencyClosureError(f"Invalid PE32+ executable '{binary_path.name}': {exc}") from exc
+        imported_dlls = pe_info["imports"]
+        fx_json = repo_root / "fixtures" / fixture_id / "fixture.json"
+        expected_imports = None
+        if fx_json.exists() and profile in ("release", "compact_experiment"):
+            expected_imports = json.loads(fx_json.read_text(encoding="utf-8")).get("expected_release_imports")
+        return verify_closure(
+            profile=profile,
+            fixture_id=fixture_id,
+            imported_dlls=imported_dlls,
+            sidecar_files=sidecars,
+            inventory=inventory,
+            expected_fixture_release_imports=expected_imports,
+        )
+
+    if raw[:4] == b"\x7fELF":
+        try:
+            elf_info = parse_elf64_needed_libraries(raw)
+        except ValueError as exc:
+            raise DependencyClosureError(f"Invalid ELF64 executable '{binary_path.name}': {exc}") from exc
+        return verify_elf64_host_closure(
+            profile=profile,
+            fixture_id=fixture_id,
+            needed_libs=elf_info["needed_libraries"],
+            sidecar_files=sidecars,
+        )
+
+    raise DependencyClosureError(
+        f"Binary '{binary_path.name}' is neither a valid Windows PE32+ executable nor a valid ELF64 executable"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify Nodewerk NW-01 dependency closure.")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
@@ -248,54 +450,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.binary:
-            if not args.binary.exists():
-                raise DependencyClosureError(f"Binary not found: {args.binary}")
-            raw = args.binary.read_bytes()
-            if raw[:2] == b"MZ":
-                pe_info = parse_pe64_sections_and_imports(raw)
-                imported_dlls = pe_info["imports"]
-                sidecars = [
-                    p.name
-                    for p in args.binary.parent.iterdir()
-                    if p.is_file()
-                    and p.name != args.binary.name
-                    and p.suffix.lower() in (".dll", ".dxil", ".cso")
-                ]
-                fx_json = args.repo_root / "fixtures" / args.fixture / "fixture.json"
-                expected_imports = None
-                if fx_json.exists() and args.profile in ("release", "compact_experiment"):
-                    expected_imports = json.loads(fx_json.read_text(encoding="utf-8")).get(
-                        "expected_release_imports"
-                    )
-                res = verify_closure(
-                    profile=args.profile,
-                    fixture_id=args.fixture,
-                    imported_dlls=imported_dlls,
-                    sidecar_files=sidecars,
-                    inventory=inventory,
-                    expected_fixture_release_imports=expected_imports,
-                )
-                print(json.dumps(res, indent=2))
-            else:
-                # Non-PE host binary: still verify no forbidden sidecar DLLs exist alongside it
-                sidecars = [
-                    p.name
-                    for p in args.binary.parent.iterdir()
-                    if p.is_file() and p.suffix.lower() == ".dll"
-                ]
-                fx_json = args.repo_root / "fixtures" / args.fixture / "fixture.json"
-                expected_imports = json.loads(fx_json.read_text(encoding="utf-8")).get(
-                    "expected_release_imports", ["kernel32.dll", "ucrtbase.dll"]
-                )
-                res = verify_closure(
-                    profile=args.profile,
-                    fixture_id=args.fixture,
-                    imported_dlls=expected_imports,
-                    sidecar_files=sidecars,
-                    inventory=inventory,
-                    expected_fixture_release_imports=expected_imports,
-                )
-                print(json.dumps(res, indent=2))
+            res = verify_binary_file(
+                args.binary,
+                profile=args.profile,
+                fixture_id=args.fixture,
+                inventory=inventory,
+                repo_root=args.repo_root,
+            )
+            print(json.dumps(res, indent=2))
         else:
             reports = verify_all_recorded_ledgers(args.repo_root)
             print(json.dumps({"verified_ledgers": len(reports), "reports": reports}, indent=2))

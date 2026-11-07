@@ -83,6 +83,18 @@ function(nw_verify_toolchain_manifest)
                 nw_report_toolchain_drift(
                     "lld-link version output '${_nw_linker_out}' does not match pinned '${NW_PINNED_CLANG_VERSION}'")
             endif()
+        elseif(NW_ACTIVE_TOOLCHAIN_ID STREQUAL "msvc-ltcg")
+            execute_process(
+                COMMAND "${CMAKE_LINKER}"
+                OUTPUT_VARIABLE _nw_msvc_linker_out
+                ERROR_VARIABLE _nw_msvc_linker_err
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            set(_nw_msvc_linker_combined "${_nw_msvc_linker_out} ${_nw_msvc_linker_err}")
+            if(NOT _nw_msvc_linker_combined MATCHES "${NW_PINNED_MSVC_LINKER_VERSION}")
+                nw_report_toolchain_drift(
+                    "MSVC link.exe version output does not match pinned '${NW_PINNED_MSVC_LINKER_VERSION}'")
+            endif()
         endif()
     endif()
 

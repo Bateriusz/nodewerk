@@ -171,7 +171,13 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     raise SchemaValidationError(
                         f"{doc_path}: unverified fixture '{fx['fixture_id']}' must have exit_code=null"
                     )
-            for metric_key in ("startup_time_ms", "cpu_time_ms", "gpu_time_ms", "committed_memory_bytes"):
+            for metric_key in (
+                "total_distributed_bytes",
+                "startup_time_ms",
+                "cpu_time_ms",
+                "gpu_time_ms",
+                "committed_memory_bytes",
+            ):
                 val = fx.get(metric_key)
                 if val is None:
                     qualified = f"fixture_results.{metric_key}"
@@ -185,14 +191,42 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     )
 
     elif schema_name == "size-ledger.schema.json":
+        status = instance.get("verification_status")
         components = instance.get("distributed_components", [])
-        computed_sum = sum(c["size_bytes"] for c in components if c.get("counted_in_total_distributed_bytes"))
-        if computed_sum != instance.get("total_distributed_bytes"):
-            raise SchemaValidationError(
-                f"{doc_path}: total_distributed_bytes ({instance.get('total_distributed_bytes')}) "
-                f"!= sum of counted distributed_components ({computed_sum})"
-            )
+        total_bytes = instance.get("total_distributed_bytes")
         unavailable_metrics = {m["metric"] for m in instance.get("unavailable_measurements", [])}
+
+        if status == "unverified":
+            if total_bytes is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: unverified size ledger must have total_distributed_bytes=null"
+                )
+            if "total_distributed_bytes" not in unavailable_metrics:
+                raise SchemaValidationError(
+                    f"{doc_path}: unverified size ledger must list 'total_distributed_bytes' in unavailable_measurements"
+                )
+            for comp in components:
+                if comp.get("size_bytes") is not None or comp.get("sha256") is not None:
+                    raise SchemaValidationError(
+                        f"{doc_path}: unverified size ledger component '{comp.get('name')}' must have size_bytes=null and sha256=null"
+                    )
+        else:
+            if total_bytes is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified size ledger must have integer total_distributed_bytes"
+                )
+            for comp in components:
+                if comp.get("size_bytes") is None or comp.get("sha256") is None:
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified size ledger component '{comp.get('name')}' must have non-null size_bytes and sha256"
+                    )
+            computed_sum = sum(c["size_bytes"] for c in components if c.get("counted_in_total_distributed_bytes"))
+            if computed_sum != total_bytes:
+                raise SchemaValidationError(
+                    f"{doc_path}: total_distributed_bytes ({total_bytes}) "
+                    f"!= sum of counted distributed_components ({computed_sum})"
+                )
+
         for metric_key, val in instance.get("runtime_metrics", {}).items():
             if val is None and metric_key not in unavailable_metrics:
                 raise SchemaValidationError(
@@ -204,28 +238,95 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 )
 
     elif schema_name == "clean-system-report.schema.json":
-        if instance.get("verification_status") == "unverified" and instance.get("clean_system_passed") is not False:
-            raise SchemaValidationError(
-                f"{doc_path}: unverified clean-system report must have clean_system_passed=false"
-            )
+        status = instance.get("verification_status")
         inv = instance.get("deployed_dependency_inventory", {})
-        deployed_sum = sum(f["size_bytes"] for f in inv.get("deployed_files", []))
-        if deployed_sum != inv.get("total_distributed_bytes"):
-            raise SchemaValidationError(
-                f"{doc_path}: deployed_dependency_inventory.total_distributed_bytes ({inv.get('total_distributed_bytes')}) "
-                f"!= sum of deployed_files ({deployed_sum})"
-            )
+        sdk_checks = instance.get("sdk_absence_checks", {})
+        shader_ev = instance.get("offline_shader_execution_evidence", {})
+
+        if status == "unverified":
+            if instance.get("clean_system_passed") is not False:
+                raise SchemaValidationError(
+                    f"{doc_path}: unverified clean-system report must have clean_system_passed=false"
+                )
+            if any(v is not None for v in sdk_checks.values()):
+                raise SchemaValidationError(
+                    f"{doc_path}: unverified clean-system report must have null sdk_absence_checks"
+                )
+            if inv.get("total_distributed_bytes") is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: unverified clean-system report must have total_distributed_bytes=null"
+                )
+            if shader_ev.get("compiled_offline_with_dxc") is True:
+                raise SchemaValidationError(
+                    f"{doc_path}: unverified clean-system report must not claim compiled_offline_with_dxc=true"
+                )
+        else:
+            if any(f.get("size_bytes") is None for f in inv.get("deployed_files", [])):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report must have non-null deployed_files size_bytes"
+                )
+            deployed_sum = sum(f["size_bytes"] for f in inv.get("deployed_files", []))
+            if deployed_sum != inv.get("total_distributed_bytes"):
+                raise SchemaValidationError(
+                    f"{doc_path}: deployed_dependency_inventory.total_distributed_bytes ({inv.get('total_distributed_bytes')}) "
+                    f"!= sum of deployed_files ({deployed_sum})"
+                )
 
     elif schema_name == "reproducibility-report.schema.json":
+        status = instance.get("verification_status")
         artifacts = instance.get("artifacts", [])
-        all_match = all(
-            a["size_bytes_a"] == a["size_bytes_b"] and a["sha256_a"] == a["sha256_b"] and a["hash_match"]
-            for a in artifacts
-        )
-        if all_match != instance.get("all_artifacts_match"):
-            raise SchemaValidationError(
-                f"{doc_path}: all_artifacts_match does not agree with per-artifact hash comparisons"
+        if status == "unverified":
+            if instance.get("all_artifacts_match") is not False:
+                raise SchemaValidationError(
+                    f"{doc_path}: unverified reproducibility report must have all_artifacts_match=false"
+                )
+            for a in artifacts:
+                if (
+                    a.get("size_bytes_a") is not None
+                    or a.get("size_bytes_b") is not None
+                    or a.get("sha256_a") is not None
+                    or a.get("sha256_b") is not None
+                    or a.get("hash_match") is not None
+                ):
+                    raise SchemaValidationError(
+                        f"{doc_path}: unverified reproducibility report must not contain self-referential sizes or hashes for '{a.get('artifact_name')}'"
+                    )
+        else:
+            for a in artifacts:
+                if (
+                    a.get("size_bytes_a") is None
+                    or a.get("size_bytes_b") is None
+                    or a.get("sha256_a") is None
+                    or a.get("sha256_b") is None
+                    or a.get("hash_match") is None
+                ):
+                    raise SchemaValidationError(
+                        f"{doc_path}: {status} reproducibility report must have non-null sizes and hashes for '{a.get('artifact_name')}'"
+                    )
+            all_match = all(
+                a["size_bytes_a"] == a["size_bytes_b"]
+                and a["sha256_a"] == a["sha256_b"]
+                and a["hash_match"] is True
+                for a in artifacts
             )
+            if all_match != instance.get("all_artifacts_match"):
+                raise SchemaValidationError(
+                    f"{doc_path}: all_artifacts_match does not agree with per-artifact hash comparisons"
+                )
+
+    elif schema_name == "experiment-record.schema.json":
+        status = instance.get("verification_status")
+        meas = instance.get("measurements", {})
+        diag = instance.get("diagnostics", {})
+        if status == "unverified":
+            if (
+                meas.get("total_distributed_bytes") is not None
+                or meas.get("delta_vs_release_baseline_bytes") is not None
+                or diag.get("exit_code") is not None
+            ):
+                raise SchemaValidationError(
+                    f"{doc_path}: unverified experiment record must have null measurements and null exit_code"
+                )
 
 
 ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [

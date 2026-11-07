@@ -6,14 +6,15 @@
   "toolchain_id": "msvc-ltcg",
   "compiler_version": "19.40.33813",
   "linker_version": "14.40.33813.0",
-  "verification_status": "reference_baseline",
-  "total_distributed_bytes": 16896,
+  "verification_status": "unverified",
+  "unverified_reason": "Windows 11 x64 MSVC cl.exe 19.40.33813, link.exe 14.40.33813.0, and DXC 1.8.2407 are not installed on the current Linux host; executable byte size, PE section sizes, SHA-256 digest, and offline DXIL byte size are recorded as null until populated on Windows 11 x64.",
+  "total_distributed_bytes": null,
   "distributed_components": [
     {
       "name": "nw_compute_shader_fixture.exe",
       "category": "executable",
-      "size_bytes": 16896,
-      "sha256": "f052c4a891d7e3062b4f81a95c3e7d204b6a19c83e5d70f21a4b9c8603d5e172",
+      "size_bytes": null,
+      "sha256": null,
       "counted_in_total_distributed_bytes": true
     }
   ],
@@ -47,32 +48,32 @@
   "executable_sections": [
     {
       "name": ".text",
-      "virtual_size_bytes": 7680,
-      "raw_size_bytes": 8192,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_CODE|MEM_EXECUTE|MEM_READ"
     },
     {
       "name": ".rdata",
-      "virtual_size_bytes": 4992,
-      "raw_size_bytes": 5120,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
     },
     {
       "name": ".data",
-      "virtual_size_bytes": 384,
-      "raw_size_bytes": 512,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
     },
     {
       "name": ".pdata",
-      "virtual_size_bytes": 720,
-      "raw_size_bytes": 1024,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
     },
     {
       "name": ".reloc",
-      "virtual_size_bytes": 288,
-      "raw_size_bytes": 512,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_DISCARDABLE|MEM_READ"
     }
   ],
@@ -129,8 +130,8 @@
       "entry_point": "CSMain",
       "target_profile": "cs_6_0",
       "hlsl_source_bytes": 800,
-      "offline_dxil_bytes": 392,
-      "embedded_in_executable_bytes": 392,
+      "offline_dxil_bytes": null,
+      "embedded_in_executable_bytes": null,
       "runtime_compilation_used": false,
       "agility_sdk_required": false
     }
@@ -148,6 +149,18 @@
     "gpu_committed_memory_bytes": null
   },
   "unavailable_measurements": [
+    {
+      "metric": "total_distributed_bytes",
+      "reason": "Windows 11 x64 MSVC 19.40.33813 and DXC 1.8.2407 are not installed on the current Linux host; recorded as null rather than claiming an unmeasured byte size."
+    },
+    {
+      "metric": "executable_sections",
+      "reason": "PE32+ section virtual/raw sizes require linking nw_compute_shader_fixture.exe with MSVC link.exe /LTCG on a Windows 11 SDK host."
+    },
+    {
+      "metric": "shaders[0].offline_dxil_bytes",
+      "reason": "Offline DXC 1.8.2407 shader compiler is not installed on the current Linux host; recorded as null rather than synthesizing a fake DXBC container."
+    },
     {
       "metric": "startup_time_ms",
       "reason": "Physical Windows 11 x64 D3D12 compute PSO initialization timing is unverified on the current Linux build host."
@@ -172,6 +185,6 @@
   "budget_claim_policy": {
     "claims_64kib_achievable": false,
     "defer_minimum_size_claim_until_task": "NW-10",
-    "statement": "MSVC/LTCG comparison ledger (+2048 bytes vs clang-cl/lld-link) retained for toolchain comparison without claiming a 64 KiB budget."
+    "statement": "MSVC/LTCG comparison ledger retained for toolchain comparison without claiming an unmeasured size or claiming a 64 KiB budget before NW-10."
   }
 }

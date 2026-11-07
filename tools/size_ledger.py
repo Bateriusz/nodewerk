@@ -6,7 +6,8 @@ Reports and validates:
   installed display-driver components; counting every other DLL, payload, model, and sidecar).
 - Executable sections (.text, .rdata, .data, .pdata, .reloc), imports, offline shaders,
   decoder overhead, startup time, CPU/GPU time, and committed memory.
-- Explicit identification of unavailable runtime measurements (null + reason, never 0).
+- Explicit identification of unavailable measurements (null + reason in unavailable_measurements,
+  never 0 and never fabricated numbers).
 - Toolchain byte comparison between clang-cl/lld-link and MSVC/LTCG across
   empty_player, clear_present, and compute_shader.
 - Explicit non-claim on 64 KiB budget until NW-10 supplies evidence.
@@ -15,10 +16,13 @@ Reports and validates:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
 from typing import Any
+
+from dependency_check import parse_pe64_sections_and_imports
 
 
 class SizeLedgerError(ValueError):
@@ -87,6 +91,57 @@ def compute_distribution_accounting(
     }
 
 
+def record_ledger_from_pe_binary(
+    binary_path: Path,
+    ledger_path: Path,
+    inventory: dict[str, Any],
+    *,
+    offline_dxil_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Update a size ledger JSON file from a real measured PE32+ executable."""
+    raw = binary_path.read_bytes()
+    pe_info = parse_pe64_sections_and_imports(raw)
+    sha256_hex = hashlib.sha256(raw).hexdigest()
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+
+    candidates = [
+        {
+            "name": binary_path.name,
+            "category": "executable",
+            "size_bytes": len(raw),
+            "sha256": sha256_hex,
+        }
+    ]
+    for exc in ledger.get("excluded_system_components", []):
+        candidates.append({"name": exc["name"], "category": "dll", "size_bytes": 0})
+
+    acct = compute_distribution_accounting(candidates, inventory)
+    ledger["verification_status"] = "verified"
+    ledger.pop("unverified_reason", None)
+    ledger["total_distributed_bytes"] = acct["total_distributed_bytes"]
+    ledger["distributed_components"] = acct["distributed_components"]
+
+    sec_by_name = {s["name"]: s for s in pe_info["sections"]}
+    for sec_entry in ledger.get("executable_sections", []):
+        measured_sec = sec_by_name.get(sec_entry["name"])
+        if measured_sec:
+            sec_entry["virtual_size_bytes"] = measured_sec["virtual_size_bytes"]
+            sec_entry["raw_size_bytes"] = measured_sec["raw_size_bytes"]
+
+    if offline_dxil_bytes is not None:
+        for sh in ledger.get("shaders", []):
+            sh["offline_dxil_bytes"] = offline_dxil_bytes
+            sh["embedded_in_executable_bytes"] = offline_dxil_bytes
+
+    ledger["unavailable_measurements"] = [
+        m
+        for m in ledger.get("unavailable_measurements", [])
+        if m["metric"] not in ("total_distributed_bytes", "executable_sections", "shaders[0].offline_dxil_bytes")
+    ]
+    ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    return ledger
+
+
 def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
     """Validate all recorded ledgers and compare clang-cl/lld-link vs MSVC/LTCG."""
     inventory_path = repo_root / "benchmarks" / "dependency-inventory.v1.json"
@@ -110,6 +165,7 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         key = (ledger["fixture_id"], ledger["toolchain_id"])
         ledgers_by_key[key] = ledger
+        status = ledger.get("verification_status")
 
         # Verify budget claim policy
         policy = ledger.get("budget_claim_policy", {})
@@ -127,17 +183,30 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
             if basis == "installed_display_driver_component" and exc_name not in driver_dlls:
                 raise SizeLedgerError(f"{ledger_path.name}: '{exc_name}' is not a documented display driver DLL")
 
-        # Verify counted distributed components sum to total_distributed_bytes
-        counted_sum = sum(
-            c["size_bytes"]
-            for c in ledger.get("distributed_components", [])
-            if c.get("counted_in_total_distributed_bytes")
-        )
-        if counted_sum != ledger["total_distributed_bytes"]:
-            raise SizeLedgerError(
-                f"{ledger_path.name}: total_distributed_bytes ({ledger['total_distributed_bytes']}) "
-                f"!= sum of distributed_components ({counted_sum})"
+        unavailable_metrics = {m["metric"] for m in ledger.get("unavailable_measurements", [])}
+
+        if status == "verified":
+            counted_sum = sum(
+                c["size_bytes"]
+                for c in ledger.get("distributed_components", [])
+                if c.get("counted_in_total_distributed_bytes")
             )
+            if counted_sum != ledger["total_distributed_bytes"]:
+                raise SizeLedgerError(
+                    f"{ledger_path.name}: total_distributed_bytes ({ledger['total_distributed_bytes']}) "
+                    f"!= sum of distributed_components ({counted_sum})"
+                )
+        elif status == "unverified":
+            if ledger.get("total_distributed_bytes") is not None:
+                raise SizeLedgerError(
+                    f"{ledger_path.name}: unverified ledger must not claim a non-null total_distributed_bytes"
+                )
+            if "total_distributed_bytes" not in unavailable_metrics:
+                raise SizeLedgerError(
+                    f"{ledger_path.name}: unverified ledger must list 'total_distributed_bytes' in unavailable_measurements"
+                )
+        else:
+            raise SizeLedgerError(f"{ledger_path.name}: unexpected verification_status '{status}'")
 
         # Verify shader accounting matches shaders/manifest.json
         if ledger["fixture_id"] == "compute_shader":
@@ -165,7 +234,8 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
 
         clang_bytes = clang_ledger["total_distributed_bytes"]
         msvc_bytes = msvc_ledger["total_distributed_bytes"]
-        if clang_bytes >= msvc_bytes:
+        both_measured = (clang_bytes is not None) and (msvc_bytes is not None)
+        if both_measured and clang_bytes >= msvc_bytes:
             raise SizeLedgerError(
                 f"Expected selected toolchain clang-cl-lld ({clang_bytes} B) to be smaller than msvc-ltcg ({msvc_bytes} B) on {fixture_id}"
             )
@@ -177,15 +247,27 @@ def generate_size_comparison_report(repo_root: Path) -> dict[str, Any]:
                 f"Import closure mismatch between clang-cl-lld ({clang_imports}) and msvc-ltcg ({msvc_imports}) on {fixture_id}"
             )
 
-        clang_text = next(s["raw_size_bytes"] for s in clang_ledger["executable_sections"] if s["name"] == ".text")
-        msvc_text = next(s["raw_size_bytes"] for s in msvc_ledger["executable_sections"] if s["name"] == ".text")
+        clang_text = next(
+            (s["raw_size_bytes"] for s in clang_ledger["executable_sections"] if s["name"] == ".text"),
+            None,
+        )
+        msvc_text = next(
+            (s["raw_size_bytes"] for s in msvc_ledger["executable_sections"] if s["name"] == ".text"),
+            None,
+        )
 
         comparisons.append(
             {
                 "fixture_id": fixture_id,
+                "verification_status": (
+                    "verified"
+                    if clang_ledger["verification_status"] == "verified"
+                    and msvc_ledger["verification_status"] == "verified"
+                    else "unverified"
+                ),
                 "clang_cl_lld_bytes": clang_bytes,
                 "msvc_ltcg_bytes": msvc_bytes,
-                "delta_msvc_minus_clang_bytes": msvc_bytes - clang_bytes,
+                "delta_msvc_minus_clang_bytes": (msvc_bytes - clang_bytes) if both_measured else None,
                 "clang_cl_text_raw_bytes": clang_text,
                 "msvc_ltcg_text_raw_bytes": msvc_text,
                 "identical_import_closure": True,

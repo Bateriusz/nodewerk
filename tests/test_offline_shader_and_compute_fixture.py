@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 import struct
 import sys
 from pathlib import Path
@@ -11,49 +12,133 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
+import offline_shader_pack  # noqa: E402
 from offline_shader_pack import (  # noqa: E402
-    build_deterministic_dxil_container,
+    CS_6_0_PROGRAM_VERSION,
+    FORBIDDEN_SM66_HEAP_INDEXING_MASK,
+    OfflineShaderCompilerError,
     check_hlsl_source_constraints,
+    compile_and_record_manifest,
+    compile_shader_with_dxc,
     format_cpp_dxil_header,
+    pack_dxil_to_header,
     validate_dxil_container,
 )
 
 
-def test_offline_dxil_container_and_embedded_header_reproducibility() -> None:
-    hlsl_path = REPO_ROOT / "shaders" / "compute_fixture.hlsl"
-    dxil_path = REPO_ROOT / "shaders" / "compute_fixture.dxil"
-    header_path = REPO_ROOT / "shaders" / "generated" / "compute_fixture_dxil.h"
-    manifest_path = REPO_ROOT / "shaders" / "manifest.json"
+def make_test_signed_dxil_container(
+    *,
+    prog_version: int = CS_6_0_PROGRAM_VERSION,
+    feature_flags: int = 0,
+    include_psv0: bool = True,
+    unsigned_digest: bool = False,
+    synthetic_md5_digest: bool = False,
+    first_bitstream_word: int = 0x00000021,
+) -> bytes:
+    """Build a test DXBC container with SFI0, PSV0, and LLVM 3.7 MODULE_BLOCK DXIL chunks for validator unit tests."""
+    sfi0_payload = struct.pack("<Q", feature_flags)
+    sfi0_chunk = b"SFI0" + struct.pack("<I", len(sfi0_payload)) + sfi0_payload
 
-    hlsl_bytes = hlsl_path.read_bytes()
-    assert check_hlsl_source_constraints(hlsl_bytes.decode("utf-8")) == []
+    psv0_info = bytearray(36)
+    struct.pack_into("<III", psv0_info, 12, 64, 1, 1)
+    psv0_payload = struct.pack("<I", len(psv0_info)) + bytes(psv0_info) + struct.pack("<II", 0, 1)
+    psv0_chunk = b"PSV0" + struct.pack("<I", len(psv0_payload)) + psv0_payload
 
-    rebuilt_blob = build_deterministic_dxil_container(hlsl_bytes)
-    committed_blob = dxil_path.read_bytes()
-    assert rebuilt_blob == committed_blob, "Committed DXIL container must match deterministic offline pack output"
+    bitcode_words = [
+        first_bitstream_word,
+        0x00000002,
+        0x00000021,
+        0x0000000C,
+    ] + [0x00000000] * 16
+    bitcode = b"BC\xc0\xde" + struct.pack(f"<{len(bitcode_words)}I", *bitcode_words)
+    dxil_header_size = 24
+    dxil_chunk_size = dxil_header_size + len(bitcode)
+    dxil_payload = (
+        struct.pack(
+            "<II4sIII",
+            prog_version,
+            dxil_chunk_size // 4,
+            b"DXIL",
+            0x00010100,
+            16,
+            len(bitcode),
+        )
+        + bitcode
+    )
+    dxil_chunk = b"DXIL" + struct.pack("<I", len(dxil_payload)) + dxil_payload
 
-    info = validate_dxil_container(committed_blob)
-    assert info["valid"] is True
-    assert info["shader_model"] == "cs_6_0"
-    assert info["size_bytes"] == 392
-    assert info["requires_sm_6_6_heap_indexing"] is False
-    assert info["requires_enhanced_barriers"] is False
-    assert info["requires_mesh_shaders"] is False
-    assert info["requires_ray_tracing"] is False
+    chunks = [sfi0_chunk]
+    if include_psv0:
+        chunks.append(psv0_chunk)
+    chunks.append(dxil_chunk)
 
-    expected_header = format_cpp_dxil_header(committed_blob, info["sha256"])
-    assert header_path.read_text(encoding="utf-8") == expected_header
+    chunk_count = len(chunks)
+    header_size = 32 + chunk_count * 4
+    offsets = []
+    pos = header_size
+    for ch in chunks:
+        offsets.append(pos)
+        pos += len(ch)
+    total_size = pos
+    joined_chunks = b"".join(chunks)
 
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if unsigned_digest:
+        digest = b"\x00" * 16
+    elif synthetic_md5_digest:
+        digest = hashlib.md5(joined_chunks).digest()
+    else:
+        # Non-zero, non-plain-MD5/SHA256 retail-style HMAC digest for unit test validation
+        digest = hashlib.blake2s(b"dxc-retail-sig:" + joined_chunks, digest_size=16).digest()
+
+    header = (
+        b"DXBC"
+        + digest
+        + struct.pack("<HHII", 1, 0, total_size, chunk_count)
+        + struct.pack(f"<{chunk_count}I", *offsets)
+    )
+    return header + joined_chunks
+
+
+def test_no_synthetic_dxil_generator_and_honest_unverified_manifest() -> None:
+    assert not hasattr(offline_shader_pack, "build_deterministic_dxil_container"), (
+        "offline_shader_pack.py must never synthesize fake DXBC containers"
+    )
+    assert not (REPO_ROOT / "shaders" / "compute_fixture.dxil").exists(), (
+        "Fake tracked shaders/compute_fixture.dxil must not exist in the source tree"
+    )
+
+    manifest = json.loads((REPO_ROOT / "shaders" / "manifest.json").read_text(encoding="utf-8"))
     shader_entry = manifest["shaders"][0]
     assert shader_entry["target_profile"] == "cs_6_0"
-    assert shader_entry["offline_dxil_bytes"] == len(committed_blob)
-    assert shader_entry["offline_dxil_sha256"] == info["sha256"]
+    assert shader_entry["pinned_dxc_version"] == "1.8.2407"
     assert shader_entry["runtime_compilation_used"] is False
     assert shader_entry["agility_sdk_required"] is False
+    # On Linux host without DXC, manifest must be honestly marked unverified with compiled_offline_with_dxc=False
+    assert manifest["verification_status"] == "unverified"
+    assert shader_entry["compiled_offline_with_dxc"] is False
+    assert shader_entry["offline_dxil_bytes"] is None
+    assert shader_entry["offline_dxil_sha256"] is None
+
+
+def test_hermetic_cmake_shader_compilation_rules() -> None:
+    cmake_lists = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    compile_shaders = (REPO_ROOT / "cmake" / "CompileShaders.cmake").read_text(encoding="utf-8")
+
+    # CMakeLists.txt must place DXIL and generated header inside ${CMAKE_CURRENT_BINARY_DIR}
+    assert '"${CMAKE_CURRENT_BINARY_DIR}/shaders/compute_fixture.dxil"' in cmake_lists
+    assert '"${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/compute_fixture_dxil.h"' in cmake_lists
+
+    # CompileShaders.cmake must attach both outputs to the custom target and provide a Python-free DXC -Fh fallback
+    assert 'OUTPUT "${output_dxil}" "${output_header}"' in compile_shaders
+    assert 'DEPENDS "${output_dxil}" "${output_header}"' in compile_shaders
+    assert '-Fh "${output_header}"' in compile_shaders
+    assert "-Vn kComputeFixtureDxil" in compile_shaders
 
 
 def test_hlsl_source_constraint_checker_rejects_non_baseline_features() -> None:
+    hlsl_text = (REPO_ROOT / "shaders" / "compute_fixture.hlsl").read_text(encoding="utf-8")
+    assert check_hlsl_source_constraints(hlsl_text) == []
+
     for forbidden_snippet in (
         "RWByteAddressBuffer buf = ResourceDescriptorHeap[0];",
         "SamplerState s = SamplerDescriptorHeap[1];",
@@ -65,26 +150,90 @@ def test_hlsl_source_constraint_checker_rejects_non_baseline_features() -> None:
         assert len(violations) == 1, f"Expected violation for: {forbidden_snippet}"
 
 
-def test_dxil_container_validator_rejects_corrupt_or_wrong_shader_model() -> None:
+def test_dxil_container_validator_enforces_signature_psv0_sfi0_and_bitcode() -> None:
     with pytest.raises(ValueError, match="too small"):
         validate_dxil_container(b"DXBCshort")
 
-    hlsl_bytes = (REPO_ROOT / "shaders" / "compute_fixture.hlsl").read_bytes()
-    valid_blob = bytearray(build_deterministic_dxil_container(hlsl_bytes))
+    valid_blob = make_test_signed_dxil_container()
+    info = validate_dxil_container(valid_blob)
+    assert info["valid"] is True
+    assert info["shader_model"] == "cs_6_0"
+    assert info["has_psv0"] is True
 
-    # Corrupt magic
-    bad_magic = bytearray(valid_blob)
-    bad_magic[:4] = b"BAD!"
-    with pytest.raises(ValueError, match="magic"):
-        validate_dxil_container(bytes(bad_magic))
+    # 1. Reject unsigned (all-zero digest) containers
+    with pytest.raises(ValueError, match="all-zero unsigned digest"):
+        validate_dxil_container(make_test_signed_dxil_container(unsigned_digest=True))
 
-    # Corrupt shader model from cs_6_0 (0x60) to cs_6_6 (0x66)
-    sm66_blob = bytearray(valid_blob)
-    dxil_offset = struct.unpack_from("<I", sm66_blob, 36)[0]
+    # 2. Reject synthetic MD5 digest containers
+    with pytest.raises(ValueError, match="synthetic pseudo-DXBC"):
+        validate_dxil_container(make_test_signed_dxil_container(synthetic_md5_digest=True))
+
+    # 3. Reject missing PSV0 chunk
+    with pytest.raises(ValueError, match="PSV0"):
+        validate_dxil_container(make_test_signed_dxil_container(include_psv0=False))
+
+    # 4. Reject SM 6.6 heap indexing SFI0 flags
+    with pytest.raises(ValueError, match="SM 6.6"):
+        validate_dxil_container(
+            make_test_signed_dxil_container(feature_flags=FORBIDDEN_SM66_HEAP_INDEXING_MASK)
+        )
+
+    # 5. Reject wrong shader model (cs_6_6)
     prog_ver_cs_6_6 = (5 << 16) | (6 << 4) | 6
-    struct.pack_into("<I", sm66_blob, dxil_offset + 8, prog_ver_cs_6_6)
     with pytest.raises(ValueError, match="cs_6_6"):
-        validate_dxil_container(bytes(sm66_blob))
+        validate_dxil_container(make_test_signed_dxil_container(prog_version=prog_ver_cs_6_6))
+
+    # 6. Reject fake bitcode body lacking LLVM 3.7 MODULE_BLOCK (0x21)
+    with pytest.raises(ValueError, match="MODULE_BLOCK"):
+        validate_dxil_container(make_test_signed_dxil_container(first_bitstream_word=0xDEADBEEF))
+
+
+def test_offline_dxc_compile_and_pack_into_build_dir(tmp_path: Path) -> None:
+    hlsl_path = REPO_ROOT / "shaders" / "compute_fixture.hlsl"
+    out_dxil = tmp_path / "build" / "shaders" / "compute_fixture.dxil"
+    out_header = tmp_path / "build" / "shaders" / "generated" / "compute_fixture_dxil.h"
+
+    # Without DXC in PATH, compile_shader_with_dxc must fail rather than synthesizing a container
+    with pytest.raises(OfflineShaderCompilerError, match="refusing to synthesize"):
+        compile_shader_with_dxc(hlsl_path, out_dxil, dxc_executable=tmp_path / "nonexistent_dxc")
+
+    # Create a mock DXC executable in tmp_path to test the offline compile + header generation flow
+    valid_dxil_hex = make_test_signed_dxil_container().hex()
+    mock_dxc = tmp_path / "mock_dxc.py"
+    mock_dxc.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "if '--version' in sys.argv:\n"
+        "    print('dxcompiler.dll: 1.8 - 1.8.2407.12')\n"
+        "    sys.exit(0)\n"
+        "fo_idx = sys.argv.index('-Fo')\n"
+        "out_file = Path(sys.argv[fo_idx + 1])\n"
+        "out_file.parent.mkdir(parents=True, exist_ok=True)\n"
+        f"out_file.write_bytes(bytes.fromhex({valid_dxil_hex!r}))\n",
+        encoding="utf-8",
+    )
+    mock_dxc.chmod(mock_dxc.stat().st_mode | stat.S_IEXEC)
+
+    res = compile_shader_with_dxc(hlsl_path, out_dxil, dxc_executable=mock_dxc)
+    assert res["valid"] is True
+    assert res["measured_dxc_version"] == "1.8.2407.12"
+    assert out_dxil.exists()
+
+    pack_res = pack_dxil_to_header(hlsl_path, out_dxil, out_header)
+    assert out_header.exists()
+    assert out_header.read_text(encoding="utf-8") == format_cpp_dxil_header(
+        out_dxil.read_bytes(), pack_res["sha256"]
+    )
+
+    # Test compile_and_record_manifest in an isolated copy of repo shaders/
+    fake_repo = tmp_path / "repo"
+    (fake_repo / "shaders").mkdir(parents=True)
+    (fake_repo / "shaders" / "compute_fixture.hlsl").write_bytes(hlsl_path.read_bytes())
+    manifest = compile_and_record_manifest(fake_repo, fake_repo / "build", dxc_executable=mock_dxc)
+    assert manifest["verification_status"] == "verified"
+    assert manifest["shaders"][0]["compiled_offline_with_dxc"] is True
+    assert manifest["shaders"][0]["offline_dxil_bytes"] == len(out_dxil.read_bytes())
 
 
 def test_compute_fixture_expected_output_matches_reference_formula() -> None:

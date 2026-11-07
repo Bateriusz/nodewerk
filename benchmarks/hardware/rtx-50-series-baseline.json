@@ -58,7 +58,7 @@
       "d3d12_validation_clean": null,
       "compute_output_verified": null,
       "exit_code": null,
-      "total_distributed_bytes": 16896,
+      "total_distributed_bytes": null,
       "startup_time_ms": null,
       "cpu_time_ms": null,
       "gpu_time_ms": null,
@@ -71,7 +71,7 @@
       "d3d12_validation_clean": null,
       "compute_output_verified": null,
       "exit_code": null,
-      "total_distributed_bytes": 14848,
+      "total_distributed_bytes": null,
       "startup_time_ms": null,
       "cpu_time_ms": null,
       "gpu_time_ms": null,
@@ -83,6 +83,10 @@
     {
       "metric": "captured_capabilities",
       "reason": "Physical desktop RTX 50-series D3D12 CheckFeatureSupport capture has not been executed on the current non-GPU Linux host."
+    },
+    {
+      "metric": "fixture_results.total_distributed_bytes",
+      "reason": "Windows 11 x64 clang-cl/lld-link/DXC release build has not been executed on the current Linux host; recorded as null rather than unmeasured byte counts."
     },
     {
       "metric": "fixture_results.startup_time_ms",

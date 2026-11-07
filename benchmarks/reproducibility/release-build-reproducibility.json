@@ -6,34 +6,40 @@
   "directory_a": "build/repro-clean-a",
   "directory_b": "build/repro-clean-b",
   "verification_status": "unverified",
-  "all_artifacts_match": true,
+  "unverified_reason": "Windows 11 x64 clang-cl 18.1.8, lld-link 18.1.8, Windows SDK 10.0.26100.0, and DXC 1.8.2407 are not installed on the current Linux host; two-clean-directory release builds have not yet been executed. Run pwsh ./tools/verify-nw01.ps1 -Mode Full on Windows 11 x64 to build and record measured SHA-256 hashes.",
+  "all_artifacts_match": false,
+  "missing_files": [
+    "nw_empty_player.exe",
+    "nw_clear_present_fixture.exe",
+    "nw_compute_shader_fixture.exe"
+  ],
   "artifacts": [
     {
       "artifact_name": "nw_empty_player.exe",
       "fixture_id": "empty_player",
-      "size_bytes_a": 10752,
-      "size_bytes_b": 10752,
-      "sha256_a": "4b2e83c179df098a31e02f1b4c8d19e260a9573f881e6b3a7f24c9d110e8a5c3",
-      "sha256_b": "4b2e83c179df098a31e02f1b4c8d19e260a9573f881e6b3a7f24c9d110e8a5c3",
-      "hash_match": true
+      "size_bytes_a": null,
+      "size_bytes_b": null,
+      "sha256_a": null,
+      "sha256_b": null,
+      "hash_match": null
     },
     {
       "artifact_name": "nw_clear_present_fixture.exe",
       "fixture_id": "clear_present",
-      "size_bytes_a": 16896,
-      "size_bytes_b": 16896,
-      "sha256_a": "91e0734f6d21c58a40e719b30c84f26a19d578e20f318c7d5a9e2b6401c873e4",
-      "sha256_b": "91e0734f6d21c58a40e719b30c84f26a19d578e20f318c7d5a9e2b6401c873e4",
-      "hash_match": true
+      "size_bytes_a": null,
+      "size_bytes_b": null,
+      "sha256_a": null,
+      "sha256_b": null,
+      "hash_match": null
     },
     {
       "artifact_name": "nw_compute_shader_fixture.exe",
       "fixture_id": "compute_shader",
-      "size_bytes_a": 14848,
-      "size_bytes_b": 14848,
-      "sha256_a": "c48701f935a2b76e18d40f9263c8b14750d3e29a8416f0c73b5d9a1204e687f1",
-      "sha256_b": "c48701f935a2b76e18d40f9263c8b14750d3e29a8416f0c73b5d9a1204e687f1",
-      "hash_match": true
+      "size_bytes_a": null,
+      "size_bytes_b": null,
+      "sha256_a": null,
+      "sha256_b": null,
+      "hash_match": null
     }
   ],
   "mismatch_investigation": {
@@ -43,6 +49,24 @@
       "Embedded absolute build-directory PDB paths mitigated via /PDBALTPATH:%_PDB%.",
       "Compiler __FILE__ and debug prefix paths normalized via -ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
     ],
-    "remediation_applied": "Pinned /Brepro, /PDBALTPATH:%_PDB%, and -ffile-prefix-map=${CMAKE_SOURCE_DIR}=. in cmake/BuildProfiles.cmake. Verification status remains unverified on hosts lacking Windows clang-cl/lld-link until tools/verify-nw01.ps1 -Mode Full executes on Windows 11 x64."
-  }
+    "remediation_applied": "Pinned /Brepro, /PDBALTPATH:%_PDB%, and -ffile-prefix-map=${CMAKE_SOURCE_DIR}=. in cmake/BuildProfiles.cmake. Verification status remains unverified with all_artifacts_match=false until tools/verify-nw01.ps1 -Mode Full executes two clean builds on Windows 11 x64 and writes measured hashes to this file."
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "artifacts[*].size_bytes_a",
+      "reason": "Clean build directory A (build/repro-clean-a) has not been built on the current Linux host lacking Windows 11 clang-cl/lld-link/DXC."
+    },
+    {
+      "metric": "artifacts[*].size_bytes_b",
+      "reason": "Clean build directory B (build/repro-clean-b) has not been built on the current Linux host lacking Windows 11 clang-cl/lld-link/DXC."
+    },
+    {
+      "metric": "artifacts[*].sha256_a",
+      "reason": "Clean build directory A SHA-256 digest is unmeasured until built on Windows 11 x64; never populated with self-referential placeholder hashes."
+    },
+    {
+      "metric": "artifacts[*].sha256_b",
+      "reason": "Clean build directory B SHA-256 digest is unmeasured until built on Windows 11 x64; never populated with self-referential placeholder hashes."
+    }
+  ]
 }

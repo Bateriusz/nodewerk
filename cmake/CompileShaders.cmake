@@ -11,16 +11,18 @@ function(nw_add_offline_compute_shader target_name hlsl_file entry_point profile
     get_filename_component(_dxil_dir "${output_dxil}" DIRECTORY)
     get_filename_component(_header_dir "${output_header}" DIRECTORY)
 
-    # Guard against accidental source-tree mutation
-    file(RELATIVE_PATH _rel_to_src "${CMAKE_SOURCE_DIR}" "${output_dxil}")
-    if(NOT _rel_to_src MATCHES "^\\.\\.")
-        file(RELATIVE_PATH _rel_to_bin "${CMAKE_BINARY_DIR}" "${output_dxil}")
-        if(_rel_to_bin MATCHES "^\\.\\.")
-            message(FATAL_ERROR
-                "[NW-SHADER-ERR] Offline shader output '${output_dxil}' must reside inside "
-                "CMAKE_BINARY_DIR ('${CMAKE_BINARY_DIR}'), never in the tracked source tree.")
+    # Guard against accidental source-tree mutation for both DXIL and C++ header outputs
+    foreach(_out_artifact IN ITEMS "${output_dxil}" "${output_header}")
+        file(RELATIVE_PATH _rel_to_src "${CMAKE_SOURCE_DIR}" "${_out_artifact}")
+        if(NOT _rel_to_src MATCHES "^\\.\\.")
+            file(RELATIVE_PATH _rel_to_bin "${CMAKE_BINARY_DIR}" "${_out_artifact}")
+            if(_rel_to_bin MATCHES "^\\.\\.")
+                message(FATAL_ERROR
+                    "[NW-SHADER-ERR] Offline shader output '${_out_artifact}' must reside inside "
+                    "CMAKE_BINARY_DIR ('${CMAKE_BINARY_DIR}'), never in the tracked source tree.")
+            endif()
         endif()
-    endif()
+    endforeach()
 
     if(NOT NW_DXC_EXECUTABLE)
         message(FATAL_ERROR

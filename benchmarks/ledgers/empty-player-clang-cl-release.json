@@ -6,14 +6,15 @@
   "toolchain_id": "clang-cl-lld",
   "compiler_version": "18.1.8",
   "linker_version": "18.1.8",
-  "verification_status": "reference_baseline",
-  "total_distributed_bytes": 10752,
+  "verification_status": "unverified",
+  "unverified_reason": "Windows 11 x64 clang-cl 18.1.8 and lld-link 18.1.8 are not installed on the current Linux host; executable byte size, PE section sizes, and SHA-256 digest are recorded as null rather than unmeasured numbers until populated via tools/size_ledger.py on Windows 11 x64.",
+  "total_distributed_bytes": null,
   "distributed_components": [
     {
       "name": "nw_empty_player.exe",
       "category": "executable",
-      "size_bytes": 10752,
-      "sha256": "4b2e83c179df098a31e02f1b4c8d19e260a9573f881e6b3a7f24c9d110e8a5c3",
+      "size_bytes": null,
+      "sha256": null,
       "counted_in_total_distributed_bytes": true
     }
   ],
@@ -32,32 +33,32 @@
   "executable_sections": [
     {
       "name": ".text",
-      "virtual_size_bytes": 3840,
-      "raw_size_bytes": 4096,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_CODE|MEM_EXECUTE|MEM_READ"
     },
     {
       "name": ".rdata",
-      "virtual_size_bytes": 2912,
-      "raw_size_bytes": 3072,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
     },
     {
       "name": ".data",
-      "virtual_size_bytes": 320,
-      "raw_size_bytes": 512,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
     },
     {
       "name": ".pdata",
-      "virtual_size_bytes": 432,
-      "raw_size_bytes": 512,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
     },
     {
       "name": ".reloc",
-      "virtual_size_bytes": 184,
-      "raw_size_bytes": 512,
+      "virtual_size_bytes": null,
+      "raw_size_bytes": null,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_DISCARDABLE|MEM_READ"
     }
   ],
@@ -67,14 +68,13 @@
       "classification": "windows_inbox",
       "symbols": [
         "ExitProcess",
+        "FreeLibrary",
         "GetCurrentProcess",
-        "GetCurrentProcessId",
-        "GetCurrentThreadId",
-        "GetSystemTimeAsFileTime",
-        "IsProcessorFeaturePresent",
-        "QueryPerformanceCounter",
-        "TerminateProcess",
-        "UnhandledExceptionFilter"
+        "GetLastError",
+        "GetModuleHandleA",
+        "GetProcAddress",
+        "LoadLibraryExA",
+        "QueryPerformanceCounter"
       ]
     },
     {
@@ -110,6 +110,14 @@
   },
   "unavailable_measurements": [
     {
+      "metric": "total_distributed_bytes",
+      "reason": "Windows 11 x64 clang-cl 18.1.8 and lld-link 18.1.8 are not installed on the current Linux host; recorded as null rather than claiming an unmeasured byte size."
+    },
+    {
+      "metric": "executable_sections",
+      "reason": "PE32+ section virtual/raw sizes require linking nw_empty_player.exe with lld-link 18.1.8 on a Windows 11 SDK host."
+    },
+    {
       "metric": "startup_time_ms",
       "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host; recorded as null rather than zero."
     },
@@ -119,7 +127,7 @@
     },
     {
       "metric": "gpu_time_ms",
-      "reason": "Empty player bootstrap does not submit GPU command lists and physical Windows 11 GPU hardware is unverified."
+      "reason": "Empty player bootstrap only queries adapter capabilities without submitting GPU command lists, and physical Windows 11 GPU hardware is unverified."
     },
     {
       "metric": "committed_memory_bytes",
@@ -133,6 +141,6 @@
   "budget_claim_policy": {
     "claims_64kib_achievable": false,
     "defer_minimum_size_claim_until_task": "NW-10",
-    "statement": "This ledger establishes the reproducible empty-player byte baseline without claiming that a 64 KiB full demo budget is achievable before NW-10 supplies package and compression evidence."
+    "statement": "This ledger establishes the empty-player byte-accounting schema and import closure contract without claiming an unmeasured minimum size or claiming that a 64 KiB full demo budget is achievable before NW-10 supplies evidence."
   }
 }

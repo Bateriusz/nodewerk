@@ -3,7 +3,9 @@
   "experiment_id": "exp-crt-elimination-nodefaultlib",
   "category": "crt_elimination",
   "status": "failed_preserved",
+  "verification_status": "unverified",
   "substituted_silently": false,
+  "reproducible_command": "cmake --preset clang-cl-compact-experiment -DNW_ENABLE_CRT_ELIMINATION_EXPERIMENT=ON && cmake --build --preset clang-cl-compact-experiment",
   "configuration": {
     "toolchain_id": "clang-cl-lld",
     "profile_name": "compact_experiment",
@@ -39,7 +41,7 @@
       "obligation_id": "entry_stack_alignment_16b",
       "phase": "initialization",
       "description": "Custom mainCRTStartup / WinMainCRTStartup must align RSP to 16-byte boundary before SSE2/AVX2 instructions.",
-      "satisfied": true
+      "satisfied": false
     },
     {
       "obligation_id": "security_cookie_init",
@@ -51,13 +53,13 @@
       "obligation_id": "fltused_abi_symbol",
       "phase": "initialization",
       "description": "Must define extern \"C\" int _fltused = 0x9875 for floating-point codegen under Windows x64 ABI.",
-      "satisfied": true
+      "satisfied": false
     },
     {
       "obligation_id": "freestanding_memory_intrinsics",
       "phase": "runtime",
       "description": "Must supply freestanding memcpy, memset, and memcmp compiled with -fno-builtin so LTO does not emit unresolved UCRT symbol references.",
-      "satisfied": true
+      "satisfied": false
     },
     {
       "obligation_id": "static_initializers_and_tls",
@@ -74,14 +76,28 @@
   ],
   "measurements": {
     "fixture_id": "empty_player",
-    "total_distributed_bytes": 6656,
-    "delta_vs_release_baseline_bytes": -4096,
-    "notes": "Omitting ucrtbase.dll imports via /NODEFAULTLIB reduced empty_player from 10752 bytes to 6656 bytes (-4096 bytes), but naive /NODEFAULTLIB without linking vcruntime security-cookie/CFG stubs fails linker resolution for __security_cookie and __guard_check_icall_fptr when platform security mitigations (/GS, /guard:cf) are retained."
+    "total_distributed_bytes": null,
+    "delta_vs_release_baseline_bytes": null,
+    "notes": "Enabling -DNW_ENABLE_CRT_ELIMINATION_EXPERIMENT=ON adds /NODEFAULTLIB /ENTRY:mainCRTStartup in cmake/BuildProfiles.cmake without providing custom mainCRTStartup or security-cookie/CFG runtime stubs, so linking fails before producing an executable; byte measurements are recorded as null rather than invented numbers."
   },
   "diagnostics": {
-    "exit_code": 1,
-    "error_code": "LLD_LINK_UNDEFINED_SECURITY_COOKIE_AND_CFG_SYMBOLS",
-    "summary": "lld-link error: undefined symbol: __security_check_cookie, __security_cookie, __guard_check_icall_fptr when /NODEFAULTLIB is enabled alongside /GS and /guard:cf without custom security support stubs.",
-    "preservation_statement": "CRT elimination remains disabled by default (NW_ENABLE_CRT_ELIMINATION_EXPERIMENT=OFF); this record preserves the exact /NODEFAULTLIB obligations, byte measurements, and linker failure diagnostics without silently falling back or stripping security mitigations."
-  }
+    "exit_code": null,
+    "error_code": "NODEFAULTLIB_MISSING_CRT_AND_SECURITY_STUBS",
+    "summary": "Passing /NODEFAULTLIB /ENTRY:mainCRTStartup while retaining /GS and /guard:cf requires custom mainCRTStartup, __security_cookie, __security_check_cookie, __guard_check_icall_fptr, _fltused, and freestanding string/memory intrinsics not linked in the baseline.",
+    "preservation_statement": "CRT elimination remains disabled by default (NW_ENABLE_CRT_ELIMINATION_EXPERIMENT=OFF); this record preserves the exact reproducible CMake command, obligations, and linker requirements without claiming unmeasured byte counts or silently stripping security mitigations."
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "measurements.total_distributed_bytes",
+      "reason": "Naive /NODEFAULTLIB without custom entry/security-cookie stubs does not produce a linked executable, and Windows 11 clang-cl/lld-link is not installed on the current Linux host."
+    },
+    {
+      "metric": "measurements.delta_vs_release_baseline_bytes",
+      "reason": "No linked PE executable is produced without custom CRT/security-cookie support stubs, and Windows 11 clang-cl/lld-link is not installed on the current Linux host."
+    },
+    {
+      "metric": "diagnostics.exit_code",
+      "reason": "Windows 11 lld-link execution has not been run on the current Linux host; recorded as null."
+    }
+  ]
 }

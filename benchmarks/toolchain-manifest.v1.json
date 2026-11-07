@@ -10,9 +10,9 @@
     "linker_executable": "lld-link.exe",
     "linker_version": "18.1.8",
     "target_triple": "x86_64-pc-windows-msvc",
-    "selection_rationale": "Identical-fixture comparison across empty_player, clear_present, and compute_shader showed clang-cl 18.1.8 + lld-link with ThinLTO (/O1 /Os /Gw /Gy /OPT:REF /OPT:ICF=4) produced smaller release executables than MSVC 19.40.33813 /LTCG across all three fixtures (saving 1536 to 2560 bytes per fixture) while preserving identical inbox DLL import closure, full PDB debugging compatibility, and deterministic byte-identical builds across clean directories.",
-    "debugging_evidence": "Verified CodeView /DEBUG:FULL and /PDBALTPATH:%_PDB% symbol generation compatible with WinDbg, Visual Studio Debugger, and PIX for Windows GPU captures.",
-    "reproducibility_evidence": "Verified bit-for-bit identical PE executables across independent clean build directories using /Brepro, -ffile-prefix-map=${CMAKE_SOURCE_DIR}=., and /PDBALTPATH:%_PDB%."
+    "selection_rationale": "Selected clang-cl 18.1.8 + lld-link 18.1.8 with ThinLTO (-flto=thin, /O1 /Os /Gw /Gy /GF /OPT:REF /OPT:ICF=4) as the primary toolchain configuration paired against MSVC 19.40.33813 /LTCG across identical empty_player, clear_present, and compute_shader fixtures. Both toolchains share identical Windows 11 inbox DLL import closures, CodeView PDB symbol support, and /Brepro deterministic linking; exact PE byte counts remain null (unverified) until compiled on a Windows 11 x64 toolchain host.",
+    "debugging_evidence": "Configured with CodeView /DEBUG:FULL (dev) and /PDBALTPATH:%_PDB% (release) symbol emission for WinDbg, Visual Studio Debugger, and PIX for Windows GPU captures; live Windows debugger verification is pending Windows 11 x64 host execution.",
+    "reproducibility_evidence": "Configured for bit-for-bit identical PE executables across independent clean build directories using /Brepro, -ffile-prefix-map=${CMAKE_SOURCE_DIR}=., and /PDBALTPATH:%_PDB%, enforced by cmake/ToolchainManifest.cmake and tools/verify_nw01.py."
   },
   "evaluated_toolchains": [
     {
@@ -20,11 +20,12 @@
       "compiler_version": "18.1.8",
       "linker_version": "18.1.8",
       "status": "selected",
-      "empty_player_bytes": 10752,
-      "clear_present_bytes": 16896,
-      "compute_fixture_bytes": 14848,
-      "pdb_debugging_verified": true,
-      "deterministic_repro_verified": true,
+      "verification_status": "unverified",
+      "empty_player_bytes": null,
+      "clear_present_bytes": null,
+      "compute_fixture_bytes": null,
+      "pdb_debugging_verified": false,
+      "deterministic_repro_verified": false,
       "deployment_closure_identical": true
     },
     {
@@ -32,11 +33,12 @@
       "compiler_version": "19.40.33813",
       "linker_version": "14.40.33813.0",
       "status": "retained_alternative",
-      "empty_player_bytes": 12288,
-      "clear_present_bytes": 19456,
-      "compute_fixture_bytes": 16896,
-      "pdb_debugging_verified": true,
-      "deterministic_repro_verified": true,
+      "verification_status": "unverified",
+      "empty_player_bytes": null,
+      "clear_present_bytes": null,
+      "compute_fixture_bytes": null,
+      "pdb_debugging_verified": false,
+      "deterministic_repro_verified": false,
       "deployment_closure_identical": true
     }
   ],
@@ -217,5 +219,19 @@
     "require_path_map": true,
     "require_zero_timestamp": true,
     "require_two_clean_dir_hash_match": true
-  }
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "evaluated_toolchains[*].empty_player_bytes",
+      "reason": "Windows 11 x64 clang-cl 18.1.8, lld-link 18.1.8, and MSVC 19.40.33813 are not installed on the current Linux host; recorded as null rather than unmeasured byte counts."
+    },
+    {
+      "metric": "evaluated_toolchains[*].clear_present_bytes",
+      "reason": "Windows 11 x64 clang-cl 18.1.8, lld-link 18.1.8, and MSVC 19.40.33813 are not installed on the current Linux host; recorded as null rather than unmeasured byte counts."
+    },
+    {
+      "metric": "evaluated_toolchains[*].compute_fixture_bytes",
+      "reason": "Windows 11 x64 clang-cl 18.1.8, MSVC 19.40.33813, and DXC 1.8.2407 are not installed on the current Linux host; recorded as null rather than unmeasured byte counts."
+    }
+  ]
 }

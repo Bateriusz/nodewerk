@@ -22,19 +22,19 @@ We standardize on **C++20** for `nodewerk-studio`, `nodewerkc`, and `nodewerk-pl
 - **Why Not Rust or Zig:** While Rust and Zig are viable systems languages, introducing either here would require maintaining external Win32/D3D12 COM bindings, prevent seamless header/constexpr sharing with C++ tooling, and lacks measured size or workflow advantages over `clang-cl` C++20. Neither C, Rust, nor Zig may be introduced without measured justification.
 - **Library Boundary:** Authoring (`nodewerk-studio`) and whole-demo compiler (`nodewerkc`) builds may freely use the C++20 standard library; standalone player builds (`nodewerk-player` and NW-01 fixtures) disable exceptions and RTTI and avoid heavy standard library dependencies.
 
-### 2. Toolchain Comparison & Selection: `clang-cl` + `lld-link` Retained Over `MSVC` + `LTCG`
+### 2. Toolchain Comparison & Selection: `clang-cl` + `lld-link` vs `MSVC` + `LTCG`
 
-We evaluated **LLVM `clang-cl` 18.1.8 + `lld-link` 18.1.8** (with ThinLTO `-flto=thin`, `/O1 /Os /Gw /Gy /GF /OPT:REF /OPT:ICF=4`) against **MSVC `cl.exe` 19.40.33813 + `link.exe` 14.40.33813.0** (with `/O1 /Os /GL /Gw /Gy /GF /LTCG /OPT:REF /OPT:ICF=4`) across identical C++20 source fixtures:
+We configure and maintain identical CMake/Ninja toolchain presets for **LLVM `clang-cl` 18.1.8 + `lld-link` 18.1.8** (ThinLTO `-flto=thin`, `/O1 /Os /Gw /Gy /GF /OPT:REF /OPT:ICF=4`) and **MSVC `cl.exe` 19.40.33813 + `link.exe` 14.40.33813.0** (`/O1 /Os /GL /Gw /Gy /GF /LTCG /OPT:REF /OPT:ICF=4`) across all three identical C++20 measurement fixtures:
 
-| Fixture | `clang-cl` + `lld-link` (Bytes) | `MSVC` + `LTCG` (Bytes) | Delta (`MSVC` vs `clang-cl`) | Identical Import Closure |
-| :--- | ---: | ---: | ---: | :---: |
-| `empty_player` | `10,752` | `12,288` | `+1,536` (`+14.3%`) | Yes (`kernel32.dll`, `ucrtbase.dll`) |
-| `clear_present` | `16,896` | `19,456` | `+2,560` (`+15.2%`) | Yes (`kernel32.dll`, `user32.dll`, `d3d12.dll`, `dxgi.dll`, `ucrtbase.dll`) |
-| `compute_shader` | `14,848` | `16,896` | `+2,048` (`+13.8%`) | Yes (`kernel32.dll`, `d3d12.dll`, `dxgi.dll`, `ucrtbase.dll`) |
+| Fixture | `clang-cl` + `lld-link` Ledger | `MSVC` + `LTCG` Ledger | Identical Import Closure | Current Measurement Status |
+| :--- | :--- | :--- | :---: | :--- |
+| `empty_player` | `empty-player-clang-cl-release.json` | `empty-player-msvc-ltcg-release.json` | Yes (`kernel32.dll`, `ucrtbase.dll`) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
+| `clear_present` | `clear-present-clang-cl-release.json` | `clear-present-msvc-ltcg-release.json` | Yes (`kernel32.dll`, `user32.dll`, `d3d12.dll`, `dxgi.dll`, `ucrtbase.dll`) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
+| `compute_shader` | `compute-fixture-clang-cl-release.json` | `compute-fixture-msvc-ltcg-release.json` | Yes (`kernel32.dll`, `d3d12.dll`, `dxgi.dll`, `ucrtbase.dll`) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
 
-**Retained Primary Configuration:** `clang-cl` 18.1.8 + `lld-link` 18.1.8 (`cmake/toolchains/clang-cl-x64.cmake`) is retained as the primary baseline toolchain because:
-1. It produces the smaller working executable across all three measurement fixtures (`1,536` to `2,560` bytes smaller per fixture due to tighter `.text` constant folding and `.rdata` COM GUID/unwind table folding).
-2. It emits deterministic, bit-for-bit reproducible binaries across independent clean directories via `/Brepro`, `-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.`, and `/PDBALTPATH:%_PDB%`.
-3. It preserves full CodeView PDB debugging compatibility and identical inbox Windows 11 import closure (`ucrtbase.dll`, `kernel32.dll`, `user32.dll`, `d3d12.dll`, `dxgi.dll`).
+**Retained Primary Configuration:** `clang-cl` 18.1.8 + `lld-link` 18.1.8 (`cmake/toolchains/clang-cl-x64.cmake`) is selected as the primary baseline toolchain because:
+1. It supports explicit source-prefix normalization (`-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.`) alongside `/Brepro` and `/PDBALTPATH:%_PDB%` for deterministic bit-for-bit reproducible builds across independent clean directories.
+2. It provides aggressive ThinLTO dead-stripping and identical-code folding (`/OPT:REF /OPT:ICF=4`) while preserving full CodeView PDB debugging compatibility and identical inbox Windows 11 import closure (`ucrtbase.dll`, `kernel32.dll`, `user32.dll`, `d3d12.dll`, `dxgi.dll`).
+3. Both toolchains are actively version-checked at CMake configure time in [`cmake/ToolchainManifest.cmake`](../../cmake/ToolchainManifest.cmake), and `tools/size_ledger.py` records and compares the exact PE byte ledgers when executed on a Windows 11 x64 toolchain host without ever claiming unmeasured byte counts.
 
-The `MSVC/LTCG` configuration (`cmake/toolchains/msvc-x64.cmake`, preset `msvc-release-ltcg`) and its byte ledgers are preserved in [`benchmarks/ledgers/`](../../benchmarks/ledgers/) and [`benchmarks/experiments/msvc-ltcg-comparison.json`](../../benchmarks/experiments/msvc-ltcg-comparison.json) for ongoing regression tracking.
+The `MSVC/LTCG` configuration (`cmake/toolchains/msvc-x64.cmake`, preset `msvc-release-ltcg`) and its byte ledgers are preserved in [`benchmarks/ledgers/`](../../benchmarks/ledgers/) and [`benchmarks/experiments/msvc-ltcg-comparison.json`](../../benchmarks/experiments/msvc-ltcg-comparison.json).

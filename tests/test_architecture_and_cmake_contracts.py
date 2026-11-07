@@ -109,3 +109,15 @@ def test_cmake_profiles_and_presets_contract() -> None:
     # CRT elimination strictly gated behind NW_ENABLE_CRT_ELIMINATION_EXPERIMENT
     assert "if(NW_ENABLE_CRT_ELIMINATION_EXPERIMENT)" in build_profiles_cmake
     assert "/NODEFAULTLIB" in build_profiles_cmake
+    assert "if(NW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT)" in build_profiles_cmake
+
+    # ToolchainManifest.cmake must actively verify compiler, linker, SDK, DXC, CMake, and Ninja versions
+    toolchain_cmake = (REPO_ROOT / "cmake" / "ToolchainManifest.cmake").read_text(encoding="utf-8")
+    assert "function(nw_verify_toolchain_manifest)" in toolchain_cmake
+    assert "nw_verify_toolchain_manifest()" in toolchain_cmake
+    assert "NW_PINNED_CMAKE_VERSION" in toolchain_cmake
+    assert "NW_PINNED_NINJA_VERSION" in toolchain_cmake
+    assert "NW_PINNED_CLANG_VERSION" in toolchain_cmake
+    assert "NW_PINNED_MSVC_VERSION" in toolchain_cmake
+    assert "NW_PINNED_WINDOWS_SDK_VERSION" in toolchain_cmake
+    assert "NW_PINNED_DXC_VERSION" in toolchain_cmake

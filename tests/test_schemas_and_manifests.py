@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -24,7 +25,7 @@ def test_all_repository_json_artifacts_validate_against_schemas() -> None:
     assert all(item["valid"] for item in summary["results"])
 
 
-def test_capability_manifest_baseline_and_exclusions() -> None:
+def test_capability_manifest_baseline_and_cpp_enforcement_agreement() -> None:
     cap = json.loads((REPO_ROOT / "benchmarks" / "capability-manifest.v1.json").read_text(encoding="utf-8"))
     assert cap["target_platform"]["os"] == "windows_11_x64"
     assert cap["target_platform"]["minimum_tested_windows_build"] == "10.0.22631.4317"
@@ -49,6 +50,19 @@ def test_capability_manifest_baseline_and_exclusions() -> None:
     assert api["barrier_model"] == "ordinary_resource_barriers"
     assert api["queue_model"] == {"direct_queue_count": 1, "compute_queue_count": 0, "copy_queue_count": 0}
 
+    req_features = cap["required_features"]
+    assert req_features["resource_binding_tier"] == 2
+    assert req_features["resource_heap_tier"] == 2
+
+    # Verify C++ runtime capability check header and implementation enforce identical Tier 2 constants
+    cap_h = (REPO_ROOT / "src" / "player" / "capability_check.h").read_text(encoding="utf-8")
+    cap_cpp = (REPO_ROOT / "src" / "player" / "capability_check.cpp").read_text(encoding="utf-8")
+    assert re.search(r"kMinWindowsBuildNumber\s*=\s*22631u", cap_h)
+    assert re.search(r"kRequiredResourceBindingTier\s*=\s*2u", cap_h)
+    assert re.search(r"kRequiredResourceHeapTier\s*=\s*2u", cap_h)
+    assert "BaselineCapabilityProfile::kRequiredResourceBindingTier" in cap_cpp
+    assert "BaselineCapabilityProfile::kRequiredResourceHeapTier" in cap_cpp
+
     excl = cap["excluded_baseline_features"]
     assert excl["sm_6_6_direct_heap_indexing"] is False
     assert excl["enhanced_barriers"] is False
@@ -72,6 +86,7 @@ def test_hardware_benchmarks_mark_missing_coverage_unverified_and_not_passed() -
         assert hw["benchmark_passed"] is False
         for fx in hw["fixture_results"]:
             assert fx["execution_status"] == "unverified"
+            assert fx["total_distributed_bytes"] is None
             assert fx["startup_time_ms"] is None
             assert fx["cpu_time_ms"] is None
             assert fx["gpu_time_ms"] is None
@@ -95,6 +110,14 @@ def test_schema_rejects_unverified_benchmark_claiming_pass_or_zero_metrics() -> 
     bad_zero["fixture_results"][0]["startup_time_ms"] = 0
     with pytest.raises(SchemaValidationError):
         validate_instance(bad_zero, schema, schema)
+
+    # Case 3: unverified reproducibility report claiming all_artifacts_match=True must fail semantic check
+    repro_path = REPO_ROOT / "benchmarks" / "reproducibility" / "release-build-reproducibility.json"
+    repro = json.loads(repro_path.read_text(encoding="utf-8"))
+    bad_repro = copy.deepcopy(repro)
+    bad_repro["all_artifacts_match"] = True
+    with pytest.raises(SchemaValidationError, match="all_artifacts_match=false"):
+        validate_semantic_invariants(bad_repro, "reproducibility-report.schema.json", repro_path)
 
 
 def test_schema_rejects_premature_64kib_claim_in_size_ledger() -> None:
