@@ -122,8 +122,8 @@
         "/Gy",
         "/GF",
         "/Brepro",
-        "MSVC_RUNTIME_LIBRARY=MultiThreadedDLL",
-        "-DNW_CRT_LINKAGE_STATIC_VCRUNTIME_DYNAMIC_UCRT=1",
+        "MSVC_RUNTIME_LIBRARY=MultiThreaded",
+        "-DNW_CRT_LINKAGE_STATIC=1",
         "-flto=thin",
         "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.",
         "-D_HAS_EXCEPTIONS=0",
@@ -141,10 +141,6 @@
         "/guard:cf",
         "/Brepro",
         "/PDBALTPATH:%_PDB%",
-        "/NODEFAULTLIB:msvcrt",
-        "/NODEFAULTLIB:vcruntime",
-        "/NODEFAULTLIB:vcruntime140",
-        "/NODEFAULTLIB:vcruntime140_1",
         "/INCREMENTAL:NO"
       ],
       "dxc_flags": [
@@ -162,7 +158,7 @@
       "player_rtti_enabled": false,
       "security_mitigations_retained": true,
       "d3d12_validation_enabled": false,
-      "crt_mode": "static_vcruntime_inbox_ucrt",
+      "crt_mode": "static_crt",
       "dependency_closure_profile": "release"
     },
     "compact_experiment": {
@@ -182,8 +178,8 @@
         "/Gy",
         "/GF",
         "/Brepro",
-        "MSVC_RUNTIME_LIBRARY=MultiThreadedDLL",
-        "-DNW_CRT_LINKAGE_STATIC_VCRUNTIME_DYNAMIC_UCRT=1",
+        "MSVC_RUNTIME_LIBRARY=MultiThreaded",
+        "-DNW_CRT_LINKAGE_STATIC=1",
         "-flto",
         "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.",
         "-D_HAS_EXCEPTIONS=0",
@@ -201,10 +197,6 @@
         "/guard:cf",
         "/Brepro",
         "/PDBALTPATH:%_PDB%",
-        "/NODEFAULTLIB:msvcrt",
-        "/NODEFAULTLIB:vcruntime",
-        "/NODEFAULTLIB:vcruntime140",
-        "/NODEFAULTLIB:vcruntime140_1",
         "/INCREMENTAL:NO"
       ],
       "dxc_flags": [
@@ -222,7 +214,7 @@
       "player_rtti_enabled": false,
       "security_mitigations_retained": true,
       "d3d12_validation_enabled": false,
-      "crt_mode": "static_vcruntime_inbox_ucrt",
+      "crt_mode": "static_crt",
       "dependency_closure_profile": "compact_experiment"
     }
   },

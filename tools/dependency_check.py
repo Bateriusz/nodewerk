@@ -511,6 +511,7 @@ def collect_deployment_files(
     exclude_paths: set[Path] | None = None,
     exclude_names: set[str] | None = None,
     exclude_dir_names: set[str] | None = None,
+    exclude_build_metadata: bool = False,
 ) -> list[str]:
     """Return every file in the deployment tree as a normalized relative path.
 
@@ -522,9 +523,9 @@ def collect_deployment_files(
     excluded_paths = {p.resolve() for p in (exclude_paths or set())}
     excluded_names = {n.lower() for n in (exclude_names or set())}
     metadata_names = {n.lower() for n in BUILD_METADATA_NAMES}
-    excluded_dirs = {d.lower() for d in BUILD_METADATA_DIRS} | {
-        d.lower() for d in (exclude_dir_names or set())
-    }
+    excluded_dirs = {d.lower() for d in (exclude_dir_names or set())}
+    if exclude_build_metadata:
+        excluded_dirs |= {d.lower() for d in BUILD_METADATA_DIRS}
     files: list[str] = []
     if not root.exists():
         return files
@@ -536,7 +537,7 @@ def collect_deployment_files(
                 continue
             if name.lower() in excluded_names:
                 continue
-            if name.lower() in metadata_names:
+            if exclude_build_metadata and name.lower() in metadata_names:
                 continue
             files.append(full.relative_to(root).as_posix())
     return files
@@ -602,7 +603,6 @@ def verify_binary_file(
     sidecars = collect_deployment_files(
         deployment_dir,
         exclude_paths={binary_path},
-        exclude_names=KNOWN_FIXTURE_EXECUTABLES,
     )
 
     if raw[:2] == b"MZ":

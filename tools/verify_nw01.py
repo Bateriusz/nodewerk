@@ -32,7 +32,6 @@ from typing import Any, Callable
 
 from dependency_check import (
     DependencyClosureError,
-    KNOWN_FIXTURE_EXECUTABLES,
     collect_deployment_files,
     parse_pe64_sections_and_imports,
     verify_all_recorded_ledgers,
@@ -66,9 +65,10 @@ NW_LOADED_MODULE_RE = re.compile(r"^NW_LOADED_MODULE=(.+)$", re.MULTILINE)
 def resolve_fixture_executable(directory: Path, fixture_id: str, executable_name: str) -> Path | None:
     """Locate a fixture executable in a raw build tree or an isolated deployment directory."""
     candidates = (
-        directory / executable_name,
         directory / "deploy" / executable_name,
         directory / "deploy" / fixture_id / executable_name,
+        directory / "staging" / fixture_id / executable_name,
+        directory / executable_name,
     )
     for candidate in candidates:
         if candidate.exists():
@@ -105,15 +105,17 @@ def parse_fixture_metrics(stdout: str) -> dict[str, Any]:
                 metrics[key_map[name]] = float(value)
             except ValueError:
                 pass
-        elif name.endswith("_BYTES") or name.endswith("_SUPPORTED") or name in {
+        elif name in {"MAX_SHADER_MODEL", "FEATURE_LEVEL", "MAX_FEATURE_LEVEL"}:
+            metrics[name.lower()] = value
+        elif name.endswith("_BYTES") or name.endswith("_SUPPORTED") or name.endswith("_QUERIED") or name in {
             "VENDOR_ID",
             "DEVICE_ID",
             "VRAM_MB",
             "RESOURCE_BINDING_TIER",
             "RESOURCE_HEAP_TIER",
-            "MAX_SHADER_MODEL",
-            "FEATURE_LEVEL",
             "MODULE_COUNT",
+            "WARMUP_FRAMES",
+            "MEASURED_FRAMES",
         }:
             try:
                 metrics[name.lower()] = int(value)
@@ -137,13 +139,52 @@ def parse_validation_evidence(stdout: str, stderr: str) -> dict[str, Any]:
 
 
 def parse_loaded_modules(stdout: str) -> list[str]:
-    """Extract observed runtime-loaded module names emitted by the fixture."""
+    """Extract observed runtime-loaded module paths emitted by the fixture."""
     modules: list[str] = []
+    seen: set[str] = set()
     for raw in NW_LOADED_MODULE_RE.findall(stdout):
-        name = raw.strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
-        if name and name not in modules:
-            modules.append(name)
+        path = raw.strip().replace("\\", "/")
+        key = path.lower()
+        if path and key not in seen:
+            seen.add(key)
+            modules.append(path)
     return modules
+
+
+def classify_loaded_module_evidence(
+    module_paths: list[str],
+    *,
+    system_root: str | None = None,
+) -> dict[str, Any]:
+    """Classify observed module paths as inbox vs redistributable runtime components.
+
+    Windows 11 itself ships D3D12Core.dll. Only a D3D12Core.dll loaded from outside the
+    Windows system directory is an Agility SDK redistributable.
+    """
+    root = (system_root or os.environ.get("SystemRoot") or "C:/Windows").replace("\\", "/").lower()
+    system32 = f"{root.rstrip('/')}/system32/"
+    result: dict[str, Any] = {
+        "runtime_dxcompiler_loaded": False,
+        "runtime_d3dcompiler_loaded": False,
+        "agility_d3d12core_redist_loaded": False,
+        "d3d12core_classification_unknown": False,
+        "inbox_d3d12core_observed": False,
+    }
+    for path in module_paths:
+        lower = path.lower()
+        base = lower.rsplit("/", 1)[-1]
+        if base in {"dxcompiler.dll", "dxil.dll"}:
+            result["runtime_dxcompiler_loaded"] = True
+        elif base.startswith("d3dcompiler"):
+            result["runtime_d3dcompiler_loaded"] = True
+        elif base == "d3d12core.dll":
+            if "/" not in lower:
+                result["d3d12core_classification_unknown"] = True
+            elif lower.startswith(system32) or "/windows/system32/" in lower:
+                result["inbox_d3d12core_observed"] = True
+            else:
+                result["agility_d3d12core_redist_loaded"] = True
+    return result
 
 
 def _format_nvidia_driver_version(raw_version: str) -> str:
@@ -172,6 +213,20 @@ def _is_supported_nvidia_gpu_and_driver(
     if any(non_nv in lower_gpu for non_nv in ("microsoft basic", "intel(", "intel ", "amd ", "radeon")):
         return False
     return bool(re.match(r"^[0-9]{3}\.[0-9]{2}$", nvidia_driver_version.strip()))
+
+
+def hardware_tier_matches(gpu_model: str | None, hardware_tier: str) -> bool:
+    """Return True only when the observed adapter belongs to the requested evidence tier."""
+    if not gpu_model:
+        return False
+    lower = gpu_model.strip().lower()
+    if "nvidia" not in lower:
+        return False
+    if hardware_tier == "rtx_4060_desktop":
+        return "4060" in lower
+    if hardware_tier == "rtx_50_series_desktop":
+        return re.search(r"\brtx\s*50[0-9]{2}\b", lower) is not None
+    return False
 
 
 def detect_host_system_environment(observed_stdout: str = "") -> dict[str, str | None]:
@@ -525,15 +580,15 @@ def compare_two_build_directories(
         # is deterministic equality across both clean directories, not a zero value.
         pe_a = parse_pe64_sections_and_imports(bytes_a)
         pe_b = parse_pe64_sections_and_imports(bytes_b)
-        if pe_a["time_date_stamp"] != pe_b["time_date_stamp"]:
-            raise ValueError(
-                f"PE32+ artifact '{exe_name}' violates deterministic TimeDateStamp policy "
-                f"(stamp_a={pe_a['time_date_stamp']}, stamp_b={pe_b['time_date_stamp']})"
-            )
+        timestamp_identical = pe_a["time_date_stamp"] == pe_b["time_date_stamp"]
 
         hash_a = hashlib.sha256(bytes_a).hexdigest()
         hash_b = hashlib.sha256(bytes_b).hexdigest()
-        matched = (len(bytes_a) == len(bytes_b)) and (hash_a == hash_b)
+        matched = (
+            (len(bytes_a) == len(bytes_b))
+            and (hash_a == hash_b)
+            and timestamp_identical
+        )
         if not matched:
             mismatches_found += 1
         artifacts_report.append(
@@ -547,7 +602,7 @@ def compare_two_build_directories(
                 "hash_match": matched,
                 "time_date_stamp_a": pe_a["time_date_stamp"],
                 "time_date_stamp_b": pe_b["time_date_stamp"],
-                "time_date_stamp_identical": True,
+                "time_date_stamp_identical": timestamp_identical,
             }
         )
 
@@ -976,6 +1031,8 @@ def verify_debug_symbol_evidence(binary_dir: Path) -> dict[str, Any]:
             if Path(raw_pdb_path).is_absolute():
                 pdb_candidates.append(Path(raw_pdb_path))
             pdb_candidates.append(exe_path.parent / win_path.name)
+            pdb_candidates.append(binary_dir / "staging" / fixture_id / win_path.name)
+            pdb_candidates.append(binary_dir / "staging" / fixture_id / Path(win_path.as_posix()))
             pdb_candidates.append(binary_dir / "deploy" / fixture_id / win_path.name)
             pdb_candidates.append(binary_dir / "deploy" / win_path.name)
             pdb_candidates.append(binary_dir / Path(win_path.as_posix()))
@@ -1419,16 +1476,6 @@ def capture_benchmark_result(
     output = output_path or (
         repo_root / "benchmarks" / "hardware" / BENCHMARK_CAPTURE_FILES[hardware_tier]
     )
-    template = (
-        json.loads(output.read_text(encoding="utf-8"))
-        if output.exists()
-        else {
-            "environment_metadata": {},
-            "power_settings": {},
-            "resolution": {},
-            "cache_conditions": {},
-        }
-    )
     validation = execute_release_fixture_validation(
         repo_root, binary_dir, timeout_seconds=timeout_seconds
     )
@@ -1450,70 +1497,105 @@ def capture_benchmark_result(
         if metrics:
             first_metrics.update({k: v for k, v in metrics.items() if v is not None})
 
-    template_env = dict(template.get("environment_metadata", {}))
-    os_build = measured_os_build or template_env.get("os_build")
-    gpu_model = measured_gpu_model or template_env.get("gpu_model")
-    nvidia_driver = measured_nvidia_driver or template_env.get("nvidia_driver_version")
-    toolchain = template_env.get(
-        "toolchain",
-        {
-            "toolchain_id": "clang-cl-lld",
-            "compiler_version": "18.1.8",
-            "linker_version": "18.1.8",
-            "windows_sdk_version": "10.0.26100.0",
-            "dxc_version": "1.8.2407",
-        },
+    unavailable: list[dict[str, str]] = []
+
+    def mark_unavailable(metric: str, reason: str) -> None:
+        unavailable.append({"metric": metric, "reason": reason})
+
+    toolchain_manifest = json.loads(
+        (repo_root / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
     )
-    environment_metadata = {
-        "gpu_model": str(gpu_model or template_env.get("gpu_model") or "unverified"),
-        "gpu_architecture": str(
-            template_env.get("gpu_architecture") or "unverified"
-        ),
-        "gpu_vendor_id": "0x%04X" % int(first_metrics.get("vendor_id", 0x10DE)),
-        "gpu_device_id": "0x%04X" % int(first_metrics.get("device_id", 0x0001)),
-        "vram_mb": int(first_metrics.get("vram_mb") or template_env.get("vram_mb") or 1024),
-        "cpu_model": str(
-            template_env.get("cpu_model")
-            or platform.processor()
-            or "unverified"
-        ),
-        "os_name": "Windows 11 x64",
-        "os_build": str(os_build or "10.0.22631.4317"),
-        "nvidia_driver_version": str(nvidia_driver or "000.00"),
-        "wddm_driver_version": str(
-            template_env.get("wddm_driver_version") or "0.0.0.0"
-        ),
-        "toolchain": toolchain,
-        "power_settings": template.get(
-            "power_settings",
-            template_env.get("power_settings", {}),
-        )
-        or {
-            "windows_power_plan": "unverified",
-            "nvidia_power_management_mode": "unverified",
-            "pci_express_link_state_power_management": "unverified",
-        },
-        "resolution": template.get("resolution", template_env.get("resolution", {}))
-        or {
-            "width": 1280,
-            "height": 720,
-            "refresh_hz": 60,
-            "format": "DXGI_FORMAT_R8G8B8A8_UNORM",
-            "presentation_mode": "windowed_swapchain",
-        },
-        "cache_conditions": template.get(
-            "cache_conditions", template_env.get("cache_conditions", {})
-        )
-        or {
-            "driver_shader_cache_state": "cold_cleared",
-            "os_file_cache_state": "cold",
-            "warmup_frames": 0,
-            "measured_frames": 2,
-        },
+    pin = toolchain_manifest.get("selected_toolchain", {})
+    pinned = toolchain_manifest.get("pinned_dependencies", {})
+    toolchain = {
+        "toolchain_id": str(pin.get("toolchain_id", "unverified")),
+        "compiler_version": str(pin.get("compiler_version", "unverified")),
+        "linker_version": str(pin.get("linker_version", "unverified")),
+        "windows_sdk_version": str(pinned.get("windows_sdk_version", "unverified")),
+        "dxc_version": str(pinned.get("dxc_version", "unverified")),
     }
 
+    gpu_model = measured_gpu_model
+    nvidia_driver = measured_nvidia_driver
+    cpu_model = override.get("cpu_model") or platform.processor() or os.environ.get(
+        "PROCESSOR_IDENTIFIER"
+    )
+    gpu_architecture = override.get("gpu_architecture")
+    wddm_driver_version = override.get("wddm_driver_version")
+    vendor_id = first_metrics.get("vendor_id")
+    device_id = first_metrics.get("device_id")
+    vram_mb = first_metrics.get("vram_mb")
+    power = {
+        "windows_power_plan": override.get("windows_power_plan"),
+        "nvidia_power_management_mode": override.get("nvidia_power_management_mode"),
+        "pci_express_link_state_power_management": override.get(
+            "pci_express_link_state_power_management"
+        ),
+    }
+    driver_cache_state = override.get("driver_shader_cache_state", "unverified")
+    os_file_cache_state = override.get("os_file_cache_state", "unverified")
+    clear_metrics = runs_by_fixture.get("clear_present", {}).get("metrics", {})
+    warmup_frames = int(clear_metrics.get("warmup_frames", first_metrics.get("warmup_frames", 0)))
+    measured_frames = int(
+        clear_metrics.get("measured_frames", first_metrics.get("measured_frames", 2))
+    )
+
+    for metric_name, value, reason in (
+        ("environment_metadata.gpu_model", gpu_model, "Executing NVIDIA adapter was not observed."),
+        ("environment_metadata.gpu_architecture", gpu_architecture, "GPU architecture was not provided by the operator or detected."),
+        ("environment_metadata.gpu_vendor_id", vendor_id, "DXGI adapter vendor ID was not emitted."),
+        ("environment_metadata.gpu_device_id", device_id, "DXGI adapter device ID was not emitted."),
+        ("environment_metadata.vram_mb", vram_mb, "Dedicated video memory was not emitted."),
+        ("environment_metadata.cpu_model", cpu_model, "CPU model was not detected or provided."),
+        ("environment_metadata.os_build", measured_os_build, "Windows 11 build was not measured or provided."),
+        ("environment_metadata.nvidia_driver_version", nvidia_driver, "NVIDIA driver version was not measured or provided."),
+        ("environment_metadata.wddm_driver_version", wddm_driver_version, "WDDM driver version was not provided."),
+        ("environment_metadata.power_settings.windows_power_plan", power["windows_power_plan"], "Windows power plan was not provided."),
+        ("environment_metadata.power_settings.nvidia_power_management_mode", power["nvidia_power_management_mode"], "NVIDIA power management mode was not provided."),
+        ("environment_metadata.power_settings.pci_express_link_state_power_management", power["pci_express_link_state_power_management"], "PCIe link-state power management was not provided."),
+        ("environment_metadata.cache_conditions.driver_shader_cache_state", None if driver_cache_state == "unverified" else driver_cache_state, "Driver shader-cache state was not provided."),
+        ("environment_metadata.cache_conditions.os_file_cache_state", None if os_file_cache_state == "unverified" else os_file_cache_state, "OS file-cache state was not provided."),
+    ):
+        if value is None or value == "":
+            mark_unavailable(metric_name, reason)
+
+    environment_metadata = {
+        "gpu_model": str(gpu_model) if gpu_model else None,
+        "gpu_architecture": str(gpu_architecture) if gpu_architecture else None,
+        "gpu_vendor_id": ("0x%04X" % int(vendor_id)) if vendor_id is not None else None,
+        "gpu_device_id": ("0x%04X" % int(device_id)) if device_id is not None else None,
+        "vram_mb": int(vram_mb) if vram_mb is not None else None,
+        "cpu_model": str(cpu_model) if cpu_model else None,
+        "os_name": "Windows 11 x64",
+        "os_build": str(measured_os_build) if measured_os_build else None,
+        "nvidia_driver_version": str(nvidia_driver) if nvidia_driver else None,
+        "wddm_driver_version": str(wddm_driver_version) if wddm_driver_version else None,
+        "toolchain": toolchain,
+        "power_settings": power,
+        "resolution": {
+            "width": 1280,
+            "height": 720,
+            "refresh_hz": (
+                int(override["refresh_hz"]) if override.get("refresh_hz") else None
+            ),
+            "format": "DXGI_FORMAT_R8G8B8A8_UNORM",
+            "presentation_mode": "windowed_swapchain",
+            "measurement_source": "requested_fixture_size",
+        },
+        "cache_conditions": {
+            "driver_shader_cache_state": driver_cache_state,
+            "os_file_cache_state": os_file_cache_state,
+            "warmup_frames": warmup_frames,
+            "measured_frames": measured_frames,
+        },
+    }
+    if not override.get("refresh_hz"):
+        mark_unavailable(
+            "environment_metadata.resolution.refresh_hz",
+            "Swapchain refresh rate was not measured or provided.",
+        )
+
     fixture_results: list[dict[str, Any]] = []
-    unavailable: list[dict[str, str]] = []
     all_passed = True
     for fixture_id in ("clear_present", "compute_shader"):
         run = runs_by_fixture.get(fixture_id, {})
@@ -1571,14 +1653,21 @@ def capture_benchmark_result(
             }
         )
 
-    capabilities_measured = first_metrics.get("max_shader_model") is not None
+    feature_level_value = first_metrics.get("max_feature_level") or first_metrics.get(
+        "feature_level"
+    )
+    shader_model_value = first_metrics.get("max_shader_model")
+    capabilities_measured = feature_level_value is not None and shader_model_value is not None
+    wave_ops_queried = bool(first_metrics.get("wave_ops_queried"))
+    int64_queried = bool(first_metrics.get("int64_shader_ops_queried"))
+    fp16_queried = bool(first_metrics.get("fp16_shader_ops_queried"))
     captured_capabilities = {
         "max_supported_feature_level": (
-            str(first_metrics.get("feature_level")) if first_metrics.get("feature_level") else None
+            str(feature_level_value) if feature_level_value is not None else None
         ),
         "max_supported_shader_model": (
-            str(first_metrics.get("max_shader_model"))
-            if first_metrics.get("max_shader_model")
+            str(shader_model_value)
+            if shader_model_value is not None
             else None
         ),
         "baseline_feature_level_12_0_supported": (
@@ -1593,9 +1682,27 @@ def capture_benchmark_result(
         ),
         "resource_binding_tier": first_metrics.get("resource_binding_tier"),
         "resource_heap_tier": first_metrics.get("resource_heap_tier"),
+        "wave_ops_queried": wave_ops_queried,
         "wave_ops_supported": (
             bool(first_metrics.get("wave_ops_supported"))
-            if "wave_ops_supported" in first_metrics
+            if wave_ops_queried and "wave_ops_supported" in first_metrics
+            else None
+        ),
+        "int64_shader_ops_queried": int64_queried,
+        "int64_shader_ops_supported": (
+            bool(first_metrics.get("int64_shader_ops_supported"))
+            if int64_queried and "int64_shader_ops_supported" in first_metrics
+            else None
+        ),
+        "fp16_shader_ops_queried": fp16_queried,
+        "fp16_shader_ops_supported": (
+            bool(first_metrics.get("fp16_shader_ops_supported"))
+            if fp16_queried and "fp16_shader_ops_supported" in first_metrics
+            else None
+        ),
+        "typed_uav_additional_formats_supported": (
+            bool(first_metrics.get("typed_uav_additional_formats_supported"))
+            if "typed_uav_additional_formats_supported" in first_metrics
             else None
         ),
     }
@@ -1606,10 +1713,28 @@ def capture_benchmark_result(
                 "reason": "Fixture did not emit D3D12 CheckFeatureSupport capability metrics.",
             }
         )
+    if not wave_ops_queried:
+        unavailable.append(
+            {
+                "metric": "captured_capabilities.wave_ops_supported",
+                "reason": "The fixture did not query D3D12_FEATURE_D3D12_OPTIONS1 WaveOps.",
+            }
+        )
+    if not int64_queried:
+        mark_unavailable(
+            "captured_capabilities.int64_shader_ops_supported",
+            "The fixture did not query D3D12_FEATURE_D3D12_OPTIONS1 Int64ShaderOps.",
+        )
+    if not fp16_queried:
+        mark_unavailable(
+            "captured_capabilities.fp16_shader_ops_supported",
+            "The fixture did not query D3D12_FEATURE_D3D12_OPTIONS4 native 16-bit shader ops.",
+        )
 
     hardware_verified = bool(
         measured_gpu_model
         and measured_nvidia_driver
+        and hardware_tier_matches(str(measured_gpu_model), hardware_tier)
         and _is_supported_nvidia_gpu_and_driver(
             str(measured_gpu_model), str(measured_nvidia_driver)
         )
@@ -1618,6 +1743,13 @@ def capture_benchmark_result(
             r"^10\.0\.(22[0-9]{3}|26[0-9]{3})\.[0-9]+$", str(measured_os_build)
         )
     )
+    if measured_gpu_model and not hardware_tier_matches(
+        str(measured_gpu_model), hardware_tier
+    ):
+        mark_unavailable(
+            "environment_metadata.gpu_model",
+            f"Observed adapter '{measured_gpu_model}' does not match requested tier '{hardware_tier}'.",
+        )
     verified = hardware_verified and all_passed and capabilities_measured and not unavailable
     result: dict[str, Any] = {
         "schema_version": "1.0.0",
@@ -2050,6 +2182,8 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         "msvc_debug_symbols",
         "fixture_validation",
         "msvc_fixture_validation",
+        "clang_ledger_recording",
+        "msvc_ledger_recording",
     )
     concrete_failures: list[str] = []
     for check_name in concrete_failure_checks:
@@ -2062,6 +2196,12 @@ def run_full_mode(repo_root: Path) -> tuple[int, dict[str, Any]]:
         report["checks"].get("offline_shader", {}).get("hlsl_constraints_passed") is False
     ):
         concrete_failures.append("offline_shader_constraints")
+    elif (
+        report["checks"].get("offline_shader", {}).get("passed") is False
+        and dxc_bin is not None
+        and (clang_prereqs_ready or msvc_prereqs_ready)
+    ):
+        concrete_failures.append("offline_shader_evidence")
     report["concrete_failures"] = concrete_failures
     report["evidence_gaps"] = evidence["unmet_requirements"]
     report["gate_status"] = (
@@ -2139,9 +2279,13 @@ def run_clean_system_mode(
     if not is_windows:
         missing_prereqs.append("CleanSystem execution requires a physical Windows 11 x64 host")
 
+    expected_exe_paths: dict[str, Path] = {}
     for fixture_id, exe_name in required_exes:
-        if resolve_fixture_executable(search_dir, fixture_id, exe_name) is None:
+        exe_path = resolve_fixture_executable(search_dir, fixture_id, exe_name)
+        if exe_path is None:
             missing_prereqs.append(f"Release fixture executable not found under {search_dir}")
+        else:
+            expected_exe_paths[fixture_id] = exe_path
 
     if missing_prereqs:
         return 2, {
@@ -2164,7 +2308,7 @@ def run_clean_system_mode(
     # not sidecars.
     sidecars = collect_deployment_files(
         search_dir,
-        exclude_names={name for _, name in required_exes} | KNOWN_FIXTURE_EXECUTABLES,
+        exclude_paths=set(expected_exe_paths.values()),
     )
 
     fixture_specs: dict[str, dict[str, Any]] = {}
@@ -2184,7 +2328,7 @@ def run_clean_system_mode(
     observed_modules: list[str] = []
 
     for fixture_id, exe_name in required_exes:
-        exe_path = resolve_fixture_executable(search_dir, fixture_id, exe_name)
+        exe_path = expected_exe_paths.get(fixture_id)
         if exe_path is None:
             all_runs_passed = False
             fixture_runs.append(
@@ -2225,7 +2369,7 @@ def run_clean_system_mode(
 
         deployed_files.append(
             {
-                "file_name": exe_name,
+                "file_name": exe_path.relative_to(search_dir).as_posix(),
                 "size_bytes": len(raw_bytes),
                 "sha256": hashlib.sha256(raw_bytes).hexdigest(),
                 "category": "executable",
@@ -2332,6 +2476,27 @@ def run_clean_system_mode(
     all_validation_clean = all(
         run.get("d3d12_validation_clean") is True for run in fixture_runs
     )
+    static_import_inference = {name.lower() for name in resolved_inbox_dlls}
+    static_import_inference.update(name.lower() for name in sidecars)
+    if observed_modules:
+        runtime_module_evidence_source = "observed_fixture_module_inventory"
+        module_classification = classify_loaded_module_evidence(observed_modules)
+        runtime_dxcompiler_loaded = module_classification["runtime_dxcompiler_loaded"]
+        runtime_d3dcompiler_loaded = module_classification["runtime_d3dcompiler_loaded"]
+        agility_redist_loaded = module_classification["agility_d3d12core_redist_loaded"]
+        d3d12core_classification_unknown = module_classification[
+            "d3d12core_classification_unknown"
+        ]
+    else:
+        runtime_module_evidence_source = "static_import_and_sidecar_inference"
+        runtime_dxcompiler_loaded = any(
+            "dxcompiler" in name or "dxil.dll" in name for name in static_import_inference
+        )
+        runtime_d3dcompiler_loaded = any(
+            "d3dcompiler" in name for name in static_import_inference
+        )
+        agility_redist_loaded = any("d3d12core" in name for name in static_import_inference)
+        d3d12core_classification_unknown = False
     clean_passed = (
         all_runs_passed
         and all_validation_clean
@@ -2342,23 +2507,9 @@ def run_clean_system_mode(
         and embedded_dxil_verified
         and compute_output_verified
         and system_env_measured
+        and not d3d12core_classification_unknown
     )
     expected_sha256 = expected_compute["output_sha256"]
-
-    static_import_inference = {name.lower() for name in resolved_inbox_dlls}
-    static_import_inference.update(name.lower() for name in sidecars)
-    observed_module_set = {name.lower() for name in observed_modules}
-    module_evidence = observed_module_set if observed_module_set else static_import_inference
-    runtime_module_evidence_source = (
-        "observed_fixture_module_inventory"
-        if observed_module_set
-        else "static_import_and_sidecar_inference"
-    )
-    runtime_dxcompiler_loaded = any(
-        "dxcompiler" in name or "dxil.dll" in name for name in module_evidence
-    )
-    runtime_d3dcompiler_loaded = any("d3dcompiler" in name for name in module_evidence)
-    agility_redist_loaded = any("d3d12core" in name for name in module_evidence)
 
     if measured_os_build or measured_gpu_model or measured_driver_ver:
         recorded_system_environment = {
@@ -2399,6 +2550,12 @@ def run_clean_system_mode(
             "runtime_d3dcompiler_loaded": runtime_d3dcompiler_loaded,
             "agility_d3d12core_redist_loaded": agility_redist_loaded,
             "runtime_module_evidence_source": runtime_module_evidence_source,
+            "d3d12core_classification_unknown": d3d12core_classification_unknown,
+            "inbox_d3d12core_observed": (
+                module_classification.get("inbox_d3d12core_observed", False)
+                if observed_modules
+                else False
+            ),
             "observed_loaded_modules": observed_modules,
             "expected_output_sha256": expected_sha256,
             "observed_output_sha256": (
@@ -2438,6 +2595,11 @@ def run_clean_system_mode(
                 "target system_environment (os_build, gpu_model, nvidia_driver_version) could not be "
                 "detected from host and was not provided"
             )
+        if d3d12core_classification_unknown:
+            reasons.append(
+                "observed D3D12Core.dll module path was unavailable, so inbox versus Agility "
+                "redistributable classification could not be determined"
+            )
         updated_report["unverified_reason"] = (
             "CleanSystem validation failed: " + "; ".join(reasons) if reasons else
             "CleanSystem validation failed; see command summary."
@@ -2474,6 +2636,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--os-build", type=str, default=None, help="Measured Windows 11 OS build (e.g. 10.0.26100.2033)")
     parser.add_argument("--gpu-model", type=str, default=None, help="Measured GPU model name")
     parser.add_argument("--nvidia-driver-version", type=str, default=None, help="Measured NVIDIA driver version")
+    parser.add_argument("--cpu-model", type=str, default=None, help="Measured CPU model")
+    parser.add_argument("--gpu-architecture", type=str, default=None, help="Measured GPU architecture")
+    parser.add_argument("--wddm-driver-version", type=str, default=None, help="Measured WDDM driver version")
+    parser.add_argument("--windows-power-plan", type=str, default=None, help="Measured Windows power plan")
+    parser.add_argument("--nvidia-power-management-mode", type=str, default=None, help="Measured NVIDIA power management mode")
+    parser.add_argument("--pcie-power-management", type=str, default=None, help="Measured PCIe link-state power management")
+    parser.add_argument("--refresh-hz", type=int, default=None, help="Measured swapchain refresh rate")
+    parser.add_argument("--driver-shader-cache-state", choices=["cold_cleared", "warm_primed"], default=None)
+    parser.add_argument("--os-file-cache-state", choices=["cold", "warm"], default=None)
     parser.add_argument(
         "--record-benchmark",
         choices=sorted(BENCHMARK_CAPTURE_FILES),
@@ -2483,14 +2654,41 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        sys_env: dict[str, str] = {}
+        if args.os_build:
+            sys_env["os_build"] = args.os_build
+        if args.gpu_model:
+            sys_env["gpu_model"] = args.gpu_model
+        if args.nvidia_driver_version:
+            sys_env["nvidia_driver_version"] = args.nvidia_driver_version
+        if args.cpu_model:
+            sys_env["cpu_model"] = args.cpu_model
+        if args.gpu_architecture:
+            sys_env["gpu_architecture"] = args.gpu_architecture
+        if args.wddm_driver_version:
+            sys_env["wddm_driver_version"] = args.wddm_driver_version
+        if args.windows_power_plan:
+            sys_env["windows_power_plan"] = args.windows_power_plan
+        if args.nvidia_power_management_mode:
+            sys_env["nvidia_power_management_mode"] = args.nvidia_power_management_mode
+        if args.pcie_power_management:
+            sys_env["pci_express_link_state_power_management"] = args.pcie_power_management
+        if args.refresh_hz is not None:
+            sys_env["refresh_hz"] = str(args.refresh_hz)
+        if args.driver_shader_cache_state:
+            sys_env["driver_shader_cache_state"] = args.driver_shader_cache_state
+        if args.os_file_cache_state:
+            sys_env["os_file_cache_state"] = args.os_file_cache_state
+        benchmark_result = None
+        if args.record_benchmark is not None:
+            benchmark_result = capture_benchmark_result(
+                args.repo_root,
+                args.binary_dir or (args.repo_root / "build" / "clang-cl-release" / "deploy"),
+                hardware_tier=args.record_benchmark,
+                system_environment=sys_env or None,
+            )
+
         if args.mode == "CleanSystem":
-            sys_env: dict[str, str] = {}
-            if args.os_build:
-                sys_env["os_build"] = args.os_build
-            if args.gpu_model:
-                sys_env["gpu_model"] = args.gpu_model
-            if args.nvidia_driver_version:
-                sys_env["nvidia_driver_version"] = args.nvidia_driver_version
             code, summary = run_clean_system_mode(
                 args.repo_root,
                 args.binary_dir,
@@ -2507,32 +2705,12 @@ def main(argv: list[str] | None = None) -> int:
                 "ledgers_verified": len(dep_res),
                 "selected_toolchain": ledger_res["selected_toolchain"],
             }
-        elif args.record_benchmark is not None:
-            sys_env: dict[str, str] = {}
-            if args.os_build:
-                sys_env["os_build"] = args.os_build
-            if args.gpu_model:
-                sys_env["gpu_model"] = args.gpu_model
-            if args.nvidia_driver_version:
-                sys_env["nvidia_driver_version"] = args.nvidia_driver_version
-            result = capture_benchmark_result(
-                args.repo_root,
-                args.binary_dir or (args.repo_root / "build" / "clang-cl-release" / "deploy"),
-                hardware_tier=args.record_benchmark,
-                system_environment=sys_env or None,
-            )
-            if args.mode == "CleanSystem":
-                code, summary = run_clean_system_mode(
-                    args.repo_root,
-                    args.binary_dir,
-                    system_environment=sys_env or None,
-                )
-            else:
-                code, summary = run_full_mode(args.repo_root)
-            summary = dict(summary)
-            summary["benchmark_capture"] = result
         else:
             code, summary = run_full_mode(args.repo_root)
+
+        if benchmark_result is not None:
+            summary = dict(summary)
+            summary["benchmark_capture"] = benchmark_result
 
         print(json.dumps(summary, indent=2))
         return code

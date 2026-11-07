@@ -441,16 +441,20 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    empty_pe = build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
+    empty_pe = build_synthetic_pe64(["kernel32.dll"])
     clear_pe = build_synthetic_pe64(
-        ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+        ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"]
     )
     compute_pe = build_synthetic_pe64(
-        ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+        ["kernel32.dll", "d3d12.dll", "dxgi.dll"]
     ) + dxil_blob
-    (bin_dir / "nw_empty_player.exe").write_bytes(empty_pe)
-    (bin_dir / "nw_clear_present_fixture.exe").write_bytes(clear_pe)
-    (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(compute_pe)
+    for fixture_id, name, payload in (
+        ("empty_player", "nw_empty_player.exe", empty_pe),
+        ("clear_present", "nw_clear_present_fixture.exe", clear_pe),
+        ("compute_shader", "nw_compute_shader_fixture.exe", compute_pe),
+    ):
+        (bin_dir / "staging" / fixture_id).mkdir(parents=True, exist_ok=True)
+        (bin_dir / "staging" / fixture_id / name).write_bytes(payload)
 
     recorded = record_release_ledgers(
         repo,
@@ -490,22 +494,28 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
     # Now record larger MSVC/LTCG binaries and verify both toolchains and all comparisons become verified
     msvc_dir = tmp_path / "msvc_bin"
     msvc_dir.mkdir()
-    (msvc_dir / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], extra_text_bytes=512)
-    )
-    (msvc_dir / "nw_clear_present_fixture.exe").write_bytes(
-        build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
-            extra_text_bytes=512,
-        )
-    )
-    (msvc_dir / "nw_compute_shader_fixture.exe").write_bytes(
-        build_synthetic_pe64(
-            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
-            extra_text_bytes=512,
-        )
-        + dxil_blob
-    )
+    for fixture_id, name, payload in (
+        ("empty_player", "nw_empty_player.exe", build_synthetic_pe64(["kernel32.dll"], extra_text_bytes=512)),
+        (
+            "clear_present",
+            "nw_clear_present_fixture.exe",
+            build_synthetic_pe64(
+                ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"],
+                extra_text_bytes=512,
+            ),
+        ),
+        (
+            "compute_shader",
+            "nw_compute_shader_fixture.exe",
+            build_synthetic_pe64(
+                ["kernel32.dll", "d3d12.dll", "dxgi.dll"],
+                extra_text_bytes=512,
+            )
+            + dxil_blob,
+        ),
+    ):
+        (msvc_dir / "staging" / fixture_id).mkdir(parents=True, exist_ok=True)
+        (msvc_dir / "staging" / fixture_id / name).write_bytes(payload)
     msvc_recorded = record_release_ledgers(
         repo,
         msvc_dir,
@@ -542,25 +552,28 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
+    for fixture_id in ("empty_player", "clear_present", "compute_shader"):
+        (bin_dir / "staging" / fixture_id).mkdir(parents=True, exist_ok=True)
+    (bin_dir / "staging" / "empty_player" / "nw_empty_player.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll"])
     )
-    (bin_dir / "nw_clear_present_fixture.exe").write_bytes(
-        build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
-        )
+    (bin_dir / "staging" / "clear_present" / "nw_clear_present_fixture.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"])
     )
-    (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
-        + dxil_blob
+    (bin_dir / "staging" / "compute_shader" / "nw_compute_shader_fixture.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"]) + dxil_blob
     )
 
     # Missing CodeView/PDB evidence must never yield a verified toolchain or ledger,
     # nor leave deterministic_repro_verified=True on an unverified toolchain entry,
     # while still preserving the measured binary byte counts in an unverified record.
-    empty_pe_bytes = (bin_dir / "nw_empty_player.exe").read_bytes()
-    clear_pe_bytes = (bin_dir / "nw_clear_present_fixture.exe").read_bytes()
-    compute_pe_bytes = (bin_dir / "nw_compute_shader_fixture.exe").read_bytes()
+    empty_pe_bytes = (bin_dir / "staging" / "empty_player" / "nw_empty_player.exe").read_bytes()
+    clear_pe_bytes = (
+        bin_dir / "staging" / "clear_present" / "nw_clear_present_fixture.exe"
+    ).read_bytes()
+    compute_pe_bytes = (
+        bin_dir / "staging" / "compute_shader" / "nw_compute_shader_fixture.exe"
+    ).read_bytes()
 
     recorded = record_release_ledgers(
         repo,
@@ -617,7 +630,8 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
     # preserving only the available binary measurement and clearing missing fixtures.
     partial_dir = tmp_path / "partial_bin"
     partial_dir.mkdir()
-    (partial_dir / "nw_empty_player.exe").write_bytes(empty_pe_bytes)
+    (partial_dir / "staging" / "empty_player").mkdir(parents=True, exist_ok=True)
+    (partial_dir / "staging" / "empty_player" / "nw_empty_player.exe").write_bytes(empty_pe_bytes)
     partial_recorded = record_release_ledgers(
         repo,
         partial_dir,
@@ -686,37 +700,46 @@ def test_smaller_msvc_ltcg_toolchain_is_selected_when_verified(tmp_path: Path) -
     # Build clang-cl binaries that are 512 bytes LARGER than MSVC/LTCG on every fixture.
     clang_dir = tmp_path / "clang_bin"
     clang_dir.mkdir()
-    (clang_dir / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], extra_text_bytes=512)
-    )
-    (clang_dir / "nw_clear_present_fixture.exe").write_bytes(
-        build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
-            extra_text_bytes=512,
-        )
-    )
-    (clang_dir / "nw_compute_shader_fixture.exe").write_bytes(
-        build_synthetic_pe64(
-            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
-            extra_text_bytes=512,
-        )
-        + dxil_blob
-    )
+    for fixture_id, name, payload in (
+        ("empty_player", "nw_empty_player.exe", build_synthetic_pe64(["kernel32.dll"], extra_text_bytes=512)),
+        (
+            "clear_present",
+            "nw_clear_present_fixture.exe",
+            build_synthetic_pe64(
+                ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"],
+                extra_text_bytes=512,
+            ),
+        ),
+        (
+            "compute_shader",
+            "nw_compute_shader_fixture.exe",
+            build_synthetic_pe64(
+                ["kernel32.dll", "d3d12.dll", "dxgi.dll"],
+                extra_text_bytes=512,
+            )
+            + dxil_blob,
+        ),
+    ):
+        (clang_dir / "staging" / fixture_id).mkdir(parents=True, exist_ok=True)
+        (clang_dir / "staging" / fixture_id / name).write_bytes(payload)
 
     msvc_dir = tmp_path / "msvc_bin"
     msvc_dir.mkdir()
-    (msvc_dir / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
-    )
-    (msvc_dir / "nw_clear_present_fixture.exe").write_bytes(
-        build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
-        )
-    )
-    (msvc_dir / "nw_compute_shader_fixture.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
-        + dxil_blob
-    )
+    for fixture_id, name, payload in (
+        ("empty_player", "nw_empty_player.exe", build_synthetic_pe64(["kernel32.dll"])),
+        (
+            "clear_present",
+            "nw_clear_present_fixture.exe",
+            build_synthetic_pe64(["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"]),
+        ),
+        (
+            "compute_shader",
+            "nw_compute_shader_fixture.exe",
+            build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"]) + dxil_blob,
+        ),
+    ):
+        (msvc_dir / "staging" / fixture_id).mkdir(parents=True, exist_ok=True)
+        (msvc_dir / "staging" / fixture_id / name).write_bytes(payload)
 
     record_release_ledgers(
         repo,
@@ -780,19 +803,20 @@ def _copied_repo_with_verified_shader(tmp_path: Path) -> tuple[Path, bytes]:
 
 
 def _write_fixture_binaries(binary_dir: Path, dxil_blob: bytes, extra_text_bytes: int = 0) -> None:
-    binary_dir.mkdir(parents=True, exist_ok=True)
-    (binary_dir / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], extra_text_bytes=extra_text_bytes)
+    for fixture_id in ("empty_player", "clear_present", "compute_shader"):
+        (binary_dir / "staging" / fixture_id).mkdir(parents=True, exist_ok=True)
+    (binary_dir / "staging" / "empty_player" / "nw_empty_player.exe").write_bytes(
+        build_synthetic_pe64(["kernel32.dll"], extra_text_bytes=extra_text_bytes)
     )
-    (binary_dir / "nw_clear_present_fixture.exe").write_bytes(
+    (binary_dir / "staging" / "clear_present" / "nw_clear_present_fixture.exe").write_bytes(
         build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"],
             extra_text_bytes=extra_text_bytes,
         )
     )
-    (binary_dir / "nw_compute_shader_fixture.exe").write_bytes(
+    (binary_dir / "staging" / "compute_shader" / "nw_compute_shader_fixture.exe").write_bytes(
         build_synthetic_pe64(
-            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll"],
             extra_text_bytes=extra_text_bytes,
         )
         + dxil_blob
@@ -842,7 +866,9 @@ def test_incomplete_verification_preserves_measured_compute_binary_bytes(tmp_pat
     # but the compute fixture PE binary itself is measurable.
     bin_dir = tmp_path / "clang_no_dxil"
     _write_fixture_binaries(bin_dir, b"")
-    compute_bytes = (bin_dir / "nw_compute_shader_fixture.exe").read_bytes()
+    compute_bytes = (
+        bin_dir / "staging" / "compute_shader" / "nw_compute_shader_fixture.exe"
+    ).read_bytes()
 
     recorded = record_release_ledgers(
         repo,

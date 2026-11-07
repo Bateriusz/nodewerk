@@ -186,6 +186,7 @@
             "inbox_ucrt_debug",
             "inbox_ucrt_release",
             "static_vcruntime_inbox_ucrt",
+            "static_crt",
             "custom_entry_experiment"
           ]
         },

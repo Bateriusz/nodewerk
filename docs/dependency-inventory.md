@@ -39,7 +39,7 @@ Release (`release` and `compact_experiment`) builds fail automated dependency ve
 | `dxcompiler.dll`, `dxil.dll`, `d3dcompiler_47.dll` | Runtime Shader Compiler | All HLSL shaders must be compiled offline via pinned DXC (`1.8.2407`) at build time. |
 | `D3D12Core.dll` | D3D12 Agility SDK Redistributable | Baseline uses Feature Level `12_0` + Shader Model `6.0` supported by Windows 11 inbox `d3d12.dll`. |
 | `d3d12SDKLayers.dll`, `dxgidebug.dll`, `WinPixEventRuntime.dll` | Development Validation / PIX | Permitted only in the `dev` dependency closure; forbidden in `release`. |
-| `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll` | Non-Inbox MSVC C++ Runtime | Player disables exceptions (`/EHs-c-`), RTTI (`/GR-`), and heavy STL, links `libvcruntime.lib` statically, and suppresses the `/MD` default import libraries so only inbox `ucrtbase.dll` remains as the CRT DLL. |
+| `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll` | Non-Inbox MSVC C++ Runtime | Player disables exceptions (`/EHs-c-`), RTTI (`/GR-`), and heavy STL and selects the fully static CRT (`MultiThreaded`/`/MT`), which supplies complete startup and security-cookie support without any CRT DLL import. |
 | `ucrtbased.dll`, `vcruntime140d.dll` | Debug CRT | Permitted only in the `dev` dependency closure. |
 | `nvapi64.dll`, `amd_ags_x64.dll` | Proprietary Vendor SDKs | Vendor-specific extensions are excluded from the baseline. |
 
@@ -47,7 +47,7 @@ Release (`release` and `compact_experiment`) builds fail automated dependency ve
 
 Both `clang-cl` (`clang-cl-release`) and `MSVC/LTCG` (`msvc-release-ltcg`) are verified by `tools/dependency_check.py` against `benchmarks/dependency-inventory.v1.json` and per-fixture `expected_release_imports` in `fixtures/*/fixture.json`. Neither compiler is permitted to introduce an extra runtime DLL (`vcruntime140.dll`, `libomp.dll`, etc.) without failing the build immediately.
 
-Fixture executables are built into isolated `deploy/<fixture_id>/` directories, so sibling
-fixture binaries are expected rather than treated as unexpected sidecars. The full
-`build/<preset>/deploy/` staging tree is used for clean-system execution and is scanned
-recursively.
+Fixture executables are built into isolated `staging/<fixture_id>/` directories, so each
+post-build check inventories only that fixture's payload tree. A separate
+`build/<preset>/deploy/` tree contains the flat clean-system executable set and is scanned
+recursively; nested duplicate executables or payloads in that tree are counted and rejected.

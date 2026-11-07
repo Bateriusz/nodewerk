@@ -28,23 +28,25 @@ We configure and maintain identical CMake/Ninja toolchain presets for **LLVM `cl
 
 | Fixture | `clang-cl` + `lld-link` Ledger | `MSVC` + `LTCG` Ledger | Identical Import Closure | Current Measurement Status |
 | :--- | :--- | :--- | :---: | :--- |
-| `empty_player` | `empty-player-clang-cl-release.json` | `empty-player-msvc-ltcg-release.json` | Yes (`kernel32.dll`, `ucrtbase.dll`) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
-| `clear_present` | `clear-present-clang-cl-release.json` | `clear-present-msvc-ltcg-release.json` | Yes (`kernel32.dll`, `user32.dll`, `d3d12.dll`, `dxgi.dll`, `ucrtbase.dll`) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
-| `compute_shader` | `compute-fixture-clang-cl-release.json` | `compute-fixture-msvc-ltcg-release.json` | Yes (`kernel32.dll`, `d3d12.dll`, `dxgi.dll`, `ucrtbase.dll`) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
+| `empty_player` | `empty-player-clang-cl-release.json` | `empty-player-msvc-ltcg-release.json` | Yes (`kernel32.dll`; no CRT DLL) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
+| `clear_present` | `clear-present-clang-cl-release.json` | `clear-present-msvc-ltcg-release.json` | Yes (`kernel32.dll`, `user32.dll`, `d3d12.dll`, `dxgi.dll`; no CRT DLL) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
+| `compute_shader` | `compute-fixture-clang-cl-release.json` | `compute-fixture-msvc-ltcg-release.json` | Yes (`kernel32.dll`, `d3d12.dll`, `dxgi.dll`; no CRT DLL) | `unverified` (`null` on Linux host; populated via `tools/size_ledger.py` on Windows 11 x64) |
 
 **Provisional Default Configuration:** `clang-cl` 18.1.8 + `lld-link` 18.1.8 (`cmake/toolchains/clang-cl-x64.cmake`) is configured as the provisional default for the initial baseline because:
 1. It supports explicit source-prefix normalization (`-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.`) alongside `/Brepro` and `/PDBALTPATH:%_PDB%` for deterministic bit-for-bit reproducible builds across independent clean directories.
-2. It provides aggressive ThinLTO dead-stripping and identical-code folding (`/OPT:REF /OPT:ICF=4`) while preserving full CodeView PDB debugging compatibility and identical inbox Windows 11 import closure (`ucrtbase.dll`, `kernel32.dll`, `user32.dll`, `d3d12.dll`, `dxgi.dll`).
+2. It provides aggressive ThinLTO dead-stripping and identical-code folding (`/OPT:REF /OPT:ICF=4`) while preserving full CodeView PDB debugging compatibility and identical inbox Windows 11 import closure (`kernel32.dll`, `user32.dll`, `d3d12.dll`, `dxgi.dll`) with no CRT DLL dependency.
 3. Both toolchains are actively version-checked at CMake configure time in [`cmake/ToolchainManifest.cmake`](../../cmake/ToolchainManifest.cmake), and `tools/size_ledger.py` records and compares the exact PE byte ledgers when executed on a Windows 11 x64 toolchain host without ever claiming unmeasured byte counts.
 
 **The default is not a hardcoded winner.** `tools/size_ledger.py` selects the smaller aggregate distributed footprint among toolchains whose CodeView/PDB and two-clean-directory reproducibility evidence are both verified and whose three fixture byte counts are recorded. Selection is applied when measurements are recorded and is reconciled again by `generate_size_comparison_report`, so a measured MSVC/LTCG win updates `selected_toolchain`, its executable/linker metadata, and the per-fixture `status` fields instead of failing the comparison. When only one toolchain is verified, that working toolchain is selected rather than leaving the unverified provisional default in place. Ties retain the currently selected eligible toolchain. The checked-in manifest is therefore provisional while all byte counts are `null`; it does not claim that `clang-cl` is smaller before measurement.
 
 Full-mode verification builds **both** toolchains twice in independent clean directories (`build/repro-clean-a`/`b` for clang-cl and `build/msvc-release-ltcg-clean-a`/`b` for MSVC/LTCG) and records a separate reproducibility report for each (`benchmarks/reproducibility/release-build-reproducibility.json` and `benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json`). It executes the identical clear/present and compute fixtures from **both** toolchains' clean builds before either can be selected; build hashes and PDB evidence alone are insufficient. It also compiles the `dev` profile with `/DEBUG:FULL` for each toolchain and verifies that every fixture PE contains an `RSDS` CodeView record resolving to an MSF PDB before either toolchain may be marked `verified`. A toolchain with byte measurements but missing reproducibility, execution, or CodeView/PDB evidence remains explicitly `unverified`.
 
-Both toolchains use the same release CRT linkage: static `libvcruntime.lib` plus the inbox
-`ucrtbase.dll` import library, with `/NODEFAULTLIB:msvcrt` and the `vcruntime` import libraries
-suppressed. This keeps the documented release closure (no `vcruntime140.dll`) while retaining
-`/GS` security-cookie support. `/Brepro` timestamps are accepted when deterministic and identical
-across both clean directories, whether zero or hash-derived (lld-link writes a hash-derived value).
+Both toolchains use the same release CRT linkage: the fully static CRT
+(`MSVC_RUNTIME_LIBRARY=MultiThreaded`, equivalent to `/MT`). This supplies native
+`mainCRTStartup`, `/GS` security-cookie support, the floating-point ABI marker, and UCRT internals
+in one complete supported configuration, with no CRT DLL import at all. A split static-VCRuntime +
+dynamic-UCRT recipe was rejected because it omits the native executable startup code.
+`/Brepro` timestamps are accepted when deterministic and identical across both clean directories,
+whether zero or hash-derived (lld-link writes a hash-derived value).
 
 The `MSVC/LTCG` configuration (`cmake/toolchains/msvc-x64.cmake`, preset `msvc-release-ltcg`) and its byte ledgers are preserved in [`benchmarks/ledgers/`](../../benchmarks/ledgers/) and [`benchmarks/experiments/msvc-ltcg-comparison.json`](../../benchmarks/experiments/msvc-ltcg-comparison.json).

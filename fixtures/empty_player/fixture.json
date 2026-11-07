@@ -10,7 +10,6 @@
   "requires_dxc_at_runtime": false,
   "requires_agility_sdk_redist": false,
   "expected_release_imports": [
-    "kernel32.dll",
-    "ucrtbase.dll"
+    "kernel32.dll"
   ]
 }

@@ -14,10 +14,11 @@ MSVC/LTCG must execute the identical clear/present and compute fixtures successf
 clean D3D12 info queue) before their measured bytes may participate in selection. Build hashes and
 PDB evidence alone are not sufficient.
 
-Normal release builds are **not** a CRT-elimination experiment: they link `libvcruntime.lib`
-statically while keeping `ucrtbase.dll` dynamic, so the release import table has no
-`vcruntime140.dll` and `/GS` remains active. `/NODEFAULTLIB` remains only the explicit
-`NW_ENABLE_CRT_ELIMINATION_EXPERIMENT` path documented below.
+Normal release builds are **not** a CRT-elimination experiment: they use the complete static CRT
+(`MSVC_RUNTIME_LIBRARY=MultiThreaded`/`/MT`), which supplies `mainCRTStartup`, UCRT internals,
+the floating-point ABI marker, and `/GS` security-cookie support without importing any CRT DLL.
+`/NODEFAULTLIB` remains only the explicit `NW_ENABLE_CRT_ELIMINATION_EXPERIMENT` path documented
+below.
 
 Failed CleanSystem and Full runs preserve measured exit codes, deployed sizes/hashes, SDK-probe
 results, stderr hashes/tails, validation messages, and observed module inventories in their JSON

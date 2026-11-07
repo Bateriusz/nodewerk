@@ -76,23 +76,6 @@
         "LoadLibraryExA",
         "QueryPerformanceCounter"
       ]
-    },
-    {
-      "dll_name": "ucrtbase.dll",
-      "classification": "ucrt_inbox",
-      "symbols": [
-        "_cexit",
-        "_configure_narrow_argv",
-        "_crt_atexit",
-        "_exit",
-        "_initialize_narrow_environment",
-        "_initialize_onexit_table",
-        "_initterm",
-        "_initterm_e",
-        "exit",
-        "strcmp",
-        "strtol"
-      ]
     }
   ],
   "shaders": [],

@@ -298,7 +298,7 @@ def test_recorded_ledgers_pass_dependency_and_toolchain_comparison(tmp_path: Pat
     ledger_copy = tmp_path / "empty-player-clang-cl-release.json"
     shutil.copyfile(REPO_ROOT / "benchmarks" / "ledgers" / "empty-player-clang-cl-release.json", ledger_copy)
     pe_path = tmp_path / "nw_empty_player.exe"
-    pe_path.write_bytes(build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]))
+    pe_path.write_bytes(build_synthetic_pe64(["kernel32.dll"]))
     updated = record_ledger_from_pe_binary(pe_path, ledger_copy, inventory, repo_root=REPO_ROOT)
     assert updated["verification_status"] == "verified"
     assert updated["total_distributed_bytes"] == len(pe_path.read_bytes())
@@ -448,12 +448,12 @@ def test_distribution_byte_accounting_excludes_only_inbox_and_driver_dlls() -> N
         )
 
 
-def test_known_fixture_siblings_are_not_unexpected_sidecars(tmp_path: Path) -> None:
+def test_sibling_deployment_executables_are_rejected_not_silently_skipped(tmp_path: Path) -> None:
     inventory = json.loads(
         (REPO_ROOT / "benchmarks" / "dependency-inventory.v1.json").read_text(encoding="utf-8")
     )
     empty = tmp_path / "nw_empty_player.exe"
-    empty.write_bytes(build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]))
+    empty.write_bytes(build_synthetic_pe64(["kernel32.dll"]))
     clear = tmp_path / "nw_clear_present_fixture.exe"
     clear.write_bytes(
         build_synthetic_pe64(
@@ -461,17 +461,19 @@ def test_known_fixture_siblings_are_not_unexpected_sidecars(tmp_path: Path) -> N
         )
     )
 
-    result = verify_binary_file(
-        empty,
-        profile="release",
-        fixture_id="empty_player",
-        inventory=inventory,
-        repo_root=REPO_ROOT,
-    )
-    assert result["closure_verified"] is True
-    assert "nw_clear_present_fixture.exe" not in result["sidecar_files"]
+    # Production builds isolate each fixture in its own staging directory. A second
+    # executable in the same deployment tree is therefore an uncounted required sidecar.
+    with pytest.raises(DependencyClosureError, match="nw_clear_present_fixture.exe"):
+        verify_binary_file(
+            empty,
+            profile="release",
+            fixture_id="empty_player",
+            inventory=inventory,
+            repo_root=REPO_ROOT,
+        )
 
-    # Nested payloads must still be detected and rejected.
+    # Nested payloads are also detected and rejected.
+    clear.unlink()
     nested = tmp_path / "payloads" / "demo.nwpkg"
     nested.parent.mkdir()
     nested.write_bytes(b"payload")
@@ -522,12 +524,17 @@ def test_ucrt_api_set_imports_canonicalize_to_inbox_ucrtbase(tmp_path: Path) -> 
             ]
         )
     )
-    result = verify_binary_file(
-        exe,
+    result = verify_closure(
         profile="release",
         fixture_id="empty_player",
+        imported_dlls=[
+            "kernel32.dll",
+            "api-ms-win-crt-runtime-l1-1-0.dll",
+            "api-ms-win-crt-heap-l1-1-0.dll",
+        ],
+        sidecar_files=[],
         inventory=inventory,
-        repo_root=REPO_ROOT,
+        expected_fixture_release_imports=["kernel32.dll", "ucrtbase.dll"],
     )
     assert result["closure_verified"] is True
     assert result["canonical_imports"] == ["kernel32.dll", "ucrtbase.dll"]

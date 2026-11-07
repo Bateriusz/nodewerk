@@ -18,7 +18,6 @@
   "expected_release_imports": [
     "kernel32.dll",
     "d3d12.dll",
-    "dxgi.dll",
-    "ucrtbase.dll"
+    "dxgi.dll"
   ]
 }

@@ -28,7 +28,9 @@ Defined formally in [`benchmarks/capability-manifest.v1.json`](../../benchmarks/
 - **Descriptor Binding:** Bounded descriptor tables (`CBV_SRV_UAV` and `SAMPLER` descriptor heaps with explicit bounded root descriptor tables)
 - **Synchronization:** Ordinary resource barriers (`D3D12_RESOURCE_BARRIER_TYPE_TRANSITION`, `D3D12_RESOURCE_BARRIER_TYPE_UAV`, `D3D12_RESOURCE_BARRIER_TYPE_ALIASING`) and direct queue fence synchronization
 - **Command Queue Topology:** One direct command queue (`D3D12_COMMAND_LIST_TYPE_DIRECT`) for raster, compute, and copy commands
-- **Conditional Feature Queries:** Additional optional features (such as `WaveOps`, `Int64ShaderOps`, `Native16BitShaderOpsSupported`, or `TypedUAVLoadAdditionalFormats`) are queried via `ID3D12Device::CheckFeatureSupport` **only when emitted content in the generated player link manifest declares that it uses them**.
+- **Conditional Feature Queries:** Additional optional features (such as `WaveOps`, `Int64ShaderOps`, `Native16BitShaderOpsSupported`, or `TypedUAVLoadAdditionalFormats`) are **required only when emitted content in the generated player link manifest declares that it uses them**. Benchmark capture may query them for measurement; the report records whether each optional feature was queried separately from whether it was supported.
+- **Capability Measurement:** Feature-level probing includes `12_2`/`12_1`/`12_0`/`11_1`/`11_0`; shader-model probing walks the highest available model rather than assuming 6.0. Baseline-support booleans, queried maxima, and unqueried optional features are kept distinct in the benchmark record.
+- **Runtime Module Evidence:** CleanSystem emits full module paths. `D3D12Core.dll` under the Windows system directory is classified as an inbox component; only a copy loaded from outside the system directory is an Agility SDK redistributable. Basename-only evidence is treated as unclassified rather than as a redistributable.
 
 ### 3. Explicit Baseline Exclusions
 

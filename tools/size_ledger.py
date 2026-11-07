@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 from dependency_check import (
-    KNOWN_FIXTURE_EXECUTABLES,
     canonical_inbox_dll,
     collect_deployment_files,
     parse_pe64_sections_and_imports,
@@ -37,11 +36,12 @@ class SizeLedgerError(ValueError):
 
 
 def resolve_fixture_executable(directory: Path, fixture_id: str, executable_name: str) -> Path | None:
-    """Locate a fixture executable in a raw build tree or an isolated deployment directory."""
+    """Locate a fixture executable, preferring its isolated staging directory."""
     candidates = (
-        directory / executable_name,
+        directory / "staging" / fixture_id / executable_name,
         directory / "deploy" / executable_name,
         directory / "deploy" / fixture_id / executable_name,
+        directory / executable_name,
     )
     for candidate in candidates:
         if candidate.exists():
@@ -167,17 +167,9 @@ def record_ledger_from_pe_binary(
                 f"Fixture contract {fx_json} is missing non-empty 'expected_release_imports'"
             )
 
-    deployment_root = binary_path.parent / "deploy"
-    if not deployment_root.is_dir():
-        deployment_root = binary_path.parent
     sidecars = collect_deployment_files(
-        deployment_root,
+        binary_path.parent,
         exclude_paths={binary_path, ledger_path},
-        exclude_names=KNOWN_FIXTURE_EXECUTABLES,
-        # In a raw CMake build tree, shaders/ and object directories are build
-        # intermediates, not deployment payloads. Dedicated deploy/ trees are scanned
-        # without this exclusion.
-        exclude_dir_names={"shaders"} if deployment_root == binary_path.parent else set(),
     )
 
     verify_closure(

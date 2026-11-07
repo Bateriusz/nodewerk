@@ -47,6 +47,9 @@ struct AdapterCapabilitySnapshot {
     std::uint32_t max_shader_model = 0;
     std::uint32_t resource_binding_tier = 0;
     std::uint32_t resource_heap_tier = 0;
+    bool wave_ops_queried = false;
+    bool int64_shader_ops_queried = false;
+    bool fp16_shader_ops_queried = false;
     bool wave_ops_supported = false;
     bool int64_shader_ops_supported = false;
     bool fp16_shader_ops_supported = false;

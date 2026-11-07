@@ -128,6 +128,8 @@
           "type": "string",
           "enum": ["observed_fixture_module_inventory", "static_import_and_sidecar_inference"]
         },
+        "d3d12core_classification_unknown": { "type": "boolean" },
+        "inbox_d3d12core_observed": { "type": "boolean" },
         "observed_loaded_modules": {
           "type": "array",
           "items": { "type": "string" }

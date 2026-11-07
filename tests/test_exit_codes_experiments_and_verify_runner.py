@@ -22,6 +22,7 @@ from verify_nw01 import (  # noqa: E402
     _format_nvidia_driver_version,
     build_and_compare_two_clean_directories,
     capture_benchmark_result,
+    classify_loaded_module_evidence,
     check_evidence_completeness,
     compare_two_build_directories,
     detect_host_system_environment,
@@ -29,6 +30,7 @@ from verify_nw01 import (  # noqa: E402
     find_embedded_dxil_container,
     load_compute_expected_output,
     parse_observed_compute_readback,
+    parse_loaded_modules,
     probe_sdk_absence,
     record_shader_manifest_evidence,
     run_clean_system_mode,
@@ -114,14 +116,14 @@ def test_reproducibility_comparison_and_pinned_toolchain_build_runner(
     repro_out = tmp_path / "release-build-reproducibility.json"
 
     artifacts = [
-        ("nw_empty_player.exe", build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])),
+        ("nw_empty_player.exe", build_synthetic_pe64(["kernel32.dll"])),
         (
             "nw_clear_present_fixture.exe",
-            build_synthetic_pe64(["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]),
+            build_synthetic_pe64(["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"]),
         ),
         (
             "nw_compute_shader_fixture.exe",
-            build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]),
+            build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"]),
         ),
     ]
     for name, payload in artifacts:
@@ -134,28 +136,37 @@ def test_reproducibility_comparison_and_pinned_toolchain_build_runner(
     assert repro_out.exists()
     assert json.loads(repro_out.read_text(encoding="utf-8"))["all_artifacts_match"] is True
 
-    # Verify non-zero TimeDateStamp (violating /Brepro) is rejected
+    # A differing TimeDateStamp is recorded as a reproducibility mismatch, not thrown away.
     (dir_b / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], time_date_stamp=12345)
+        build_synthetic_pe64(["kernel32.dll"], time_date_stamp=12345)
     )
-    with pytest.raises(ValueError, match="TimeDateStamp"):
-        compare_two_build_directories(dir_a, dir_b)
+    timestamp_mismatch = compare_two_build_directories(
+        dir_a, dir_b, output_report_path=repro_out
+    )
+    assert timestamp_mismatch["verification_status"] == "mismatch_detected"
+    empty_artifact = next(
+        a for a in timestamp_mismatch["artifacts"] if a["fixture_id"] == "empty_player"
+    )
+    assert empty_artifact["time_date_stamp_identical"] is False
+    assert empty_artifact["sha256_a"] is not None
+    assert empty_artifact["sha256_b"] is not None
+    assert json.loads(repro_out.read_text(encoding="utf-8"))["verification_status"] == "mismatch_detected"
 
     # A deterministic hash-derived timestamp (lld-link /Brepro) is accepted when identical
     # across both clean directories.
     for d in (dir_a, dir_b):
         (d / "nw_empty_player.exe").write_bytes(
-            build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], time_date_stamp=0x1234ABCD)
+            build_synthetic_pe64(["kernel32.dll"], time_date_stamp=0x1234ABCD)
         )
     deterministic = compare_two_build_directories(dir_a, dir_b)
     assert deterministic["all_artifacts_match"] is True
 
     # Restore valid PE with different section content in dir_b to verify mismatch detection
     (dir_a / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
+        build_synthetic_pe64(["kernel32.dll"])
     )
     (dir_b / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"], extra_text_bytes=512)
+        build_synthetic_pe64(["kernel32.dll"], extra_text_bytes=512)
     )
     mismatch_report = compare_two_build_directories(dir_a, dir_b, output_report_path=repro_out)
     assert mismatch_report["all_artifacts_match"] is False
@@ -271,12 +282,12 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
 
     bin_dir = sim_repo / "build" / "clang-cl-release"
     bin_dir.mkdir(parents=True)
-    (bin_dir / "nw_empty_player.exe").write_bytes(build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]))
+    (bin_dir / "nw_empty_player.exe").write_bytes(build_synthetic_pe64(["kernel32.dll"]))
     (bin_dir / "nw_clear_present_fixture.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
+        build_synthetic_pe64(["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"])
     )
     (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]) + dxil_blob
+        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"]) + dxil_blob
     )
 
     clean_sys32 = tmp_path / "System32"
@@ -308,6 +319,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     observed_stdout = (
         "NW_WINDOWS_BUILD=26100\n"
         "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080\n"
+        "NW_LOADED_MODULE=C:\\Windows\\System32\\D3D12Core.dll\n"
         f"NW_READBACK_ELEMENT_COUNT={expected['element_count']}\n"
         "NW_READBACK_U32=" + ",".join(f"{v:08X}" for v in expected["elements_u32"]) + "\n"
     )
@@ -395,6 +407,13 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     assert recorded_clean["system_environment"]["nvidia_driver_version"] == "572.16"
     assert all(recorded_clean["sdk_absence_checks"].values())
     assert recorded_clean["offline_shader_execution_evidence"]["output_verified"] is True
+    assert recorded_clean["offline_shader_execution_evidence"]["inbox_d3d12core_observed"] is True
+    assert (
+        recorded_clean["offline_shader_execution_evidence"][
+            "agility_d3d12core_redist_loaded"
+        ]
+        is False
+    )
     assert (
         recorded_clean["offline_shader_execution_evidence"]["observed_output_sha256"]
         == expected["output_sha256"]
@@ -557,14 +576,14 @@ def test_find_embedded_dxil_container_validates_candidate_bytes() -> None:
 def test_debug_symbol_evidence_requires_codeview_and_msf_pdb(tmp_path: Path) -> None:
     pdb_bytes = build_synthetic_msf_pdb()
     for exe_name, imported in (
-        ("nw_empty_player.exe", ["kernel32.dll", "ucrtbase.dll"]),
+        ("nw_empty_player.exe", ["kernel32.dll"]),
         (
             "nw_clear_present_fixture.exe",
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"],
         ),
         (
             "nw_compute_shader_fixture.exe",
-            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll"],
         ),
     ):
         pdb_name = exe_name.replace(".exe", ".pdb")
@@ -609,7 +628,7 @@ def test_debug_symbol_evidence_requires_codeview_and_msf_pdb(tmp_path: Path) -> 
     # A PE without a CodeView debug directory must not count either.
     (tmp_path / "nw_empty_player.pdb").write_bytes(pdb_bytes)
     (tmp_path / "nw_empty_player.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"])
+        build_synthetic_pe64(["kernel32.dll"])
     )
     no_debug = verify_debug_symbol_evidence(tmp_path)
     assert no_debug["verified"] is False
@@ -630,12 +649,12 @@ def test_build_runner_invokes_pinned_two_clean_directory_builds(
     monkeypatch.setattr(verify_module, "find_dxc_executable", lambda: "/fake/dxc")
 
     artifacts = {
-        "nw_empty_player.exe": build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]),
+        "nw_empty_player.exe": build_synthetic_pe64(["kernel32.dll"]),
         "nw_clear_present_fixture.exe": build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"]
         ),
         "nw_compute_shader_fixture.exe": build_synthetic_pe64(
-            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll"]
         ),
     }
     configure_calls: list[list[str]] = []
@@ -705,25 +724,25 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
 
     dxil_blob = make_test_signed_dxil_container()
     clang_artifacts = {
-        "nw_empty_player.exe": build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]),
+        "nw_empty_player.exe": build_synthetic_pe64(["kernel32.dll"]),
         "nw_clear_present_fixture.exe": build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"]
         ),
         "nw_compute_shader_fixture.exe": build_synthetic_pe64(
-            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll"]
         )
         + dxil_blob,
     }
     msvc_artifacts = {
         "nw_empty_player.exe": build_synthetic_pe64(
-            ["kernel32.dll", "ucrtbase.dll"], extra_text_bytes=512
+            ["kernel32.dll"], extra_text_bytes=512
         ),
         "nw_clear_present_fixture.exe": build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"],
             extra_text_bytes=512,
         ),
         "nw_compute_shader_fixture.exe": build_synthetic_pe64(
-            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"],
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll"],
             extra_text_bytes=512,
         )
         + dxil_blob,
@@ -745,28 +764,37 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
 
             if "debug-symbols" in str(build_dir):
                 # Simulate a dev /DEBUG:FULL build: CodeView RSDS debug directory + MSF PDB.
-                for name in (
-                    "nw_empty_player.exe",
-                    "nw_clear_present_fixture.exe",
-                    "nw_compute_shader_fixture.exe",
+                for fixture_id, name in (
+                    ("empty_player", "nw_empty_player.exe"),
+                    ("clear_present", "nw_clear_present_fixture.exe"),
+                    ("compute_shader", "nw_compute_shader_fixture.exe"),
                 ):
                     pdb_name = name.replace(".exe", ".pdb")
                     imported = (
-                        ["kernel32.dll", "ucrtbase.dll"]
+                        ["kernel32.dll"]
                         if name == "nw_empty_player.exe"
-                        else ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+                        else ["kernel32.dll", "d3d12.dll", "dxgi.dll"]
                     )
-                    (build_dir / name).write_bytes(
+                    target = build_dir / "staging" / fixture_id
+                    target.mkdir(parents=True, exist_ok=True)
+                    (target / name).write_bytes(
                         build_synthetic_pe64(imported, pdb_path=pdb_name)
                     )
-                    (build_dir / pdb_name).write_bytes(build_synthetic_msf_pdb())
+                    (target / pdb_name).write_bytes(build_synthetic_msf_pdb())
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             (build_dir / "shaders").mkdir(parents=True, exist_ok=True)
             (build_dir / "shaders" / "compute_fixture.dxil").write_bytes(dxil_blob)
             source_map = msvc_artifacts if "msvc-release-ltcg" in str(build_dir) else clang_artifacts
+            fixture_ids = {
+                "nw_empty_player.exe": "empty_player",
+                "nw_clear_present_fixture.exe": "clear_present",
+                "nw_compute_shader_fixture.exe": "compute_shader",
+            }
             for name, payload in source_map.items():
-                (build_dir / name).write_bytes(payload)
+                target = build_dir / "staging" / fixture_ids[name]
+                target.mkdir(parents=True, exist_ok=True)
+                (target / name).write_bytes(payload)
             return subprocess.CompletedProcess(command, 0, "", "")
         if any(c.endswith("nw_compute_shader_fixture.exe") for c in command):
             return subprocess.CompletedProcess(command, 0, compute_stdout, "")
@@ -872,12 +900,12 @@ def test_run_full_mode_runs_clang_path_without_msvc_tools(
 
     dxil_blob = make_test_signed_dxil_container()
     clang_artifacts = {
-        "nw_empty_player.exe": build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll"]),
+        "nw_empty_player.exe": build_synthetic_pe64(["kernel32.dll"]),
         "nw_clear_present_fixture.exe": build_synthetic_pe64(
-            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+            ["kernel32.dll", "user32.dll", "d3d12.dll", "dxgi.dll"]
         ),
         "nw_compute_shader_fixture.exe": build_synthetic_pe64(
-            ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+            ["kernel32.dll", "d3d12.dll", "dxgi.dll"]
         )
         + dxil_blob,
     }
@@ -895,26 +923,35 @@ def test_run_full_mode_runs_clang_path_without_msvc_tools(
             build_dir = Path(command[command.index("--build") + 1])
             build_dir.mkdir(parents=True, exist_ok=True)
             if "debug-symbols" in str(build_dir):
-                for name in (
-                    "nw_empty_player.exe",
-                    "nw_clear_present_fixture.exe",
-                    "nw_compute_shader_fixture.exe",
+                for fixture_id, name in (
+                    ("empty_player", "nw_empty_player.exe"),
+                    ("clear_present", "nw_clear_present_fixture.exe"),
+                    ("compute_shader", "nw_compute_shader_fixture.exe"),
                 ):
                     pdb_name = name.replace(".exe", ".pdb")
                     imported = (
-                        ["kernel32.dll", "ucrtbase.dll"]
+                        ["kernel32.dll"]
                         if name == "nw_empty_player.exe"
-                        else ["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"]
+                        else ["kernel32.dll", "d3d12.dll", "dxgi.dll"]
                     )
-                    (build_dir / name).write_bytes(
+                    target = build_dir / "staging" / fixture_id
+                    target.mkdir(parents=True, exist_ok=True)
+                    (target / name).write_bytes(
                         build_synthetic_pe64(imported, pdb_path=pdb_name)
                     )
-                    (build_dir / pdb_name).write_bytes(build_synthetic_msf_pdb())
+                    (target / pdb_name).write_bytes(build_synthetic_msf_pdb())
                 return subprocess.CompletedProcess(command, 0, "", "")
             (build_dir / "shaders").mkdir(parents=True, exist_ok=True)
             (build_dir / "shaders" / "compute_fixture.dxil").write_bytes(dxil_blob)
+            fixture_ids = {
+                "nw_empty_player.exe": "empty_player",
+                "nw_clear_present_fixture.exe": "clear_present",
+                "nw_compute_shader_fixture.exe": "compute_shader",
+            }
             for name, payload in clang_artifacts.items():
-                (build_dir / name).write_bytes(payload)
+                target = build_dir / "staging" / fixture_ids[name]
+                target.mkdir(parents=True, exist_ok=True)
+                (target / name).write_bytes(payload)
             return subprocess.CompletedProcess(command, 0, "", "")
         if any(c.endswith("nw_compute_shader_fixture.exe") for c in command):
             return subprocess.CompletedProcess(command, 0, compute_stdout, "")
@@ -954,10 +991,10 @@ def test_capture_benchmark_result_records_measured_metrics(
     bin_dir = tmp_path / "deploy"
     bin_dir.mkdir()
     (bin_dir / "nw_clear_present_fixture.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
+        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"])
     )
     (bin_dir / "nw_compute_shader_fixture.exe").write_bytes(
-        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll", "ucrtbase.dll"])
+        build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"])
     )
     expected = load_compute_expected_output(repo)
     metrics = {
@@ -969,13 +1006,22 @@ def test_capture_benchmark_result_records_measured_metrics(
         "vendor_id": 0x10DE,
         "device_id": 0x2C02,
         "vram_mb": 16384,
-        "feature_level": "12_0",
+        "max_feature_level": "12_1",
+        "feature_level": "12_1",
         "max_shader_model": "6_0",
         "baseline_feature_level_12_0_supported": 1,
         "baseline_shader_model_6_0_supported": 1,
         "resource_binding_tier": 2,
         "resource_heap_tier": 2,
+        "wave_ops_queried": 1,
         "wave_ops_supported": 1,
+        "int64_shader_ops_queried": 1,
+        "int64_shader_ops_supported": 1,
+        "fp16_shader_ops_queried": 1,
+        "fp16_shader_ops_supported": 1,
+        "typed_uav_additional_formats_supported": 1,
+        "warmup_frames": 0,
+        "measured_frames": 2,
     }
     fake_validation = {
         "passed": True,
@@ -1023,6 +1069,15 @@ def test_capture_benchmark_result_records_measured_metrics(
             "os_build": "10.0.26100.3194",
             "gpu_model": "NVIDIA GeForce RTX 5080",
             "nvidia_driver_version": "572.16",
+            "cpu_model": "AMD Ryzen 7 9800X3D 8-Core Processor",
+            "gpu_architecture": "Blackwell (GB203)",
+            "wddm_driver_version": "32.0.15.7216",
+            "windows_power_plan": "High performance",
+            "nvidia_power_management_mode": "Prefer maximum performance",
+            "pci_express_link_state_power_management": "Off",
+            "refresh_hz": "60",
+            "driver_shader_cache_state": "warm_primed",
+            "os_file_cache_state": "warm",
         },
     )
     assert result["verification_status"] == "verified"
@@ -1076,3 +1131,79 @@ def test_release_fixture_validation_fails_on_info_queue_errors(
     assert clear_run["execution_status"] == "failed"
     assert clear_run["d3d12_validation_clean"] is False
     assert "bad barrier" in clear_run["d3d12_validation_errors"][0]
+
+
+def test_loaded_module_paths_distinguish_inbox_d3d12core_from_redistributable() -> None:
+    stdout = (
+        "NW_LOADED_MODULE=C:\\Windows\\System32\\D3D12Core.dll\n"
+        "NW_LOADED_MODULE=C:\\Games\\Demo\\D3D12Core.dll\n"
+        "NW_LOADED_MODULE=C:\\Games\\Demo\\dxcompiler.dll\n"
+    )
+    modules = parse_loaded_modules(stdout)
+    assert len(modules) == 3
+    classification = classify_loaded_module_evidence(modules, system_root="C:/Windows")
+    assert classification["inbox_d3d12core_observed"] is True
+    assert classification["agility_d3d12core_redist_loaded"] is True
+    assert classification["runtime_dxcompiler_loaded"] is True
+    assert classification["d3d12core_classification_unknown"] is False
+
+    basename_only = classify_loaded_module_evidence(["D3D12Core.dll"])
+    assert basename_only["d3d12core_classification_unknown"] is True
+    assert basename_only["agility_d3d12core_redist_loaded"] is False
+
+
+def test_benchmark_capture_rejects_wrong_hardware_tier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    bin_dir = tmp_path / "deploy"
+    bin_dir.mkdir()
+    for name in ("nw_clear_present_fixture.exe", "nw_compute_shader_fixture.exe"):
+        (bin_dir / name).write_bytes(build_synthetic_pe64(["kernel32.dll"]))
+    monkeypatch.setattr(
+        verify_module,
+        "execute_release_fixture_validation",
+        lambda *_a, **_kw: {
+            "passed": True,
+            "fixture_runs": [
+                {
+                    "fixture_id": "clear_present",
+                    "execution_status": "passed",
+                    "exit_code": 0,
+                    "metrics": {},
+                    "d3d12_validation_clean": True,
+                    "stdout": "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080\n",
+                },
+                {
+                    "fixture_id": "compute_shader",
+                    "execution_status": "passed",
+                    "exit_code": 0,
+                    "metrics": {},
+                    "d3d12_validation_clean": True,
+                    "stdout": "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080\n",
+                    "readback": {
+                        "observed_output_sha256": "a" * 64,
+                        "elements_match": True,
+                        "hash_match": True,
+                    },
+                },
+            ],
+        },
+    )
+    result = capture_benchmark_result(
+        repo,
+        bin_dir,
+        hardware_tier="rtx_4060_desktop",
+        system_environment={
+            "os_build": "10.0.26100.3194",
+            "gpu_model": "NVIDIA GeForce RTX 5080",
+            "nvidia_driver_version": "572.16",
+        },
+    )
+    assert result["verification_status"] == "unverified"
+    assert result["benchmark_passed"] is False
+    assert any("does not match requested tier" in m["reason"] for m in result["unavailable_measurements"])

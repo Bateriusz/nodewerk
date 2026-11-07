@@ -81,6 +81,35 @@ param(
     [string]$NvidiaDriverVersion = "",
 
     [Parameter(Mandatory = $false)]
+    [string]$CpuModel = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$GpuArchitecture = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$WddmDriverVersion = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$WindowsPowerPlan = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$NvidiaPowerManagementMode = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$PciePowerManagement = "",
+
+    [Parameter(Mandatory = $false)]
+    [int]$RefreshHz = 0,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("", "cold_cleared", "warm_primed")]
+    [string]$DriverShaderCacheState = "",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("", "cold", "warm")]
+    [string]$OsFileCacheState = "",
+
+    [Parameter(Mandatory = $false)]
     [ValidateSet("", "rtx_4060_desktop", "rtx_50_series_desktop")]
     [string]$RecordBenchmark = ""
 )
@@ -115,6 +144,33 @@ if ($GpuModel -ne "") {
 }
 if ($NvidiaDriverVersion -ne "") {
     $CmdArgs += @("--nvidia-driver-version", $NvidiaDriverVersion)
+}
+if ($CpuModel -ne "") {
+    $CmdArgs += @("--cpu-model", $CpuModel)
+}
+if ($GpuArchitecture -ne "") {
+    $CmdArgs += @("--gpu-architecture", $GpuArchitecture)
+}
+if ($WddmDriverVersion -ne "") {
+    $CmdArgs += @("--wddm-driver-version", $WddmDriverVersion)
+}
+if ($WindowsPowerPlan -ne "") {
+    $CmdArgs += @("--windows-power-plan", $WindowsPowerPlan)
+}
+if ($NvidiaPowerManagementMode -ne "") {
+    $CmdArgs += @("--nvidia-power-management-mode", $NvidiaPowerManagementMode)
+}
+if ($PciePowerManagement -ne "") {
+    $CmdArgs += @("--pcie-power-management", $PciePowerManagement)
+}
+if ($RefreshHz -gt 0) {
+    $CmdArgs += @("--refresh-hz", $RefreshHz)
+}
+if ($DriverShaderCacheState -ne "") {
+    $CmdArgs += @("--driver-shader-cache-state", $DriverShaderCacheState)
+}
+if ($OsFileCacheState -ne "") {
+    $CmdArgs += @("--os-file-cache-state", $OsFileCacheState)
 }
 if ($RecordBenchmark -ne "") {
     $CmdArgs += @("--record-benchmark", $RecordBenchmark)

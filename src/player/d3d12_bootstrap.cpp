@@ -22,11 +22,6 @@ namespace nw::shaders {
 #include "compute_fixture_dxil.h"
 } // namespace nw::shaders
 
-// The release profile suppresses the dynamic VCRuntime import library while keeping the
-// static libvcruntime + inbox UCRT split. Define the floating-point ABI marker explicitly so
-// the linker does not depend on a CRT startup object to provide it.
-extern "C" int _fltused = 0x9875;
-
 namespace nw::player {
 
 std::uint32_t EvaluateReferenceComputeElement(std::uint32_t tid, std::uint32_t seed_mask) noexcept {
@@ -151,6 +146,24 @@ std::uint64_t QueryProcessCommittedBytes() noexcept {
     return 0u;
 }
 
+double QueryProcessCpuTimeMs() noexcept {
+    FILETIME creation{};
+    FILETIME exit_time{};
+    FILETIME kernel{};
+    FILETIME user{};
+    if (!GetProcessTimes(
+            GetCurrentProcess(), &creation, &exit_time, &kernel, &user)) {
+        return 0.0;
+    }
+    ULARGE_INTEGER kernel_ticks{};
+    ULARGE_INTEGER user_ticks{};
+    kernel_ticks.LowPart = kernel.dwLowDateTime;
+    kernel_ticks.HighPart = kernel.dwHighDateTime;
+    user_ticks.LowPart = user.dwLowDateTime;
+    user_ticks.HighPart = user.dwHighDateTime;
+    return static_cast<double>(kernel_ticks.QuadPart + user_ticks.QuadPart) / 10000.0;
+}
+
 struct ValidationSummary {
     bool has_error = false;
     bool has_corruption = false;
@@ -265,7 +278,7 @@ void EmitLoadedModuleInventory() noexcept {
     unsigned int module_count = 0;
     if (Module32FirstW(snapshot, &entry)) {
         do {
-            std::printf("NW_LOADED_MODULE=%ls\n", entry.szModule);
+            std::printf("NW_LOADED_MODULE=%ls\n", entry.szExePath);
             ++module_count;
             entry.dwSize = static_cast<DWORD>(sizeof(entry));
         } while (Module32NextW(snapshot, &entry));
@@ -309,18 +322,52 @@ AdapterHardwareInfo QueryAdapterHardwareInfo(IDXGIAdapter1* adapter) noexcept {
     return info;
 }
 
+AdapterHardwareInfo QueryDeviceAdapterHardwareInfo(ID3D12Device* device) noexcept {
+    if (!device) {
+        return AdapterHardwareInfo{};
+    }
+    IDXGIDevice* dxgi_device = nullptr;
+    if (FAILED(device->QueryInterface(
+            __uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi_device))) ||
+        !dxgi_device) {
+        return AdapterHardwareInfo{};
+    }
+    AdapterHardwareInfo info{};
+    IDXGIAdapter* adapter = nullptr;
+    if (SUCCEEDED(dxgi_device->GetAdapter(&adapter)) && adapter) {
+        IDXGIAdapter1* adapter1 = nullptr;
+        if (SUCCEEDED(adapter->QueryInterface(
+                __uuidof(IDXGIAdapter1), reinterpret_cast<void**>(&adapter1))) &&
+            adapter1) {
+            info = QueryAdapterHardwareInfo(adapter1);
+            adapter1->Release();
+        }
+        adapter->Release();
+    }
+    dxgi_device->Release();
+    return info;
+}
+
 void EmitBenchmarkMetrics(
     const AdapterCapabilitySnapshot& snapshot,
     const AdapterHardwareInfo& hardware,
     const char* adapter_name,
     double startup_ms,
     double cpu_ms,
-    double gpu_ms) noexcept {
-    std::printf("NW_STARTUP_MS=%.3f\n", startup_ms > 0.0 ? startup_ms : 0.001);
-    std::printf("NW_CPU_TIME_MS=%.3f\n", cpu_ms > 0.0 ? cpu_ms : 0.001);
+    double gpu_ms,
+    unsigned int warmup_frames,
+    unsigned int measured_frames) noexcept {
+    if (startup_ms > 0.0) {
+        std::printf("NW_STARTUP_MS=%.3f\n", startup_ms);
+    }
+    if (cpu_ms > 0.0) {
+        std::printf("NW_CPU_TIME_MS=%.3f\n", cpu_ms);
+    }
     if (gpu_ms > 0.0) {
         std::printf("NW_GPU_TIME_MS=%.3f\n", gpu_ms);
     }
+    std::printf("NW_WARMUP_FRAMES=%u\n", warmup_frames);
+    std::printf("NW_MEASURED_FRAMES=%u\n", measured_frames);
     const std::uint64_t committed_bytes = QueryProcessCommittedBytes();
     if (committed_bytes > 0u) {
         std::printf("NW_COMMITTED_MEMORY_BYTES=%llu\n",
@@ -341,7 +388,9 @@ void EmitBenchmarkMetrics(
         std::printf("NW_ADAPTER_DESCRIPTION=%s\n", adapter_name);
     }
     const char* feature_level_name = "unknown";
-    if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_12_1)) {
+    if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_12_2)) {
+        feature_level_name = "12_2";
+    } else if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_12_1)) {
         feature_level_name = "12_1";
     } else if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_12_0)) {
         feature_level_name = "12_0";
@@ -350,6 +399,7 @@ void EmitBenchmarkMetrics(
     } else if (snapshot.max_feature_level >= static_cast<std::uint32_t>(D3D_FEATURE_LEVEL_11_0)) {
         feature_level_name = "11_0";
     }
+    std::printf("NW_MAX_FEATURE_LEVEL=%s\n", feature_level_name);
     std::printf("NW_FEATURE_LEVEL=%s\n", feature_level_name);
     char shader_model_name[16] = "unknown";
     if (snapshot.max_shader_model >= BaselineCapabilityProfile::kRequiredShaderModel) {
@@ -364,7 +414,22 @@ void EmitBenchmarkMetrics(
         snapshot.max_shader_model >= BaselineCapabilityProfile::kRequiredShaderModel ? 1 : 0);
     std::printf("NW_RESOURCE_BINDING_TIER=%u\n", snapshot.resource_binding_tier);
     std::printf("NW_RESOURCE_HEAP_TIER=%u\n", snapshot.resource_heap_tier);
-    std::printf("NW_WAVE_OPS_SUPPORTED=%d\n", snapshot.wave_ops_supported ? 1 : 0);
+    std::printf("NW_TYPED_UAV_ADDITIONAL_FORMATS_SUPPORTED=%d\n",
+        snapshot.typed_uav_additional_formats_supported ? 1 : 0);
+    std::printf("NW_WAVE_OPS_QUERIED=%d\n", snapshot.wave_ops_queried ? 1 : 0);
+    if (snapshot.wave_ops_queried) {
+        std::printf("NW_WAVE_OPS_SUPPORTED=%d\n", snapshot.wave_ops_supported ? 1 : 0);
+    }
+    std::printf("NW_INT64_SHADER_OPS_QUERIED=%d\n", snapshot.int64_shader_ops_queried ? 1 : 0);
+    if (snapshot.int64_shader_ops_queried) {
+        std::printf("NW_INT64_SHADER_OPS_SUPPORTED=%d\n",
+            snapshot.int64_shader_ops_supported ? 1 : 0);
+    }
+    std::printf("NW_FP16_SHADER_OPS_QUERIED=%d\n", snapshot.fp16_shader_ops_queried ? 1 : 0);
+    if (snapshot.fp16_shader_ops_queried) {
+        std::printf("NW_FP16_SHADER_OPS_SUPPORTED=%d\n",
+            snapshot.fp16_shader_ops_supported ? 1 : 0);
+    }
     std::fflush(stdout);
 }
 #endif
@@ -405,6 +470,7 @@ DiagnosticRecord PopulateAdapterCapabilitySnapshot(
     out_snapshot->windows_build_number = windows_build_number;
 
     static constexpr D3D_FEATURE_LEVEL kRequestedFeatureLevels[] = {
+        D3D_FEATURE_LEVEL_12_2,
         D3D_FEATURE_LEVEL_12_1,
         D3D_FEATURE_LEVEL_12_0,
         D3D_FEATURE_LEVEL_11_1,
@@ -426,17 +492,27 @@ DiagnosticRecord PopulateAdapterCapabilitySnapshot(
     }
     out_snapshot->max_feature_level = static_cast<std::uint32_t>(feature_levels.MaxSupportedFeatureLevel);
 
-    D3D12_FEATURE_DATA_SHADER_MODEL sm_data{D3D_SHADER_MODEL_6_0};
-    hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm_data, sizeof(sm_data));
-    if (FAILED(hr)) {
+    bool shader_model_query_ok = false;
+    D3D_SHADER_MODEL highest_shader_model = D3D_SHADER_MODEL_6_0;
+    for (unsigned int value = 0x68u; value >= 0x60u; --value) {
+        D3D12_FEATURE_DATA_SHADER_MODEL candidate{static_cast<D3D_SHADER_MODEL>(value)};
+        if (SUCCEEDED(device->CheckFeatureSupport(
+                D3D12_FEATURE_SHADER_MODEL, &candidate, sizeof(candidate))) &&
+            static_cast<unsigned int>(candidate.HighestShaderModel) >= value) {
+            highest_shader_model = candidate.HighestShaderModel;
+            shader_model_query_ok = true;
+            break;
+        }
+    }
+    if (!shader_model_query_ok) {
         return DiagnosticRecord{
             ExitCode::CapabilityBaselineUnmet,
-            static_cast<std::uint32_t>(hr),
+            0x887A0004u,
             "shader_model_check",
             "CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL) failed",
             {}};
     }
-    out_snapshot->max_shader_model = static_cast<std::uint32_t>(sm_data.HighestShaderModel);
+    out_snapshot->max_shader_model = static_cast<std::uint32_t>(highest_shader_model);
 
     D3D12_FEATURE_DATA_D3D12_OPTIONS options0{};
     hr = device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options0, sizeof(options0));
@@ -452,19 +528,22 @@ DiagnosticRecord PopulateAdapterCapabilitySnapshot(
     out_snapshot->resource_heap_tier = static_cast<std::uint32_t>(options0.ResourceHeapTier);
     out_snapshot->typed_uav_additional_formats_supported = (options0.TypedUAVLoadAdditionalFormats != FALSE);
 
-    // Query optional features only when emitted content requests them (per conditional_feature_policy)
-    if (optional_features.uses_wave_intrinsics || optional_features.uses_int64_shader_ops) {
-        D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
-        if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
-            out_snapshot->wave_ops_supported = (options1.WaveOps != FALSE);
-            out_snapshot->int64_shader_ops_supported = (options1.Int64ShaderOps != FALSE);
-        }
+    // Query optional features for capability capture. They are only *required* when emitted
+    // content requests them; querying does not change the baseline contract.
+    D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
+    if (SUCCEEDED(device->CheckFeatureSupport(
+            D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
+        out_snapshot->wave_ops_queried = true;
+        out_snapshot->int64_shader_ops_queried = true;
+        out_snapshot->wave_ops_supported = (options1.WaveOps != FALSE);
+        out_snapshot->int64_shader_ops_supported = (options1.Int64ShaderOps != FALSE);
     }
-    if (optional_features.uses_fp16_shader_ops) {
-        D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
-        if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4)))) {
-            out_snapshot->fp16_shader_ops_supported = (options4.Native16BitShaderOpsSupported != FALSE);
-        }
+    D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
+    if (SUCCEEDED(device->CheckFeatureSupport(
+            D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4)))) {
+        out_snapshot->fp16_shader_ops_queried = true;
+        out_snapshot->fp16_shader_ops_supported =
+            (options4.Native16BitShaderOpsSupported != FALSE);
     }
 
     const ExitCode contract_code = EvaluateCapabilityContract(*out_snapshot, optional_features);
@@ -656,6 +735,7 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     }
 
     const double start_ms = NwNowMs();
+    const double cpu_start_ms = QueryProcessCpuTimeMs();
     char adapter_name[128]{};
 
     const std::uint32_t win_build =
@@ -767,7 +847,6 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
     }
 
     DXGI_ADAPTER_DESC1 selected_desc{};
-    const AdapterHardwareInfo hardware_info = QueryAdapterHardwareInfo(selected_adapter);
     if (SUCCEEDED(selected_adapter->GetDesc1(&selected_desc))) {
         for (std::size_t c = 0; c < 127u && selected_desc.Description[c] != L'\0'; ++c) {
             const wchar_t wc = selected_desc.Description[c];
@@ -1159,7 +1238,14 @@ DiagnosticRecord ExecuteClearPresentFixture(const BootstrapConfig& config) noexc
 
     if (config.emit_benchmark_metrics) {
         EmitBenchmarkMetrics(
-            cap_snapshot, hardware_info, adapter_name, setup_ms, NwNowMs() - start_ms, gpu_ms);
+            cap_snapshot,
+            QueryDeviceAdapterHardwareInfo(device),
+            adapter_name,
+            setup_ms,
+            QueryProcessCpuTimeMs() - cpu_start_ms,
+            gpu_ms,
+            0u,
+            config.frame_count);
     }
     if (config.emit_loaded_modules) {
         EmitLoadedModuleInventory();
@@ -1176,6 +1262,7 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
     }
 
     const double start_ms = NwNowMs();
+    const double cpu_start_ms = QueryProcessCpuTimeMs();
 
     const std::uint32_t win_build =
         config.os_build_override != 0u ? config.os_build_override : QueryWindowsBuildNumber();
@@ -1280,7 +1367,6 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
         factory->Release();
         return DiagnosticRecord{ExitCode::D3D12DeviceCreationFailed, static_cast<std::uint32_t>(hr), "d3d12_device", "D3D12CreateDevice(12_0) failed", {}};
     }
-    const AdapterHardwareInfo hardware_info = QueryAdapterHardwareInfo(selected_adapter);
     selected_adapter->Release();
     factory->Release();
 
@@ -1696,7 +1782,14 @@ DiagnosticRecord ExecuteComputeShaderFixture(const BootstrapConfig& config) noex
 
     if (config.emit_benchmark_metrics) {
         EmitBenchmarkMetrics(
-            cap_snapshot, hardware_info, adapter_name, setup_ms, NwNowMs() - start_ms, gpu_ms);
+            cap_snapshot,
+            QueryDeviceAdapterHardwareInfo(device),
+            adapter_name,
+            setup_ms,
+            QueryProcessCpuTimeMs() - cpu_start_ms,
+            gpu_ms,
+            0u,
+            1u);
     }
     if (config.emit_loaded_modules) {
         EmitLoadedModuleInventory();
