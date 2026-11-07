@@ -290,7 +290,9 @@ def test_run_full_mode_isolates_debug_symbol_failure_from_reproducibility(
     assert "synthetic PDB verification failure" in report["checks"]["msvc_debug_symbols"]["reason"]
 
 
-def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path: Path) -> None:
+def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ps1_path = REPO_ROOT / "tools" / "verify-nw01.ps1"
     assert ps1_path.exists()
     ps1_text = ps1_path.read_text(encoding="utf-8")
@@ -308,7 +310,16 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(tmp_path:
     for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
         shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
 
-    full_code, full_summary = run_full_mode(sim_repo)
+    # This case specifically exercises missing native build coverage. Make that
+    # precondition host-independent so a provisioned Windows CI runner does not
+    # turn the synthetic repo (which intentionally has no CMakeLists.txt) into a
+    # real build attempt and concrete build failure.
+    import verify_nw01 as verify_module
+
+    with monkeypatch.context() as m:
+        m.setattr(verify_module.shutil, "which", lambda _name: None)
+        full_code, full_summary = run_full_mode(sim_repo)
+
     # Missing host tools mean required build coverage is absent; that is an exit 3,
     # not the exit 2 "only physical evidence missing" state.
     assert full_code == 3
