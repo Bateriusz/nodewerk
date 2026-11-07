@@ -1479,11 +1479,16 @@ def test_ci_provisions_pinned_msvc_toolset_and_windows_sdk() -> None:
     ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
-    assert "ilammy/msvc-dev-cmd@v1" in ci
-    assert "toolset: 14.40" in ci
-    assert "sdk: 10.0.26100.0" in ci
     assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" in ci
     assert "Microsoft.VisualStudio.Component.Windows11SDK.26100" in ci
+    assert "Microsoft.VisualStudio.Product.BuildTools" in ci
+    assert '-version "[17.0,18.0)"' in ci
+    assert "vcvars64.bat" in ci
+    assert "-vcvars_ver=14.40" in ci
+    assert "-winsdk=10.0.26100.0" in ci
+    assert 'VCToolsVersion -notmatch "^14\\.40\\."' in ci
+    assert "cl.exe is outside the pinned VCToolsInstallDir" in ci
+    assert "link.exe is outside the pinned VCToolsInstallDir" in ci
     assert "19\\.40\\.33813" in ci
     assert "14\\.40\\.33813\\.0" in ci
     assert "--mode BuildChecks" in ci
