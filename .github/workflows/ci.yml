@@ -63,8 +63,24 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install pinned CMake, Ninja, and pytest
-        run: python -m pip install --upgrade "cmake==3.30.2" "ninja==1.12.1" pytest
+      - name: Install pinned CMake and pytest
+        run: python -m pip install --upgrade "cmake==3.30.2" pytest
+
+      - name: Provision pinned Ninja 1.12.1
+        shell: pwsh
+        run: |
+          $ninjaRoot = "C:\Tools\Ninja-1.12.1"
+          $ninjaExe = Join-Path $ninjaRoot "ninja.exe"
+          if (-not (Test-Path $ninjaExe -PathType Leaf)) {
+            $archive = Join-Path $env:RUNNER_TEMP "ninja-win-1.12.1.zip"
+            Invoke-WebRequest `
+              -Uri "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip" `
+              -OutFile $archive
+            New-Item -ItemType Directory -Force -Path $ninjaRoot | Out-Null
+            Expand-Archive -Path $archive -DestinationPath $ninjaRoot -Force
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $ninjaRoot
+          & $ninjaExe --version
 
       - name: Initialize pinned MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
