@@ -47,12 +47,18 @@ function(nw_add_offline_compute_shader target_name hlsl_file entry_point profile
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_SOURCE_DIR}/tools/offline_shader_pack.py"
                 --mode pack-header
+                --repo-root "${CMAKE_SOURCE_DIR}"
+                --cxx-compiler "${CMAKE_CXX_COMPILER}"
+                --require-cpp-validator
                 --hlsl "${hlsl_file}"
                 --dxil "${output_dxil}"
                 --output-header "${output_header}"
             DEPENDS
                 "${hlsl_file}"
                 "${CMAKE_SOURCE_DIR}/tools/offline_shader_pack.py"
+                "${CMAKE_SOURCE_DIR}/src/player/capability_check.cpp"
+                "${CMAKE_SOURCE_DIR}/src/player/capability_check.h"
+                "${CMAKE_SOURCE_DIR}/src/player/exit_codes.h"
             COMMENT "Compiling offline SM 6.0 shader ${hlsl_file} (${entry_point}) via DXC into build directory"
             VERBATIM
         )
