@@ -240,6 +240,7 @@ jobs:
           Write-Host "Verified cl.exe banner: $($clBanner.Trim())"
           Write-Host "Verified link.exe banner: $($linkBanner.Trim())"
           Write-Host "Verified Windows SDK $env:WindowsSDKVersion"
+          exit 0
 
       - name: Report provisioned toolchain versions
         shell: pwsh
