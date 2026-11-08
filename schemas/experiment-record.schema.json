@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.dev/schemas/experiment-record.schema.json",
+  "title": "Nodewerk Experiment Preservation Schema",
+  "description": "Preserves failed or comparative toolchain, compact-profile, and CRT-elimination experiments with their exact configuration, reproducible command, obligations, measurements, and failure diagnostics without silent substitution.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "category",
+    "status",
+    "verification_status",
+    "substituted_silently",
+    "reproducible_command",
+    "configuration",
+    "initialization_and_cleanup_obligations",
+    "measurements",
+    "diagnostics",
+    "unavailable_measurements"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "experiment_id": { "type": "string", "minLength": 3 },
+    "category": {
+      "type": "string",
+      "enum": ["toolchain_comparison", "compact_profile", "crt_elimination"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["retained_in_baseline", "rejected_preserved", "failed_preserved"]
+    },
+    "verification_status": {
+      "type": "string",
+      "enum": ["verified", "unverified"]
+    },
+    "substituted_silently": {
+      "type": "boolean",
+      "const": false
+    },
+    "reproducible_command": {
+      "type": "string",
+      "minLength": 10
+    },
+    "configuration": {
+      "type": "object",
+      "required": ["toolchain_id", "profile_name", "compiler_flags", "linker_flags", "security_mitigations_retained"],
+      "additionalProperties": false,
+      "properties": {
+        "toolchain_id": { "type": "string" },
+        "profile_name": { "type": "string" },
+        "compiler_flags": { "type": "array", "items": { "type": "string" } },
+        "linker_flags": { "type": "array", "items": { "type": "string" } },
+        "security_mitigations_retained": { "type": "boolean" }
+      }
+    },
+    "initialization_and_cleanup_obligations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["obligation_id", "phase", "description", "satisfied"],
+        "additionalProperties": false,
+        "properties": {
+          "obligation_id": { "type": "string" },
+          "phase": { "type": "string", "enum": ["initialization", "runtime", "cleanup"] },
+          "description": { "type": "string", "minLength": 10 },
+          "satisfied": { "type": "boolean" }
+        }
+      }
+    },
+    "measurements": {
+      "type": "object",
+      "required": ["fixture_id", "total_distributed_bytes", "delta_vs_release_baseline_bytes", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "fixture_id": { "type": "string" },
+        "total_distributed_bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "delta_vs_release_baseline_bytes": { "type": ["integer", "null"] },
+        "notes": { "type": "string" }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "required": ["exit_code", "error_code", "summary", "preservation_statement"],
+      "additionalProperties": false,
+      "properties": {
+        "exit_code": { "type": ["integer", "null"] },
+        "error_code": { "type": "string" },
+        "summary": { "type": "string", "minLength": 10 },
+        "preservation_statement": { "type": "string", "minLength": 10 }
+      }
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "metric": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
+      }
+    }
+  }
+}

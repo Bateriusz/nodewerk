@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "exp-toolchain-msvc-ltcg-vs-clang-cl",
+  "category": "toolchain_comparison",
+  "status": "retained_in_baseline",
+  "verification_status": "verified",
+  "substituted_silently": false,
+  "reproducible_command": "cmake --preset msvc-release-ltcg && cmake --build --preset msvc-release-ltcg",
+  "configuration": {
+    "toolchain_id": "msvc-ltcg",
+    "profile_name": "release",
+    "compiler_flags": [
+      "/std:c++20",
+      "/O1",
+      "/Os",
+      "/GL",
+      "/EHs-c-",
+      "/GR-",
+      "/GS",
+      "/guard:cf",
+      "/Gw",
+      "/Gy",
+      "/GF",
+      "/Brepro",
+      "MSVC_RUNTIME_LIBRARY=MultiThreaded",
+      "-DNW_CRT_LINKAGE_STATIC=1"
+    ],
+    "linker_flags": [
+      "/LTCG",
+      "/OPT:REF",
+      "/OPT:ICF=4",
+      "/DYNAMICBASE",
+      "/HIGHENTROPYVA",
+      "/NXCOMPAT",
+      "/CETCOMPAT",
+      "/guard:cf",
+      "/Brepro"
+    ],
+    "security_mitigations_retained": true
+  },
+  "initialization_and_cleanup_obligations": [
+    {
+      "obligation_id": "identical_inbox_import_closure",
+      "phase": "initialization",
+      "description": "Must resolve only inbox Windows 11 DLLs (kernel32.dll, user32.dll, d3d12.dll, dxgi.dll) with the fully static CRT and no vcruntime140.dll or other CRT DLL sidecar.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "deterministic_com_teardown",
+      "phase": "cleanup",
+      "description": "Wait on direct queue fence and release all COM interfaces prior to process exit.",
+      "satisfied": true
+    }
+  ],
+  "measurements": {
+    "fixture_id": "clear_present",
+    "total_distributed_bytes": 168960,
+    "delta_vs_release_baseline_bytes": -3584,
+    "notes": "Measured MSVC 19.40.33821 /LTCG clear_present bytes: 168960 B versus 172544 B for clang-cl/lld-link. MSVC/LTCG is smaller on every fixture and was selected as the retained baseline toolchain."
+  },
+  "diagnostics": {
+    "exit_code": 0,
+    "error_code": "OK",
+    "summary": "Both toolchains built twice in independent clean directories and executed all three identical fixtures successfully; MSVC/LTCG aggregate 494080 B is smaller than clang-cl/lld-link aggregate 503808 B.",
+    "preservation_statement": "Preserved exact MSVC/LTCG configuration and measured ledgers; measured selection replaced the provisional clang-cl default without silent substitution."
+  },
+  "unavailable_measurements": []
+}

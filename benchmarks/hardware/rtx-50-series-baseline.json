@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0.0",
+  "benchmark_id": "nw01-hardware-rtx-50-series-desktop-baseline",
+  "hardware_tier": "rtx_50_series_desktop",
+  "verification_status": "verified",
+  "benchmark_passed": true,
+  "environment_metadata": {
+    "gpu_model": "NVIDIA GeForce RTX 5070 Ti",
+    "gpu_architecture": "Blackwell",
+    "gpu_vendor_id": "0x10DE",
+    "gpu_device_id": "0x2C05",
+    "vram_mb": 15995,
+    "cpu_model": "13th Gen Intel(R) Core(TM) i7-1360P",
+    "os_name": "Windows 11 x64",
+    "os_build": "10.0.26200.9711",
+    "nvidia_driver_version": "610.88",
+    "wddm_driver_version": "32.0.16.1088",
+    "toolchain": {
+      "toolchain_id": "msvc-ltcg",
+      "compiler_name": "Microsoft C/C++ Optimizing Compiler (MSVC)",
+      "compiler_executable": "cl.exe",
+      "compiler_version": "19.40.33821",
+      "linker_name": "Microsoft Incremental Linker",
+      "linker_executable": "link.exe",
+      "linker_version": "14.40.33821.0",
+      "windows_sdk_version": "10.0.26100.0",
+      "dxc_version": "1.8.2407"
+    },
+    "power_settings": {
+      "windows_power_plan": "High performance",
+      "nvidia_power_management_mode": "Prefer maximum performance",
+      "pci_express_link_state_power_management": "Off"
+    },
+    "resolution": {
+      "width": 1280,
+      "height": 720,
+      "refresh_hz": 120,
+      "format": "DXGI_FORMAT_R8G8B8A8_UNORM",
+      "presentation_mode": "windowed_swapchain",
+      "measurement_source": "requested_fixture_size"
+    },
+    "cache_conditions": {
+      "driver_shader_cache_state": "warm_primed",
+      "os_file_cache_state": "warm",
+      "warmup_frames": 0,
+      "measured_frames": 2
+    }
+  },
+  "captured_capabilities": {
+    "max_supported_feature_level": "12_2",
+    "max_supported_shader_model": "6_8",
+    "baseline_feature_level_12_0_supported": true,
+    "baseline_shader_model_6_0_supported": true,
+    "resource_binding_tier": 3,
+    "resource_heap_tier": 2,
+    "wave_ops_queried": true,
+    "wave_ops_supported": true,
+    "int64_shader_ops_queried": true,
+    "int64_shader_ops_supported": true,
+    "fp16_shader_ops_queried": true,
+    "fp16_shader_ops_supported": true,
+    "typed_uav_additional_formats_supported": true
+  },
+  "artifact_provenance": {
+    "toolchain_id": "msvc-ltcg",
+    "artifact_sha256": {
+      "empty_player": "cfe952b633ab2cf359c58ed1a393a342b560e79a54ee3e5436c51c90ec1f23b6",
+      "clear_present": "5b3ecb7775379ce637104292b854dc47eaa6b3f49afebb7f5b593356bdc8f478",
+      "compute_shader": "34f993e68a87918d25f43ad9121560dc4153e392581fd39e16b007ff97a78b8d"
+    },
+    "source": "recorded_ledger_artifact_hash"
+  },
+  "fixture_results": [
+    {
+      "fixture_id": "clear_present",
+      "sha256": "5b3ecb7775379ce637104292b854dc47eaa6b3f49afebb7f5b593356bdc8f478",
+      "execution_status": "passed",
+      "d3d12_validation_clean": true,
+      "compute_output_verified": null,
+      "exit_code": 0,
+      "total_distributed_bytes": 168960,
+      "startup_time_ms": 298.549,
+      "cpu_time_ms": 265.625,
+      "gpu_time_ms": 0.008,
+      "committed_memory_bytes": 103829504,
+      "gpu_committed_memory_bytes": 22388736
+    },
+    {
+      "fixture_id": "compute_shader",
+      "sha256": "34f993e68a87918d25f43ad9121560dc4153e392581fd39e16b007ff97a78b8d",
+      "execution_status": "passed",
+      "d3d12_validation_clean": true,
+      "compute_output_verified": true,
+      "exit_code": 0,
+      "total_distributed_bytes": 172032,
+      "startup_time_ms": 295.146,
+      "cpu_time_ms": 281.25,
+      "gpu_time_ms": 0.002,
+      "committed_memory_bytes": 99643392,
+      "gpu_committed_memory_bytes": 14594048
+    }
+  ],
+  "unavailable_measurements": []
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0.0",
+  "report_id": "nw01-msvc-ltcg-release-reproducibility-v1",
+  "toolchain_manifest_ref": "benchmarks/toolchain-manifest.v1.json",
+  "build_profile": "release",
+  "directory_a": "C:\\Users\\micha\\Desktop\\nodewerk\\build\\msvc-release-ltcg-clean-a",
+  "directory_b": "C:\\Users\\micha\\Desktop\\nodewerk\\build\\msvc-release-ltcg-clean-b",
+  "verification_status": "verified",
+  "all_artifacts_match": true,
+  "missing_files": [],
+  "artifacts": [
+    {
+      "artifact_name": "nw_empty_player.exe",
+      "fixture_id": "empty_player",
+      "size_bytes_a": 153088,
+      "size_bytes_b": 153088,
+      "sha256_a": "cfe952b633ab2cf359c58ed1a393a342b560e79a54ee3e5436c51c90ec1f23b6",
+      "sha256_b": "cfe952b633ab2cf359c58ed1a393a342b560e79a54ee3e5436c51c90ec1f23b6",
+      "hash_match": true,
+      "time_date_stamp_a": 1579203154,
+      "time_date_stamp_b": 1579203154,
+      "time_date_stamp_identical": true
+    },
+    {
+      "artifact_name": "nw_clear_present_fixture.exe",
+      "fixture_id": "clear_present",
+      "size_bytes_a": 168960,
+      "size_bytes_b": 168960,
+      "sha256_a": "5b3ecb7775379ce637104292b854dc47eaa6b3f49afebb7f5b593356bdc8f478",
+      "sha256_b": "5b3ecb7775379ce637104292b854dc47eaa6b3f49afebb7f5b593356bdc8f478",
+      "hash_match": true,
+      "time_date_stamp_a": 3210298383,
+      "time_date_stamp_b": 3210298383,
+      "time_date_stamp_identical": true
+    },
+    {
+      "artifact_name": "nw_compute_shader_fixture.exe",
+      "fixture_id": "compute_shader",
+      "size_bytes_a": 172032,
+      "size_bytes_b": 172032,
+      "sha256_a": "34f993e68a87918d25f43ad9121560dc4153e392581fd39e16b007ff97a78b8d",
+      "sha256_b": "34f993e68a87918d25f43ad9121560dc4153e392581fd39e16b007ff97a78b8d",
+      "hash_match": true,
+      "time_date_stamp_a": 605720296,
+      "time_date_stamp_b": 605720296,
+      "time_date_stamp_identical": true
+    }
+  ],
+  "mismatch_investigation": {
+    "mismatches_found": 0,
+    "root_causes_investigated": [
+      "PE COFF header TimeDateStamp determinism achieved via /Brepro on both clang-cl/lld-link and MSVC; deterministic zero and deterministic hash-derived timestamps are both accepted.",
+      "Embedded absolute build-directory PDB paths mitigated via /PDBALTPATH:%_PDB%.",
+      "Compiler __FILE__ and debug prefix paths normalized via -ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+    ],
+    "remediation_applied": "All artifacts matched bit-for-bit across independent clean directories."
+  },
+  "unavailable_measurements": []
+}

@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0.0",
+  "inventory_version": "1.0.0",
+  "accounting_policy": {
+    "exclude_documented_windows_inbox_dlls": true,
+    "exclude_installed_display_driver_components": true,
+    "count_all_other_dlls": true,
+    "count_all_payloads_models_and_sidecars": true,
+    "fail_on_unexpected_import_or_sidecar": true,
+    "forbid_silent_compiler_closure_change": true
+  },
+  "inbox_windows_allowlist": [
+    {
+      "dll_name": "kernel32.dll",
+      "role": "Win32 process, memory, synchronization, and module management",
+      "minimum_windows_build": "10.0.22631.4317",
+      "counted_in_distributed_bytes": false
+    },
+    {
+      "dll_name": "user32.dll",
+      "role": "Win32 window creation and message pump for swapchain presentation",
+      "minimum_windows_build": "10.0.22631.4317",
+      "counted_in_distributed_bytes": false
+    },
+    {
+      "dll_name": "gdi32.dll",
+      "role": "Win32 display subsystem support",
+      "minimum_windows_build": "10.0.22631.4317",
+      "counted_in_distributed_bytes": false
+    },
+    {
+      "dll_name": "d3d12.dll",
+      "role": "Inbox Windows 11 Direct3D 12 runtime loader (Feature Level 12_0 / SM 6.0 baseline)",
+      "minimum_windows_build": "10.0.22631.4317",
+      "counted_in_distributed_bytes": false
+    },
+    {
+      "dll_name": "dxgi.dll",
+      "role": "Inbox Windows 11 DXGI 1.6 adapter enumeration and flip-model swapchain runtime",
+      "minimum_windows_build": "10.0.22631.4317",
+      "counted_in_distributed_bytes": false
+    },
+    {
+      "dll_name": "ucrtbase.dll",
+      "role": "Inbox Windows 11 Universal C Runtime (OS system component since Windows 10/11)",
+      "minimum_windows_build": "10.0.22631.4317",
+      "counted_in_distributed_bytes": false
+    }
+  ],
+  "installed_display_driver_allowlist": [
+    {
+      "dll_name": "nvwgf2umx.dll",
+      "vendor": "NVIDIA",
+      "role": "Installed NVIDIA D3D12 user-mode display driver (loaded dynamically by d3d12.dll)",
+      "counted_in_distributed_bytes": false
+    },
+    {
+      "dll_name": "nvldumdx.dll",
+      "vendor": "NVIDIA",
+      "role": "Installed NVIDIA WDDM user-mode driver loader",
+      "counted_in_distributed_bytes": false
+    }
+  ],
+  "forbidden_release_imports": [
+    "dxcompiler.dll",
+    "dxil.dll",
+    "d3dcompiler_47.dll",
+    "d3d12core.dll",
+    "d3d12sdklayers.dll",
+    "dxgidebug.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+    "ucrtbased.dll",
+    "nvapi64.dll",
+    "amd_ags_x64.dll"
+  ],
+  "forbidden_release_sidecars": [
+    "dxcompiler.dll",
+    "dxil.dll",
+    "d3dcompiler_47.dll",
+    "D3D12Core.dll",
+    "d3d12SDKLayers.dll",
+    "dxgidebug.dll",
+    "WinPixEventRuntime.dll",
+    "nvapi64.dll"
+  ],
+  "closures": {
+    "dev": {
+      "profile_name": "dev",
+      "allowed_import_dlls": [
+        "kernel32.dll",
+        "user32.dll",
+        "gdi32.dll",
+        "d3d12.dll",
+        "dxgi.dll",
+        "ucrtbase.dll",
+        "ucrtbased.dll",
+        "vcruntime140d.dll"
+      ],
+      "allowed_optional_dev_dlls": [
+        "d3d12sdklayers.dll",
+        "dxgidebug.dll",
+        "winpixeventruntime.dll"
+      ],
+      "allowed_sidecar_categories": [
+        "pdb_symbols"
+      ],
+      "allow_runtime_shader_compiler": false,
+      "allow_agility_sdk_redist": false,
+      "allow_executable_packer": false
+    },
+    "release": {
+      "profile_name": "release",
+      "allowed_import_dlls": [
+        "kernel32.dll",
+        "user32.dll",
+        "gdi32.dll",
+        "d3d12.dll",
+        "dxgi.dll",
+        "ucrtbase.dll"
+      ],
+      "allowed_optional_dev_dlls": [],
+      "allowed_sidecar_categories": [],
+      "allow_runtime_shader_compiler": false,
+      "allow_agility_sdk_redist": false,
+      "allow_executable_packer": false
+    },
+    "compact_experiment": {
+      "profile_name": "compact_experiment",
+      "allowed_import_dlls": [
+        "kernel32.dll",
+        "user32.dll",
+        "gdi32.dll",
+        "d3d12.dll",
+        "dxgi.dll",
+        "ucrtbase.dll"
+      ],
+      "allowed_optional_dev_dlls": [],
+      "allowed_sidecar_categories": [],
+      "allow_runtime_shader_compiler": false,
+      "allow_agility_sdk_redist": false,
+      "allow_executable_packer": false
+    }
+  }
+}

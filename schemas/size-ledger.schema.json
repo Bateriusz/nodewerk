@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.dev/schemas/size-ledger.schema.json",
+  "title": "Nodewerk Size Ledger Schema",
+  "description": "Reusable size-ledger schema recording total distributed bytes, executable sections, imports, shaders, decoder overhead, startup time, CPU/GPU time, and committed memory. Unavailable measurements must be null and listed in unavailable_measurements.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ledger_id",
+    "fixture_id",
+    "build_profile",
+    "toolchain_id",
+    "compiler_version",
+    "linker_version",
+    "verification_status",
+    "total_distributed_bytes",
+    "distributed_components",
+    "excluded_system_components",
+    "executable_sections",
+    "imports",
+    "shaders",
+    "decoder_overhead",
+    "runtime_metrics",
+    "unavailable_measurements",
+    "budget_claim_policy"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "ledger_id": { "type": "string", "minLength": 3 },
+    "fixture_id": {
+      "type": "string",
+      "enum": ["empty_player", "clear_present", "compute_shader"]
+    },
+    "build_profile": {
+      "type": "string",
+      "enum": ["dev", "release", "compact_experiment"]
+    },
+    "toolchain_id": {
+      "type": "string",
+      "enum": ["clang-cl-lld", "msvc-ltcg"]
+    },
+    "compiler_version": { "type": "string" },
+    "linker_version": { "type": "string" },
+    "verification_status": {
+      "type": "string",
+      "enum": ["verified", "unverified"]
+    },
+    "unverified_reason": {
+      "type": "string"
+    },
+    "total_distributed_bytes": {
+      "type": ["integer", "null"],
+      "minimum": 512
+    },
+    "distributed_components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "category",
+          "size_bytes",
+          "sha256",
+          "counted_in_total_distributed_bytes"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "category": {
+            "type": "string",
+            "enum": ["executable", "dll", "shader_payload", "data_payload", "model", "sidecar"]
+          },
+          "size_bytes": { "type": ["integer", "null"], "minimum": 1 },
+          "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "counted_in_total_distributed_bytes": { "type": "boolean", "const": true }
+        }
+      }
+    },
+    "excluded_system_components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "exclusion_basis", "counted_in_total_distributed_bytes"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "exclusion_basis": {
+            "type": "string",
+            "enum": ["windows_11_inbox_os_component", "installed_display_driver_component"]
+          },
+          "counted_in_total_distributed_bytes": { "type": "boolean", "const": false }
+        }
+      }
+    },
+    "executable_sections": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["name", "virtual_size_bytes", "raw_size_bytes", "characteristics"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 8, "pattern": "^[A-Za-z0-9._$]+$" },
+          "virtual_size_bytes": { "type": ["integer", "null"], "minimum": 0 },
+          "raw_size_bytes": { "type": ["integer", "null"], "minimum": 0 },
+          "characteristics": { "type": "string" }
+        }
+      }
+    },
+    "imports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["dll_name", "classification", "symbols"],
+        "additionalProperties": false,
+        "properties": {
+          "dll_name": { "type": "string" },
+          "classification": {
+            "type": "string",
+            "enum": ["windows_inbox", "ucrt_inbox", "dev_only_diagnostic"]
+          },
+          "delay_load": { "type": "boolean" },
+          "symbols": {
+            "type": "array",
+            "minItems": 0,
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "shaders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "shader_id",
+          "entry_point",
+          "target_profile",
+          "hlsl_source_bytes",
+          "offline_dxil_bytes",
+          "embedded_in_executable_bytes",
+          "runtime_compilation_used",
+          "agility_sdk_required"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "shader_id": { "type": "string" },
+          "entry_point": { "type": "string" },
+          "target_profile": { "type": "string", "pattern": "^(cs|vs|ps)_6_0$" },
+          "hlsl_source_bytes": { "type": "integer", "minimum": 1 },
+          "offline_dxil_bytes": { "type": ["integer", "null"], "minimum": 1 },
+          "embedded_in_executable_bytes": { "type": ["integer", "null"], "minimum": 0 },
+          "runtime_compilation_used": { "type": "boolean", "const": false },
+          "agility_sdk_required": { "type": "boolean", "const": false }
+        }
+      }
+    },
+    "decoder_overhead": {
+      "type": "object",
+      "required": ["packer_or_decoder_used", "decoder_overhead_bytes", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "packer_or_decoder_used": { "type": "boolean", "const": false },
+        "decoder_overhead_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "runtime_metrics": {
+      "type": "object",
+      "required": [
+        "startup_time_ms",
+        "cpu_time_ms",
+        "gpu_time_ms",
+        "committed_memory_bytes",
+        "gpu_committed_memory_bytes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "startup_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "cpu_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "gpu_time_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "committed_memory_bytes": { "type": ["integer", "null"], "minimum": 1 },
+        "gpu_committed_memory_bytes": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "metric": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
+      }
+    },
+    "budget_claim_policy": {
+      "type": "object",
+      "required": ["claims_64kib_achievable", "defer_minimum_size_claim_until_task", "statement"],
+      "additionalProperties": false,
+      "properties": {
+        "claims_64kib_achievable": { "type": "boolean", "const": false },
+        "defer_minimum_size_claim_until_task": { "type": "string", "const": "NW-10" },
+        "statement": { "type": "string", "minLength": 20 }
+      }
+    }
+  }
+}

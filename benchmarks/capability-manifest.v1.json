@@ -1,0 +1,138 @@
+{
+  "schema_version": "1.0.0",
+  "manifest_version": "1.0.0",
+  "target_platform": {
+    "os": "windows_11_x64",
+    "architecture": "x86_64",
+    "minimum_tested_windows_build": "10.0.26200.9711",
+    "minimum_tested_windows_build_status": "verified",
+    "tested_windows_builds": [
+      {
+        "build_number": "10.0.22631.4317",
+        "release_label": "Windows 11 23H2 (intended lower target)",
+        "verification_status": "target_pinned"
+      },
+      {
+        "build_number": "10.0.26200.9711",
+        "release_label": "Windows 11 25H2 (measured clean-system)",
+        "verification_status": "verified"
+      },
+      {
+        "build_number": "10.0.26300.9818",
+        "release_label": "Windows 11 (measured RTX 4060 Ti)",
+        "verification_status": "verified"
+      }
+    ],
+    "tested_nvidia_drivers": [
+      {
+        "hardware_tier": "rtx_4060_desktop",
+        "gpu_model": "NVIDIA GeForce RTX 4060 Ti",
+        "driver_version": "610.88",
+        "wddm_version": "32.0.16.1088",
+        "windows_build": "10.0.26300.9818",
+        "verification_status": "verified",
+        "notes": "Measured desktop RTX 4060 Ti (Ada Lovelace AD106) baseline with verified artifact provenance."
+      },
+      {
+        "hardware_tier": "rtx_50_series_desktop",
+        "gpu_model": "NVIDIA GeForce RTX 5070 Ti",
+        "driver_version": "610.88",
+        "wddm_version": "32.0.16.1088",
+        "windows_build": "10.0.26200.9711",
+        "verification_status": "verified",
+        "notes": "Measured representative desktop RTX 50-series baseline with verified artifact provenance; CPU model is recorded metadata and does not gate GPU tier eligibility."
+      }
+    ],
+    "unsupported_platforms": [
+      "windows_10",
+      "linux",
+      "macos",
+      "legacy_gpu_pre_fl12_0"
+    ]
+  },
+  "graphics_api": {
+    "api": "D3D12",
+    "feature_level": "12_0",
+    "shader_model": "6.0",
+    "descriptor_model": "bounded_descriptor_tables",
+    "barrier_model": "ordinary_resource_barriers",
+    "queue_model": {
+      "direct_queue_count": 1,
+      "compute_queue_count": 0,
+      "copy_queue_count": 0
+    }
+  },
+  "required_features": {
+    "resource_binding_tier": 2,
+    "resource_heap_tier": 2,
+    "tiled_resources_tier": 0,
+    "conservative_rasterization_tier": 0,
+    "TypedUAVLoadAdditionalFormats": false,
+    "ROVsSupported": false,
+    "WaveOps": false,
+    "Int64ShaderOps": false
+  },
+  "required_formats": [
+    {
+      "dxgi_format": "DXGI_FORMAT_R8G8B8A8_UNORM",
+      "usages": [
+        "swap_chain",
+        "render_target",
+        "shader_resource",
+        "unordered_access"
+      ]
+    },
+    {
+      "dxgi_format": "DXGI_FORMAT_R32G32B32A32_FLOAT",
+      "usages": [
+        "render_target",
+        "shader_resource",
+        "unordered_access",
+        "vertex_buffer"
+      ]
+    },
+    {
+      "dxgi_format": "DXGI_FORMAT_R32_UINT",
+      "usages": [
+        "shader_resource",
+        "unordered_access",
+        "index_buffer"
+      ]
+    },
+    {
+      "dxgi_format": "DXGI_FORMAT_D32_FLOAT",
+      "usages": [
+        "depth_stencil",
+        "shader_resource"
+      ]
+    }
+  ],
+  "baseline_limits": {
+    "max_cbv_srv_uav_descriptors_per_frame": 4096,
+    "max_sampler_descriptors_per_frame": 64,
+    "max_root_signature_dword_cost": 16,
+    "max_compute_threads_per_group": 1024,
+    "max_texture_2d_dimension": 8192,
+    "swap_chain_buffer_count": 2
+  },
+  "excluded_baseline_features": {
+    "sm_6_6_direct_heap_indexing": false,
+    "enhanced_barriers": false,
+    "mesh_shaders": false,
+    "ray_tracing": false,
+    "runtime_shader_compilation": false,
+    "mandatory_agility_sdk_redistribution": false,
+    "proprietary_vendor_sdks": false,
+    "executable_packers": false
+  },
+  "conditional_feature_policy": {
+    "query_only_when_emitted_content_uses": true,
+    "fallback_or_exit_code_on_missing": 24,
+    "allowed_optional_queries": [
+      "D3D12_FEATURE_D3D12_OPTIONS1::WaveOps",
+      "D3D12_FEATURE_D3D12_OPTIONS1::Int64ShaderOps",
+      "D3D12_FEATURE_D3D12_OPTIONS4::Native16BitShaderOpsSupported",
+      "D3D12_FEATURE_D3D12_OPTIONS::TypedUAVLoadAdditionalFormats"
+    ]
+  }
+}
