@@ -287,8 +287,46 @@ jobs:
           Write-Host "BuildChecks passed all concrete build/reproducibility/dependency/failure-recovery checks."
           Write-Host "Physical RTX 4060/RTX 50-series and clean-system evidence remain unverified and are NOT claimed by this job."
 
-      - name: Full physical-evidence gate (declared physical target only)
-        if: vars.NW_PHYSICAL_TARGET == 'true'
+      - name: Upload NW-01 build-check evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw01-windows-build-checks
+          path: |
+            ${{ runner.temp }}/nw01-build-checks.json
+            benchmarks/reproducibility/*.json
+            benchmarks/ledgers/*.json
+            benchmarks/toolchain-manifest.v1.json
+          if-no-files-found: warn
+
+  windows-physical-evidence:
+    name: Physical Windows 11 x64 GPU Evidence & CleanSystem Package
+    if: vars.NW_PHYSICAL_RUNNER_LABEL != ''
+    runs-on: ${{ vars.NW_PHYSICAL_RUNNER_LABEL }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Verify pinned physical-host toolchain is present
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          clang-cl --version
+          lld-link --version
+          dxc --version
+          cl 2>&1 | Select-Object -First 2
+          link 2>&1 | Select-Object -First 2
+
+      - name: Run NW-01 Full physical-evidence validation
         shell: pwsh
         run: |
           $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
@@ -300,6 +338,7 @@ jobs:
           }
           $summary = Get-Content -Raw -Path $summaryPath | ConvertFrom-Json
           if ($code -eq 0) {
+            Add-Content -Path $env:GITHUB_ENV -Value "NW_FULL_SUMMARY=$summaryPath"
             Write-Host "Full mode passed every concrete and physical-evidence check."
             exit 0
           }
@@ -320,93 +359,24 @@ jobs:
                 exit 1
               }
             }
+            Add-Content -Path $env:GITHUB_ENV -Value "NW_FULL_SUMMARY=$summaryPath"
             Write-Host "Full mode passed all concrete checks; only physical evidence remains unverified."
             exit 0
           }
           Write-Error "Full mode failed or skipped required build coverage (exit code $code)."
           exit 1
 
-      - name: Prepare clean-system deployment artifact
-        if: vars.NW_PHYSICAL_TARGET == 'true'
+      - name: Package verified CleanSystem deployment
         shell: pwsh
         run: |
-          $toolchain = (Get-Content -Raw "benchmarks/toolchain-manifest.v1.json" | ConvertFrom-Json).selected_toolchain.toolchain_id
-          if ($toolchain -eq "msvc-ltcg") {
-            $source = "build/msvc-release-ltcg-clean-a/deploy"
-            $sourceBuildDirectory = "build/msvc-release-ltcg-clean-a"
-          } elseif ($toolchain -eq "clang-cl-lld") {
-            $source = "build/repro-clean-a/deploy"
-            $sourceBuildDirectory = "build/repro-clean-a"
-          } else {
-            Write-Error "Unknown selected toolchain '$toolchain'."
-            exit 1
+          $summaryPath = $env:NW_FULL_SUMMARY
+          if ([string]::IsNullOrWhiteSpace($summaryPath)) {
+            $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
           }
           $artifactRoot = Join-Path $env:RUNNER_TEMP "nw01-clean-system-package"
-          $deployRoot = Join-Path $artifactRoot "deploy"
-          $evidenceRoot = Join-Path $artifactRoot "evidence"
-          if (-not (Test-Path $source -PathType Container)) {
-            Write-Error "Expected clean-system deploy directory was not produced: $source"
-            exit 1
-          }
-
-          New-Item -ItemType Directory -Force -Path $deployRoot | Out-Null
-          New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $evidenceRoot "ledgers") | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $evidenceRoot "reproducibility") | Out-Null
-
-          $requiredExecutables = @(
-            "nw_empty_player.exe",
-            "nw_clear_present_fixture.exe",
-            "nw_compute_shader_fixture.exe"
-          )
-          $files = @()
-          foreach ($name in $requiredExecutables) {
-            $sourcePath = Join-Path $source $name
-            if (-not (Test-Path $sourcePath -PathType Leaf)) {
-              Write-Error "Required clean-system executable is missing: $sourcePath"
-              exit 1
-            }
-            $destinationPath = Join-Path $deployRoot $name
-            Copy-Item -Force $sourcePath $destinationPath
-            $item = Get-Item $destinationPath
-            $files += [ordered]@{
-              name = $name
-              bytes = $item.Length
-              sha256 = (Get-FileHash -Algorithm SHA256 $destinationPath).Hash.ToLowerInvariant()
-            }
-          }
-
-          $manifest = [ordered]@{
-            schema_version = "1"
-            source_commit = $env:GITHUB_SHA
-            source_build_directory = $sourceBuildDirectory
-            toolchain = $toolchain
-            purpose = "NW-01 CleanSystem physical Windows execution"
-            files = $files
-          }
-          $manifest | ConvertTo-Json -Depth 4 |
-            Set-Content -Encoding utf8 (Join-Path $evidenceRoot "artifact-manifest.json")
-
-          Copy-Item -Force "benchmarks/toolchain-manifest.v1.json" `
-            (Join-Path $evidenceRoot "toolchain-manifest.v1.json")
-          Copy-Item -Force "shaders/manifest.json" `
-            (Join-Path $evidenceRoot "shaders-manifest.json")
-          Copy-Item -Force "benchmarks/ledgers/*.json" `
-            (Join-Path $evidenceRoot "ledgers")
-          Copy-Item -Force "benchmarks/reproducibility/*.json" `
-            (Join-Path $evidenceRoot "reproducibility")
-
-          # The package must carry the verified Full summary that produced these ledgers,
-          # not the earlier GPU-less BuildChecks summary.
-          $fullSummary = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
-          if (-not (Test-Path $fullSummary -PathType Leaf)) {
-            Write-Error "Verified Full summary is missing; refusing to advertise an unverified CleanSystem package."
-            exit 1
-          }
-          Copy-Item -Force $fullSummary (Join-Path $evidenceRoot "build-checks.json")
+          pwsh ./tools/package-clean-system.ps1 -FullSummary $summaryPath -OutputRoot $artifactRoot
 
       - name: Upload NW-01 clean-system deployment
-        if: vars.NW_PHYSICAL_TARGET == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: nw01-clean-system-deploy-${{ github.sha }}
@@ -414,14 +384,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload NW-01 build-check evidence
+      - name: Upload NW-01 physical evidence summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nw01-windows-build-checks
+          name: nw01-windows-physical-evidence-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/nw01-build-checks.json
+            ${{ runner.temp }}/nw01-full-mode.json
             benchmarks/reproducibility/*.json
             benchmarks/ledgers/*.json
             benchmarks/toolchain-manifest.v1.json
+            benchmarks/hardware/*.json
+            benchmarks/clean-system/*.json
           if-no-files-found: warn
+          retention-days: 14

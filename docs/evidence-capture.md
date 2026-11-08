@@ -25,6 +25,12 @@ This must execute both toolchains' fixtures, produce verified
 physical evidence is still incomplete; exit code `3` means required build/toolchain coverage
 was skipped or unavailable and must not be treated as an evidence-only gap.
 
+CI routes this physical GPU work to the runner selected by the
+`NW_PHYSICAL_RUNNER_LABEL` repository variable. The hosted `windows-latest` job performs only
+GPU-less BuildChecks and never advertises a CleanSystem package. The packaging command
+`tools/package-clean-system.ps1` refuses to run unless the supplied Full summary contains
+verified ledgers and successful clang-cl and MSVC fixture execution.
+
 ## 2. Clean Physical-System Execution
 
 Copy the `build/<preset>/deploy/` directory to a clean physical Windows 11 x64 machine with
