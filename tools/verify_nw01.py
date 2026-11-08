@@ -1938,6 +1938,7 @@ def capture_benchmark_result(
     *,
     hardware_tier: str,
     system_environment: dict[str, str] | None = None,
+    evidence_dir: Path | None = None,
     output_path: Path | None = None,
     timeout_seconds: int = 120,
 ) -> dict[str, Any]:
@@ -1987,7 +1988,9 @@ def capture_benchmark_result(
         (repo_root / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
     )
     pinned = toolchain_manifest.get("pinned_dependencies", {})
-    provenance = resolve_artifact_provenance(repo_root, binary_dir)
+    provenance = resolve_artifact_provenance(
+        repo_root, binary_dir, evidence_dir
+    )
     provenance_toolchain = provenance.get("toolchain_id")
     evaluated = {
         entry.get("toolchain_id"): entry
@@ -3461,11 +3464,26 @@ def main(argv: list[str] | None = None) -> int:
             sys_env["os_file_cache_state"] = args.os_file_cache_state
         benchmark_result = None
         if args.record_benchmark is not None:
+            benchmark_binary_dir = args.binary_dir or (
+                args.repo_root / "build" / "clang-cl-release" / "deploy"
+            )
+            benchmark_evidence_dir = args.evidence_dir
+            if benchmark_evidence_dir is None:
+                package_evidence_dir = benchmark_binary_dir / "evidence"
+                sibling_evidence_dir = benchmark_binary_dir.parent / "evidence"
+                if package_evidence_dir.is_dir():
+                    benchmark_evidence_dir = package_evidence_dir
+                elif (
+                    benchmark_binary_dir.name.lower() == "deploy"
+                    and sibling_evidence_dir.is_dir()
+                ):
+                    benchmark_evidence_dir = sibling_evidence_dir
             benchmark_result = capture_benchmark_result(
                 args.repo_root,
-                args.binary_dir or (args.repo_root / "build" / "clang-cl-release" / "deploy"),
+                benchmark_binary_dir,
                 hardware_tier=args.record_benchmark,
                 system_environment=sys_env or None,
+                evidence_dir=benchmark_evidence_dir,
             )
 
         if args.mode == "CleanSystem":
