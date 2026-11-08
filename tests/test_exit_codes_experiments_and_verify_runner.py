@@ -490,6 +490,88 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
     assert clean_summary["clean_system_passed"] is True
     assert clean_summary["verification_status"] == "verified"
 
+    # A downloaded CI package keeps runtime closure under deploy/ and immutable build
+    # evidence under evidence/. CleanSystem must infer both roots and must not classify
+    # evidence JSON as runtime sidecars.
+    package_root = sim_repo / "clean-system-package"
+    package_deploy = package_root / "deploy"
+    package_evidence = package_root / "evidence"
+    package_ledgers = package_evidence / "ledgers"
+    package_deploy.mkdir(parents=True)
+    package_ledgers.mkdir(parents=True)
+    package_hashes: dict[str, str] = {}
+    package_sizes: dict[str, int] = {}
+    fixture_names = {
+        "empty_player": "nw_empty_player.exe",
+        "clear_present": "nw_clear_present_fixture.exe",
+        "compute_shader": "nw_compute_shader_fixture.exe",
+    }
+    for fixture_id, exe_name in fixture_names.items():
+        payload_bytes = (bin_dir / exe_name).read_bytes()
+        (package_deploy / exe_name).write_bytes(payload_bytes)
+        package_hashes[fixture_id] = hashlib.sha256(payload_bytes).hexdigest()
+        package_sizes[fixture_id] = len(payload_bytes)
+
+    shutil.copy(manifest_path, package_evidence / "shaders-manifest.json")
+    shutil.copy(
+        sim_repo / "benchmarks" / "toolchain-manifest.v1.json",
+        package_evidence / "toolchain-manifest.v1.json",
+    )
+    for ledger_path in (sim_repo / "benchmarks" / "ledgers").glob("*.json"):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        if (
+            ledger.get("toolchain_id") == "clang-cl-lld"
+            and ledger.get("fixture_id") in fixture_names
+        ):
+            ledger["verification_status"] = "verified"
+            ledger.pop("unverified_reason", None)
+            for component in ledger.get("distributed_components", []):
+                if component.get("category") == "executable":
+                    fixture_id = str(ledger["fixture_id"])
+                    component["sha256"] = package_hashes[fixture_id]
+                    component["size_bytes"] = package_sizes[fixture_id]
+        (package_ledgers / ledger_path.name).write_text(
+            json.dumps(ledger, indent=2) + "\n", encoding="utf-8"
+        )
+
+    package_manifest = {
+        "schema_version": "1",
+        "source_commit": "synthetic-test-sha",
+        "source_build_directory": "build/repro-clean-a",
+        "toolchain": "clang-cl-lld",
+        "purpose": "NW-01 CleanSystem physical Windows execution",
+        "files": [
+            {
+                "name": exe_name,
+                "bytes": package_sizes[fixture_id],
+                "sha256": package_hashes[fixture_id],
+            }
+            for fixture_id, exe_name in fixture_names.items()
+        ],
+    }
+    (package_evidence / "artifact-manifest.json").write_text(
+        json.dumps(package_manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
+    packaged_code, packaged_summary = run_clean_system_mode(
+        sim_repo,
+        package_root,
+        allow_non_windows_simulation=True,
+        env=clean_env,
+        system32_dir=clean_sys32,
+        system_environment=measured_system_env,
+        executor=passing_executor,
+    )
+    assert packaged_code == 0
+    assert packaged_summary["clean_system_passed"] is True
+    assert packaged_summary["dependency_closure_failures"] == []
+    assert packaged_summary["embedded_dxil_verified"] is True
+    assert packaged_summary["artifact_provenance"]["toolchain_id"] == "clang-cl-lld"
+    assert (
+        packaged_summary["artifact_provenance"]["source"]
+        == "recorded_ledger_artifact_hash"
+    )
+
     recorded_clean = json.loads(
         (sim_repo / "benchmarks" / "clean-system" / "clean-system-validation.json").read_text(encoding="utf-8")
     )
