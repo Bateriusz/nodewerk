@@ -23,3 +23,4 @@ This directory contains the Architecture Decision Records (ADRs), dependency inv
 - Hardware Capability & Benchmark Captures: [`benchmarks/hardware/`](../benchmarks/hardware/) (validated by [`schemas/benchmark-result.schema.json`](../schemas/benchmark-result.schema.json))
 - Clean-Directory Reproducibility Reports: [`benchmarks/reproducibility/release-build-reproducibility.json`](../benchmarks/reproducibility/release-build-reproducibility.json) (clang-cl/lld-link) and [`benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json`](../benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json) (MSVC/LTCG)
 - Clean Physical System Validation Report: [`benchmarks/clean-system/clean-system-validation.json`](../benchmarks/clean-system/clean-system-validation.json)
+- Upstream Measured-Evidence Status: [`benchmarks/evidence-status.json`](../benchmarks/evidence-status.json) (explicitly unverified until physical captures complete)
