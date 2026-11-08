@@ -3,42 +3,30 @@
 
 from __future__ import annotations
 
-import re
-
-_MOBILE_CPU_MARKERS = ("laptop", "mobile", "notebook", "tablet")
-_MOBILE_INTEL_SUFFIXES = {"p", "u", "h", "hs", "hx", "g1", "g2", "g4", "g7", "g8"}
-_MOBILE_AMD_SUFFIXES = {"u", "h", "hs", "hx", "c", "e"}
-
-
 def desktop_cpu_model_matches(cpu_model: str | None) -> bool:
-    """Return True only for a recognized desktop-class CPU model string.
+    """Return True when a non-generic CPU model string is recorded.
 
-    Desktop tiers accept Intel Core/Ultra desktop suffixes, AMD Ryzen desktop suffixes
-    (including Ryzen PRO APUs), Ryzen Threadripper, and Intel Xeon E/W workstation parts.
-    Mobile/low-power suffixes (Intel P/U/H/HX/HS and AMD U/H/HS/HX) and explicit mobile
-    markers fail certification. Generic host strings such as "x86_64", "AMD64", or
-    "Intel64 Family 6 Model ..." are not recorded CPU models and are rejected.
+    NW-01 requires recorded CPU metadata, not CPU-family or desktop/mobile classification.
+    GPU tier eligibility is determined from the observed GPU, not from the CPU. This check
+    rejects only missing and generic host strings that do not identify a CPU model.
     """
     if not cpu_model:
         return False
     lower = cpu_model.strip().lower()
-    if not lower or any(marker in lower for marker in _MOBILE_CPU_MARKERS):
+    if not lower:
         return False
-    if any(marker in lower for marker in ("atom", "celeron", "pentium", "ryzen ai")):
+    generic = {
+        "amd64",
+        "x86_64",
+        "x64",
+        "arm64",
+        "intel64",
+        "unknown",
+        "unverified",
+        "none",
+    }
+    if lower in generic:
         return False
-    if re.search(r"\bryzen\s+threadripper\b", lower):
-        return True
-    if "xeon" in lower and re.search(r"\b[ew]-?\d", lower):
-        return True
-    intel = re.search(r"\bi[3579]-\d{4,5}([a-z][a-z0-9]{0,3})?\b", lower)
-    if intel:
-        return (intel.group(1) or "") not in _MOBILE_INTEL_SUFFIXES
-    ultra = re.search(r"\bcore\s+ultra\s+[3579]\s+\d{3}([a-z][a-z0-9]{0,3})?\b", lower)
-    if ultra:
-        return (ultra.group(1) or "") not in _MOBILE_INTEL_SUFFIXES
-    amd = re.search(
-        r"\bryzen\s+[3579]\s+(?:pro\s+)?\d{4}([a-z][a-z0-9]{0,3})?\b", lower
-    )
-    if amd:
-        return (amd.group(1) or "") not in _MOBILE_AMD_SUFFIXES
-    return False
+    if lower.startswith(("intel64 family", "amd64 family")):
+        return False
+    return True

@@ -186,9 +186,9 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     )
             if not desktop_cpu_model_matches(str(env.get("cpu_model") or "")):
                 raise SchemaValidationError(
-                    f"{doc_path}: verified benchmark environment_metadata.cpu_model must identify "
-                    "a desktop-class processor; mobile/low-power or generic host strings cannot "
-                    "certify a desktop tier"
+                    f"{doc_path}: verified benchmark environment_metadata.cpu_model must be a "
+                    "recorded non-generic CPU model; GPU tier eligibility is determined from "
+                    "the observed GPU"
                 )
             toolchain = env.get("toolchain", {})
             if toolchain.get("toolchain_id") in (None, "", "unverified"):

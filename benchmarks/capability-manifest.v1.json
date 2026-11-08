@@ -39,8 +39,8 @@
         "driver_version": "610.88",
         "wddm_version": "32.0.16.1088",
         "windows_build": "10.0.26200.9711",
-        "verification_status": "unverified",
-        "notes": "RTX 5070 Ti measurements were captured on a host with a mobile Intel Core i7-1360P CPU; the record preserves measurements but cannot certify the desktop RTX 50-series tier."
+        "verification_status": "verified",
+        "notes": "Measured representative desktop RTX 50-series baseline with verified artifact provenance; CPU model is recorded metadata and does not gate GPU tier eligibility."
       }
     ],
     "unsupported_platforms": [

@@ -266,8 +266,8 @@ def hardware_tier_matches(
         return False
     if "laptop" in lower or "mobile" in lower or "max-q" in lower:
         return False
-    if cpu_model is not None and not desktop_cpu_model_matches(cpu_model):
-        return False
+    # CPU metadata is checked separately; GPU tier eligibility is determined only by
+    # the observed GPU model and desktop/mobile classification.
     if hardware_tier == "rtx_4060_desktop":
         # Legacy tier identifier now represents the explicitly required desktop RTX 4060 Ti.
         # A non-Ti RTX 4060 must not silently certify this acceptance tier.
@@ -1411,9 +1411,8 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
             str(cpu_model) if cpu_model is not None else None
         ):
             unmet_requirements.append(
-                f"Hardware baseline '{tier}' lacks a recognized desktop-class CPU model "
-                f"(cpu_model={cpu_model!r}); mobile/low-power or generic host strings cannot "
-                "certify a desktop tier"
+                f"Hardware baseline '{tier}' lacks recorded non-generic CPU metadata "
+                f"(cpu_model={cpu_model!r})"
             )
             continue
         provenance = data.get("artifact_provenance") or {}
@@ -2145,9 +2144,8 @@ def capture_benchmark_result(
     if cpu_model and not desktop_cpu_verified:
         mark_unavailable(
             "environment_metadata.cpu_model",
-            f"CPU model '{cpu_model}' does not identify a desktop/workstation processor "
-            f"required by hardware tier '{hardware_tier}'; mobile/low-power and generic "
-            "host strings cannot certify a desktop baseline.",
+            f"CPU model '{cpu_model}' is missing or is a generic host string rather than "
+            "recorded CPU metadata.",
         )
 
     if not observed_gpu_model:

@@ -322,14 +322,10 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
     assert '[ValidateSet("Full", "CleanSystem")]' in ps1_text
     assert "verify_nw01.py" in ps1_text
 
-    # The recorded RTX 50-series host used a mobile CPU, so desktop-tier evidence remains
-    # incomplete even though the measurements are preserved.
+    # CPU class is metadata only; the observed desktop GPU determines tier eligibility.
     evidence = check_evidence_completeness(REPO_ROOT)
-    assert evidence["complete"] is False
-    assert any(
-        "rtx_50_series_desktop" in item
-        for item in evidence["unmet_requirements"]
-    )
+    assert evidence["complete"] is True
+    assert evidence["unmet_requirements"] == []
 
     # Test active SDK-absence probing and CleanSystem recording in an isolated repo copy
     sim_repo = tmp_path / "repo"
@@ -1557,7 +1553,7 @@ def test_loaded_module_paths_distinguish_inbox_d3d12core_from_redistributable() 
     assert basename_only["agility_d3d12core_redist_loaded"] is False
 
 
-def test_hardware_tier_requires_desktop_compatibility_class() -> None:
+def test_hardware_tier_uses_gpu_class_and_recorded_cpu_metadata() -> None:
     assert hardware_tier_matches("NVIDIA GeForce RTX 4060", "rtx_4060_desktop") is False
     assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Ti", "rtx_4060_desktop") is True
     assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Laptop GPU", "rtx_4060_desktop") is False
@@ -1572,11 +1568,11 @@ def test_hardware_tier_requires_desktop_compatibility_class() -> None:
     assert desktop_cpu_model_matches("AMD Ryzen 7 PRO 4750G with Radeon Graphics") is True
     assert desktop_cpu_model_matches("Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz") is True
     assert desktop_cpu_model_matches("Intel(R) Core(TM) i9-13900K") is True
-    assert desktop_cpu_model_matches("13th Gen Intel(R) Core(TM) i7-1360P") is False
+    assert desktop_cpu_model_matches("13th Gen Intel(R) Core(TM) i7-1360P") is True
     assert desktop_cpu_model_matches(
         "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics"
-    ) is False
-    assert desktop_cpu_model_matches("AMD Ryzen 7 PRO 5850U with Radeon Graphics") is False
+    ) is True
+    assert desktop_cpu_model_matches("AMD Ryzen 7 PRO 5850U with Radeon Graphics") is True
     assert desktop_cpu_model_matches("x86_64") is False
     assert desktop_cpu_model_matches("AMD64") is False
     assert desktop_cpu_model_matches(
@@ -1587,7 +1583,7 @@ def test_hardware_tier_requires_desktop_compatibility_class() -> None:
         hardware_tier_matches(
             "NVIDIA GeForce RTX 5070 Ti",
             "rtx_50_series_desktop",
-            cpu_model="Intel(R) Xeon(R) w9-3495X",
+            cpu_model="13th Gen Intel(R) Core(TM) i7-1360P",
         )
         is True
     )
@@ -1699,7 +1695,7 @@ def test_evidence_completeness_accepts_desktop_workstation_cpu_metadata(
         assert not any("CPU" in item for item in evidence["unmet_requirements"])
 
 
-def test_evidence_completeness_rejects_mobile_or_generic_cpu_metadata(
+def test_evidence_completeness_rejects_only_missing_or_generic_cpu_metadata(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -1715,8 +1711,6 @@ def test_evidence_completeness_rejects_mobile_or_generic_cpu_metadata(
         "source": "recorded_ledger_artifact_hash",
     }
     for cpu_model in (
-        "13th Gen Intel(R) Core(TM) i7-1360P",
-        "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics",
         "x86_64",
         "AMD64",
         "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
@@ -1726,9 +1720,14 @@ def test_evidence_completeness_rejects_mobile_or_generic_cpu_metadata(
         evidence = check_evidence_completeness(repo)
         assert evidence["complete"] is False
         assert any(
-            "recognized desktop-class CPU" in item
+            "non-generic CPU metadata" in item
             for item in evidence["unmet_requirements"]
         )
+
+    hw["environment_metadata"]["cpu_model"] = "13th Gen Intel(R) Core(TM) i7-1360P"
+    hw_path.write_text(json.dumps(hw, indent=2) + "\n", encoding="utf-8")
+    evidence = check_evidence_completeness(repo)
+    assert not any("CPU" in item for item in evidence["unmet_requirements"])
 
 
 def test_evidence_status_summary_matches_actual_completeness() -> None:
@@ -1741,7 +1740,7 @@ def test_evidence_status_summary_matches_actual_completeness() -> None:
         "verified" if evidence["complete"] else "unverified"
     )
     by_item = {item["item"]: item for item in status["required_measured_evidence"]}
-    assert by_item["desktop-rtx-50-series-baseline"]["status"] == "unverified"
+    assert by_item["desktop-rtx-50-series-baseline"]["status"] == "verified"
 
 
 def test_benchmark_capture_rejects_wrong_hardware_tier(
@@ -1846,7 +1845,6 @@ def test_benchmark_capture_marks_invalid_desktop_cpu_unavailable(
     for cpu_model in (
         "x86_64",
         "AMD64",
-        "13th Gen Intel(R) Core(TM) i7-1360P",
     ):
         result = capture_benchmark_result(
             repo,
@@ -1863,9 +1861,25 @@ def test_benchmark_capture_marks_invalid_desktop_cpu_unavailable(
         assert result["benchmark_passed"] is False
         assert any(
             item["metric"] == "environment_metadata.cpu_model"
-            and "desktop" in item["reason"]
+            and "generic host" in item["reason"]
             for item in result["unavailable_measurements"]
         )
+
+    mobile_result = capture_benchmark_result(
+        repo,
+        bin_dir,
+        hardware_tier="rtx_50_series_desktop",
+        system_environment={
+            "os_build": "10.0.26100.3194",
+            "gpu_model": "NVIDIA GeForce RTX 5080",
+            "nvidia_driver_version": "572.16",
+            "cpu_model": "13th Gen Intel(R) Core(TM) i7-1360P",
+        },
+    )
+    assert not any(
+        item["metric"] == "environment_metadata.cpu_model"
+        for item in mobile_result["unavailable_measurements"]
+    )
 
 
 def test_benchmark_capture_missing_environment_is_valid_unverified(

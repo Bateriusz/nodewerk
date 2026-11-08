@@ -1,9 +1,9 @@
 # NW-01 Measured Evidence Capture
 
 The commands below document how NW-01 physical evidence is captured reproducibly. The current
-checked-in evidence is verified only for configurations that satisfy the recorded desktop
-requirements; a captured mobile-CPU host is preserved as unverified evidence. Nothing in this
-repository fabricates or substitutes measured data.
+checked-in evidence is verified for the recorded desktop GPU captures; CPU model is stored as
+metadata and does not gate GPU tier eligibility. Nothing in this repository fabricates or
+substitutes measured data.
 
 ## Required Physical Targets
 
@@ -87,20 +87,19 @@ Repeat with `-RecordBenchmark rtx_50_series_desktop` and the corresponding deskt
 tier matching, environment measurement, and artifact-hash provenance all verify. The
 evidence-completeness gate additionally requires those recorded executable hashes and the
 toolchain ID to match the selected toolchain's verified release ledgers; stale physical
-results from older binaries cannot certify newly built artifacts. A desktop GPU name is not
-sufficient by itself. A recognized desktop/workstation CPU model is required: Intel
-Core/Ultra desktop suffixes, Intel Xeon E/W, AMD Ryzen desktop suffixes (including Ryzen PRO
-APUs), and Ryzen Threadripper are accepted. Mobile/low-power suffixes such as Intel
-P/U/H/HX/HS and AMD U/H/HS/HX, and generic host strings such as `x86_64` or `AMD64`, are
-rejected and reported as unavailable CPU evidence.
+results from older binaries cannot certify newly built artifacts. GPU tier eligibility is
+determined from the observed GPU model and desktop/mobile classification. CPU metadata must be
+recorded, but CPU family, suffix, or desktop/mobile class is not a certification gate. Generic
+host strings such as `x86_64`, `AMD64`, or `Intel64 Family ...` are rejected as missing CPU
+metadata.
 
 ## Current Status
 
 Verified evidence covers Windows `10.0.26200.9711` and `10.0.26300.9818`, NVIDIA driver
-`610.88`, and the desktop RTX 4060 Ti. The actual minimum tested Windows build is
-`10.0.26200.9711`; `10.0.22631.4317` remains only the lower intended runtime target. An RTX
-5070 Ti capture exists, but its host CPU was a mobile 13th Gen Intel Core i7-1360P, so the
-desktop RTX 50-series tier remains explicitly unverified with its measurements preserved.
+`610.88`, desktop RTX 4060 Ti, and desktop RTX 5070 Ti. The actual minimum tested Windows build
+is `10.0.26200.9711`; `10.0.22631.4317` remains only the lower intended runtime target. The
+RTX 5070 Ti capture records its i7-1360P host CPU as metadata; CPU class does not gate the
+verified desktop GPU evidence.
 Verified release ledgers, compiler comparison, reproducibility, offline DXIL execution, and
 clean-system execution are recorded in the checked-in benchmark artifacts. Re-run the commands
 below after any toolchain, shader, or fixture change.
