@@ -523,8 +523,10 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
             ledger.get("toolchain_id") == "clang-cl-lld"
             and ledger.get("fixture_id") in fixture_names
         ):
-            ledger["verification_status"] = "verified"
-            ledger.pop("unverified_reason", None)
+            ledger["verification_status"] = "unverified"
+            ledger["unverified_reason"] = (
+                "Fixture execution is intentionally pending physical CleanSystem validation."
+            )
             for component in ledger.get("distributed_components", []):
                 if component.get("category") == "executable":
                     fixture_id = str(ledger["fixture_id"])
@@ -553,6 +555,31 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
         json.dumps(package_manifest, indent=2) + "\n", encoding="utf-8"
     )
 
+    build_checks = {
+        "concrete_failures": [],
+        "checks": {
+            "reproducibility_build": {"passed": True},
+            "clang_debug_symbols": {"passed": True},
+            "offline_shader": {"passed": True},
+            "failure_recovery": {"passed": True},
+            "size_ledgers": {
+                "recorded": {
+                    "clang-cl-lld": {
+                        "selected_toolchain": "clang-cl-lld",
+                        "verification_status": "unverified",
+                        "recorded_fixtures": {
+                            fixture_id: {"sha256": package_hashes[fixture_id]}
+                            for fixture_id in fixture_names
+                        },
+                    }
+                }
+            },
+        },
+    }
+    (package_evidence / "build-checks.json").write_text(
+        json.dumps(build_checks, indent=2) + "\n", encoding="utf-8"
+    )
+
     packaged_code, packaged_summary = run_clean_system_mode(
         sim_repo,
         package_root,
@@ -570,6 +597,29 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
     assert (
         packaged_summary["artifact_provenance"]["source"]
         == "recorded_ledger_artifact_hash"
+    )
+
+    # The same unverified ledgers must be rejected when CI build evidence is tampered.
+    tampered_build_checks = dict(build_checks)
+    tampered_build_checks["checks"] = dict(build_checks["checks"])
+    tampered_build_checks["checks"]["clang_debug_symbols"] = {"passed": False}
+    (package_evidence / "build-checks.json").write_text(
+        json.dumps(tampered_build_checks, indent=2) + "\n", encoding="utf-8"
+    )
+    tampered_code, tampered_summary = run_clean_system_mode(
+        sim_repo,
+        package_root,
+        allow_non_windows_simulation=True,
+        env=clean_env,
+        system32_dir=clean_sys32,
+        system_environment=measured_system_env,
+        executor=passing_executor,
+    )
+    assert tampered_code == 1
+    assert tampered_summary["clean_system_passed"] is False
+    assert tampered_summary["artifact_provenance"]["toolchain_id"] is None
+    (package_evidence / "build-checks.json").write_text(
+        json.dumps(build_checks, indent=2) + "\n", encoding="utf-8"
     )
 
     recorded_clean = json.loads(
