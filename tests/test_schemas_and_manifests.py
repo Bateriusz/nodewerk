@@ -115,6 +115,10 @@ def test_hardware_benchmark_coverage_matches_recorded_physical_evidence() -> Non
     assert clean["verification_status"] == "unverified"
     assert clean["clean_system_passed"] is False
     assert all(value is None for value in clean["sdk_absence_checks"].values())
+    assert clean["deployed_dependency_inventory"]["inbox_dlls_resolved"] == []
+    assert clean["system_environment"]["os_build"] is None
+    assert clean["system_environment"]["gpu_model"] is None
+    assert clean["system_environment"]["nvidia_driver_version"] is None
 
 
 def test_schema_rejects_unverified_benchmark_claiming_pass_or_zero_metrics() -> None:
@@ -142,6 +146,28 @@ def test_schema_rejects_unverified_benchmark_claiming_pass_or_zero_metrics() -> 
     bad_repro["all_artifacts_match"] = True
     with pytest.raises(SchemaValidationError, match="all_artifacts_match=false"):
         validate_semantic_invariants(bad_repro, "reproducibility-report.schema.json", repro_path)
+
+
+def test_verified_benchmark_rejects_mobile_desktop_cpu_evidence() -> None:
+    hw_path = REPO_ROOT / "benchmarks" / "hardware" / "rtx-50-series-baseline.json"
+    hw = json.loads(hw_path.read_text(encoding="utf-8"))
+    hw["verification_status"] = "verified"
+    hw["benchmark_passed"] = True
+    hw["environment_metadata"].update(
+        gpu_model="NVIDIA GeForce RTX 5070 Ti",
+        gpu_architecture="Blackwell",
+        gpu_vendor_id="0x10DE",
+        gpu_device_id="0x2C05",
+        vram_mb=16384,
+        cpu_model="13th Gen Intel(R) Core(TM) i7-1360P",
+        os_build="10.0.26200.9711",
+        nvidia_driver_version="610.88",
+        wddm_driver_version="32.0.16.1088",
+    )
+    with pytest.raises(SchemaValidationError, match="desktop-class processor"):
+        validate_semantic_invariants(
+            hw, "benchmark-result.schema.json", hw_path
+        )
 
 
 def test_schema_rejects_premature_64kib_claim_in_size_ledger() -> None:
@@ -192,6 +218,13 @@ def test_verified_clean_report_requires_real_observed_readback_hash() -> None:
     report = {
         "verification_status": "verified",
         "clean_system_passed": True,
+        "system_environment": {
+            "os_name": "Windows 11 x64",
+            "os_build": "10.0.26100.3194",
+            "architecture": "x86_64",
+            "gpu_model": "NVIDIA GeForce RTX 5080",
+            "nvidia_driver_version": "572.16",
+        },
         "deployed_dependency_inventory": {
             "deployed_files": [{"size_bytes": 1024}],
             "total_distributed_bytes": 1024,

@@ -3,13 +3,13 @@
   "report_id": "nw01-clean-windows11-x64-validation-v1",
   "verification_status": "unverified",
   "clean_system_passed": false,
-  "unverified_reason": "No clean physical Windows 11 x64 execution has been captured in this workspace. CleanSystem can pass only after Full records the selected toolchain and all three release ledgers as verified; the target system values below are placeholders, and every SDK-absence, deployment, shader, and fixture field remains null until execution.",
+  "unverified_reason": "No clean physical Windows 11 x64 execution has been captured in this workspace. CleanSystem can pass only after Full records the selected toolchain and all three release ledgers as verified; every target-environment, SDK-absence, dependency-closure, shader, and fixture field remains null or empty until execution.",
   "system_environment": {
     "os_name": "Windows 11 x64",
-    "os_build": "10.0.26100.2033",
+    "os_build": null,
     "architecture": "x86_64",
-    "gpu_model": "NVIDIA GeForce RTX 4060 Ti",
-    "nvidia_driver_version": "566.03"
+    "gpu_model": null,
+    "nvidia_driver_version": null
   },
   "sdk_absence_checks": {
     "windows_sdk_absent": null,
@@ -40,13 +40,7 @@
       }
     ],
     "total_distributed_bytes": null,
-    "inbox_dlls_resolved": [
-      "kernel32.dll",
-      "user32.dll",
-      "d3d12.dll",
-      "dxgi.dll",
-      "ucrtbase.dll"
-    ],
+    "inbox_dlls_resolved": [],
     "unexpected_sidecars_found": []
   },
   "offline_shader_execution_evidence": {

@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from evidence_checks import desktop_cpu_model_matches
+
 
 class SchemaValidationError(ValueError):
     """Raised when a JSON document fails schema or semantic validation."""
@@ -182,6 +184,11 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     raise SchemaValidationError(
                         f"{doc_path}: verified benchmark requires measured environment_metadata.{key}"
                     )
+            if not desktop_cpu_model_matches(str(env.get("cpu_model") or "")):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified benchmark environment_metadata.cpu_model must identify "
+                    "a desktop-class processor; mobile/low-power CPUs cannot certify a desktop tier"
+                )
             toolchain = env.get("toolchain", {})
             if toolchain.get("toolchain_id") in (None, "", "unverified"):
                 raise SchemaValidationError(
@@ -336,6 +343,18 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     raise SchemaValidationError(
                         f"{doc_path}: unexecuted unverified clean-system report must have total_distributed_bytes=null"
                     )
+                if inv.get("inbox_dlls_resolved"):
+                    raise SchemaValidationError(
+                        f"{doc_path}: unexecuted unverified clean-system report must not advertise "
+                        "an inbox DLL closure"
+                    )
+                system_env = instance.get("system_environment", {})
+                for key in ("os_build", "gpu_model", "nvidia_driver_version"):
+                    if system_env.get(key) is not None:
+                        raise SchemaValidationError(
+                            f"{doc_path}: unexecuted unverified clean-system report must have "
+                            f"system_environment.{key}=null rather than an unmeasured target value"
+                        )
                 if shader_ev.get("compiled_offline_with_dxc") is True:
                     raise SchemaValidationError(
                         f"{doc_path}: unexecuted unverified clean-system report must not claim compiled_offline_with_dxc=true"
@@ -348,6 +367,29 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
             if not all(v is True for v in sdk_checks.values()):
                 raise SchemaValidationError(
                     f"{doc_path}: verified clean-system report requires every SDK-absence check to be true"
+                )
+            system_env = instance.get("system_environment", {})
+            for key in ("os_build", "gpu_model", "nvidia_driver_version"):
+                if system_env.get(key) is None:
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified clean-system report requires measured "
+                        f"system_environment.{key}"
+                    )
+            if re.search(
+                r"^10\.0\.(22[0-9]{3}|26[0-9]{3})\.[0-9]+$",
+                str(system_env.get("os_build")),
+            ) is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report requires a measured Windows 11 "
+                    "build in system_environment.os_build"
+                )
+            if re.search(
+                r"^[0-9]{3}\.[0-9]{2}$",
+                str(system_env.get("nvidia_driver_version")),
+            ) is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean-system report requires an NNN.NN NVIDIA driver "
+                    "version in system_environment.nvidia_driver_version"
                 )
             if shader_ev.get("compiled_offline_with_dxc") is not True:
                 raise SchemaValidationError(
@@ -472,6 +514,10 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     raise SchemaValidationError(
                         f"{doc_path}: unverified evaluated_toolchain '{tid}' must not have pdb_debugging_verified=true"
                     )
+                if et.get("fixture_execution_verified") is True:
+                    raise SchemaValidationError(
+                        f"{doc_path}: unverified evaluated_toolchain '{tid}' must not have fixture_execution_verified=true"
+                    )
             elif et_status == "verified":
                 if any(v is None for v in byte_fields):
                     raise SchemaValidationError(
@@ -484,6 +530,10 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 if et.get("pdb_debugging_verified") is not True:
                     raise SchemaValidationError(
                         f"{doc_path}: verified evaluated_toolchain '{tid}' must have pdb_debugging_verified=true"
+                    )
+                if et.get("fixture_execution_verified") is not True:
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified evaluated_toolchain '{tid}' must have fixture_execution_verified=true"
                     )
 
         if evaluated and all(et.get("verification_status") == "verified" for et in evaluated):

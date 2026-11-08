@@ -33,10 +33,10 @@
       "additionalProperties": false,
       "properties": {
         "os_name": { "type": "string", "const": "Windows 11 x64" },
-        "os_build": { "type": "string", "pattern": "^10\\.0\\.(22[0-9]{3}|26[0-9]{3})\\.[0-9]+$" },
+        "os_build": { "type": ["string", "null"] },
         "architecture": { "type": "string", "const": "x86_64" },
-        "gpu_model": { "type": "string" },
-        "nvidia_driver_version": { "type": "string" }
+        "gpu_model": { "type": ["string", "null"] },
+        "nvidia_driver_version": { "type": ["string", "null"] }
       }
     },
     "sdk_absence_checks": {
@@ -95,7 +95,7 @@
         "total_distributed_bytes": { "type": ["integer", "null"], "minimum": 1 },
         "inbox_dlls_resolved": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "items": { "type": "string" }
         },
         "unexpected_sidecars_found": {

@@ -398,6 +398,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
             entry["verification_status"] = "verified"
             entry["pdb_debugging_verified"] = True
             entry["deterministic_repro_verified"] = True
+            entry["fixture_execution_verified"] = True
             entry["empty_player_bytes"] = raw_sizes.get("empty_player")
             entry["clear_present_bytes"] = raw_sizes.get("clear_present")
             entry["compute_fixture_bytes"] = raw_sizes.get("compute_shader")
@@ -1351,6 +1352,7 @@ def test_capture_benchmark_result_records_measured_metrics(
             entry["verification_status"] = "verified"
             entry["pdb_debugging_verified"] = True
             entry["deterministic_repro_verified"] = True
+            entry["fixture_execution_verified"] = True
             for field, fixture_id in (
                 ("empty_player_bytes", "empty_player"),
                 ("clear_present_bytes", "clear_present"),
@@ -1558,12 +1560,14 @@ def test_artifact_provenance_rejects_unverified_release_ledgers(tmp_path: Path) 
     for exe_name in fixture_names.values():
         (bin_dir / exe_name).write_bytes(build_synthetic_pe64(["kernel32.dll"]))
 
+    sizes: dict[str, int] = {}
     # Bind matching artifact hashes into the copied release ledgers but deliberately leave
     # every ledger and the selected toolchain entry unverified.
     for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         fixture_id = str(ledger["fixture_id"])
         payload = (bin_dir / fixture_names[fixture_id]).read_bytes()
+        sizes[fixture_id] = len(payload)
         for component in ledger.get("distributed_components", []):
             if component.get("category") == "executable":
                 component["sha256"] = hashlib.sha256(payload).hexdigest()
@@ -1574,6 +1578,73 @@ def test_artifact_provenance_rejects_unverified_release_ledgers(tmp_path: Path) 
     provenance = resolve_artifact_provenance(repo, bin_dir)
     assert provenance["toolchain_id"] is None
     assert provenance["source"] == "unavailable"
+
+    # A manifest entry marked verified without the execution/PDB/reproducibility flags
+    # cannot establish provenance even when all three ledger hashes match.
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        ledger["verification_status"] = "verified"
+        ledger.pop("unverified_reason", None)
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
+    toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    clang_entry = next(
+        entry
+        for entry in toolchain["evaluated_toolchains"]
+        if entry["toolchain_id"] == "clang-cl-lld"
+    )
+    clang_entry.update(
+        status="selected",
+        verification_status="verified",
+        fixture_execution_verified=True,
+        pdb_debugging_verified=True,
+        deterministic_repro_verified=True,
+        deployment_closure_identical=True,
+        empty_player_bytes=sizes["empty_player"],
+        clear_present_bytes=sizes["clear_present"],
+        compute_fixture_bytes=sizes["compute_shader"],
+    )
+    toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
+    assert resolve_artifact_provenance(repo, bin_dir)["toolchain_id"] == "clang-cl-lld"
+
+    for flag in (
+        "fixture_execution_verified",
+        "pdb_debugging_verified",
+        "deterministic_repro_verified",
+    ):
+        clang_entry[flag] = False
+        toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
+        provenance = resolve_artifact_provenance(repo, bin_dir)
+        assert provenance["toolchain_id"] is None
+        assert provenance["source"] == "unavailable"
+        clang_entry[flag] = True
+    toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
+
+
+def test_evidence_completeness_rejects_mobile_cpu_on_verified_hardware(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    hw_path = repo / "benchmarks" / "hardware" / "rtx-50-series-baseline.json"
+    hw = json.loads(hw_path.read_text(encoding="utf-8"))
+    hw["verification_status"] = "verified"
+    hw["benchmark_passed"] = True
+    hw["environment_metadata"]["cpu_model"] = "13th Gen Intel(R) Core(TM) i7-1360P"
+    hw["artifact_provenance"] = {
+        "toolchain_id": "clang-cl-lld",
+        "artifact_sha256": {},
+        "source": "recorded_ledger_artifact_hash",
+    }
+    hw_path.write_text(json.dumps(hw, indent=2) + "\n", encoding="utf-8")
+
+    evidence = check_evidence_completeness(repo)
+    assert evidence["complete"] is False
+    assert any(
+        "recognized desktop-class CPU" in item
+        for item in evidence["unmet_requirements"]
+    )
 
 
 def test_benchmark_capture_rejects_wrong_hardware_tier(
@@ -1968,6 +2039,9 @@ def test_evidence_completeness_requires_matching_artifact_hashes_and_toolchain(
         hardware = json.loads(hardware_path.read_text(encoding="utf-8"))
         hardware["verification_status"] = "verified"
         hardware["benchmark_passed"] = True
+        hardware["environment_metadata"]["cpu_model"] = (
+            "AMD Ryzen 7 9800X3D 8-Core Processor"
+        )
         hardware["artifact_provenance"] = provenance
         hardware_path.write_text(
             json.dumps(hardware, indent=2) + "\n", encoding="utf-8"

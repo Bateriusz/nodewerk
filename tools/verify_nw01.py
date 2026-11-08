@@ -37,6 +37,7 @@ from dependency_check import (
     verify_all_recorded_ledgers,
     verify_closure,
 )
+from evidence_checks import desktop_cpu_model_matches
 from offline_shader_pack import (
     check_hlsl_source_constraints,
     find_dxc_executable,
@@ -250,39 +251,6 @@ def _is_supported_nvidia_gpu_and_driver(
     if any(non_nv in lower_gpu for non_nv in ("microsoft basic", "intel(", "intel ", "amd ", "radeon")):
         return False
     return bool(re.match(r"^[0-9]{3}\.[0-9]{2}$", nvidia_driver_version.strip()))
-
-
-_MOBILE_CPU_MARKERS = ("laptop", "mobile", "notebook", "tablet")
-_MOBILE_INTEL_SUFFIXES = {"p", "u", "h", "hs", "hx", "g1", "g2", "g4", "g7", "g8"}
-_MOBILE_AMD_SUFFIXES = {"u", "h", "hs", "hx", "c", "e"}
-
-
-def desktop_cpu_model_matches(cpu_model: str | None) -> bool:
-    """Reject CPU models that identify mobile/low-power parts in a desktop evidence tier.
-
-    The NW-01 desktop tiers require a desktop-class processor. CPU strings are operator-
-    supplied or host-detected text, so this is a conservative filter: known mobile suffixes
-    (Intel P/U/H/HX/HS and AMD U/H/HS/HX) and explicit mobile markers fail certification.
-    A recognized desktop CPU model family is required; generic strings such as
-    "Intel64 Family 6 Model ..." and missing CPU evidence are not eligible.
-    """
-    if not cpu_model:
-        return False
-    lower = cpu_model.strip().lower()
-    if not lower or any(marker in lower for marker in _MOBILE_CPU_MARKERS):
-        return False
-    if any(marker in lower for marker in ("atom", "celeron", "pentium", "ryzen ai")):
-        return False
-    intel = re.search(r"\bi[3579]-\d{4,5}([a-z][a-z0-9]{0,3})?\b", lower)
-    if intel:
-        return (intel.group(1) or "") not in _MOBILE_INTEL_SUFFIXES
-    ultra = re.search(r"\bcore\s+ultra\s+[3579]\s+\d{3}([a-z][a-z0-9]{0,3})?\b", lower)
-    if ultra:
-        return (ultra.group(1) or "") not in _MOBILE_INTEL_SUFFIXES
-    amd = re.search(r"\bryzen\s+[3579]\s+\d{4}([a-z][a-z0-9]{0,3})?\b", lower)
-    if amd:
-        return (amd.group(1) or "") not in _MOBILE_AMD_SUFFIXES
-    return False
 
 
 def hardware_tier_matches(
@@ -1438,6 +1406,16 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
                 f"(benchmark_passed={data.get('benchmark_passed')})"
             )
             continue
+        cpu_model = (data.get("environment_metadata") or {}).get("cpu_model")
+        if not desktop_cpu_model_matches(
+            str(cpu_model) if cpu_model is not None else None
+        ):
+            unmet_requirements.append(
+                f"Hardware baseline '{tier}' lacks a recognized desktop-class CPU model "
+                f"(cpu_model={cpu_model!r}); mobile/low-power CPU evidence cannot certify "
+                "a desktop tier"
+            )
+            continue
         provenance = data.get("artifact_provenance") or {}
         if provenance.get("source") != "recorded_ledger_artifact_hash":
             unmet_requirements.append(
@@ -1833,10 +1811,12 @@ def resolve_artifact_provenance(
     """Bind executed artifacts to the selected toolchain's verified release ledgers.
 
     Unverified ledgers never establish provenance, including for a packaged CleanSystem
-    bundle. The selected toolchain entry and all three fixture ledgers (empty_player,
-    clear_present, compute_shader) must be verified and hash-match the executed artifacts.
-    Optional CI build evidence must additionally show no concrete failures and passing
-    reproducibility, debug-symbol, offline-shader, and failure-recovery checks.
+    bundle. The selected toolchain entry must be verified with fixture-execution,
+    CodeView/PDB, and two-clean-directory reproducibility flags, and all three fixture
+    ledgers (empty_player, clear_present, compute_shader) must be verified and hash-match
+    the executed artifacts. Optional CI build evidence must additionally show no concrete
+    failures and passing reproducibility, debug-symbol, offline-shader, and
+    failure-recovery checks.
     """
     fixture_specs = (
         ("empty_player", "nw_empty_player.exe"),
@@ -1879,6 +1859,18 @@ def resolve_artifact_provenance(
         selected_manifest_verified = bool(
             selected_entry
             and selected_entry.get("verification_status") == "verified"
+            and selected_entry.get("fixture_execution_verified") is True
+            and selected_entry.get("pdb_debugging_verified") is True
+            and selected_entry.get("deterministic_repro_verified") is True
+            and selected_entry.get("deployment_closure_identical") is True
+            and all(
+                selected_entry.get(field) is not None
+                for field in (
+                    "empty_player_bytes",
+                    "clear_present_bytes",
+                    "compute_fixture_bytes",
+                )
+            )
         )
 
     bundle_build_checks: dict[str, Any] | None = None
@@ -3309,8 +3301,10 @@ def run_clean_system_mode(
     ):
         recorded_system_environment = {
             "os_name": "Windows 11 x64",
-            "os_build": str(
-                measured_os_build or existing_report["system_environment"].get("os_build")
+            "os_build": (
+                measured_os_build
+                or existing_report["system_environment"].get("os_build")
+                or None
             ),
             "architecture": "x86_64",
             "gpu_model": str(
