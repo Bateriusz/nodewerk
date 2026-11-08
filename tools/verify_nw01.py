@@ -2310,7 +2310,11 @@ def capture_benchmark_result(
             else "Hardware coverage or fixture execution could not be verified."
         )
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(result, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     schema_path = repo_root / "schemas" / "benchmark-result.schema.json"
     if schema_path.exists():
         validate_file_against_schema(output, schema_path)
