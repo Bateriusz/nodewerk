@@ -9,14 +9,19 @@ This directory contains the Architecture Decision Records (ADRs), dependency inv
 3. [ADR-0003: Language Rationale (C++20) & Toolchain Selection (`clang-cl`/`lld-link` vs `MSVC`/`LTCG`)](architecture/0003-language-and-toolchain-selection.md)
 4. [ADR-0004: Build Profiles, Dependency Closures & CRT-Elimination Experiment Obligations](architecture/0004-dependency-closure-and-crt-experiment.md)
 5. [ADR-0005: Downstream Task Contracts (NW-02 through NW-12)](architecture/0005-task-contracts-nw02-nw12.md)
-6. [Dependency Inventory & Distribution Accounting Policy](dependency-inventory.md)
-7. [Initialization Exit Codes, Diagnostics & Inbox-Runtime Blocker Semantics](exit-codes-and-diagnostics.md)
-8. [Preserved Toolchain, Compact-Profile & CRT Experiments](experiments-and-blockers.md)
-9. [Measured Evidence Capture Requirements](evidence-capture.md)
+6. [ADR-0006: Capability-Based GPU Support, Correctness, Optional-Feature & Performance-Evidence Policy](architecture/0006-capability-based-gpu-support-policy.md)
+7. [ADR-0007: NW-02 through NW-12 Section-Level Audit](architecture/0007-nw02-nw12-section-audit.md)
+8. [NW-01B Handoff: Evidence Contracts & Deferred Implementation Ownership](nw01b-handoff.md)
+9. [Dependency Inventory & Distribution Accounting Policy](dependency-inventory.md)
+10. [Initialization Exit Codes, Diagnostics & Inbox-Runtime Blocker Semantics](exit-codes-and-diagnostics.md)
+11. [Preserved Toolchain, Compact-Profile & CRT Experiments](experiments-and-blockers.md)
+12. [Measured Evidence Capture Requirements](evidence-capture.md)
+13. [NW-02 through NW-12 Backlog Correction Bundle](backlog/README.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
 - Capability Manifest: [`benchmarks/capability-manifest.v1.json`](../benchmarks/capability-manifest.v1.json) (validated by [`schemas/capability-manifest.schema.json`](../schemas/capability-manifest.schema.json))
+- Common Capability Profile: [`benchmarks/capability-profile.common.v1.json`](../benchmarks/capability-profile.common.v1.json) (stable common-profile ID and canonical requirements digest)
 - Reproducible Toolchain Manifest: [`benchmarks/toolchain-manifest.v1.json`](../benchmarks/toolchain-manifest.v1.json) (validated by [`schemas/toolchain-manifest.schema.json`](../schemas/toolchain-manifest.schema.json))
 - Dependency Inventory: [`benchmarks/dependency-inventory.v1.json`](../benchmarks/dependency-inventory.v1.json) (validated by [`schemas/dependency-inventory.schema.json`](../schemas/dependency-inventory.schema.json))
 - Size Ledgers: [`benchmarks/ledgers/`](../benchmarks/ledgers/) (validated by [`schemas/size-ledger.schema.json`](../schemas/size-ledger.schema.json))

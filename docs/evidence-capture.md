@@ -5,12 +5,96 @@ checked-in evidence is verified for the recorded desktop GPU captures; CPU model
 metadata and does not gate GPU tier eligibility. Nothing in this repository fabricates or
 substitutes measured data.
 
+## Policy Separation
+
+NW-01A ([ADR-0006](architecture/0006-capability-based-gpu-support-policy.md)) separates five
+concerns that must not be collapsed into one GPU model:
+
+1. **Declared support scope** — desktop RTX 40-series/Ada compatibility floor and desktop
+   RTX 50-series/Blackwell current-generation target. This is qualification scope, never a
+   runtime feature predicate.
+2. **Exact capability eligibility** — applicable D3D12 queries plus the emitted package,
+   player link manifest, capability-profile ID, and canonical requirements digest.
+3. **Correctness coverage** — the identical common artifact on representative compliant
+   desktop Ada and Blackwell hardware.
+4. **Optional artifacts** — named profiles with exact additional capabilities, shader/runtime/
+   toolchain requirements, dependencies, and artifact budgets, plus a separately exported and
+   tested common fallback.
+5. **Performance certification** — only the designated reference hardware, environment, and
+   protocol in the named performance contract, currently `nw07_perf_ref_v1`.
+
+Measured environment metadata is recorded independently of all five.
+
 ## Required Physical Targets
 
-| Tier | Required hardware class | Required recorded environment |
+| Coverage target / role | Required hardware class | Required recorded environment |
 | :--- | :--- | :--- |
-| `rtx_4060_desktop` | Desktop NVIDIA GeForce RTX 4060 Ti (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, measured CPU model, GPU architecture |
-| `rtx_50_series_desktop` | Desktop NVIDIA RTX 50-series (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, measured CPU model, GPU architecture |
+| `ada_desktop` / correctness qualification | Any representative compliant desktop NVIDIA RTX 40-series/Ada adapter that satisfies the common profile (not Laptop GPU); exact SKU is not required | Exact adapter/device ID, architecture, VRAM, Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, measured CPU/RAM, queried capabilities, artifact hashes, cache/power/thermal metadata, unavailable telemetry |
+| `blackwell_desktop` / correctness qualification | Any representative compliant desktop NVIDIA RTX 50-series/Blackwell adapter that satisfies the common profile (not Laptop GPU); exact SKU is not required | Exact adapter/device ID, architecture, VRAM, Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, measured CPU/RAM, queried capabilities, artifact hashes, cache/power/thermal metadata, unavailable telemetry |
+| `nw07_perf_ref_v1` / performance certification | Exact designated desktop NVIDIA GeForce RTX 4060 reference board, CPU/host, environment, and protocol; no other SKU may substitute | Exact board/VBIOS/device ID/VRAM/clocks/power/cooling, CPU/motherboard/RAM/storage, OS build, driver/WDDM, power/thermal conditions, resolution/quality, cache conditions, measurement tools, raw samples, percentile method, artifact hashes |
+
+The historical `rtx_4060_desktop` tier label remains backward-readable for
+`benchmarks/hardware/rtx-4060-baseline.json`, whose recorded adapter is an RTX 4060 Ti
+(`AD106`, device ID `0x2803`). It is not RTX 4060 evidence and cannot certify
+`nw07_perf_ref_v1`. The historical `rtx_50_series_desktop` label remains readable for the
+recorded RTX 5070 Ti evidence.
+
+## Evidence Record Fields
+
+New evidence records separate these backward-readable groups:
+
+- `coverage_target`: `common`, `ada_desktop`, `blackwell_desktop`, or `optional:<profile-id>`.
+- `evidence_role`: `correctness_qualification`, `performance_certification`,
+  `informational_regression`, `pending`, or `unsupported`.
+- `observed_hardware`: exact GPU model/architecture, vendor ID, device ID, adapter/LUID,
+  VRAM; exact CPU model and RAM; desktop/mobile classification.
+- `capability_profile`: profile ID, canonical requirements digest, and queried capability
+  results, distinguishing unqueried from unsupported features.
+- `artifact_provenance`: artifact/package/shader hashes, size-ledger identity, toolchain and
+  build/reproducibility identity.
+- `environment`: OS build/UBR, driver/WDDM/runtime, toolchain versions, clocks, power,
+  thermal, cache state, display/resolution/quality.
+- `protocol_identity`: performance-contract ID, metric definitions/operators, warm-up and run
+  protocol, percentile method, matching rules, measurement tools, and raw samples.
+- `result_status`: `pass`, `fail`, `pending`, `unsupported`, or `unverified`.
+- `unavailable_telemetry`: explicit list of required fields that could not be measured, with
+  reasons. Missing values are never zero-filled or inferred from another device.
+
+An executed failure remains `fail`; unavailable required evidence remains `pending`; optional
+features outside a profile's declared coverage remain `unsupported`. Aggregate reporting cannot
+convert any of these into `pass`.
+
+## Performance Contract `nw07_perf_ref_v1`
+
+The NW-07 hard gate is certified only by a matching reference measurement under
+`nw07_perf_ref_v1`:
+
+- exact designated desktop NVIDIA GeForce RTX 4060 reference board, CPU/host, OS/driver,
+  power/thermal/clocks, cache conditions, resolution/quality, measurement tools, artifact
+  hashes, and protocol;
+- `1920x1080` p99 GPU frame time `< 16.67` ms and p99 CPU submission time `< 16.67` ms;
+- five-second warm-up followed by three uncapped 60-second runs, with **every** run required
+  to satisfy both strict gates;
+- retained raw per-run samples and named percentile methodology;
+- clean-start measurements without an application pipeline cache, with cold driver-cache and
+  warm results distinguished.
+
+RTX 4060 Ti, other Ada, Blackwell, stale-artifact, mismatched-host, and mismatched-protocol
+measurements remain available as informational or correctness evidence but cannot certify v1.
+Missing reference hardware leaves certification pending. A separate matched-environment
+Blackwell development/performance series is maintained without a new absolute Blackwell gate.
+Replacement references or normalization require a new contract version with independently
+justified thresholds, validation uncertainty, and bridge measurements; they never pass v1
+retroactively.
+
+## Backward-Readable Migration
+
+- Existing records keep their original interpretation. Do not rewrite historical files.
+- Absence of `coverage_target`, `evidence_role`, or `result_status` means
+  `legacy_unclassified`; the record remains readable but cannot certify a new gate.
+- `gpu_model`, `gpu_device_id`, and `gpu_architecture` are authoritative over a legacy
+  `hardware_tier` label.
+- A legacy tier label must never become proof that its recorded RTX 4060 Ti was an RTX 4060.
 
 ## 1. Release Ledger, Reproducibility, and Compiler Comparison
 

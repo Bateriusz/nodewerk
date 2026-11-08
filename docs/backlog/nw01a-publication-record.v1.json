@@ -1,0 +1,351 @@
+{
+  "schema": "nw01a-publication-record.v1",
+  "task": "NW-01A",
+  "source_identity": {
+    "task": "NW-01A",
+    "refined_issue": 18,
+    "planning_source_issue": 15,
+    "planning_run_id": "plan-3952f366ef2f607f355cb098",
+    "planning_base": "743a4c1aec9e016af8c76cf08f9dd1696017270c",
+    "frozen_source_requirements": "sha256:v1:4b7a4e828d9ce4835d3f002bdd2960d7af00d99aefdc418317bc8592f753116d",
+    "refinement_hash": "sha256:v1:8498891e588744b796ba4e1cf88c4908cd65b3b24c2dca78e2248a2b05e5804b",
+    "body_hash": "sha256:v1:0d3941a663b71a9f602224f70b4ec65ea2ebb9731c3ee5f5d1cacc1905a62379"
+  },
+  "publication_channel": "repository_backlog_bundle",
+  "github_publication_attempted": true,
+  "github_publication_status": "not_executed_offline_sandbox",
+  "github_publication_blocker": "The implementation sandbox has no DNS/network access to GitHub; the exact updated bodies, hashes, source revisions, section offsets, and per-issue completion records are preserved here for deterministic readback and later publication.",
+  "github_publication_error": "Network preflight failed: gh could not connect to api.github.com and DNS resolution for github.com/api.github.com failed in this sandbox.",
+  "issues": [
+    {
+      "task": "NW-02",
+      "issue_number": 3,
+      "title": "NW-02 — Implement versioned operator schemas, typed DAGs, and deterministic evaluation",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 3,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:e3da09b716364e8f494b3d02ba184eaea292c90dde73332399ec37218b9ce7c8",
+        "original_body_hash": "sha256:v1:5c3e56399192470729cdd9fede7041832698f1ed35c08e943f637e01bf96709e"
+      },
+      "source_refinement_hash": "sha256:v1:e3da09b716364e8f494b3d02ba184eaea292c90dde73332399ec37218b9ce7c8",
+      "original_body_hash": "sha256:v1:5c3e56399192470729cdd9fede7041832698f1ed35c08e943f637e01bf96709e",
+      "updated_body_hash": "sha256:v1:63375a23d9b9c149452f88dba3b80c44ec19f6442b1a046990960c0d19ea9356",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-03.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-03.md"
+    },
+    {
+      "task": "NW-03",
+      "issue_number": 4,
+      "title": "NW-03 — Build offline shader lowering and a bounded release-package format",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 4,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:4fd73fd37b1bc7a222ae5aa48d7f6d9ed05e5b9ca9ff769dfff0b7e9b4cf3561",
+        "original_body_hash": "sha256:v1:be156db25c9b4bdd6d8abc2653a3979ad286d7969cc6f005dc537e5b56c0c6da"
+      },
+      "source_refinement_hash": "sha256:v1:4fd73fd37b1bc7a222ae5aa48d7f6d9ed05e5b9ca9ff769dfff0b7e9b4cf3561",
+      "original_body_hash": "sha256:v1:be156db25c9b4bdd6d8abc2653a3979ad286d7969cc6f005dc537e5b56c0c6da",
+      "updated_body_hash": "sha256:v1:24cd84cc0e141c538da8d13278ea59be7fd497ebdbda2e6d3d7dea7ac2e65f66",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-04.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-04.md"
+    },
+    {
+      "task": "NW-04",
+      "issue_number": 5,
+      "title": "NW-04 — Implement the minimal package-driven D3D12 player",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 5,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:e2cc8ebe078f74aaa171ff65f808915de1ca5cb8f8b3139b67eee565b9030c89",
+        "original_body_hash": "sha256:v1:5c1ae6888a9f7f4ed2f66114c87aca306a71b853312daf29be1c1663e526fe31"
+      },
+      "source_refinement_hash": "sha256:v1:e2cc8ebe078f74aaa171ff65f808915de1ca5cb8f8b3139b67eee565b9030c89",
+      "original_body_hash": "sha256:v1:5c1ae6888a9f7f4ed2f66114c87aca306a71b853312daf29be1c1663e526fe31",
+      "updated_body_hash": "sha256:v1:11b29f30f1d423602e2e2f66177c02c5445591964869c95ec6499f680df50680",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-05.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-05.md"
+    },
+    {
+      "task": "NW-05",
+      "issue_number": 6,
+      "title": "NW-05 — Compile whole graphs into specialized players and explicit resource schedules",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 6,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:dd8620adac2b708eb6282fa0d743a5844a2487087563752d45ea7dc6b9371631",
+        "original_body_hash": "sha256:v1:ddac60a648ffb052dc2b425892d3eb1188a0cccbf4f9805b13fb64ba91f08c5f"
+      },
+      "source_refinement_hash": "sha256:v1:dd8620adac2b708eb6282fa0d743a5844a2487087563752d45ea7dc6b9371631",
+      "original_body_hash": "sha256:v1:ddac60a648ffb052dc2b425892d3eb1188a0cccbf4f9805b13fb64ba91f08c5f",
+      "updated_body_hash": "sha256:v1:00ded3ba9c6406478df27d932f4c8944f0e8820784d2e29f5a6d87e4817c985f",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-06.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-06.md"
+    },
+    {
+      "task": "NW-06",
+      "issue_number": 7,
+      "title": "NW-06 — Add procedural mesh, texture, scene, and integer-timeline operators",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 7,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:2d007ed5ac0d362c59854705af51336bb50497cc818addc71f6c002457325475",
+        "original_body_hash": "sha256:v1:1b5d30e943f5b3b15a3e9e29d6521119f21e479ff1d59aafa75b61533ccfa8fc"
+      },
+      "source_refinement_hash": "sha256:v1:2d007ed5ac0d362c59854705af51336bb50497cc818addc71f6c002457325475",
+      "original_body_hash": "sha256:v1:1b5d30e943f5b3b15a3e9e29d6521119f21e479ff1d59aafa75b61533ccfa8fc",
+      "updated_body_hash": "sha256:v1:075f4624bdb3476a9bb95be0afd9bfefdc55cfd376f429c84a4fba4663baaf12",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-07.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-07.md"
+    },
+    {
+      "task": "NW-07",
+      "issue_number": 8,
+      "title": "NW-07 — Deliver and benchmark the 256 KiB architectural proof",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 8,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:479b0778fd2e7d635ce8171c5c3a7614e2b42dfb5db3a4147b895f6e49fb0b74",
+        "original_body_hash": "sha256:v1:4774c208d7461228090e4a81639cd89667b4d719d4321986036518c1746e057f"
+      },
+      "source_refinement_hash": "sha256:v1:479b0778fd2e7d635ce8171c5c3a7614e2b42dfb5db3a4147b895f6e49fb0b74",
+      "original_body_hash": "sha256:v1:4774c208d7461228090e4a81639cd89667b4d719d4321986036518c1746e057f",
+      "updated_body_hash": "sha256:v1:16ce897c050f4f6c0f8960d9675280828aadbb108140c3e6b9c617868fdb5e8e",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-08.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-08.md"
+    },
+    {
+      "task": "NW-08",
+      "issue_number": 9,
+      "title": "NW-08 — Add a minimal authoring editor with incremental GPU caching",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 9,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:555a165d08e2e04173f9a191f40612fe062d8d1718a082565669926a9e983384",
+        "original_body_hash": "sha256:v1:4950160c4c169b5b1a5633855a056015371367d323e6f64ed484f57e3bb0524e"
+      },
+      "source_refinement_hash": "sha256:v1:555a165d08e2e04173f9a191f40612fe062d8d1718a082565669926a9e983384",
+      "original_body_hash": "sha256:v1:4950160c4c169b5b1a5633855a056015371367d323e6f64ed484f57e3bb0524e",
+      "updated_body_hash": "sha256:v1:24e67d430a06d855e7ee78174654739edbd2e7fedddf0cb1430d30f36d902028",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-09.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-09.md"
+    },
+    {
+      "task": "NW-09",
+      "issue_number": 10,
+      "title": "NW-09 — Introduce explicit temporal state and replayable simulation",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 10,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:1110fb91593dc8018b0995c64550b059ec199396e78fcb1a95b46e5dfa4bdbec",
+        "original_body_hash": "sha256:v1:1cea6bfca133ce5ae45ff8d6b9dcf64bd86f3854aee80ecc64b5ea62f0af9a65"
+      },
+      "source_refinement_hash": "sha256:v1:1110fb91593dc8018b0995c64550b059ec199396e78fcb1a95b46e5dfa4bdbec",
+      "original_body_hash": "sha256:v1:1cea6bfca133ce5ae45ff8d6b9dcf64bd86f3854aee80ecc64b5ea62f0af9a65",
+      "updated_body_hash": "sha256:v1:2d3f9e03ec00386300c36241bdbe9733b665ae234dfbed40db9a9bb33738daf0",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-10.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-10.md"
+    },
+    {
+      "task": "NW-10",
+      "issue_number": 11,
+      "title": "NW-10 — Engineer compact exports and determine true 64 KiB feasibility",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 11,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:40f2cad601def67d17d7ebad5cf63f05d1214929537a7e68e5302c79c8f183a8",
+        "original_body_hash": "sha256:v1:ec79b7b05aadfd867f8854284a25d3e4413add7bcc6391863307e4429cc9a577"
+      },
+      "source_refinement_hash": "sha256:v1:40f2cad601def67d17d7ebad5cf63f05d1214929537a7e68e5302c79c8f183a8",
+      "original_body_hash": "sha256:v1:ec79b7b05aadfd867f8854284a25d3e4413add7bcc6391863307e4429cc9a577",
+      "updated_body_hash": "sha256:v1:49e473328942e89589d59bd9bc2f860cc4a2880bf72a9acaf9772b5d03c07236",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-11.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-11.md"
+    },
+    {
+      "task": "NW-11",
+      "issue_number": 12,
+      "title": "NW-11 — Evaluate advanced RTX features through bounded, costed experiments",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 12,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:a979c215d0d9c9ea9d8aba495e8ef5686d843cc8c10e13c52b4d6ff35dd9b441",
+        "original_body_hash": "sha256:v1:789be1b8c685ef70647ee1acb7a590fde68e2a4e61b9b89fac2cf4327de73475"
+      },
+      "source_refinement_hash": "sha256:v1:a979c215d0d9c9ea9d8aba495e8ef5686d843cc8c10e13c52b4d6ff35dd9b441",
+      "original_body_hash": "sha256:v1:789be1b8c685ef70647ee1acb7a590fde68e2a4e61b9b89fac2cf4327de73475",
+      "updated_body_hash": "sha256:v1:5e299a03f767825597678d6772ac0953e39b8fd5bb65728aa5d728ec4dbd4de3",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-12.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-12.md"
+    },
+    {
+      "task": "NW-12",
+      "issue_number": 13,
+      "title": "NW-12 — Add optional procedural audio through the authoritative clock boundary",
+      "source_revision": {
+        "host": "github.com",
+        "repository": "bateriusz/nodewerk",
+        "issue_number": 13,
+        "refinement_run_id": "plan-1e6c8c83858cb79fbd34a36a",
+        "refinement_hash": "sha256:v1:db2a021490f80e68d5fe0f0d42b1d2e4c9c2bacff9aa6508e2396cc7952968ac",
+        "original_body_hash": "sha256:v1:731b912c3196b8d3a082381a7e68c188fae4a6fd1a7e3a99a2eb0cccdab62348"
+      },
+      "source_refinement_hash": "sha256:v1:db2a021490f80e68d5fe0f0d42b1d2e4c9c2bacff9aa6508e2396cc7952968ac",
+      "original_body_hash": "sha256:v1:731b912c3196b8d3a082381a7e68c188fae4a6fd1a7e3a99a2eb0cccdab62348",
+      "updated_body_hash": "sha256:v1:546cf64bd24fc57ed9218894e6ff28a78b7689b6c081cf7b88f709dacaa77cd2",
+      "section_offsets_recomputed": true,
+      "preserved_refinement_marker": true,
+      "verified": true,
+      "verification_checks": {
+        "original_body_hash_matches_recorded_source_revision": true,
+        "updated_body_hash_recorded": true,
+        "pairallel_section_offsets_recomputed": true,
+        "pairallel_refinement_marker_preserved": true,
+        "required_sections_present": true
+      },
+      "completion_status": "prepared_and_verified",
+      "github_publication_status": "pending_offline_sandbox",
+      "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-13.body.md",
+      "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-13.md"
+    }
+  ]
+}

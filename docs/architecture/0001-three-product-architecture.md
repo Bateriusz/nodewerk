@@ -17,14 +17,14 @@ Nodewerk is partitioned into **three separate products** with strict compilation
 1. **Authoring Application (`nodewerk-studio`)**
    - Interactive operator-graph editor, timeline tool, live preview, and profiling host.
    - Permitted to use the C++20 standard library, UI toolkits, debug layers, and development sidecars (`d3d12sdklayers.dll`, `dxgidebug.dll`, PIX).
-   - *Scope Boundary:* Implementing the authoring application is outside NW-01 (scheduled for NW-09).
+   - *Scope Boundary:* Implementing the authoring application is outside NW-01 (the minimal editor is NW-08 / issue #9; broader editor UX is later work).
 
 2. **Whole-Demo Compiler (`nodewerkc`)**
    - Ahead-of-time command-line compiler that consumes a **versioned typed operator graph**, lowers parameters into **optimized expressions**, lowers operator evaluation into **scheduled GPU passes** (raster, compute, and resource transitions), invokes offline HLSL/DXC shader compilation, and emits:
      - a **compact binary package** (opcodes, constant tables, pass schedule, and offline DXIL shader bytecode), plus
      - a **generated player link manifest** (enumerating only the operator kernels, shader permutations, and optional D3D12 capability queries actually referenced by the demo).
    - *Backend Neutrality in Compiler IR:* Backend neutrality is preserved strictly in `nodewerkc`'s intermediate representations (the Typed Expression IR and Scheduled Pass IR). We explicitly reject introducing a general runtime Rendering Hardware Interface (RHI) virtual dispatch layer in the player.
-   - *Scope Boundary:* Implementing `nodewerkc` is outside NW-01 (scheduled for NW-02 through NW-05 and NW-10).
+   - *Scope Boundary:* Implementing `nodewerkc` is outside NW-01 (NW-02 schemas, NW-03 shader/package lowering, NW-05 whole-graph specialization/scheduling, and NW-10 compact exports; NW-04 owns the player and NW-06 owns the procedural operator set).
 
 3. **Specialized Standalone Player (`nodewerk-player`)**
    - Minimal Windows 11 x64 Direct3D 12 executable compiled against the generated player link manifest so unreferenced operators and features are dead-stripped by the linker (`/OPT:REF`, `/OPT:ICF`, LTO).

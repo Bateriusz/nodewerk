@@ -10,6 +10,8 @@ Nodewerk is a size-conscious procedural demoscene authoring and playback system 
 
 See [`docs/README.md`](docs/README.md) for the full NW-01 Architecture Decision Records, dependency inventory, capability and toolchain manifests, size ledgers, and verification entry points.
 
+GPU support, correctness coverage, optional-feature, evidence, and performance-reference policy is defined in [`ADR-0006`](docs/architecture/0006-capability-based-gpu-support-policy.md). Shared capability identity is `nw.common.d3d12.fl12_0.sm6_0.v1`; the canonical requirements digest and exact requirements are in [`benchmarks/capability-profile.common.v1.json`](benchmarks/capability-profile.common.v1.json).
+
 ## Verification Entry Point (`NW-01`)
 
 - **Cross-platform schema, dependency closure, reproducibility, and fixture contract suite:**
