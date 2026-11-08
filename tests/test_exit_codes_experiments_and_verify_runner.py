@@ -1580,6 +1580,61 @@ def test_benchmark_capture_missing_environment_is_valid_unverified(
     )
 
 
+def test_cli_infers_packaged_benchmark_evidence_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    package_root = tmp_path / "clean-system-package"
+    (package_root / "deploy").mkdir(parents=True)
+    (package_root / "evidence").mkdir()
+
+    observed: dict[str, Path | None] = {}
+
+    def fake_capture(
+        _repo_root: Path,
+        binary_dir: Path,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        observed["binary_dir"] = binary_dir
+        observed["evidence_dir"] = kwargs.get("evidence_dir")
+        return {
+            "benchmark_passed": True,
+            "fixture_results": [{"execution_status": "passed"}],
+        }
+
+    monkeypatch.setattr(verify_module, "capture_benchmark_result", fake_capture)
+    monkeypatch.setattr(
+        verify_module,
+        "validate_all_repository_artifacts",
+        lambda _repo_root: {"validated_count": 1},
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "verify_all_recorded_ledgers",
+        lambda _repo_root: [],
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "generate_size_comparison_report",
+        lambda _repo_root: {"selected_toolchain": "clang-cl-lld"},
+    )
+
+    code = verify_module.main(
+        [
+            "--mode",
+            "ContractsOnly",
+            "--binary-dir",
+            str(package_root),
+            "--record-benchmark",
+            "rtx_50_series_desktop",
+        ]
+    )
+    assert code == 0
+    assert observed["binary_dir"] == package_root
+    assert observed["evidence_dir"] == package_root / "evidence"
+
+
 def test_explicit_benchmark_capture_failure_affects_command_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
