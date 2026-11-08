@@ -13,11 +13,11 @@ _MOBILE_AMD_SUFFIXES = {"u", "h", "hs", "hx", "c", "e"}
 def desktop_cpu_model_matches(cpu_model: str | None) -> bool:
     """Return True only for a recognized desktop-class CPU model string.
 
-    Desktop tiers accept Intel Core/Ultra desktop suffixes, AMD Ryzen desktop suffixes,
-    Ryzen Threadripper, and Intel Xeon W workstation parts. Mobile/low-power suffixes
-    (Intel P/U/H/HX/HS and AMD U/H/HS/HX) and explicit mobile markers fail certification.
-    Generic host strings such as "x86_64", "AMD64", or "Intel64 Family 6 Model ..." are not
-    recorded CPU models and are rejected.
+    Desktop tiers accept Intel Core/Ultra desktop suffixes, AMD Ryzen desktop suffixes
+    (including Ryzen PRO APUs), Ryzen Threadripper, and Intel Xeon E/W workstation parts.
+    Mobile/low-power suffixes (Intel P/U/H/HX/HS and AMD U/H/HS/HX) and explicit mobile
+    markers fail certification. Generic host strings such as "x86_64", "AMD64", or
+    "Intel64 Family 6 Model ..." are not recorded CPU models and are rejected.
     """
     if not cpu_model:
         return False
@@ -28,7 +28,7 @@ def desktop_cpu_model_matches(cpu_model: str | None) -> bool:
         return False
     if re.search(r"\bryzen\s+threadripper\b", lower):
         return True
-    if "xeon" in lower and re.search(r"\bw-?\d", lower):
+    if "xeon" in lower and re.search(r"\b[ew]-?\d", lower):
         return True
     intel = re.search(r"\bi[3579]-\d{4,5}([a-z][a-z0-9]{0,3})?\b", lower)
     if intel:
@@ -36,7 +36,9 @@ def desktop_cpu_model_matches(cpu_model: str | None) -> bool:
     ultra = re.search(r"\bcore\s+ultra\s+[3579]\s+\d{3}([a-z][a-z0-9]{0,3})?\b", lower)
     if ultra:
         return (ultra.group(1) or "") not in _MOBILE_INTEL_SUFFIXES
-    amd = re.search(r"\bryzen\s+[3579]\s+\d{4}([a-z][a-z0-9]{0,3})?\b", lower)
+    amd = re.search(
+        r"\bryzen\s+[3579]\s+(?:pro\s+)?\d{4}([a-z][a-z0-9]{0,3})?\b", lower
+    )
     if amd:
         return (amd.group(1) or "") not in _MOBILE_AMD_SUFFIXES
     return False

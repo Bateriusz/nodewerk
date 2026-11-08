@@ -1568,11 +1568,15 @@ def test_hardware_tier_requires_desktop_compatibility_class() -> None:
     assert desktop_cpu_model_matches("AMD Ryzen 5 5600 6-Core Processor") is True
     assert desktop_cpu_model_matches("AMD Ryzen Threadripper PRO 7995WX") is True
     assert desktop_cpu_model_matches("Intel(R) Xeon(R) w9-3495X") is True
+    assert desktop_cpu_model_matches("AMD Ryzen 5 PRO 4650G with Radeon Graphics") is True
+    assert desktop_cpu_model_matches("AMD Ryzen 7 PRO 4750G with Radeon Graphics") is True
+    assert desktop_cpu_model_matches("Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz") is True
     assert desktop_cpu_model_matches("Intel(R) Core(TM) i9-13900K") is True
     assert desktop_cpu_model_matches("13th Gen Intel(R) Core(TM) i7-1360P") is False
     assert desktop_cpu_model_matches(
         "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics"
     ) is False
+    assert desktop_cpu_model_matches("AMD Ryzen 7 PRO 5850U with Radeon Graphics") is False
     assert desktop_cpu_model_matches("x86_64") is False
     assert desktop_cpu_model_matches("AMD64") is False
     assert desktop_cpu_model_matches(
@@ -1666,7 +1670,7 @@ def test_artifact_provenance_rejects_unverified_release_ledgers(tmp_path: Path) 
     toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
 
 
-def test_evidence_completeness_accepts_non_whitelisted_cpu_metadata(
+def test_evidence_completeness_accepts_desktop_workstation_cpu_metadata(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -1676,17 +1680,23 @@ def test_evidence_completeness_accepts_non_whitelisted_cpu_metadata(
     hw = json.loads(hw_path.read_text(encoding="utf-8"))
     hw["verification_status"] = "verified"
     hw["benchmark_passed"] = True
-    hw["environment_metadata"]["cpu_model"] = "Intel(R) Xeon(R) w9-3495X"
     hw["artifact_provenance"] = {
         "toolchain_id": "clang-cl-lld",
         "artifact_sha256": {},
         "source": "recorded_ledger_artifact_hash",
     }
-    hw_path.write_text(json.dumps(hw, indent=2) + "\n", encoding="utf-8")
-
-    evidence = check_evidence_completeness(repo)
-    assert evidence["complete"] is False
-    assert not any("CPU" in item for item in evidence["unmet_requirements"])
+    for cpu_model in (
+        "Intel(R) Xeon(R) w9-3495X",
+        "Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz",
+        "AMD Ryzen 5 PRO 4650G with Radeon Graphics",
+        "AMD Ryzen 7 PRO 4750G with Radeon Graphics",
+        "AMD Ryzen Threadripper PRO 7995WX",
+    ):
+        hw["environment_metadata"]["cpu_model"] = cpu_model
+        hw_path.write_text(json.dumps(hw, indent=2) + "\n", encoding="utf-8")
+        evidence = check_evidence_completeness(repo)
+        assert evidence["complete"] is False
+        assert not any("CPU" in item for item in evidence["unmet_requirements"])
 
 
 def test_evidence_completeness_rejects_mobile_or_generic_cpu_metadata(
@@ -1719,6 +1729,19 @@ def test_evidence_completeness_rejects_mobile_or_generic_cpu_metadata(
             "recognized desktop-class CPU" in item
             for item in evidence["unmet_requirements"]
         )
+
+
+def test_evidence_status_summary_matches_actual_completeness() -> None:
+    status = json.loads(
+        (REPO_ROOT / "benchmarks" / "evidence-status.json").read_text(encoding="utf-8")
+    )
+    evidence = check_evidence_completeness(REPO_ROOT)
+    assert status["complete"] is evidence["complete"]
+    assert status["verification_status"] == (
+        "verified" if evidence["complete"] else "unverified"
+    )
+    by_item = {item["item"]: item for item in status["required_measured_evidence"]}
+    assert by_item["desktop-rtx-50-series-baseline"]["status"] == "unverified"
 
 
 def test_benchmark_capture_rejects_wrong_hardware_tier(
@@ -1776,6 +1799,73 @@ def test_benchmark_capture_rejects_wrong_hardware_tier(
     assert result["verification_status"] == "unverified"
     assert result["benchmark_passed"] is False
     assert any("does not match requested tier" in m["reason"] for m in result["unavailable_measurements"])
+
+
+def test_benchmark_capture_marks_invalid_desktop_cpu_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import verify_nw01 as verify_module
+
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    bin_dir = tmp_path / "deploy"
+    bin_dir.mkdir()
+    for name in ("nw_clear_present_fixture.exe", "nw_compute_shader_fixture.exe"):
+        (bin_dir / name).write_bytes(build_synthetic_pe64(["kernel32.dll"]))
+    monkeypatch.setattr(
+        verify_module,
+        "execute_release_fixture_validation",
+        lambda *_a, **_kw: {
+            "passed": True,
+            "fixture_runs": [
+                {
+                    "fixture_id": "clear_present",
+                    "execution_status": "passed",
+                    "exit_code": 0,
+                    "metrics": {},
+                    "d3d12_validation_clean": True,
+                    "stdout": "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080\n",
+                },
+                {
+                    "fixture_id": "compute_shader",
+                    "execution_status": "passed",
+                    "exit_code": 0,
+                    "metrics": {},
+                    "d3d12_validation_clean": True,
+                    "stdout": "NW_ADAPTER_DESCRIPTION=NVIDIA GeForce RTX 5080\n",
+                    "readback": {
+                        "observed_output_sha256": "a" * 64,
+                        "elements_match": True,
+                        "hash_match": True,
+                    },
+                },
+            ],
+        },
+    )
+    for cpu_model in (
+        "x86_64",
+        "AMD64",
+        "13th Gen Intel(R) Core(TM) i7-1360P",
+    ):
+        result = capture_benchmark_result(
+            repo,
+            bin_dir,
+            hardware_tier="rtx_50_series_desktop",
+            system_environment={
+                "os_build": "10.0.26100.3194",
+                "gpu_model": "NVIDIA GeForce RTX 5080",
+                "nvidia_driver_version": "572.16",
+                "cpu_model": cpu_model,
+            },
+        )
+        assert result["verification_status"] == "unverified"
+        assert result["benchmark_passed"] is False
+        assert any(
+            item["metric"] == "environment_metadata.cpu_model"
+            and "desktop" in item["reason"]
+            for item in result["unavailable_measurements"]
+        )
 
 
 def test_benchmark_capture_missing_environment_is_valid_unverified(

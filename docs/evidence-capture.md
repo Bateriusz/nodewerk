@@ -88,9 +88,11 @@ tier matching, environment measurement, and artifact-hash provenance all verify.
 evidence-completeness gate additionally requires those recorded executable hashes and the
 toolchain ID to match the selected toolchain's verified release ledgers; stale physical
 results from older binaries cannot certify newly built artifacts. A desktop GPU name is not
-sufficient by itself: CPU metadata must be recorded, but a specific CPU family or model
-whitelist is not imposed. Ryzen Threadripper, Intel Xeon W, Core, Ryzen, and other valid
-desktop workstation processors are acceptable when paired with the required desktop GPU.
+sufficient by itself. A recognized desktop/workstation CPU model is required: Intel
+Core/Ultra desktop suffixes, Intel Xeon E/W, AMD Ryzen desktop suffixes (including Ryzen PRO
+APUs), and Ryzen Threadripper are accepted. Mobile/low-power suffixes such as Intel
+P/U/H/HX/HS and AMD U/H/HS/HX, and generic host strings such as `x86_64` or `AMD64`, are
+rejected and reported as unavailable CPU evidence.
 
 ## Current Status
 

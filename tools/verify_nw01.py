@@ -2139,6 +2139,17 @@ def capture_benchmark_result(
         if value is None or value == "":
             mark_unavailable(metric_name, reason)
 
+    desktop_cpu_verified = desktop_cpu_model_matches(
+        str(cpu_model) if cpu_model else None
+    )
+    if cpu_model and not desktop_cpu_verified:
+        mark_unavailable(
+            "environment_metadata.cpu_model",
+            f"CPU model '{cpu_model}' does not identify a desktop/workstation processor "
+            f"required by hardware tier '{hardware_tier}'; mobile/low-power and generic "
+            "host strings cannot certify a desktop baseline.",
+        )
+
     if not observed_gpu_model:
         mark_unavailable(
             "environment_metadata.gpu_model",
@@ -2330,14 +2341,15 @@ def capture_benchmark_result(
             "The fixture did not query D3D12_FEATURE_D3D12_OPTIONS4 native 16-bit shader ops.",
         )
 
+    gpu_tier_matches = bool(
+        observed_gpu_model
+        and hardware_tier_matches(str(observed_gpu_model), hardware_tier)
+    )
     hardware_verified = bool(
         observed_gpu_model
         and measured_nvidia_driver
-        and hardware_tier_matches(
-            str(observed_gpu_model),
-            hardware_tier,
-            cpu_model=str(cpu_model) if cpu_model else None,
-        )
+        and gpu_tier_matches
+        and desktop_cpu_verified
         and _is_supported_nvidia_gpu_and_driver(
             str(observed_gpu_model), str(measured_nvidia_driver)
         )
@@ -2346,11 +2358,7 @@ def capture_benchmark_result(
             r"^10\.0\.(22[0-9]{3}|26[0-9]{3})\.[0-9]+$", str(measured_os_build)
         )
     )
-    if observed_gpu_model and not hardware_tier_matches(
-        str(observed_gpu_model),
-        hardware_tier,
-        cpu_model=str(cpu_model) if cpu_model else None,
-    ):
+    if observed_gpu_model and not gpu_tier_matches:
         mark_unavailable(
             "environment_metadata.gpu_model",
             f"Observed adapter '{observed_gpu_model}' does not match requested tier '{hardware_tier}'.",
