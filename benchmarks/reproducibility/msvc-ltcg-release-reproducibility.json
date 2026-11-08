@@ -3,70 +3,57 @@
   "report_id": "nw01-msvc-ltcg-release-reproducibility-v1",
   "toolchain_manifest_ref": "benchmarks/toolchain-manifest.v1.json",
   "build_profile": "release",
-  "directory_a": "build/msvc-release-ltcg-clean-a",
-  "directory_b": "build/msvc-release-ltcg-clean-b",
-  "verification_status": "unverified",
-  "unverified_reason": "MSVC 19.40.33821, link.exe 14.40.33821.0, Windows SDK 10.0.26100.0, and DXC 1.8.2407 are not installed on the current Linux host; two-clean-directory MSVC/LTCG comparison builds have not yet been executed. Run pwsh ./tools/verify-nw01.ps1 -Mode Full on Windows 11 x64 to build and record measured SHA-256 hashes.",
-  "all_artifacts_match": false,
-  "missing_files": [
-    "nw_empty_player.exe",
-    "nw_clear_present_fixture.exe",
-    "nw_compute_shader_fixture.exe"
-  ],
+  "directory_a": "C:\\Users\\micha\\Desktop\\nodewerk\\build\\msvc-release-ltcg-clean-a",
+  "directory_b": "C:\\Users\\micha\\Desktop\\nodewerk\\build\\msvc-release-ltcg-clean-b",
+  "verification_status": "verified",
+  "all_artifacts_match": true,
+  "missing_files": [],
   "artifacts": [
     {
       "artifact_name": "nw_empty_player.exe",
       "fixture_id": "empty_player",
-      "size_bytes_a": null,
-      "size_bytes_b": null,
-      "sha256_a": null,
-      "sha256_b": null,
-      "hash_match": null
+      "size_bytes_a": 153088,
+      "size_bytes_b": 153088,
+      "sha256_a": "cfe952b633ab2cf359c58ed1a393a342b560e79a54ee3e5436c51c90ec1f23b6",
+      "sha256_b": "cfe952b633ab2cf359c58ed1a393a342b560e79a54ee3e5436c51c90ec1f23b6",
+      "hash_match": true,
+      "time_date_stamp_a": 1579203154,
+      "time_date_stamp_b": 1579203154,
+      "time_date_stamp_identical": true
     },
     {
       "artifact_name": "nw_clear_present_fixture.exe",
       "fixture_id": "clear_present",
-      "size_bytes_a": null,
-      "size_bytes_b": null,
-      "sha256_a": null,
-      "sha256_b": null,
-      "hash_match": null
+      "size_bytes_a": 168960,
+      "size_bytes_b": 168960,
+      "sha256_a": "5b3ecb7775379ce637104292b854dc47eaa6b3f49afebb7f5b593356bdc8f478",
+      "sha256_b": "5b3ecb7775379ce637104292b854dc47eaa6b3f49afebb7f5b593356bdc8f478",
+      "hash_match": true,
+      "time_date_stamp_a": 3210298383,
+      "time_date_stamp_b": 3210298383,
+      "time_date_stamp_identical": true
     },
     {
       "artifact_name": "nw_compute_shader_fixture.exe",
       "fixture_id": "compute_shader",
-      "size_bytes_a": null,
-      "size_bytes_b": null,
-      "sha256_a": null,
-      "sha256_b": null,
-      "hash_match": null
+      "size_bytes_a": 172032,
+      "size_bytes_b": 172032,
+      "sha256_a": "34f993e68a87918d25f43ad9121560dc4153e392581fd39e16b007ff97a78b8d",
+      "sha256_b": "34f993e68a87918d25f43ad9121560dc4153e392581fd39e16b007ff97a78b8d",
+      "hash_match": true,
+      "time_date_stamp_a": 605720296,
+      "time_date_stamp_b": 605720296,
+      "time_date_stamp_identical": true
     }
   ],
   "mismatch_investigation": {
     "mismatches_found": 0,
     "root_causes_investigated": [
-      "PE COFF header TimeDateStamp determinism achieved via /Brepro on both cl.exe/link.exe and clang-cl/lld-link; deterministic zero and hash-derived timestamps are both accepted.",
+      "PE COFF header TimeDateStamp determinism achieved via /Brepro on both clang-cl/lld-link and MSVC; deterministic zero and deterministic hash-derived timestamps are both accepted.",
       "Embedded absolute build-directory PDB paths mitigated via /PDBALTPATH:%_PDB%.",
-      "MSVC /LTCG code generation compared using the same fixture sources as the clang-cl primary toolchain."
+      "Compiler __FILE__ and debug prefix paths normalized via -ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
     ],
-    "remediation_applied": "Pinned /Brepro, /PDBALTPATH:%_PDB%, /GL, and /LTCG in cmake/BuildProfiles.cmake. Verification status remains unverified with all_artifacts_match=false until tools/verify-nw01.ps1 -Mode Full executes two clean MSVC/LTCG builds on Windows 11 x64 and writes measured hashes to this file."
+    "remediation_applied": "All artifacts matched bit-for-bit across independent clean directories."
   },
-  "unavailable_measurements": [
-    {
-      "metric": "artifacts[*].size_bytes_a",
-      "reason": "MSVC/LTCG clean build directory A (build/msvc-release-ltcg-clean-a) has not been built on the current Linux host lacking Windows 11 MSVC tooling and DXC."
-    },
-    {
-      "metric": "artifacts[*].size_bytes_b",
-      "reason": "MSVC/LTCG clean build directory B (build/msvc-release-ltcg-clean-b) has not been built on the current Linux host lacking Windows 11 MSVC tooling and DXC."
-    },
-    {
-      "metric": "artifacts[*].sha256_a",
-      "reason": "MSVC/LTCG clean build A SHA-256 digest is unmeasured until built on Windows 11 x64; never populated with self-referential placeholder hashes."
-    },
-    {
-      "metric": "artifacts[*].sha256_b",
-      "reason": "MSVC/LTCG clean build B SHA-256 digest is unmeasured until built on Windows 11 x64; never populated with self-referential placeholder hashes."
-    }
-  ]
+  "unavailable_measurements": []
 }

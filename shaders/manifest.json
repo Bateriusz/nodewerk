@@ -1,7 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "verification_status": "unverified",
-  "unverified_reason": "Offline DXC shader compiler (dxc 1.8.2407) is not installed on the current Linux host; execute CMake build or tools/offline_shader_pack.py --compile on Windows 11 x64 with DXC 1.8.2407 to compile shaders/compute_fixture.hlsl into build/clang-cl-release/shaders/compute_fixture.dxil and record measured DXIL bytes and SHA-256.",
+  "verification_status": "verified",
   "shaders": [
     {
       "shader_id": "compute_fixture_cs",
@@ -11,8 +10,8 @@
       "entry_point": "CSMain",
       "target_profile": "cs_6_0",
       "pinned_dxc_version": "1.8.2407",
-      "measured_dxc_version": null,
-      "compiled_offline_with_dxc": false,
+      "measured_dxc_version": "1.8.2407.7",
+      "compiled_offline_with_dxc": true,
       "dxc_flags": [
         "-T",
         "cs_6_0",
@@ -26,8 +25,8 @@
       ],
       "hlsl_source_bytes": 800,
       "hlsl_sha256": "b8c6597b9e5d0d8c4f403b51ff760cbec81f5176b0f6182c361d7c11238641af",
-      "offline_dxil_bytes": null,
-      "offline_dxil_sha256": null,
+      "offline_dxil_bytes": 1748,
+      "offline_dxil_sha256": "5d3f9fa44888b2aa77cdbf8e412168d50f8212dcdfc1630bbff2ccb72e9c4ceb",
       "runtime_compilation_used": false,
       "agility_sdk_required": false,
       "requires_sm_6_6_heap_indexing": false,
@@ -36,14 +35,5 @@
       "requires_ray_tracing": false
     }
   ],
-  "unavailable_measurements": [
-    {
-      "metric": "shaders[0].offline_dxil_bytes",
-      "reason": "Offline DXC shader compiler (dxc 1.8.2407) is not installed on the current Linux host; recorded as null rather than synthesizing a pseudo-DXBC container."
-    },
-    {
-      "metric": "shaders[0].offline_dxil_sha256",
-      "reason": "Offline DXC shader compiler (dxc 1.8.2407) is not installed on the current Linux host; recorded as null rather than synthesizing a pseudo-DXBC container."
-    }
-  ]
+  "unavailable_measurements": []
 }

@@ -6,15 +6,14 @@
   "toolchain_id": "msvc-ltcg",
   "compiler_version": "19.40.33821",
   "linker_version": "14.40.33821.0",
-  "verification_status": "unverified",
-  "unverified_reason": "Windows 11 x64 MSVC cl.exe 19.40.33821 and link.exe 14.40.33821.0 are not installed on the current Linux host; executable byte size, PE section sizes, and SHA-256 digest are recorded as null until populated on Windows 11 x64.",
-  "total_distributed_bytes": null,
+  "verification_status": "verified",
+  "total_distributed_bytes": 153088,
   "distributed_components": [
     {
       "name": "nw_empty_player.exe",
       "category": "executable",
-      "size_bytes": null,
-      "sha256": null,
+      "size_bytes": 153088,
+      "sha256": "cfe952b633ab2cf359c58ed1a393a342b560e79a54ee3e5436c51c90ec1f23b6",
       "counted_in_total_distributed_bytes": true
     }
   ],
@@ -33,32 +32,44 @@
   "executable_sections": [
     {
       "name": ".text",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 92368,
+      "raw_size_bytes": 92672,
       "characteristics": "CNT_CODE|MEM_EXECUTE|MEM_READ"
     },
     {
       "name": ".rdata",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 48102,
+      "raw_size_bytes": 48128,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
     },
     {
       "name": ".data",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 7200,
+      "raw_size_bytes": 3072,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
     },
     {
       "name": ".pdata",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 4980,
+      "raw_size_bytes": 5120,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".fptable",
+      "virtual_size_bytes": 256,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
+    },
+    {
+      "name": ".rsrc",
+      "virtual_size_bytes": 480,
+      "raw_size_bytes": 512,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
     },
     {
       "name": ".reloc",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 1676,
+      "raw_size_bytes": 2048,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_DISCARDABLE|MEM_READ"
     }
   ],
@@ -67,14 +78,85 @@
       "dll_name": "kernel32.dll",
       "classification": "windows_inbox",
       "symbols": [
-        "ExitProcess",
-        "FreeLibrary",
+        "LoadLibraryExW",
+        "WriteConsoleW",
+        "CreateFileW",
+        "HeapReAlloc",
+        "HeapSize",
+        "GetFileSizeEx",
+        "SetFilePointerEx",
+        "GetProcessHeap",
+        "GetStringTypeW",
+        "SetStdHandle",
+        "SetEnvironmentVariableW",
+        "FreeEnvironmentStringsW",
+        "GetEnvironmentStringsW",
+        "OutputDebugStringA",
         "GetCurrentProcess",
-        "GetLastError",
-        "GetModuleHandleA",
-        "GetProcAddress",
         "LoadLibraryExA",
-        "QueryPerformanceCounter"
+        "GetModuleHandleA",
+        "GetLastError",
+        "CloseHandle",
+        "GetProcAddress",
+        "GetCurrentProcessId",
+        "FreeLibrary",
+        "QueryPerformanceCounter",
+        "WideCharToMultiByte",
+        "RtlCaptureContext",
+        "RtlLookupFunctionEntry",
+        "RtlVirtualUnwind",
+        "UnhandledExceptionFilter",
+        "SetUnhandledExceptionFilter",
+        "TerminateProcess",
+        "IsProcessorFeaturePresent",
+        "GetCurrentThreadId",
+        "GetSystemTimeAsFileTime",
+        "InitializeSListHead",
+        "IsDebuggerPresent",
+        "GetStartupInfoW",
+        "GetModuleHandleW",
+        "RtlUnwindEx",
+        "SetLastError",
+        "EnterCriticalSection",
+        "LeaveCriticalSection",
+        "DeleteCriticalSection",
+        "InitializeCriticalSectionAndSpinCount",
+        "TlsAlloc",
+        "TlsGetValue",
+        "TlsSetValue",
+        "TlsFree",
+        "EncodePointer",
+        "RaiseException",
+        "RtlPcToFileHeader",
+        "GetStdHandle",
+        "WriteFile",
+        "GetModuleFileNameW",
+        "ExitProcess",
+        "GetModuleHandleExW",
+        "GetCommandLineA",
+        "GetCommandLineW",
+        "HeapAlloc",
+        "HeapFree",
+        "FlsAlloc",
+        "FlsGetValue",
+        "FlsSetValue",
+        "FlsFree",
+        "InitializeCriticalSectionEx",
+        "VirtualProtect",
+        "CompareStringW",
+        "LCMapStringW",
+        "GetFileType",
+        "FlushFileBuffers",
+        "GetConsoleOutputCP",
+        "GetConsoleMode",
+        "FindClose",
+        "FindFirstFileExW",
+        "FindNextFileW",
+        "IsValidCodePage",
+        "GetACP",
+        "GetOEMCP",
+        "GetCPInfo",
+        "MultiByteToWideChar"
       ]
     }
   ],
@@ -92,18 +174,6 @@
     "gpu_committed_memory_bytes": null
   },
   "unavailable_measurements": [
-    {
-      "metric": "total_distributed_bytes",
-      "reason": "Windows 11 x64 MSVC 19.40.33821 toolchain is not installed on the current Linux host; recorded as null rather than claiming an unmeasured byte size."
-    },
-    {
-      "metric": "executable_sections",
-      "reason": "PE32+ section virtual/raw sizes require linking nw_empty_player.exe with MSVC link.exe /LTCG on a Windows 11 SDK host."
-    },
-    {
-      "metric": "imports[*].symbols",
-      "reason": "Imported function names were not measured from the PE import lookup table on the current Linux host; the baseline symbol lists are expected-import targets, not verified measurements. Recording a PE with tools/size_ledger.py replaces them with measured symbols."
-    },
     {
       "metric": "startup_time_ms",
       "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host."

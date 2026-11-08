@@ -6,15 +6,14 @@
   "toolchain_id": "msvc-ltcg",
   "compiler_version": "19.40.33821",
   "linker_version": "14.40.33821.0",
-  "verification_status": "unverified",
-  "unverified_reason": "Windows 11 x64 MSVC cl.exe 19.40.33821 and link.exe 14.40.33821.0 are not installed on the current Linux host; executable byte size, PE section sizes, and SHA-256 digest are recorded as null until populated on Windows 11 x64.",
-  "total_distributed_bytes": null,
+  "verification_status": "verified",
+  "total_distributed_bytes": 168960,
   "distributed_components": [
     {
       "name": "nw_clear_present_fixture.exe",
       "category": "executable",
-      "size_bytes": null,
-      "sha256": null,
+      "size_bytes": 168960,
+      "sha256": "5b3ecb7775379ce637104292b854dc47eaa6b3f49afebb7f5b593356bdc8f478",
       "counted_in_total_distributed_bytes": true
     }
   ],
@@ -53,65 +52,54 @@
   "executable_sections": [
     {
       "name": ".text",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 103776,
+      "raw_size_bytes": 103936,
       "characteristics": "CNT_CODE|MEM_EXECUTE|MEM_READ"
     },
     {
       "name": ".rdata",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 52088,
+      "raw_size_bytes": 52224,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
     },
     {
       "name": ".data",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 7200,
+      "raw_size_bytes": 3072,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
     },
     {
       "name": ".pdata",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 5208,
+      "raw_size_bytes": 5632,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".fptable",
+      "virtual_size_bytes": 256,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
+    },
+    {
+      "name": ".rsrc",
+      "virtual_size_bytes": 480,
+      "raw_size_bytes": 512,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
     },
     {
       "name": ".reloc",
-      "virtual_size_bytes": null,
-      "raw_size_bytes": null,
+      "virtual_size_bytes": 1680,
+      "raw_size_bytes": 2048,
       "characteristics": "CNT_INITIALIZED_DATA|MEM_DISCARDABLE|MEM_READ"
     }
   ],
   "imports": [
     {
-      "dll_name": "kernel32.dll",
-      "classification": "windows_inbox",
-      "symbols": [
-        "CloseHandle",
-        "CreateEventA",
-        "ExitProcess",
-        "GetCurrentProcess",
-        "GetLastError",
-        "GetModuleHandleA",
-        "QueryPerformanceCounter",
-        "WaitForSingleObject"
-      ]
-    },
-    {
-      "dll_name": "user32.dll",
-      "classification": "windows_inbox",
-      "symbols": [
-        "CreateWindowExA",
-        "DefWindowProcA",
-        "DestroyWindow",
-        "RegisterClassA"
-      ]
-    },
-    {
       "dll_name": "d3d12.dll",
       "classification": "windows_inbox",
       "symbols": [
-        "D3D12CreateDevice"
+        "#102",
+        "#101"
       ]
     },
     {
@@ -119,6 +107,112 @@
       "classification": "windows_inbox",
       "symbols": [
         "CreateDXGIFactory2"
+      ]
+    },
+    {
+      "dll_name": "user32.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "UpdateWindow",
+        "DispatchMessageA",
+        "DestroyWindow",
+        "ShowWindow",
+        "RegisterClassA",
+        "DefWindowProcA",
+        "CreateWindowExA",
+        "TranslateMessage",
+        "PeekMessageA"
+      ]
+    },
+    {
+      "dll_name": "kernel32.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "LoadLibraryExW",
+        "WriteConsoleW",
+        "CreateFileW",
+        "HeapReAlloc",
+        "HeapSize",
+        "GetFileSizeEx",
+        "SetFilePointerEx",
+        "GetProcessHeap",
+        "GetStringTypeW",
+        "SetStdHandle",
+        "SetEnvironmentVariableW",
+        "FreeEnvironmentStringsW",
+        "GetEnvironmentStringsW",
+        "OutputDebugStringA",
+        "GetCurrentProcess",
+        "WaitForSingleObject",
+        "GetModuleHandleA",
+        "CreateToolhelp32Snapshot",
+        "GetLastError",
+        "QueryPerformanceFrequency",
+        "CloseHandle",
+        "Module32FirstW",
+        "GetProcAddress",
+        "GetCurrentProcessId",
+        "FreeLibrary",
+        "Module32NextW",
+        "CreateEventA",
+        "QueryPerformanceCounter",
+        "GetProcessTimes",
+        "WideCharToMultiByte",
+        "RtlCaptureContext",
+        "RtlLookupFunctionEntry",
+        "RtlVirtualUnwind",
+        "UnhandledExceptionFilter",
+        "SetUnhandledExceptionFilter",
+        "TerminateProcess",
+        "IsProcessorFeaturePresent",
+        "GetCurrentThreadId",
+        "GetSystemTimeAsFileTime",
+        "InitializeSListHead",
+        "IsDebuggerPresent",
+        "GetStartupInfoW",
+        "GetModuleHandleW",
+        "RtlUnwindEx",
+        "SetLastError",
+        "EnterCriticalSection",
+        "LeaveCriticalSection",
+        "DeleteCriticalSection",
+        "InitializeCriticalSectionAndSpinCount",
+        "TlsAlloc",
+        "TlsGetValue",
+        "TlsSetValue",
+        "TlsFree",
+        "EncodePointer",
+        "RaiseException",
+        "RtlPcToFileHeader",
+        "GetStdHandle",
+        "WriteFile",
+        "GetModuleFileNameW",
+        "ExitProcess",
+        "GetModuleHandleExW",
+        "GetCommandLineA",
+        "GetCommandLineW",
+        "HeapAlloc",
+        "HeapFree",
+        "FlsAlloc",
+        "FlsGetValue",
+        "FlsSetValue",
+        "FlsFree",
+        "InitializeCriticalSectionEx",
+        "VirtualProtect",
+        "CompareStringW",
+        "LCMapStringW",
+        "GetFileType",
+        "FlushFileBuffers",
+        "GetConsoleOutputCP",
+        "GetConsoleMode",
+        "FindClose",
+        "FindFirstFileExW",
+        "FindNextFileW",
+        "IsValidCodePage",
+        "GetACP",
+        "GetOEMCP",
+        "GetCPInfo",
+        "MultiByteToWideChar"
       ]
     }
   ],
@@ -129,46 +223,13 @@
     "notes": "No executable packer or payload decompressor is permitted in the NW-01 baseline."
   },
   "runtime_metrics": {
-    "startup_time_ms": null,
-    "cpu_time_ms": null,
-    "gpu_time_ms": null,
-    "committed_memory_bytes": null,
-    "gpu_committed_memory_bytes": null
+    "startup_time_ms": 326.683,
+    "cpu_time_ms": 296.875,
+    "gpu_time_ms": 0.005,
+    "committed_memory_bytes": 101916672,
+    "gpu_committed_memory_bytes": 20971520
   },
-  "unavailable_measurements": [
-    {
-      "metric": "total_distributed_bytes",
-      "reason": "Windows 11 x64 MSVC 19.40.33821 toolchain is not installed on the current Linux host; recorded as null rather than claiming an unmeasured byte size."
-    },
-    {
-      "metric": "executable_sections",
-      "reason": "PE32+ section virtual/raw sizes require linking nw_clear_present_fixture.exe with MSVC link.exe /LTCG on a Windows 11 SDK host."
-    },
-    {
-      "metric": "imports[*].symbols",
-      "reason": "Imported function names were not measured from the PE import lookup table on the current Linux host; the baseline symbol lists are expected-import targets, not verified measurements. Recording a PE with tools/size_ledger.py replaces them with measured symbols."
-    },
-    {
-      "metric": "startup_time_ms",
-      "reason": "Physical Windows 11 x64 D3D12 swapchain initialization timing is unverified on the current Linux build host."
-    },
-    {
-      "metric": "cpu_time_ms",
-      "reason": "Physical Windows 11 x64 CPU frame recording timing is unverified on the current Linux build host."
-    },
-    {
-      "metric": "gpu_time_ms",
-      "reason": "Physical Windows 11 x64 D3D12 clear/present GPU timestamp timing is unverified on the current Linux build host."
-    },
-    {
-      "metric": "committed_memory_bytes",
-      "reason": "Physical Windows 11 x64 process working-set/commit measurement is unverified on the current Linux build host."
-    },
-    {
-      "metric": "gpu_committed_memory_bytes",
-      "reason": "Physical Windows 11 D3D12 VidMm swapchain/heap commitment is unverified on the current Linux build host."
-    }
-  ],
+  "unavailable_measurements": [],
   "budget_claim_policy": {
     "claims_64kib_achievable": false,
     "defer_minimum_size_claim_until_task": "NW-10",
