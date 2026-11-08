@@ -345,8 +345,9 @@ jobs:
             (Join-Path $evidenceRoot "ledgers")
           Copy-Item -Force "benchmarks/reproducibility/*.json" `
             (Join-Path $evidenceRoot "reproducibility")
-          if (Test-Path $summaryPath -PathType Leaf) {
-            Copy-Item -Force $summaryPath (Join-Path $evidenceRoot "build-checks.json")
+          $buildChecksSummary = Join-Path $env:RUNNER_TEMP "nw01-build-checks.json"
+          if (Test-Path $buildChecksSummary -PathType Leaf) {
+            Copy-Item -Force $buildChecksSummary (Join-Path $evidenceRoot "build-checks.json")
           }
 
       - name: Upload NW-01 clean-system deployment
