@@ -471,3 +471,12 @@ def test_incomplete_publication_cannot_claim_completion() -> None:
     broken["github_publication_status"] = "published"
     with pytest.raises(tool.VerificationError):
         tool.verify_publication_claims(broken)
+
+
+def test_source_digest_normalizes_checkout_newlines(tmp_path: Path) -> None:
+    tool = _load_tool()
+    lf = tmp_path / "lf.json"
+    crlf = tmp_path / "crlf.json"
+    lf.write_bytes(b'{"manifest":true}\n')
+    crlf.write_bytes(b'{"manifest":true}\r\n')
+    assert tool.sha256_file_v1(lf) == tool.sha256_file_v1(crlf)

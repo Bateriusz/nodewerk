@@ -104,7 +104,11 @@ def sha256_v1(text: str) -> str:
 
 
 def sha256_file_v1(path: Path) -> str:
-    return "sha256:v1:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    # Git may check text files out with CRLF on Windows.  Line-ending spelling is
+    # not semantic content, so hash the newline-normalized bytes to keep the
+    # recorded LF-based source digest stable across checkouts.
+    data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return "sha256:v1:" + hashlib.sha256(data).hexdigest()
 
 
 def normalize_body(text: str) -> str:
@@ -912,10 +916,13 @@ def publish(
             print(f"{task['task']} #{number}: would publish {updated_path}")
             continue
         # The repository body-only file is the exact issue body; GitHub must not
-        # receive the human-readable "# title" document wrapper.
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md") as handle:
-            handle.write(updated_body)
-            handle.flush()
+        # receive the human-readable "# title" document wrapper.  Close the
+        # temporary file before invoking gh: Windows does not permit a second
+        # process to open a NamedTemporaryFile while the Python handle is open.
+        fd, temporary_name = tempfile.mkstemp(suffix=".md")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(updated_body)
             runner(
                 [
                     "issue",
@@ -924,9 +931,11 @@ def publish(
                     "--repo",
                     GH_REPO,
                     "--body-file",
-                    handle.name,
+                    temporary_name,
                 ]
             )
+        finally:
+            Path(temporary_name).unlink(missing_ok=True)
         readback = json.loads(
             runner(
                 ["issue", "view", str(number), "--repo", GH_REPO, "--json", "title,body"]
