@@ -7,8 +7,8 @@ Windows 11 x64 machines. Nothing in this repository fabricates or substitutes me
 
 | Tier | Required hardware class | Required recorded environment |
 | :--- | :--- | :--- |
-| `rtx_4060_desktop` | Desktop NVIDIA GeForce RTX 4060 (not RTX 4060 Ti, not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, CPU model, GPU architecture |
-| `rtx_50_series_desktop` | Desktop NVIDIA RTX 50-series (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, CPU model, GPU architecture |
+| `rtx_4060_desktop` | Desktop NVIDIA GeForce RTX 4060 Ti (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, desktop-class CPU model, GPU architecture |
+| `rtx_50_series_desktop` | Desktop NVIDIA RTX 50-series (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, desktop-class CPU model, GPU architecture |
 
 ## 1. Release Ledger, Reproducibility, and Compiler Comparison
 
@@ -41,7 +41,9 @@ pwsh ./tools/verify-nw01.ps1 -Mode CleanSystem `
 The report must show SDK/redistributable absence, complete deployment-tree accounting,
 offline DXIL execution, observed module paths, and a matching compute readback hash. Operator
 GPU metadata is accepted only when it matches the adapter description emitted by both the
-raster and compute fixtures.
+raster and compute fixtures. CleanSystem can pass only when the selected toolchain and all
+three release ledgers are already verified by Full; unverified ledgers, including packaged
+ledgers awaiting fixture execution, are rejected rather than used to certify provenance.
 
 ## 3. Hardware Baseline Capture
 
@@ -53,7 +55,7 @@ pwsh ./tools/verify-nw01.ps1 -Mode Full `
   -BinaryDir <deployed-directory> `
   -RecordBenchmark rtx_4060_desktop `
   -OsBuild <exact measured build e.g. 10.0.26100.3194> `
-  -GpuModel "NVIDIA GeForce RTX 4060" `
+  -GpuModel "NVIDIA GeForce RTX 4060 Ti" `
   -NvidiaDriverVersion <NNN.NN> `
   -CpuModel "<measured CPU model>" `
   -GpuArchitecture "<measured architecture>" `
@@ -72,11 +74,16 @@ Repeat with `-RecordBenchmark rtx_50_series_desktop` and the corresponding deskt
 tier matching, environment measurement, and artifact-hash provenance all verify. The
 evidence-completeness gate additionally requires those recorded executable hashes and the
 toolchain ID to match the selected toolchain's verified release ledgers; stale physical
-results from older binaries cannot certify newly built artifacts.
+results from older binaries cannot certify newly built artifacts. A desktop GPU name is not
+sufficient by itself: mobile/low-power CPU models (for example Intel `P`/`U`/`H`/`HX`/`HS`
+or AMD `U`/`H`/`HS`/`HX` suffixes) are rejected so a mobile host cannot be recorded as a
+desktop tier.
 
 ## Current Status
 
-No measured Windows, RTX 4060, RTX 50-series, reproducibility, compiler-comparison, offline
-GPU, or clean-system results are present in this workspace. Those acceptance requirements
-remain explicitly unverified. The pinned minimum Windows build and selected clang-cl/lld-link
-toolchain are therefore *targets*, not tested claims, until this evidence is captured.
+No measured Windows, RTX 4060 Ti, RTX 50-series, reproducibility, compiler-comparison, offline
+GPU, or clean-system results are present in this workspace. The checked-in hardware baseline
+and clean-system JSON files are unverified templates with null measurement fields, not
+measurement records. Those acceptance requirements remain explicitly unverified. The pinned
+minimum Windows build and selected clang-cl/lld-link toolchain are therefore *targets*, not
+tested claims, until this evidence is captured.

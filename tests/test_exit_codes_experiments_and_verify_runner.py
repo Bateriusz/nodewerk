@@ -50,6 +50,7 @@ from verify_nw01 import (  # noqa: E402
     build_and_compare_two_clean_directories,
     capture_benchmark_result,
     classify_loaded_module_evidence,
+    desktop_cpu_model_matches,
     hardware_tier_matches,
     check_evidence_completeness,
     compare_two_build_directories,
@@ -60,6 +61,7 @@ from verify_nw01 import (  # noqa: E402
     parse_observed_compute_readback,
     parse_loaded_modules,
     probe_sdk_absence,
+    resolve_artifact_provenance,
     record_shader_manifest_evidence,
     run_build_checks_mode,
     run_failure_recovery_checks,
@@ -365,15 +367,45 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
         "clear_present": "nw_clear_present_fixture.exe",
         "compute_shader": "nw_compute_shader_fixture.exe",
     }
+    raw_sizes: dict[str, int] = {}
     for ledger_path in (sim_repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         fixture_id = str(ledger["fixture_id"])
         exe_payload = (bin_dir / raw_fixture_names[fixture_id]).read_bytes()
+        raw_sizes[fixture_id] = len(exe_payload)
         for component in ledger.get("distributed_components", []):
             if component.get("category") == "executable":
                 component["sha256"] = hashlib.sha256(exe_payload).hexdigest()
                 component["size_bytes"] = len(exe_payload)
+        ledger["verification_status"] = "verified"
+        ledger.pop("unverified_reason", None)
+        ledger["total_distributed_bytes"] = len(exe_payload)
+        ledger["unavailable_measurements"] = [
+            item
+            for item in ledger.get("unavailable_measurements", [])
+            if item["metric"] != "total_distributed_bytes"
+        ]
         ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
+    # CleanSystem may certify only the selected toolchain after Full has verified its
+    # three release ledgers. Simulate that post-Full state in the isolated repo.
+    sim_toolchain_path = sim_repo / "benchmarks" / "toolchain-manifest.v1.json"
+    sim_toolchain = json.loads(sim_toolchain_path.read_text(encoding="utf-8"))
+    sim_toolchain["selected_toolchain"]["toolchain_id"] = "clang-cl-lld"
+    for entry in sim_toolchain["evaluated_toolchains"]:
+        if entry["toolchain_id"] == "clang-cl-lld":
+            entry["status"] = "selected"
+            entry["verification_status"] = "verified"
+            entry["pdb_debugging_verified"] = True
+            entry["deterministic_repro_verified"] = True
+            entry["empty_player_bytes"] = raw_sizes.get("empty_player")
+            entry["clear_present_bytes"] = raw_sizes.get("clear_present")
+            entry["compute_fixture_bytes"] = raw_sizes.get("compute_shader")
+        else:
+            entry["status"] = "retained_alternative"
+    sim_toolchain_path.write_text(
+        json.dumps(sim_toolchain, indent=2) + "\n", encoding="utf-8"
+    )
 
     clean_sys32 = tmp_path / "System32"
     clean_sys32.mkdir()
@@ -540,15 +572,21 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
             ledger.get("toolchain_id") == "clang-cl-lld"
             and ledger.get("fixture_id") in fixture_names
         ):
-            ledger["verification_status"] = "unverified"
-            ledger["unverified_reason"] = (
-                "Fixture execution is intentionally pending physical CleanSystem validation."
-            )
+            ledger["verification_status"] = "verified"
+            ledger.pop("unverified_reason", None)
             for component in ledger.get("distributed_components", []):
                 if component.get("category") == "executable":
                     fixture_id = str(ledger["fixture_id"])
                     component["sha256"] = package_hashes[fixture_id]
                     component["size_bytes"] = package_sizes[fixture_id]
+            ledger["total_distributed_bytes"] = package_sizes[
+                str(ledger["fixture_id"])
+            ]
+            ledger["unavailable_measurements"] = [
+                item
+                for item in ledger.get("unavailable_measurements", [])
+                if item["metric"] != "total_distributed_bytes"
+            ]
         (package_ledgers / ledger_path.name).write_text(
             json.dumps(ledger, indent=2) + "\n", encoding="utf-8"
         )
@@ -583,7 +621,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
                 "recorded": {
                     "clang-cl-lld": {
                         "selected_toolchain": "clang-cl-lld",
-                        "verification_status": "unverified",
+                        "verification_status": "verified",
                         "recorded_fixtures": {
                             fixture_id: {"sha256": package_hashes[fixture_id]}
                             for fixture_id in fixture_names
@@ -616,7 +654,7 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
         == "recorded_ledger_artifact_hash"
     )
 
-    # The same unverified ledgers must be rejected when CI build evidence is tampered.
+    # Verified ledgers must still be rejected when the packaged CI build evidence is tampered.
     tampered_build_checks = dict(build_checks)
     tampered_build_checks["checks"] = dict(build_checks["checks"])
     tampered_build_checks["checks"]["clang_debug_symbols"] = {"passed": False}
@@ -1292,11 +1330,38 @@ def test_capture_benchmark_result_records_measured_metrics(
     for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         fixture_id = ledger["fixture_id"]
-        ledger["distributed_components"][0]["sha256"] = hashlib.sha256(
-            (bin_dir / ledger_exe[fixture_id]).read_bytes()
-        ).hexdigest()
+        payload = (bin_dir / ledger_exe[fixture_id]).read_bytes()
+        ledger["distributed_components"][0]["sha256"] = hashlib.sha256(payload).hexdigest()
+        ledger["distributed_components"][0]["size_bytes"] = len(payload)
         ledger["toolchain_id"] = "clang-cl-lld"
+        ledger["verification_status"] = "verified"
+        ledger.pop("unverified_reason", None)
+        ledger["total_distributed_bytes"] = len(payload)
+        ledger["unavailable_measurements"] = [
+            item
+            for item in ledger.get("unavailable_measurements", [])
+            if item["metric"] != "total_distributed_bytes"
+        ]
         ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
+    toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    for entry in toolchain["evaluated_toolchains"]:
+        if entry["toolchain_id"] == "clang-cl-lld":
+            entry["status"] = "selected"
+            entry["verification_status"] = "verified"
+            entry["pdb_debugging_verified"] = True
+            entry["deterministic_repro_verified"] = True
+            for field, fixture_id in (
+                ("empty_player_bytes", "empty_player"),
+                ("clear_present_bytes", "clear_present"),
+                ("compute_fixture_bytes", "compute_shader"),
+            ):
+                entry[field] = (bin_dir / ledger_exe[fixture_id]).stat().st_size
+        else:
+            entry["status"] = "retained_alternative"
+    toolchain_path.write_text(
+        json.dumps(toolchain, indent=2) + "\n", encoding="utf-8"
+    )
     expected = load_compute_expected_output(repo)
     metrics = {
         "startup_time_ms": 12.5,
@@ -1460,6 +1525,55 @@ def test_hardware_tier_requires_desktop_compatibility_class() -> None:
     assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Ti Laptop GPU", "rtx_4060_desktop") is False
     assert hardware_tier_matches("NVIDIA GeForce RTX 5080", "rtx_50_series_desktop") is True
     assert hardware_tier_matches("NVIDIA GeForce RTX 5080 Laptop GPU", "rtx_50_series_desktop") is False
+
+    # A desktop GPU name is not sufficient: the recorded CPU must also identify a desktop part.
+    assert desktop_cpu_model_matches("AMD Ryzen 5 5600 6-Core Processor") is True
+    assert desktop_cpu_model_matches("AMD Ryzen 7 9800X3D 8-Core Processor") is True
+    assert desktop_cpu_model_matches("13th Gen Intel(R) Core(TM) i7-1360P") is False
+    assert desktop_cpu_model_matches("Intel(R) Core(TM) i7-1360P CPU @ 2.20GHz") is False
+    assert desktop_cpu_model_matches("AMD Ryzen 7 7840HS w/ Radeon 780M Graphics") is False
+    assert desktop_cpu_model_matches(None) is False
+    assert (
+        hardware_tier_matches(
+            "NVIDIA GeForce RTX 5070 Ti",
+            "rtx_50_series_desktop",
+            cpu_model="13th Gen Intel(R) Core(TM) i7-1360P",
+        )
+        is False
+    )
+
+
+def test_artifact_provenance_rejects_unverified_release_ledgers(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+
+    bin_dir = tmp_path / "deploy"
+    bin_dir.mkdir()
+    fixture_names = {
+        "empty_player": "nw_empty_player.exe",
+        "clear_present": "nw_clear_present_fixture.exe",
+        "compute_shader": "nw_compute_shader_fixture.exe",
+    }
+    for exe_name in fixture_names.values():
+        (bin_dir / exe_name).write_bytes(build_synthetic_pe64(["kernel32.dll"]))
+
+    # Bind matching artifact hashes into the copied release ledgers but deliberately leave
+    # every ledger and the selected toolchain entry unverified.
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        fixture_id = str(ledger["fixture_id"])
+        payload = (bin_dir / fixture_names[fixture_id]).read_bytes()
+        for component in ledger.get("distributed_components", []):
+            if component.get("category") == "executable":
+                component["sha256"] = hashlib.sha256(payload).hexdigest()
+                component["size_bytes"] = len(payload)
+        ledger["total_distributed_bytes"] = len(payload)
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
+    provenance = resolve_artifact_provenance(repo, bin_dir)
+    assert provenance["toolchain_id"] is None
+    assert provenance["source"] == "unavailable"
 
 
 def test_benchmark_capture_rejects_wrong_hardware_tier(

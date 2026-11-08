@@ -20,7 +20,7 @@
          D3D12 validation enabled (--validation) plus failure-recovery exit-code checks. The
          identical fixtures are also executed from the MSVC/LTCG clean build before either
          toolchain can be selected.
-      5. Performs evidence-completeness checks across desktop RTX 4060, representative RTX 50-series,
+      5. Performs evidence-completeness checks across desktop RTX 4060 Ti, representative RTX 50-series,
          reproducibility, and clean-system reports.
       NOTE: Missing prerequisites or unverified physical hardware/clean-system evidence NEVER
       produce a passing Full baseline result. Exit code 2 means no concrete check failed but

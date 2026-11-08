@@ -31,7 +31,7 @@ evidence, measured size ledgers, and D3D12-validation fixture runs. `CleanSystem
 SDK-absence checks and the observed GPU compute readback hash on the target machine.
 
 `Full` exits `0` only when the complete baseline and physical evidence are verified, `2` when
-concrete checks pass but RTX 4060/RTX 50-series or clean-system evidence remains unavailable,
+concrete checks pass but RTX 4060 Ti/RTX 50-series or clean-system evidence remains unavailable,
 `3` when required build/toolchain coverage (including MSVC/LTCG and failure-recovery
 diagnostics) was skipped or unavailable, and `1` when a build, schema, dependency,
 reproducibility, or fixture-validation check fails. Physical evidence is accepted only when

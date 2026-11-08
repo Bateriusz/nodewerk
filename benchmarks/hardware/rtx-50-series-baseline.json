@@ -2,103 +2,137 @@
   "schema_version": "1.0.0",
   "benchmark_id": "nw01-hardware-rtx-50-series-desktop-baseline",
   "hardware_tier": "rtx_50_series_desktop",
-  "verification_status": "verified",
-  "benchmark_passed": true,
+  "verification_status": "unverified",
+  "benchmark_passed": false,
+  "unverified_reason": "No physical desktop NVIDIA RTX 50-series benchmark has been captured in this workspace. Every environment and fixture measurement remains null until tools/verify-nw01.ps1 records a desktop RTX 50-series host with desktop-class CPU evidence; mobile GPUs and mobile/low-power CPUs cannot certify this tier.",
   "environment_metadata": {
-    "gpu_model": "NVIDIA GeForce RTX 5070 Ti",
-    "gpu_architecture": "Blackwell",
-    "gpu_vendor_id": "0x10DE",
-    "gpu_device_id": "0x2C05",
-    "vram_mb": 15995,
-    "cpu_model": "13th Gen Intel(R) Core(TM) i7-1360P",
+    "gpu_model": null,
+    "gpu_architecture": null,
+    "gpu_vendor_id": null,
+    "gpu_device_id": null,
+    "vram_mb": null,
+    "cpu_model": null,
     "os_name": "Windows 11 x64",
-    "os_build": "10.0.26200.9711",
-    "nvidia_driver_version": "610.88",
-    "wddm_driver_version": "32.0.16.1088",
+    "os_build": null,
+    "nvidia_driver_version": null,
+    "wddm_driver_version": null,
     "toolchain": {
-      "toolchain_id": "clang-cl-lld",
-      "compiler_name": "LLVM clang-cl",
-      "compiler_executable": "clang-cl.exe",
-      "compiler_version": "18.1.8",
-      "linker_name": "LLVM lld-link",
-      "linker_executable": "lld-link.exe",
-      "linker_version": "18.1.8",
-      "windows_sdk_version": "10.0.26100.0",
-      "dxc_version": "1.8.2407"
+      "toolchain_id": null,
+      "compiler_name": null,
+      "compiler_executable": null,
+      "compiler_version": null,
+      "linker_name": null,
+      "linker_executable": null,
+      "linker_version": null,
+      "windows_sdk_version": null,
+      "dxc_version": null
     },
     "power_settings": {
-      "windows_power_plan": "High performance",
-      "nvidia_power_management_mode": "Prefer maximum performance",
-      "pci_express_link_state_power_management": "Off"
+      "windows_power_plan": null,
+      "nvidia_power_management_mode": null,
+      "pci_express_link_state_power_management": null
     },
     "resolution": {
-      "width": 1280,
-      "height": 720,
-      "refresh_hz": 120,
+      "width": null,
+      "height": null,
+      "refresh_hz": null,
       "format": "DXGI_FORMAT_R8G8B8A8_UNORM",
       "presentation_mode": "windowed_swapchain",
       "measurement_source": "requested_fixture_size"
     },
     "cache_conditions": {
-      "driver_shader_cache_state": "warm_primed",
-      "os_file_cache_state": "warm",
+      "driver_shader_cache_state": "unverified",
+      "os_file_cache_state": "unverified",
       "warmup_frames": 0,
-      "measured_frames": 2
+      "measured_frames": 1
     }
   },
   "captured_capabilities": {
-    "max_supported_feature_level": "12_2",
-    "max_supported_shader_model": "6_8",
-    "baseline_feature_level_12_0_supported": true,
-    "baseline_shader_model_6_0_supported": true,
-    "resource_binding_tier": 3,
-    "resource_heap_tier": 2,
-    "wave_ops_queried": true,
-    "wave_ops_supported": true,
-    "int64_shader_ops_queried": true,
-    "int64_shader_ops_supported": true,
-    "fp16_shader_ops_queried": true,
-    "fp16_shader_ops_supported": true,
-    "typed_uav_additional_formats_supported": true
+    "max_supported_feature_level": null,
+    "max_supported_shader_model": null,
+    "baseline_feature_level_12_0_supported": null,
+    "baseline_shader_model_6_0_supported": null,
+    "resource_binding_tier": null,
+    "resource_heap_tier": null,
+    "wave_ops_queried": false,
+    "wave_ops_supported": null,
+    "int64_shader_ops_queried": false,
+    "int64_shader_ops_supported": null,
+    "fp16_shader_ops_queried": false,
+    "fp16_shader_ops_supported": null,
+    "typed_uav_additional_formats_supported": null
   },
   "artifact_provenance": {
-    "toolchain_id": "clang-cl-lld",
+    "toolchain_id": null,
     "artifact_sha256": {
-      "empty_player": "a676bed41cc276acaf10bfd6d2e5e2c954da8d8540fded7cf9d4b0e12bdcc4e8",
-      "clear_present": "79a35d166c31cc5ec82b079f8e089b0f6d039272be637208f8f7994e99542a73",
-      "compute_shader": "de109ce7df58af4781d32f190f2b48dca42b0fbd2800ff070c450809dabc0318"
+      "empty_player": null,
+      "clear_present": null,
+      "compute_shader": null
     },
-    "source": "recorded_ledger_artifact_hash"
+    "source": "unavailable"
   },
   "fixture_results": [
     {
       "fixture_id": "clear_present",
-      "sha256": "79a35d166c31cc5ec82b079f8e089b0f6d039272be637208f8f7994e99542a73",
-      "execution_status": "passed",
-      "d3d12_validation_clean": true,
+      "sha256": null,
+      "execution_status": "unverified",
+      "d3d12_validation_clean": null,
       "compute_output_verified": null,
-      "exit_code": 0,
-      "total_distributed_bytes": 172544,
-      "startup_time_ms": 291.71,
-      "cpu_time_ms": 281.25,
-      "gpu_time_ms": 0.008,
-      "committed_memory_bytes": 103211008,
-      "gpu_committed_memory_bytes": 22388736
+      "exit_code": null,
+      "total_distributed_bytes": null,
+      "startup_time_ms": null,
+      "cpu_time_ms": null,
+      "gpu_time_ms": null,
+      "committed_memory_bytes": null,
+      "gpu_committed_memory_bytes": null
     },
     {
       "fixture_id": "compute_shader",
-      "sha256": "de109ce7df58af4781d32f190f2b48dca42b0fbd2800ff070c450809dabc0318",
-      "execution_status": "passed",
-      "d3d12_validation_clean": true,
-      "compute_output_verified": true,
-      "exit_code": 0,
-      "total_distributed_bytes": 175616,
-      "startup_time_ms": 269.705,
-      "cpu_time_ms": 312.5,
-      "gpu_time_ms": 0.002,
-      "committed_memory_bytes": 100360192,
-      "gpu_committed_memory_bytes": 14594048
+      "sha256": null,
+      "execution_status": "unverified",
+      "d3d12_validation_clean": null,
+      "compute_output_verified": null,
+      "exit_code": null,
+      "total_distributed_bytes": null,
+      "startup_time_ms": null,
+      "cpu_time_ms": null,
+      "gpu_time_ms": null,
+      "committed_memory_bytes": null,
+      "gpu_committed_memory_bytes": null
     }
   ],
-  "unavailable_measurements": []
+  "unavailable_measurements": [
+    {
+      "metric": "environment_metadata",
+      "reason": "No physical desktop RTX 50-series capture exists; GPU, CPU, OS build, driver, power, resolution, and cache fields remain null rather than target values presented as measurements."
+    },
+    {
+      "metric": "captured_capabilities",
+      "reason": "Physical desktop RTX 50-series D3D12 CheckFeatureSupport capture has not been executed in this workspace."
+    },
+    {
+      "metric": "fixture_results.total_distributed_bytes",
+      "reason": "No Windows 11 x64 release build or fixture execution has been captured for the RTX 50-series tier; recorded as null rather than zero."
+    },
+    {
+      "metric": "fixture_results.startup_time_ms",
+      "reason": "Physical desktop RTX 50-series startup timing is unavailable until executed on the target machine; recorded as null rather than zero."
+    },
+    {
+      "metric": "fixture_results.cpu_time_ms",
+      "reason": "Physical desktop RTX 50-series CPU frame/dispatch timing is unavailable until executed on the target machine."
+    },
+    {
+      "metric": "fixture_results.gpu_time_ms",
+      "reason": "Physical desktop RTX 50-series GPU timestamp query timing is unavailable until executed on the target machine."
+    },
+    {
+      "metric": "fixture_results.committed_memory_bytes",
+      "reason": "Physical desktop RTX 50-series process and VidMm memory commitment is unavailable until executed on the target machine."
+    },
+    {
+      "metric": "fixture_results.gpu_committed_memory_bytes",
+      "reason": "Physical desktop RTX 50-series VidMm commitment is unavailable until executed on the target machine."
+    }
+  ]
 }

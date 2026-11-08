@@ -252,14 +252,53 @@ def _is_supported_nvidia_gpu_and_driver(
     return bool(re.match(r"^[0-9]{3}\.[0-9]{2}$", nvidia_driver_version.strip()))
 
 
-def hardware_tier_matches(gpu_model: str | None, hardware_tier: str) -> bool:
-    """Return True only when the observed adapter belongs to the requested evidence tier."""
+_MOBILE_CPU_MARKERS = ("laptop", "mobile", "notebook", "tablet")
+_MOBILE_INTEL_SUFFIXES = {"p", "u", "h", "hs", "hx", "g1", "g2", "g4", "g7", "g8"}
+_MOBILE_AMD_SUFFIXES = {"u", "h", "hs", "hx", "c", "e"}
+
+
+def desktop_cpu_model_matches(cpu_model: str | None) -> bool:
+    """Reject CPU models that identify mobile/low-power parts in a desktop evidence tier.
+
+    The NW-01 desktop tiers require a desktop-class processor. CPU strings are operator-
+    supplied or host-detected text, so this is a conservative filter: known mobile suffixes
+    (Intel P/U/H/HX/HS and AMD U/H/HS/HX) and explicit mobile markers fail certification.
+    A recognized desktop CPU model family is required; generic strings such as
+    "Intel64 Family 6 Model ..." and missing CPU evidence are not eligible.
+    """
+    if not cpu_model:
+        return False
+    lower = cpu_model.strip().lower()
+    if not lower or any(marker in lower for marker in _MOBILE_CPU_MARKERS):
+        return False
+    if any(marker in lower for marker in ("atom", "celeron", "pentium", "ryzen ai")):
+        return False
+    intel = re.search(r"\bi[3579]-\d{4,5}([a-z][a-z0-9]{0,3})?\b", lower)
+    if intel:
+        return (intel.group(1) or "") not in _MOBILE_INTEL_SUFFIXES
+    ultra = re.search(r"\bcore\s+ultra\s+[3579]\s+\d{3}([a-z][a-z0-9]{0,3})?\b", lower)
+    if ultra:
+        return (ultra.group(1) or "") not in _MOBILE_INTEL_SUFFIXES
+    amd = re.search(r"\bryzen\s+[3579]\s+\d{4}([a-z][a-z0-9]{0,3})?\b", lower)
+    if amd:
+        return (amd.group(1) or "") not in _MOBILE_AMD_SUFFIXES
+    return False
+
+
+def hardware_tier_matches(
+    gpu_model: str | None,
+    hardware_tier: str,
+    cpu_model: str | None = None,
+) -> bool:
+    """Return True only when the observed adapter (and optional CPU) matches the evidence tier."""
     if not gpu_model:
         return False
     lower = gpu_model.strip().lower()
     if "nvidia" not in lower:
         return False
     if "laptop" in lower or "mobile" in lower or "max-q" in lower:
+        return False
+    if cpu_model is not None and not desktop_cpu_model_matches(cpu_model):
         return False
     if hardware_tier == "rtx_4060_desktop":
         # Legacy tier identifier represents the desktop RTX 4060 compatibility class:
@@ -1791,14 +1830,13 @@ def resolve_artifact_provenance(
     binary_dir: Path,
     evidence_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Bind executed artifacts to recorded ledger hashes and optional CI build evidence.
+    """Bind executed artifacts to the selected toolchain's verified release ledgers.
 
-    A GPU-less CI BuildChecks run cannot fully verify release ledgers because fixture
-    execution is intentionally deferred to the physical target. For a packaged CleanSystem
-    run, an unverified ledger is therefore eligible only when the same evidence bundle proves
-    deterministic reproducibility, CodeView/PDB debugging, offline DXC evidence, and zero
-    concrete build failures. The physical CleanSystem execution supplies the missing fixture
-    execution evidence.
+    Unverified ledgers never establish provenance, including for a packaged CleanSystem
+    bundle. The selected toolchain entry and all three fixture ledgers (empty_player,
+    clear_present, compute_shader) must be verified and hash-match the executed artifacts.
+    Optional CI build evidence must additionally show no concrete failures and passing
+    reproducibility, debug-symbol, offline-shader, and failure-recovery checks.
     """
     fixture_specs = (
         ("empty_player", "nw_empty_player.exe"),
@@ -1818,20 +1856,36 @@ def resolve_artifact_provenance(
             hashes[fixture_id] = hashlib.sha256(payload).hexdigest()
             sizes[fixture_id] = len(payload)
 
+    manifest_path = (
+        evidence_dir / "toolchain-manifest.v1.json"
+        if evidence_dir is not None
+        else repo_root / "benchmarks" / "toolchain-manifest.v1.json"
+    )
+    selected_toolchain: str | None = None
+    selected_manifest_verified = False
+    if manifest_path.is_file():
+        toolchain_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        selected_toolchain = toolchain_manifest.get("selected_toolchain", {}).get(
+            "toolchain_id"
+        )
+        selected_entry = next(
+            (
+                entry
+                for entry in toolchain_manifest.get("evaluated_toolchains", [])
+                if entry.get("toolchain_id") == selected_toolchain
+            ),
+            None,
+        )
+        selected_manifest_verified = bool(
+            selected_entry
+            and selected_entry.get("verification_status") == "verified"
+        )
+
     bundle_build_checks: dict[str, Any] | None = None
-    bundle_allows_pending_fixture_execution = False
     if evidence_dir is not None:
         build_checks_path = evidence_dir / "build-checks.json"
         if build_checks_path.is_file():
             bundle_build_checks = json.loads(build_checks_path.read_text(encoding="utf-8"))
-            checks = bundle_build_checks.get("checks", {})
-            bundle_allows_pending_fixture_execution = bool(
-                bundle_build_checks.get("concrete_failures") == []
-                and checks.get("reproducibility_build", {}).get("passed") is True
-                and checks.get("clang_debug_symbols", {}).get("passed") is True
-                and checks.get("offline_shader", {}).get("passed") is True
-                and checks.get("failure_recovery", {}).get("passed") is True
-            )
 
     ledger_root = (
         evidence_dir / "ledgers"
@@ -1839,13 +1893,13 @@ def resolve_artifact_provenance(
         else repo_root / "benchmarks" / "ledgers"
     )
     ledger_matches: dict[str, set[str]] = {fixture_id: set() for fixture_id, _ in fixture_specs}
-    if ledger_root.is_dir():
+    if ledger_root.is_dir() and selected_toolchain and selected_manifest_verified:
         for ledger_path in sorted(ledger_root.glob("*.json")):
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-            ledger_status = ledger.get("verification_status")
-            if evidence_dir is not None:
-                if ledger_status != "verified" and not bundle_allows_pending_fixture_execution:
-                    continue
+            if ledger.get("verification_status") != "verified":
+                continue
+            if ledger.get("toolchain_id") != selected_toolchain:
+                continue
             fixture_id = str(ledger.get("fixture_id"))
             if fixture_id not in ledger_matches:
                 continue
@@ -1857,24 +1911,19 @@ def resolve_artifact_provenance(
                     component.get("category") == "executable"
                     and str(component.get("sha256", "")).lower() == artifact_hash.lower()
                 ):
-                    toolchain_id = ledger.get("toolchain_id")
-                    if toolchain_id:
-                        ledger_matches[fixture_id].add(str(toolchain_id))
+                    ledger_matches[fixture_id].add(selected_toolchain)
 
-    matched_toolchains = set.intersection(
-        *(ledger_matches[fixture_id] for fixture_id in required_fixture_ids)
-    )
-    complete = all(
-        hashes.get(fixture_id) and len(ledger_matches[fixture_id]) == 1
+    all_ledgers_verified = bool(selected_toolchain) and all(
+        ledger_matches[fixture_id] == {selected_toolchain}
         for fixture_id in required_fixture_ids
     )
     toolchain_id = (
-        next(iter(matched_toolchains))
-        if complete and len(matched_toolchains) == 1
+        selected_toolchain
+        if all_ledgers_verified and selected_manifest_verified
         else None
     )
 
-    if evidence_dir is not None:
+    if evidence_dir is not None and toolchain_id is not None:
         package_manifest_path = evidence_dir / "artifact-manifest.json"
         if not package_manifest_path.is_file():
             toolchain_id = None
@@ -1897,6 +1946,24 @@ def resolve_artifact_provenance(
                     toolchain_id = None
                     break
 
+        if toolchain_id is not None:
+            checks = (bundle_build_checks or {}).get("checks", {})
+            debug_check_name = (
+                "msvc_debug_symbols"
+                if toolchain_id == "msvc-ltcg"
+                else "clang_debug_symbols"
+            )
+            build_checks_ok = bool(
+                bundle_build_checks is not None
+                and bundle_build_checks.get("concrete_failures") == []
+                and checks.get("reproducibility_build", {}).get("passed") is True
+                and checks.get(debug_check_name, {}).get("passed") is True
+                and checks.get("offline_shader", {}).get("passed") is True
+                and checks.get("failure_recovery", {}).get("passed") is True
+            )
+            if not build_checks_ok:
+                toolchain_id = None
+
         if toolchain_id is not None and bundle_build_checks is not None:
             selected = (
                 bundle_build_checks.get("checks", {})
@@ -1904,10 +1971,7 @@ def resolve_artifact_provenance(
                 .get("recorded", {})
                 .get(toolchain_id, {})
             )
-            toolchain_manifest_path = evidence_dir / "toolchain-manifest.v1.json"
-            toolchain_manifest = json.loads(
-                toolchain_manifest_path.read_text(encoding="utf-8")
-            )
+            toolchain_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             if (
                 selected.get("selected_toolchain") != toolchain_id
                 or toolchain_manifest.get("selected_toolchain", {}).get("toolchain_id")
@@ -2073,6 +2137,17 @@ def capture_benchmark_result(
     ):
         if value is None or value == "":
             mark_unavailable(metric_name, reason)
+
+    desktop_cpu_verified = desktop_cpu_model_matches(
+        str(cpu_model) if cpu_model else None
+    )
+    if cpu_model and not desktop_cpu_verified:
+        mark_unavailable(
+            "environment_metadata.cpu_model",
+            f"CPU model '{cpu_model}' does not identify a desktop processor required by "
+            f"hardware tier '{hardware_tier}' (mobile/low-power CPU models cannot be certified "
+            "as a desktop baseline).",
+        )
 
     if not observed_gpu_model:
         mark_unavailable(
@@ -2268,7 +2343,12 @@ def capture_benchmark_result(
     hardware_verified = bool(
         observed_gpu_model
         and measured_nvidia_driver
-        and hardware_tier_matches(str(observed_gpu_model), hardware_tier)
+        and hardware_tier_matches(
+            str(observed_gpu_model),
+            hardware_tier,
+            cpu_model=str(cpu_model) if cpu_model else None,
+        )
+        and desktop_cpu_verified
         and _is_supported_nvidia_gpu_and_driver(
             str(observed_gpu_model), str(measured_nvidia_driver)
         )
@@ -2278,7 +2358,9 @@ def capture_benchmark_result(
         )
     )
     if observed_gpu_model and not hardware_tier_matches(
-        str(observed_gpu_model), hardware_tier
+        str(observed_gpu_model),
+        hardware_tier,
+        cpu_model=str(cpu_model) if cpu_model else None,
     ):
         mark_unavailable(
             "environment_metadata.gpu_model",
@@ -2750,7 +2832,7 @@ def run_full_mode(
                 "reason": f"Post-recording schema validation failed: {exc}",
             }
 
-    # 5. Evidence completeness check (RTX 4060, RTX 50-series, clean-system, reproducibility, toolchain comparison)
+    # 5. Evidence completeness check (RTX 4060 Ti, RTX 50-series, clean-system, reproducibility, toolchain comparison)
     evidence = check_evidence_completeness(repo_root)
     report["unmet_evidence"] = evidence["unmet_requirements"]
     report["checks"]["evidence_completeness"] = {
@@ -3310,7 +3392,8 @@ def run_clean_system_mode(
             reasons.append("observed compute readback did not match the committed expected bytes")
         if not provenance_verified:
             reasons.append(
-                "executed artifacts could not be bound to the CI build evidence and recorded ledger hashes"
+                "executed artifacts could not be bound to the selected toolchain's verified "
+                "release ledgers for all three fixtures (unverified ledgers are not accepted)"
             )
         if not system_env_measured:
             reasons.append(

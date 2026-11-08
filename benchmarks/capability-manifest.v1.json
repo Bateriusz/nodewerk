@@ -21,12 +21,12 @@
     "tested_nvidia_drivers": [
       {
         "hardware_tier": "rtx_4060_desktop",
-        "gpu_model": "NVIDIA GeForce RTX 4060",
+        "gpu_model": "NVIDIA GeForce RTX 4060 Ti",
         "driver_version": "566.03",
         "wddm_version": "32.0.15.6603",
         "windows_build": "10.0.26100.2033",
         "verification_status": "unverified",
-        "notes": "Target Ada Lovelace AD107 desktop baseline; marked unverified until physical Windows 11 RTX 4060 execution runs."
+        "notes": "Target Ada Lovelace AD106 desktop RTX 4060 Ti baseline; marked unverified until physical Windows 11 RTX 4060 Ti execution runs."
       },
       {
         "hardware_tier": "rtx_50_series_desktop",
