@@ -31,6 +31,11 @@ GPU-less BuildChecks and never advertises a CleanSystem package. The packaging c
 `tools/package-clean-system.ps1` refuses to run unless the supplied Full summary contains
 verified ledgers and successful clang-cl and MSVC fixture execution.
 
+The workflow can be started manually with `workflow_dispatch` after setting
+`NW_PHYSICAL_RUNNER_LABEL` to the physical Windows GPU runner label. The resulting physical
+job uploads the Full summary, ledgers, reproducibility reports, hardware baselines, and
+CleanSystem package for evidence review.
+
 ## 2. Clean Physical-System Execution
 
 Copy the `build/<preset>/deploy/` directory to a clean physical Windows 11 x64 machine with

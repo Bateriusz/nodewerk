@@ -1,6 +1,7 @@
 name: NW-01 Baseline & Deployment Risk Verification
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
   pull_request:
