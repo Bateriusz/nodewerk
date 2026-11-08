@@ -638,6 +638,17 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
     (package_evidence / "build-checks.json").write_text(
         json.dumps(build_checks, indent=2) + "\n", encoding="utf-8"
     )
+    restored_code, restored_summary = run_clean_system_mode(
+        sim_repo,
+        package_root,
+        allow_non_windows_simulation=True,
+        env=clean_env,
+        system32_dir=clean_sys32,
+        system_environment=measured_system_env,
+        executor=passing_executor,
+    )
+    assert restored_code == 0
+    assert restored_summary["clean_system_passed"] is True
 
     recorded_clean = json.loads(
         (sim_repo / "benchmarks" / "clean-system" / "clean-system-validation.json").read_text(encoding="utf-8")
