@@ -1453,10 +1453,11 @@ def test_loaded_module_paths_distinguish_inbox_d3d12core_from_redistributable() 
     assert basename_only["agility_d3d12core_redist_loaded"] is False
 
 
-def test_hardware_tier_requires_exact_desktop_class() -> None:
+def test_hardware_tier_requires_desktop_compatibility_class() -> None:
     assert hardware_tier_matches("NVIDIA GeForce RTX 4060", "rtx_4060_desktop") is True
-    assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Ti", "rtx_4060_desktop") is False
+    assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Ti", "rtx_4060_desktop") is True
     assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Laptop GPU", "rtx_4060_desktop") is False
+    assert hardware_tier_matches("NVIDIA GeForce RTX 4060 Ti Laptop GPU", "rtx_4060_desktop") is False
     assert hardware_tier_matches("NVIDIA GeForce RTX 5080", "rtx_50_series_desktop") is True
     assert hardware_tier_matches("NVIDIA GeForce RTX 5080 Laptop GPU", "rtx_50_series_desktop") is False
 
