@@ -1903,6 +1903,16 @@ def resolve_artifact_provenance(
                 .get("recorded", {})
                 .get(toolchain_id, {})
             )
+            toolchain_manifest_path = evidence_dir / "toolchain-manifest.v1.json"
+            toolchain_manifest = json.loads(
+                toolchain_manifest_path.read_text(encoding="utf-8")
+            )
+            if (
+                selected.get("selected_toolchain") != toolchain_id
+                or toolchain_manifest.get("selected_toolchain", {}).get("toolchain_id")
+                != toolchain_id
+            ):
+                toolchain_id = None
             recorded_fixtures = selected.get("recorded_fixtures", {})
             for fixture_id in required_fixture_ids:
                 if (
@@ -2904,6 +2914,7 @@ def run_clean_system_mode(
     if resolved_evidence_dir is not None:
         required_evidence = (
             resolved_evidence_dir / "artifact-manifest.json",
+            resolved_evidence_dir / "build-checks.json",
             resolved_evidence_dir / "shaders-manifest.json",
             resolved_evidence_dir / "toolchain-manifest.v1.json",
             resolved_evidence_dir / "ledgers",
