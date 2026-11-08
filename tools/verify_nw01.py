@@ -262,8 +262,9 @@ def hardware_tier_matches(gpu_model: str | None, hardware_tier: str) -> bool:
     if "laptop" in lower or "mobile" in lower or "max-q" in lower:
         return False
     if hardware_tier == "rtx_4060_desktop":
-        # Reject RTX 4060 Ti and other non-desktop RTX 4060 variants.
-        return re.search(r"\brtx\s*4060\b(?!\s*ti)", lower) is not None
+        # Legacy tier identifier represents the desktop RTX 4060 compatibility class:
+        # accept RTX 4060 and RTX 4060 Ti while still rejecting mobile variants above.
+        return re.search(r"\brtx\s*4060(?:\s*ti)?\b", lower) is not None
     if hardware_tier == "rtx_50_series_desktop":
         return re.search(r"\brtx\s*50[5-9]0(?:\s*ti)?\b", lower) is not None
     return False
