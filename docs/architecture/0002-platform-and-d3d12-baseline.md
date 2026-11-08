@@ -15,8 +15,8 @@ Shipping a standalone player without redistributing compiler or runtime DLLs req
 - **Target OS:** Windows 11 x64 (`x86_64-pc-windows-msvc`). The pinned minimum *target* build is `10.0.22631.4317` (Windows 11 23H2), with `10.0.26100.2033` (Windows 11 24H2) as the current capture target. Both builds are recorded as `target_pinned_unverified` until the Full/CleanSystem evidence gates execute on physical hardware; this ADR does not claim they have been tested yet.
 - **Non-Commitments:** Nodewerk makes **no commitment** to Windows 10, Linux, macOS, or legacy pre-Feature-Level-12_0 GPUs. Only one Windows x64 D3D12 backend is implemented initially.
 - **Target Hardware Matrix:**
-  1. **Desktop NVIDIA GeForce RTX 4060 Ti** (Ada Lovelace `AD106`, Device ID `0x2803`, target driver baseline `566.03` / WDDM `32.0.15.6603`; unverified until physically captured with desktop-class CPU evidence).
-  2. **Representative Desktop NVIDIA RTX 50-Series** (`NVIDIA GeForce RTX 5080`, Blackwell `GB203`, Device ID `0x2C02`, target driver baseline `572.16` / WDDM `32.0.15.7216`; unverified until physically captured with desktop-class CPU evidence).
+  1. **Desktop NVIDIA GeForce RTX 4060 Ti** (Ada Lovelace `AD106`, Device ID `0x2803`, target driver baseline `566.03` / WDDM `32.0.15.6603`; unverified until physically captured with recorded CPU metadata).
+  2. **Representative Desktop NVIDIA RTX 50-Series** (`NVIDIA GeForce RTX 5080`, Blackwell `GB203`, Device ID `0x2C02`, target driver baseline `572.16` / WDDM `32.0.15.7216`; unverified until physically captured with recorded CPU metadata).
 - **Missing Coverage Policy:** Any missing or unexecuted physical hardware coverage is recorded explicitly as `"verification_status": "unverified"` with `"benchmark_passed": false` and `null` runtime metrics (accompanied by `unavailable_measurements` explanations)—never as a passing benchmark or zeroed measurement. Toolchain selection likewise remains provisional until both identical-fixture builds and the physical captures contain matching artifact hashes and toolchain provenance.
 
 ### 2. Direct3D 12 Baseline Capability Profile

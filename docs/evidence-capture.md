@@ -7,8 +7,8 @@ Windows 11 x64 machines. Nothing in this repository fabricates or substitutes me
 
 | Tier | Required hardware class | Required recorded environment |
 | :--- | :--- | :--- |
-| `rtx_4060_desktop` | Desktop NVIDIA GeForce RTX 4060 Ti (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, desktop-class CPU model, GPU architecture |
-| `rtx_50_series_desktop` | Desktop NVIDIA RTX 50-series (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, desktop-class CPU model, GPU architecture |
+| `rtx_4060_desktop` | Desktop NVIDIA GeForce RTX 4060 Ti (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, measured CPU model, GPU architecture |
+| `rtx_50_series_desktop` | Desktop NVIDIA RTX 50-series (not Laptop GPU) | Exact Windows 11 build/UBR, NVIDIA driver `NNN.NN`, WDDM version, measured CPU model, GPU architecture |
 
 ## 1. Release Ledger, Reproducibility, and Compiler Comparison
 
@@ -75,9 +75,9 @@ tier matching, environment measurement, and artifact-hash provenance all verify.
 evidence-completeness gate additionally requires those recorded executable hashes and the
 toolchain ID to match the selected toolchain's verified release ledgers; stale physical
 results from older binaries cannot certify newly built artifacts. A desktop GPU name is not
-sufficient by itself: mobile/low-power CPU models (for example Intel `P`/`U`/`H`/`HX`/`HS`
-or AMD `U`/`H`/`HS`/`HX` suffixes) are rejected so a mobile host cannot be recorded as a
-desktop tier.
+sufficient by itself: CPU metadata must be recorded, but a specific CPU family or model
+whitelist is not imposed. Ryzen Threadripper, Intel Xeon W, Core, Ryzen, and other valid
+desktop workstation processors are acceptable when paired with the required desktop GPU.
 
 ## Current Status
 

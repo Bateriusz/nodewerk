@@ -4,7 +4,7 @@
   "hardware_tier": "rtx_50_series_desktop",
   "verification_status": "unverified",
   "benchmark_passed": false,
-  "unverified_reason": "No physical desktop NVIDIA RTX 50-series benchmark has been captured in this workspace. Every environment and fixture measurement remains null until tools/verify-nw01.ps1 records a desktop RTX 50-series host with desktop-class CPU evidence; mobile GPUs and mobile/low-power CPUs cannot certify this tier.",
+  "unverified_reason": "No physical desktop NVIDIA RTX 50-series benchmark has been captured in this workspace. Every environment and fixture measurement remains null until tools/verify-nw01.ps1 records a desktop RTX 50-series host with recorded CPU metadata.",
   "environment_metadata": {
     "gpu_model": null,
     "gpu_architecture": null,

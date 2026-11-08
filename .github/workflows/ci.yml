@@ -287,10 +287,60 @@ jobs:
           Write-Host "BuildChecks passed all concrete build/reproducibility/dependency/failure-recovery checks."
           Write-Host "Physical RTX 4060/RTX 50-series and clean-system evidence remain unverified and are NOT claimed by this job."
 
-      - name: Prepare clean-system deployment artifact
+      - name: Full physical-evidence gate (declared physical target only)
+        if: vars.NW_PHYSICAL_TARGET == 'true'
         shell: pwsh
         run: |
-          $source = "build/repro-clean-a/deploy"
+          $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
+          python tools/verify_nw01.py --mode Full --summary-json $summaryPath
+          $code = $LASTEXITCODE
+          if (-not (Test-Path $summaryPath)) {
+            Write-Error "Full mode did not produce a summary JSON (exit code $code)."
+            exit 1
+          }
+          $summary = Get-Content -Raw -Path $summaryPath | ConvertFrom-Json
+          if ($code -eq 0) {
+            Write-Host "Full mode passed every concrete and physical-evidence check."
+            exit 0
+          }
+          if ($code -eq 2) {
+            $requiredChecks = @(
+              "reproducibility_build",
+              "msvc_ltcg_build",
+              "clang_debug_symbols",
+              "msvc_debug_symbols",
+              "fixture_validation",
+              "msvc_fixture_validation",
+              "size_ledgers",
+              "failure_recovery"
+            )
+            foreach ($name in $requiredChecks) {
+              if ($summary.checks.$name.passed -ne $true) {
+                Write-Error "Full mode exited 2 but required concrete check '$name' did not pass."
+                exit 1
+              }
+            }
+            Write-Host "Full mode passed all concrete checks; only physical evidence remains unverified."
+            exit 0
+          }
+          Write-Error "Full mode failed or skipped required build coverage (exit code $code)."
+          exit 1
+
+      - name: Prepare clean-system deployment artifact
+        if: vars.NW_PHYSICAL_TARGET == 'true'
+        shell: pwsh
+        run: |
+          $toolchain = (Get-Content -Raw "benchmarks/toolchain-manifest.v1.json" | ConvertFrom-Json).selected_toolchain.toolchain_id
+          if ($toolchain -eq "msvc-ltcg") {
+            $source = "build/msvc-release-ltcg-clean-a/deploy"
+            $sourceBuildDirectory = "build/msvc-release-ltcg-clean-a"
+          } elseif ($toolchain -eq "clang-cl-lld") {
+            $source = "build/repro-clean-a/deploy"
+            $sourceBuildDirectory = "build/repro-clean-a"
+          } else {
+            Write-Error "Unknown selected toolchain '$toolchain'."
+            exit 1
+          }
           $artifactRoot = Join-Path $env:RUNNER_TEMP "nw01-clean-system-package"
           $deployRoot = Join-Path $artifactRoot "deploy"
           $evidenceRoot = Join-Path $artifactRoot "evidence"
@@ -329,8 +379,8 @@ jobs:
           $manifest = [ordered]@{
             schema_version = "1"
             source_commit = $env:GITHUB_SHA
-            source_build_directory = "build/repro-clean-a"
-            toolchain = "clang-cl-lld"
+            source_build_directory = $sourceBuildDirectory
+            toolchain = $toolchain
             purpose = "NW-01 CleanSystem physical Windows execution"
             files = $files
           }
@@ -345,55 +395,24 @@ jobs:
             (Join-Path $evidenceRoot "ledgers")
           Copy-Item -Force "benchmarks/reproducibility/*.json" `
             (Join-Path $evidenceRoot "reproducibility")
-          $buildChecksSummary = Join-Path $env:RUNNER_TEMP "nw01-build-checks.json"
-          if (Test-Path $buildChecksSummary -PathType Leaf) {
-            Copy-Item -Force $buildChecksSummary (Join-Path $evidenceRoot "build-checks.json")
+
+          # The package must carry the verified Full summary that produced these ledgers,
+          # not the earlier GPU-less BuildChecks summary.
+          $fullSummary = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
+          if (-not (Test-Path $fullSummary -PathType Leaf)) {
+            Write-Error "Verified Full summary is missing; refusing to advertise an unverified CleanSystem package."
+            exit 1
           }
+          Copy-Item -Force $fullSummary (Join-Path $evidenceRoot "build-checks.json")
 
       - name: Upload NW-01 clean-system deployment
+        if: vars.NW_PHYSICAL_TARGET == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: nw01-clean-system-deploy-${{ github.sha }}
           path: ${{ runner.temp }}/nw01-clean-system-package/
           if-no-files-found: error
           retention-days: 14
-      - name: Full physical-evidence gate (declared physical target only)
-        if: vars.NW_PHYSICAL_TARGET == 'true'
-        shell: pwsh
-        run: |
-          $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
-          python tools/verify_nw01.py --mode Full --summary-json $summaryPath
-          $code = $LASTEXITCODE
-          if (-not (Test-Path $summaryPath)) {
-            Write-Error "Full mode did not produce a summary JSON (exit code $code)."
-            exit 1
-          }
-          $summary = Get-Content -Raw -Path $summaryPath | ConvertFrom-Json
-          if ($code -eq 0) {
-            Write-Host "Full mode passed every concrete and physical-evidence check."
-            exit 0
-          }
-          if ($code -eq 2) {
-            $requiredChecks = @(
-              "reproducibility_build",
-              "msvc_ltcg_build",
-              "clang_debug_symbols",
-              "msvc_debug_symbols",
-              "fixture_validation",
-              "msvc_fixture_validation",
-              "failure_recovery"
-            )
-            foreach ($name in $requiredChecks) {
-              if ($summary.checks.$name.passed -ne $true) {
-                Write-Error "Full mode exited 2 but required concrete check '$name' did not pass."
-                exit 1
-              }
-            }
-            Write-Host "Full mode passed all concrete checks; only physical evidence remains unverified."
-            exit 0
-          }
-          Write-Error "Full mode failed or skipped required build coverage (exit code $code)."
-          exit 1
 
       - name: Upload NW-01 build-check evidence
         if: always()

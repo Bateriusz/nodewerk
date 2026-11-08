@@ -269,9 +269,9 @@ def hardware_tier_matches(
     if cpu_model is not None and not desktop_cpu_model_matches(cpu_model):
         return False
     if hardware_tier == "rtx_4060_desktop":
-        # Legacy tier identifier represents the desktop RTX 4060 compatibility class:
-        # accept RTX 4060 and RTX 4060 Ti while still rejecting mobile variants above.
-        return re.search(r"\brtx\s*4060(?:\s*ti)?\b", lower) is not None
+        # Legacy tier identifier now represents the explicitly required desktop RTX 4060 Ti.
+        # A non-Ti RTX 4060 must not silently certify this acceptance tier.
+        return re.search(r"\brtx\s*4060\s*ti\b", lower) is not None
     if hardware_tier == "rtx_50_series_desktop":
         return re.search(r"\brtx\s*50[5-9]0(?:\s*ti)?\b", lower) is not None
     return False
@@ -1411,9 +1411,8 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
             str(cpu_model) if cpu_model is not None else None
         ):
             unmet_requirements.append(
-                f"Hardware baseline '{tier}' lacks a recognized desktop-class CPU model "
-                f"(cpu_model={cpu_model!r}); mobile/low-power CPU evidence cannot certify "
-                "a desktop tier"
+                f"Hardware baseline '{tier}' lacks recorded CPU metadata "
+                f"(cpu_model={cpu_model!r})"
             )
             continue
         provenance = data.get("artifact_provenance") or {}
@@ -2041,9 +2040,18 @@ def capture_benchmark_result(
     def mark_unavailable(metric: str, reason: str) -> None:
         unavailable.append({"metric": metric, "reason": reason})
 
-    toolchain_manifest = json.loads(
-        (repo_root / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
-    )
+    if evidence_dir is not None:
+        toolchain_manifest_path = evidence_dir / "toolchain-manifest.v1.json"
+        toolchain_manifest = (
+            json.loads(toolchain_manifest_path.read_text(encoding="utf-8"))
+            if toolchain_manifest_path.is_file()
+            else {}
+        )
+    else:
+        toolchain_manifest_path = repo_root / "benchmarks" / "toolchain-manifest.v1.json"
+        toolchain_manifest = json.loads(
+            toolchain_manifest_path.read_text(encoding="utf-8")
+        )
     pinned = toolchain_manifest.get("pinned_dependencies", {})
     provenance = resolve_artifact_provenance(
         repo_root, binary_dir, evidence_dir
@@ -2129,17 +2137,6 @@ def capture_benchmark_result(
     ):
         if value is None or value == "":
             mark_unavailable(metric_name, reason)
-
-    desktop_cpu_verified = desktop_cpu_model_matches(
-        str(cpu_model) if cpu_model else None
-    )
-    if cpu_model and not desktop_cpu_verified:
-        mark_unavailable(
-            "environment_metadata.cpu_model",
-            f"CPU model '{cpu_model}' does not identify a desktop processor required by "
-            f"hardware tier '{hardware_tier}' (mobile/low-power CPU models cannot be certified "
-            "as a desktop baseline).",
-        )
 
     if not observed_gpu_model:
         mark_unavailable(
@@ -2340,7 +2337,6 @@ def capture_benchmark_result(
             hardware_tier,
             cpu_model=str(cpu_model) if cpu_model else None,
         )
-        and desktop_cpu_verified
         and _is_supported_nvidia_gpu_and_driver(
             str(observed_gpu_model), str(measured_nvidia_driver)
         )

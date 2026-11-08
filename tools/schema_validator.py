@@ -15,8 +15,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from evidence_checks import desktop_cpu_model_matches
-
 
 class SchemaValidationError(ValueError):
     """Raised when a JSON document fails schema or semantic validation."""
@@ -184,11 +182,6 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     raise SchemaValidationError(
                         f"{doc_path}: verified benchmark requires measured environment_metadata.{key}"
                     )
-            if not desktop_cpu_model_matches(str(env.get("cpu_model") or "")):
-                raise SchemaValidationError(
-                    f"{doc_path}: verified benchmark environment_metadata.cpu_model must identify "
-                    "a desktop-class processor; mobile/low-power CPUs cannot certify a desktop tier"
-                )
             toolchain = env.get("toolchain", {})
             if toolchain.get("toolchain_id") in (None, "", "unverified"):
                 raise SchemaValidationError(

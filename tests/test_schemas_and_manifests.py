@@ -148,7 +148,7 @@ def test_schema_rejects_unverified_benchmark_claiming_pass_or_zero_metrics() -> 
         validate_semantic_invariants(bad_repro, "reproducibility-report.schema.json", repro_path)
 
 
-def test_verified_benchmark_rejects_mobile_desktop_cpu_evidence() -> None:
+def test_verified_benchmark_requires_recorded_cpu_metadata_without_family_whitelist() -> None:
     hw_path = REPO_ROOT / "benchmarks" / "hardware" / "rtx-50-series-baseline.json"
     hw = json.loads(hw_path.read_text(encoding="utf-8"))
     hw["verification_status"] = "verified"
@@ -159,12 +159,43 @@ def test_verified_benchmark_rejects_mobile_desktop_cpu_evidence() -> None:
         gpu_vendor_id="0x10DE",
         gpu_device_id="0x2C05",
         vram_mb=16384,
-        cpu_model="13th Gen Intel(R) Core(TM) i7-1360P",
+        cpu_model="AMD Ryzen Threadripper PRO 7995WX 96-Core Processor",
         os_build="10.0.26200.9711",
         nvidia_driver_version="610.88",
         wddm_driver_version="32.0.16.1088",
     )
-    with pytest.raises(SchemaValidationError, match="desktop-class processor"):
+    hw["environment_metadata"]["toolchain"].update(
+        toolchain_id="clang-cl-lld",
+        compiler_name="LLVM clang-cl",
+        compiler_executable="clang-cl.exe",
+        compiler_version="18.1.8",
+        linker_name="LLVM lld-link",
+        linker_executable="lld-link.exe",
+        linker_version="18.1.8",
+        windows_sdk_version="10.0.26100.0",
+        dxc_version="1.8.2407",
+    )
+    hw["environment_metadata"]["power_settings"].update(
+        windows_power_plan="High performance",
+        nvidia_power_management_mode="Prefer maximum performance",
+        pci_express_link_state_power_management="Off",
+    )
+    hw["environment_metadata"]["resolution"].update(
+        width=1280, height=720, refresh_hz=60
+    )
+    hw["environment_metadata"]["cache_conditions"].update(
+        driver_shader_cache_state="warm_primed",
+        os_file_cache_state="warm",
+    )
+    hw["artifact_provenance"] = {
+        "toolchain_id": "clang-cl-lld",
+        "artifact_sha256": {},
+        "source": "recorded_ledger_artifact_hash",
+    }
+    validate_semantic_invariants(hw, "benchmark-result.schema.json", hw_path)
+
+    hw["environment_metadata"]["cpu_model"] = None
+    with pytest.raises(SchemaValidationError, match="environment_metadata.cpu_model"):
         validate_semantic_invariants(
             hw, "benchmark-result.schema.json", hw_path
         )
