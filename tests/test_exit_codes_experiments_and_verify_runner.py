@@ -358,6 +358,23 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
         build_synthetic_pe64(["kernel32.dll", "d3d12.dll", "dxgi.dll"]) + dxil_blob
     )
 
+    # A CleanSystem PASS must now be bound to recorded artifact hashes even for
+    # a raw binary directory. Bind the synthetic executables to the clang ledgers.
+    raw_fixture_names = {
+        "empty_player": "nw_empty_player.exe",
+        "clear_present": "nw_clear_present_fixture.exe",
+        "compute_shader": "nw_compute_shader_fixture.exe",
+    }
+    for ledger_path in (sim_repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        fixture_id = str(ledger["fixture_id"])
+        exe_payload = (bin_dir / raw_fixture_names[fixture_id]).read_bytes()
+        for component in ledger.get("distributed_components", []):
+            if component.get("category") == "executable":
+                component["sha256"] = hashlib.sha256(exe_payload).hexdigest()
+                component["size_bytes"] = len(exe_payload)
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
     clean_sys32 = tmp_path / "System32"
     clean_sys32.mkdir()
     clean_env: dict[str, str] = {}
