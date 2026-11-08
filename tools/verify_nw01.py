@@ -3330,7 +3330,11 @@ def run_clean_system_mode(
             "CleanSystem validation failed; see command summary."
         )
 
-    clean_report_path.write_text(\n        json.dumps(updated_report, indent=2) + "\n", encoding="utf-8", newline="\n"\n    )
+    clean_report_path.write_text(
+        json.dumps(updated_report, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     validate_file_against_schema(clean_report_path, clean_schema_path)
 
     return (0 if clean_passed else 1), {
