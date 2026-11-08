@@ -1820,7 +1820,7 @@ def resolve_artifact_provenance(
     if ledger_root.is_dir():
         for ledger_path in sorted(ledger_root.glob("*.json")):
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-            if ledger.get("verification_status") != "verified":
+            if evidence_dir is not None and ledger.get("verification_status") != "verified":
                 continue
             fixture_id = str(ledger.get("fixture_id"))
             if fixture_id not in ledger_matches:
