@@ -117,6 +117,14 @@
       "type": "string",
       "enum": ["verified", "target_pinned_unverified"]
     },
+    "intended_minimum_windows_build": {
+      "type": "string",
+      "pattern": "^10\\.0\\.(22[0-9]{3}|26[0-9]{3})\\.[0-9]+$"
+    },
+    "intended_minimum_windows_build_status": {
+      "type": "string",
+      "enum": ["verified", "target_pinned_unverified"]
+    },
     "required_feature_manifest_ref": {
       "type": "string",
       "const": "benchmarks/capability-manifest.v1.json"

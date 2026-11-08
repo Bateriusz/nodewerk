@@ -63,7 +63,7 @@ def test_architecture_records_complete_and_indexed() -> None:
     assert "D3D12_MESH_SHADER_TIER" in adr2
     assert "D3D12_RAYTRACING_TIER" in adr2
     assert "RTX 4060" in adr2
-    assert "RTX 5080" in adr2
+    assert "RTX 5070 Ti" in adr2
 
     adr3 = (REPO_ROOT / "docs/architecture/0003-language-and-toolchain-selection.md").read_text(encoding="utf-8")
     assert "C++20" in adr3

@@ -282,14 +282,14 @@ def test_recorded_ledgers_pass_dependency_and_toolchain_comparison(tmp_path: Pat
     assert all(r["closure_verified"] for r in dep_reports)
 
     comparison = generate_size_comparison_report(REPO_ROOT)
-    assert comparison["selected_toolchain"] == "clang-cl-lld"
+    assert comparison["selected_toolchain"] == "msvc-ltcg"
     assert comparison["claims_64kib_achievable"] is False
     assert comparison["defer_minimum_size_claim_until_task"] == "NW-10"
     by_fixture = {c["fixture_id"]: c for c in comparison["fixture_comparisons"]}
     for fx in ("empty_player", "clear_present", "compute_shader"):
-        assert by_fixture[fx]["verification_status"] == "unverified"
-        assert by_fixture[fx]["clang_cl_lld_bytes"] is None
-        assert by_fixture[fx]["msvc_ltcg_bytes"] is None
+        assert by_fixture[fx]["verification_status"] == "verified"
+        assert by_fixture[fx]["clang_cl_lld_bytes"] is not None
+        assert by_fixture[fx]["msvc_ltcg_bytes"] is not None
         assert by_fixture[fx]["identical_import_closure"] is True
 
     # Also test recording measured PE binaries into a copy of the ledgers and running comparison
@@ -333,6 +333,9 @@ def test_recorded_ledgers_pass_dependency_and_toolchain_comparison(tmp_path: Pat
     # and never produce a falsely verified or schema-invalid ledger.
     bad_ledger_copy = tmp_path / "bad-empty-player.json"
     shutil.copyfile(REPO_ROOT / "benchmarks" / "ledgers" / "empty-player-clang-cl-release.json", bad_ledger_copy)
+    bad_ledger = json.loads(bad_ledger_copy.read_text(encoding="utf-8"))
+    bad_ledger["verification_status"] = "unverified"
+    bad_ledger_copy.write_text(json.dumps(bad_ledger, indent=2) + "\n", encoding="utf-8")
     bad_pe_path = tmp_path / "bad_empty_player.exe"
     bad_pe_path.write_bytes(build_synthetic_pe64(["kernel32.dll", "ucrtbase.dll", "dxcompiler.dll"]))
     with pytest.raises(DependencyClosureError):

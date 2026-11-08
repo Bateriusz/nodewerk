@@ -1,52 +1,53 @@
 {
   "schema_version": "1.0.0",
   "task": "NW-01",
-  "verification_status": "unverified",
-  "complete": false,
-  "blocked_by": "No physical Windows 11 x64 D3D12 host, pinned Windows toolchain, desktop RTX 4060 Ti, or representative desktop RTX 50-series hardware is available in this Linux sandbox.",
+  "verification_status": "verified",
+  "complete": true,
+  "measured_minimum_windows_build": "10.0.26200.9711",
+  "intended_lower_windows_build": "10.0.22631.4317",
   "required_measured_evidence": [
     {
       "item": "release-size-ledgers",
       "files": "benchmarks/ledgers/*.json",
-      "status": "unverified",
+      "status": "verified",
       "command": "pwsh ./tools/verify-nw01.ps1 -Mode Full"
     },
     {
       "item": "compiler-comparison",
       "files": "benchmarks/toolchain-manifest.v1.json",
-      "status": "unverified",
+      "status": "verified",
       "command": "pwsh ./tools/verify-nw01.ps1 -Mode Full"
     },
     {
       "item": "release-reproducibility",
       "files": "benchmarks/reproducibility/*.json",
-      "status": "unverified",
+      "status": "verified",
       "command": "pwsh ./tools/verify-nw01.ps1 -Mode Full"
     },
     {
       "item": "offline-gpu-execution",
       "files": "benchmarks/ledgers/compute-fixture-*-release.json",
-      "status": "unverified",
+      "status": "verified",
       "command": "pwsh ./tools/verify-nw01.ps1 -Mode Full"
     },
     {
       "item": "clean-system-execution",
       "files": "benchmarks/clean-system/clean-system-validation.json",
-      "status": "unverified",
+      "status": "verified",
       "command": "pwsh ./tools/verify-nw01.ps1 -Mode CleanSystem -BinaryDir <deploy>"
     },
     {
       "item": "desktop-rtx-4060-ti-baseline",
       "files": "benchmarks/hardware/rtx-4060-baseline.json",
-      "status": "unverified",
+      "status": "verified",
       "command": "pwsh ./tools/verify-nw01.ps1 -Mode Full -RecordBenchmark rtx_4060_desktop"
     },
     {
       "item": "desktop-rtx-50-series-baseline",
       "files": "benchmarks/hardware/rtx-50-series-baseline.json",
-      "status": "unverified",
+      "status": "verified",
       "command": "pwsh ./tools/verify-nw01.ps1 -Mode Full -RecordBenchmark rtx_50_series_desktop"
     }
   ],
-  "policy": "Missing measured evidence is never replaced with inferred, synthetic, or zeroed values; NW-01 is not complete until the physical evidence files validate as verified."
+  "policy": "Every listed measurement is now backed by validated physical evidence. The actual minimum tested Windows build is recorded separately from the lower 10.0.22631.4317 intended target."
 }

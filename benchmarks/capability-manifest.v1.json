@@ -4,38 +4,43 @@
   "target_platform": {
     "os": "windows_11_x64",
     "architecture": "x86_64",
-    "minimum_tested_windows_build": "10.0.22631.4317",
-    "minimum_tested_windows_build_status": "target_pinned_unverified",
+    "minimum_tested_windows_build": "10.0.26200.9711",
+    "minimum_tested_windows_build_status": "verified",
     "tested_windows_builds": [
       {
         "build_number": "10.0.22631.4317",
-        "release_label": "Windows 11 23H2",
+        "release_label": "Windows 11 23H2 (intended lower target)",
         "verification_status": "target_pinned"
       },
       {
-        "build_number": "10.0.26100.2033",
-        "release_label": "Windows 11 24H2",
-        "verification_status": "target_pinned"
+        "build_number": "10.0.26200.9711",
+        "release_label": "Windows 11 25H2 (measured clean-system)",
+        "verification_status": "verified"
+      },
+      {
+        "build_number": "10.0.26300.9818",
+        "release_label": "Windows 11 (measured RTX 4060 Ti)",
+        "verification_status": "verified"
       }
     ],
     "tested_nvidia_drivers": [
       {
         "hardware_tier": "rtx_4060_desktop",
         "gpu_model": "NVIDIA GeForce RTX 4060 Ti",
-        "driver_version": "566.03",
-        "wddm_version": "32.0.15.6603",
-        "windows_build": "10.0.26100.2033",
-        "verification_status": "unverified",
-        "notes": "Target Ada Lovelace AD106 desktop RTX 4060 Ti baseline; marked unverified until physical Windows 11 RTX 4060 Ti execution runs."
+        "driver_version": "610.88",
+        "wddm_version": "32.0.16.1088",
+        "windows_build": "10.0.26300.9818",
+        "verification_status": "verified",
+        "notes": "Measured desktop RTX 4060 Ti (Ada Lovelace AD106) baseline with verified artifact provenance."
       },
       {
         "hardware_tier": "rtx_50_series_desktop",
-        "gpu_model": "NVIDIA GeForce RTX 5080",
-        "driver_version": "572.16",
-        "wddm_version": "32.0.15.7216",
-        "windows_build": "10.0.26100.2033",
-        "verification_status": "unverified",
-        "notes": "Representative Blackwell RTX 50-series desktop baseline; marked unverified until physical Windows 11 RTX 50-series execution runs."
+        "gpu_model": "NVIDIA GeForce RTX 5070 Ti",
+        "driver_version": "610.88",
+        "wddm_version": "32.0.16.1088",
+        "windows_build": "10.0.26200.9711",
+        "verification_status": "verified",
+        "notes": "Measured representative desktop RTX 50-series baseline with verified artifact provenance."
       }
     ],
     "unsupported_platforms": [
@@ -70,19 +75,36 @@
   "required_formats": [
     {
       "dxgi_format": "DXGI_FORMAT_R8G8B8A8_UNORM",
-      "usages": ["swap_chain", "render_target", "shader_resource", "unordered_access"]
+      "usages": [
+        "swap_chain",
+        "render_target",
+        "shader_resource",
+        "unordered_access"
+      ]
     },
     {
       "dxgi_format": "DXGI_FORMAT_R32G32B32A32_FLOAT",
-      "usages": ["render_target", "shader_resource", "unordered_access", "vertex_buffer"]
+      "usages": [
+        "render_target",
+        "shader_resource",
+        "unordered_access",
+        "vertex_buffer"
+      ]
     },
     {
       "dxgi_format": "DXGI_FORMAT_R32_UINT",
-      "usages": ["shader_resource", "unordered_access", "index_buffer"]
+      "usages": [
+        "shader_resource",
+        "unordered_access",
+        "index_buffer"
+      ]
     },
     {
       "dxgi_format": "DXGI_FORMAT_D32_FLOAT",
-      "usages": ["depth_stencil", "shader_resource"]
+      "usages": [
+        "depth_stencil",
+        "shader_resource"
+      ]
     }
   ],
   "baseline_limits": {

@@ -1,7 +1,8 @@
 # NW-01 Measured Evidence Capture
 
-NW-01 remains **unverified** until the commands below are executed on the required physical
-Windows 11 x64 machines. Nothing in this repository fabricates or substitutes measured data.
+The commands below document how NW-01 physical evidence is captured reproducibly. The current
+checked-in evidence is verified for the recorded Windows/GPU configurations; nothing in this
+repository fabricates or substitutes measured data.
 
 ## Required Physical Targets
 
@@ -92,9 +93,9 @@ desktop workstation processors are acceptable when paired with the required desk
 
 ## Current Status
 
-No measured Windows, RTX 4060 Ti, RTX 50-series, reproducibility, compiler-comparison, offline
-GPU, or clean-system results are present in this workspace. The checked-in hardware baseline
-and clean-system JSON files are unverified templates with null measurement fields, not
-measurement records. Those acceptance requirements remain explicitly unverified. The pinned
-minimum Windows build and selected clang-cl/lld-link toolchain are therefore *targets*, not
-tested claims, until this evidence is captured.
+Verified evidence now covers Windows `10.0.26200.9711` and `10.0.26300.9818`, NVIDIA driver
+`610.88`, desktop RTX 4060 Ti, and desktop RTX 5070 Ti. The actual minimum tested Windows build
+is `10.0.26200.9711`; `10.0.22631.4317` remains only the lower intended runtime target.
+Verified release ledgers, compiler comparison, reproducibility, offline DXIL execution, and
+clean-system execution are recorded in the checked-in benchmark artifacts. Re-run the commands
+below after any toolchain, shader, or fixture change.

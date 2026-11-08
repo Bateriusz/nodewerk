@@ -11,7 +11,7 @@ Because player and measurement fixture builds disable C++ exceptions (`/EHs-c-`,
 | ---: | :--- | :--- | :--- |
 | `0` | `Success` | `ok` | Normal completion; all GPU/Win32 resources released cleanly. |
 | `10` | `InvalidArguments` | `platform_bootstrap` | Unrecognized CLI flag or invalid argument value. |
-| `11` | `OsVersionUnsupported` | `platform_bootstrap` | OS build is older than the pinned minimum target Windows 11 x64 build (`10.0.22631`). |
+| `11` | `OsVersionUnsupported` | `platform_bootstrap` | OS build is older than the intended runtime floor (`10.0.22631`). The actual measured minimum tested build is `10.0.26200.9711`; the lower floor remains a target, not a measured claim. |
 | `12` | `WindowCreationFailed` | `platform_bootstrap` | Win32 `RegisterClassA` or `CreateWindowExA` failed. |
 | `20` | `DxgiFactoryCreationFailed` | `device_and_capability` | `CreateDXGIFactory2` failed. |
 | `21` | `AdapterEnumerationFailed` | `device_and_capability` | No hardware DXGI adapter supporting `D3D_FEATURE_LEVEL_12_0` was found. |

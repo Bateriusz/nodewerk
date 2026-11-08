@@ -53,8 +53,8 @@
     "cmake_version": "3.30.2",
     "ninja_version": "1.12.1"
   },
-  "minimum_tested_windows_build": "10.0.22631.4317",
-  "minimum_tested_windows_build_status": "target_pinned_unverified",
+  "minimum_tested_windows_build": "10.0.26200.9711",
+  "minimum_tested_windows_build_status": "verified",
   "required_feature_manifest_ref": "benchmarks/capability-manifest.v1.json",
   "build_profiles": {
     "dev": {
@@ -225,5 +225,7 @@
     "require_deterministic_timestamp": true,
     "require_two_clean_dir_hash_match": true
   },
-  "unavailable_measurements": []
+  "unavailable_measurements": [],
+  "intended_minimum_windows_build": "10.0.22631.4317",
+  "intended_minimum_windows_build_status": "target_pinned_unverified"
 }

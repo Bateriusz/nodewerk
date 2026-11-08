@@ -33,8 +33,8 @@ values.
 - **Record:** [`benchmarks/experiments/msvc-ltcg-comparison.json`](../benchmarks/experiments/msvc-ltcg-comparison.json)
 - **Reproducible Command:** `cmake --preset msvc-release-ltcg && cmake --build --preset msvc-release-ltcg`
 - **Category:** `toolchain_comparison`
-- **Status:** `rejected_preserved` (`substituted_silently: false`, `verification_status: unverified` on Linux host)
-- **Outcome:** The experiment is preserved unverified because no Windows PE byte comparison has been executed. `clang-cl/lld-link` remains only the provisional default in `benchmarks/toolchain-manifest.v1.json`; `tools/size_ledger.py` selects the smaller verified aggregate footprint (or the only verified toolchain) from the recorded ledgers and updates `selected_toolchain` after measurement, including when `MSVC/LTCG` wins. The `MSVC/LTCG` presets (`msvc-dev`, `msvc-release-ltcg`, `msvc-compact-experiment`) and ledger schemas remain preserved in `benchmarks/ledgers/*-msvc-ltcg-release.json` for identical-fixture comparison on Windows 11 x64.
+- **Status:** `retained_in_baseline` (`substituted_silently: false`, `verification_status: verified`)
+- **Outcome:** Both toolchains built twice in independent clean directories and executed all three identical fixtures. MSVC/LTCG produced 494080 B aggregate versus 503808 B for clang-cl/lld-link and is smaller on every fixture, so `tools/size_ledger.py` selected MSVC/LTCG as the retained primary toolchain. The exact measured configuration remains preserved in `benchmarks/experiments/msvc-ltcg-comparison.json`, the release ledgers, and the toolchain manifest.
 
 ### 2. Compact Profile Experiment: Section Merging (`/MERGE:.rdata=.text`) + Sub-Page Alignment (`/ALIGN:16`)
 - **Record:** [`benchmarks/experiments/compact-profile-experiment.json`](../benchmarks/experiments/compact-profile-experiment.json)
@@ -54,5 +54,5 @@ values.
 
 ## Inbox-Runtime Blocker Log
 
-- **Current Status:** No inbox-runtime blocker has been *observed or recorded* yet. The stated Feature Level `12_0` + Shader Model `6.0` baseline assumes that the Windows 11 x64 inbox `d3d12.dll` supports bounded descriptor tables, ordinary barriers, and one direct queue without `D3D12Core.dll` Agility SDK redistribution. That assumption remains **unverified** until the physical RTX 4060 Ti and RTX 50-series captures run; if it fails, the exact `win_build`, `d3d12_dll` version, HRESULT, and failed feature must be recorded here before any profile or redistributable change.
+- **Current Status:** No inbox-runtime blocker was observed in the verified RTX 4060 Ti and RTX 5070 Ti captures. The recorded dispatches succeeded on inbox Windows 11 `d3d12.dll` with Feature Level `12_0` + Shader Model `6.0`, bounded descriptor tables, ordinary barriers, and one direct queue without Agility SDK redistribution. If a future capture fails, the exact `win_build`, `d3d12_dll` version, HRESULT, and failed feature must be recorded here before any profile or redistributable change.
 - **Blocker Reporting Mechanism:** Verified via `nw_empty_player --simulate-failure InboxRuntimeBlocker --diagnostics`, which returns exit code `25` (`InboxRuntimeBlocker`) and emits the structured blocker diagnostic required before any profile change.

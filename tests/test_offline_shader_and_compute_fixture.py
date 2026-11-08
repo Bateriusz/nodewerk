@@ -31,7 +31,11 @@ from offline_shader_pack import (  # noqa: E402
     validate_dxil_container,
     verify_dxil_blob_with_cpp_validator,
 )
-from size_ledger import generate_size_comparison_report, record_release_ledgers  # noqa: E402
+from size_ledger import (  # noqa: E402
+    _apply_selected_toolchain_pin,
+    generate_size_comparison_report,
+    record_release_ledgers,
+)
 from schema_validator import validate_file_against_schema  # noqa: E402
 from test_dependency_closure_and_accounting import build_synthetic_pe64  # noqa: E402
 
@@ -419,8 +423,32 @@ def test_verified_shader_manifest_does_not_break_unverified_size_ledgers(tmp_pat
     manifest["unavailable_measurements"] = []
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
+    # This test targets the unverified-ledger state; reset the copied repository evidence.
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*.json"):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        ledger["verification_status"] = "unverified"
+        ledger["unverified_reason"] = "synthetic unverified-ledger test state"
+        ledger["total_distributed_bytes"] = None
+        for component in ledger.get("distributed_components", []):
+            component["size_bytes"] = None
+            component["sha256"] = None
+        for shader in ledger.get("shaders", []):
+            shader["offline_dxil_bytes"] = None
+            shader["embedded_in_executable_bytes"] = None
+        if not any(
+            item["metric"] == "total_distributed_bytes"
+            for item in ledger.get("unavailable_measurements", [])
+        ):
+            ledger.setdefault("unavailable_measurements", []).append(
+                {
+                    "metric": "total_distributed_bytes",
+                    "reason": "Synthetic test resets ledger bytes to unverified.",
+                }
+            )
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
     report = generate_size_comparison_report(repo)
-    assert report["selected_toolchain"] == "clang-cl-lld"
+    assert report["selected_toolchain"] == "msvc-ltcg"
     assert all(c["verification_status"] == "unverified" for c in report["fixture_comparisons"])
 
 
@@ -428,6 +456,7 @@ def test_record_release_ledgers_from_measured_binaries(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
         shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    _reset_repo_evidence(repo)
 
     dxil_blob = make_test_signed_dxil_container()
     manifest_path = repo / "shaders" / "manifest.json"
@@ -539,6 +568,7 @@ def test_record_release_ledgers_requires_pdb_and_reproducibility_evidence(tmp_pa
     repo = tmp_path / "repo"
     for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
         shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    _reset_repo_evidence(repo)
 
     dxil_blob = make_test_signed_dxil_container()
     manifest_path = repo / "shaders" / "manifest.json"
@@ -802,6 +832,68 @@ def _copied_repo_with_verified_shader(tmp_path: Path) -> tuple[Path, bytes]:
     return repo, dxil_blob
 
 
+def _reset_repo_evidence(repo: Path, selected_toolchain: str = "clang-cl-lld") -> Path:
+    """Reset copied verified evidence to the unverified baseline expected by older tests."""
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*.json"):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        ledger["verification_status"] = "unverified"
+        ledger["unverified_reason"] = "synthetic test reset to unverified state"
+        ledger["total_distributed_bytes"] = None
+        for component in ledger.get("distributed_components", []):
+            component["size_bytes"] = None
+            component["sha256"] = None
+        for section in ledger.get("executable_sections", []):
+            section["virtual_size_bytes"] = None
+            section["raw_size_bytes"] = None
+        for shader in ledger.get("shaders", []):
+            shader["offline_dxil_bytes"] = None
+            shader["embedded_in_executable_bytes"] = None
+        if not any(
+            item["metric"] == "total_distributed_bytes"
+            for item in ledger.get("unavailable_measurements", [])
+        ):
+            ledger.setdefault("unavailable_measurements", []).append(
+                {
+                    "metric": "total_distributed_bytes",
+                    "reason": "Synthetic test resets ledger evidence to unverified.",
+                }
+            )
+        unavailable_metrics = {
+            item["metric"] for item in ledger.get("unavailable_measurements", [])
+        }
+        for metric, reason in (
+            (
+                "executable_sections",
+                "Synthetic test resets section measurements to unverified.",
+            ),
+            (
+                "shaders[0].offline_dxil_bytes",
+                "Synthetic test resets shader measurements to unverified.",
+            ),
+        ):
+            if metric not in unavailable_metrics and (
+                metric == "executable_sections" or ledger.get("shaders")
+            ):
+                ledger.setdefault("unavailable_measurements", []).append(
+                    {"metric": metric, "reason": reason}
+                )
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
+    toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
+    toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    for entry in toolchain["evaluated_toolchains"]:
+        entry["verification_status"] = "unverified"
+        entry["pdb_debugging_verified"] = False
+        entry["deterministic_repro_verified"] = False
+        entry["fixture_execution_verified"] = False
+        entry["empty_player_bytes"] = None
+        entry["clear_present_bytes"] = None
+        entry["compute_fixture_bytes"] = None
+    _apply_selected_toolchain_pin(toolchain, selected_toolchain)
+    toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
+    return repo
+
+
 def _write_fixture_binaries(binary_dir: Path, dxil_blob: bytes, extra_text_bytes: int = 0) -> None:
     for fixture_id in ("empty_player", "clear_present", "compute_shader"):
         (binary_dir / "staging" / fixture_id).mkdir(parents=True, exist_ok=True)
@@ -825,6 +917,7 @@ def _write_fixture_binaries(binary_dir: Path, dxil_blob: bytes, extra_text_bytes
 
 def test_only_verified_msvc_toolchain_is_selected_instead_of_clang_default(tmp_path: Path) -> None:
     repo, dxil_blob = _copied_repo_with_verified_shader(tmp_path)
+    repo = _reset_repo_evidence(repo)
     bin_dir = tmp_path / "msvc_only"
     _write_fixture_binaries(bin_dir, dxil_blob)
 
@@ -861,6 +954,14 @@ def test_incomplete_verification_preserves_measured_compute_binary_bytes(tmp_pat
     repo = tmp_path / "repo"
     for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
         shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    _reset_repo_evidence(repo)
+    shader_manifest_path = repo / "shaders" / "manifest.json"
+    shader_manifest = json.loads(shader_manifest_path.read_text(encoding="utf-8"))
+    shader_manifest["verification_status"] = "unverified"
+    shader_manifest["shaders"][0]["compiled_offline_with_dxc"] = False
+    shader_manifest["shaders"][0]["offline_dxil_bytes"] = None
+    shader_manifest["shaders"][0]["offline_dxil_sha256"] = None
+    shader_manifest_path.write_text(json.dumps(shader_manifest, indent=2) + "\n", encoding="utf-8")
 
     # The shader manifest intentionally remains unverified (offline DXIL bytes are null),
     # but the compute fixture PE binary itself is measurable.
@@ -953,6 +1054,7 @@ def test_selection_rationale_uses_mixed_per_fixture_ordering(tmp_path: Path) -> 
 
 def test_generate_report_reconciles_stale_manifest_toolchain_selection(tmp_path: Path) -> None:
     repo, dxil_blob = _copied_repo_with_verified_shader(tmp_path)
+    repo = _reset_repo_evidence(repo)
     clang_dir = tmp_path / "clang_bin"
     msvc_dir = tmp_path / "msvc_bin"
     _write_fixture_binaries(clang_dir, dxil_blob, extra_text_bytes=512)
@@ -1013,6 +1115,7 @@ def test_generate_report_reconciles_stale_manifest_toolchain_selection(tmp_path:
 
 def test_failed_reverification_downgrades_previously_verified_ledgers(tmp_path: Path) -> None:
     repo, dxil_blob = _copied_repo_with_verified_shader(tmp_path)
+    repo = _reset_repo_evidence(repo)
     bin_dir = tmp_path / "clang_bin"
     _write_fixture_binaries(bin_dir, dxil_blob)
     first = record_release_ledgers(
@@ -1090,6 +1193,7 @@ def test_toolchain_is_not_selectable_without_fixture_execution_evidence(
     tmp_path: Path,
 ) -> None:
     repo, dxil_blob = _copied_repo_with_verified_shader(tmp_path)
+    repo = _reset_repo_evidence(repo)
     bin_dir = tmp_path / "clang_bin"
     _write_fixture_binaries(bin_dir, dxil_blob)
 

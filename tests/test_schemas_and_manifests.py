@@ -28,7 +28,7 @@ def test_all_repository_json_artifacts_validate_against_schemas() -> None:
 def test_capability_manifest_baseline_and_cpp_enforcement_agreement() -> None:
     cap = json.loads((REPO_ROOT / "benchmarks" / "capability-manifest.v1.json").read_text(encoding="utf-8"))
     assert cap["target_platform"]["os"] == "windows_11_x64"
-    assert cap["target_platform"]["minimum_tested_windows_build"] == "10.0.22631.4317"
+    assert cap["target_platform"]["minimum_tested_windows_build"] == "10.0.26200.9711"
     assert "windows_10" in cap["target_platform"]["unsupported_platforms"]
     assert "linux" in cap["target_platform"]["unsupported_platforms"]
     assert "macos" in cap["target_platform"]["unsupported_platforms"]
@@ -36,11 +36,11 @@ def test_capability_manifest_baseline_and_cpp_enforcement_agreement() -> None:
     drivers = {d["hardware_tier"]: d for d in cap["target_platform"]["tested_nvidia_drivers"]}
     assert set(drivers.keys()) == {"rtx_4060_desktop", "rtx_50_series_desktop"}
     assert drivers["rtx_4060_desktop"]["gpu_model"] == "NVIDIA GeForce RTX 4060 Ti"
-    assert drivers["rtx_4060_desktop"]["driver_version"] == "566.03"
-    assert drivers["rtx_4060_desktop"]["verification_status"] == "unverified"
-    assert drivers["rtx_50_series_desktop"]["gpu_model"] == "NVIDIA GeForce RTX 5080"
-    assert drivers["rtx_50_series_desktop"]["driver_version"] == "572.16"
-    assert drivers["rtx_50_series_desktop"]["verification_status"] == "unverified"
+    assert drivers["rtx_4060_desktop"]["driver_version"] == "610.88"
+    assert drivers["rtx_4060_desktop"]["verification_status"] == "verified"
+    assert drivers["rtx_50_series_desktop"]["gpu_model"] == "NVIDIA GeForce RTX 5070 Ti"
+    assert drivers["rtx_50_series_desktop"]["driver_version"] == "610.88"
+    assert drivers["rtx_50_series_desktop"]["verification_status"] == "verified"
 
     api = cap["graphics_api"]
     assert api["api"] == "D3D12"
@@ -78,53 +78,57 @@ def test_hardware_benchmark_coverage_matches_recorded_physical_evidence() -> Non
     rtx4060_path = REPO_ROOT / "benchmarks" / "hardware" / "rtx-4060-baseline.json"
     rtx4060 = json.loads(rtx4060_path.read_text(encoding="utf-8"))
     assert rtx4060["hardware_tier"] == "rtx_4060_desktop"
-    assert rtx4060["verification_status"] == "unverified"
-    assert rtx4060["benchmark_passed"] is False
-    assert rtx4060["environment_metadata"]["gpu_model"] is None
+    assert rtx4060["verification_status"] == "verified"
+    assert rtx4060["benchmark_passed"] is True
+    assert rtx4060["environment_metadata"]["gpu_model"] == "NVIDIA GeForce RTX 4060 Ti"
+    assert rtx4060["environment_metadata"]["os_build"] == "10.0.26300.9818"
+    assert rtx4060["environment_metadata"]["nvidia_driver_version"] == "610.88"
     for fx in rtx4060["fixture_results"]:
-        assert fx["execution_status"] == "unverified"
-        assert fx["total_distributed_bytes"] is None
-        assert fx["startup_time_ms"] is None
-        assert fx["cpu_time_ms"] is None
-        assert fx["gpu_time_ms"] is None
-        assert fx["committed_memory_bytes"] is None
+        assert fx["execution_status"] == "passed"
+        assert fx["total_distributed_bytes"] is not None
+        assert fx["startup_time_ms"] is not None
+        assert fx["cpu_time_ms"] is not None
+        assert fx["gpu_time_ms"] is not None
+        assert fx["committed_memory_bytes"] is not None
 
     rtx50_path = REPO_ROOT / "benchmarks" / "hardware" / "rtx-50-series-baseline.json"
     rtx50 = json.loads(rtx50_path.read_text(encoding="utf-8"))
     assert rtx50["hardware_tier"] == "rtx_50_series_desktop"
-    assert rtx50["verification_status"] == "unverified"
-    assert rtx50["benchmark_passed"] is False
-    assert rtx50["environment_metadata"]["gpu_model"] is None
-    assert rtx50["environment_metadata"]["cpu_model"] is None
-    assert rtx50["artifact_provenance"]["toolchain_id"] is None
-    assert rtx50["artifact_provenance"]["source"] == "unavailable"
+    assert rtx50["verification_status"] == "verified"
+    assert rtx50["benchmark_passed"] is True
+    assert rtx50["environment_metadata"]["gpu_model"] == "NVIDIA GeForce RTX 5070 Ti"
+    assert rtx50["environment_metadata"]["cpu_model"] is not None
+    assert rtx50["artifact_provenance"]["toolchain_id"] == "msvc-ltcg"
+    assert rtx50["artifact_provenance"]["source"] == "recorded_ledger_artifact_hash"
     for fx in rtx50["fixture_results"]:
-        assert fx["execution_status"] == "unverified"
-        assert fx["exit_code"] is None
-        assert fx["total_distributed_bytes"] is None
-        assert fx["startup_time_ms"] is None
-        assert fx["cpu_time_ms"] is None
-        assert fx["gpu_time_ms"] is None
-        assert fx["committed_memory_bytes"] is None
+        assert fx["execution_status"] == "passed"
+        assert fx["exit_code"] == 0
+        assert fx["total_distributed_bytes"] is not None
+        assert fx["startup_time_ms"] is not None
+        assert fx["cpu_time_ms"] is not None
+        assert fx["gpu_time_ms"] is not None
+        assert fx["committed_memory_bytes"] is not None
 
     clean = json.loads(
         (
             REPO_ROOT / "benchmarks" / "clean-system" / "clean-system-validation.json"
         ).read_text(encoding="utf-8")
     )
-    assert clean["verification_status"] == "unverified"
-    assert clean["clean_system_passed"] is False
-    assert all(value is None for value in clean["sdk_absence_checks"].values())
-    assert clean["deployed_dependency_inventory"]["inbox_dlls_resolved"] == []
-    assert clean["system_environment"]["os_build"] is None
-    assert clean["system_environment"]["gpu_model"] is None
-    assert clean["system_environment"]["nvidia_driver_version"] is None
+    assert clean["verification_status"] == "verified"
+    assert clean["clean_system_passed"] is True
+    assert all(value is True for value in clean["sdk_absence_checks"].values())
+    assert clean["deployed_dependency_inventory"]["inbox_dlls_resolved"]
+    assert clean["system_environment"]["os_build"] == "10.0.26200.9711"
+    assert clean["system_environment"]["gpu_model"] == "NVIDIA GeForce RTX 5070 Ti"
+    assert clean["system_environment"]["nvidia_driver_version"] == "610.88"
 
 
 def test_schema_rejects_unverified_benchmark_claiming_pass_or_zero_metrics() -> None:
     hw_path = REPO_ROOT / "benchmarks" / "hardware" / "rtx-4060-baseline.json"
     schema_path = REPO_ROOT / "schemas" / "benchmark-result.schema.json"
     hw = json.loads(hw_path.read_text(encoding="utf-8"))
+    hw["verification_status"] = "unverified"
+    hw["benchmark_passed"] = False
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
     # Case 1: unverified hardware must never have benchmark_passed=True
@@ -143,6 +147,7 @@ def test_schema_rejects_unverified_benchmark_claiming_pass_or_zero_metrics() -> 
     repro_path = REPO_ROOT / "benchmarks" / "reproducibility" / "release-build-reproducibility.json"
     repro = json.loads(repro_path.read_text(encoding="utf-8"))
     bad_repro = copy.deepcopy(repro)
+    bad_repro["verification_status"] = "unverified"
     bad_repro["all_artifacts_match"] = True
     with pytest.raises(SchemaValidationError, match="all_artifacts_match=false"):
         validate_semantic_invariants(bad_repro, "reproducibility-report.schema.json", repro_path)

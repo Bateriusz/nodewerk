@@ -44,7 +44,10 @@ from test_dependency_closure_and_accounting import (  # noqa: E402
     build_synthetic_msf_pdb,
     build_synthetic_pe64,
 )
-from test_offline_shader_and_compute_fixture import make_test_signed_dxil_container  # noqa: E402
+from test_offline_shader_and_compute_fixture import (  # noqa: E402
+    _reset_repo_evidence,
+    make_test_signed_dxil_container,
+)
 from verify_nw01 import (  # noqa: E402
     _format_nvidia_driver_version,
     build_and_compare_two_clean_directories,
@@ -134,23 +137,40 @@ def test_exit_codes_and_d3d12_bootstrap_safety_contracts() -> None:
 def test_preserved_experiments_retain_reproducible_commands_and_honest_unverified_state() -> None:
     exp_dir = REPO_ROOT / "benchmarks" / "experiments"
     expected_experiments = {
-        "msvc-ltcg-comparison.json": ("toolchain_comparison", "rejected_preserved"),
-        "compact-profile-experiment.json": ("compact_profile", "failed_preserved"),
-        "crt-elimination-experiment.json": ("crt_elimination", "failed_preserved"),
+        "msvc-ltcg-comparison.json": (
+            "toolchain_comparison",
+            "retained_in_baseline",
+            "verified",
+        ),
+        "compact-profile-experiment.json": (
+            "compact_profile",
+            "failed_preserved",
+            "unverified",
+        ),
+        "crt-elimination-experiment.json": (
+            "crt_elimination",
+            "failed_preserved",
+            "unverified",
+        ),
     }
-    for filename, (expected_cat, expected_status) in expected_experiments.items():
+    for filename, (expected_cat, expected_status, expected_verification) in expected_experiments.items():
         record = json.loads((exp_dir / filename).read_text(encoding="utf-8"))
         assert record["category"] == expected_cat
         assert record["status"] == expected_status
-        assert record["verification_status"] == "unverified"
+        assert record["verification_status"] == expected_verification
         assert record["substituted_silently"] is False
         assert "cmake --preset" in record["reproducible_command"]
         assert record["configuration"]["security_mitigations_retained"] is True
         assert len(record["initialization_and_cleanup_obligations"]) >= 1
-        assert record["measurements"]["total_distributed_bytes"] is None
-        assert record["measurements"]["delta_vs_release_baseline_bytes"] is None
-        assert record["diagnostics"]["exit_code"] is None
-        assert len(record["unavailable_measurements"]) >= 2
+        if expected_verification == "verified":
+            assert record["measurements"]["total_distributed_bytes"] is not None
+            assert record["measurements"]["delta_vs_release_baseline_bytes"] is not None
+            assert record["diagnostics"]["exit_code"] == 0
+        else:
+            assert record["measurements"]["total_distributed_bytes"] is None
+            assert record["measurements"]["delta_vs_release_baseline_bytes"] is None
+            assert record["diagnostics"]["exit_code"] is None
+            assert len(record["unavailable_measurements"]) >= 2
 
     # Ensure compact-profile-experiment does NOT map 0xC000007B to ExitCode::OsVersionUnsupported (11)
     compact_rec = json.loads((exp_dir / "compact-profile-experiment.json").read_text(encoding="utf-8"))
@@ -302,10 +322,10 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
     assert '[ValidateSet("Full", "CleanSystem")]' in ps1_text
     assert "verify_nw01.py" in ps1_text
 
-    # On the unverified repository checkout, offline-shader plus all physical/toolchain evidence items are unmet.
+    # The repository now carries verified physical/toolchain evidence.
     evidence = check_evidence_completeness(REPO_ROOT)
-    assert evidence["complete"] is False
-    assert len(evidence["unmet_requirements"]) >= 4
+    assert evidence["complete"] is True
+    assert evidence["unmet_requirements"] == []
 
     # Test active SDK-absence probing and CleanSystem recording in an isolated repo copy
     sim_repo = tmp_path / "repo"
@@ -333,8 +353,8 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
     assert isinstance(full_summary["checks"]["offline_shader"]["passed"], bool)
     assert full_summary["checks"]["dependency_closures"]["passed"] is True
     assert full_summary["checks"]["size_ledgers"]["contracts_valid"] is True
-    assert full_summary["checks"]["size_ledgers"]["comparison_verified"] is False
-    assert full_summary["checks"]["size_ledgers"]["passed"] is False
+    assert full_summary["checks"]["size_ledgers"]["comparison_verified"] is True
+    assert full_summary["checks"]["size_ledgers"]["passed"] is True
     assert isinstance(full_summary["checks"]["fixture_validation"]["passed"], bool)
 
     # Simulate the state after a successful offline DXC build recorded by Full mode.
@@ -830,6 +850,14 @@ def test_record_shader_manifest_evidence_uses_validated_build_artifact(tmp_path:
     (repo / "shaders").mkdir(parents=True)
     shutil.copy(REPO_ROOT / "shaders" / "compute_fixture.hlsl", repo / "shaders" / "compute_fixture.hlsl")
     shutil.copy(REPO_ROOT / "shaders" / "manifest.json", repo / "shaders" / "manifest.json")
+    reset_manifest = json.loads((repo / "shaders" / "manifest.json").read_text(encoding="utf-8"))
+    reset_manifest["verification_status"] = "unverified"
+    reset_manifest["shaders"][0]["compiled_offline_with_dxc"] = False
+    reset_manifest["shaders"][0]["offline_dxil_bytes"] = None
+    reset_manifest["shaders"][0]["offline_dxil_sha256"] = None
+    (repo / "shaders" / "manifest.json").write_text(
+        json.dumps(reset_manifest, indent=2) + "\n", encoding="utf-8"
+    )
 
     dxil_blob = make_test_signed_dxil_container()
     stale_dxil = repo / "build" / "clang-cl-release" / "shaders" / "compute_fixture.dxil"
@@ -1019,6 +1047,7 @@ def test_run_full_mode_builds_both_toolchains_and_reflects_post_recording_failur
     sim_repo = tmp_path / "repo"
     for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
         shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
+    _reset_repo_evidence(sim_repo, selected_toolchain="clang-cl-lld")
 
     mock_dxc = tmp_path / "mock_dxc.py"
     mock_dxc.write_text(
@@ -1197,6 +1226,7 @@ def test_run_full_mode_runs_clang_path_without_msvc_tools(
     sim_repo = tmp_path / "repo"
     for subdir in ("benchmarks", "schemas", "fixtures", "shaders"):
         shutil.copytree(REPO_ROOT / subdir, sim_repo / subdir)
+    _reset_repo_evidence(sim_repo, selected_toolchain="clang-cl-lld")
 
     mock_dxc = tmp_path / "mock_dxc.py"
     mock_dxc.write_text(
@@ -1282,7 +1312,10 @@ def test_run_full_mode_runs_clang_path_without_msvc_tools(
     code, summary = run_full_mode(sim_repo)
     # The clang path built and executed, but the required MSVC/LTCG comparison coverage
     # is missing, so this must not be reported as an evidence-only exit 2.
-    assert code == 3
+    assert code == 3, (
+        summary.get("concrete_failures"),
+        summary["checks"].get("size_ledgers", {}).get("reason"),
+    )
     assert summary["gate_status"] == "build_coverage_missing"
     assert "msvc_ltcg_build" in summary["missing_build_coverage"]
     assert summary["checks"]["reproducibility_build"]["passed"] is True
@@ -1328,13 +1361,13 @@ def test_capture_benchmark_result_records_measured_metrics(
         "clear_present": "nw_clear_present_fixture.exe",
         "compute_shader": "nw_compute_shader_fixture.exe",
     }
-    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-msvc-ltcg-release.json"):
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         fixture_id = ledger["fixture_id"]
         payload = (bin_dir / ledger_exe[fixture_id]).read_bytes()
         ledger["distributed_components"][0]["sha256"] = hashlib.sha256(payload).hexdigest()
         ledger["distributed_components"][0]["size_bytes"] = len(payload)
-        ledger["toolchain_id"] = "clang-cl-lld"
+        ledger["toolchain_id"] = "msvc-ltcg"
         ledger["verification_status"] = "verified"
         ledger.pop("unverified_reason", None)
         ledger["total_distributed_bytes"] = len(payload)
@@ -1347,7 +1380,7 @@ def test_capture_benchmark_result_records_measured_metrics(
     toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
     toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
     for entry in toolchain["evaluated_toolchains"]:
-        if entry["toolchain_id"] == "clang-cl-lld":
+        if entry["toolchain_id"] == "msvc-ltcg":
             entry["status"] = "selected"
             entry["verification_status"] = "verified"
             entry["pdb_debugging_verified"] = True
@@ -1546,6 +1579,7 @@ def test_artifact_provenance_rejects_unverified_release_ledgers(tmp_path: Path) 
     repo = tmp_path / "repo"
     for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
         shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    _reset_repo_evidence(repo, selected_toolchain="msvc-ltcg")
 
     bin_dir = tmp_path / "deploy"
     bin_dir.mkdir()
@@ -1560,7 +1594,7 @@ def test_artifact_provenance_rejects_unverified_release_ledgers(tmp_path: Path) 
     sizes: dict[str, int] = {}
     # Bind matching artifact hashes into the copied release ledgers but deliberately leave
     # every ledger and the selected toolchain entry unverified.
-    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-msvc-ltcg-release.json"):
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         fixture_id = str(ledger["fixture_id"])
         payload = (bin_dir / fixture_names[fixture_id]).read_bytes()
@@ -1578,19 +1612,19 @@ def test_artifact_provenance_rejects_unverified_release_ledgers(tmp_path: Path) 
 
     # A manifest entry marked verified without the execution/PDB/reproducibility flags
     # cannot establish provenance even when all three ledger hashes match.
-    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-msvc-ltcg-release.json"):
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         ledger["verification_status"] = "verified"
         ledger.pop("unverified_reason", None)
         ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
     toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
-    clang_entry = next(
+    msvc_entry = next(
         entry
         for entry in toolchain["evaluated_toolchains"]
-        if entry["toolchain_id"] == "clang-cl-lld"
+        if entry["toolchain_id"] == "msvc-ltcg"
     )
-    clang_entry.update(
+    msvc_entry.update(
         status="selected",
         verification_status="verified",
         fixture_execution_verified=True,
@@ -1602,19 +1636,19 @@ def test_artifact_provenance_rejects_unverified_release_ledgers(tmp_path: Path) 
         compute_fixture_bytes=sizes["compute_shader"],
     )
     toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
-    assert resolve_artifact_provenance(repo, bin_dir)["toolchain_id"] == "clang-cl-lld"
+    assert resolve_artifact_provenance(repo, bin_dir)["toolchain_id"] == "msvc-ltcg"
 
     for flag in (
         "fixture_execution_verified",
         "pdb_debugging_verified",
         "deterministic_repro_verified",
     ):
-        clang_entry[flag] = False
+        msvc_entry[flag] = False
         toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
         provenance = resolve_artifact_provenance(repo, bin_dir)
         assert provenance["toolchain_id"] is None
         assert provenance["source"] == "unavailable"
-        clang_entry[flag] = True
+        msvc_entry[flag] = True
     toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
 
 
@@ -1975,7 +2009,7 @@ def test_evidence_completeness_requires_matching_artifact_hashes_and_toolchain(
         "clear_present": "nw_clear_present_fixture.exe",
         "compute_shader": "nw_compute_shader_fixture.exe",
     }
-    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-clang-cl-release.json"):
+    for ledger_path in (repo / "benchmarks" / "ledgers").glob("*-msvc-ltcg-release.json"):
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         fixture_id = ledger["fixture_id"]
         ledger["verification_status"] = "verified"
@@ -2021,7 +2055,7 @@ def test_evidence_completeness_requires_matching_artifact_hashes_and_toolchain(
         repro_path.write_text(json.dumps(repro, indent=2) + "\n", encoding="utf-8")
 
     provenance = {
-        "toolchain_id": "clang-cl-lld",
+        "toolchain_id": "msvc-ltcg",
         "artifact_sha256": hashes,
         "source": "recorded_ledger_artifact_hash",
     }
@@ -2081,7 +2115,7 @@ def test_evidence_completeness_requires_matching_artifact_hashes_and_toolchain(
     hardware["artifact_provenance"]["artifact_sha256"]["clear_present"] = hashes[
         "clear_present"
     ]
-    hardware["artifact_provenance"]["toolchain_id"] = "msvc-ltcg"
+    hardware["artifact_provenance"]["toolchain_id"] = "clang-cl-lld"
     hardware_paths[0].write_text(
         json.dumps(hardware, indent=2) + "\n", encoding="utf-8"
     )

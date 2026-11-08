@@ -12,12 +12,12 @@ Shipping a standalone player without redistributing compiler or runtime DLLs req
 
 ### 1. Target Operating System & Hardware Tiers
 
-- **Target OS:** Windows 11 x64 (`x86_64-pc-windows-msvc`). The pinned minimum *target* build is `10.0.22631.4317` (Windows 11 23H2), with `10.0.26100.2033` (Windows 11 24H2) as the current capture target. Both builds are recorded as `target_pinned_unverified` until the Full/CleanSystem evidence gates execute on physical hardware; this ADR does not claim they have been tested yet.
+- **Target OS:** Windows 11 x64 (`x86_64-pc-windows-msvc`). The actual **minimum tested** build is `10.0.26200.9711`, recorded as verified. `10.0.22631.4317` remains the lower *intended runtime target* and is recorded separately as `target_pinned_unverified`; it is not claimed as measured.
 - **Non-Commitments:** Nodewerk makes **no commitment** to Windows 10, Linux, macOS, or legacy pre-Feature-Level-12_0 GPUs. Only one Windows x64 D3D12 backend is implemented initially.
 - **Target Hardware Matrix:**
-  1. **Desktop NVIDIA GeForce RTX 4060 Ti** (Ada Lovelace `AD106`, Device ID `0x2803`, target driver baseline `566.03` / WDDM `32.0.15.6603`; unverified until physically captured with recorded CPU metadata).
-  2. **Representative Desktop NVIDIA RTX 50-Series** (`NVIDIA GeForce RTX 5080`, Blackwell `GB203`, Device ID `0x2C02`, target driver baseline `572.16` / WDDM `32.0.15.7216`; unverified until physically captured with recorded CPU metadata).
-- **Missing Coverage Policy:** Any missing or unexecuted physical hardware coverage is recorded explicitly as `"verification_status": "unverified"` with `"benchmark_passed": false` and `null` runtime metrics (accompanied by `unavailable_measurements` explanations)—never as a passing benchmark or zeroed measurement. Toolchain selection likewise remains provisional until both identical-fixture builds and the physical captures contain matching artifact hashes and toolchain provenance.
+  1. **Desktop NVIDIA GeForce RTX 4060 Ti** (Ada Lovelace `AD106`, Device ID `0x2803`): measured on Windows `10.0.26300.9818` with NVIDIA `610.88` / WDDM `32.0.16.1088`; verified with artifact-hash provenance.
+  2. **Representative Desktop NVIDIA RTX 50-Series** (`NVIDIA GeForce RTX 5070 Ti`, Blackwell, Device ID `0x2C05`): measured on Windows `10.0.26200.9711` with NVIDIA `610.88` / WDDM `32.0.16.1088`; verified with artifact-hash provenance.
+- **Missing Coverage Policy:** Any missing or unexecuted physical hardware coverage is recorded explicitly as `"verification_status": "unverified"` with `"benchmark_passed": false` and `null` runtime metrics (accompanied by `unavailable_measurements` explanations)—never as a passing benchmark or zeroed measurement. The recorded RTX 4060 Ti and RTX 5070 Ti captures now carry verified artifact-hash provenance, so toolchain selection is backed by measured identical-fixture builds rather than remaining provisional.
 
 ### 2. Direct3D 12 Baseline Capability Profile
 

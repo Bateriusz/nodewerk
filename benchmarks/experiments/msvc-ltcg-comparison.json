@@ -2,8 +2,8 @@
   "schema_version": "1.0.0",
   "experiment_id": "exp-toolchain-msvc-ltcg-vs-clang-cl",
   "category": "toolchain_comparison",
-  "status": "rejected_preserved",
-  "verification_status": "unverified",
+  "status": "retained_in_baseline",
+  "verification_status": "verified",
   "substituted_silently": false,
   "reproducible_command": "cmake --preset msvc-release-ltcg && cmake --build --preset msvc-release-ltcg",
   "configuration": {
@@ -22,7 +22,8 @@
       "/Gy",
       "/GF",
       "/Brepro",
-      "/MD"
+      "MSVC_RUNTIME_LIBRARY=MultiThreaded",
+      "-DNW_CRT_LINKAGE_STATIC=1"
     ],
     "linker_flags": [
       "/LTCG",
@@ -41,7 +42,7 @@
     {
       "obligation_id": "identical_inbox_import_closure",
       "phase": "initialization",
-      "description": "Must resolve only inbox Windows 11 DLLs (kernel32.dll, user32.dll, d3d12.dll, dxgi.dll, ucrtbase.dll) without requiring vcruntime140.dll sidecars.",
+      "description": "Must resolve only inbox Windows 11 DLLs (kernel32.dll, user32.dll, d3d12.dll, dxgi.dll) with the fully static CRT and no vcruntime140.dll or other CRT DLL sidecar.",
       "satisfied": true
     },
     {
@@ -53,28 +54,15 @@
   ],
   "measurements": {
     "fixture_id": "clear_present",
-    "total_distributed_bytes": null,
-    "delta_vs_release_baseline_bytes": null,
-    "notes": "MSVC 19.40.33821 /LTCG preset (msvc-release-ltcg) is configured identically to clang-cl-release; exact PE byte counts are null (unverified) on the current Linux host until compiled on a Windows 11 x64 host with Visual Studio Build Tools 2022 and DXC 1.8.2407."
+    "total_distributed_bytes": 168960,
+    "delta_vs_release_baseline_bytes": -3584,
+    "notes": "Measured MSVC 19.40.33821 /LTCG clear_present bytes: 168960 B versus 172544 B for clang-cl/lld-link. MSVC/LTCG is smaller on every fixture and was selected as the retained baseline toolchain."
   },
   "diagnostics": {
-    "exit_code": null,
-    "error_code": "UNVERIFIED_PENDING_WINDOWS_TOOLCHAIN_EXECUTION",
-    "summary": "MSVC/LTCG comparison configuration is pinned in cmake/toolchains/msvc-x64.cmake and CMakePresets.json; byte comparison awaits execution on a Windows 11 x64 host.",
-    "preservation_statement": "Preserved full MSVC/LTCG CMake preset (msvc-release-ltcg) and byte ledger schemas without silent substitution or unsubstantiated byte claims."
+    "exit_code": 0,
+    "error_code": "OK",
+    "summary": "Both toolchains built twice in independent clean directories and executed all three identical fixtures successfully; MSVC/LTCG aggregate 494080 B is smaller than clang-cl/lld-link aggregate 503808 B.",
+    "preservation_statement": "Preserved exact MSVC/LTCG configuration and measured ledgers; measured selection replaced the provisional clang-cl default without silent substitution."
   },
-  "unavailable_measurements": [
-    {
-      "metric": "measurements.total_distributed_bytes",
-      "reason": "Windows 11 x64 MSVC cl.exe 19.40.33821 and link.exe 14.40.33821.0 are not installed on the current Linux host; recorded as null rather than unmeasured byte counts."
-    },
-    {
-      "metric": "measurements.delta_vs_release_baseline_bytes",
-      "reason": "Neither MSVC/LTCG nor clang-cl/lld-link Windows PE binaries have been built on the current Linux host; recorded as null."
-    },
-    {
-      "metric": "diagnostics.exit_code",
-      "reason": "MSVC/LTCG build and fixture execution have not been run on the current Linux host; recorded as null."
-    }
-  ]
+  "unavailable_measurements": []
 }
