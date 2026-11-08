@@ -1790,13 +1790,21 @@ def resolve_artifact_provenance(
     binary_dir: Path,
     evidence_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Match executed artifacts to verified ledger hashes and optional CI package metadata."""
+    """Bind executed artifacts to recorded ledger hashes and optional CI build evidence.
+
+    A GPU-less CI BuildChecks run cannot fully verify release ledgers because fixture
+    execution is intentionally deferred to the physical target. For a packaged CleanSystem
+    run, an unverified ledger is therefore eligible only when the same evidence bundle proves
+    deterministic reproducibility, CodeView/PDB debugging, offline DXC evidence, and zero
+    concrete build failures. The physical CleanSystem execution supplies the missing fixture
+    execution evidence.
+    """
     fixture_specs = (
         ("empty_player", "nw_empty_player.exe"),
         ("clear_present", "nw_clear_present_fixture.exe"),
         ("compute_shader", "nw_compute_shader_fixture.exe"),
     )
-    required_fixture_ids = ("clear_present", "compute_shader")
+    required_fixture_ids = tuple(fixture_id for fixture_id, _ in fixture_specs)
     hashes: dict[str, str | None] = {}
     sizes: dict[str, int | None] = {}
     for fixture_id, exe_name in fixture_specs:
@@ -1809,19 +1817,34 @@ def resolve_artifact_provenance(
             hashes[fixture_id] = hashlib.sha256(payload).hexdigest()
             sizes[fixture_id] = len(payload)
 
+    bundle_build_checks: dict[str, Any] | None = None
+    bundle_allows_pending_fixture_execution = False
+    if evidence_dir is not None:
+        build_checks_path = evidence_dir / "build-checks.json"
+        if build_checks_path.is_file():
+            bundle_build_checks = json.loads(build_checks_path.read_text(encoding="utf-8"))
+            checks = bundle_build_checks.get("checks", {})
+            bundle_allows_pending_fixture_execution = bool(
+                bundle_build_checks.get("concrete_failures") == []
+                and checks.get("reproducibility_build", {}).get("passed") is True
+                and checks.get("clang_debug_symbols", {}).get("passed") is True
+                and checks.get("offline_shader", {}).get("passed") is True
+                and checks.get("failure_recovery", {}).get("passed") is True
+            )
+
     ledger_root = (
         evidence_dir / "ledgers"
         if evidence_dir is not None
         else repo_root / "benchmarks" / "ledgers"
     )
-    ledger_matches: dict[str, set[str]] = {
-        fixture_id: set() for fixture_id, _ in fixture_specs
-    }
+    ledger_matches: dict[str, set[str]] = {fixture_id: set() for fixture_id, _ in fixture_specs}
     if ledger_root.is_dir():
         for ledger_path in sorted(ledger_root.glob("*.json")):
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-            if evidence_dir is not None and ledger.get("verification_status") != "verified":
-                continue
+            ledger_status = ledger.get("verification_status")
+            if evidence_dir is not None:
+                if ledger_status != "verified" and not bundle_allows_pending_fixture_execution:
+                    continue
             fixture_id = str(ledger.get("fixture_id"))
             if fixture_id not in ledger_matches:
                 continue
@@ -1869,6 +1892,22 @@ def resolve_artifact_provenance(
                     or str(item.get("sha256", "")).lower()
                     != str(hashes.get(fixture_id) or "").lower()
                     or int(item.get("bytes", -1)) != int(sizes.get(fixture_id) or -1)
+                ):
+                    toolchain_id = None
+                    break
+
+        if toolchain_id is not None and bundle_build_checks is not None:
+            selected = (
+                bundle_build_checks.get("checks", {})
+                .get("size_ledgers", {})
+                .get("recorded", {})
+                .get(toolchain_id, {})
+            )
+            recorded_fixtures = selected.get("recorded_fixtures", {})
+            for fixture_id in required_fixture_ids:
+                if (
+                    str(recorded_fixtures.get(fixture_id, {}).get("sha256", "")).lower()
+                    != str(hashes.get(fixture_id) or "").lower()
                 ):
                     toolchain_id = None
                     break
@@ -3108,6 +3147,13 @@ def run_clean_system_mode(
     )
 
     total_distributed_bytes = sum(f["size_bytes"] for f in deployed_files)
+    artifact_provenance = resolve_artifact_provenance(
+        repo_root, search_dir, resolved_evidence_dir
+    )
+    provenance_verified = bool(
+        artifact_provenance.get("toolchain_id")
+        and artifact_provenance.get("source") == "recorded_ledger_artifact_hash"
+    )
     compute_output_verified = bool(
         compute_readback
         and compute_readback.get("elements_match") is True
@@ -3146,6 +3192,7 @@ def run_clean_system_mode(
         and shader_evidence["verified"]
         and embedded_dxil_verified
         and compute_output_verified
+        and provenance_verified
         and system_env_measured
         and not runtime_dxcompiler_loaded
         and not runtime_d3dcompiler_loaded
@@ -3153,10 +3200,6 @@ def run_clean_system_mode(
         and not d3d12core_classification_unknown
     )
     expected_sha256 = expected_compute["output_sha256"]
-    artifact_provenance = resolve_artifact_provenance(
-        repo_root, search_dir, resolved_evidence_dir
-    )
-
     if (
         measured_os_build
         or measured_gpu_model
@@ -3246,6 +3289,10 @@ def run_clean_system_mode(
             )
         if not compute_output_verified:
             reasons.append("observed compute readback did not match the committed expected bytes")
+        if not provenance_verified:
+            reasons.append(
+                "executed artifacts could not be bound to the CI build evidence and recorded ledger hashes"
+            )
         if not system_env_measured:
             reasons.append(
                 "target system_environment (os_build, gpu_model, nvidia_driver_version) could not be "
