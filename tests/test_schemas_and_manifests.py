@@ -74,23 +74,37 @@ def test_capability_manifest_baseline_and_cpp_enforcement_agreement() -> None:
     assert excl["executable_packers"] is False
 
 
-def test_hardware_benchmarks_mark_missing_coverage_unverified_and_not_passed() -> None:
-    for filename, expected_tier in (
-        ("rtx-4060-baseline.json", "rtx_4060_desktop"),
-        ("rtx-50-series-baseline.json", "rtx_50_series_desktop"),
-    ):
-        hw_path = REPO_ROOT / "benchmarks" / "hardware" / filename
-        hw = json.loads(hw_path.read_text(encoding="utf-8"))
-        assert hw["hardware_tier"] == expected_tier
-        assert hw["verification_status"] == "unverified"
-        assert hw["benchmark_passed"] is False
-        for fx in hw["fixture_results"]:
-            assert fx["execution_status"] == "unverified"
-            assert fx["total_distributed_bytes"] is None
-            assert fx["startup_time_ms"] is None
-            assert fx["cpu_time_ms"] is None
-            assert fx["gpu_time_ms"] is None
-            assert fx["committed_memory_bytes"] is None
+def test_hardware_benchmark_coverage_matches_recorded_physical_evidence() -> None:
+    rtx4060_path = REPO_ROOT / "benchmarks" / "hardware" / "rtx-4060-baseline.json"
+    rtx4060 = json.loads(rtx4060_path.read_text(encoding="utf-8"))
+    assert rtx4060["hardware_tier"] == "rtx_4060_desktop"
+    assert rtx4060["verification_status"] == "unverified"
+    assert rtx4060["benchmark_passed"] is False
+    for fx in rtx4060["fixture_results"]:
+        assert fx["execution_status"] == "unverified"
+        assert fx["total_distributed_bytes"] is None
+        assert fx["startup_time_ms"] is None
+        assert fx["cpu_time_ms"] is None
+        assert fx["gpu_time_ms"] is None
+        assert fx["committed_memory_bytes"] is None
+
+    rtx50_path = REPO_ROOT / "benchmarks" / "hardware" / "rtx-50-series-baseline.json"
+    rtx50 = json.loads(rtx50_path.read_text(encoding="utf-8"))
+    assert rtx50["hardware_tier"] == "rtx_50_series_desktop"
+    assert rtx50["verification_status"] == "verified"
+    assert rtx50["benchmark_passed"] is True
+    assert rtx50["unavailable_measurements"] == []
+    assert rtx50["environment_metadata"]["gpu_model"] == "NVIDIA GeForce RTX 5070 Ti"
+    assert rtx50["artifact_provenance"]["toolchain_id"] == "clang-cl-lld"
+    assert rtx50["artifact_provenance"]["source"] == "recorded_ledger_artifact_hash"
+    for fx in rtx50["fixture_results"]:
+        assert fx["execution_status"] == "passed"
+        assert fx["exit_code"] == 0
+        assert fx["total_distributed_bytes"] > 0
+        assert fx["startup_time_ms"] > 0
+        assert fx["cpu_time_ms"] > 0
+        assert fx["gpu_time_ms"] >= 0
+        assert fx["committed_memory_bytes"] > 0
 
 
 def test_schema_rejects_unverified_benchmark_claiming_pass_or_zero_metrics() -> None:
