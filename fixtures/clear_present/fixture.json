@@ -1,0 +1,19 @@
+{
+  "fixture_id": "clear_present",
+  "target_name": "nw_clear_present_fixture",
+  "executable_name": "nw_clear_present_fixture.exe",
+  "description": "Minimal D3D12 Clear/Present measurement fixture using Feature Level 12_0, 1 direct queue, ordinary resource barriers, and 2-buffer DXGI flip-discard swapchain.",
+  "entry_point": "fixtures/clear_present/main.cpp",
+  "baseline_feature_level": "12_0",
+  "baseline_shader_model": "6.0",
+  "requires_offline_shaders": false,
+  "requires_dxc_at_runtime": false,
+  "requires_agility_sdk_redist": false,
+  "supports_d3d12_validation": true,
+  "expected_release_imports": [
+    "kernel32.dll",
+    "user32.dll",
+    "d3d12.dll",
+    "dxgi.dll"
+  ]
+}

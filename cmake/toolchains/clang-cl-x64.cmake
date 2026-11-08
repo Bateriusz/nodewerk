@@ -1,0 +1,7 @@
+# Pinned Primary Toolchain: clang-cl + lld-link (Windows 11 x64)
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR AMD64)
+set(CMAKE_C_COMPILER clang-cl)
+set(CMAKE_CXX_COMPILER clang-cl)
+set(CMAKE_LINKER lld-link)
+set(NW_ACTIVE_TOOLCHAIN_ID "clang-cl-lld" CACHE STRING "Active toolchain identifier" FORCE)

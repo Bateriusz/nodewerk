@@ -1,0 +1,7 @@
+# Evaluated Comparison Toolchain: MSVC cl.exe + link.exe (/LTCG, Windows 11 x64)
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR AMD64)
+set(CMAKE_C_COMPILER cl)
+set(CMAKE_CXX_COMPILER cl)
+set(CMAKE_LINKER link)
+set(NW_ACTIVE_TOOLCHAIN_ID "msvc-ltcg" CACHE STRING "Active toolchain identifier" FORCE)

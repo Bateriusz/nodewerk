@@ -1,0 +1,23 @@
+{
+  "fixture_id": "compute_shader",
+  "target_name": "nw_compute_shader_fixture",
+  "executable_name": "nw_compute_shader_fixture.exe",
+  "description": "Minimal D3D12 offline compute-shader measurement fixture executing offline-compiled SM 6.0 DXIL (CSMain) via bounded descriptor table u0 and verifying 256-element readback.",
+  "entry_point": "fixtures/compute_shader/main.cpp",
+  "shader_id": "compute_fixture_cs",
+  "shader_source": "shaders/compute_fixture.hlsl",
+  "offline_dxil_build_output": "build/clang-cl-release/shaders/compute_fixture.dxil",
+  "embedded_dxil_header_build_output": "build/clang-cl-release/shaders/generated/compute_fixture_dxil.h",
+  "expected_output_path": "fixtures/compute_shader/expected_output.json",
+  "baseline_feature_level": "12_0",
+  "baseline_shader_model": "6.0",
+  "requires_offline_shaders": true,
+  "requires_dxc_at_runtime": false,
+  "requires_agility_sdk_redist": false,
+  "supports_d3d12_validation": true,
+  "expected_release_imports": [
+    "kernel32.dll",
+    "d3d12.dll",
+    "dxgi.dll"
+  ]
+}

@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.dev/schemas/capability-manifest.schema.json",
+  "title": "Nodewerk Capability Manifest Schema",
+  "description": "Versioned D3D12 capability manifest defining baseline API, shader model, required features, formats, limits, and excluded features.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "manifest_version",
+    "target_platform",
+    "graphics_api",
+    "required_features",
+    "required_formats",
+    "baseline_limits",
+    "excluded_baseline_features",
+    "conditional_feature_policy"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "manifest_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "target_platform": {
+      "type": "object",
+      "required": [
+        "os",
+        "architecture",
+        "minimum_tested_windows_build",
+        "minimum_tested_windows_build_status",
+        "tested_windows_builds",
+        "tested_nvidia_drivers",
+        "unsupported_platforms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "os": { "type": "string", "const": "windows_11_x64" },
+        "architecture": { "type": "string", "const": "x86_64" },
+        "minimum_tested_windows_build": {
+          "type": "string",
+          "pattern": "^10\\.0\\.(22[0-9]{3}|26[0-9]{3})\\.[0-9]+$"
+        },
+        "minimum_tested_windows_build_status": {
+          "type": "string",
+          "enum": ["verified", "target_pinned_unverified"]
+        },
+        "tested_windows_builds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["build_number", "release_label", "verification_status"],
+            "additionalProperties": false,
+            "properties": {
+              "build_number": { "type": "string" },
+              "release_label": { "type": "string" },
+              "verification_status": {
+                "type": "string",
+                "enum": ["verified", "unverified", "target_pinned"]
+              }
+            }
+          }
+        },
+        "tested_nvidia_drivers": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": [
+              "hardware_tier",
+              "gpu_model",
+              "driver_version",
+              "wddm_version",
+              "windows_build",
+              "verification_status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "hardware_tier": {
+                "type": "string",
+                "enum": ["rtx_4060_desktop", "rtx_50_series_desktop"]
+              },
+              "gpu_model": { "type": "string", "minLength": 1 },
+              "driver_version": { "type": "string", "minLength": 1 },
+              "wddm_version": { "type": "string", "minLength": 1 },
+              "windows_build": { "type": "string", "minLength": 1 },
+              "verification_status": {
+                "type": "string",
+                "enum": ["verified", "unverified"]
+              },
+              "notes": { "type": "string" }
+            }
+          }
+        },
+        "unsupported_platforms": {
+          "type": "array",
+          "items": { "type": "string" },
+          "contains": { "const": "windows_10" }
+        }
+      }
+    },
+    "graphics_api": {
+      "type": "object",
+      "required": [
+        "api",
+        "feature_level",
+        "shader_model",
+        "descriptor_model",
+        "barrier_model",
+        "queue_model"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "api": { "type": "string", "const": "D3D12" },
+        "feature_level": { "type": "string", "const": "12_0" },
+        "shader_model": { "type": "string", "const": "6.0" },
+        "descriptor_model": { "type": "string", "const": "bounded_descriptor_tables" },
+        "barrier_model": { "type": "string", "const": "ordinary_resource_barriers" },
+        "queue_model": {
+          "type": "object",
+          "required": ["direct_queue_count", "compute_queue_count", "copy_queue_count"],
+          "additionalProperties": false,
+          "properties": {
+            "direct_queue_count": { "type": "integer", "const": 1 },
+            "compute_queue_count": { "type": "integer", "const": 0 },
+            "copy_queue_count": { "type": "integer", "const": 0 }
+          }
+        }
+      }
+    },
+    "required_features": {
+      "type": "object",
+      "required": [
+        "resource_binding_tier",
+        "resource_heap_tier",
+        "tiled_resources_tier",
+        "conservative_rasterization_tier",
+        "TypedUAVLoadAdditionalFormats",
+        "ROVsSupported",
+        "WaveOps",
+        "Int64ShaderOps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "resource_binding_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "resource_heap_tier": { "type": "integer", "enum": [1, 2] },
+        "tiled_resources_tier": { "type": "integer", "minimum": 0 },
+        "conservative_rasterization_tier": { "type": "integer", "minimum": 0 },
+        "TypedUAVLoadAdditionalFormats": { "type": "boolean" },
+        "ROVsSupported": { "type": "boolean" },
+        "WaveOps": { "type": "boolean" },
+        "Int64ShaderOps": { "type": "boolean" }
+      }
+    },
+    "required_formats": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["dxgi_format", "usages"],
+        "additionalProperties": false,
+        "properties": {
+          "dxgi_format": { "type": "string", "pattern": "^DXGI_FORMAT_" },
+          "usages": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "swap_chain",
+                "render_target",
+                "depth_stencil",
+                "shader_resource",
+                "unordered_access",
+                "vertex_buffer",
+                "index_buffer"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "baseline_limits": {
+      "type": "object",
+      "required": [
+        "max_cbv_srv_uav_descriptors_per_frame",
+        "max_sampler_descriptors_per_frame",
+        "max_root_signature_dword_cost",
+        "max_compute_threads_per_group",
+        "max_texture_2d_dimension",
+        "swap_chain_buffer_count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "max_cbv_srv_uav_descriptors_per_frame": { "type": "integer", "minimum": 16, "maximum": 1000000 },
+        "max_sampler_descriptors_per_frame": { "type": "integer", "minimum": 4, "maximum": 2048 },
+        "max_root_signature_dword_cost": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "max_compute_threads_per_group": { "type": "integer", "const": 1024 },
+        "max_texture_2d_dimension": { "type": "integer", "minimum": 4096 },
+        "swap_chain_buffer_count": { "type": "integer", "minimum": 2, "maximum": 3 }
+      }
+    },
+    "excluded_baseline_features": {
+      "type": "object",
+      "required": [
+        "sm_6_6_direct_heap_indexing",
+        "enhanced_barriers",
+        "mesh_shaders",
+        "ray_tracing",
+        "runtime_shader_compilation",
+        "mandatory_agility_sdk_redistribution",
+        "proprietary_vendor_sdks",
+        "executable_packers"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sm_6_6_direct_heap_indexing": { "type": "boolean", "const": false },
+        "enhanced_barriers": { "type": "boolean", "const": false },
+        "mesh_shaders": { "type": "boolean", "const": false },
+        "ray_tracing": { "type": "boolean", "const": false },
+        "runtime_shader_compilation": { "type": "boolean", "const": false },
+        "mandatory_agility_sdk_redistribution": { "type": "boolean", "const": false },
+        "proprietary_vendor_sdks": { "type": "boolean", "const": false },
+        "executable_packers": { "type": "boolean", "const": false }
+      }
+    },
+    "conditional_feature_policy": {
+      "type": "object",
+      "required": [
+        "query_only_when_emitted_content_uses",
+        "fallback_or_exit_code_on_missing",
+        "allowed_optional_queries"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "query_only_when_emitted_content_uses": { "type": "boolean", "const": true },
+        "fallback_or_exit_code_on_missing": { "type": "integer", "const": 24 },
+        "allowed_optional_queries": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

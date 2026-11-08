@@ -1,0 +1,203 @@
+{
+  "schema_version": "1.0.0",
+  "ledger_id": "empty-player-msvc-ltcg-release-v1",
+  "fixture_id": "empty_player",
+  "build_profile": "release",
+  "toolchain_id": "msvc-ltcg",
+  "compiler_version": "19.40.33821",
+  "linker_version": "14.40.33821.0",
+  "verification_status": "verified",
+  "total_distributed_bytes": 153088,
+  "distributed_components": [
+    {
+      "name": "nw_empty_player.exe",
+      "category": "executable",
+      "size_bytes": 153088,
+      "sha256": "cfe952b633ab2cf359c58ed1a393a342b560e79a54ee3e5436c51c90ec1f23b6",
+      "counted_in_total_distributed_bytes": true
+    }
+  ],
+  "excluded_system_components": [
+    {
+      "name": "kernel32.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    },
+    {
+      "name": "ucrtbase.dll",
+      "exclusion_basis": "windows_11_inbox_os_component",
+      "counted_in_total_distributed_bytes": false
+    }
+  ],
+  "executable_sections": [
+    {
+      "name": ".text",
+      "virtual_size_bytes": 92368,
+      "raw_size_bytes": 92672,
+      "characteristics": "CNT_CODE|MEM_EXECUTE|MEM_READ"
+    },
+    {
+      "name": ".rdata",
+      "virtual_size_bytes": 48102,
+      "raw_size_bytes": 48128,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".data",
+      "virtual_size_bytes": 7200,
+      "raw_size_bytes": 3072,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
+    },
+    {
+      "name": ".pdata",
+      "virtual_size_bytes": 4980,
+      "raw_size_bytes": 5120,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".fptable",
+      "virtual_size_bytes": 256,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ|MEM_WRITE"
+    },
+    {
+      "name": ".rsrc",
+      "virtual_size_bytes": 480,
+      "raw_size_bytes": 512,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_READ"
+    },
+    {
+      "name": ".reloc",
+      "virtual_size_bytes": 1676,
+      "raw_size_bytes": 2048,
+      "characteristics": "CNT_INITIALIZED_DATA|MEM_DISCARDABLE|MEM_READ"
+    }
+  ],
+  "imports": [
+    {
+      "dll_name": "kernel32.dll",
+      "classification": "windows_inbox",
+      "symbols": [
+        "LoadLibraryExW",
+        "WriteConsoleW",
+        "CreateFileW",
+        "HeapReAlloc",
+        "HeapSize",
+        "GetFileSizeEx",
+        "SetFilePointerEx",
+        "GetProcessHeap",
+        "GetStringTypeW",
+        "SetStdHandle",
+        "SetEnvironmentVariableW",
+        "FreeEnvironmentStringsW",
+        "GetEnvironmentStringsW",
+        "OutputDebugStringA",
+        "GetCurrentProcess",
+        "LoadLibraryExA",
+        "GetModuleHandleA",
+        "GetLastError",
+        "CloseHandle",
+        "GetProcAddress",
+        "GetCurrentProcessId",
+        "FreeLibrary",
+        "QueryPerformanceCounter",
+        "WideCharToMultiByte",
+        "RtlCaptureContext",
+        "RtlLookupFunctionEntry",
+        "RtlVirtualUnwind",
+        "UnhandledExceptionFilter",
+        "SetUnhandledExceptionFilter",
+        "TerminateProcess",
+        "IsProcessorFeaturePresent",
+        "GetCurrentThreadId",
+        "GetSystemTimeAsFileTime",
+        "InitializeSListHead",
+        "IsDebuggerPresent",
+        "GetStartupInfoW",
+        "GetModuleHandleW",
+        "RtlUnwindEx",
+        "SetLastError",
+        "EnterCriticalSection",
+        "LeaveCriticalSection",
+        "DeleteCriticalSection",
+        "InitializeCriticalSectionAndSpinCount",
+        "TlsAlloc",
+        "TlsGetValue",
+        "TlsSetValue",
+        "TlsFree",
+        "EncodePointer",
+        "RaiseException",
+        "RtlPcToFileHeader",
+        "GetStdHandle",
+        "WriteFile",
+        "GetModuleFileNameW",
+        "ExitProcess",
+        "GetModuleHandleExW",
+        "GetCommandLineA",
+        "GetCommandLineW",
+        "HeapAlloc",
+        "HeapFree",
+        "FlsAlloc",
+        "FlsGetValue",
+        "FlsSetValue",
+        "FlsFree",
+        "InitializeCriticalSectionEx",
+        "VirtualProtect",
+        "CompareStringW",
+        "LCMapStringW",
+        "GetFileType",
+        "FlushFileBuffers",
+        "GetConsoleOutputCP",
+        "GetConsoleMode",
+        "FindClose",
+        "FindFirstFileExW",
+        "FindNextFileW",
+        "IsValidCodePage",
+        "GetACP",
+        "GetOEMCP",
+        "GetCPInfo",
+        "MultiByteToWideChar"
+      ]
+    }
+  ],
+  "shaders": [],
+  "decoder_overhead": {
+    "packer_or_decoder_used": false,
+    "decoder_overhead_bytes": null,
+    "notes": "No executable packer or payload decompressor is permitted in the NW-01 baseline."
+  },
+  "runtime_metrics": {
+    "startup_time_ms": null,
+    "cpu_time_ms": null,
+    "gpu_time_ms": null,
+    "committed_memory_bytes": null,
+    "gpu_committed_memory_bytes": null
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "startup_time_ms",
+      "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host."
+    },
+    {
+      "metric": "cpu_time_ms",
+      "reason": "Physical Windows 11 x64 target execution is unverified on the current Linux build host."
+    },
+    {
+      "metric": "gpu_time_ms",
+      "reason": "Empty player bootstrap only queries adapter capabilities without submitting GPU command lists, and physical Windows 11 GPU hardware is unverified."
+    },
+    {
+      "metric": "committed_memory_bytes",
+      "reason": "Physical Windows 11 x64 process working-set/commit measurement is unverified on the current Linux build host."
+    },
+    {
+      "metric": "gpu_committed_memory_bytes",
+      "reason": "Physical Windows 11 D3D12 VidMm commitment measurement is unverified on the current Linux build host."
+    }
+  ],
+  "budget_claim_policy": {
+    "claims_64kib_achievable": false,
+    "defer_minimum_size_claim_until_task": "NW-10",
+    "statement": "MSVC/LTCG comparison ledger retained for toolchain comparison without claiming an unmeasured size or claiming a 64 KiB budget before NW-10."
+  }
+}

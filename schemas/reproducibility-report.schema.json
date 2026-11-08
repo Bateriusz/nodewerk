@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.dev/schemas/reproducibility-report.schema.json",
+  "title": "Nodewerk Clean-Directory Build Reproducibility Report Schema",
+  "description": "Records independent two-clean-directory release builds with the pinned toolchain and compares artifact SHA-256 hashes. Unverified builds must not claim all_artifacts_match=true or copy self-referential hashes.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_id",
+    "toolchain_manifest_ref",
+    "build_profile",
+    "directory_a",
+    "directory_b",
+    "verification_status",
+    "all_artifacts_match",
+    "artifacts",
+    "mismatch_investigation",
+    "unavailable_measurements"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "report_id": { "type": "string", "minLength": 3 },
+    "toolchain_manifest_ref": {
+      "type": "string",
+      "const": "benchmarks/toolchain-manifest.v1.json"
+    },
+    "build_profile": { "type": "string", "const": "release" },
+    "directory_a": { "type": "string", "minLength": 1 },
+    "directory_b": { "type": "string", "minLength": 1 },
+    "verification_status": {
+      "type": "string",
+      "enum": ["verified", "unverified", "mismatch_detected"]
+    },
+    "unverified_reason": { "type": "string" },
+    "all_artifacts_match": { "type": "boolean" },
+    "missing_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "artifact_name",
+          "fixture_id",
+          "size_bytes_a",
+          "size_bytes_b",
+          "sha256_a",
+          "sha256_b",
+          "hash_match"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "artifact_name": { "type": "string" },
+          "fixture_id": { "type": "string", "enum": ["empty_player", "clear_present", "compute_shader"] },
+          "size_bytes_a": { "type": ["integer", "null"], "minimum": 1 },
+          "size_bytes_b": { "type": ["integer", "null"], "minimum": 1 },
+          "sha256_a": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "sha256_b": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "hash_match": { "type": ["boolean", "null"] },
+          "time_date_stamp_a": { "type": ["integer", "null"], "minimum": 0 },
+          "time_date_stamp_b": { "type": ["integer", "null"], "minimum": 0 },
+          "time_date_stamp_identical": { "type": ["boolean", "null"] }
+        }
+      }
+    },
+    "mismatch_investigation": {
+      "type": "object",
+      "required": ["mismatches_found", "root_causes_investigated", "remediation_applied"],
+      "additionalProperties": false,
+      "properties": {
+        "mismatches_found": { "type": "integer", "minimum": 0 },
+        "root_causes_investigated": { "type": "array", "items": { "type": "string" } },
+        "remediation_applied": { "type": "string" }
+      }
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "metric": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
+      }
+    }
+  }
+}
