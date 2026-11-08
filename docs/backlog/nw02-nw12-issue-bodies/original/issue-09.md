@@ -83,7 +83,3 @@ Dependencies:
 Boundaries:
 - No general plugin marketplace, asset browser, scripting console, or elaborate editor polish.
 - Editor recovery is independent of the minimal release player's failure policy.
-
-<!-- pairallel-sections:v1 {"sections":[{"end":93,"slug":"goal","start":9},{"end":388,"slug":"source-context","start":114},{"end":1017,"slug":"final-technical-design","start":417},{"end":1223,"slug":"scope","start":1029},{"end":1333,"slug":"affected-components","start":1249},{"end":1647,"slug":"required-behavior","start":1357},{"end":1888,"slug":"state-configuration-api-changes","start":1691},{"end":2182,"slug":"recovery-semantics","start":1913},{"end":2466,"slug":"compatibility-and-safety-constraints","start":2225},{"end":2753,"slug":"test-plan","start":2482},{"end":2915,"slug":"regressions","start":2771},{"end":3206,"slug":"acceptance-criteria","start":2941},{"end":3579,"slug":"decomposition-dependencies-and-boundaries","start":3254}],"version":"v1"} -->
-
-<!-- pairallel-refinement:v1 {"base_sha":"270d298f1b037548e0ab4808b2c123c12ddcc4e6","decision":"DECOMPOSE","output_count":12,"output_index":7,"policy_fingerprint":"sha256:v1:c7d698432d5df80cd4d3ca6eb810711f4ef9f7909cfc0008b8ee5c8be3c70e6a","refinement_hash":"sha256:v1:555a165d08e2e04173f9a191f40612fe062d8d1718a082565669926a9e983384","run_id":"plan-1e6c8c83858cb79fbd34a36a","source":{"host":"github.com","issue_number":1,"repository":"bateriusz/nodewerk"},"source_hash":"sha256:v1:7bbf325efe402077d68a5b5776d28e8be75e4d5da74ccc097c9aecf2783a616f","version":"v1"} -->

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKLOG = REPO_ROOT / "docs" / "backlog"
@@ -255,3 +258,216 @@ def test_performance_and_historical_evidence_are_not_rewritten() -> None:
     assert "nw07_perf_ref_v1" in evidence
     assert "legacy_unclassified" in evidence
     assert "unavailable_telemetry" in evidence
+
+
+def test_profile_verifier_checks_full_contract_and_recorded_digest() -> None:
+    tool = _load_tool()
+    profile = json.loads(
+        (REPO_ROOT / "benchmarks" / "capability-profile.common.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest = json.loads(
+        (REPO_ROOT / "benchmarks" / "capability-manifest.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    toolchain = json.loads(
+        (REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    tool.verify_profile_against_sources(profile, manifest, toolchain)
+
+    # A missing /CETCOMPAT mitigation must be detected.
+    broken_profile = copy.deepcopy(profile)
+    broken_profile["requirements"]["architectural_constraints"][
+        "security_mitigations_required"
+    ].remove("/CETCOMPAT")
+    with pytest.raises(tool.VerificationError):
+        tool.verify_profile_against_sources(broken_profile, manifest, toolchain)
+
+    # Format names alone are insufficient; usages must match the manifest too.
+    broken_profile = copy.deepcopy(profile)
+    broken_profile["requirements"]["queried_capabilities"][
+        "required_format_support"
+    ][0]["usages"].remove("swap_chain")
+    with pytest.raises(tool.VerificationError):
+        tool.verify_profile_against_sources(broken_profile, manifest, toolchain)
+
+    # The pinned DXC release profile must still compile the common shader target.
+    broken_toolchain = copy.deepcopy(toolchain)
+    broken_toolchain["build_profiles"]["release"]["dxc_flags"].remove("cs_6_0")
+    with pytest.raises(tool.VerificationError):
+        tool.verify_profile_against_sources(profile, manifest, broken_toolchain)
+
+    audit = json.loads((BACKLOG / "nw01a-issue-audit.v1.json").read_text(encoding="utf-8"))
+    broken_audit = copy.deepcopy(audit)
+    broken_audit["verified_nw01_contracts"]["source_sha256"] = (
+        "sha256:v1:0000000000000000000000000000000000000000000000000000000000000000"
+    )
+    with pytest.raises(tool.VerificationError):
+        tool.verify_recorded_nw01_contracts(broken_audit, profile, manifest)
+
+
+def test_audit_text_and_changed_reasons_match_the_bodies() -> None:
+    tool = _load_tool()
+    audit = json.loads((BACKLOG / "nw01a-issue-audit.v1.json").read_text(encoding="utf-8"))
+    for task in audit["tasks"]:
+        original = (REPO_ROOT / task["original_body_path"]).read_text(encoding="utf-8")
+        updated = (REPO_ROOT / task["updated_body_path"]).read_text(encoding="utf-8")
+        tool.verify_audit_section_texts(task, original, updated)
+        for entry in task["sections"]:
+            if entry["status"] == "changed":
+                assert "See exact replacement text" not in entry["reason"]
+                assert len(entry["reason"].strip()) >= 80
+
+    # A stale replacement text must be detected rather than silently passing.
+    task = copy.deepcopy(audit["tasks"][0])
+    changed = next(
+        entry for entry in task["sections"] if entry["status"] == "changed"
+    )
+    changed["replacement_text"] += " stale"
+    with pytest.raises(tool.VerificationError):
+        tool.verify_audit_section_texts(
+            task,
+            (REPO_ROOT / task["original_body_path"]).read_text(encoding="utf-8"),
+            (REPO_ROOT / task["updated_body_path"]).read_text(encoding="utf-8"),
+        )
+
+
+def test_document_wrappers_omit_body_relative_section_metadata() -> None:
+    tool = _load_tool()
+    audit = json.loads((BACKLOG / "nw01a-issue-audit.v1.json").read_text(encoding="utf-8"))
+    for task in audit["tasks"]:
+        for body_path, document_path in (
+            (task["original_body_path"], task["original_document_path"]),
+            (task["updated_body_path"], task["updated_document_path"]),
+        ):
+            body = (REPO_ROOT / body_path).read_text(encoding="utf-8")
+            document = (REPO_ROOT / document_path).read_text(encoding="utf-8")
+            assert document.startswith("# " + task["title"] + "\n\n")
+            assert "<!-- pairallel-sections:v1 " not in document
+            assert "<!-- pairallel-refinement:v1 " not in document
+            # The wrapper still carries the same human-readable section content.
+            assert tool.extract_sections(document) == tool.extract_sections(body)
+
+
+class _FakeGitHub:
+    def __init__(self, bodies: dict[int, str], titles: dict[int, str], crlf: bool = False):
+        self.bodies = dict(bodies)
+        self.titles = dict(titles)
+        self.crlf = crlf
+        self.edits: list[int] = []
+
+    def __call__(self, args: list[str]) -> str:
+        if args[:2] == ["issue", "view"]:
+            number = int(args[2])
+            return json.dumps(
+                {"title": self.titles[number], "body": self.bodies[number]}
+            )
+        if args[:2] == ["issue", "edit"]:
+            number = int(args[2])
+            body_file = Path(args[args.index("--body-file") + 1])
+            body = body_file.read_text(encoding="utf-8")
+            if self.crlf:
+                body = body.replace("\n", "\r\n")
+            self.bodies[number] = body
+            self.edits.append(number)
+            return ""
+        raise AssertionError(f"unexpected gh invocation: {args!r}")
+
+
+def _publication_fixture(tool):
+    audit = json.loads((BACKLOG / "nw01a-issue-audit.v1.json").read_text(encoding="utf-8"))
+    record = json.loads(
+        (BACKLOG / "nw01a-publication-record.v1.json").read_text(encoding="utf-8")
+    )
+    bodies = {}
+    titles = {}
+    for task in audit["tasks"]:
+        number = task["issue_number"]
+        bodies[number] = (REPO_ROOT / task["original_body_path"]).read_text(
+            encoding="utf-8"
+        )
+        titles[number] = task["title"]
+    return audit, record, bodies, titles
+
+
+def test_publish_dry_run_and_apply_verify_live_offsets(tmp_path: Path) -> None:
+    tool = _load_tool()
+    audit, record, bodies, titles = _publication_fixture(tool)
+    record_path = tmp_path / "record.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    fake = _FakeGitHub(bodies, titles)
+    assert tool.publish(False, fake, record_path=record_path) == 0
+    assert fake.edits == []
+    # Dry-run must not mutate the record.
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record
+
+    fake = _FakeGitHub(bodies, titles)
+    assert tool.publish(True, fake, record_path=record_path) == 0
+    assert fake.edits == [task["issue_number"] for task in audit["tasks"]]
+    published = json.loads(record_path.read_text(encoding="utf-8"))
+    assert published["github_publication_status"] == "published"
+    for issue in published["issues"]:
+        assert issue["completion_status"] == "published_and_verified"
+        assert issue["published_section_offsets_verified"] is True
+        assert issue["published_refinement_marker_preserved"] is True
+
+
+def test_publish_accepts_crlf_and_aborts_on_concurrent_edit(tmp_path: Path) -> None:
+    tool = _load_tool()
+    _audit, record, bodies, titles = _publication_fixture(tool)
+    record_path = tmp_path / "record.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    # GitHub may return CRLF even though the body was published with LF.  The
+    # normalized hash and the normalized body-relative offsets must both verify.
+    fake = _FakeGitHub(bodies, titles, crlf=True)
+    assert tool.publish(True, fake, record_path=record_path) == 0
+    published = json.loads(record_path.read_text(encoding="utf-8"))
+    assert all(
+        issue["published_newline_style"] == "crlf"
+        for issue in published["issues"]
+    )
+
+    # A concurrent edit must abort before any subsequent issue is touched.
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    fake = _FakeGitHub(bodies, titles)
+    fake.bodies[3] = "concurrent edit"
+    assert tool.publish(True, fake, record_path=record_path) == 3
+    assert fake.edits == []
+    blocked = json.loads(record_path.read_text(encoding="utf-8"))
+    assert blocked["github_publication_status"] == "blocked_concurrent_edit"
+    assert all(
+        issue["completion_status"] == "prepared_verified_publication_pending"
+        for issue in blocked["issues"]
+    )
+
+
+def test_live_offset_verification_is_independent_of_hash_match() -> None:
+    tool = _load_tool()
+    audit = json.loads((BACKLOG / "nw01a-issue-audit.v1.json").read_text(encoding="utf-8"))
+    task = audit["tasks"][0]
+    body = (REPO_ROOT / task["updated_body_path"]).read_text(encoding="utf-8")
+    marker, _ = tool.extract_marker(tool.normalize_body(body), tool.REFINEMENT_MARKER_RE)
+    tool.verify_published_body(body, body, task["section_offsets"], marker)
+    wrong_offsets = copy.deepcopy(task["section_offsets"])
+    wrong_offsets[0]["start"] += 1
+    with pytest.raises(tool.VerificationError):
+        tool.verify_published_body(body, body, wrong_offsets, marker)
+
+
+def test_incomplete_publication_cannot_claim_completion() -> None:
+    tool = _load_tool()
+    record = json.loads(
+        (BACKLOG / "nw01a-publication-record.v1.json").read_text(encoding="utf-8")
+    )
+    # The checked-in record is intentionally pending in the offline sandbox.
+    tool.verify_publication_claims(record)
+    broken = copy.deepcopy(record)
+    broken["github_publication_status"] = "published"
+    with pytest.raises(tool.VerificationError):
+        tool.verify_publication_claims(broken)

@@ -14,7 +14,7 @@
 | [`nw01a-issue-audit.v1.json`](nw01a-issue-audit.v1.json) | Machine-readable per-issue source identity, hashes, section dispositions, exact replacement text, and recomputed section offsets. |
 | [`nw01a-publication-record.v1.json`](nw01a-publication-record.v1.json) | Per-issue original/updated body hashes, completion status, GitHub publication status, and source revision. |
 | [`nw02-nw12-issue-bodies/original/`](nw02-nw12-issue-bodies/original/) | Verbatim original issue bodies reconstructed from the durable planning output and verified against their recorded body hashes. |
-| [`nw02-nw12-issue-bodies/updated/`](nw02-nw12-issue-bodies/updated/) | Complete intended issue bodies with corrected sections, preserved `pairallel-refinement:v1` provenance markers, and recomputed `pairallel-sections:v1` offsets. |
+| [`nw02-nw12-issue-bodies/updated/`](nw02-nw12-issue-bodies/updated/) | Complete intended issue bodies. The `.body.md` files are canonical and carry preserved `pairallel-refinement:v1` provenance markers plus recomputed body-relative `pairallel-sections:v1` offsets. The `.md` files are human-readable `# title` wrappers and intentionally carry no machine metadata. |
 
 Issue mapping:
 
@@ -46,6 +46,12 @@ refinement hash. NW-01A intends to amend the issue content, not to rewrite its r
 history; the `pairallel-sections:v1` manifest is the metadata recomputed for the amended body.
 The audit and publication records carry both original and updated body hashes.
 
+The canonical `.body.md` files are the exact GitHub issue bodies and carry body-relative
+`pairallel-sections:v1` offsets. The `.md` wrappers start with a `# title` line, which would
+shift every body-relative offset, so the wrappers deliberately omit the machine manifest.
+Parsing a wrapper for offsets is therefore invalid by construction; parse the `.body.md`
+file instead.
+
 NW-01A's own source identity is recorded as:
 
 - refined issue #18 from planning source issue #15;
@@ -57,21 +63,34 @@ NW-01A's own source identity is recorded as:
 
 ## Publication status
 
-The bundle is prepared and locally verified. The implementation sandbox has no DNS/network
-access to GitHub, so live `gh issue edit` publication could not be executed here. The exact
-intended bodies, source revisions, original bodies, hashes, and per-issue completion records are
-preserved for deterministic readback and for publication by the environment that has GitHub
-access.
+The bundle is prepared and locally verified, but it is **not published**. The implementation
+sandbox has no DNS/network access to GitHub and the configured `gh` token is invalid, so live
+`gh issue edit` publication and readback could not be executed here. Every per-issue record is
+`prepared_verified_publication_pending` / `pending_live_publication`; none claims that GitHub
+already contains the updated body.
 
-When publication is executed, the publisher must:
+NW-01A completion is contingent on live publication. Run the following in an environment with
+GitHub API access and a valid token:
 
-1. Fetch each live issue and compare its current body hash with the recorded original body hash.
-2. Abort or reconcile if the live body differs (concurrent edit).
-3. Publish only the exact recorded updated body.
-4. Preserve the `pairallel-refinement:v1` marker byte-for-byte and the recomputed
-   `pairallel-sections:v1` offsets.
-5. Read back and verify every intended update before marking completion.
-6. Retain the original body and per-issue completion record.
+```bash
+python tools/nw01a_backlog.py publish --apply
+```
+
+The publisher must:
+
+1. Verify the local bundle before contacting GitHub.
+2. Fetch each live issue and accept only the recorded original or updated normalized body hash;
+   abort with a concurrent-edit result on any other body or title.
+3. Publish only the exact recorded updated `.body.md` body.
+4. Read back the live body and verify the normalized body hash, the preserved
+   `pairallel-refinement:v1` marker, and the body-relative `pairallel-sections:v1` offsets
+   recomputed after newline normalization.
+5. Retain the original body and atomically update the per-issue completion record only after
+   readback succeeds.
+6. Mark the bundle `published` only when every issue is `published_and_verified`.
+
+Do not declare NW-01A complete, and do not unblock NW-01B, while any issue remains
+`pending_live_publication`.
 
 ## Validation
 
@@ -81,6 +100,10 @@ Run:
 python tools/nw01a_backlog.py verify
 ```
 
-The verifier checks hashes, section offsets, preserved refinement markers, profile digest,
-task titles, required sections, and the NW-07/NW-11 policy invariants. It does not require
-network access and does not execute benchmarks.
+The verifier checks hashes, section offsets, preserved refinement markers, the recorded NW-01
+source digest, every common-profile requirement category (including format usages, shader
+targets, pinned toolchain/runtime requirements, and `/CETCOMPAT`), audit text against the exact
+bodies, specific changed-section reasons, ADR-0007 consistency, task titles, required sections,
+and the NW-07/NW-11 policy invariants. It does not require network access and does not execute
+benchmarks. The `publish` command is the only operation that contacts GitHub; it verifies live
+offsets, not just the normalized body hash.

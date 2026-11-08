@@ -83,7 +83,3 @@ Dependencies:
 Boundaries:
 - No general asynchronous simulation graph or distributed execution.
 - No audio side effects in replay; NW-12 defines their separate policy.
-
-<!-- pairallel-sections:v1 {"sections":[{"end":87,"slug":"goal","start":9},{"end":382,"slug":"source-context","start":108},{"end":1135,"slug":"final-technical-design","start":411},{"end":1314,"slug":"scope","start":1147},{"end":1454,"slug":"affected-components","start":1340},{"end":1788,"slug":"required-behavior","start":1478},{"end":2065,"slug":"state-configuration-api-changes","start":1832},{"end":2356,"slug":"recovery-semantics","start":2090},{"end":2611,"slug":"compatibility-and-safety-constraints","start":2399},{"end":2904,"slug":"test-plan","start":2627},{"end":3132,"slug":"regressions","start":2922},{"end":3416,"slug":"acceptance-criteria","start":3158},{"end":3743,"slug":"decomposition-dependencies-and-boundaries","start":3464}],"version":"v1"} -->
-
-<!-- pairallel-refinement:v1 {"base_sha":"270d298f1b037548e0ab4808b2c123c12ddcc4e6","decision":"DECOMPOSE","output_count":12,"output_index":8,"policy_fingerprint":"sha256:v1:c7d698432d5df80cd4d3ca6eb810711f4ef9f7909cfc0008b8ee5c8be3c70e6a","refinement_hash":"sha256:v1:1110fb91593dc8018b0995c64550b059ec199396e78fcb1a95b46e5dfa4bdbec","run_id":"plan-1e6c8c83858cb79fbd34a36a","source":{"host":"github.com","issue_number":1,"repository":"bateriusz/nodewerk"},"source_hash":"sha256:v1:7bbf325efe402077d68a5b5776d28e8be75e4d5da74ccc097c9aecf2783a616f","version":"v1"} -->

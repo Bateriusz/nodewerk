@@ -81,7 +81,3 @@ Dependencies:
 Boundaries:
 - No SDF-to-mesh extraction, particles, history, path tracing, audio implementation, or asset importers.
 - Do not expand the initial operator catalog beyond the proof's needs.
-
-<!-- pairallel-sections:v1 {"sections":[{"end":129,"slug":"goal","start":9},{"end":424,"slug":"source-context","start":150},{"end":1401,"slug":"final-technical-design","start":453},{"end":1693,"slug":"scope","start":1413},{"end":1847,"slug":"affected-components","start":1719},{"end":2175,"slug":"required-behavior","start":1871},{"end":2487,"slug":"state-configuration-api-changes","start":2219},{"end":2776,"slug":"recovery-semantics","start":2512},{"end":3090,"slug":"compatibility-and-safety-constraints","start":2819},{"end":3439,"slug":"test-plan","start":3106},{"end":3668,"slug":"regressions","start":3457},{"end":4010,"slug":"acceptance-criteria","start":3694},{"end":4311,"slug":"decomposition-dependencies-and-boundaries","start":4058}],"version":"v1"} -->
-
-<!-- pairallel-refinement:v1 {"base_sha":"270d298f1b037548e0ab4808b2c123c12ddcc4e6","decision":"DECOMPOSE","output_count":12,"output_index":5,"policy_fingerprint":"sha256:v1:c7d698432d5df80cd4d3ca6eb810711f4ef9f7909cfc0008b8ee5c8be3c70e6a","refinement_hash":"sha256:v1:2d007ed5ac0d362c59854705af51336bb50497cc818addc71f6c002457325475","run_id":"plan-1e6c8c83858cb79fbd34a36a","source":{"host":"github.com","issue_number":1,"repository":"bateriusz/nodewerk"},"source_hash":"sha256:v1:7bbf325efe402077d68a5b5776d28e8be75e4d5da74ccc097c9aecf2783a616f","version":"v1"} -->

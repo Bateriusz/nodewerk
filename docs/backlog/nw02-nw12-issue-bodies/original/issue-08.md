@@ -84,7 +84,3 @@ Dependencies:
 Boundaries:
 - This closes the first implementation milestone.
 - Audio, full editor UX, temporal simulation, advanced RTX features, and 64 KiB exports are later work.
-
-<!-- pairallel-sections:v1 {"sections":[{"end":95,"slug":"goal","start":9},{"end":390,"slug":"source-context","start":116},{"end":1514,"slug":"final-technical-design","start":419},{"end":1766,"slug":"scope","start":1526},{"end":1885,"slug":"affected-components","start":1792},{"end":2231,"slug":"required-behavior","start":1909},{"end":2501,"slug":"state-configuration-api-changes","start":2275},{"end":2731,"slug":"recovery-semantics","start":2526},{"end":3034,"slug":"compatibility-and-safety-constraints","start":2774},{"end":3388,"slug":"test-plan","start":3050},{"end":3683,"slug":"regressions","start":3406},{"end":4095,"slug":"acceptance-criteria","start":3709},{"end":4441,"slug":"decomposition-dependencies-and-boundaries","start":4143}],"version":"v1"} -->
-
-<!-- pairallel-refinement:v1 {"base_sha":"270d298f1b037548e0ab4808b2c123c12ddcc4e6","decision":"DECOMPOSE","output_count":12,"output_index":6,"policy_fingerprint":"sha256:v1:c7d698432d5df80cd4d3ca6eb810711f4ef9f7909cfc0008b8ee5c8be3c70e6a","refinement_hash":"sha256:v1:479b0778fd2e7d635ce8171c5c3a7614e2b42dfb5db3a4147b895f6e49fb0b74","run_id":"plan-1e6c8c83858cb79fbd34a36a","source":{"host":"github.com","issue_number":1,"repository":"bateriusz/nodewerk"},"source_hash":"sha256:v1:7bbf325efe402077d68a5b5776d28e8be75e4d5da74ccc097c9aecf2783a616f","version":"v1"} -->

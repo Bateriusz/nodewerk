@@ -100,7 +100,3 @@ Boundaries:
 - No general-purpose runtime graph interpreter.
 - No universal bake heuristic, unrestricted pass fusion, or advanced renderer.
 - No optional implementation or GPU-name predicate may enter the common export.
-
-<!-- pairallel-sections:v1 {"sections":[{"end":94,"slug":"goal","start":9},{"end":389,"slug":"source-context","start":115},{"end":1760,"slug":"final-technical-design","start":418},{"end":2108,"slug":"scope","start":1772},{"end":2248,"slug":"affected-components","start":2134},{"end":3140,"slug":"required-behavior","start":2272},{"end":3760,"slug":"state-configuration-api-changes","start":3184},{"end":4192,"slug":"recovery-semantics","start":3785},{"end":4636,"slug":"compatibility-and-safety-constraints","start":4235},{"end":5368,"slug":"test-plan","start":4652},{"end":5779,"slug":"regressions","start":5386},{"end":6377,"slug":"acceptance-criteria","start":5805},{"end":7173,"slug":"decomposition-dependencies-and-boundaries","start":6425}],"version":"v1"} -->
-
-<!-- pairallel-refinement:v1 {"base_sha":"270d298f1b037548e0ab4808b2c123c12ddcc4e6","decision":"DECOMPOSE","output_count":12,"output_index":4,"policy_fingerprint":"sha256:v1:c7d698432d5df80cd4d3ca6eb810711f4ef9f7909cfc0008b8ee5c8be3c70e6a","refinement_hash":"sha256:v1:dd8620adac2b708eb6282fa0d743a5844a2487087563752d45ea7dc6b9371631","run_id":"plan-1e6c8c83858cb79fbd34a36a","source":{"host":"github.com","issue_number":1,"repository":"bateriusz/nodewerk"},"source_hash":"sha256:v1:7bbf325efe402077d68a5b5776d28e8be75e4d5da74ccc097c9aecf2783a616f","version":"v1"} -->

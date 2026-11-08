@@ -93,7 +93,3 @@ Boundaries:
 - No general asynchronous simulation graph or distributed execution.
 - No audio side effects in replay; NW-12 defines their separate policy.
 - No portable GPU-state replay or exact-SKU cross-device prerequisite.
-
-<!-- pairallel-sections:v1 {"sections":[{"end":87,"slug":"goal","start":9},{"end":382,"slug":"source-context","start":108},{"end":1590,"slug":"final-technical-design","start":411},{"end":1769,"slug":"scope","start":1602},{"end":1909,"slug":"affected-components","start":1795},{"end":2398,"slug":"required-behavior","start":1933},{"end":2753,"slug":"state-configuration-api-changes","start":2442},{"end":3144,"slug":"recovery-semantics","start":2778},{"end":3557,"slug":"compatibility-and-safety-constraints","start":3187},{"end":4208,"slug":"test-plan","start":3573},{"end":4546,"slug":"regressions","start":4226},{"end":5118,"slug":"acceptance-criteria","start":4572},{"end":5878,"slug":"decomposition-dependencies-and-boundaries","start":5166}],"version":"v1"} -->
-
-<!-- pairallel-refinement:v1 {"base_sha":"270d298f1b037548e0ab4808b2c123c12ddcc4e6","decision":"DECOMPOSE","output_count":12,"output_index":8,"policy_fingerprint":"sha256:v1:c7d698432d5df80cd4d3ca6eb810711f4ef9f7909cfc0008b8ee5c8be3c70e6a","refinement_hash":"sha256:v1:1110fb91593dc8018b0995c64550b059ec199396e78fcb1a95b46e5dfa4bdbec","run_id":"plan-1e6c8c83858cb79fbd34a36a","source":{"host":"github.com","issue_number":1,"repository":"bateriusz/nodewerk"},"source_hash":"sha256:v1:7bbf325efe402077d68a5b5776d28e8be75e4d5da74ccc097c9aecf2783a616f","version":"v1"} -->

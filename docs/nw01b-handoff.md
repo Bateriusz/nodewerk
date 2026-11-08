@@ -19,10 +19,28 @@ the NW-01B evidence schema, capture tool, or GPU evidence verifier.
 
 `NW-01 -> NW-01A -> NW-01B -> NW-02..NW-12`
 
-- NW-01A completion unblocks **NW-01B only**.
+- NW-01A completion includes live publication and readback of the affected issue bodies.
+  Until every per-issue record in
+  [`docs/backlog/nw01a-publication-record.v1.json`](backlog/nw01a-publication-record.v1.json)
+  is `published_and_verified`, NW-01A is prepared but incomplete and **NW-01B must not start**.
+- Once live publication is verified, NW-01A completion unblocks **NW-01B only**.
 - NW-02 through NW-12 implementation remains blocked until **both** NW-01A and NW-01B complete.
 - Existing dependencies among NW-02 through NW-12 are preserved.
-- The issue bodies in [`docs/backlog/nw02-nw12-issue-bodies/updated/`](backlog/nw02-nw12-issue-bodies/updated/) already contain the global prerequisite note.
+- The canonical issue bodies in
+  [`docs/backlog/nw02-nw12-issue-bodies/updated/*.body.md`](backlog/nw02-nw12-issue-bodies/updated/)
+  already contain the global prerequisite note. The `.md` wrappers are human-readable only and
+  intentionally omit the body-relative section manifest.
+
+Publish and read back in a networked environment with a valid GitHub token:
+
+```bash
+python tools/nw01a_backlog.py publish --apply
+```
+
+The command refuses to overwrite a concurrent edit. After `gh issue edit` it reads each issue
+back and verifies the normalized body hash, the preserved `pairallel-refinement:v1` marker, and
+the body-relative `pairallel-sections:v1` offsets recomputed after newline normalization. A
+matching hash alone is not accepted.
 
 ## 2. Canonical common profile
 
@@ -205,7 +223,7 @@ NW-01B must not rewrite historical NW-01 evidence. Instead:
 
 | Area | Owner | Deferred work |
 | :--- | :--- | :--- |
-| Evidence schema, capture tool, verifier, profile digest loader, backlog publication tooling | **NW-01B** | Implement additive evidence fields, canonical profile verification, raw-sample retention, gate evaluation, result-status rules, and issue-publication readback/offset verification. |
+| Evidence schema, capture tool, verifier, profile digest loader, durable backlog-publication tooling | **NW-01B** | Implement additive evidence fields, canonical profile verification, raw-sample retention, gate evaluation, result-status rules, and a reusable issue-publication readback/offset verifier. NW-01A contributes the one-time `tools/nw01a_backlog.py publish --apply` utility but does not implement the durable NW-01B tool. |
 | Capability-profile identity, target-profile semantic hashing, graph schema | **NW-02** | Consume the profile ID/digest; keep compiler acceptance GPU-independent. |
 | Package capability requirements and validation boundaries | **NW-03** | Encode exact emitted requirements in v1; reject unknown/malformed records without package redesign. |
 | Player startup capability validation and diagnostics | **NW-04** | Query exact capabilities, identify unmet requirements before bulk allocation, and qualify the identical common package on representative Ada and Blackwell. |
@@ -226,7 +244,8 @@ NW-01B should add meaningful automated checks for:
 - `nw07_perf_ref_v1` per-run gate evaluation, non-reference rejection, and pending state;
 - optional-profile unsupported/pending/fallback distinction;
 - issue-body publication readback, original-body retention, concurrent-edit detection, and
-  section-offset recomputation.
+  section-offset recomputation after newline normalization (hash-only comparison is
+  insufficient).
 
 Physical benchmark execution, hardware acquisition, and normalization research are not
 requirements of NW-01A and must not be used to block its completion.

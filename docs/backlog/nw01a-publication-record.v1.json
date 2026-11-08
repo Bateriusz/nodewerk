@@ -12,10 +12,11 @@
     "body_hash": "sha256:v1:0d3941a663b71a9f602224f70b4ec65ea2ebb9731c3ee5f5d1cacc1905a62379"
   },
   "publication_channel": "repository_backlog_bundle",
+  "verification_scope": "local_bundle_only: hashes, audit text, profile/source contracts, and section offsets were verified locally; live GitHub publication and readback were not executed in the offline sandbox.",
   "github_publication_attempted": true,
-  "github_publication_status": "not_executed_offline_sandbox",
-  "github_publication_blocker": "The implementation sandbox has no DNS/network access to GitHub; the exact updated bodies, hashes, source revisions, section offsets, and per-issue completion records are preserved here for deterministic readback and later publication.",
-  "github_publication_error": "Network preflight failed: gh could not connect to api.github.com and DNS resolution for github.com/api.github.com failed in this sandbox.",
+  "github_publication_status": "blocked_offline_sandbox",
+  "github_publication_blocker": "Live publication and readback require GitHub API access. The sandbox has no DNS/network access and the configured gh token is invalid; run `python tools/nw01a_backlog.py publish --apply` in a networked environment before declaring NW-01A complete.",
+  "github_publication_error": "Published-attempt result: `python tools/nw01a_backlog.py publish --apply` aborted at issue #3 with exit code 2: `gh command failed: error connecting to api.github.com / check your internet connection or https://githubstatus.com`. DNS resolution failed, direct TCP to the GitHub API address was blocked, and gh reported that the configured token is invalid.",
   "issues": [
     {
       "task": "NW-02",
@@ -42,8 +43,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-03.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-03.md"
     },
@@ -72,8 +73,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-04.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-04.md"
     },
@@ -102,8 +103,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-05.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-05.md"
     },
@@ -132,8 +133,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-06.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-06.md"
     },
@@ -162,8 +163,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-07.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-07.md"
     },
@@ -192,8 +193,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-08.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-08.md"
     },
@@ -222,8 +223,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-09.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-09.md"
     },
@@ -252,8 +253,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-10.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-10.md"
     },
@@ -271,7 +272,7 @@
       },
       "source_refinement_hash": "sha256:v1:40f2cad601def67d17d7ebad5cf63f05d1214929537a7e68e5302c79c8f183a8",
       "original_body_hash": "sha256:v1:ec79b7b05aadfd867f8854284a25d3e4413add7bcc6391863307e4429cc9a577",
-      "updated_body_hash": "sha256:v1:49e473328942e89589d59bd9bc2f860cc4a2880bf72a9acaf9772b5d03c07236",
+      "updated_body_hash": "sha256:v1:3183eaca3fb1ee33c83541c630dc4938f05de9f02969d9ee6507298ebcc67cd0",
       "section_offsets_recomputed": true,
       "preserved_refinement_marker": true,
       "verified": true,
@@ -282,8 +283,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-11.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-11.md"
     },
@@ -312,8 +313,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-12.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-12.md"
     },
@@ -342,8 +343,8 @@
         "pairallel_refinement_marker_preserved": true,
         "required_sections_present": true
       },
-      "completion_status": "prepared_and_verified",
-      "github_publication_status": "pending_offline_sandbox",
+      "completion_status": "prepared_verified_publication_pending",
+      "github_publication_status": "pending_live_publication",
       "updated_body_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-13.body.md",
       "updated_document_path": "docs/backlog/nw02-nw12-issue-bodies/updated/issue-13.md"
     }

@@ -84,7 +84,3 @@ Dependencies:
 Boundaries:
 - 64 KiB is a research outcome, not a prerequisite for completing the engine proof.
 - No custom compressor project unless existing measured options demonstrably fail.
-
-<!-- pairallel-sections:v1 {"sections":[{"end":102,"slug":"goal","start":9},{"end":397,"slug":"source-context","start":123},{"end":1517,"slug":"final-technical-design","start":426},{"end":1726,"slug":"scope","start":1529},{"end":1902,"slug":"affected-components","start":1752},{"end":2232,"slug":"required-behavior","start":1926},{"end":2461,"slug":"state-configuration-api-changes","start":2276},{"end":2719,"slug":"recovery-semantics","start":2486},{"end":3032,"slug":"compatibility-and-safety-constraints","start":2762},{"end":3300,"slug":"test-plan","start":3048},{"end":3528,"slug":"regressions","start":3318},{"end":3966,"slug":"acceptance-criteria","start":3554},{"end":4298,"slug":"decomposition-dependencies-and-boundaries","start":4014}],"version":"v1"} -->
-
-<!-- pairallel-refinement:v1 {"base_sha":"270d298f1b037548e0ab4808b2c123c12ddcc4e6","decision":"DECOMPOSE","output_count":12,"output_index":9,"policy_fingerprint":"sha256:v1:c7d698432d5df80cd4d3ca6eb810711f4ef9f7909cfc0008b8ee5c8be3c70e6a","refinement_hash":"sha256:v1:40f2cad601def67d17d7ebad5cf63f05d1214929537a7e68e5302c79c8f183a8","run_id":"plan-1e6c8c83858cb79fbd34a36a","source":{"host":"github.com","issue_number":1,"repository":"bateriusz/nodewerk"},"source_hash":"sha256:v1:7bbf325efe402077d68a5b5776d28e8be75e4d5da74ccc097c9aecf2783a616f","version":"v1"} -->

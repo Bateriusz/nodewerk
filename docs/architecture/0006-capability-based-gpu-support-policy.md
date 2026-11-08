@@ -67,7 +67,8 @@ The final NW-01 contracts were cross-checked against the planning base before th
 | **Shader targets** | `cs_6_0`, `vs_6_0`, `ps_6_0`; offline compilation only; no SM 6.6 `ResourceDescriptorHeap`/`SamplerDescriptorHeap` indexing; DXIL container validation retained. |
 | **Pinned build tools** | DXC `1.8.2407` with `-Qstrip_reflect -Qstrip_debug`; clang-cl/lld-link and MSVC/LTCG profiles; reproducible-build contract retained. |
 | **Runtime requirements** | Windows 11 x64; minimum tested build `10.0.26200.9711`; intended lower runtime target `10.0.22631.4317` (unverified); inbox `d3d12.dll`; no mandatory Agility SDK redistribution; no runtime DXC/Slang; no proprietary vendor SDK; no executable packer. |
-| **Architectural constraints** | Bounded descriptor tables; ordinary `TRANSITION`/`UAV`/`ALIASING` barriers (no enhanced barriers); exactly one direct queue (zero compute/copy queues); `max_cbv_srv_uav_descriptors_per_frame = 4096`; `max_sampler_descriptors_per_frame = 64`; `max_root_signature_dword_cost = 16`; `max_compute_threads_per_group = 1024`; `max_texture_2d_dimension = 8192`; `swap_chain_buffer_count = 2`; no mesh shaders, ray tracing, or runtime shader compilation. Existing platform security mitigations remain required. |
+| **Architectural constraints** | Bounded descriptor tables; ordinary `TRANSITION`/`UAV`/`ALIASING` barriers (no enhanced barriers); exactly one direct queue (zero compute/copy queues); `max_cbv_srv_uav_descriptors_per_frame = 4096`; `max_sampler_descriptors_per_frame = 64`; `max_root_signature_dword_cost = 16`; `max_compute_threads_per_group = 1024`; `max_texture_2d_dimension = 8192`; `swap_chain_buffer_count = 2`; no mesh shaders, ray tracing, or runtime shader compilation. |
+| **Security mitigations** | `/GS`, `/guard:cf`, `/DYNAMICBASE`, `/HIGHENTROPYVA`, `/NXCOMPAT`, and `/CETCOMPAT` remain required across build profiles; existing platform security mitigations are not removed. |
 
 Optional features such as `WaveOps`, `Int64ShaderOps`, `Native16BitShaderOpsSupported`, and `TypedUAVLoadAdditionalFormats` are **not** part of the common requirement vector. They are queried only when emitted content declares them.
 
@@ -234,13 +235,13 @@ Backward-readable migration examples:
 - Non-reference, stale, mismatched-host, or mismatched-protocol measurements remain available but cannot certify the named performance gate.
 - A failed benchmark remains a failure; unavailable hardware remains pending.
 - Reference or threshold changes create a new contract version and preserve earlier results and unresolved statuses.
-- Issue updates retain original bodies and per-issue completion records so interrupted updates can be reconciled without overwriting concurrent edits. Completion requires readback verification of every intended update, including recomputed section offsets.
+- Issue updates retain original bodies and per-issue completion records so interrupted updates can be reconciled without overwriting concurrent edits. Completion requires readback verification of every intended update, including recomputed section offsets after newline normalization. A matching normalized body hash alone is insufficient; the live body must also reproduce the recorded body-relative offsets and refinement provenance marker.
 
 ### 11. Execution order
 
 `NW-01 -> NW-01A -> NW-01B -> NW-02..NW-12`
 
-NW-01A unblocks NW-01B only. Implementation of NW-02 through NW-12 remains blocked until NW-01B also completes. Existing dependencies among NW-02 through NW-12 are preserved.
+NW-01A includes verified live publication of the affected issue bodies. Until every per-issue record is `published_and_verified`, NW-01A is prepared but not complete and NW-01B must not start. Once publication is verified, NW-01A unblocks NW-01B only. Implementation of NW-02 through NW-12 remains blocked until NW-01B also completes. Existing dependencies among NW-02 through NW-12 are preserved.
 
 ### 12. Downstream dispositions
 

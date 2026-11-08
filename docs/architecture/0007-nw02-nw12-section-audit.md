@@ -35,6 +35,10 @@ The repository mapping in `docs/architecture/0005-task-contracts-nw02-nw12.md` d
 
 The nine required sections are Final technical design, Scope, Required behavior, State/configuration/API changes, Compatibility and safety constraints, Test plan, Regressions, Acceptance criteria, and Dependencies/boundaries. Recovery semantics is audited separately for consistency. Affected components is reviewed for indirect assumptions. Concrete pass/fail/pending/unsupported review examples are recorded in ADR-0006.
 
+The canonical issue bodies are the `.body.md` files; they carry body-relative `pairallel-sections:v1` offsets. The `.md` wrappers begin with a `# title` line and deliberately omit the machine manifest so body-relative offsets cannot be misread as document-relative offsets.
+
+Publication status is tracked in [`docs/backlog/nw01a-publication-record.v1.json`](../backlog/nw01a-publication-record.v1.json). This audit is prepared and locally verified; it is not complete until every intended live issue update has been published and read back with section offsets recomputed.
+
 ## NW-02 — issue #3
 
 **Actual title:** NW-02 — Implement versioned operator schemas, typed DAGs, and deterministic evaluation
@@ -50,15 +54,15 @@ The nine required sections are Final technical design, Scope, Required behavior,
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the vague `target profile` hash input with the stable capability-profile ID and canonical requirements digest, and explicitly excludes GPU generation, marketing model, adapter description, and PCI device ID from semantic hashing; states that target identity and compiler acceptance are GPU-independent.
 
 **Exact replacement text:**
 
@@ -68,15 +72,15 @@ Represent projects as immutable snapshots of typed, multi-output DAGs. Schemas d
 
 ### Scope — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds rules that target-profile identity comes only from the capability-profile ID/digest and that identical semantic hashes and compiler acceptance must be produced on a GPU-less host.
 
 **Exact replacement text:**
 
@@ -91,7 +95,7 @@ Represent projects as immutable snapshots of typed, multi-output DAGs. Schemas d
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the capability-profile ID/digest as the stored target-profile identity and keeps observed adapter and GPU-generation metadata outside canonical semantic encodings.
 
 **Exact replacement text:**
 
@@ -104,7 +108,7 @@ Represent projects as immutable snapshots of typed, multi-output DAGs. Schemas d
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds rejection of unknown or malformed capability-profile IDs/digests through the existing schema-version/migration path instead of interpreting GPU generation or model names.
 
 **Exact replacement text:**
 
@@ -117,7 +121,7 @@ Represent projects as immutable snapshots of typed, multi-output DAGs. Schemas d
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the constraint that compiler acceptance requires no GPU execution and that hardware qualification belongs to downstream evidence tasks.
 
 **Exact replacement text:**
 
@@ -130,7 +134,7 @@ Represent projects as immutable snapshots of typed, multi-output DAGs. Schemas d
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds tests that changing only GPU model/generation metadata does not change semantic hashes or target-profile selection, and that compiler acceptance works on a GPU-less host.
 
 **Exact replacement text:**
 
@@ -145,7 +149,7 @@ Represent projects as immutable snapshots of typed, multi-output DAGs. Schemas d
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds a regression guard that marketing names, generation labels, adapter descriptions, and PCI identifiers cannot alter semantic artifact identity or target-profile selection.
 
 **Exact replacement text:**
 
@@ -158,7 +162,7 @@ Represent projects as immutable snapshots of typed, multi-output DAGs. Schemas d
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds an acceptance clause requiring semantic hashes and compiler acceptance to derive from the capability-profile ID/digest and to pass with no GPU present.
 
 **Exact replacement text:**
 
@@ -172,7 +176,7 @@ Represent projects as immutable snapshots of typed, multi-output DAGs. Schemas d
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds NW-01A/NW-01B ownership and the global prerequisite, and records that no GPU-execution or exact-SKU compiler prerequisite is introduced.
 
 **Exact replacement text:**
 
@@ -206,15 +210,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces generic capability requirements with exact emitted-only fields: profile ID/digest, feature level, shader model, binding/heap tiers, required DXGI formats and limits, emitted shader targets, runtime requirements, and optional-profile identity; rejects unknown or malformed records at existing validation boundaries without redesigning the package.
 
 **Exact replacement text:**
 
@@ -224,7 +228,7 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### Scope — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the exact emitted capability-requirements section inside the existing `.nwp` v1 header and validation path, avoiding a package-format redesign.
 
 **Exact replacement text:**
 
@@ -238,11 +242,11 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds exact emitted-requirement encoding, validation-boundary rejection of unknown, missing, or malformed records, and a prohibition on inferring capability from GPU names, tiers, or PCI identifiers.
 
 **Exact replacement text:**
 
@@ -257,7 +261,7 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Extends the v1 capability-requirements record with profile identity/digest, exact queried features, formats and limits, shader targets, runtime and toolchain requirements, and optional-profile identity without changing the container structure.
 
 **Exact replacement text:**
 
@@ -270,7 +274,7 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds rejection of unknown or malformed requirements, profiles, or digests before bulk allocation through the existing package-validation diagnostic category, with no silent downgrade.
 
 **Exact replacement text:**
 
@@ -284,7 +288,7 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that requirement encoding is additive within v1 and that unsupported optional profiles remain separate artifacts rather than common-package requirements.
 
 **Exact replacement text:**
 
@@ -298,7 +302,7 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds tests for unknown, missing, malformed, and contradictory requirement records at package-validation boundaries and for exact requirement round-trip and inspection.
 
 **Exact replacement text:**
 
@@ -313,7 +317,7 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds a guard that no GPU model, generation, tier label, or PCI identifier becomes a package capability requirement or parser branch.
 
 **Exact replacement text:**
 
@@ -326,7 +330,7 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds acceptance that packages express and inspect exact capability requirements and that malformed or unknown requirements fail through existing validation boundaries without package-format redesign.
 
 **Exact replacement text:**
 
@@ -340,7 +344,7 @@ Lower ShaderExpr DAGs into a small typed expression IR and generate specialized 
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the NW-01A/NW-01B prerequisite chain and records that no package-format redesign or GPU-name capability inference is introduced.
 
 **Exact replacement text:**
 
@@ -375,15 +379,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces generic startup checks with exact validation of feature level, shader model, binding/heap tiers, formats and limits, and every emitted optional or profile requirement against the package profile ID/digest; adds representative Ada and Blackwell qualification of the identical common package.
 
 **Exact replacement text:**
 
@@ -393,15 +397,15 @@ Implement Win32 lifecycle, capability checks, D3D12 device/swapchain, one direct
 
 ### Scope — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the generic capability check with exact startup validation and diagnostics naming each unmet requirement, and makes adapter names, marketing generations, tier labels, and PCI identifiers metadata only.
 
 **Exact replacement text:**
 
@@ -415,7 +419,7 @@ Implement Win32 lifecycle, capability checks, D3D12 device/swapchain, one direct
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds structured capability-validation diagnostics carrying the unmet requirement, required and observed values, package profile ID/digest, and the existing exit-code category.
 
 **Exact replacement text:**
 
@@ -428,7 +432,7 @@ Implement Win32 lifecycle, capability checks, D3D12 device/swapchain, one direct
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the existing capability-failure category before bulk allocation for missing or unknown requirements and distinguishes missing representative coverage as pending, not a runtime failure or pass.
 
 **Exact replacement text:**
 
@@ -442,7 +446,7 @@ Implement Win32 lifecycle, capability checks, D3D12 device/swapchain, one direct
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds single-common-package Ada and Blackwell qualification and prohibits adapter-name, marketing-generation, tier-label, and PCI-whitelist predicates.
 
 **Exact replacement text:**
 
@@ -456,7 +460,7 @@ Implement Win32 lifecycle, capability checks, D3D12 device/swapchain, one direct
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds tests for exact missing feature, format, limit, and profile failures and diagnostics before allocation, plus representative Ada/Blackwell common-package coverage with pending status when absent.
 
 **Exact replacement text:**
 
@@ -471,7 +475,7 @@ Implement Win32 lifecycle, capability checks, D3D12 device/swapchain, one direct
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds guards that missing coverage remains pending, executed failures remain failures, and startup validation never branches on adapter names, generation labels, or PCI identifiers.
 
 **Exact replacement text:**
 
@@ -485,7 +489,7 @@ Implement Win32 lifecycle, capability checks, D3D12 device/swapchain, one direct
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the generic two-generation smoke test with identical common-package rendering on representative Ada and Blackwell with exact capability and environment evidence, and adds exact startup-diagnostic acceptance.
 
 **Exact replacement text:**
 
@@ -499,7 +503,7 @@ Implement Win32 lifecycle, capability checks, D3D12 device/swapchain, one direct
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds NW-01A/NW-01B prerequisites and records that no exact-SKU correctness prerequisite exists beyond representative generation coverage.
 
 **Exact replacement text:**
 
@@ -534,15 +538,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Keys export target profiles by capability-profile ID/digest instead of GPU generation or model, and requires the player link manifest to contain only reachable feature queries with unused optional implementations, shaders, and dependencies excluded from the common artifact.
 
 **Exact replacement text:**
 
@@ -552,7 +556,7 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### Scope — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds capability-profile export identity and reachable-content closure as explicit scope for common and optional artifacts.
 
 **Exact replacement text:**
 
@@ -566,11 +570,11 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds profile-ID/digest export identity, exact reachable requirement emission, exclusion of unused optional content from common exports, and representative schedule and aliasing qualification.
 
 **Exact replacement text:**
 
@@ -586,7 +590,7 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds profile ID/digest to export settings and reports in place of GPU generation or model selectors and records the reachable feature-query closure and excluded optional implementations.
 
 **Exact replacement text:**
 
@@ -600,7 +604,7 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Changes export failure to cover unsupported or unknown capability profiles with a dependency path, and adds pending coverage without changing a successful artifact.
 
 **Exact replacement text:**
 
@@ -613,7 +617,7 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that optional profiles are separate artifacts with exact requirements and budgets and that common exports never contain mandatory optional code, shaders, or dependencies.
 
 **Exact replacement text:**
 
@@ -626,7 +630,7 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds tests that export identity is profile-based rather than GPU-name-based, that representative Ada and Blackwell aliasing validation is recorded, and that optional additions do not change the common link closure.
 
 **Exact replacement text:**
 
@@ -641,7 +645,7 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds guards that optional additions do not enlarge common exports or requirements and that GPU marketing metadata cannot alter export identity or byte-identical results.
 
 **Exact replacement text:**
 
@@ -655,7 +659,7 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the generic aliasing acceptance with representative Ada and Blackwell schedule and aliasing validation on the identical common artifact and adds profile-keyed export identity and common-content exclusion.
 
 **Exact replacement text:**
 
@@ -669,7 +673,7 @@ Implement typed lowering, constant propagation, dead-node/dead-output eliminatio
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds NW-01A/NW-01B prerequisites and records that no optional implementation or GPU-name predicate may enter the common export.
 
 **Exact replacement text:**
 
@@ -705,15 +709,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds fixed-tick capture metadata for common artifact hash, profile ID/digest, exact adapter and device, driver, OS and toolchain, queried capabilities, clocks, power, thermal state, cache state, and protocol; adds representative Ada and Blackwell common-artifact coverage with pending missing coverage while preserving tolerances and exclusions.
 
 **Exact replacement text:**
 
@@ -723,7 +727,7 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### Scope — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds representative Ada and Blackwell fixed-tick correctness captures with artifact and environment provenance to the task scope.
 
 **Exact replacement text:**
 
@@ -737,11 +741,11 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the identical common artifact as the representative Ada and Blackwell correctness input and requires exact device, capability, environment, and artifact provenance.
 
 **Exact replacement text:**
 
@@ -755,7 +759,7 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds capture metadata fields for coverage target, evidence role, profile identity/digest, artifact hashes, exact device, driver, OS and toolchain, queried capabilities, clocks, power, thermal state, cache state, and unavailable telemetry.
 
 **Exact replacement text:**
 
@@ -768,7 +772,7 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that missing representative hardware or telemetry yields pending or unverified coverage and is never substituted or reported as passing.
 
 **Exact replacement text:**
 
@@ -781,7 +785,7 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that representative hardware is not an exact-SKU requirement and that existing tolerances, exclusions, quality, and resolution requirements remain unchanged.
 
 **Exact replacement text:**
 
@@ -794,7 +798,7 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces RTX 40 and RTX 50 fixed-tick captures with representative desktop Ada and Blackwell captures using the identical common artifact and exact provenance, retaining tolerances and pending coverage.
 
 **Exact replacement text:**
 
@@ -807,7 +811,7 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds a guard that new capture identity and provenance metadata cannot alter existing numeric or image tolerances or feature exclusions.
 
 **Exact replacement text:**
 
@@ -820,7 +824,7 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the generic fixed-tick tolerance check with representative Ada and Blackwell captures of the identical common artifact that meet the existing tolerances, with missing coverage pending.
 
 **Exact replacement text:**
 
@@ -833,7 +837,7 @@ Add seeded 256x256 Noise2D material generation, a 64x32 parametric torus mesh ge
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds NW-01A/NW-01B prerequisites and records that no exact-SKU capture or tolerance change is introduced.
 
 **Exact replacement text:**
 
@@ -867,15 +871,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Separates representative Ada and Blackwell correctness from versioned `nw07_perf_ref_v1` certification, adds the reference board, CPU, host, environment, and protocol designation plus per-run strict gates, preserves all existing size, startup, memory, image-quality, and resolution budgets, and rejects non-reference substitution and surrogate thresholds.
 
 **Exact replacement text:**
 
@@ -893,7 +897,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Scope — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the separation of representative common-artifact correctness from `nw07_perf_ref_v1` certification and the reference host, protocol, raw-sample, and pending evidence states.
 
 **Exact replacement text:**
 
@@ -908,7 +912,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Affected components — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the performance-reference contract record and evidence-role metadata as components, separating certification provenance from correctness coverage.
 
 **Exact replacement text:**
 
@@ -921,7 +925,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Separates correctness coverage from performance certification, adds per-run strict gate and non-reference or mismatched rejection, and makes missing reference evidence pending rather than a pass or substitution.
 
 **Exact replacement text:**
 
@@ -937,7 +941,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the generic metric baseline record with explicit `nw07_perf_ref_v1` contract identity, reference host, protocol, metric, operator, cache, and matching fields, raw samples, percentile method, result status, and coverage-role metadata.
 
 **Exact replacement text:**
 
@@ -950,7 +954,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Makes executed failures remain failures, absent reference hardware remain pending regardless of other measurements, and reference or threshold changes create a new contract version while preserving earlier results.
 
 **Exact replacement text:**
 
@@ -963,7 +967,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that theoretical throughput is insufficient, that the exact RTX 4060 appears only as the justified `nw07_perf_ref_v1` reference or observed metadata, and that no new absolute Blackwell gate is introduced.
 
 **Exact replacement text:**
 
@@ -977,7 +981,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the generic three-pass test with the verified five-second warm-up plus three uncapped 60-second reference runs, per-run strict p99 gates, raw-sample and percentile retention, representative correctness coverage, and non-reference rejection checks.
 
 **Exact replacement text:**
 
@@ -992,7 +996,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds guards that faster SKUs, theoretical ratios, legacy labels, and non-reference measurements cannot certify v1, and that missing coverage and executed failures are never relabeled as passes.
 
 **Exact replacement text:**
 
@@ -1007,7 +1011,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the generic 16.67 ms acceptance with per-run strict p99 gates under `nw07_perf_ref_v1`, adds representative Ada and Blackwell correctness, requires reference designation before certification, and keeps missing reference evidence pending without blocking NW-01A.
 
 **Exact replacement text:**
 
@@ -1023,7 +1027,7 @@ Record process RAM, driver memory, startup pipeline time, generation time, image
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds NW-01A/NW-01B prerequisites, records that the RTX 4060 performance reference does not narrow Ada compatibility, and requires any replacement or normalized reference to be a new contract rather than a retroactive v1 pass.
 
 **Exact replacement text:**
 
@@ -1059,15 +1063,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Defines device generation as the D3D12 device-instance recreation epoch and adds capability-profile ID/digest plus actual adapter and device identity only where device-resident realizations need it; compiler targets are keyed by capability profile, not RTX marketing generation.
 
 **Exact replacement text:**
 
@@ -1077,15 +1081,15 @@ Build a separate editor with graph connections, parameter inspection, timeline s
 
 ### Scope — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that stale jobs cannot publish across device-recreation epochs and explicitly distinguishes the D3D12 device epoch from GPU marketing generation.
 
 **Exact replacement text:**
 
@@ -1099,7 +1103,7 @@ Build a separate editor with graph connections, parameter inspection, timeline s
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds device-generation cache keys keyed by D3D12 recreation epoch, capability-profile ID/digest, and actual adapter identity where required, while compiler targets stay profile-keyed.
 
 **Exact replacement text:**
 
@@ -1112,7 +1116,7 @@ Build a separate editor with graph connections, parameter inspection, timeline s
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that device recreation increments the epoch and invalidates device-resident realizations, while existing disk and compiler-cache ownership is unchanged.
 
 **Exact replacement text:**
 
@@ -1126,7 +1130,7 @@ Build a separate editor with graph connections, parameter inspection, timeline s
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that adapter identity may appear only in device-resident realization keys and that RTX marketing-generation strings cannot become cache, compiler, or capability predicates.
 
 **Exact replacement text:**
 
@@ -1140,7 +1144,7 @@ Build a separate editor with graph connections, parameter inspection, timeline s
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds stale-completion testing across device epochs, profile-change invalidation, and verification that marketing-name metadata does not affect compiler or cache targets and adapter identity is retained only for device-resident keys.
 
 **Exact replacement text:**
 
@@ -1155,7 +1159,7 @@ Build a separate editor with graph connections, parameter inspection, timeline s
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds a guard that device-epoch or capability-profile changes are not conflated with RTX marketing generations.
 
 **Exact replacement text:**
 
@@ -1168,7 +1172,7 @@ Build a separate editor with graph connections, parameter inspection, timeline s
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds acceptance that device generation means a D3D12 recreation epoch, compiler targets are profile-keyed, and device-resident realizations retain actual adapter and device identity.
 
 **Exact replacement text:**
 
@@ -1182,7 +1186,7 @@ Build a separate editor with graph connections, parameter inspection, timeline s
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds NW-01A/NW-01B prerequisites and records that no GPU marketing generation may define a device epoch or compiler target.
 
 **Exact replacement text:**
 
@@ -1217,15 +1221,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds checkpoint compatibility over version, tick, semantic/state-layout hash, and capability-profile ID/digest, binds device-resident checkpoints to D3D12 device lifetime and epoch, and limits cross-device correctness to representative Ada and Blackwell tolerances without promising portable GPU-state replay.
 
 **Exact replacement text:**
 
@@ -1235,15 +1239,15 @@ Implement explicit History read/write boundaries: previous-tick state is an exte
 
 ### Scope — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the distinction between semantic/state-layout compatibility and device-resident lifetime and forbids portable GPU-state replay claims across adapters.
 
 **Exact replacement text:**
 
@@ -1257,7 +1261,7 @@ Implement explicit History read/write boundaries: previous-tick state is an exte
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the generic checkpoint hash and device field with version, tick, semantic/state-layout hash, capability-profile ID/digest, and device-lifetime binding.
 
 **Exact replacement text:**
 
@@ -1269,7 +1273,7 @@ Implement explicit History read/write boundaries: previous-tick state is an exte
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that device recreation invalidates device-resident checkpoints while packaged-checkpoint compatibility remains semantic/state-layout and capability-profile based.
 
 **Exact replacement text:**
 
@@ -1282,7 +1286,7 @@ Implement explicit History read/write boundaries: previous-tick state is an exte
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds representative Ada and Blackwell cross-device tolerance coverage and device-lifetime binding while explicitly avoiding portable GPU-state replay claims.
 
 **Exact replacement text:**
 
@@ -1295,7 +1299,7 @@ Implement explicit History read/write boundaries: previous-tick state is an exte
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds checkpoint compatibility tests across state-layout and profile changes, device-recreation rejection, and representative Ada and Blackwell tolerance coverage with exact metadata and pending missing coverage.
 
 **Exact replacement text:**
 
@@ -1310,7 +1314,7 @@ Implement explicit History read/write boundaries: previous-tick state is an exte
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds a guard that checkpoint compatibility rules cannot drive semantic behavior or imply portable GPU-state replay.
 
 **Exact replacement text:**
 
@@ -1323,7 +1327,7 @@ Implement explicit History read/write boundaries: previous-tick state is an exte
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds acceptance that checkpoints identify state-layout and capability-profile requirements, device-resident state is lifetime-bound, and cross-device tolerance coverage runs on representative Ada and Blackwell without portable replay claims.
 
 **Exact replacement text:**
 
@@ -1337,7 +1341,7 @@ Implement explicit History read/write boundaries: previous-tick state is an exte
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds NW-01A/NW-01B prerequisites and records that no portable GPU-state replay or exact-SKU cross-device prerequisite is introduced.
 
 **Exact replacement text:**
 
@@ -1364,7 +1368,7 @@ Boundaries:
 - Source revision: `github.com/bateriusz/nodewerk#11` in `plan-1e6c8c83858cb79fbd34a36a`
 - Source refinement hash: `sha256:v1:40f2cad601def67d17d7ebad5cf63f05d1214929537a7e68e5302c79c8f183a8`
 - Original body hash: `sha256:v1:ec79b7b05aadfd867f8854284a25d3e4413add7bcc6391863307e4429cc9a577`
-- Updated body hash: `sha256:v1:49e473328942e89589d59bd9bc2f860cc4a2880bf72a9acaf9772b5d03c07236`
+- Updated body hash: `sha256:v1:3183eaca3fb1ee33c83541c630dc4938f05de9f02969d9ee6507298ebcc67cd0`
 - Original body (exact): [`docs/backlog/nw02-nw12-issue-bodies/original/issue-11.body.md`](../backlog/nw02-nw12-issue-bodies/original/issue-11.body.md)
 - Updated body (exact): [`docs/backlog/nw02-nw12-issue-bodies/updated/issue-11.body.md`](../backlog/nw02-nw12-issue-bodies/updated/issue-11.body.md)
 - Original document: [`docs/backlog/nw02-nw12-issue-bodies/original/issue-11.md`](../backlog/nw02-nw12-issue-bodies/original/issue-11.md)
@@ -1372,19 +1376,25 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
-### Final technical design — unchanged
+### Final technical design — changed
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** Adds the inherited `nw07_perf_ref_v1` requirement: before and after compact-export measurements use matched hardware, environment, and protocol; faster substitutes cannot certify preservation; missing reference evidence remains pending; and common-artifact correctness retains representative Ada and Blackwell coverage.
+
+**Exact replacement text:**
+
+```markdown
+Optimize the existing 256 KiB proof using measured parameter packing, delta references, AoS-versus-SoA layouts, shader specialization/fusion choices, linker elimination, and payload compression. Compare encoded bytes plus decoder code and startup memory/time against raw storage. Validate CRT-free startup only if it produces a net benefit with correct compiler-helper and initialization behavior. Then freeze a deliberately restricted 20-second SDF intro: sphere/torus composition, seeded procedural material, camera curves, and tonemapping, with no audio, mesh pipeline, or hardware RT requirement. Attempt a complete single-file export of at most 65,536 bytes using offline shaders and an explicitly verified x64 packaging toolchain. Do not depend on runtime DXC or assumed x64 Crinkler support. Failure produces the smallest measured artifact and tested blockers, not a proof that 64 KiB is impossible. Preserve larger profiles: 128 KiB compact is a stretch tier, 256 KiB is the proven small-demo tier, 1 MiB is a standard production tier, and larger configured budgets remain supported. Preserve the inherited `nw07_perf_ref_v1` performance contract: every before/after comparison uses matched hardware, environment, and protocol; a faster substitute (including RTX 4060 Ti, other Ada, or Blackwell) cannot certify preservation; missing reference evidence remains pending. Common-artifact correctness retains representative desktop Ada and Blackwell coverage.
+```
 
 ### Scope — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds matched before and after performance-evidence inheritance from `nw07_perf_ref_v1` to the task scope.
 
 **Exact replacement text:**
 
@@ -1398,11 +1408,11 @@ Boundaries:
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Requires before and after performance comparisons to use matched hardware, environment, and protocol and adds that `nw07_perf_ref_v1` preservation cannot be certified by an RTX 4060 Ti, other Ada, Blackwell, or faster substitute and that missing reference evidence is pending.
 
 **Exact replacement text:**
 
@@ -1416,7 +1426,7 @@ Boundaries:
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds recording of the inherited contract identity, reference host and protocol identity, matching keys, artifact hashes, and result status for every before and after comparison.
 
 **Exact replacement text:**
 
@@ -1429,7 +1439,7 @@ Boundaries:
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that unmatched, stale, or non-reference evidence remains available but cannot certify v1 preservation, with executed failures remaining failures and missing reference evidence pending.
 
 **Exact replacement text:**
 
@@ -1442,7 +1452,7 @@ Boundaries:
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds a prohibition on unvalidated cross-SKU scaling, theoretical-throughput equivalence, and the 13.5 ms and 12.00 ms surrogate thresholds.
 
 **Exact replacement text:**
 
@@ -1456,7 +1466,7 @@ Boundaries:
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds matched-hardware, environment, and protocol before and after comparison and representative Ada and Blackwell common-artifact correctness verification.
 
 **Exact replacement text:**
 
@@ -1470,7 +1480,7 @@ Boundaries:
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Extends the NW-07 performance and visual preservation guard to name `nw07_perf_ref_v1` and reject faster-substitute or mismatched-evidence certification.
 
 **Exact replacement text:**
 
@@ -1482,7 +1492,7 @@ Boundaries:
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds acceptance that preservation evidence names `nw07_perf_ref_v1`, uses matched before and after environments, retains representative common-artifact correctness, and cannot use a faster substitute.
 
 **Exact replacement text:**
 
@@ -1496,7 +1506,7 @@ Boundaries:
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the `nw07_perf_ref_v1` inheritance, NW-01A/NW-01B prerequisites, and a boundary that compact optimization introduces no new or relaxed performance reference.
 
 **Exact replacement text:**
 
@@ -1531,15 +1541,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the one-common-RTX-40/50-profile wording with a common profile qualified on representative Ada and Blackwell plus separately exported optional profiles, each declaring exact capabilities, shader, runtime, and toolchain requirements, dependencies, and budgets with a separately exported and tested common fallback.
 
 **Exact replacement text:**
 
@@ -1549,7 +1559,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Scope — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds capability-qualified per-device baseline and variant pairs and separately tested common fallback artifacts to the task scope.
 
 **Exact replacement text:**
 
@@ -1563,7 +1573,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Affected components — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Renames capability profiles to optional profiles with exact requirements and budgets and adds common fallback artifacts to the benchmark-fixture component.
 
 **Exact replacement text:**
 
@@ -1575,7 +1585,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Requires matched baseline and variant pairs only on capability-qualified declared targets, evaluates the improvement criterion per device and environment, distinguishes unsupported from pending coverage, and excludes optional content from common and fallback exports.
 
 **Exact replacement text:**
 
@@ -1590,7 +1600,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### State, configuration, and API changes — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds optional-profile ID/digest, artifact budgets, dependencies, fallback-artifact identity, and pass, fail, pending, or unsupported evidence status.
 
 **Exact replacement text:**
 
@@ -1603,7 +1613,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Recovery semantics — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that unsupported optional artifacts exit diagnostically without effect substitution or common-baseline elevation.
 
 **Exact replacement text:**
 
@@ -1616,7 +1626,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that no optional feature is presumed available across a generation and that common and fallback artifacts remain mandatory and separately tested.
 
 **Exact replacement text:**
 
@@ -1629,7 +1639,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the exact RTX 4060 paired-test prerequisite with common-artifact Ada and Blackwell runs, capability-qualified matched optional pairs, per-device improvement evaluation, and unsupported, pending, and fallback checks.
 
 **Exact replacement text:**
 
@@ -1643,7 +1653,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Replaces the RTX 40 and RTX 50 artifact guard with one that prevents optional-profile improvements from altering common or fallback artifacts and prevents unsupported or pending outcomes being reported as passes.
 
 **Exact replacement text:**
 
@@ -1655,7 +1665,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds acceptance for representative common coverage on both generations, capability-qualified per-device optional claims, unsupported-versus-pending distinction, and separately tested common fallback artifacts.
 
 **Exact replacement text:**
 
@@ -1670,7 +1680,7 @@ Maintain one common capability profile qualified on representative desktop Ada a
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds `nw07_perf_ref_v1`, NW-01A/NW-01B prerequisites, and a boundary against cross-SKU performance equivalence or optional-feature baseline elevation.
 
 **Exact replacement text:**
 
@@ -1706,15 +1716,15 @@ Boundaries:
 
 ### Goal — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Source context — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Final technical design — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds an explicit GPU-policy note that synthesis, the authoritative clock, WASAPI, PCM and offline rendering, and audio acceptance are hardware-neutral and introduce no GPU generation, exact-SKU, capability-profile, or performance-reference requirement.
 
 **Exact replacement text:**
 
@@ -1724,15 +1734,15 @@ Introduce an optional audio provider that produces PCM, reports an authoritative
 
 ### Scope — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Affected components — reviewed-no-policy-change
 
-**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, or capability-identity assumptions; the existing component list remains correct.
+**Reason:** Reviewed, no policy change required: the affected components were checked for indirect exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumptions; the existing component list remains correct.
 
 ### Required behavior — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds a hardware-neutrality rule forbidding GPU generation, exact-SKU, capability-profile, or performance-reference predicates in audio.
 
 **Exact replacement text:**
 
@@ -1746,15 +1756,15 @@ Introduce an optional audio provider that produces PCM, reports an authoritative
 
 ### State, configuration, and API changes — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Recovery semantics — unchanged
 
-**Reason:** No change required: the section has no GPU exact-model prerequisite, generation-name predicate, performance-reference assumption, or capability-identity drift; its existing contract remains correct under ADR-0006.
+**Reason:** No change required: this section contains no exact-model, generation-name, performance-reference, capability-identity, or optional-artifact assumption; its existing text remains correct under ADR-0006.
 
 ### Compatibility and safety constraints — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds that audio adds no GPU capability, generation, SKU, or performance-contract requirement to common or fallback artifacts.
 
 **Exact replacement text:**
 
@@ -1767,7 +1777,7 @@ Introduce an optional audio provider that produces PCM, reports an authoritative
 
 ### Test plan — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds verification that audio changes introduce no GPU model, generation, capability-profile, or performance-reference predicate.
 
 **Exact replacement text:**
 
@@ -1781,7 +1791,7 @@ Introduce an optional audio provider that produces PCM, reports an authoritative
 
 ### Regressions — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds a guard that audio additions cannot introduce GPU-specific capability, generation, or performance dependencies.
 
 **Exact replacement text:**
 
@@ -1794,7 +1804,7 @@ Introduce an optional audio provider that produces PCM, reports an authoritative
 
 ### Acceptance criteria — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds acceptance that audio remains hardware-neutral and needs no GPU-policy qualification beyond the existing common-artifact representative coverage.
 
 **Exact replacement text:**
 
@@ -1808,7 +1818,7 @@ Introduce an optional audio provider that produces PCM, reports an authoritative
 
 ### Decomposition dependencies and boundaries — changed
 
-**Reason:** See exact replacement text; the change separates capability-profile identity, representative coverage, performance-reference certification, optional-profile boundaries, and/or evidence provenance as required by NW-01A.
+**Reason:** Adds the hardware-neutral audio contract statement, NW-01A/NW-01B prerequisites, and records that NW-12 makes no GPU qualification claim and that its former hardware-qualification mapping is corrected in ADR-0005.
 
 **Exact replacement text:**
 
