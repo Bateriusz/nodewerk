@@ -40,7 +40,7 @@ def test_capability_manifest_baseline_and_cpp_enforcement_agreement() -> None:
     assert drivers["rtx_4060_desktop"]["verification_status"] == "verified"
     assert drivers["rtx_50_series_desktop"]["gpu_model"] == "NVIDIA GeForce RTX 5070 Ti"
     assert drivers["rtx_50_series_desktop"]["driver_version"] == "610.88"
-    assert drivers["rtx_50_series_desktop"]["verification_status"] == "verified"
+    assert drivers["rtx_50_series_desktop"]["verification_status"] == "unverified"
 
     api = cap["graphics_api"]
     assert api["api"] == "D3D12"
@@ -94,10 +94,13 @@ def test_hardware_benchmark_coverage_matches_recorded_physical_evidence() -> Non
     rtx50_path = REPO_ROOT / "benchmarks" / "hardware" / "rtx-50-series-baseline.json"
     rtx50 = json.loads(rtx50_path.read_text(encoding="utf-8"))
     assert rtx50["hardware_tier"] == "rtx_50_series_desktop"
-    assert rtx50["verification_status"] == "verified"
-    assert rtx50["benchmark_passed"] is True
+    assert rtx50["verification_status"] == "unverified"
+    assert rtx50["benchmark_passed"] is False
     assert rtx50["environment_metadata"]["gpu_model"] == "NVIDIA GeForce RTX 5070 Ti"
-    assert rtx50["environment_metadata"]["cpu_model"] is not None
+    assert rtx50["environment_metadata"]["cpu_model"] == (
+        "13th Gen Intel(R) Core(TM) i7-1360P"
+    )
+    assert "mobile" in rtx50["unverified_reason"]
     assert rtx50["artifact_provenance"]["toolchain_id"] == "msvc-ltcg"
     assert rtx50["artifact_provenance"]["source"] == "recorded_ledger_artifact_hash"
     for fx in rtx50["fixture_results"]:
@@ -198,6 +201,19 @@ def test_verified_benchmark_requires_recorded_cpu_metadata_without_family_whitel
         "source": "recorded_ledger_artifact_hash",
     }
     validate_semantic_invariants(hw, "benchmark-result.schema.json", hw_path)
+
+    for generic_or_mobile in (
+        "13th Gen Intel(R) Core(TM) i7-1360P",
+        "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics",
+        "x86_64",
+        "AMD64",
+        "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+    ):
+        hw["environment_metadata"]["cpu_model"] = generic_or_mobile
+        with pytest.raises(SchemaValidationError, match="desktop-class processor"):
+            validate_semantic_invariants(
+                hw, "benchmark-result.schema.json", hw_path
+            )
 
     hw["environment_metadata"]["cpu_model"] = None
     with pytest.raises(SchemaValidationError, match="environment_metadata.cpu_model"):

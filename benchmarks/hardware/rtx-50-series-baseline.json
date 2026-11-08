@@ -2,8 +2,9 @@
   "schema_version": "1.0.0",
   "benchmark_id": "nw01-hardware-rtx-50-series-desktop-baseline",
   "hardware_tier": "rtx_50_series_desktop",
-  "verification_status": "verified",
-  "benchmark_passed": true,
+  "verification_status": "unverified",
+  "benchmark_passed": false,
+  "unverified_reason": "The recorded host used a 13th Gen Intel(R) Core(TM) i7-1360P mobile P-series CPU, so it cannot certify the rtx_50_series_desktop tier. Fixture measurements and artifact hashes are preserved as unverified evidence; desktop RTX 50-series coverage remains outstanding.",
   "environment_metadata": {
     "gpu_model": "NVIDIA GeForce RTX 5070 Ti",
     "gpu_architecture": "Blackwell",
@@ -100,5 +101,10 @@
       "gpu_committed_memory_bytes": 14594048
     }
   ],
-  "unavailable_measurements": []
+  "unavailable_measurements": [
+    {
+      "metric": "environment_metadata.desktop_cpu_evidence",
+      "reason": "The recorded mobile i7-1360P CPU cannot establish a representative desktop RTX 50-series host; desktop CPU/chassis evidence is unavailable."
+    }
+  ]
 }

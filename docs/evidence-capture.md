@@ -1,7 +1,8 @@
 # NW-01 Measured Evidence Capture
 
 The commands below document how NW-01 physical evidence is captured reproducibly. The current
-checked-in evidence is verified for the recorded Windows/GPU configurations; nothing in this
+checked-in evidence is verified only for configurations that satisfy the recorded desktop
+requirements; a captured mobile-CPU host is preserved as unverified evidence. Nothing in this
 repository fabricates or substitutes measured data.
 
 ## Required Physical Targets
@@ -93,9 +94,11 @@ desktop workstation processors are acceptable when paired with the required desk
 
 ## Current Status
 
-Verified evidence now covers Windows `10.0.26200.9711` and `10.0.26300.9818`, NVIDIA driver
-`610.88`, desktop RTX 4060 Ti, and desktop RTX 5070 Ti. The actual minimum tested Windows build
-is `10.0.26200.9711`; `10.0.22631.4317` remains only the lower intended runtime target.
+Verified evidence covers Windows `10.0.26200.9711` and `10.0.26300.9818`, NVIDIA driver
+`610.88`, and the desktop RTX 4060 Ti. The actual minimum tested Windows build is
+`10.0.26200.9711`; `10.0.22631.4317` remains only the lower intended runtime target. An RTX
+5070 Ti capture exists, but its host CPU was a mobile 13th Gen Intel Core i7-1360P, so the
+desktop RTX 50-series tier remains explicitly unverified with its measurements preserved.
 Verified release ledgers, compiler comparison, reproducibility, offline DXIL execution, and
 clean-system execution are recorded in the checked-in benchmark artifacts. Re-run the commands
 below after any toolchain, shader, or fixture change.

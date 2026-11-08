@@ -322,10 +322,14 @@ def test_verify_nw01_records_clean_system_evidence_and_gates_full_mode(
     assert '[ValidateSet("Full", "CleanSystem")]' in ps1_text
     assert "verify_nw01.py" in ps1_text
 
-    # The repository now carries verified physical/toolchain evidence.
+    # The recorded RTX 50-series host used a mobile CPU, so desktop-tier evidence remains
+    # incomplete even though the measurements are preserved.
     evidence = check_evidence_completeness(REPO_ROOT)
-    assert evidence["complete"] is True
-    assert evidence["unmet_requirements"] == []
+    assert evidence["complete"] is False
+    assert any(
+        "rtx_50_series_desktop" in item
+        for item in evidence["unmet_requirements"]
+    )
 
     # Test active SDK-absence probing and CleanSystem recording in an isolated repo copy
     sim_repo = tmp_path / "repo"
@@ -1564,6 +1568,16 @@ def test_hardware_tier_requires_desktop_compatibility_class() -> None:
     assert desktop_cpu_model_matches("AMD Ryzen 5 5600 6-Core Processor") is True
     assert desktop_cpu_model_matches("AMD Ryzen Threadripper PRO 7995WX") is True
     assert desktop_cpu_model_matches("Intel(R) Xeon(R) w9-3495X") is True
+    assert desktop_cpu_model_matches("Intel(R) Core(TM) i9-13900K") is True
+    assert desktop_cpu_model_matches("13th Gen Intel(R) Core(TM) i7-1360P") is False
+    assert desktop_cpu_model_matches(
+        "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics"
+    ) is False
+    assert desktop_cpu_model_matches("x86_64") is False
+    assert desktop_cpu_model_matches("AMD64") is False
+    assert desktop_cpu_model_matches(
+        "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel"
+    ) is False
     assert desktop_cpu_model_matches(None) is False
     assert (
         hardware_tier_matches(
@@ -1673,6 +1687,38 @@ def test_evidence_completeness_accepts_non_whitelisted_cpu_metadata(
     evidence = check_evidence_completeness(repo)
     assert evidence["complete"] is False
     assert not any("CPU" in item for item in evidence["unmet_requirements"])
+
+
+def test_evidence_completeness_rejects_mobile_or_generic_cpu_metadata(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    for subdir in ("benchmarks", "schemas", "shaders", "fixtures"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+    hw_path = repo / "benchmarks" / "hardware" / "rtx-50-series-baseline.json"
+    hw = json.loads(hw_path.read_text(encoding="utf-8"))
+    hw["verification_status"] = "verified"
+    hw["benchmark_passed"] = True
+    hw["artifact_provenance"] = {
+        "toolchain_id": "clang-cl-lld",
+        "artifact_sha256": {},
+        "source": "recorded_ledger_artifact_hash",
+    }
+    for cpu_model in (
+        "13th Gen Intel(R) Core(TM) i7-1360P",
+        "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics",
+        "x86_64",
+        "AMD64",
+        "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+    ):
+        hw["environment_metadata"]["cpu_model"] = cpu_model
+        hw_path.write_text(json.dumps(hw, indent=2) + "\n", encoding="utf-8")
+        evidence = check_evidence_completeness(repo)
+        assert evidence["complete"] is False
+        assert any(
+            "recognized desktop-class CPU" in item
+            for item in evidence["unmet_requirements"]
+        )
 
 
 def test_benchmark_capture_rejects_wrong_hardware_tier(

@@ -54,5 +54,5 @@ values.
 
 ## Inbox-Runtime Blocker Log
 
-- **Current Status:** No inbox-runtime blocker was observed in the verified RTX 4060 Ti and RTX 5070 Ti captures. The recorded dispatches succeeded on inbox Windows 11 `d3d12.dll` with Feature Level `12_0` + Shader Model `6.0`, bounded descriptor tables, ordinary barriers, and one direct queue without Agility SDK redistribution. If a future capture fails, the exact `win_build`, `d3d12_dll` version, HRESULT, and failed feature must be recorded here before any profile or redistributable change.
+- **Current Status:** No inbox-runtime blocker was observed in the verified RTX 4060 Ti capture or in the preserved RTX 5070 Ti run (unverified for the desktop tier because its host CPU was mobile). The recorded dispatches succeeded on inbox Windows 11 `d3d12.dll` with Feature Level `12_0` + Shader Model `6.0`, bounded descriptor tables, ordinary barriers, and one direct queue without Agility SDK redistribution. If a future capture fails, the exact `win_build`, `d3d12_dll` version, HRESULT, and failed feature must be recorded here before any profile or redistributable change.
 - **Blocker Reporting Mechanism:** Verified via `nw_empty_player --simulate-failure InboxRuntimeBlocker --diagnostics`, which returns exit code `25` (`InboxRuntimeBlocker`) and emits the structured blocker diagnostic required before any profile change.

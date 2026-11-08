@@ -1411,8 +1411,9 @@ def check_evidence_completeness(repo_root: Path) -> dict[str, Any]:
             str(cpu_model) if cpu_model is not None else None
         ):
             unmet_requirements.append(
-                f"Hardware baseline '{tier}' lacks recorded CPU metadata "
-                f"(cpu_model={cpu_model!r})"
+                f"Hardware baseline '{tier}' lacks a recognized desktop-class CPU model "
+                f"(cpu_model={cpu_model!r}); mobile/low-power or generic host strings cannot "
+                "certify a desktop tier"
             )
             continue
         provenance = data.get("artifact_provenance") or {}
