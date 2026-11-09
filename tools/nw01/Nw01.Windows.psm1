@@ -28,15 +28,37 @@ function Get-NwToolchainContract {
         throw "Toolchain manifest does not contain both clang-cl-lld and msvc-ltcg evaluated toolchains."
     }
 
+    $windowsSdkVersion = [string]$pins.windows_sdk_version
+    $msvcCompilerVersion = [string]$msvc.compiler_version
+    $msvcLinkerVersion = [string]$msvc.linker_version
+    # The Visual Studio toolset version is the first three numeric components of
+    # the MSVC linker (14.40.33821.0 -> 14.40.33821). It is derived from the
+    # authoritative toolchain manifest rather than re-pinned in provisioning
+    # sources so the vcvars selector and the expected binary versions cannot drift.
+    $msvcToolsetVersion = ""
+    if ($msvcLinkerVersion -match '^([0-9]+)\.([0-9]+)\.([0-9]+)(?:\.[0-9]+)?$') {
+        $msvcToolsetVersion = "$($matches[1]).$($matches[2]).$($matches[3])"
+    } elseif ($msvcCompilerVersion -match '^19\.([0-9]+)\.([0-9]+)$') {
+        $msvcToolsetVersion = "14.$($matches[1]).$($matches[2])"
+    } else {
+        throw "Toolchain manifest does not expose a usable MSVC toolset version (compiler='$msvcCompilerVersion', linker='$msvcLinkerVersion')."
+    }
+    $sdkParts = @($windowsSdkVersion -split '\.')
+    if ($sdkParts.Count -lt 3 -or $sdkParts[2] -notmatch '^[0-9]+$') {
+        throw "Toolchain manifest pins an invalid Windows SDK version: '$windowsSdkVersion'."
+    }
+
     [pscustomobject]@{
         RepoRoot = $root
         CMakeVersion = [string]$pins.cmake_version
         NinjaVersion = [string]$pins.ninja_version
         LlvmVersion = [string]$clang.compiler_version
         DxcVersion = [string]$pins.dxc_version
-        MsvcCompilerVersion = [string]$msvc.compiler_version
-        MsvcLinkerVersion = [string]$msvc.linker_version
-        WindowsSdkVersion = [string]$pins.windows_sdk_version
+        MsvcCompilerVersion = $msvcCompilerVersion
+        MsvcLinkerVersion = $msvcLinkerVersion
+        MsvcToolsetVersion = $msvcToolsetVersion
+        WindowsSdkVersion = $windowsSdkVersion
+        WindowsSdkBuild = [string]$sdkParts[2]
         SelectedToolchain = [string]$selected.toolchain_id
     }
 }
@@ -52,9 +74,93 @@ function Get-NwProvisioningSources {
     return Get-Content -Raw $path | ConvertFrom-Json
 }
 
+function ConvertTo-NwToolsetVersion {
+    <# Normalize a Visual Studio toolset/compiler version to MAJOR.MINOR.PATCH. #>
+    param([string]$Value)
+    $trimmed = ([string]$Value).Trim().TrimEnd('\')
+    $parts = @($trimmed -split '\.')
+    if ($parts.Count -ge 3) { return ($parts[0..2] -join '.') }
+    return $trimmed
+}
+
 function Expand-NwTemplate {
     param([Parameter(Mandatory)][string]$Template, [Parameter(Mandatory)][string]$Version)
     return $Template.Replace("{version}", $Version)
+}
+
+function Get-NwVisualStudioSelection {
+    <#
+        Resolve the Visual Studio build-tools selector from the authoritative
+        toolchain manifest. Component templates in toolchain-sources.json may
+        reference {msvc_toolset}, {msvc_toolset_major_minor},
+        {windows_sdk_version} and {windows_sdk_build}. Literal component IDs are
+        also accepted but are cross-checked against the manifest so a stale
+        duplicate pin fails deterministically instead of drifting.
+    #>
+    [CmdletBinding()]
+    param([string]$RepoRoot = "")
+
+    $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
+    $sources = Get-NwProvisioningSources -RepoRoot $RepoRoot
+    $vs = $sources.visual_studio
+    if ($null -eq $vs) { throw "Provisioning sources do not define visual_studio." }
+    if ([string]::IsNullOrWhiteSpace([string]$vs.bootstrapper_url)) {
+        throw "Provisioning sources do not define visual_studio.bootstrapper_url."
+    }
+
+    $toolsetParts = @($contract.MsvcToolsetVersion -split '\.')
+    $toolsetMajorMinor = ($toolsetParts[0..1] -join '.')
+    $templates = @($vs.components)
+    if ($templates.Count -eq 0) {
+        throw "Provisioning sources do not define any Visual Studio components."
+    }
+    $components = @(
+        foreach ($template in $templates) {
+            $component = [string]$template
+            $component = $component.Replace('{msvc_toolset}', $contract.MsvcToolsetVersion)
+            $component = $component.Replace('{msvc_toolset_major_minor}', $toolsetMajorMinor)
+            $component = $component.Replace('{windows_sdk_version}', $contract.WindowsSdkVersion)
+            $component = $component.Replace('{windows_sdk_build}', $contract.WindowsSdkBuild)
+            $component
+        }
+    )
+
+    foreach ($component in $components) {
+        if ($component -match '^Microsoft\.VisualStudio\.Component\.VC\.([0-9]+\.[0-9]+)\.') {
+            $componentMajorMinor = $matches[1]
+            if ($componentMajorMinor -ne $toolsetMajorMinor) {
+                throw "Visual Studio component '$component' does not match pinned MSVC toolset $toolsetMajorMinor (selected $componentMajorMinor)."
+            }
+        }
+        if ($component -match 'Windows11SDK\.([0-9]+)') {
+            $componentSdkBuild = $matches[1]
+            if ($componentSdkBuild -ne $contract.WindowsSdkBuild) {
+                throw "Visual Studio component '$component' does not match pinned Windows SDK $($contract.WindowsSdkVersion) (selected build $componentSdkBuild)."
+            }
+        }
+    }
+    if (-not ($components | Where-Object { $_ -match 'Windows11SDK\.' })) {
+        throw "Visual Studio component list does not include the pinned Windows SDK build $($contract.WindowsSdkBuild)."
+    }
+
+    $sha256 = ""
+    if ($vs.PSObject.Properties.Name -contains "bootstrapper_sha256") {
+        $sha256 = [string]$vs.bootstrapper_sha256
+    }
+    $subject = "Microsoft Corporation"
+    if ($vs.PSObject.Properties.Name -contains "bootstrapper_authenticode_subject_contains") {
+        $subject = [string]$vs.bootstrapper_authenticode_subject_contains
+    }
+
+    return [pscustomobject]@{
+        WindowsSdkVersion = $contract.WindowsSdkVersion
+        WindowsSdkBuild = $contract.WindowsSdkBuild
+        VcVarsVersion = $contract.MsvcToolsetVersion
+        Components = $components
+        BootstrapperUrl = [string]$vs.bootstrapper_url
+        BootstrapperSha256 = $sha256
+        BootstrapperSubjectContains = $subject
+    }
 }
 
 function Get-NwCommandOutput {
@@ -88,7 +194,11 @@ function Test-NwExactVersion {
         "ninja" { return (($output -split "`r?`n")[0].Trim() -eq $Expected) }
         "clang-cl" { return $output -match ("clang version\s+" + [regex]::Escape($Expected) + "(?:\s|$)") }
         "lld-link" { return $output -match ("LLD\s+" + [regex]::Escape($Expected) + "(?:\s|$)") }
-        "dxc" { return $output -match [regex]::Escape($Expected) }
+        # DXC prints a bare semantic version (for example
+        # "dxcompiler.dll: 1.8.2407 (...); dxil.dll: 1.8.2407"). Bound the
+        # match to a complete numeric token so 1.8.24070 / 11.8.2407 cannot
+        # satisfy the 1.8.2407 pin.
+        "dxc" { return $output -match ("(?<![0-9.])" + [regex]::Escape($Expected) + "(?![0-9.])") }
         # MSVC localizes the surrounding banner text (for example Polish cl.exe
         # prints "wersja kompilatora"), so compiler/linker validation must bind
         # to the exact numeric version token rather than English words.
@@ -106,6 +216,26 @@ function Find-NwExactCommand {
         [string[]]$AdditionalCandidates = @()
     )
 
+    $resolved = Resolve-NwToolCandidate -Name $Name -Tool $Tool -Expected $Expected -AdditionalCandidates $AdditionalCandidates
+    if ($null -ne $resolved -and $resolved.Exact) { return [string]$resolved.Executable }
+    return $null
+}
+
+function Resolve-NwToolCandidate {
+    <#
+        Return the best candidate for a tool as an object with Executable,
+        Detected and Exact fields. An exact pinned match always wins; otherwise
+        the first executable that produced a version banner is returned with
+        Exact=$false so doctor can report expected-versus-detected.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Tool,
+        [Parameter(Mandatory)][string]$Expected,
+        [string[]]$AdditionalCandidates = @()
+    )
+
     $candidates = New-Object System.Collections.Generic.List[string]
     foreach ($candidate in $AdditionalCandidates) {
         if (-not [string]::IsNullOrWhiteSpace($candidate)) { $candidates.Add($candidate) }
@@ -113,12 +243,22 @@ function Find-NwExactCommand {
     foreach ($cmd in @(Get-Command $Name -All -ErrorAction SilentlyContinue)) {
         if ($cmd.Source) { $candidates.Add([string]$cmd.Source) }
     }
+
+    $firstAvailable = $null
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path $candidate -PathType Leaf)) { continue }
+        $args = if ($Tool -in @("cl", "link")) { @() } else { @("--version") }
+        $output = Get-NwCommandOutput -Executable $candidate -Arguments $args
+        if ([string]::IsNullOrWhiteSpace($output)) { continue }
+        $detected = (($output -split "`r?`n")[0]).Trim()
         if (Test-NwExactVersion -Tool $Tool -Executable $candidate -Expected $Expected) {
-            return $candidate
+            return [pscustomobject]@{ Executable = $candidate; Detected = $detected; Exact = $true }
+        }
+        if ($null -eq $firstAvailable) {
+            $firstAvailable = [pscustomobject]@{ Executable = $candidate; Detected = $detected; Exact = $false }
         }
     }
-    return $null
+    return $firstAvailable
 }
 
 function Add-NwPathEntry {
@@ -171,6 +311,53 @@ function Test-NwTransientDownloadException {
     return $message -match "(?i)(timed? out|timeout|connection.*(closed|reset|refused)|temporar|name resolution|dns|network.*unreachable|5\d\d|429)"
 }
 
+function Invoke-NwDownloadWithFallback {
+    <#
+        Download with bounded retries. Only transient delivery failures may use
+        the caller-provided fallback probe, and the probe is responsible for
+        validating an exact pinned version. Non-transient delivery failures,
+        checksum mismatches and malformed/version-invalid archives never reach
+        this fallback path because they are raised by the caller after a
+        successful download.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$OutFile,
+        [Parameter(Mandatory)]$RetryPolicy,
+        [scriptblock]$FallbackProbe
+    )
+
+    $result = Invoke-NwDownload -Uri $Uri -OutFile $OutFile -RetryPolicy $RetryPolicy
+    if ($result.Success) {
+        return [pscustomobject]@{
+            Downloaded = $true
+            FallbackUsed = $false
+            FallbackValue = $null
+            Attempts = $result.Attempts
+            Error = $null
+        }
+    }
+    if (-not $result.TransientFailure) {
+        throw "Non-transient download failure for ${Name}: $($result.Error)"
+    }
+
+    Write-Warning "[NW-BOOTSTRAP] transient download failure after $($result.Attempts) attempts for $Name; re-checking exact runner-provided installation."
+    $fallback = $null
+    if ($null -ne $FallbackProbe) { $fallback = & $FallbackProbe }
+    if ($null -ne $fallback -and $fallback -ne $false) {
+        return [pscustomobject]@{
+            Downloaded = $false
+            FallbackUsed = $true
+            FallbackValue = $fallback
+            Attempts = $result.Attempts
+            Error = $result.Error
+        }
+    }
+    throw "Transient download failure for $Name and no exact pinned runner-provided fallback is available: $($result.Error)"
+}
+
 function Invoke-NwDownload {
     [CmdletBinding()]
     param(
@@ -209,6 +396,28 @@ function Assert-NwSha256 {
     $actual = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
     if ($actual -ne $Expected.ToLowerInvariant()) {
         throw "SHA-256 mismatch for $Path. expected=$Expected actual=$actual"
+    }
+}
+
+function Assert-NwAuthenticodeSignature {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$SubjectContains = ""
+    )
+    if (-not (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue)) {
+        throw "Get-AuthenticodeSignature is unavailable; refusing to trust $Path without integrity validation."
+    }
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ($null -eq $signature -or $signature.Status -ne 'Valid') {
+        $status = if ($null -eq $signature) { "unknown" } else { [string]$signature.Status }
+        throw "Authenticode signature validation failed for $Path (status=$status)."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SubjectContains)) {
+        $subject = [string]$signature.SignerCertificate.Subject
+        if ($subject -notlike "*$SubjectContains*") {
+            throw "Authenticode signer for $Path ('$subject') does not contain '$SubjectContains'."
+        }
     }
 }
 
@@ -267,8 +476,9 @@ set
     if (($env:WindowsSDKVersion.TrimEnd('\')) -ne $WindowsSdkVersion) {
         throw "vcvars selected Windows SDK '$env:WindowsSDKVersion', expected '$WindowsSdkVersion'"
     }
-    if (-not $env:VCToolsVersion.StartsWith("14.40", [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "vcvars selected VCToolsVersion '$env:VCToolsVersion', expected 14.40.x"
+    $toolsetDetected = ConvertTo-NwToolsetVersion $env:VCToolsVersion
+    if (-not [string]::Equals($toolsetDetected, (ConvertTo-NwToolsetVersion $VcVarsVersion), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "vcvars selected VCToolsVersion '$env:VCToolsVersion', expected '$VcVarsVersion'"
     }
 
     if ($ExportGitHubEnv) {
@@ -286,12 +496,12 @@ function Get-NwStandaloneToolPaths {
     $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
     $toolsRoot = if ($env:NW_TOOLS_ROOT) { $env:NW_TOOLS_ROOT } else { "C:\Tools" }
     $cmakeRoot = Join-Path $toolsRoot ("CMake-{0}" -f $contract.CMakeVersion)
-    $cmakeNested = Join-Path $cmakeRoot ("cmake-{0}-windows-x86_64\bin" -f $contract.CMakeVersion)
+    $cmakeNested = Join-Path $cmakeRoot ("cmake-{0}-windows-x86_64" -f $contract.CMakeVersion) "bin"
     [pscustomobject]@{
         CMakeBin = $cmakeNested
         NinjaBin = Join-Path $toolsRoot ("Ninja-{0}" -f $contract.NinjaVersion)
-        LlvmBin = Join-Path $toolsRoot ("LLVM-{0}\bin" -f $contract.LlvmVersion)
-        DxcBin = Join-Path $toolsRoot ("dxc-{0}\bin\x64" -f $contract.DxcVersion)
+        LlvmBin = Join-Path $toolsRoot ("LLVM-{0}" -f $contract.LlvmVersion) "bin"
+        DxcBin = Join-Path $toolsRoot ("dxc-{0}" -f $contract.DxcVersion) "bin" "x64"
     }
 }
 
@@ -345,13 +555,13 @@ function Enter-NwBuildEnvironment {
     )
     if (-not $IsWindows) { throw "NW-01 Windows build environment can only be entered on Windows." }
     $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
-    $sources = Get-NwProvisioningSources -RepoRoot $RepoRoot
+    $visualStudio = Get-NwVisualStudioSelection -RepoRoot $RepoRoot
     # Import vcvars first because it prepends SDK locations. Then resolve each
     # standalone tool by exact version (canonical C:\Tools copy or exact
     # runner-provided fallback) and deliberately move that selected directory
     # ahead of the SDK. This prevents Windows SDK's newer dxc.exe from
     # shadowing the pinned DXC 1.8.2407 used by NW-01.
-    Import-NwVcVarsEnvironment -WindowsSdkVersion $contract.WindowsSdkVersion -VcVarsVersion ([string]$sources.visual_studio.vcvars_version) | Out-Null
+    Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion | Out-Null
     $selection = Get-NwExactStandaloneToolSelection -RepoRoot $RepoRoot
 
     foreach ($entry in @($selection.CMakeBin, $selection.NinjaBin, $selection.LlvmBin, $selection.DxcBin)) {
@@ -377,7 +587,7 @@ function Enter-NwBuildEnvironment {
         throw "Pinned DXC precedence failure: command resolution selected '$resolvedDxc', expected '$($selection.DxcExecutable)'"
     }
 
-    return [pscustomobject]@{ Contract = $contract; Paths = $selection }
+    return [pscustomobject]@{ Contract = $contract; VisualStudio = $visualStudio; Paths = $selection }
 }
 
 function Get-NwDoctorResults {
@@ -395,19 +605,19 @@ function Get-NwDoctorResults {
         @{ Name = "MSVC link"; Tool = "link"; Expected = $contract.MsvcLinkerVersion; Command = "link.exe"; Candidate = "" }
     )
     $results = foreach ($spec in $specs) {
-        $exe = Find-NwExactCommand -Name ([string]$spec.Command) -Tool ([string]$spec.Tool) -Expected ([string]$spec.Expected) -AdditionalCandidates @([string]$spec.Candidate)
-        $ok = -not [string]::IsNullOrWhiteSpace([string]$exe)
-        $detected = "missing-or-mismatch"
-        if ($ok) {
-            $args = if ($spec.Tool -in @("cl", "link")) { @() } else { @("--version") }
-            $detected = ((Get-NwCommandOutput -Executable $exe -Arguments $args) -split "`r?`n")[0]
-        }
+        $resolved = Resolve-NwToolCandidate -Name ([string]$spec.Command) -Tool ([string]$spec.Tool) -Expected ([string]$spec.Expected) -AdditionalCandidates @([string]$spec.Candidate)
+        $ok = ($null -ne $resolved) -and ($resolved.Exact -eq $true)
+        $detected = if ($null -eq $resolved) { "not found" } else { [string]$resolved.Detected }
+        $exe = if ($null -eq $resolved) { $null } else { [string]$resolved.Executable }
         [pscustomobject]@{ Name = $spec.Name; Expected = [string]$spec.Expected; Detected = $detected; Pass = $ok; Executable = $exe }
     }
     $sdkOk = $false
     $sdkDetected = if ($env:WindowsSDKVersion) { $env:WindowsSDKVersion.TrimEnd('\') } else { "missing" }
-    if ($sdkDetected -eq $contract.WindowsSdkVersion) { $sdkOk = $true }
+    if ([string]::Equals($sdkDetected, $contract.WindowsSdkVersion, [System.StringComparison]::OrdinalIgnoreCase)) { $sdkOk = $true }
     $results += [pscustomobject]@{ Name = "Windows SDK"; Expected = $contract.WindowsSdkVersion; Detected = $sdkDetected; Pass = $sdkOk; Executable = $env:WindowsSdkDir }
+    $toolsetDetected = if ($env:VCToolsVersion) { ConvertTo-NwToolsetVersion $env:VCToolsVersion } else { "missing" }
+    $toolsetOk = [string]::Equals($toolsetDetected, $contract.MsvcToolsetVersion, [System.StringComparison]::OrdinalIgnoreCase)
+    $results += [pscustomobject]@{ Name = "MSVC toolset"; Expected = $contract.MsvcToolsetVersion; Detected = $toolsetDetected; Pass = $toolsetOk; Executable = $env:VCToolsInstallDir }
     return $results
 }
 

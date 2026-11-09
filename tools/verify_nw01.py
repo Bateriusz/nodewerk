@@ -52,6 +52,24 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def resolve_source_commit(repo_root: Path) -> str | None:
+    """Return the checked-out Git revision without depending on CI environment variables."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    candidate = proc.stdout.strip().lower()
+    return candidate if re.fullmatch(r"[0-9a-f]{40}", candidate) else None
+
+
 READBACK_LINE_RE = re.compile(r"^NW_READBACK_U32=([0-9A-Fa-f,]+)$", re.MULTILINE)
 READBACK_COUNT_RE = re.compile(r"^NW_READBACK_ELEMENT_COUNT=([0-9]+)$", re.MULTILINE)
 WINDOWS_BUILD_LINE_RE = re.compile(r"^NW_WINDOWS_BUILD=([0-9]+)$", re.MULTILINE)
@@ -2148,7 +2166,10 @@ def capture_benchmark_result(
             "recorded CPU metadata.",
         )
 
-    if not observed_gpu_model:
+    reported_adapter_descriptions = [
+        value for value in adapter_evidence["descriptions"].values() if value
+    ]
+    if not reported_adapter_descriptions:
         mark_unavailable(
             "environment_metadata.gpu_model",
             "No adapter description was emitted by the executing fixtures; tier coverage cannot be bound to the observed GPU.",
@@ -2427,6 +2448,7 @@ def run_full_mode(
     """Execute Mode=Full verification checks and record reproducibility evidence when built."""
     report: dict[str, Any] = {
         "mode": "Full",
+        "source_commit": resolve_source_commit(repo_root),
         "host_os": platform.system(),
         "host_arch": platform.machine(),
         "checks": {},

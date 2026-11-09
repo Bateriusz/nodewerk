@@ -19,6 +19,8 @@ try {
     $entered = Enter-NwBuildEnvironment -RepoRoot $RepoRoot -ExportGitHubEnv:$ExportGitHubEnv
     Write-Host "[NW-ENV] MSVC/SDK environment initialized."
     Write-Host "[NW-ENV] selected toolchain contract: $($entered.Contract.SelectedToolchain)"
+    Write-Host "[NW-ENV] MSVC toolset: $($entered.VisualStudio.VcVarsVersion); Windows SDK: $($entered.VisualStudio.WindowsSdkVersion)"
+    Write-Host "[NW-ENV] INCLUDE/LIB/LIBPATH are set for the selected toolset and SDK."
 
     if (-not [string]::IsNullOrWhiteSpace($Command)) {
         & pwsh -NoProfile -Command $Command

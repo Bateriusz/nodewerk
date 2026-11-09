@@ -2128,16 +2128,18 @@ def test_ci_uses_shared_pinned_windows_harness() -> None:
     assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" not in ci
     assert "vs_buildtools.exe" not in ci
 
-    # Exact Visual Studio components and the vcvars selector remain explicit,
-    # but have one repository-owned source instead of an independent CI copy.
-    components = set(sources["visual_studio"]["components"])
-    assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" in components
-    assert "Microsoft.VisualStudio.Component.Windows11SDK.26100" in components
-    assert sources["visual_studio"]["vcvars_version"] == "14.40.33807"
+    # Component templates and the vcvars selector remain explicit, but the
+    # authoritative version pins come only from the toolchain manifest. A
+    # duplicate literal version in sources is rejected as drift.
+    components = "\n".join(sources["visual_studio"]["components"])
+    assert "{msvc_toolset_major_minor}" in components
+    assert "{windows_sdk_build}" in components
+    assert "vcvars_version" not in sources["visual_studio"]
 
     # Runtime version pins are read from the existing measured toolchain
     # manifest and exact versions are verified after environment activation.
     assert "benchmarks/toolchain-manifest.v1.json" in module
+    assert "Get-NwVisualStudioSelection" in module
     assert "Import-NwVcVarsEnvironment" in module
     assert "Test-NwExactVersion" in module
     assert "Invoke-NwDownload" in bootstrap

@@ -193,6 +193,15 @@ jobs:
             exit 1
           }
           $summary = Get-Content -Raw $summaryPath | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace([string]$summary.wrapper_invocation_id)) {
+            Write-Error "Physical Full summary was not produced by run-full.ps1 in this invocation."
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$summary.source_commit) -or
+              -not [string]::Equals([string]$summary.source_commit, [string]$env:GITHUB_SHA, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Error "Physical Full summary source_commit does not match the checked-out revision."
+            exit 1
+          }
           if ($summary.full_baseline_passed -ne $true) {
             Write-Error "Physical Full baseline remains incomplete or failed; evidence/package artifacts were preserved for operator follow-up."
             exit 1

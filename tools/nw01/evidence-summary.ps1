@@ -25,11 +25,29 @@ try {
 
     $fullStatus = if ($status.complete -eq $true -and $status.verification_status -eq "verified") { "VERIFIED" } else { "INCOMPLETE" }
     $concreteStatus = "UNKNOWN"
+    $fullSummarySourceCommit = $null
+    $fullSummaryMatchesCheckout = $true
     if (-not [string]::IsNullOrWhiteSpace($FullSummary)) {
         if (-not (Test-Path $FullSummary -PathType Leaf)) { throw "Full summary not found: $FullSummary" }
         $full = Get-Content -Raw $FullSummary | ConvertFrom-Json
-        $concreteStatus = if (@($full.concrete_failures).Count -eq 0 -and @($full.missing_build_coverage).Count -eq 0) { "PASS" } else { "FAIL" }
-        if ($full.full_baseline_passed -eq $true) { $fullStatus = "VERIFIED" }
+        if ($full.PSObject.Properties.Name -contains "source_commit") {
+            $fullSummarySourceCommit = ([string]$full.source_commit).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($fullSummarySourceCommit)) {
+                $fullSummaryMatchesCheckout = [string]::Equals(
+                    $fullSummarySourceCommit,
+                    $sourceCommit,
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )
+            }
+        }
+        $concreteFailures = if ($full.PSObject.Properties.Name -contains "concrete_failures") { @($full.concrete_failures) } else { @() }
+        $missingCoverage = if ($full.PSObject.Properties.Name -contains "missing_build_coverage") { @($full.missing_build_coverage) } else { @() }
+        $concreteStatus = if ($concreteFailures.Count -eq 0 -and $missingCoverage.Count -eq 0) { "PASS" } else { "FAIL" }
+        if (-not $fullSummaryMatchesCheckout) {
+            # A summary from another revision never certifies the current checkout.
+            $fullStatus = "HISTORICAL"
+        }
+        elseif (($full.PSObject.Properties.Name -contains "full_baseline_passed") -and $full.full_baseline_passed -eq $true) { $fullStatus = "VERIFIED" }
         elseif ($concreteStatus -eq "PASS") { $fullStatus = "INCOMPLETE" }
         else { $fullStatus = "FAILED" }
     }
@@ -37,6 +55,8 @@ try {
     $summary = [ordered]@{
         schema_version = "1"
         source_commit = $sourceCommit
+        full_summary_source_commit = $fullSummarySourceCommit
+        full_summary_matches_checkout = $fullSummaryMatchesCheckout
         selected_toolchain = [string]$toolchainManifest.selected_toolchain.toolchain_id
         concrete_checks = $concreteStatus
         rtx_40_representative_hardware = $(if ($items["desktop-rtx-4060-ti-baseline"] -eq "verified") { "VERIFIED" } else { "PENDING" })
@@ -53,6 +73,9 @@ try {
     Write-Host "RTX 50 representative hardware: $($summary.rtx_50_representative_hardware)"
     Write-Host "CleanSystem: $($summary.clean_system)"
     Write-Host "Full baseline: $($summary.full_baseline)"
+    if (-not $fullSummaryMatchesCheckout) {
+        Write-Host "Full summary source: $fullSummarySourceCommit (historical; does not match checkout $sourceCommit)"
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($JsonPath)) {
         $parent = Split-Path -Parent $JsonPath

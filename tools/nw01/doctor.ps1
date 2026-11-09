@@ -13,7 +13,16 @@ if (-not $IsWindows) {
 
 Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force
 try {
-    Enter-NwBuildEnvironment -RepoRoot $RepoRoot | Out-Null
+    # Activation is diagnostic here: any non-exact standalone tool makes
+    # Enter-NwBuildEnvironment throw, but doctor still has to render the full
+    # expected-versus-detected table before rejecting the host. vcvars is
+    # imported before standalone selection, so cl/link/SDK values are populated
+    # even when a later exact-version assertion fails.
+    try {
+        Enter-NwBuildEnvironment -RepoRoot $RepoRoot | Out-Null
+    } catch {
+        Write-Warning "[NW-DOCTOR] build-environment activation reported: $($_.Exception.Message)"
+    }
     $results = @(Get-NwDoctorResults -RepoRoot $RepoRoot)
     Write-Host ""
     Write-Host "NW-01 pinned toolchain doctor"
@@ -24,7 +33,8 @@ try {
     }
     $failures = @($results | Where-Object { -not $_.Pass })
     if ($failures.Count -gt 0) {
-        Write-Error "NW-01 doctor found $($failures.Count) pinned toolchain mismatch(es)."
+        $details = @($failures | ForEach-Object { "$($_.Name) expected=$($_.Expected) detected=$($_.Detected)" })
+        Write-Error "NW-01 doctor found $($failures.Count) pinned toolchain mismatch(es): $($details -join '; ')"
         exit 1
     }
     Write-Host "[NW-DOCTOR] all pinned toolchain requirements match exactly."

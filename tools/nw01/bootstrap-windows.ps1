@@ -18,6 +18,7 @@ $env:NW_TOOLS_ROOT = $ToolsRoot
 Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force
 $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
 $sources = Get-NwProvisioningSources -RepoRoot $RepoRoot
+$visualStudio = Get-NwVisualStudioSelection -RepoRoot $RepoRoot
 $retry = $sources.download_retry
 New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "nodewerk-nw01-bootstrap"
@@ -34,6 +35,11 @@ $provenance = [ordered]@{
     schema_version = "1"
     generated_at_utc = [DateTime]::UtcNow.ToString("o")
     source_commit = $sourceCommit
+    visual_studio = [ordered]@{
+        vcvars_version = $visualStudio.VcVarsVersion
+        windows_sdk_version = $visualStudio.WindowsSdkVersion
+        components = @($visualStudio.Components)
+    }
     tools = [ordered]@{}
 }
 
@@ -48,21 +54,6 @@ function Record-Selection([string]$Name, [string]$Expected, [string]$Executable,
 
 function Find-Exact([string]$Name, [string]$Tool, [string]$Expected, [string[]]$Candidates) {
     return Find-NwExactCommand -Name $Name -Tool $Tool -Expected $Expected -AdditionalCandidates $Candidates
-}
-
-function Download-WithFallback(
-    [string]$Name,
-    [string]$Uri,
-    [string]$OutFile,
-    [scriptblock]$FallbackProbe
-) {
-    $result = Invoke-NwDownload -Uri $Uri -OutFile $OutFile -RetryPolicy $retry
-    if ($result.Success) { return $true }
-    if (-not $result.TransientFailure) { throw "Non-transient download failure for ${Name}: $($result.Error)" }
-    Write-Warning "[NW-BOOTSTRAP] transient download failure after $($result.Attempts) attempts for $Name; re-checking exact runner-provided installation."
-    $fallback = & $FallbackProbe
-    if ($fallback) { return $fallback }
-    throw "Transient download failure for $Name and no exact pinned runner-provided fallback is available: $($result.Error)"
 }
 
 function Ensure-ZipTool(
@@ -93,8 +84,8 @@ function Ensure-ZipTool(
         }
         return $null
     }
-    $download = Download-WithFallback $Name $Uri $archive $fallbackProbe
-    if ($download -is [string]) { return $download }
+    $download = Invoke-NwDownloadWithFallback -Name $Name -Uri $Uri -OutFile $archive -RetryPolicy $retry -FallbackProbe $fallbackProbe
+    if ($download.FallbackUsed) { return [string]$download.FallbackValue }
 
     # A completed download is trusted only after the pinned digest matches. Integrity
     # failures are hard failures and never enter the runner-fallback path.
@@ -133,8 +124,8 @@ function Ensure-Llvm {
         }
         return $null
     }
-    $download = Download-WithFallback "LLVM" $uri $installer $fallbackProbe
-    if ($download -is [string]) { return $download }
+    $download = Invoke-NwDownloadWithFallback -Name "LLVM" -Uri $uri -OutFile $installer -RetryPolicy $retry -FallbackProbe $fallbackProbe
+    if ($download.FallbackUsed) { return [string]$download.FallbackValue }
     Assert-NwSha256 -Path $installer -Expected ([string]$sources.llvm.sha256)
     if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
     $process = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList '/S', "/D=$installRoot"
@@ -149,7 +140,7 @@ function Ensure-Llvm {
 
 function Test-ExistingVisualStudio {
     try {
-        Import-NwVcVarsEnvironment -WindowsSdkVersion $contract.WindowsSdkVersion -VcVarsVersion ([string]$sources.visual_studio.vcvars_version) | Out-Null
+        Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion | Out-Null
         $cl = (Get-Command cl.exe -ErrorAction Stop).Source
         $link = (Get-Command link.exe -ErrorAction Stop).Source
         return ((Test-NwExactVersion -Tool "cl" -Executable $cl -Expected $contract.MsvcCompilerVersion) -and
@@ -167,20 +158,27 @@ function Ensure-VisualStudio {
 
     $bootstrapper = Join-Path $tempRoot "vs_buildtools.exe"
     Remove-Item -Force -ErrorAction SilentlyContinue $bootstrapper
-    $download = Invoke-NwDownload -Uri ([string]$sources.visual_studio.bootstrapper_url) -OutFile $bootstrapper -RetryPolicy $retry
-    if (-not $download.Success) {
-        if ($download.TransientFailure -and (Test-ExistingVisualStudio)) {
+    $fallbackProbe = {
+        if (Test-ExistingVisualStudio) {
             Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "runner-preinstalled-after-transient-download-failure"
-            return
+            return $true
         }
-        throw "Visual Studio Build Tools bootstrapper download failed: $($download.Error)"
+        return $null
     }
+    $download = Invoke-NwDownloadWithFallback -Name "Visual Studio Build Tools" -Uri $visualStudio.BootstrapperUrl -OutFile $bootstrapper -RetryPolicy $retry -FallbackProbe $fallbackProbe
+    if ($download.FallbackUsed) { return }
 
     # Microsoft's aka.ms VS bootstrapper is a rolling signed bootstrapper rather than a
-    # versioned immutable release artifact. The installed compiler/linker/SDK are therefore
-    # the fail-closed contract boundary and are verified exactly after installation.
+    # versioned immutable release artifact. Integrity is established before execution:
+    # a configured SHA-256 must match, and the Authenticode signature must be valid and
+    # issued to Microsoft. The installed compiler/linker/SDK are then verified exactly.
+    if (-not [string]::IsNullOrWhiteSpace($visualStudio.BootstrapperSha256)) {
+        Assert-NwSha256 -Path $bootstrapper -Expected $visualStudio.BootstrapperSha256
+    }
+    Assert-NwAuthenticodeSignature -Path $bootstrapper -SubjectContains $visualStudio.BootstrapperSubjectContains
+
     $args = @("--quiet", "--wait", "--norestart", "--nocache")
-    foreach ($component in $sources.visual_studio.components) { $args += @("--add", [string]$component) }
+    foreach ($component in $visualStudio.Components) { $args += @("--add", [string]$component) }
     $args += "--includeRecommended"
     $process = Start-Process -Wait -PassThru -FilePath $bootstrapper -ArgumentList $args
     if ($process.ExitCode -notin @(0, 3010)) { throw "Visual Studio Build Tools installation failed with exit code $($process.ExitCode)" }

@@ -74,6 +74,40 @@ if (-not (Test-Path $source -PathType Container)) {
     exit 1
 }
 
+$sourceCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+$sourceCommit = ([string]$sourceCommit).Trim().ToLowerInvariant()
+if ($sourceCommit -notmatch '^[0-9a-f]{40}$') {
+    Write-Error "Could not resolve a valid checked-out source commit for CleanSystem package provenance."
+    exit 1
+}
+# A stale or mismatched GITHUB_SHA in a local shell must not make the package
+# record a revision other than the one that was actually built. The checked-out
+# HEAD is authoritative; an explicit CI SHA may only confirm it.
+if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA)) {
+    $ciSha = ([string]$env:GITHUB_SHA).Trim().ToLowerInvariant()
+    if ($ciSha -notmatch '^[0-9a-f]{40}$') {
+        Write-Error "GITHUB_SHA is not a full Git revision: '$($env:GITHUB_SHA)'."
+        exit 1
+    }
+    if (-not [string]::Equals($ciSha, $sourceCommit, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Error "GITHUB_SHA '$ciSha' does not match checked-out HEAD '$sourceCommit'; refusing to label artifacts with a different revision."
+        exit 1
+    }
+}
+# Require and validate the Full summary's source revision before its verified
+# checks are used to certify or package this build. A summary without a
+# verifiable revision cannot prove it belongs to the checkout being built.
+$summarySourceProperty = $summary.PSObject.Properties["source_commit"]
+$summaryCommit = if ($null -eq $summarySourceProperty) { "" } else { ([string]$summarySourceProperty.Value).Trim().ToLowerInvariant() }
+if ($summaryCommit -notmatch '^[0-9a-f]{40}$') {
+    Write-Error "Full summary does not record a valid full source revision; refusing to package unverifiable build evidence."
+    exit 1
+}
+if (-not [string]::Equals($summaryCommit, $sourceCommit, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Error "Full summary source_commit '$summaryCommit' does not match checked-out HEAD '$sourceCommit'; refusing stale build evidence."
+    exit 1
+}
+
 $deployRoot = Join-Path $OutputRoot "deploy"
 $evidenceRoot = Join-Path $OutputRoot "evidence"
 New-Item -ItemType Directory -Force -Path $deployRoot | Out-Null
@@ -103,18 +137,10 @@ foreach ($name in $requiredExecutables) {
     }
 }
 
-$sourceCommit = $env:GITHUB_SHA
-if ([string]::IsNullOrWhiteSpace($sourceCommit)) {
-    $sourceCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
-    $sourceCommit = ([string]$sourceCommit).Trim()
-}
-if ($sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
-    Write-Error "Could not resolve a valid source commit for CleanSystem package provenance."
-    exit 1
-}
 $manifest = [ordered]@{
     schema_version = "1"
     source_commit = $sourceCommit
+    source_revision_origin = "git-checkout-head"
     source_build_directory = $sourceBuildDirectory
     toolchain = $toolchain
     purpose = "NW-01 CleanSystem physical Windows execution"

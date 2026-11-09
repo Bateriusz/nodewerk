@@ -35,7 +35,12 @@ pwsh ./tools/nw01/bootstrap-windows.ps1
 
 The bootstrap is idempotent. It first searches for an **exact** pinned installation and reuses it.
 Only missing or wrong components are provisioned. Standalone release artifacts are SHA-256
-verified before installation.
+verified before installation. The Visual Studio Build Tools bootstrapper is validated with its
+configured SHA-256 (when present) and its Authenticode signature before it is executed.
+
+The Visual Studio component list uses manifest placeholders (`{msvc_toolset_major_minor}`,
+`{windows_sdk_build}`). They are expanded from `benchmarks/toolchain-manifest.v1.json`; a literal
+component that disagrees with the manifest is rejected instead of drifting.
 
 For transient package-delivery failures (timeout, 429, 5xx, network/CDN failure), downloads use a
 bounded retry policy. After retries are exhausted, an exact runner-provided installation may be
@@ -66,9 +71,10 @@ environment of its already-running parent process.
 
 The MSVC environment reproduces the same `vcvars64.bat` selection mechanism that completed
 NW-01 on the physical RTX 4060 Ti host. The Windows SDK version is read from
-`benchmarks/toolchain-manifest.v1.json`; the matching Visual Studio component and vcvars selector
-are read from `tools/nw01/toolchain-sources.json`. The documentation therefore does not maintain a
-second independent copy of those pins.
+`benchmarks/toolchain-manifest.v1.json`; the `vcvars_ver` selector is derived from the manifest's
+pinned MSVC toolset (for example `14.40.33821`). `tools/nw01/toolchain-sources.json` only carries
+component templates, download locations, integrity digests and retry policy. There is no second
+independent copy of the toolset or SDK version pins.
 
 ## 3. Run Full and preserve its summary
 
@@ -76,7 +82,10 @@ second independent copy of those pins.
 pwsh ./tools/nw01/run-full.ps1
 ```
 
-A timestamped summary JSON is preserved. The wrapper returns the verifier result unchanged:
+A timestamped, invocation-identified summary JSON is preserved on **every** invocation, including
+environment-activation failures, missing Python and verifier crashes without output. An explicit
+`-SummaryPath` is cleared before the run so a stale file can never be re-exported, and the written
+summary carries a wrapper invocation id. The wrapper returns the verifier result unchanged:
 
 ```text
 0 = full baseline verified
@@ -93,6 +102,9 @@ For CI or scripted use an explicit path may be supplied:
 pwsh ./tools/nw01/run-full.ps1 `
   -SummaryPath C:\evidence\nw01-full.json
 ```
+
+Paths containing spaces are supported because every harness command passes paths as native
+PowerShell arguments rather than concatenating them into a shell command line.
 
 ## 4. Capture physical GPU evidence
 
@@ -136,9 +148,10 @@ pwsh ./tools/nw01/prepare-clean-system.ps1 `
 ```
 
 The command wraps `tools/package-clean-system.ps1`, records a real source commit, verifies the
-package manifest, and creates a ZIP. Local execution resolves the source commit from
-`git rev-parse HEAD`; CI may use its exact `GITHUB_SHA`. A stale package cannot silently certify a
-different source revision.
+package manifest, and creates a ZIP. The checked-out `git rev-parse HEAD` is authoritative. A
+`GITHUB_SHA` value, when present, may only confirm that commit; a mismatch is rejected. A Full
+summary from a different source revision is rejected as stale. A stale package therefore cannot
+silently certify a different source revision.
 
 By default package output is kept outside the repository working tree.
 
@@ -190,7 +203,10 @@ pwsh ./tools/nw01/archive-artifacts.ps1 `
 ```
 
 The command refuses an archive root inside the repository and writes an archive manifest bound to
-the source commit.
+the source revision recorded by the supplied Full summary and CleanSystem package artifact
+manifest. It rejects conflicting revisions and labels the archive `current-certifying` or
+`historical`; historical evidence is never relabelled as current certifying evidence. Prior
+archive directories are preserved; `-Replace` is required for an explicit overwrite.
 
 ## 9. Prepare repository evidence for Git
 
@@ -202,7 +218,8 @@ pwsh ./tools/nw01/prepare-evidence-commit.ps1
 
 Only an explicit evidence allowlist is staged. Unexpected modified/untracked paths cause refusal;
 the command never uses `git add .`, never stages build/package/ZIP artifacts, and prints staged
-paths plus a diff stat.
+paths plus a diff stat. A path with both staged and unstaged changes is rejected rather than
+silently replacing pre-staged content.
 
 To create an ordinary new commit:
 
@@ -211,7 +228,8 @@ pwsh ./tools/nw01/prepare-evidence-commit.ps1 -Commit
 ```
 
 This never amends history, never force-pushes, and never merges. Push remains an explicit operator
-action.
+action. If a merge, rebase, cherry-pick, revert or sequencer operation is in progress, the command
+refuses to stage or commit.
 
 ## CI
 
