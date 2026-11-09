@@ -2103,28 +2103,46 @@ def test_build_checks_mode_requires_actual_build_coverage(
     assert "failure_recovery" in summary["missing_required_checks"]
 
 
-def test_ci_provisions_pinned_msvc_toolset_and_windows_sdk() -> None:
+def test_ci_uses_shared_pinned_windows_harness() -> None:
     ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
-    assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" in ci
-    assert "Microsoft.VisualStudio.Component.Windows11SDK.26100" in ci
-    assert "Microsoft.VisualStudio.Product.BuildTools" in ci
-    assert '-version "[17.0,18.0)"' in ci
-    assert "vcvars64.bat" in ci
-    assert "-vcvars_ver=14.40" in ci
-    assert 'call "$vcvars" 10.0.26100.0 -vcvars_ver=14.40' in ci
-    assert 'VCToolsVersion -notmatch "^14\\.40\\."' in ci
-    assert "cl.exe is outside the pinned VCToolsInstallDir" in ci
-    assert "link.exe is outside the pinned VCToolsInstallDir" in ci
-    assert "19\\.40\\.33821" in ci
-    assert "14\\.40\\.33821\\.0" in ci
-    assert "Compiler Version 19\\.40\\.33821" in ci
-    assert "Linker Version 14\\.40\\.33821\\.0" in ci
-    assert "--mode BuildChecks" in ci
-    assert "build_checks_passed" in ci
-    # Exit 2 is tolerated only after explicit required concrete checks pass.
-    assert "Full mode exited 2 but required concrete check" in ci
+    sources = json.loads(
+        (REPO_ROOT / "tools" / "nw01" / "toolchain-sources.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    module = (REPO_ROOT / "tools" / "nw01" / "Nw01.Windows.psm1").read_text(
+        encoding="utf-8"
+    )
+    bootstrap = (
+        REPO_ROOT / "tools" / "nw01" / "bootstrap-windows.ps1"
+    ).read_text(encoding="utf-8")
+
+    # CI must consume the repository-owned harness rather than duplicating
+    # Visual Studio/toolchain provisioning logic in workflow YAML.
+    assert "tools/nw01/bootstrap-windows.ps1" in ci
+    assert "tools/nw01/enter-build-env.ps1" in ci
+    assert "tools/nw01/doctor.ps1" in ci
+    assert "tools/nw01/run-build-checks.ps1" in ci
+    assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" not in ci
+    assert "vs_buildtools.exe" not in ci
+
+    # Exact Visual Studio components and the vcvars selector remain explicit,
+    # but have one repository-owned source instead of an independent CI copy.
+    components = set(sources["visual_studio"]["components"])
+    assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" in components
+    assert "Microsoft.VisualStudio.Component.Windows11SDK.26100" in components
+    assert sources["visual_studio"]["vcvars_version"] == "14.40.33807"
+
+    # Runtime version pins are read from the existing measured toolchain
+    # manifest and exact versions are verified after environment activation.
+    assert "benchmarks/toolchain-manifest.v1.json" in module
+    assert "Import-NwVcVarsEnvironment" in module
+    assert "Test-NwExactVersion" in module
+    assert "Invoke-NwDownload" in bootstrap
+    assert "Assert-NwSha256" in bootstrap
+    assert "runner-preinstalled-after-transient-download-failure" in bootstrap
 
 
 def test_ci_cancels_superseded_runs_and_avoids_duplicate_agent_push_runs() -> None:

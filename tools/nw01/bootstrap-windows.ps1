@@ -50,7 +50,7 @@ function Download-WithFallback(
 ) {
     $result = Invoke-NwDownload -Uri $Uri -OutFile $OutFile -RetryPolicy $retry
     if ($result.Success) { return $true }
-    if (-not $result.TransientFailure) { throw "Non-transient download failure for $Name: $($result.Error)" }
+    if (-not $result.TransientFailure) { throw "Non-transient download failure for ${Name}: $($result.Error)" }
     Write-Warning "[NW-BOOTSTRAP] transient download failure after $($result.Attempts) attempts for $Name; re-checking exact runner-provided installation."
     $fallback = & $FallbackProbe
     if ($fallback) { return $fallback }
