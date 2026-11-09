@@ -89,6 +89,10 @@ def test_hardware_capture_measures_host_fields_and_keeps_unreliable_inputs_expli
     ):
         assert name in script
     assert "--record-benchmark" in script
+    assert '"--binary-dir", $BinaryDir' in script
+    assert 'build\\msvc-release-ltcg-clean-a' in script
+    assert 'build\\repro-clean-a' in script
+    assert "Run tools/nw01/run-full.ps1 successfully before capture-hardware.ps1" in script
 
 
 def test_clean_system_package_uses_local_git_sha_when_ci_sha_is_absent() -> None:
