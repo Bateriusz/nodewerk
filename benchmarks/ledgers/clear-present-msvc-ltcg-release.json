@@ -223,10 +223,10 @@
     "notes": "No executable packer or payload decompressor is permitted in the NW-01 baseline."
   },
   "runtime_metrics": {
-    "startup_time_ms": 326.683,
-    "cpu_time_ms": 296.875,
+    "startup_time_ms": 323.167,
+    "cpu_time_ms": 265.625,
     "gpu_time_ms": 0.005,
-    "committed_memory_bytes": 101916672,
+    "committed_memory_bytes": 100663296,
     "gpu_committed_memory_bytes": 20971520
   },
   "unavailable_measurements": [],

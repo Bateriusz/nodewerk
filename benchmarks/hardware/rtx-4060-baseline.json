@@ -79,10 +79,10 @@
       "compute_output_verified": null,
       "exit_code": 0,
       "total_distributed_bytes": 168960,
-      "startup_time_ms": 335.113,
-      "cpu_time_ms": 281.25,
-      "gpu_time_ms": 0.004,
-      "committed_memory_bytes": 102023168,
+      "startup_time_ms": 323.167,
+      "cpu_time_ms": 265.625,
+      "gpu_time_ms": 0.005,
+      "committed_memory_bytes": 100663296,
       "gpu_committed_memory_bytes": 20971520
     },
     {
@@ -93,10 +93,10 @@
       "compute_output_verified": true,
       "exit_code": 0,
       "total_distributed_bytes": 172032,
-      "startup_time_ms": 314.176,
+      "startup_time_ms": 311.256,
       "cpu_time_ms": 296.875,
-      "gpu_time_ms": 0.002,
-      "committed_memory_bytes": 98254848,
+      "gpu_time_ms": 0.003,
+      "committed_memory_bytes": 97435648,
       "gpu_committed_memory_bytes": 13176832
     }
   ],

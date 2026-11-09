@@ -215,10 +215,10 @@
     "notes": "Offline DXIL payload is embedded directly in .rdata without an executable packer or runtime decompressor."
   },
   "runtime_metrics": {
-    "startup_time_ms": 309.607,
+    "startup_time_ms": 311.256,
     "cpu_time_ms": 296.875,
     "gpu_time_ms": 0.003,
-    "committed_memory_bytes": 97390592,
+    "committed_memory_bytes": 97435648,
     "gpu_committed_memory_bytes": 13176832
   },
   "unavailable_measurements": [],
