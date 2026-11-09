@@ -48,6 +48,21 @@ jobs:
       - name: Install pytest
         run: python -m pip install pytest
 
+      - name: Parse CleanSystem runner with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\tools\nw01\run-clean-system.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+
       - name: Bootstrap exact NW-01 Windows toolchain
         shell: pwsh
         run: >-
