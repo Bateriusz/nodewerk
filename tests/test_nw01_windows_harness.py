@@ -426,7 +426,13 @@ def build_archive_package(
                 {"category": "executable", "name": name, "sha256": digest}
             ],
         }
-        (ledger_dir / f"{fixture.replace('_', '-')}-{toolchain}-release.json").write_text(
+        ledger_stem = {
+            "empty_player": "empty-player",
+            "clear_present": "clear-present",
+            "compute_shader": "compute-fixture",
+        }[fixture]
+        ledger_suffix = "clang-cl" if toolchain == "clang-cl-lld" else toolchain
+        (ledger_dir / f"{ledger_stem}-{ledger_suffix}-release.json").write_text(
             json.dumps(ledger) + "\n", encoding="utf-8"
         )
     return manifest
