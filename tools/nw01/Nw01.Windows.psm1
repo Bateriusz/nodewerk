@@ -292,6 +292,48 @@ function Get-NwStandaloneToolPaths {
     }
 }
 
+function Get-NwExactStandaloneToolSelection {
+    [CmdletBinding()]
+    param([string]$RepoRoot = "")
+
+    $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
+    $paths = Get-NwStandaloneToolPaths -RepoRoot $RepoRoot
+    $specs = @(
+        @{ Key = "CMake"; Name = "cmake.exe"; Tool = "cmake"; Expected = $contract.CMakeVersion; Canonical = (Join-Path $paths.CMakeBin "cmake.exe") },
+        @{ Key = "Ninja"; Name = "ninja.exe"; Tool = "ninja"; Expected = $contract.NinjaVersion; Canonical = (Join-Path $paths.NinjaBin "ninja.exe") },
+        @{ Key = "Clang"; Name = "clang-cl.exe"; Tool = "clang-cl"; Expected = $contract.LlvmVersion; Canonical = (Join-Path $paths.LlvmBin "clang-cl.exe") },
+        @{ Key = "Lld"; Name = "lld-link.exe"; Tool = "lld-link"; Expected = $contract.LlvmVersion; Canonical = (Join-Path $paths.LlvmBin "lld-link.exe") },
+        @{ Key = "Dxc"; Name = "dxc.exe"; Tool = "dxc"; Expected = $contract.DxcVersion; Canonical = (Join-Path $paths.DxcBin "dxc.exe") }
+    )
+
+    $resolved = [ordered]@{}
+    foreach ($spec in $specs) {
+        $exe = Find-NwExactCommand -Name ([string]$spec.Name) -Tool ([string]$spec.Tool) -Expected ([string]$spec.Expected) -AdditionalCandidates @([string]$spec.Canonical)
+        if ([string]::IsNullOrWhiteSpace([string]$exe)) {
+            throw "Exact pinned standalone tool '$($spec.Key)' version '$($spec.Expected)' is not available."
+        }
+        $resolved[$spec.Key] = [System.IO.Path]::GetFullPath([string]$exe)
+    }
+
+    $clangDir = Split-Path -Parent $resolved.Clang
+    $lldDir = Split-Path -Parent $resolved.Lld
+    if ([System.IO.Path]::GetFullPath($clangDir) -ne [System.IO.Path]::GetFullPath($lldDir)) {
+        throw "Pinned clang-cl and lld-link were resolved from different tool directories: '$clangDir' vs '$lldDir'"
+    }
+
+    return [pscustomobject]@{
+        CMakeExecutable = $resolved.CMake
+        NinjaExecutable = $resolved.Ninja
+        ClangExecutable = $resolved.Clang
+        LldExecutable = $resolved.Lld
+        DxcExecutable = $resolved.Dxc
+        CMakeBin = (Split-Path -Parent $resolved.CMake)
+        NinjaBin = (Split-Path -Parent $resolved.Ninja)
+        LlvmBin = $clangDir
+        DxcBin = (Split-Path -Parent $resolved.Dxc)
+    }
+}
+
 function Enter-NwBuildEnvironment {
     [CmdletBinding()]
     param(
@@ -301,17 +343,16 @@ function Enter-NwBuildEnvironment {
     if (-not $IsWindows) { throw "NW-01 Windows build environment can only be entered on Windows." }
     $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
     $sources = Get-NwProvisioningSources -RepoRoot $RepoRoot
-    $paths = Get-NwStandaloneToolPaths -RepoRoot $RepoRoot
-    # Import vcvars first because it prepends SDK locations. Then deliberately
-    # move every pinned standalone tool directory ahead of the SDK. In
-    # particular this prevents Windows SDK's newer dxc.exe from shadowing the
-    # pinned DXC 1.8.2407 used by NW-01.
+    # Import vcvars first because it prepends SDK locations. Then resolve each
+    # standalone tool by exact version (canonical C:\Tools copy or exact
+    # runner-provided fallback) and deliberately move that selected directory
+    # ahead of the SDK. This prevents Windows SDK's newer dxc.exe from
+    # shadowing the pinned DXC 1.8.2407 used by NW-01.
     Import-NwVcVarsEnvironment -WindowsSdkVersion $contract.WindowsSdkVersion -VcVarsVersion ([string]$sources.visual_studio.vcvars_version) | Out-Null
+    $selection = Get-NwExactStandaloneToolSelection -RepoRoot $RepoRoot
 
-    foreach ($entry in @($paths.CMakeBin, $paths.NinjaBin, $paths.LlvmBin, $paths.DxcBin)) {
-        if (Test-Path $entry -PathType Container) {
-            Add-NwPathEntry -Path $entry
-        }
+    foreach ($entry in @($selection.CMakeBin, $selection.NinjaBin, $selection.LlvmBin, $selection.DxcBin)) {
+        Add-NwPathEntry -Path $entry
     }
 
     if ($ExportGitHubEnv) {
@@ -329,12 +370,11 @@ function Enter-NwBuildEnvironment {
     # Fail immediately if command resolution still disagrees with the exact
     # pinned DXC path after vcvars/path activation.
     $resolvedDxc = (Get-Command dxc.exe -ErrorAction Stop).Source
-    $expectedDxc = Join-Path $paths.DxcBin "dxc.exe"
-    if ([System.IO.Path]::GetFullPath($resolvedDxc) -ne [System.IO.Path]::GetFullPath($expectedDxc)) {
-        throw "Pinned DXC precedence failure: command resolution selected '$resolvedDxc', expected '$expectedDxc'"
+    if ([System.IO.Path]::GetFullPath($resolvedDxc) -ne [System.IO.Path]::GetFullPath($selection.DxcExecutable)) {
+        throw "Pinned DXC precedence failure: command resolution selected '$resolvedDxc', expected '$($selection.DxcExecutable)'"
     }
 
-    return [pscustomobject]@{ Contract = $contract; Paths = $paths }
+    return [pscustomobject]@{ Contract = $contract; Paths = $selection }
 }
 
 function Get-NwDoctorResults {

@@ -1,0 +1,80 @@
+#!/usr/bin/env pwsh
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$PackageRoot,
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
+    [string]$SummaryPath = ""
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+if (-not $IsWindows) {
+    Write-Error "NW-01 CleanSystem execution requires Windows."
+    exit 1
+}
+
+try {
+    $binaryDir = Join-Path $PackageRoot "deploy"
+    $evidenceDir = Join-Path $PackageRoot "evidence"
+    if (-not (Test-Path $binaryDir -PathType Container)) { throw "CleanSystem package deploy directory is missing: $binaryDir" }
+    if (-not (Test-Path $evidenceDir -PathType Container)) { throw "CleanSystem package evidence directory is missing: $evidenceDir" }
+
+    # No bootstrap or build-environment activation is allowed on this role.
+    # The verifier owns authoritative SDK/DXC/debug/redist absence probes;
+    # these preflight checks only catch obvious contamination before fixtures run.
+    if (-not [string]::IsNullOrWhiteSpace($env:WindowsSdkDir) -or
+        -not [string]::IsNullOrWhiteSpace($env:WindowsSDKVersion)) {
+        throw "CleanSystem target has an active Windows SDK environment. Use an uncontaminated target."
+    }
+    if (Get-Command dxc.exe -ErrorAction SilentlyContinue) {
+        throw "CleanSystem target exposes dxc.exe in PATH. Use an uncontaminated target."
+    }
+
+    $nt = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+    $osBuild = "10.0.$($nt.CurrentBuildNumber).$($nt.UBR)"
+
+    $nvidiaSmi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+    if (-not $nvidiaSmi) { $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue }
+    if (-not $nvidiaSmi) { throw "nvidia-smi is required to bind CleanSystem execution to the physical NVIDIA adapter." }
+    $gpuLine = (& $nvidiaSmi.Source --query-gpu=name,driver_version --format=csv,noheader,nounits | Select-Object -First 1)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gpuLine)) { throw "nvidia-smi did not return GPU model/driver metadata." }
+    $parts = @($gpuLine -split ',', 2 | ForEach-Object { $_.Trim() })
+    if ($parts.Count -ne 2) { throw "Unexpected nvidia-smi output: $gpuLine" }
+    $gpuModel = $parts[0]
+    $nvidiaDriver = $parts[1]
+
+    if ([string]::IsNullOrWhiteSpace($SummaryPath)) {
+        $stamp = [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss")
+        $SummaryPath = Join-Path (Split-Path -Parent ([System.IO.Path]::GetFullPath($PackageRoot))) "nw01-clean-system-$stamp.json"
+    }
+
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+    if (-not $python) { throw "Python 3 is required to run the repository verifier." }
+
+    $args = @(
+        (Join-Path $RepoRoot "tools\verify_nw01.py"),
+        "--mode", "CleanSystem",
+        "--binary-dir", $binaryDir,
+        "--evidence-dir", $evidenceDir,
+        "--os-build", $osBuild,
+        "--gpu-model", $gpuModel,
+        "--nvidia-driver-version", $nvidiaDriver,
+        "--summary-json", $SummaryPath
+    )
+    & $python.Source @args
+    $code = $LASTEXITCODE
+
+    if (-not (Test-Path $SummaryPath -PathType Leaf)) {
+        throw "CleanSystem verifier did not produce summary JSON (exit code $code)."
+    }
+    if ($code -eq 0) {
+        Write-Host "[NW-CLEANSYSTEM] VERIFIED package=$PackageRoot summary=$SummaryPath"
+    } else {
+        Write-Host "[NW-CLEANSYSTEM] FAILED exit=$code package=$PackageRoot summary=$SummaryPath"
+    }
+    exit $code
+} catch {
+    Write-Error "[NW-CLEANSYSTEM] $($_.Exception.Message)"
+    exit 1
+}

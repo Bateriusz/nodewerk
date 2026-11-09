@@ -55,6 +55,13 @@ jobs:
           -Ci
           -ProvenancePath "$env:RUNNER_TEMP\nw01-bootstrap-provenance.json"
 
+      - name: Verify bootstrap idempotence on an already-correct host
+        shell: pwsh
+        run: >-
+          pwsh ./tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath "$env:RUNNER_TEMP\nw01-bootstrap-idempotence.json"
+
       - name: Export exact MSVC/SDK build environment
         shell: pwsh
         run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
@@ -79,6 +86,7 @@ jobs:
           name: nw01-windows-build-checks
           path: |
             ${{ runner.temp }}/nw01-bootstrap-provenance.json
+            ${{ runner.temp }}/nw01-bootstrap-idempotence.json
             ${{ runner.temp }}/nw01-build-checks.json
             benchmarks/reproducibility/*.json
             benchmarks/ledgers/*.json
@@ -110,60 +118,37 @@ jobs:
         run: pwsh ./tools/nw01/doctor.ps1
 
       - name: Run NW-01 Full physical-evidence validation
+        id: full
+        continue-on-error: true
         shell: pwsh
-        run: |
-          $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
-          python tools/verify_nw01.py --mode Full --summary-json $summaryPath
-          $code = $LASTEXITCODE
-          if (-not (Test-Path $summaryPath)) {
-            Write-Error "Full mode did not produce a summary JSON (exit code $code)."
-            exit 1
-          }
-          $summary = Get-Content -Raw -Path $summaryPath | ConvertFrom-Json
-          if ($code -eq 0) {
-            Add-Content -Path $env:GITHUB_ENV -Value "NW_FULL_SUMMARY=$summaryPath"
-            Write-Host "Full mode passed every concrete and physical-evidence check."
-            exit 0
-          }
-          if ($code -eq 2) {
-            $requiredChecks = @(
-              "reproducibility_build",
-              "msvc_ltcg_build",
-              "clang_debug_symbols",
-              "msvc_debug_symbols",
-              "fixture_validation",
-              "msvc_fixture_validation",
-              "size_ledgers",
-              "failure_recovery"
-            )
-            foreach ($name in $requiredChecks) {
-              if ($summary.checks.$name.passed -ne $true) {
-                Write-Error "Full mode exited 2 but required concrete check '$name' did not pass."
-                exit 1
-              }
-            }
-            Add-Content -Path $env:GITHUB_ENV -Value "NW_FULL_SUMMARY=$summaryPath"
-            Write-Host "Full mode passed all concrete checks; only physical evidence remains unverified."
-            exit 0
-          }
-          Write-Error "Full mode failed or skipped required build coverage (exit code $code)."
-          exit 1
+        run: >-
+          pwsh ./tools/nw01/run-full.ps1
+          -SummaryPath "$env:RUNNER_TEMP\nw01-full-mode.json"
+          -ExportGitHubEnv
 
       - name: Package verified CleanSystem deployment
+        if: always() && env.NW_FULL_SUMMARY != ''
         shell: pwsh
-        run: |
-          $summaryPath = $env:NW_FULL_SUMMARY
-          if ([string]::IsNullOrWhiteSpace($summaryPath)) {
-            $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
-          }
-          $artifactRoot = Join-Path $env:RUNNER_TEMP "nw01-clean-system-package"
-          pwsh ./tools/package-clean-system.ps1 -FullSummary $summaryPath -OutputRoot $artifactRoot
+        run: >-
+          pwsh ./tools/nw01/prepare-clean-system.ps1
+          -FullSummary "$env:NW_FULL_SUMMARY"
+          -OutputRoot "$env:RUNNER_TEMP\nw01-clean-system-package"
+          -ZipPath "$env:RUNNER_TEMP\nw01-clean-system-package.zip"
 
+      - name: Render NW-01 evidence status
+        if: always() && env.NW_FULL_SUMMARY != ''
+        shell: pwsh
+        run: >-
+          pwsh ./tools/nw01/evidence-summary.ps1
+          -FullSummary "$env:NW_FULL_SUMMARY"
+          -JsonPath "$env:RUNNER_TEMP\nw01-evidence-summary.json"
       - name: Upload NW-01 clean-system deployment
         uses: actions/upload-artifact@v4
         with:
           name: nw01-clean-system-deploy-${{ github.sha }}
-          path: ${{ runner.temp }}/nw01-clean-system-package/
+          path: |
+            ${{ runner.temp }}/nw01-clean-system-package/
+            ${{ runner.temp }}/nw01-clean-system-package.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -174,6 +159,7 @@ jobs:
           name: nw01-windows-physical-evidence-${{ github.sha }}
           path: |
             ${{ runner.temp }}/nw01-full-mode.json
+            ${{ runner.temp }}/nw01-evidence-summary.json
             benchmarks/reproducibility/*.json
             benchmarks/ledgers/*.json
             benchmarks/toolchain-manifest.v1.json
@@ -181,3 +167,20 @@ jobs:
             benchmarks/clean-system/*.json
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Enforce verified Full baseline
+        if: always()
+        shell: pwsh
+        run: |
+          $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-full-mode.json"
+          if (-not (Test-Path $summaryPath -PathType Leaf)) {
+            Write-Error "Physical Full summary is missing."
+            exit 1
+          }
+          $summary = Get-Content -Raw $summaryPath | ConvertFrom-Json
+          if ($summary.full_baseline_passed -ne $true) {
+            Write-Error "Physical Full baseline remains incomplete or failed; evidence/package artifacts were preserved for operator follow-up."
+            exit 1
+          }
+          Write-Host "Physical Full baseline is verified."
+

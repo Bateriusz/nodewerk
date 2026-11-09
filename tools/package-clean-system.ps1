@@ -103,9 +103,17 @@ foreach ($name in $requiredExecutables) {
     }
 }
 
+$sourceCommit = $env:GITHUB_SHA
+if ([string]::IsNullOrWhiteSpace($sourceCommit)) {
+    $sourceCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
+}
+if ($sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    Write-Error "Could not resolve a valid source commit for CleanSystem package provenance."
+    exit 1
+}
 $manifest = [ordered]@{
     schema_version = "1"
-    source_commit = $env:GITHUB_SHA
+    source_commit = $sourceCommit
     source_build_directory = $sourceBuildDirectory
     toolchain = $toolchain
     purpose = "NW-01 CleanSystem physical Windows execution"

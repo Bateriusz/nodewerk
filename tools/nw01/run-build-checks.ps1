@@ -16,7 +16,7 @@ Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force
 try {
     Enter-NwBuildEnvironment -RepoRoot $RepoRoot | Out-Null
     if ([string]::IsNullOrWhiteSpace($SummaryPath)) {
-        $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $RepoRoot "artifacts\nw01" }
+        $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path (Split-Path -Parent $RepoRoot) "nodewerk-evidence" }
         New-Item -ItemType Directory -Force -Path $base | Out-Null
         $SummaryPath = Join-Path $base "nw01-build-checks.json"
     } else {
