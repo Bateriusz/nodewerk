@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import offline_shader_pack  # noqa: E402
+import verify_nw01  # noqa: E402
 from offline_shader_pack import (  # noqa: E402
     CS_6_0_PROGRAM_VERSION,
     FORBIDDEN_SM66_HEAP_INDEXING_MASK,
@@ -388,10 +389,16 @@ def test_offline_dxc_compile_and_pack_into_build_dir(tmp_path: Path) -> None:
     # Test compile_and_record_manifest in an isolated copy of repo shaders/
     fake_repo = tmp_path / "repo"
     (fake_repo / "shaders").mkdir(parents=True)
+    (fake_repo / "benchmarks").mkdir(parents=True)
     (fake_repo / "shaders" / "compute_fixture.hlsl").write_bytes(hlsl_path.read_bytes())
+    shutil.copy2(
+        REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json",
+        fake_repo / "benchmarks" / "toolchain-manifest.v1.json",
+    )
     manifest = compile_and_record_manifest(fake_repo, fake_repo / "build", dxc_executable=mock_dxc)
     assert manifest["verification_status"] == "verified"
     assert manifest["shaders"][0]["compiled_offline_with_dxc"] is True
+    assert manifest["shaders"][0]["pinned_dxc_version"] == "1.8.2407"
     assert manifest["shaders"][0]["offline_dxil_bytes"] == len(out_dxil.read_bytes())
 
 
@@ -1215,3 +1222,28 @@ def test_toolchain_is_not_selectable_without_fixture_execution_evidence(
     assert clang["verification_status"] == "unverified"
     assert clang["fixture_execution_verified"] is False
     assert toolchain["selected_toolchain"]["toolchain_id"] == "clang-cl-lld"
+
+
+def test_verifier_dxc_pin_comes_from_authoritative_toolchain_manifest(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "dxc-pin repo"
+    for subdir in ("benchmarks", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+
+    pinned, drift = verify_nw01.resolve_pinned_dxc_version(repo)
+    assert pinned == "1.8.2407"
+    assert drift is None
+    assert offline_shader_pack.load_pinned_dxc_version(repo) == "1.8.2407"
+
+    toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
+    toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    toolchain["pinned_dependencies"]["dxc_version"] = "9.9.2407"
+    toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
+
+    # The toolchain manifest change propagates to the verifier. The stale shader
+    # manifest pin is reported as drift instead of remaining a second requirement.
+    pinned, drift = verify_nw01.resolve_pinned_dxc_version(repo)
+    assert pinned == "9.9.2407"
+    assert drift == "1.8.2407"
+    assert offline_shader_pack.load_pinned_dxc_version(repo) == "9.9.2407"

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import textwrap
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -124,3 +128,112 @@ def test_cmake_profiles_and_presets_contract() -> None:
     assert "NW_WINDOWS_SDK_ROOT" in toolchain_cmake
     assert "KitsRoot10" in toolchain_cmake
     assert "NW_PINNED_DXC_VERSION" in toolchain_cmake
+
+
+def test_toolchain_verifier_has_no_independent_version_literals() -> None:
+    manifest = json.loads(
+        (REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json").read_text(encoding="utf-8")
+    )
+    toolchain_cmake = (REPO_ROOT / "cmake" / "ToolchainManifest.cmake").read_text(encoding="utf-8")
+
+    # The repository manifest is the only authoritative version contract.
+    assert 'file(READ "${NW_TOOLCHAIN_MANIFEST_JSON}"' in toolchain_cmake
+    for key in ("cmake_version", "ninja_version", "windows_sdk_version", "dxc_version"):
+        assert f"pinned_dependencies {key}" in toolchain_cmake
+    for key in ("evaluated_toolchains", "compiler_version", "linker_version"):
+        assert key in toolchain_cmake
+    assert "FORCE" in toolchain_cmake
+
+    evaluated = {
+        entry["toolchain_id"]: entry for entry in manifest["evaluated_toolchains"]
+    }
+    literal_pins = {
+        "cmake_version": manifest["pinned_dependencies"]["cmake_version"],
+        "ninja_version": manifest["pinned_dependencies"]["ninja_version"],
+        "windows_sdk_version": manifest["pinned_dependencies"]["windows_sdk_version"],
+        "dxc_version": manifest["pinned_dependencies"]["dxc_version"],
+        "clang compiler_version": evaluated["clang-cl-lld"]["compiler_version"],
+        "msvc compiler_version": evaluated["msvc-ltcg"]["compiler_version"],
+        "msvc linker_version": evaluated["msvc-ltcg"]["linker_version"],
+    }
+    for name, value in literal_pins.items():
+        assert value not in toolchain_cmake, (
+            f"{name} pin '{value}' is duplicated as a literal in "
+            "cmake/ToolchainManifest.cmake; the repository manifest must be the only source"
+        )
+
+
+def test_cmake_downstream_pins_follow_manifest_changes(tmp_path: Path) -> None:
+    cmake = shutil.which("cmake")
+    if cmake is None:
+        pytest.skip("cmake is required to exercise downstream pin propagation")
+
+    repo = tmp_path / "pin repo"
+    (repo / "benchmarks").mkdir(parents=True)
+    (repo / "cmake").mkdir()
+    shutil.copy2(
+        REPO_ROOT / "cmake" / "ToolchainManifest.cmake",
+        repo / "cmake" / "ToolchainManifest.cmake",
+    )
+    for name in (
+        "toolchain-manifest.v1.json",
+        "capability-manifest.v1.json",
+        "dependency-inventory.v1.json",
+    ):
+        shutil.copy2(REPO_ROOT / "benchmarks" / name, repo / "benchmarks" / name)
+
+    manifest_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["pinned_dependencies"].update(
+        {
+            "cmake_version": "9.9.901",
+            "ninja_version": "9.9.902",
+            "windows_sdk_version": "10.0.99999.0",
+            "dxc_version": "9.9.2407",
+        }
+    )
+    for entry in manifest["evaluated_toolchains"]:
+        if entry["toolchain_id"] == "clang-cl-lld":
+            entry["compiler_version"] = "9.9.903"
+            entry["linker_version"] = "9.9.903"
+        elif entry["toolchain_id"] == "msvc-ltcg":
+            entry["compiler_version"] = "19.99.33821"
+            entry["linker_version"] = "14.99.33821.0"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    driver = tmp_path / "load-pins.cmake"
+    driver.write_text(
+        textwrap.dedent(
+            f"""
+            set(NW_ENFORCE_PINNED_TOOLCHAIN OFF CACHE BOOL "" FORCE)
+            include("{repo.as_posix()}/cmake/ToolchainManifest.cmake")
+            message(STATUS "NWPIN_CMAKE=${{NW_PINNED_CMAKE_VERSION}}")
+            message(STATUS "NWPIN_NINJA=${{NW_PINNED_NINJA_VERSION}}")
+            message(STATUS "NWPIN_CLANG=${{NW_PINNED_CLANG_VERSION}}")
+            message(STATUS "NWPIN_MSVC=${{NW_PINNED_MSVC_VERSION}}")
+            message(STATUS "NWPIN_MSVC_LINKER=${{NW_PINNED_MSVC_LINKER_VERSION}}")
+            message(STATUS "NWPIN_SDK=${{NW_PINNED_WINDOWS_SDK_VERSION}}")
+            message(STATUS "NWPIN_DXC=${{NW_PINNED_DXC_VERSION}}")
+            """
+        ),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [cmake, "-P", str(driver)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, output
+    expected = {
+        "NWPIN_CMAKE": "9.9.901",
+        "NWPIN_NINJA": "9.9.902",
+        "NWPIN_CLANG": "9.9.903",
+        "NWPIN_MSVC": "19.99.33821",
+        "NWPIN_MSVC_LINKER": "14.99.33821.0",
+        "NWPIN_SDK": "10.0.99999.0",
+        "NWPIN_DXC": "9.9.2407",
+    }
+    for name, value in expected.items():
+        assert f"{name}={value}" in output, output

@@ -1,21 +1,74 @@
 # Nodewerk NW-01 Reproducible Toolchain Manifest Contract
 # Pins and actively verifies the selected compiler/linker, Windows SDK, DXC,
 # CMake/Ninja versions, minimum target Windows 11 build, and required feature manifest.
+#
+# There is exactly one authoritative version contract:
+# benchmarks/toolchain-manifest.v1.json. The pins below are read from that JSON
+# on every configure so bootstrap, doctor and this downstream verifier cannot
+# drift to independently duplicated literals. Missing or malformed pins fail
+# closed instead of silently falling back to a hard-coded value.
 
-set(NW_PINNED_TOOLCHAIN_ID "clang-cl-lld" CACHE STRING "Primary selected toolchain ID")
-set(NW_PINNED_CLANG_VERSION "18.1.8" CACHE STRING "Pinned LLVM clang-cl/lld-link version")
-set(NW_PINNED_MSVC_VERSION "19.40.33821" CACHE STRING "Pinned MSVC cl.exe/link.exe comparison version")
-set(NW_PINNED_MSVC_LINKER_VERSION "14.40.33821.0" CACHE STRING "Pinned MSVC link.exe comparison version")
-set(NW_PINNED_WINDOWS_SDK_VERSION "10.0.26100.0" CACHE STRING "Pinned Windows 11 SDK version")
-set(NW_WINDOWS_SDK_VERSION "" CACHE STRING "Explicit Windows SDK version override or detected version (e.g. 10.0.26100.0)")
-set(NW_WINDOWS_SDK_ROOT "" CACHE PATH "Explicit Windows Kits 10 root directory (e.g. C:/Program Files (x86)/Windows Kits/10)")
-set(NW_PINNED_DXC_VERSION "1.8.2407" CACHE STRING "Pinned offline DXC shader compiler version")
-set(NW_PINNED_CMAKE_VERSION "3.30.2" CACHE STRING "Pinned CMake version")
-set(NW_PINNED_NINJA_VERSION "1.12.1" CACHE STRING "Pinned Ninja version")
-set(NW_MIN_TESTED_WINDOWS_BUILD "10.0.22631.4317" CACHE STRING "Minimum tested Windows 11 x64 build")
-set(NW_REQUIRED_FEATURE_MANIFEST "${CMAKE_SOURCE_DIR}/benchmarks/capability-manifest.v1.json")
-set(NW_TOOLCHAIN_MANIFEST_JSON "${CMAKE_SOURCE_DIR}/benchmarks/toolchain-manifest.v1.json")
-set(NW_DEPENDENCY_INVENTORY_JSON "${CMAKE_SOURCE_DIR}/benchmarks/dependency-inventory.v1.json")
+get_filename_component(_nw_repository_root "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+set(NW_TOOLCHAIN_MANIFEST_JSON "${_nw_repository_root}/benchmarks/toolchain-manifest.v1.json"
+    CACHE FILEPATH "Authoritative NW-01 repository toolchain pin contract")
+if(NOT EXISTS "${NW_TOOLCHAIN_MANIFEST_JSON}")
+    message(FATAL_ERROR "[NW-TOOLCHAIN-ERR] Missing authoritative toolchain manifest: ${NW_TOOLCHAIN_MANIFEST_JSON}")
+endif()
+file(READ "${NW_TOOLCHAIN_MANIFEST_JSON}" _nw_toolchain_manifest_json)
+
+string(JSON _nw_pinned_selected_toolchain GET "${_nw_toolchain_manifest_json}" selected_toolchain toolchain_id)
+string(JSON _nw_pinned_cmake_version GET "${_nw_toolchain_manifest_json}" pinned_dependencies cmake_version)
+string(JSON _nw_pinned_ninja_version GET "${_nw_toolchain_manifest_json}" pinned_dependencies ninja_version)
+string(JSON _nw_pinned_windows_sdk_version GET "${_nw_toolchain_manifest_json}" pinned_dependencies windows_sdk_version)
+string(JSON _nw_pinned_dxc_version GET "${_nw_toolchain_manifest_json}" pinned_dependencies dxc_version)
+
+string(JSON _nw_evaluated_toolchain_count LENGTH "${_nw_toolchain_manifest_json}" evaluated_toolchains)
+set(_nw_pinned_clang_version "")
+set(_nw_pinned_msvc_compiler_version "")
+set(_nw_pinned_msvc_linker_version "")
+math(EXPR _nw_evaluated_toolchain_last "${_nw_evaluated_toolchain_count} - 1")
+foreach(_nw_evaluated_index RANGE 0 ${_nw_evaluated_toolchain_last})
+    string(JSON _nw_evaluated_toolchain_id GET "${_nw_toolchain_manifest_json}" evaluated_toolchains ${_nw_evaluated_index} toolchain_id)
+    string(JSON _nw_evaluated_compiler_version GET "${_nw_toolchain_manifest_json}" evaluated_toolchains ${_nw_evaluated_index} compiler_version)
+    string(JSON _nw_evaluated_linker_version GET "${_nw_toolchain_manifest_json}" evaluated_toolchains ${_nw_evaluated_index} linker_version)
+    if(_nw_evaluated_toolchain_id STREQUAL "clang-cl-lld")
+        set(_nw_pinned_clang_version "${_nw_evaluated_compiler_version}")
+    elseif(_nw_evaluated_toolchain_id STREQUAL "msvc-ltcg")
+        set(_nw_pinned_msvc_compiler_version "${_nw_evaluated_compiler_version}")
+        set(_nw_pinned_msvc_linker_version "${_nw_evaluated_linker_version}")
+    endif()
+endforeach()
+if(_nw_pinned_clang_version STREQUAL ""
+   OR _nw_pinned_msvc_compiler_version STREQUAL ""
+   OR _nw_pinned_msvc_linker_version STREQUAL "")
+    message(FATAL_ERROR
+        "[NW-TOOLCHAIN-ERR] Toolchain manifest '${NW_TOOLCHAIN_MANIFEST_JSON}' must record clang-cl-lld and msvc-ltcg evaluated toolchain versions.")
+endif()
+
+string(JSON _nw_minimum_tested_windows_build
+    ERROR_VARIABLE _nw_minimum_tested_windows_build_error
+    GET "${_nw_toolchain_manifest_json}" intended_minimum_windows_build)
+if(_nw_minimum_tested_windows_build_error)
+    string(JSON _nw_minimum_tested_windows_build GET "${_nw_toolchain_manifest_json}" minimum_tested_windows_build)
+endif()
+
+# The derived cache entries exist only for inspection/logging. FORCE guarantees
+# a changed manifest pin wins over a stale value left in an existing build tree;
+# there is no supported independent pin override.
+set(NW_PINNED_TOOLCHAIN_ID "${_nw_pinned_selected_toolchain}" CACHE STRING "Selected toolchain ID (from toolchain manifest)" FORCE)
+set(NW_PINNED_CLANG_VERSION "${_nw_pinned_clang_version}" CACHE STRING "Pinned LLVM clang-cl/lld-link version (from toolchain manifest)" FORCE)
+set(NW_PINNED_MSVC_VERSION "${_nw_pinned_msvc_compiler_version}" CACHE STRING "Pinned MSVC cl.exe version (from toolchain manifest)" FORCE)
+set(NW_PINNED_MSVC_LINKER_VERSION "${_nw_pinned_msvc_linker_version}" CACHE STRING "Pinned MSVC link.exe version (from toolchain manifest)" FORCE)
+set(NW_PINNED_WINDOWS_SDK_VERSION "${_nw_pinned_windows_sdk_version}" CACHE STRING "Pinned Windows 11 SDK version (from toolchain manifest)" FORCE)
+set(NW_PINNED_DXC_VERSION "${_nw_pinned_dxc_version}" CACHE STRING "Pinned offline DXC shader compiler version (from toolchain manifest)" FORCE)
+set(NW_PINNED_CMAKE_VERSION "${_nw_pinned_cmake_version}" CACHE STRING "Pinned CMake version (from toolchain manifest)" FORCE)
+set(NW_PINNED_NINJA_VERSION "${_nw_pinned_ninja_version}" CACHE STRING "Pinned Ninja version (from toolchain manifest)" FORCE)
+set(NW_MIN_TESTED_WINDOWS_BUILD "${_nw_minimum_tested_windows_build}" CACHE STRING "Minimum target Windows 11 x64 build (from toolchain manifest)" FORCE)
+
+set(NW_WINDOWS_SDK_VERSION "" CACHE STRING "Explicit Windows SDK version override or detected version")
+set(NW_WINDOWS_SDK_ROOT "" CACHE PATH "Explicit Windows Kits 10 root directory")
+set(NW_REQUIRED_FEATURE_MANIFEST "${_nw_repository_root}/benchmarks/capability-manifest.v1.json")
+set(NW_DEPENDENCY_INVENTORY_JSON "${_nw_repository_root}/benchmarks/dependency-inventory.v1.json")
 
 option(NW_ENFORCE_PINNED_TOOLCHAIN
     "Enforce exact pinned compiler, linker, Windows SDK, DXC, CMake, and Ninja versions during configure"

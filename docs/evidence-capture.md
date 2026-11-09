@@ -17,6 +17,11 @@ distribution is recorded in `tools/nw01/tool-version-identities.json`; for examp
 `1.8.2407` release reports `1.8.2407.7` / `1.8.2407.12`, and any other build suffix or nearby
 numeric token is rejected.
 
+Bootstrap, the doctor, the verifier, CI and the downstream CMake configure-time check
+(`cmake/ToolchainManifest.cmake`) all consume those same manifest pins. The CMake verifier reads
+the JSON directly instead of carrying its own literal versions, so changing a manifest pin
+propagates to every layer and cannot let provisioning accept a toolchain that Full later rejects.
+
 ## Required Physical Targets
 
 | Tier | Required hardware class | Required recorded environment |
@@ -211,7 +216,9 @@ states are recomputed from the current hardware/CleanSystem files by reconciling
 hashes against the selected toolchain's verified release ledgers; stale or incomplete evidence is
 reported as `PENDING` with a reason. Without a supplied Full result the Full baseline is
 `NOT_EVALUATED`, never `VERIFIED`. An exit-2 Full summary cannot promote stale physical evidence
-to verified.
+to verified. Likewise, a previously successful Full summary is downgraded to `INCOMPLETE` (with a
+`full_baseline_reason`) when current hardware or CleanSystem evidence no longer reconciles against
+the ledgers at the same HEAD.
 
 ## 8. Archive non-repository artifacts
 
@@ -259,7 +266,9 @@ ledgers; reproducibility hash pairs are tied to those ledgers rather than merely
 other, and `benchmarks/evidence-status.json` must reference current, validated evidence files.
 Status references are confined to repository-relative, allowlisted evidence paths and are
 cycle-checked before staging. Evidence paths that traverse a filesystem reparse point (symlink or
-junction) are rejected so staging cannot read out-of-repository content.
+junction) are rejected so staging cannot read out-of-repository content. The generated shader
+header is accepted only when the byte array it embeds matches the verified shader manifest's
+offline DXIL size and SHA-256; a stale or merely non-empty header is rejected.
 For example `benchmarks/hardware/credentials.json`, an unrelated `benchmarks/hardware/rtx.json`
 capture, a stale reproducibility report, or a status file referencing missing evidence is
 rejected.

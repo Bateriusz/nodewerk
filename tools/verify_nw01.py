@@ -41,6 +41,7 @@ from evidence_checks import desktop_cpu_model_matches
 from offline_shader_pack import (
     check_hlsl_source_constraints,
     find_dxc_executable,
+    load_pinned_dxc_version,
     query_dxc_version,
     validate_dxil_container,
 )
@@ -74,6 +75,29 @@ READBACK_LINE_RE = re.compile(r"^NW_READBACK_U32=([0-9A-Fa-f,]+)$", re.MULTILINE
 READBACK_COUNT_RE = re.compile(r"^NW_READBACK_ELEMENT_COUNT=([0-9]+)$", re.MULTILINE)
 WINDOWS_BUILD_LINE_RE = re.compile(r"^NW_WINDOWS_BUILD=([0-9]+)$", re.MULTILINE)
 ADAPTER_DESC_LINE_RE = re.compile(r"^NW_ADAPTER_DESCRIPTION=(.+)$", re.MULTILINE)
+
+
+def load_toolchain_pins(repo_root: Path) -> dict[str, str]:
+    """Return toolchain pins from the single authoritative repository manifest."""
+    manifest_path = repo_root / "benchmarks" / "toolchain-manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    pinned_dependencies = manifest.get("pinned_dependencies", {})
+    evaluated = {
+        entry.get("toolchain_id"): entry
+        for entry in manifest.get("evaluated_toolchains", [])
+    }
+    clang = evaluated.get("clang-cl-lld", {})
+    msvc = evaluated.get("msvc-ltcg", {})
+    return {
+        "cmake": str(pinned_dependencies.get("cmake_version", "")),
+        "ninja": str(pinned_dependencies.get("ninja_version", "")),
+        "clang": str(clang.get("compiler_version", "")),
+        "msvc_compiler": str(msvc.get("compiler_version", "")),
+        "msvc_linker": str(msvc.get("linker_version", "")),
+        "dxc": str(pinned_dependencies.get("dxc_version", "")),
+        "windows_sdk": str(pinned_dependencies.get("windows_sdk_version", "")),
+    }
+
 
 NW_METRIC_LINE_RE = re.compile(r"^NW_([A-Z0-9_]+)=(.+)$", re.MULTILINE)
 NW_VALIDATION_ERROR_RE = re.compile(r"^NW_D3D12_VALIDATION_ERROR=(.+)$", re.MULTILINE)
@@ -526,6 +550,7 @@ def record_shader_manifest_evidence(
         query_dxc_version(str(dxc_executable)) if dxc_executable is not None else "unknown"
     )
     shader["compiled_offline_with_dxc"] = True
+    shader["pinned_dxc_version"] = load_pinned_dxc_version(repo_root)
     shader["hlsl_source_bytes"] = len(hlsl_bytes)
     shader["hlsl_sha256"] = hashlib.sha256(hlsl_bytes).hexdigest()
     shader["offline_dxil_bytes"] = info["size_bytes"]
@@ -542,6 +567,26 @@ def record_shader_manifest_evidence(
     return manifest
 
 
+def resolve_pinned_dxc_version(repo_root: Path) -> tuple[str, str | None]:
+    """Return the authoritative DXC pin and any shader-manifest drift.
+
+    ``benchmarks/toolchain-manifest.v1.json`` is the single version contract.
+    ``shaders/manifest.json`` records measured compilation evidence and may keep
+    the pin it was observed with, but a disagreement is reported as drift rather
+    than being used as an independent requirement.
+    """
+    pinned = load_pinned_dxc_version(repo_root)
+    shader_manifest_path = repo_root / "shaders" / "manifest.json"
+    shader_pin = ""
+    if shader_manifest_path.is_file():
+        shader_manifest = json.loads(shader_manifest_path.read_text(encoding="utf-8"))
+        shader_pin = str(
+            (shader_manifest.get("shaders") or [{}])[0].get("pinned_dxc_version", "")
+        ).strip()
+    drift = shader_pin if (shader_pin and pinned and shader_pin != pinned) else None
+    return pinned, drift
+
+
 def evaluate_offline_shader(
     repo_root: Path,
     dxc_executable: str | None,
@@ -555,12 +600,9 @@ def evaluate_offline_shader(
     hlsl_violations = check_hlsl_source_constraints(hlsl_text)
 
     dxil_info: dict[str, Any] | None = None
-    pinned_dxc = (
-        json.loads((repo_root / "shaders" / "manifest.json").read_text(encoding="utf-8"))["shaders"][0]
-        .get("pinned_dxc_version", "")
-    )
+    pinned_dxc, shader_pin_drift = resolve_pinned_dxc_version(repo_root)
     dxc_version_matches_pin = False
-    if dxc_executable is not None:
+    if dxc_executable is not None and shader_pin_drift is None:
         measured_version = query_dxc_version(str(dxc_executable))
         dxc_version_matches_pin = bool(pinned_dxc) and pinned_dxc in measured_version
 
@@ -602,8 +644,13 @@ def evaluate_offline_shader(
         "reason": (
             None
             if passed
-            else "Offline DXC evidence is unverified; run on Windows 11 x64 with the pinned dxc "
-            f"({pinned_dxc or 'unknown'}) and a freshly built artifact to record shaders/manifest.json."
+            else (
+                f"shaders/manifest.json records pinned DXC {shader_pin_drift} but the authoritative "
+                f"toolchain manifest pins {pinned_dxc}; re-record shader evidence with the pinned DXC."
+                if shader_pin_drift is not None
+                else "Offline DXC evidence is unverified; run on Windows 11 x64 with the pinned dxc "
+                f"({pinned_dxc or 'unknown'}) and a freshly built artifact to record shaders/manifest.json."
+            )
         ),
     }
 
@@ -2505,20 +2552,21 @@ def run_full_mode(
 
     if not is_windows:
         report["missing_prerequisites"].append("Windows 11 x64 OS host required for native D3D12 build and execution")
+    pinned = load_toolchain_pins(repo_root)
     if not cmake_bin:
-        report["missing_prerequisites"].append("cmake (pinned 3.30.2) not found in PATH")
+        report["missing_prerequisites"].append(f"cmake (pinned {pinned['cmake']}) not found in PATH")
     if not ninja_bin:
-        report["missing_prerequisites"].append("ninja (pinned 1.12.1) not found in PATH")
+        report["missing_prerequisites"].append(f"ninja (pinned {pinned['ninja']}) not found in PATH")
     if not clang_cl_bin:
-        report["missing_prerequisites"].append("clang-cl (pinned 18.1.8) not found in PATH")
+        report["missing_prerequisites"].append(f"clang-cl (pinned {pinned['clang']}) not found in PATH")
     if not lld_link_bin:
-        report["missing_prerequisites"].append("lld-link (pinned 18.1.8) not found in PATH")
+        report["missing_prerequisites"].append(f"lld-link (pinned {pinned['clang']}) not found in PATH")
     if not cl_bin:
-        report["missing_prerequisites"].append("cl (pinned MSVC 19.40.33821) not found in PATH for toolchain comparison")
+        report["missing_prerequisites"].append(f"cl (pinned MSVC {pinned['msvc_compiler']}) not found in PATH for toolchain comparison")
     if not link_bin:
-        report["missing_prerequisites"].append("link (pinned MSVC 14.40.33821.0) not found in PATH for toolchain comparison")
+        report["missing_prerequisites"].append(f"link (pinned MSVC {pinned['msvc_linker']}) not found in PATH for toolchain comparison")
     if not dxc_bin:
-        report["missing_prerequisites"].append("dxc (pinned 1.8.2407) not found in PATH")
+        report["missing_prerequisites"].append(f"dxc (pinned {pinned['dxc']}) not found in PATH")
 
     clang_prereqs_ready = bool(
         is_windows and cmake_bin and ninja_bin and clang_cl_bin and lld_link_bin and dxc_bin

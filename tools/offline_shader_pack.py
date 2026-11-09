@@ -36,6 +36,27 @@ class OfflineShaderCompilerError(RuntimeError):
     """Raised when offline DXC compilation fails or DXC is unavailable."""
 
 
+def load_pinned_dxc_version(repo_root: Path) -> str:
+    """Return the authoritative DXC pin recorded in the repository toolchain manifest.
+
+    The shader manifest records measured compilation evidence, but it is not a
+    second source of the version requirement. Provisioning, the doctor and the
+    verifier all consume ``benchmarks/toolchain-manifest.v1.json``.
+    """
+    manifest_path = Path(repo_root) / "benchmarks" / "toolchain-manifest.v1.json"
+    if not manifest_path.is_file():
+        raise OfflineShaderCompilerError(
+            f"Authoritative toolchain manifest not found: {manifest_path}"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    pinned = str(manifest.get("pinned_dependencies", {}).get("dxc_version", "")).strip()
+    if not pinned:
+        raise OfflineShaderCompilerError(
+            "Toolchain manifest does not record pinned_dependencies.dxc_version."
+        )
+    return pinned
+
+
 def find_dxc_executable(explicit_path: str | Path | None = None) -> str | None:
     """Locate the offline DXC executable in PATH or from an explicit path."""
     if explicit_path:
@@ -529,6 +550,7 @@ def compile_and_record_manifest(
     )
     pack_dxil_to_header(hlsl_path, dxil_path, header_path)
 
+    pinned_dxc_version = load_pinned_dxc_version(repo_root)
     manifest = {
         "schema_version": "1.0.0",
         "verification_status": "verified",
@@ -540,7 +562,7 @@ def compile_and_record_manifest(
                 "embedded_header_build_output_path": "build/clang-cl-release/shaders/generated/compute_fixture_dxil.h",
                 "entry_point": "CSMain",
                 "target_profile": "cs_6_0",
-                "pinned_dxc_version": "1.8.2407",
+                "pinned_dxc_version": pinned_dxc_version,
                 "measured_dxc_version": validation["measured_dxc_version"],
                 "compiled_offline_with_dxc": True,
                 "dxc_flags": [

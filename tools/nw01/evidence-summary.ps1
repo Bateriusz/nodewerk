@@ -186,7 +186,8 @@ try {
             # A summary from another revision never certifies the current checkout.
             $fullStatus = "HISTORICAL"
             $concreteStatus = "HISTORICAL"
-        } elseif ((Get-NwPropertyValue $full "full_baseline_passed") -eq $true) {
+        } elseif ((Get-NwPropertyValue $full "full_baseline_passed") -eq $true -and
+                  $concreteStatus -eq "PASS") {
             $fullStatus = "VERIFIED"
         } elseif ($concreteStatus -eq "PASS") {
             $fullStatus = "INCOMPLETE"
@@ -202,6 +203,21 @@ try {
     $rtx50 = Get-NwHardwareStatus -Root $RepoRoot -RelativePath "benchmarks/hardware/rtx-50-series-baseline.json" -Tier "rtx_50_series_desktop" -ToolchainId $selectedToolchain -Ledgers $ledgers -EvidenceGaps $evidenceGaps
     $clean = Get-NwCleanSystemStatus -Root $RepoRoot -ToolchainId $selectedToolchain -Ledgers $ledgers -EvidenceGaps $evidenceGaps
 
+    # A supplied Full summary only certifies the checkout while the evidence it
+    # depends on still reconciles against the current checkout. Reusing a
+    # previously successful summary after ledger hashes or captured artifacts
+    # change at the same HEAD must downgrade the Full baseline instead of
+    # advertising stale physical evidence as verified.
+    $reconciliationGaps = @()
+    if ($rtx40.Status -ne "VERIFIED") { $reconciliationGaps += "rtx_40_representative_hardware=$($rtx40.Status)" }
+    if ($rtx50.Status -ne "VERIFIED") { $reconciliationGaps += "rtx_50_representative_hardware=$($rtx50.Status)" }
+    if ($clean.Status -ne "VERIFIED") { $reconciliationGaps += "clean_system=$($clean.Status)" }
+    $fullBaselineReason = $null
+    if ($fullStatus -eq "VERIFIED" -and $reconciliationGaps.Count -gt 0) {
+        $fullStatus = "INCOMPLETE"
+        $fullBaselineReason = "current evidence reconciliation is not verified: " + ($reconciliationGaps -join ", ")
+    }
+
     $summary = [ordered]@{
         schema_version = "1"
         source_commit = $sourceCommit
@@ -216,6 +232,7 @@ try {
         clean_system = $clean.Status
         clean_system_reason = $clean.Reason
         full_baseline = $fullStatus
+        full_baseline_reason = $fullBaselineReason
         authority = "Derived convenience view only; benchmark/verifier artifacts remain authoritative."
     }
 
@@ -229,6 +246,7 @@ try {
     Write-Host "CleanSystem: $($summary.clean_system)"
     if ($clean.Reason) { Write-Host "  reason: $($clean.Reason)" }
     Write-Host "Full baseline: $($summary.full_baseline)"
+    if ($fullBaselineReason) { Write-Host "  reason: $($fullBaselineReason)" }
     if (-not $fullSummaryMatchesCheckout) {
         Write-Host "Full summary source: $fullSummarySourceCommit (historical; does not match checkout $sourceCommit)"
     }

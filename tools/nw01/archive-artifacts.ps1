@@ -106,15 +106,23 @@ function Get-NwCertificationProblems(
             $problems.Add("$Kind deploy hash for '$executable' is missing or invalid.")
             continue
         }
-        $ledger = $safeLedgers | Where-Object { [string](Get-NwValue $_ "fixture_id" "") -eq $fixture } | Select-Object -First 1
+        # Real CleanSystem packages copy every toolchain's ledgers. Select the
+        # ledger for the artifact's fixture AND toolchain AND release profile
+        # before validating it; matching on fixture alone can pick another
+        # toolchain's alphabetically-earlier file and misclassify valid
+        # current evidence as non-certifying.
+        $fixtureLedgers = @($safeLedgers | Where-Object { [string](Get-NwValue $_ "fixture_id" "") -eq $fixture })
+        $ledger = $fixtureLedgers | Where-Object {
+            [string](Get-NwValue $_ "verification_status" "") -eq "verified" -and
+            [string](Get-NwValue $_ "toolchain_id" "") -eq $Toolchain -and
+            [string](Get-NwValue $_ "build_profile" "") -eq "release"
+        } | Select-Object -First 1
         if ($null -eq $ledger) {
-            $problems.Add("$Kind has no ledger for $fixture.")
-            continue
-        }
-        if ((Get-NwValue $ledger "verification_status" "") -ne "verified" -or
-            (Get-NwValue $ledger "toolchain_id" "") -ne $Toolchain -or
-            (Get-NwValue $ledger "build_profile" "") -ne "release") {
-            $problems.Add("$Kind ledger for $fixture is not a verified release ledger for $Toolchain.")
+            if ($fixtureLedgers.Count -gt 0) {
+                $problems.Add("$Kind ledger for $fixture is not a verified release ledger for $Toolchain.")
+            } else {
+                $problems.Add("$Kind has no ledger for $fixture.")
+            }
             continue
         }
         $component = @((Get-NwValue $ledger "distributed_components" @()) |

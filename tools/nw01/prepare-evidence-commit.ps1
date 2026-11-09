@@ -409,7 +409,52 @@ function Assert-NwEvidenceContent(
     }
 
     if ($normalized -eq "shaders/generated/compute_fixture_dxil.h") {
-        if ((Get-Item $fullPath).Length -le 0) { throw "Embedded shader header is empty." }
+        # A generated header is evidence only when the bytes it embeds are the
+        # bytes recorded by the verified shader manifest. Accepting any
+        # non-empty file would let a stale header be staged and committed as
+        # verified shader evidence.
+        $manifestPath = Join-Path $Root "shaders/manifest.json"
+        if (-not (Test-Path $manifestPath -PathType Leaf)) {
+            throw "Embedded shader header cannot be validated because shaders/manifest.json is missing."
+        }
+        $shaderManifest = Read-NwJsonDocument $manifestPath
+        $shader = @((Get-NwPropertyValue $shaderManifest "shaders" @()))[0]
+        $expectedSha = ([string](Get-NwPropertyValue $shader "offline_dxil_sha256" "")).ToLowerInvariant()
+        $expectedBytes = Get-NwPropertyValue $shader "offline_dxil_bytes" $null
+        if (-not (Test-NwSha256Hex $expectedSha) -or $null -eq $expectedBytes) {
+            throw "Embedded shader header cannot be validated because the shader manifest does not record offline DXIL bytes/SHA-256."
+        }
+        $headerText = Get-Content -Raw -LiteralPath $fullPath
+        if ([string]::IsNullOrWhiteSpace($headerText)) { throw "Embedded shader header is empty." }
+        $arrayMatch = [regex]::Match(
+            $headerText,
+            'kComputeFixtureDxil\s*\[\s*\]\s*=\s*\{(?<body>.*?)\}\s*;',
+            [System.Text.RegularExpressions.RegexOptions]::Singleline
+        )
+        if (-not $arrayMatch.Success) {
+            throw "Embedded shader header does not define the kComputeFixtureDxil byte array."
+        }
+        $byteMatches = [regex]::Matches($arrayMatch.Groups['body'].Value, '0x([0-9a-fA-F]{2})')
+        if ($byteMatches.Count -eq 0) {
+            throw "Embedded shader header does not contain a byte array."
+        }
+        $embedded = [byte[]]::new($byteMatches.Count)
+        for ($i = 0; $i -lt $byteMatches.Count; $i++) {
+            $embedded[$i] = [Convert]::ToByte($byteMatches[$i].Groups[1].Value, 16)
+        }
+        if ($embedded.Length -ne [int]$expectedBytes) {
+            throw "Embedded shader header contains $($embedded.Length) bytes but shaders/manifest.json records $expectedBytes."
+        }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $digest = $sha.ComputeHash($embedded)
+        } finally {
+            $sha.Dispose()
+        }
+        $actualSha = -join ($digest | ForEach-Object { $_.ToString("x2") })
+        if ($actualSha -ne $expectedSha) {
+            throw "Embedded shader header SHA-256 $actualSha does not match shader manifest $expectedSha."
+        }
         return
     }
 

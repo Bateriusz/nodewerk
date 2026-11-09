@@ -848,8 +848,13 @@ def test_observed_readback_parser_never_copies_expected_hash() -> None:
 def test_record_shader_manifest_evidence_uses_validated_build_artifact(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "shaders").mkdir(parents=True)
+    (repo / "benchmarks").mkdir(parents=True)
     shutil.copy(REPO_ROOT / "shaders" / "compute_fixture.hlsl", repo / "shaders" / "compute_fixture.hlsl")
     shutil.copy(REPO_ROOT / "shaders" / "manifest.json", repo / "shaders" / "manifest.json")
+    shutil.copy(
+        REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json",
+        repo / "benchmarks" / "toolchain-manifest.v1.json",
+    )
     reset_manifest = json.loads((repo / "shaders" / "manifest.json").read_text(encoding="utf-8"))
     reset_manifest["verification_status"] = "unverified"
     reset_manifest["shaders"][0]["compiled_offline_with_dxc"] = False

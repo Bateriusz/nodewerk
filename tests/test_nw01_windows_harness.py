@@ -1187,6 +1187,46 @@ def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Pa
     assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
     git_run(repo, "checkout", "--", relative_evidence)
 
+    # A stale generated shader header must not be staged merely because it is
+    # non-empty. Its embedded byte array must match the verified shader manifest.
+    relative_header = "shaders/generated/compute_fixture_dxil.h"
+    header_path = repo / relative_header
+    synthetic_dxil = bytes((index * 7) % 256 for index in range(96))
+    header_path.write_text(
+        "// stale generated header\n"
+        "const unsigned char kComputeFixtureDxil[] = {\n"
+        + ", ".join(f"0x{byte:02x}" for byte in synthetic_dxil)
+        + "\n};\n",
+        encoding="utf-8",
+    )
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert "does not match shader manifest" in (proc.stdout + proc.stderr)
+    assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
+    git_run(repo, "checkout", "--", relative_header)
+
+    # A header that faithfully embeds the recorded DXIL bytes is accepted.
+    relative_shader_manifest = "shaders/manifest.json"
+    shader_manifest_path = repo / relative_shader_manifest
+    shader_manifest = json.loads(shader_manifest_path.read_text(encoding="utf-8"))
+    synthetic_sha = hashlib.sha256(synthetic_dxil).hexdigest()
+    shader_manifest["shaders"][0]["offline_dxil_bytes"] = len(synthetic_dxil)
+    shader_manifest["shaders"][0]["offline_dxil_sha256"] = synthetic_sha
+    shader_manifest_path.write_text(
+        json.dumps(shader_manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    header_path.write_text(
+        f"// Size: {len(synthetic_dxil)} bytes | SHA-256: {synthetic_sha}\n"
+        "const unsigned char kComputeFixtureDxil[] = {\n    "
+        + ", ".join(f"0x{byte:02x}" for byte in synthetic_dxil)
+        + ",\n};\n",
+        encoding="utf-8",
+    )
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    git_run(repo, "reset", "-q", "--", relative_header, relative_shader_manifest)
+    git_run(repo, "checkout", "--", relative_header, relative_shader_manifest)
+
     # A symlink inside the repository must not be able to make the staging
     # guardrail read or stage out-of-repository content.
     relative_reproducibility = "benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json"
@@ -1460,6 +1500,56 @@ def test_archive_uses_artifact_source_revision_and_preserves_prior_evidence(tmp_
     )
     assert proc.returncode != 0
     assert "outside the Git working tree" in (proc.stdout + proc.stderr)
+
+
+@requires_windows_harness
+def test_archive_selects_ledger_by_fixture_and_toolchain_from_mixed_package(
+    tmp_path: Path,
+) -> None:
+    repo = init_git_repo(tmp_path / "mixed ledger archive repo")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    head = commit_all(repo)
+
+    package = tmp_path / "mixed package"
+    build_archive_package(package, source_commit=head, toolchain="msvc-ltcg")
+    ledger_dir = package / "evidence/ledgers"
+    # Real CleanSystem packages copy every toolchain's ledgers. Add clang-cl
+    # ledgers that sort before the msvc-ltcg files and carry different hashes.
+    # Selecting on fixture_id alone would pick these and mark valid current
+    # msvc-ltcg evidence as non-certifying.
+    for stem in ("empty-player", "clear-present", "compute-fixture"):
+        source = ledger_dir / f"{stem}-msvc-ltcg-release.json"
+        clang_ledger = json.loads(source.read_text(encoding="utf-8"))
+        clang_ledger["toolchain_id"] = "clang-cl-lld"
+        for component in clang_ledger.get("distributed_components", []):
+            component["sha256"] = "a" * 64
+        (ledger_dir / f"{stem}-clang-cl-release.json").write_text(
+            json.dumps(clang_ledger) + "\n", encoding="utf-8"
+        )
+
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps({"source_commit": head, "full_baseline_passed": True}),
+        encoding="utf-8",
+    )
+    archive_root = tmp_path / "archive"
+    proc = run_pwsh_script(
+        ROOT / "tools/nw01/archive-artifacts.ps1",
+        "-ArchiveRoot",
+        archive_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        package,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    directory = next(path for path in archive_root.iterdir() if path.is_dir())
+    manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
+    assert manifest["certification_problems"] == []
+    assert manifest["evidence_class"] == "current-certifying"
+    assert manifest["certifying"] is True
 
 
 @requires_windows_harness
@@ -1974,6 +2064,24 @@ def test_evidence_summary_distinguishes_current_and_historical_full_results(tmp_
     assert data["rtx_50_representative_hardware"] == "PENDING"
     assert data["clean_system"] == "PENDING"
     assert "stale" in data["rtx_40_representative_hardware_reason"]
+
+    # The same rule applies to a *successful* summary. Reusing it after the
+    # ledger hashes change at the same HEAD must not leave Full advertised as
+    # VERIFIED while its physical evidence no longer reconciles.
+    stale_success_output = tmp_path / "stale-success-status.json"
+    proc = run_pwsh_script(
+        script,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        verified,
+        "-JsonPath",
+        stale_success_output,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(stale_success_output.read_text(encoding="utf-8-sig"))
+    assert data["full_baseline"] == "INCOMPLETE"
+    assert "reconciliation" in data["full_baseline_reason"]
 
 
 @requires_windows_harness
