@@ -1188,14 +1188,22 @@ def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Pa
     git_run(repo, "checkout", "--", relative_evidence)
 
     # A stale generated shader header must not be staged merely because it is
-    # non-empty. Its embedded byte array must match the verified shader manifest.
+    # non-empty. Exercise the hash-binding guard with the same byte count as the
+    # verified manifest so this test reaches the SHA-256 comparison rather than
+    # being rejected earlier by the independent length check.
     relative_header = "shaders/generated/compute_fixture_dxil.h"
     header_path = repo / relative_header
-    synthetic_dxil = bytes((index * 7) % 256 for index in range(96))
+    relative_shader_manifest = "shaders/manifest.json"
+    shader_manifest_path = repo / relative_shader_manifest
+    stale_manifest = json.loads(shader_manifest_path.read_text(encoding="utf-8"))
+    stale_byte_count = int(stale_manifest["shaders"][0]["offline_dxil_bytes"])
+    stale_expected_sha = stale_manifest["shaders"][0]["offline_dxil_sha256"].lower()
+    stale_dxil = bytes((index * 7 + 1) % 256 for index in range(stale_byte_count))
+    assert hashlib.sha256(stale_dxil).hexdigest() != stale_expected_sha
     header_path.write_text(
         "// stale generated header\n"
         "const unsigned char kComputeFixtureDxil[] = {\n"
-        + ", ".join(f"0x{byte:02x}" for byte in synthetic_dxil)
+        + ", ".join(f"0x{byte:02x}" for byte in stale_dxil)
         + "\n};\n",
         encoding="utf-8",
     )
@@ -1206,8 +1214,7 @@ def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Pa
     git_run(repo, "checkout", "--", relative_header)
 
     # A header that faithfully embeds the recorded DXIL bytes is accepted.
-    relative_shader_manifest = "shaders/manifest.json"
-    shader_manifest_path = repo / relative_shader_manifest
+    synthetic_dxil = bytes((index * 7) % 256 for index in range(96))
     shader_manifest = json.loads(shader_manifest_path.read_text(encoding="utf-8"))
     synthetic_sha = hashlib.sha256(synthetic_dxil).hexdigest()
     shader_manifest["shaders"][0]["offline_dxil_bytes"] = len(synthetic_dxil)
