@@ -241,7 +241,7 @@ Backward-readable migration examples:
 
 `NW-01 -> NW-01A -> NW-01B -> NW-02..NW-12`
 
-NW-01A includes verified live publication of the affected issue bodies. Until every per-issue record is `published_and_verified`, NW-01A is prepared but not complete and NW-01B must not start. Once publication is verified, NW-01A unblocks NW-01B only. Implementation of NW-02 through NW-12 remains blocked until NW-01B also completes. Existing dependencies among NW-02 through NW-12 are preserved.
+NW-01A includes verified live publication of the affected issue bodies. Until every per-issue record is `published_and_verified`, **NW-01A is blocked** and NW-01B must not start. Once publication is verified, NW-01A unblocks NW-01B only. Implementation of NW-02 through NW-12 remains blocked until NW-01B also completes. Existing dependencies among NW-02 through NW-12 are preserved.
 
 ### 12. Downstream dispositions
 

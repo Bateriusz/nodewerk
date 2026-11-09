@@ -411,6 +411,7 @@ def test_publish_dry_run_and_apply_verify_live_offsets(tmp_path: Path) -> None:
     assert fake.edits == [task["issue_number"] for task in audit["tasks"]]
     published = json.loads(record_path.read_text(encoding="utf-8"))
     assert published["github_publication_status"] == "published"
+    assert published["task_status"] == "complete"
     for issue in published["issues"]:
         assert issue["completion_status"] == "published_and_verified"
         assert issue["published_section_offsets_verified"] is True
@@ -441,6 +442,7 @@ def test_publish_accepts_crlf_and_aborts_on_concurrent_edit(tmp_path: Path) -> N
     assert fake.edits == []
     blocked = json.loads(record_path.read_text(encoding="utf-8"))
     assert blocked["github_publication_status"] == "blocked_concurrent_edit"
+    assert blocked["task_status"] == "blocked"
     assert all(
         issue["completion_status"] == "prepared_verified_publication_pending"
         for issue in blocked["issues"]
@@ -466,9 +468,17 @@ def test_incomplete_publication_cannot_claim_completion() -> None:
         (BACKLOG / "nw01a-publication-record.v1.json").read_text(encoding="utf-8")
     )
     # The checked-in record is intentionally pending in the offline sandbox.
+    assert record["task_status"] == "blocked"
+    assert record["github_publication_status"] == "blocked_live_read"
+    assert record["publication_attempt"]["failure_class"] == "blocked_live_read"
+    assert record["publication_attempt"]["exit_code"] == 2
     tool.verify_publication_claims(record)
     broken = copy.deepcopy(record)
     broken["github_publication_status"] = "published"
+    with pytest.raises(tool.VerificationError):
+        tool.verify_publication_claims(broken)
+    broken = copy.deepcopy(record)
+    broken["task_status"] = "complete"
     with pytest.raises(tool.VerificationError):
         tool.verify_publication_claims(broken)
 

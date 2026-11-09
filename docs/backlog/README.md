@@ -63,14 +63,17 @@ NW-01A's own source identity is recorded as:
 
 ## Publication status
 
-The bundle is prepared and locally verified, but it is **not published**. The implementation
-sandbox has no DNS/network access to GitHub and the configured `gh` token is invalid, so live
-`gh issue edit` publication and readback could not be executed here. Every per-issue record is
+The bundle is prepared and locally verified, but it is **not published**. **NW-01A is blocked**
+because live publication and readback have not occurred. The implementation sandbox has no
+DNS/network access to GitHub and the configured `gh` token is invalid, so live `gh issue edit`
+publication and readback could not be executed here. Every per-issue record is
 `prepared_verified_publication_pending` / `pending_live_publication`; none claims that GitHub
 already contains the updated body.
 
-NW-01A completion is contingent on live publication. Run the following in an environment with
-GitHub API access and a valid token:
+NW-01A completion is contingent on live publication. The recorded attempt is
+`blocked_live_read` with exit code 2 at issue #3; the exact tool output is retained in
+[`nw01a-publication-record.v1.json`](nw01a-publication-record.v1.json). Run the following in an
+environment with GitHub API access and a valid token:
 
 ```bash
 python tools/nw01a_backlog.py publish --apply

@@ -589,20 +589,39 @@ def verify_publication_claims(record: dict) -> None:
             raise VerificationError(
                 "publication record has all issues verified but is not marked published"
             )
+        if record.get("task_status") != "complete":
+            raise VerificationError(
+                "publication record has all issues verified but task_status is not complete"
+            )
         return
     if record.get("github_publication_status") == "published":
         raise VerificationError(
             "publication record claims published while an issue is not published_and_verified"
         )
-    readme = (BACKLOG / "README.md").read_text(encoding="utf-8").lower()
-    if "not published" not in readme or "contingent on live publication" not in readme:
+    publication_status = record.get("github_publication_status", "")
+    if not publication_status.startswith("blocked_") and publication_status != "partial":
         raise VerificationError(
-            "backlog README must state that the prepared bundle is not published"
+            "unpublished publication record must carry a blocked_* or partial status"
+        )
+    if record.get("task_status") != "blocked":
+        raise VerificationError(
+            "NW-01A must be marked blocked while live publication is incomplete"
+        )
+    if not record.get("task_status_reason"):
+        raise VerificationError("blocked NW-01A record is missing task_status_reason")
+    readme = (BACKLOG / "README.md").read_text(encoding="utf-8").lower()
+    if (
+        "nw-01a is blocked" not in readme
+        or "not published" not in readme
+        or "contingent on live publication" not in readme
+    ):
+        raise VerificationError(
+            "backlog README must state that NW-01A is blocked and not published"
         )
     handoff = (REPO_ROOT / "docs" / "nw01b-handoff.md").read_text(encoding="utf-8")
-    if "NW-01B must not start" not in handoff:
+    if "NW-01A is blocked" not in handoff or "NW-01B must not start" not in handoff:
         raise VerificationError(
-            "handoff must not unblock NW-01B before live publication is verified"
+            "handoff must mark NW-01A blocked and not unblock NW-01B before publication"
         )
 
 
@@ -846,6 +865,11 @@ def publish(
 
     def fail(status: str, message: str, code: int) -> int:
         if apply:
+            record["task_status"] = "blocked"
+            record["task_status_reason"] = (
+                f"Live publication is blocked at {status}; NW-01A is not complete "
+                "and NW-01B must not start."
+            )
             record["github_publication_status"] = status
             record["github_publication_error"] = message
             persist_record()
@@ -972,9 +996,16 @@ def publish(
         statuses = {
             rec.get("completion_status") for rec in record["issues"]
         }
-        record["github_publication_status"] = (
-            "published" if statuses == {"published_and_verified"} else "partial"
-        )
+        if statuses == {"published_and_verified"}:
+            record["task_status"] = "complete"
+            record.pop("task_status_reason", None)
+            record["github_publication_status"] = "published"
+            record.pop("github_publication_blocker", None)
+            record.pop("github_publication_error", None)
+            record.pop("publication_attempt", None)
+        else:
+            record["task_status"] = "blocked"
+            record["github_publication_status"] = "partial"
         persist_record()
     return 0
 

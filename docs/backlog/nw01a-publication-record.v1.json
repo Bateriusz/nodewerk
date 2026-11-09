@@ -1,6 +1,8 @@
 {
   "schema": "nw01a-publication-record.v1",
   "task": "NW-01A",
+  "task_status": "blocked",
+  "task_status_reason": "Live publication and readback of the eleven affected issue bodies could not be executed. NW-01A is blocked, not complete; NW-01B must not start until `python tools/nw01a_backlog.py publish --apply` succeeds and every per-issue record becomes `published_and_verified`.",
   "source_identity": {
     "task": "NW-01A",
     "refined_issue": 18,
@@ -14,9 +16,17 @@
   "publication_channel": "repository_backlog_bundle",
   "verification_scope": "local_bundle_only: hashes, audit text, profile/source contracts, and section offsets were verified locally; live GitHub publication and readback were not executed in the offline sandbox.",
   "github_publication_attempted": true,
-  "github_publication_status": "blocked_offline_sandbox",
-  "github_publication_blocker": "Live publication and readback require GitHub API access. The sandbox has no DNS/network access and the configured gh token is invalid; run `python tools/nw01a_backlog.py publish --apply` in a networked environment before declaring NW-01A complete.",
-  "github_publication_error": "Published-attempt result: `python tools/nw01a_backlog.py publish --apply` aborted at issue #3 with exit code 2: `gh command failed: error connecting to api.github.com / check your internet connection or https://githubstatus.com`. DNS resolution failed, direct TCP to the GitHub API address was blocked, and gh reported that the configured token is invalid.",
+  "github_publication_status": "blocked_live_read",
+  "github_publication_blocker": "Live publication and readback require GitHub API access. The sandbox has no DNS/network access and the configured gh token is invalid. Run `python tools/nw01a_backlog.py publish --apply` in a networked environment; NW-01A remains blocked until that succeeds.",
+  "github_publication_error": "NW-02 #3: live read failed: gh command failed: error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com",
+  "publication_attempt": {
+    "command": "python tools/nw01a_backlog.py publish --apply",
+    "exit_code": 2,
+    "failed_at_task": "NW-02",
+    "failed_at_issue": 3,
+    "failure_class": "blocked_live_read",
+    "failure_summary": "The live `gh issue view` preflight failed before any issue was edited. This is the tool's recorded result, not a separate manual interpretation."
+  },
   "issues": [
     {
       "task": "NW-02",

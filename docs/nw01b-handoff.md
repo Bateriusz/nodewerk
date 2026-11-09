@@ -20,9 +20,9 @@ the NW-01B evidence schema, capture tool, or GPU evidence verifier.
 `NW-01 -> NW-01A -> NW-01B -> NW-02..NW-12`
 
 - NW-01A completion includes live publication and readback of the affected issue bodies.
-  Until every per-issue record in
+  **NW-01A is blocked** on that external step. Until every per-issue record in
   [`docs/backlog/nw01a-publication-record.v1.json`](backlog/nw01a-publication-record.v1.json)
-  is `published_and_verified`, NW-01A is prepared but incomplete and **NW-01B must not start**.
+  is `published_and_verified`, NW-01A is not complete and **NW-01B must not start**.
 - Once live publication is verified, NW-01A completion unblocks **NW-01B only**.
 - NW-02 through NW-12 implementation remains blocked until **both** NW-01A and NW-01B complete.
 - Existing dependencies among NW-02 through NW-12 are preserved.

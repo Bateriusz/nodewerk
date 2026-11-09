@@ -37,7 +37,7 @@ The nine required sections are Final technical design, Scope, Required behavior,
 
 The canonical issue bodies are the `.body.md` files; they carry body-relative `pairallel-sections:v1` offsets. The `.md` wrappers begin with a `# title` line and deliberately omit the machine manifest so body-relative offsets cannot be misread as document-relative offsets.
 
-Publication status is tracked in [`docs/backlog/nw01a-publication-record.v1.json`](../backlog/nw01a-publication-record.v1.json). This audit is prepared and locally verified; it is not complete until every intended live issue update has been published and read back with section offsets recomputed.
+Publication status is tracked in [`docs/backlog/nw01a-publication-record.v1.json`](../backlog/nw01a-publication-record.v1.json). **NW-01A is blocked** because live publication has not occurred. This audit is prepared and locally verified, but it is not complete until every intended live issue update has been published and read back with section offsets recomputed.
 
 ## NW-02 — issue #3
 
