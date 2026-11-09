@@ -16,8 +16,9 @@ try {
     if ($archive.StartsWith($repo + '\', [System.StringComparison]::OrdinalIgnoreCase) -or $archive -eq $repo) {
         throw "ArchiveRoot must be outside the Git working tree."
     }
-    $sha = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-fA-F]{40}$') { throw "Unable to resolve repository HEAD." }
+    $sha = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $sha = ([string]$sha).Trim()
+    if ($sha -notmatch '^[0-9a-fA-F]{40}$') { throw "Unable to resolve repository HEAD." }
     $stamp = [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss")
     $dest = Join-Path $archive ("{0}-{1}" -f $sha.Substring(0,12), $stamp)
     New-Item -ItemType Directory -Force -Path $dest | Out-Null

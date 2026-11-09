@@ -10,8 +10,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 try {
-    $sourceCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    $sourceCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $sourceCommit = ([string]$sourceCommit).Trim()
+    if ($sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
         throw "Unable to resolve repository HEAD."
     }
 

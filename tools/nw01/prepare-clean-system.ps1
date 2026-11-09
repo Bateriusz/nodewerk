@@ -15,8 +15,9 @@ if (-not $IsWindows) {
 }
 
 try {
-    $sha = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-fA-F]{40}$') { throw "Unable to resolve repository HEAD for package provenance." }
+    $sha = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $sha = ([string]$sha).Trim()
+    if ($sha -notmatch '^[0-9a-fA-F]{40}$') { throw "Unable to resolve repository HEAD for package provenance." }
     if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
         $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path (Split-Path -Parent $RepoRoot) "nodewerk-evidence" }
         New-Item -ItemType Directory -Force -Path $base | Out-Null

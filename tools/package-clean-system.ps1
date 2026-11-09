@@ -105,7 +105,8 @@ foreach ($name in $requiredExecutables) {
 
 $sourceCommit = $env:GITHUB_SHA
 if ([string]::IsNullOrWhiteSpace($sourceCommit)) {
-    $sourceCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
+    $sourceCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $sourceCommit = ([string]$sourceCommit).Trim()
 }
 if ($sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
     Write-Error "Could not resolve a valid source commit for CleanSystem package provenance."

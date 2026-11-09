@@ -215,7 +215,8 @@ try {
     if ([string]::IsNullOrWhiteSpace($ProvenancePath)) {
         $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path (Split-Path -Parent $RepoRoot) "nodewerk-evidence" }
         New-Item -ItemType Directory -Force -Path $base | Out-Null
-        $sha = (& git -C $RepoRoot rev-parse --short=12 HEAD 2>$null | Select-Object -First 1).Trim()
+        $shortSha = (& $git.Source -C $RepoRoot rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
+        $sha = ([string]$shortSha).Trim()
         if ([string]::IsNullOrWhiteSpace($sha)) { $sha = "unknown" }
         $stamp = [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss")
         $ProvenancePath = Join-Path $base "nw01-bootstrap-$sha-$stamp.json"

@@ -28,8 +28,9 @@ function Test-AllowedEvidencePath([string]$Path) {
 }
 
 try {
-    $root = (& git -C $RepoRoot rev-parse --show-toplevel 2>$null | Select-Object -First 1).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($root)) { throw "RepoRoot is not a Git working tree." }
+    $root = (& git -C $RepoRoot rev-parse --show-toplevel 2>$null | Select-Object -First 1)
+    $root = ([string]$root).Trim()
+    if ([string]::IsNullOrWhiteSpace($root)) { throw "RepoRoot is not a Git working tree." }
 
     $preStaged = @(& git -C $root diff --cached --name-only)
     $unexpectedStaged = @($preStaged | Where-Object { -not (Test-AllowedEvidencePath $_) })
