@@ -116,9 +116,15 @@ pwsh ./tools/nw01/capture-hardware.ps1 `
 Use `rtx_50_series_desktop` and the corresponding architecture/settings on the representative
 RTX 50-series host.
 
-The script invokes the existing `verify_nw01.py --mode Full --record-benchmark ...` path. Adapter
-identity and artifact provenance therefore remain governed by the verifier rather than by this
-wrapper.
+Run `run-full.ps1` successfully before hardware capture. By default the capture helper reads
+`selected_toolchain` from the repository toolchain manifest and binds measurement to that
+toolchain's freshly built release directory (`msvc-ltcg` -> `build\msvc-release-ltcg-clean-a`,
+`clang-cl-lld` -> `build\repro-clean-a`). An explicit `-BinaryDir` override is available for
+diagnostic use, but the directory must contain the release fixtures.
+
+The script invokes the existing `verify_nw01.py --mode Full --record-benchmark ... --binary-dir ...`
+path. Adapter identity and artifact provenance therefore remain governed by the verifier rather
+than by this wrapper.
 
 ## 5. Prepare a CleanSystem transfer package
 
