@@ -162,6 +162,9 @@ def test_documented_clean_system_role_never_bootstraps_full_toolchain() -> None:
     assert "Get-Variable -Name IsWindows" in clean
     assert '$env:OS -eq "Windows_NT"' in clean
     assert "Do not require PowerShell 7 on CleanSystem hosts" in clean
+    assert '[string]$RepoRoot = ""' in clean
+    assert "$MyInvocation.MyCommand.Path" in clean
+    assert "Resolve the repository root after entering the script body" in clean
 
     for path in (
         "tools/nw01/bootstrap-windows.ps1",
