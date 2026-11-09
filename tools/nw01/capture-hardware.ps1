@@ -23,6 +23,7 @@ param(
     [string]$OsFileCacheState,
 
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
+    [string]$BinaryDir = "",
     [string]$SummaryPath = "",
     [string]$WindowsPowerPlan = ""
 )
@@ -73,6 +74,30 @@ try {
     }
     $WindowsPowerPlan = Get-RequiredText "Windows power plan" $WindowsPowerPlan
 
+    if ([string]::IsNullOrWhiteSpace($BinaryDir)) {
+        $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
+        switch ([string]$contract.SelectedToolchain) {
+            "msvc-ltcg" {
+                $BinaryDir = Join-Path $RepoRoot "build\msvc-release-ltcg-clean-a"
+            }
+            "clang-cl-lld" {
+                $BinaryDir = Join-Path $RepoRoot "build\repro-clean-a"
+            }
+            default {
+                throw "Unsupported selected toolchain '$($contract.SelectedToolchain)' for physical capture."
+            }
+        }
+    }
+    $BinaryDir = [System.IO.Path]::GetFullPath($BinaryDir)
+    $requiredFixtures = @(
+        (Join-Path $BinaryDir "deploy\nw_clear_present_fixture.exe"),
+        (Join-Path $BinaryDir "deploy\nw_compute_shader_fixture.exe")
+    )
+    $missingFixtures = @($requiredFixtures | Where-Object { -not (Test-Path $_ -PathType Leaf) })
+    if ($missingFixtures.Count -gt 0) {
+        throw "Selected-toolchain release fixtures are missing from '$BinaryDir'. Run tools/nw01/run-full.ps1 successfully before capture-hardware.ps1. Missing: $($missingFixtures -join ', ')"
+    }
+
     if ([string]::IsNullOrWhiteSpace($SummaryPath)) {
         $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path (Split-Path -Parent $RepoRoot) "nodewerk-evidence" }
         New-Item -ItemType Directory -Force -Path $base | Out-Null
@@ -81,6 +106,7 @@ try {
     }
 
     Write-Host "[NW-HARDWARE] measured OS=$osBuild CPU=$cpuModel GPU=$gpuModel driver=$nvidiaDriver WDDM=$wddmDriver refresh=$($refreshHz)Hz plan=$WindowsPowerPlan"
+    Write-Host "[NW-HARDWARE] selected release fixtures: $BinaryDir"
 
     $python = Get-Command python -ErrorAction SilentlyContinue
     if (-not $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
@@ -89,6 +115,7 @@ try {
         (Join-Path $RepoRoot "tools\verify_nw01.py"),
         "--mode", "Full",
         "--record-benchmark", $Tier,
+        "--binary-dir", $BinaryDir,
         "--os-build", $osBuild,
         "--gpu-model", $gpuModel,
         "--nvidia-driver-version", $nvidiaDriver,
