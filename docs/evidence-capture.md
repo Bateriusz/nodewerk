@@ -158,11 +158,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\nw01\run-clean-s
 PowerShell 7 (`pwsh`) may also be used when it is already present, but it is not a CleanSystem
 prerequisite and should not be installed solely for this validation.
 
-The wrapper performs no provisioning or build-environment activation. It rejects obvious active
-SDK/DXC contamination, measures the exact Windows build plus executing NVIDIA GPU/driver, and then
-invokes the existing `verify_nw01.py --mode CleanSystem` path. The verifier remains authoritative
-for SDK/DXC/debug-layer/redistributable absence and deployment closure. The package is transport
-evidence, not authority to weaken those checks.
+The wrapper performs no provisioning or build-environment activation. It first requires the
+package `artifact-manifest.json` source commit to match the verifier checkout HEAD exactly, so a
+package prepared from an earlier source revision cannot certify a later checkout. It then rejects
+obvious active SDK/DXC contamination, measures the exact Windows build plus executing NVIDIA
+GPU/driver, and invokes the existing `verify_nw01.py --mode CleanSystem` path. The verifier remains
+authoritative for SDK/DXC/debug-layer/redistributable absence and deployment closure. The package
+is transport evidence, not authority to weaken those checks.
 
 ## 7. Render a concise evidence summary
 
