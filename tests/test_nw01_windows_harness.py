@@ -13,7 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 IS_WINDOWS = os.name == "nt"
 PWSH_EXECUTABLE = shutil.which("pwsh")
 HAS_PWSH = PWSH_EXECUTABLE is not None
-requires_pwsh = pytest.mark.skipif(not HAS_PWSH, reason="PowerShell 7 (pwsh) is required")
+requires_windows_harness = pytest.mark.skipif(
+    not (HAS_PWSH and IS_WINDOWS),
+    reason="PowerShell harness behaviour tests run in Windows integration",
+)
 
 
 def read(path: str) -> str:
@@ -333,20 +336,22 @@ def commit_all(repo: Path, message: str = "baseline") -> str:
     return git_run(repo, "rev-parse", "HEAD").stdout.strip()
 
 
-def write_posix_tool(path: Path, output: str) -> None:
+def write_fake_tool(path: Path, output: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\nprintf '%s\\n' " + ps_quote(output) + "\n", encoding="utf-8")
-    path.chmod(0o755)
+    if IS_WINDOWS:
+        path.write_text("@echo off\r\n" + "echo " + output + "\r\n", encoding="ascii")
+    else:
+        path.write_text("#!/bin/sh\nprintf '%s\\n' " + ps_quote(output) + "\n", encoding="utf-8")
+        path.chmod(0o755)
 
 
-@requires_pwsh
-@pytest.mark.skipif(IS_WINDOWS, reason="uses POSIX executable stubs")
+@requires_windows_harness
 def test_dxc_exact_version_rejects_longer_substrings(tmp_path: Path) -> None:
     module = ROOT / "tools/nw01/Nw01.Windows.psm1"
-    executable = tmp_path / "dxc"
+    executable = tmp_path / ("dxc.cmd" if IS_WINDOWS else "dxc")
 
     def exact(output: str, expected: str) -> int:
-        write_posix_tool(executable, output)
+        write_fake_tool(executable, output)
         command = (
             f"Import-Module {ps_quote(module)} -Force; "
             f"if (Test-NwExactVersion -Tool dxc -Executable {ps_quote(executable)} -Expected {ps_quote(expected)}) "
@@ -359,77 +364,35 @@ def test_dxc_exact_version_rejects_longer_substrings(tmp_path: Path) -> None:
     assert exact("dxcompiler.dll: 11.8.2407 (deadbeef)", "1.8.2407") == 1
 
 
-@requires_pwsh
-@pytest.mark.skipif(IS_WINDOWS, reason="uses POSIX executable stubs")
-def test_exact_standalone_selection_reuses_preinstalled_tools_and_rejects_wrong_versions(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    (repo / "benchmarks").mkdir(parents=True)
-    (repo / "tools/nw01").mkdir(parents=True)
-    shutil.copy(ROOT / "benchmarks/toolchain-manifest.v1.json", repo / "benchmarks/toolchain-manifest.v1.json")
-    shutil.copy(ROOT / "tools/nw01/toolchain-sources.json", repo / "tools/nw01/toolchain-sources.json")
-
-    tools = tmp_path / "tools"
-    cmake = tools / "CMake-3.30.2" / "cmake-3.30.2-windows-x86_64" / "bin" / "cmake.exe"
-    ninja = tools / "Ninja-1.12.1" / "ninja.exe"
-    clang = tools / "LLVM-18.1.8" / "bin" / "clang-cl.exe"
-    lld = tools / "LLVM-18.1.8" / "bin" / "lld-link.exe"
-    dxc = tools / "dxc-1.8.2407" / "bin" / "x64" / "dxc.exe"
-    write_posix_tool(cmake, "cmake version 3.30.2")
-    write_posix_tool(ninja, "1.12.1")
-    write_posix_tool(clang, "clang version 18.1.8")
-    write_posix_tool(lld, "LLD 18.1.8")
-    write_posix_tool(dxc, "dxcompiler.dll: 1.8.2407 (deadbeef); dxil.dll: 1.8.2407")
-
+@requires_windows_harness
+def test_exact_tool_detection_reuses_preinstalled_and_rejects_wrong_versions(tmp_path: Path) -> None:
     module = ROOT / "tools/nw01/Nw01.Windows.psm1"
-    select_command = (
-        f"Import-Module {ps_quote(module)} -Force; "
-        f"$selection = Get-NwExactStandaloneToolSelection -RepoRoot {ps_quote(repo)}; "
-        "[ordered]@{ CMake = $selection.CMakeExecutable; Ninja = $selection.NinjaExecutable; "
-        "Clang = $selection.ClangExecutable; Lld = $selection.LldExecutable; Dxc = $selection.DxcExecutable } | "
-        "ConvertTo-Json -Compress"
-    )
-    proc = run_pwsh_command(select_command, extra_env={"NW_TOOLS_ROOT": str(tools)})
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    selected = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert Path(selected["CMake"]) == cmake
-    assert Path(selected["Ninja"]) == ninja
-    assert Path(selected["Clang"]) == clang
-    assert Path(selected["Lld"]) == lld
-    assert Path(selected["Dxc"]) == dxc
-
-    # Wrong/missing pinned version must fail deterministically instead of
-    # silently reusing an unverified installation.
-    manifest_path = repo / "benchmarks/toolchain-manifest.v1.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["pinned_dependencies"]["ninja_version"] = "9.9.9"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    proc = run_pwsh_command(select_command, extra_env={"NW_TOOLS_ROOT": str(tools)})
-    assert proc.returncode != 0
-    assert "Exact pinned standalone tool 'Ninja'" in (proc.stdout + proc.stderr)
-
-
-@requires_pwsh
-@pytest.mark.skipif(IS_WINDOWS, reason="uses POSIX executable stubs")
-def test_doctor_reports_expected_versus_detected_mismatch(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    (repo / "benchmarks").mkdir(parents=True)
-    (repo / "tools/nw01").mkdir(parents=True)
-    shutil.copy(ROOT / "benchmarks/toolchain-manifest.v1.json", repo / "benchmarks/toolchain-manifest.v1.json")
-    shutil.copy(ROOT / "tools/nw01/toolchain-sources.json", repo / "tools/nw01/toolchain-sources.json")
-
-    tools = tmp_path / "tools"
-    cmake = tools / "CMake-3.30.2" / "cmake-3.30.2-windows-x86_64" / "bin" / "cmake.exe"
-    write_posix_tool(cmake, "cmake version 3.29.0")
-
-    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    executable = tmp_path / ("cmake.cmd" if IS_WINDOWS else "cmake")
+    write_fake_tool(executable, "cmake version 3.30.2")
     command = (
         f"Import-Module {ps_quote(module)} -Force; "
-        f"$row = @(Get-NwDoctorResults -RepoRoot {ps_quote(repo)}) | Where-Object {{ $_.Name -eq 'CMake' }}; "
-        "[ordered]@{ Expected = $row.Expected; Detected = $row.Detected; Pass = $row.Pass } | ConvertTo-Json -Compress"
+        f"$exact = Find-NwExactCommand -Name 'nw-fake-cmake' -Tool cmake -Expected '3.30.2' -AdditionalCandidates @({ps_quote(executable)}); "
+        f"$wrong = Find-NwExactCommand -Name 'nw-fake-cmake' -Tool cmake -Expected '9.9.9' -AdditionalCandidates @({ps_quote(executable)}); "
+        "[ordered]@{ Exact = [string]$exact; Missing = [string]::IsNullOrWhiteSpace([string]$wrong) } | ConvertTo-Json -Compress"
     )
-    empty_bin = tmp_path / "empty-bin"
-    empty_bin.mkdir()
-    proc = run_pwsh_command(command, extra_env={"NW_TOOLS_ROOT": str(tools), "PATH": str(empty_bin)})
+    proc = run_pwsh_command(command)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert Path(result["Exact"]) == executable
+    assert result["Missing"] is True
+
+
+@requires_windows_harness
+def test_doctor_reports_expected_versus_detected_mismatch(tmp_path: Path) -> None:
+    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    executable = tmp_path / ("cmake.cmd" if IS_WINDOWS else "cmake")
+    write_fake_tool(executable, "cmake version 3.29.0")
+    command = (
+        f"Import-Module {ps_quote(module)} -Force; "
+        f"$row = Resolve-NwToolCandidate -Name 'nw-fake-cmake' -Tool cmake -Expected '3.30.2' -AdditionalCandidates @({ps_quote(executable)}); "
+        "[ordered]@{ Expected = '3.30.2'; Detected = $row.Detected; Pass = [bool]$row.Exact } | ConvertTo-Json -Compress"
+    )
+    proc = run_pwsh_command(command)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     row = json.loads(proc.stdout.strip().splitlines()[-1])
     assert row["Expected"] == "3.30.2"
@@ -437,7 +400,7 @@ def test_doctor_reports_expected_versus_detected_mismatch(tmp_path: Path) -> Non
     assert row["Pass"] is False
 
 
-@requires_pwsh
+@requires_windows_harness
 def test_visual_studio_selection_derives_versions_and_components_from_manifest(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "benchmarks").mkdir(parents=True)
@@ -472,7 +435,7 @@ def test_visual_studio_selection_derives_versions_and_components_from_manifest(t
     assert "does not match pinned MSVC toolset" in (proc.stdout + proc.stderr)
 
 
-@requires_pwsh
+@requires_windows_harness
 def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> None:
     module = ps_quote(ROOT / "tools/nw01/Nw01.Windows.psm1")
     retry = "[pscustomobject]@{ max_attempts = 4; initial_delay_seconds = 0; backoff_multiplier = 2 }"
@@ -483,13 +446,13 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
         Import-Module {module} -Force
         $global:attempts = 0
         $global:fallbacks = 0
-        function global:Invoke-WebRequest {{
-            param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
+        $downloader = {{
+            param([string]$TargetUri, [string]$TargetOutFile)
             $global:attempts++
             if ($global:attempts -le 2) {{ throw [System.Exception]::new('temporarily unavailable') }}
-            Set-Content -Path $OutFile -Value 'ok'
+            Set-Content -Path $TargetOutFile -Value 'ok'
         }}
-        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/a' -OutFile {output} -RetryPolicy {retry} -FallbackProbe {{ $global:fallbacks++; 'unused' }}
+        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/a' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe {{ $global:fallbacks++; 'unused' }}
         if ($result.Downloaded -ne $true -or $result.FallbackUsed -ne $false) {{ throw 'unexpected result' }}
         if ($global:attempts -ne 3) {{ throw "attempts=$($global:attempts)" }}
         if ($global:fallbacks -ne 0) {{ throw "fallbacks=$($global:fallbacks)" }}
@@ -504,8 +467,8 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
     fallback_script = textwrap.dedent(
         f"""
         Import-Module {module} -Force
-        function global:Invoke-WebRequest {{ throw [System.Exception]::new('temporarily unavailable') }}
-        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/b' -OutFile {output} -RetryPolicy {retry} -FallbackProbe {{ 'exact-fallback' }}
+        $downloader = {{ param([string]$TargetUri, [string]$TargetOutFile) throw [System.Exception]::new('temporarily unavailable') }}
+        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/b' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe {{ 'exact-fallback' }}
         if ($result.FallbackUsed -ne $true -or $result.FallbackValue -ne 'exact-fallback') {{ throw 'fallback was not used' }}
         Write-Output 'fallback-ok'
         """
@@ -517,10 +480,10 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
     no_fallback_script = textwrap.dedent(
         f"""
         Import-Module {module} -Force
-        function global:Invoke-WebRequest {{ throw [System.Exception]::new('temporarily unavailable') }}
+        $downloader = {{ param([string]$TargetUri, [string]$TargetOutFile) throw [System.Exception]::new('temporarily unavailable') }}
         $threw = $false
         try {{
-            Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/c' -OutFile {output} -RetryPolicy {retry} -FallbackProbe {{ $null }} | Out-Null
+            Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/c' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe {{ $null }} | Out-Null
         }} catch {{ $threw = $true }}
         if (-not $threw) {{ throw 'expected failure without exact fallback' }}
         Write-Output 'no-fallback-ok'
@@ -535,10 +498,10 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
         Import-Module {module} -Force
         $global:attempts = 0
         $global:fallbacks = 0
-        function global:Invoke-WebRequest {{ $global:attempts++; throw [System.Exception]::new('Forbidden') }}
+        $downloader = {{ param([string]$TargetUri, [string]$TargetOutFile) $global:attempts++; throw [System.Exception]::new('Forbidden') }}
         $threw = $false
         try {{
-            Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/d' -OutFile {output} -RetryPolicy {retry} -FallbackProbe {{ $global:fallbacks++; 'should-not-run' }} | Out-Null
+            Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/d' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe {{ $global:fallbacks++; 'should-not-run' }} | Out-Null
         }} catch {{ $threw = $true }}
         if (-not $threw -or $global:attempts -ne 1 -or $global:fallbacks -ne 0) {{ throw "attempts=$($global:attempts) fallbacks=$($global:fallbacks)" }}
         Write-Output 'non-transient-ok'
@@ -566,7 +529,7 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
     assert "content-validation-ok" in proc.stdout
 
 
-@requires_pwsh
+@requires_windows_harness
 def test_run_full_always_writes_fresh_failure_summary(tmp_path: Path) -> None:
     summary = tmp_path / "nw01-full-mode.json"
     summary.write_text(
@@ -591,7 +554,7 @@ def test_run_full_always_writes_fresh_failure_summary(tmp_path: Path) -> None:
     assert data["wrapper_error"]["stage"] == "wrapper"
 
 
-@requires_pwsh
+@requires_windows_harness
 @pytest.mark.skipif(not IS_WINDOWS, reason="Full wrapper is Windows-only")
 def test_run_full_preserves_all_verifier_exit_codes_and_exports_fresh_summary(tmp_path: Path) -> None:
     harness = tmp_path / "harness"
@@ -682,7 +645,7 @@ def test_run_full_preserves_all_verifier_exit_codes_and_exports_fresh_summary(tm
     assert crash["wrapper_error"]["stage"] == "wrapper"
 
 
-@requires_pwsh
+@requires_windows_harness
 def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Path) -> None:
     repo = init_git_repo(tmp_path / "repo with spaces")
     (repo / "benchmarks/hardware").mkdir(parents=True)
@@ -741,7 +704,7 @@ def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Pa
     )
 
 
-@requires_pwsh
+@requires_windows_harness
 def test_clean_system_package_records_checkout_provenance_and_rejects_stale_inputs(tmp_path: Path) -> None:
     repo = init_git_repo(tmp_path / "package repo")
     for subdir in ("benchmarks", "shaders"):
@@ -839,7 +802,7 @@ def test_clean_system_package_records_checkout_provenance_and_rejects_stale_inpu
     assert "Full summary source_commit" in (proc.stdout + proc.stderr)
 
 
-@requires_pwsh
+@requires_windows_harness
 def test_archive_uses_artifact_source_revision_and_preserves_prior_evidence(tmp_path: Path) -> None:
     repo = init_git_repo(tmp_path / "archive repo")
     (repo / "README.md").write_text("base\n", encoding="utf-8")
@@ -908,7 +871,7 @@ def test_archive_uses_artifact_source_revision_and_preserves_prior_evidence(tmp_
     assert "outside the Git working tree" in (proc.stdout + proc.stderr)
 
 
-@requires_pwsh
+@requires_windows_harness
 def test_evidence_summary_distinguishes_current_and_historical_full_results(tmp_path: Path) -> None:
     repo = init_git_repo(tmp_path / "summary repo")
     (repo / "benchmarks").mkdir()
@@ -996,16 +959,15 @@ def test_evidence_summary_distinguishes_current_and_historical_full_results(tmp_
     assert data["concrete_checks"] == "PASS"
 
 
-@requires_pwsh
-@pytest.mark.skipif(IS_WINDOWS, reason="Non-Windows target must refuse before provisioning")
-def test_clean_system_runner_is_target_only_and_never_bootstraps(tmp_path: Path) -> None:
+@requires_windows_harness
+def test_clean_system_runner_is_target_only_and_fails_without_package(tmp_path: Path) -> None:
     proc = run_pwsh_script(
         ROOT / "tools/nw01/run-clean-system.ps1",
         "-PackageRoot",
         tmp_path / "package",
     )
     assert proc.returncode == 1
-    assert "requires Windows" in (proc.stdout + proc.stderr)
+    assert "deploy directory is missing" in (proc.stdout + proc.stderr).lower()
 
 
 def test_capture_benchmark_rejects_adapter_conflicts_and_missing_metadata(

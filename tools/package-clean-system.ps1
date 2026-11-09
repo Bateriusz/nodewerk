@@ -152,10 +152,10 @@ $manifest | ConvertTo-Json -Depth 4 |
 Copy-Item -Force $toolchainManifestPath (Join-Path $evidenceRoot "toolchain-manifest.v1.json")
 Copy-Item -Force (Join-Path $RepoRoot "shaders/manifest.json") `
     (Join-Path $evidenceRoot "shaders-manifest.json")
-Copy-Item -Force (Join-Path $RepoRoot "benchmarks/ledgers/*.json") `
-    (Join-Path $evidenceRoot "ledgers")
-Copy-Item -Force (Join-Path $RepoRoot "benchmarks/reproducibility/*.json") `
-    (Join-Path $evidenceRoot "reproducibility")
+Get-ChildItem -Path (Join-Path $RepoRoot "benchmarks/ledgers") -Filter "*.json" -File |
+    Copy-Item -Force -Destination (Join-Path $evidenceRoot "ledgers")
+Get-ChildItem -Path (Join-Path $RepoRoot "benchmarks/reproducibility") -Filter "*.json" -File |
+    Copy-Item -Force -Destination (Join-Path $evidenceRoot "reproducibility")
 Copy-Item -Force $FullSummary (Join-Path $evidenceRoot "build-checks.json")
 
 Write-Host "Packaged verified $toolchain deployment at $OutputRoot"

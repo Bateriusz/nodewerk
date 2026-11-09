@@ -326,10 +326,11 @@ function Invoke-NwDownloadWithFallback {
         [Parameter(Mandatory)][string]$Uri,
         [Parameter(Mandatory)][string]$OutFile,
         [Parameter(Mandatory)]$RetryPolicy,
-        [scriptblock]$FallbackProbe
+        [scriptblock]$FallbackProbe,
+        [scriptblock]$Downloader = { param([string]$TargetUri, [string]$TargetOutFile) Invoke-WebRequest -Uri $TargetUri -OutFile $TargetOutFile -UseBasicParsing }
     )
 
-    $result = Invoke-NwDownload -Uri $Uri -OutFile $OutFile -RetryPolicy $RetryPolicy
+    $result = Invoke-NwDownload -Uri $Uri -OutFile $OutFile -RetryPolicy $RetryPolicy -Downloader $Downloader
     if ($result.Success) {
         return [pscustomobject]@{
             Downloaded = $true
@@ -363,7 +364,8 @@ function Invoke-NwDownload {
     param(
         [Parameter(Mandatory)][string]$Uri,
         [Parameter(Mandatory)][string]$OutFile,
-        [Parameter(Mandatory)]$RetryPolicy
+        [Parameter(Mandatory)]$RetryPolicy,
+        [scriptblock]$Downloader = { param([string]$TargetUri, [string]$TargetOutFile) Invoke-WebRequest -Uri $TargetUri -OutFile $TargetOutFile -UseBasicParsing }
     )
 
     $attempts = [int]$RetryPolicy.max_attempts
@@ -372,7 +374,7 @@ function Invoke-NwDownload {
     for ($attempt = 1; $attempt -le $attempts; $attempt++) {
         try {
             Write-Host "[NW-BOOTSTRAP] download attempt $attempt/${attempts}: $Uri"
-            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+            & $Downloader $Uri $OutFile
             return [pscustomobject]@{ Success = $true; TransientFailure = $false; Attempts = $attempt; Error = $null }
         } catch {
             $transient = Test-NwTransientDownloadException -Exception $_.Exception

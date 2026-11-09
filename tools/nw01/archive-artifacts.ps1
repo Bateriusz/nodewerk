@@ -117,7 +117,12 @@ try {
         if ((Test-Path $target) -and -not $Replace) {
             throw "Refusing to overwrite archived artifact '$target' without -Replace."
         }
-        Copy-Item -Recurse -Force $item.Path $target
+        if (Test-Path $item.Path -PathType Container) {
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            Copy-Item -Recurse -Force (Join-Path $item.Path '*') $target
+        } else {
+            Copy-Item -Force $item.Path $target
+        }
         $copied += $item.Name
     }
 
