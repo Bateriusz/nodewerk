@@ -423,12 +423,42 @@ function Assert-NwAuthenticodeSignature {
     }
 }
 
-function Get-NwVisualStudioInstallPath {
+function Get-NwVisualStudioInstallPaths {
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (-not (Test-Path $vswhere -PathType Leaf)) { return $null }
-    $path = & $vswhere -products Microsoft.VisualStudio.Product.BuildTools -version "[17.0,18.0)" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath -latest
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($path | Out-String))) { return $null }
-    return ([string]($path | Select-Object -First 1)).Trim()
+    if (-not (Test-Path $vswhere -PathType Leaf)) { return @() }
+
+    $query = @(
+        "-version", "[17.0,18.0)",
+        "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "-property", "installationPath"
+    )
+    # Prefer a Build Tools installation because bootstrap provisions through
+    # that product, but reuse an already-correct Community/Professional/
+    # Enterprise installation rather than downloading or replacing it.
+    $results = New-Object System.Collections.Generic.List[string]
+    foreach ($products in @("Microsoft.VisualStudio.Product.BuildTools", "*")) {
+        $paths = & $vswhere -products $products @query
+        if ($LASTEXITCODE -ne 0) { continue }
+        foreach ($path in @($paths)) {
+            $trimmed = ([string]$path).Trim()
+            if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+            $duplicate = $false
+            foreach ($existing in $results) {
+                if ([string]::Equals($existing, $trimmed, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $duplicate = $true
+                    break
+                }
+            }
+            if (-not $duplicate) { $results.Add($trimmed) }
+        }
+    }
+    return $results.ToArray()
+}
+
+function Get-NwVisualStudioInstallPath {
+    $paths = @(Get-NwVisualStudioInstallPaths)
+    if ($paths.Count -eq 0) { return $null }
+    return [string]$paths[0]
 }
 
 function Import-NwVcVarsEnvironment {
@@ -439,57 +469,87 @@ function Import-NwVcVarsEnvironment {
         [switch]$ExportGitHubEnv
     )
 
-    $vsInstall = Get-NwVisualStudioInstallPath
-    if (-not $vsInstall) { throw "Visual Studio 2022 Build Tools installation was not found." }
-    $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
-    if (-not (Test-Path $vcvars -PathType Leaf)) { throw "vcvars64.bat not found at $vcvars" }
+    $installs = @(Get-NwVisualStudioInstallPaths)
+    if ($installs.Count -eq 0) { throw "Visual Studio 2022 installation with VC tools was not found." }
 
-    $cmdFile = Join-Path ([System.IO.Path]::GetTempPath()) ("nw01-vcvars-{0}.cmd" -f [guid]::NewGuid().ToString("N"))
-    try {
-        @"
+    $required = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "WindowsSdkDir", "WindowsSDKVersion", "WindowsSdkVerBinPath", "UCRTVersion", "UniversalCRTSdkDir")
+    $requiredPresence = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCToolsInstallDir", "VCToolsVersion", "WindowsSDKVersion")
+    $expectedToolset = ConvertTo-NwToolsetVersion $VcVarsVersion
+    $failures = New-Object System.Collections.Generic.List[string]
+    $selected = $null
+    $selectedVcVars = $null
+    $selectedEnvironment = $null
+
+    foreach ($vsInstall in $installs) {
+        $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
+        if (-not (Test-Path $vcvars -PathType Leaf)) {
+            $failures.Add("${vsInstall}: vcvars64.bat missing")
+            continue
+        }
+
+        $cmdFile = Join-Path ([System.IO.Path]::GetTempPath()) ("nw01-vcvars-{0}.cmd" -f [guid]::NewGuid().ToString("N"))
+        $envDump = @()
+        $vcvarsExit = 1
+        try {
+            @"
 @echo off
 call "$vcvars" $WindowsSdkVersion -vcvars_ver=$VcVarsVersion
 if errorlevel 1 exit /b %errorlevel%
 set
 "@ | Set-Content -Path $cmdFile -Encoding ascii
-        $envDump = & $env:ComSpec /d /c $cmdFile
-        if ($LASTEXITCODE -ne 0) { throw "vcvars64.bat failed with exit code $LASTEXITCODE" }
-    } finally {
-        Remove-Item -Force -ErrorAction SilentlyContinue $cmdFile
-    }
+            $envDump = & $env:ComSpec /d /c $cmdFile
+            $vcvarsExit = $LASTEXITCODE
+        } finally {
+            Remove-Item -Force -ErrorAction SilentlyContinue $cmdFile
+        }
 
-    $required = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "WindowsSdkDir", "WindowsSDKVersion", "WindowsSdkVerBinPath", "UCRTVersion", "UniversalCRTSdkDir")
-    $captured = @{}
-    foreach ($line in $envDump) {
-        if ($line -match "^([^=]+)=(.*)$") {
-            $name = $matches[1]
-            if ($required -contains $name) {
-                $value = $matches[2]
-                $captured[$name] = $value
-                Set-Item -Path "Env:$name" -Value $value
+        $captured = @{}
+        foreach ($line in $envDump) {
+            if ($line -match "^([^=]+)=(.*)$") {
+                $name = $matches[1]
+                if ($required -contains $name) { $captured[$name] = $matches[2] }
             }
         }
-    }
-    foreach ($name in @("Path", "INCLUDE", "LIB", "LIBPATH", "VCToolsInstallDir", "VCToolsVersion", "WindowsSDKVersion")) {
-        if (-not $captured.ContainsKey($name) -or [string]::IsNullOrWhiteSpace([string]$captured[$name])) {
-            throw "vcvars64.bat did not export required environment variable $name"
+        # Publish the last observed values even on a mismatch so doctor can
+        # report expected-versus-detected instead of only "missing".
+        foreach ($name in $captured.Keys) { Set-Item -Path "Env:$name" -Value $captured[$name] }
+
+        if ($vcvarsExit -ne 0) {
+            $failures.Add("${vsInstall}: vcvars64.bat exit $vcvarsExit")
+            continue
         }
+        $missing = @($requiredPresence | Where-Object { -not $captured.ContainsKey($_) -or [string]::IsNullOrWhiteSpace([string]$captured[$_]) })
+        if ($missing.Count -gt 0) {
+            $failures.Add("${vsInstall}: missing $($missing -join ',')")
+            continue
+        }
+        $sdkDetected = ([string]$captured["WindowsSDKVersion"]).TrimEnd('\')
+        if (-not [string]::Equals($sdkDetected, $WindowsSdkVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $failures.Add("${vsInstall}: SDK '$sdkDetected' != '$WindowsSdkVersion'")
+            continue
+        }
+        $toolsetDetected = ConvertTo-NwToolsetVersion ([string]$captured["VCToolsVersion"])
+        if (-not [string]::Equals($toolsetDetected, $expectedToolset, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $failures.Add("${vsInstall}: toolset '$toolsetDetected' != '$expectedToolset'")
+            continue
+        }
+        $selected = $vsInstall
+        $selectedVcVars = $vcvars
+        $selectedEnvironment = $captured
+        break
     }
-    if (($env:WindowsSDKVersion.TrimEnd('\')) -ne $WindowsSdkVersion) {
-        throw "vcvars selected Windows SDK '$env:WindowsSDKVersion', expected '$WindowsSdkVersion'"
-    }
-    $toolsetDetected = ConvertTo-NwToolsetVersion $env:VCToolsVersion
-    if (-not [string]::Equals($toolsetDetected, (ConvertTo-NwToolsetVersion $VcVarsVersion), [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "vcvars selected VCToolsVersion '$env:VCToolsVersion', expected '$VcVarsVersion'"
+
+    if ($null -eq $selected) {
+        throw ("Unable to select exact pinned Visual Studio environment (SDK $WindowsSdkVersion, toolset $VcVarsVersion): " + ($failures -join "; "))
     }
 
     if ($ExportGitHubEnv) {
         if ([string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) { throw "GITHUB_ENV is not available." }
         foreach ($name in $required) {
-            if ($captured.ContainsKey($name)) { Add-Content -Path $env:GITHUB_ENV -Value "$name=$($captured[$name])" }
+            if ($selectedEnvironment.ContainsKey($name)) { Add-Content -Path $env:GITHUB_ENV -Value "$name=$($selectedEnvironment[$name])" }
         }
     }
-    return [pscustomobject]@{ VisualStudioInstall = $vsInstall; VcVars = $vcvars; Environment = $captured }
+    return [pscustomobject]@{ VisualStudioInstall = $selected; VcVars = $selectedVcVars; Environment = $selectedEnvironment }
 }
 
 function Get-NwStandaloneToolPaths {

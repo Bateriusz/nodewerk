@@ -15,7 +15,7 @@ if (-not $IsWindows) {
 }
 
 $env:NW_TOOLS_ROOT = $ToolsRoot
-Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force -Scope Global
 $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
 $sources = Get-NwProvisioningSources -RepoRoot $RepoRoot
 $visualStudio = Get-NwVisualStudioSelection -RepoRoot $RepoRoot
@@ -76,16 +76,19 @@ function Ensure-ZipTool(
 
     $archive = Join-Path $tempRoot ("{0}.zip" -f ($Name -replace '[^A-Za-z0-9_.-]', '_'))
     Remove-Item -Force -ErrorAction SilentlyContinue $archive
+    $probeCommand = $Command
+    $probeTool = $Tool
+    $probeExpected = $Expected
+    $probeCandidate = $candidate
     $fallbackProbe = {
-        $found = Find-Exact $Command $Tool $Expected @($candidate)
-        if ($found) {
-            Record-Selection $Name $Expected $found "runner-preinstalled-after-transient-download-failure"
-            return (Split-Path -Parent $found)
-        }
-        return $null
-    }
+        Find-NwExactCommand -Name $probeCommand -Tool $probeTool -Expected $probeExpected -AdditionalCandidates @($probeCandidate)
+    }.GetNewClosure()
     $download = Invoke-NwDownloadWithFallback -Name $Name -Uri $Uri -OutFile $archive -RetryPolicy $retry -FallbackProbe $fallbackProbe
-    if ($download.FallbackUsed) { return [string]$download.FallbackValue }
+    if ($download.FallbackUsed) {
+        $found = [string]$download.FallbackValue
+        Record-Selection $Name $Expected $found "runner-preinstalled-after-transient-download-failure"
+        return (Split-Path -Parent $found)
+    }
 
     # A completed download is trusted only after the pinned digest matches. Integrity
     # failures are hard failures and never enter the runner-fallback path.
@@ -115,17 +118,21 @@ function Ensure-Llvm {
     $uri = Expand-NwTemplate -Template ([string]$sources.llvm.url_template) -Version $contract.LlvmVersion
     $installer = Join-Path $tempRoot "LLVM-$($contract.LlvmVersion)-win64.exe"
     Remove-Item -Force -ErrorAction SilentlyContinue $installer
+    $probeClang = $clang
+    $probeLld = $lld
+    $probeVersion = $contract.LlvmVersion
     $fallbackProbe = {
-        $c = Find-Exact "clang-cl.exe" "clang-cl" $contract.LlvmVersion @($clang)
-        $l = Find-Exact "lld-link.exe" "lld-link" $contract.LlvmVersion @($lld)
-        if ($c -and $l) {
-            Record-Selection "LLVM clang-cl/lld-link" $contract.LlvmVersion $c "runner-preinstalled-after-transient-download-failure"
-            return (Split-Path -Parent $c)
-        }
+        $c = Find-NwExactCommand -Name "clang-cl.exe" -Tool "clang-cl" -Expected $probeVersion -AdditionalCandidates @($probeClang)
+        $l = Find-NwExactCommand -Name "lld-link.exe" -Tool "lld-link" -Expected $probeVersion -AdditionalCandidates @($probeLld)
+        if ($c -and $l) { return (Split-Path -Parent $c) }
         return $null
-    }
+    }.GetNewClosure()
     $download = Invoke-NwDownloadWithFallback -Name "LLVM" -Uri $uri -OutFile $installer -RetryPolicy $retry -FallbackProbe $fallbackProbe
-    if ($download.FallbackUsed) { return [string]$download.FallbackValue }
+    if ($download.FallbackUsed) {
+        $foundClangDir = [string]$download.FallbackValue
+        Record-Selection "LLVM clang-cl/lld-link" $contract.LlvmVersion (Join-Path $foundClangDir "clang-cl.exe") "runner-preinstalled-after-transient-download-failure"
+        return $foundClangDir
+    }
     Assert-NwSha256 -Path $installer -Expected ([string]$sources.llvm.sha256)
     if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
     $process = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList '/S', "/D=$installRoot"
@@ -158,15 +165,29 @@ function Ensure-VisualStudio {
 
     $bootstrapper = Join-Path $tempRoot "vs_buildtools.exe"
     Remove-Item -Force -ErrorAction SilentlyContinue $bootstrapper
+    $probeSdk = $visualStudio.WindowsSdkVersion
+    $probeVcVars = $visualStudio.VcVarsVersion
+    $probeCompiler = $contract.MsvcCompilerVersion
+    $probeLinker = $contract.MsvcLinkerVersion
     $fallbackProbe = {
-        if (Test-ExistingVisualStudio) {
-            Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "runner-preinstalled-after-transient-download-failure"
-            return $true
+        try {
+            Import-NwVcVarsEnvironment -WindowsSdkVersion $probeSdk -VcVarsVersion $probeVcVars | Out-Null
+            $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+            $link = (Get-Command link.exe -ErrorAction Stop).Source
+            if ((Test-NwExactVersion -Tool "cl" -Executable $cl -Expected $probeCompiler) -and
+                (Test-NwExactVersion -Tool "link" -Executable $link -Expected $probeLinker)) {
+                return $cl
+            }
+            return $null
+        } catch {
+            return $null
         }
-        return $null
-    }
+    }.GetNewClosure()
     $download = Invoke-NwDownloadWithFallback -Name "Visual Studio Build Tools" -Uri $visualStudio.BootstrapperUrl -OutFile $bootstrapper -RetryPolicy $retry -FallbackProbe $fallbackProbe
-    if ($download.FallbackUsed) { return }
+    if ($download.FallbackUsed) {
+        Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ([string]$download.FallbackValue) "runner-preinstalled-after-transient-download-failure"
+        return
+    }
 
     # Microsoft's aka.ms VS bootstrapper is a rolling signed bootstrapper rather than a
     # versioned immutable release artifact. Integrity is established before execution:

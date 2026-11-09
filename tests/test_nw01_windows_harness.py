@@ -468,8 +468,10 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
         f"""
         Import-Module {module} -Force
         $downloader = {{ param([string]$TargetUri, [string]$TargetOutFile) throw [System.Exception]::new('temporarily unavailable') }}
-        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/b' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe {{ 'exact-fallback' }}
-        if ($result.FallbackUsed -ne $true -or $result.FallbackValue -ne 'exact-fallback') {{ throw 'fallback was not used' }}
+        $expectedFallback = 'exact-fallback'
+        $fallbackProbe = {{ $expectedFallback }}.GetNewClosure()
+        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/b' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe $fallbackProbe
+        if ($result.FallbackUsed -ne $true -or $result.FallbackValue -ne $expectedFallback) {{ throw 'fallback was not used' }}
         Write-Output 'fallback-ok'
         """
     )
