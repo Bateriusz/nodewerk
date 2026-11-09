@@ -2,12 +2,23 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$PackageRoot,
-    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
+    [string]$RepoRoot = "",
     [string]$SummaryPath = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# In Windows PowerShell 5.1, $PSScriptRoot is not reliable while default parameter
+# expressions are being evaluated. Resolve the repository root after entering the script body.
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $scriptPath = $MyInvocation.MyCommand.Path
+    if ([string]::IsNullOrWhiteSpace($scriptPath)) {
+        throw "Unable to resolve run-clean-system.ps1 location."
+    }
+    $scriptDir = Split-Path -Parent $scriptPath
+    $RepoRoot = (Resolve-Path (Join-Path $scriptDir "../..")).Path
+}
 
 # Windows PowerShell 5.1 is present on a stock Windows 11 target, while $IsWindows
 # exists only in PowerShell Core. Do not require PowerShell 7 on CleanSystem hosts.
