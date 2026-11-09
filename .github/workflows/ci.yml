@@ -35,7 +35,9 @@ jobs:
 
   windows-reproducibility-and-fixtures:
     name: Windows 11 x64 Build, Reproducibility & Concrete Check Gate
-    runs-on: windows-latest
+    # Keep the image pinned to the VS 2022 family that still provides the
+    # build-tools installer and the 14.40 MSVC component used by the manifest.
+    runs-on: windows-2022
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,9 +46,21 @@ jobs:
         shell: pwsh
         run: |
           $bootstrapper = Join-Path $env:RUNNER_TEMP "vs_buildtools.exe"
-          Invoke-WebRequest `
-            -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" `
-            -OutFile $bootstrapper
+          $downloadAttempt = 0
+          while ($true) {
+            $downloadAttempt++
+            try {
+              Invoke-WebRequest `
+                -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" `
+                -OutFile $bootstrapper `
+                -ErrorAction Stop
+              break
+            } catch {
+              if ($downloadAttempt -ge 3) { throw }
+              Write-Warning "VS Build Tools download attempt $downloadAttempt failed: $($_.Exception.Message)"
+              Start-Sleep -Seconds 15
+            }
+          }
           $arguments = @(
             "--quiet",
             "--wait",
@@ -57,9 +71,19 @@ jobs:
             "--add", "Microsoft.VisualStudio.Component.Windows11SDK.26100",
             "--includeRecommended"
           )
-          $process = Start-Process -Wait -PassThru -FilePath $bootstrapper -ArgumentList $arguments
-          if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
-            Write-Error "Pinned Visual Studio Build Tools installation failed (exit code $($process.ExitCode))."
+          $installAttempt = 0
+          $installExitCode = -1
+          while ($true) {
+            $installAttempt++
+            $process = Start-Process -Wait -PassThru -FilePath $bootstrapper -ArgumentList $arguments
+            $installExitCode = $process.ExitCode
+            if ($installExitCode -eq 0 -or $installExitCode -eq 3010) { break }
+            if ($installAttempt -ge 3) { break }
+            Write-Warning "VS Build Tools install attempt $installAttempt failed (exit code $installExitCode)."
+            Start-Sleep -Seconds 15
+          }
+          if ($installExitCode -ne 0 -and $installExitCode -ne 3010) {
+            Write-Error "Pinned Visual Studio Build Tools installation failed (exit code $installExitCode)."
             exit 1
           }
 
@@ -78,9 +102,21 @@ jobs:
           $ninjaExe = Join-Path $ninjaRoot "ninja.exe"
           if (-not (Test-Path $ninjaExe -PathType Leaf)) {
             $archive = Join-Path $env:RUNNER_TEMP "ninja-win-1.12.1.zip"
-            Invoke-WebRequest `
-              -Uri "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip" `
-              -OutFile $archive
+            $downloadAttempt = 0
+            while ($true) {
+              $downloadAttempt++
+              try {
+                Invoke-WebRequest `
+                  -Uri "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip" `
+                  -OutFile $archive `
+                  -ErrorAction Stop
+                break
+              } catch {
+                if ($downloadAttempt -ge 3) { throw }
+                Write-Warning "Ninja download attempt $downloadAttempt failed: $($_.Exception.Message)"
+                Start-Sleep -Seconds 15
+              }
+            }
             New-Item -ItemType Directory -Force -Path $ninjaRoot | Out-Null
             Expand-Archive -Path $archive -DestinationPath $ninjaRoot -Force
           }
@@ -197,10 +233,33 @@ jobs:
           $llvmRoot = "C:\Tools\LLVM-18.1.8"
           if (-not (Test-Path "$llvmRoot\bin\clang-cl.exe")) {
             $installer = Join-Path $env:RUNNER_TEMP "LLVM-18.1.8-win64.exe"
-            Invoke-WebRequest `
-              -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe" `
-              -OutFile $installer
-            Start-Process -Wait -FilePath $installer -ArgumentList '/S', "/D=$llvmRoot"
+            $downloadAttempt = 0
+            while ($true) {
+              $downloadAttempt++
+              try {
+                Invoke-WebRequest `
+                  -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe" `
+                  -OutFile $installer `
+                  -ErrorAction Stop
+                break
+              } catch {
+                if ($downloadAttempt -ge 3) { throw }
+                Write-Warning "LLVM download attempt $downloadAttempt failed: $($_.Exception.Message)"
+                Start-Sleep -Seconds 15
+              }
+            }
+            $installAttempt = 0
+            while ($true) {
+              $installAttempt++
+              $process = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList '/S', "/D=$llvmRoot"
+              if ($process.ExitCode -eq 0) { break }
+              if ($installAttempt -ge 3) {
+                Write-Error "LLVM installer failed (exit code $($process.ExitCode))."
+                exit 1
+              }
+              Write-Warning "LLVM install attempt $installAttempt failed (exit code $($process.ExitCode))."
+              Start-Sleep -Seconds 15
+            }
           }
           Add-Content -Path $env:GITHUB_PATH -Value "$llvmRoot\bin"
 
@@ -210,9 +269,21 @@ jobs:
           $dxcRoot = "C:\Tools\dxc-1.8.2407"
           if (-not (Test-Path "$dxcRoot\bin\x64\dxc.exe")) {
             $archive = Join-Path $env:RUNNER_TEMP "dxc_2024_07_31.zip"
-            Invoke-WebRequest `
-              -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2407/dxc_2024_07_31.zip" `
-              -OutFile $archive
+            $downloadAttempt = 0
+            while ($true) {
+              $downloadAttempt++
+              try {
+                Invoke-WebRequest `
+                  -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2407/dxc_2024_07_31.zip" `
+                  -OutFile $archive `
+                  -ErrorAction Stop
+                break
+              } catch {
+                if ($downloadAttempt -ge 3) { throw }
+                Write-Warning "DXC download attempt $downloadAttempt failed: $($_.Exception.Message)"
+                Start-Sleep -Seconds 15
+              }
+            }
             Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
           }
           Add-Content -Path $env:GITHUB_PATH -Value "$dxcRoot\bin\x64"
@@ -253,6 +324,9 @@ jobs:
           dxc --version
           cl 2>&1 | Select-Object -First 2
           link 2>&1 | Select-Object -First 2
+          # cl/link print their banner and can set a nonzero LASTEXITCODE when
+          # invoked without inputs; this step only reports provisioned versions.
+          exit 0
 
       - name: Run NW-01 contract test suite on Windows
         run: pytest -v

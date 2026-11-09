@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -838,12 +839,26 @@ def verify_published_body(
 
 def _atomic_write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"
-    ) as handle:
-        handle.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
-        temporary = Path(handle.name)
-    os.replace(temporary, path)
+    fd, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=path.name + ".", suffix=".tmp"
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+        # Windows can briefly deny replacement while a scanner or another
+        # reader still has the old file open.  Retry a few times without
+        # weakening the atomic replace contract.
+        for attempt in range(5):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def publish(
@@ -959,7 +974,14 @@ def publish(
                 ]
             )
         finally:
-            Path(temporary_name).unlink(missing_ok=True)
+            for attempt in range(5):
+                try:
+                    Path(temporary_name).unlink(missing_ok=True)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05)
         readback = json.loads(
             runner(
                 ["issue", "view", str(number), "--repo", GH_REPO, "--json", "title,body"]

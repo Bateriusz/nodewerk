@@ -490,3 +490,15 @@ def test_source_digest_normalizes_checkout_newlines(tmp_path: Path) -> None:
     lf.write_bytes(b'{"manifest":true}\n')
     crlf.write_bytes(b'{"manifest":true}\r\n')
     assert tool.sha256_file_v1(lf) == tool.sha256_file_v1(crlf)
+
+
+def test_atomic_json_write_is_repeatable_and_leaves_no_temp_files(tmp_path: Path) -> None:
+    tool = _load_tool()
+    target = tmp_path / "record.json"
+    tool._atomic_write_json(target, {"state": "blocked", "attempt": 1})
+    tool._atomic_write_json(target, {"state": "complete", "attempt": 2})
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "state": "complete",
+        "attempt": 2,
+    }
+    assert list(tmp_path.glob("*.tmp")) == []
