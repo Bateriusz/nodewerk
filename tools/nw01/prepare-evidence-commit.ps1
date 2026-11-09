@@ -137,6 +137,31 @@ function Assert-NwProvenance([string]$Kind, $Document, [string]$ToolchainId, $Le
     }
 }
 
+function Assert-NwNoReparsePoints([string]$RootPath, [string]$RelativePath) {
+    $rootFull = [System.IO.Path]::GetFullPath($RootPath).TrimEnd([char[]]@('\', '/'))
+    $current = $rootFull
+    foreach ($part in @($RelativePath.Replace('\', '/').Split('/'))) {
+        if ([string]::IsNullOrWhiteSpace($part) -or $part -eq '.') { continue }
+        $current = Join-Path $current $part
+        if (-not (Test-Path -LiteralPath $current)) { return }
+        $attributes = try {
+            [System.IO.File]::GetAttributes($current)
+        } catch {
+            [System.IO.Directory]::GetAttributes($current)
+        }
+        $isReparse = (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+        if (-not $isReparse) {
+            try {
+                $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+                $isReparse = -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)
+            } catch { }
+        }
+        if ($isReparse) {
+            throw "Evidence candidate '$RelativePath' traverses a filesystem reparse point at '$current'."
+        }
+    }
+}
+
 function Assert-NwEvidenceContent(
     [string]$Root,
     [string]$RelativePath,
@@ -155,6 +180,7 @@ function Assert-NwEvidenceContent(
     if (-not $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Evidence candidate '$normalized' escapes the repository root."
     }
+    Assert-NwNoReparsePoints -RootPath $Root -RelativePath $normalized
     $activeKey = $normalized.ToLowerInvariant()
     if ($Active.ContainsKey($activeKey)) {
         throw "Evidence status contains a cyclic reference through '$normalized'."

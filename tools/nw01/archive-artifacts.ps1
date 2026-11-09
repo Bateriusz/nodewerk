@@ -159,6 +159,7 @@ function Assert-NwPackageDeployHashes([string]$PackageRoot, $Manifest) {
     $expected = Assert-NwManifestFileEntries $Manifest "CleanSystem package"
     $actualHashes = @{}
     $expectedEntryNames = @{}
+    $deployRoot = [System.IO.Path]::GetFullPath((Join-Path $PackageRoot "deploy"))
     foreach ($key in $expected.Keys) {
         $expectedEntryNames["deploy/$(Get-NwValue $expected[$key] 'name' '')"] = $true
     }
@@ -167,7 +168,7 @@ function Assert-NwPackageDeployHashes([string]$PackageRoot, $Manifest) {
         $entryName = [string](Get-NwValue $entry "name" "")
         $entryBytes = [long](Get-NwValue $entry "bytes" 0)
         $entrySha256 = [string](Get-NwValue $entry "sha256" "")
-        $deployPath = Join-Path (Join-Path $PackageRoot "deploy") $entryName
+        $deployPath = Join-Path $deployRoot $entryName
         if (-not (Test-Path $deployPath -PathType Leaf)) {
             throw "CleanSystem package is missing deploy executable '$entryName'."
         }
@@ -181,12 +182,11 @@ function Assert-NwPackageDeployHashes([string]$PackageRoot, $Manifest) {
         }
         $actualHashes[$key] = $actual
     }
-    $deployRoot = Join-Path $PackageRoot "deploy"
-    $subdirectories = @(Get-ChildItem -Path $deployRoot -Directory -Recurse -ErrorAction SilentlyContinue)
+    $subdirectories = @(Get-ChildItem -Path $deployRoot -Directory -Recurse -Force -ErrorAction SilentlyContinue)
     if ($subdirectories.Count -gt 0) {
         throw "CleanSystem package deploy tree contains unrecorded subdirectory payloads: $($subdirectories.Name -join ', ')."
     }
-    $unexpected = @(Get-ChildItem -Path $deployRoot -File -Recurse -ErrorAction SilentlyContinue |
+    $unexpected = @(Get-ChildItem -Path $deployRoot -File -Recurse -Force -ErrorAction SilentlyContinue |
         Where-Object {
             $relative = $_.FullName.Substring($deployRoot.Length).TrimStart('\', '/').Replace('\', '/')
             -not $expectedEntryNames.ContainsKey("deploy/$relative")
@@ -275,6 +275,7 @@ try {
     $packageDeployHashes = $null
     $zipDeployHashes = $null
     $hasUnverifiedProvenance = $false
+    $unverifiedArtifacts = New-Object System.Collections.Generic.List[string]
     $summaryCertifies = $false
     $packageCertifies = $false
     $zipCertifies = $false
@@ -286,14 +287,18 @@ try {
         if (-not $summaryCertifies) {
             $certificationProblems.Add("full-summary did not pass the full baseline.")
         }
-        if ($summary.PSObject.Properties.Name -contains "source_commit") {
-            $summaryCommit = ([string]$summary.source_commit).Trim()
-            if (-not [string]::IsNullOrWhiteSpace($summaryCommit)) {
-                if (-not (Test-NwCommit $summaryCommit)) {
-                    throw "FullSummary source_commit '$summaryCommit' is not a full Git revision."
-                }
-                $revisions.Add([pscustomobject]@{ Artifact = "full-summary"; SourceCommit = $summaryCommit.ToLowerInvariant() })
+        $summarySourceProperty = $summary.PSObject.Properties["source_commit"]
+        $summaryCommit = if ($null -eq $summarySourceProperty) { "" } else { ([string]$summarySourceProperty.Value).Trim() }
+        if ([string]::IsNullOrWhiteSpace($summaryCommit)) {
+            $hasUnverifiedProvenance = $true
+            $summaryCertifies = $false
+            $unverifiedArtifacts.Add("full-summary")
+            $certificationProblems.Add("full-summary does not record source_commit.")
+        } else {
+            if (-not (Test-NwCommit $summaryCommit)) {
+                throw "FullSummary source_commit '$summaryCommit' is not a full Git revision."
             }
+            $revisions.Add([pscustomobject]@{ Artifact = "full-summary"; SourceCommit = $summaryCommit.ToLowerInvariant() })
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($CleanSystemPackage)) {
@@ -337,6 +342,7 @@ try {
         $zipManifestText = Read-NwZipTextEntry -ZipPath $CleanSystemZip -EntryName "evidence/artifact-manifest.json"
         if ([string]::IsNullOrWhiteSpace($zipManifestText)) {
             $hasUnverifiedProvenance = $true
+            $unverifiedArtifacts.Add("clean-system-zip")
             $certificationProblems.Add("clean-system-zip has no embedded artifact manifest.")
             Write-Warning "[NW-ARCHIVE] CleanSystem ZIP has no embedded evidence/artifact-manifest.json; classifying that artifact as unverified provenance."
         } else {
@@ -347,6 +353,7 @@ try {
             }
             if ($zipManifest.PSObject.Properties.Name -notcontains "source_commit") {
                 $hasUnverifiedProvenance = $true
+                $unverifiedArtifacts.Add("clean-system-zip")
                 $certificationProblems.Add("clean-system-zip artifact manifest does not record source_commit.")
                 Write-Warning "[NW-ARCHIVE] CleanSystem ZIP artifact manifest does not record source_commit; classifying that artifact as unverified provenance."
             } else {
@@ -496,7 +503,7 @@ try {
         archived_at_utc = [DateTime]::UtcNow.ToString("o")
         artifacts = $copied
         source_revisions = @($revisions | ForEach-Object { [ordered]@{ artifact = $_.Artifact; source_commit = $_.SourceCommit } })
-        unverified_artifacts = @(if ($hasUnverifiedProvenance) { "clean-system-zip" } else { @() })
+        unverified_artifacts = @($unverifiedArtifacts)
         note = $note
     } | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $dest "archive-manifest.json")
 

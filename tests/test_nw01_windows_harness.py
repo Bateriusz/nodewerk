@@ -1187,6 +1187,27 @@ def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Pa
     assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
     git_run(repo, "checkout", "--", relative_evidence)
 
+    # A symlink inside the repository must not be able to make the staging
+    # guardrail read or stage out-of-repository content.
+    relative_reproducibility = "benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json"
+    linked = repo / relative_reproducibility
+    outside = tmp_path / "outside-reproducibility.json"
+    shutil.copy2(linked, outside)
+    linked.unlink()
+    try:
+        os.symlink(outside, linked, target_is_directory=False)
+    except (OSError, NotImplementedError):
+        git_run(repo, "checkout", "--", relative_reproducibility)
+        pytest.skip("filesystem symlinks are unavailable on this host")
+    try:
+        proc = run_pwsh_script(script, "-RepoRoot", repo)
+        assert proc.returncode != 0
+        assert "reparse point" in (proc.stdout + proc.stderr).lower()
+    finally:
+        if linked.is_symlink() or linked.exists():
+            linked.unlink()
+        git_run(repo, "checkout", "--", relative_reproducibility)
+
     # An in-progress merge must never turn -Commit into a merge commit.
     git_dir = git_run(repo, "rev-parse", "--git-dir").stdout.strip()
     git_dir_path = Path(git_dir) if Path(git_dir).is_absolute() else repo / git_dir
@@ -1510,6 +1531,97 @@ def test_archive_rejects_missing_and_tampered_package_deploy_files(tmp_path: Pat
 
 
 @requires_windows_harness
+def test_archive_rejects_hidden_package_deploy_payloads(tmp_path: Path) -> None:
+    repo = init_git_repo(tmp_path / "archive hidden deploy repo")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    head = commit_all(repo)
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps({"source_commit": head, "full_baseline_passed": True}),
+        encoding="utf-8",
+    )
+    script = ROOT / "tools/nw01/archive-artifacts.ps1"
+
+    def hide(path: Path) -> None:
+        subprocess.run(["attrib", "+H", str(path)], capture_output=True, check=False)
+
+    hidden_file_package = tmp_path / "hidden-file-package"
+    build_archive_package(hidden_file_package, source_commit=head)
+    hidden_file = hidden_file_package / "deploy/extra-hidden.exe"
+    hidden_file.write_bytes(b"unrecorded")
+    hide(hidden_file)
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        tmp_path / "hidden-file-archive",
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        hidden_file_package,
+    )
+    assert proc.returncode != 0
+    assert "unrecorded file" in (proc.stdout + proc.stderr).lower()
+
+    hidden_directory_package = tmp_path / "hidden-directory-package"
+    build_archive_package(hidden_directory_package, source_commit=head)
+    hidden_directory = hidden_directory_package / "deploy/hidden-dir"
+    hidden_directory.mkdir()
+    (hidden_directory / "payload.exe").write_bytes(b"unrecorded")
+    hide(hidden_directory)
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        tmp_path / "hidden-directory-archive",
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        hidden_directory_package,
+    )
+    assert proc.returncode != 0
+    assert "unrecorded subdirectory" in (proc.stdout + proc.stderr).lower()
+
+
+@requires_windows_harness
+def test_archive_accepts_relative_package_path(tmp_path: Path) -> None:
+    repo = init_git_repo(tmp_path / "archive relative repo")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    head = commit_all(repo)
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps({"source_commit": head, "full_baseline_passed": True}),
+        encoding="utf-8",
+    )
+    package = tmp_path / "package"
+    build_archive_package(package, source_commit=head)
+    try:
+        relative_package = os.path.relpath(package, ROOT)
+    except ValueError:
+        pytest.skip("package and repository are on different drives")
+
+    archive_root = tmp_path / "archive"
+    proc = run_pwsh_script(
+        ROOT / "tools/nw01/archive-artifacts.ps1",
+        "-ArchiveRoot",
+        archive_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        relative_package,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    directory = next(path for path in archive_root.iterdir() if path.is_dir())
+    manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
+    assert manifest["source_commit"] == head
+    assert manifest["evidence_class"] == "current-certifying"
+
+
+@requires_windows_harness
 def test_archive_classifies_current_incomplete_full_as_non_certifying(tmp_path: Path) -> None:
     repo = init_git_repo(tmp_path / "archive classification repo")
     (repo / "README.md").write_text("base\n", encoding="utf-8")
@@ -1596,6 +1708,40 @@ def test_archive_rejects_stale_package_build_checks_source(tmp_path: Path) -> No
     assert manifest["certifying"] is False
     assert any(
         "build-checks.json source_commit" in problem
+        for problem in manifest["certification_problems"]
+    )
+
+
+@requires_windows_harness
+def test_archive_flags_full_summary_without_source_commit(tmp_path: Path) -> None:
+    repo = init_git_repo(tmp_path / "archive summary provenance repo")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    head = commit_all(repo)
+    package = tmp_path / "package"
+    build_archive_package(package, source_commit=head)
+    summary = tmp_path / "summary-without-source.json"
+    summary.write_text(json.dumps({"full_baseline_passed": True}), encoding="utf-8")
+
+    archive_root = tmp_path / "archive"
+    proc = run_pwsh_script(
+        ROOT / "tools/nw01/archive-artifacts.ps1",
+        "-ArchiveRoot",
+        archive_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        package,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    directory = next(path for path in archive_root.iterdir() if path.is_dir())
+    manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
+    assert manifest["evidence_class"] == "current-non-certifying"
+    assert manifest["certifying"] is False
+    assert "full-summary" in manifest["unverified_artifacts"]
+    assert any(
+        "full-summary does not record source_commit" in problem
         for problem in manifest["certification_problems"]
     )
 
