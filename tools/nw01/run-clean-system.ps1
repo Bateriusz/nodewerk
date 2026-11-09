@@ -44,7 +44,11 @@ try {
         throw "CleanSystem package artifact manifest is missing: $packageManifestPath"
     }
     $packageManifest = Get-Content -Raw $packageManifestPath | ConvertFrom-Json
-    $packageSourceCommit = ([string]$packageManifest.source_commit).Trim()
+    $sourceCommitProperty = $packageManifest.PSObject.Properties["source_commit"]
+    if ($null -eq $sourceCommitProperty) {
+        throw "CleanSystem package source_commit is missing or invalid."
+    }
+    $packageSourceCommit = ([string]$sourceCommitProperty.Value).Trim()
     if ($packageSourceCommit -notmatch '^[0-9a-fA-F]{40}    # The verifier owns authoritative SDK/DXC/debug/redist absence probes;
     # these preflight checks only catch obvious contamination before fixtures run.
     if (-not [string]::IsNullOrWhiteSpace($env:WindowsSdkDir) -or
@@ -106,6 +110,7 @@ try {
 ) {
         throw "CleanSystem package source_commit is missing or invalid."
     }
+
     $checkoutCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
     $checkoutCommit = ([string]$checkoutCommit).Trim()
     if ($checkoutCommit -notmatch '^[0-9a-fA-F]{40}    # The verifier owns authoritative SDK/DXC/debug/redist absence probes;
