@@ -40,253 +40,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install pinned MSVC 14.40 toolset and Windows SDK 10.0.26100.0
-        shell: pwsh
-        run: |
-          $bootstrapper = Join-Path $env:RUNNER_TEMP "vs_buildtools.exe"
-          Invoke-WebRequest `
-            -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" `
-            -OutFile $bootstrapper
-          $arguments = @(
-            "--quiet",
-            "--wait",
-            "--norestart",
-            "--nocache",
-            "--add", "Microsoft.VisualStudio.Workload.VCTools",
-            "--add", "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64",
-            "--add", "Microsoft.VisualStudio.Component.Windows11SDK.26100",
-            "--includeRecommended"
-          )
-          $process = Start-Process -Wait -PassThru -FilePath $bootstrapper -ArgumentList $arguments
-          if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
-            Write-Error "Pinned Visual Studio Build Tools installation failed (exit code $($process.ExitCode))."
-            exit 1
-          }
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install pinned CMake and pytest
-        run: python -m pip install --upgrade "cmake==3.30.2" pytest
+      - name: Install pytest
+        run: python -m pip install pytest
 
-      - name: Provision pinned Ninja 1.12.1
+      - name: Bootstrap exact NW-01 Windows toolchain
         shell: pwsh
-        run: |
-          $ninjaRoot = "C:\Tools\Ninja-1.12.1"
-          $ninjaExe = Join-Path $ninjaRoot "ninja.exe"
-          if (-not (Test-Path $ninjaExe -PathType Leaf)) {
-            $archive = Join-Path $env:RUNNER_TEMP "ninja-win-1.12.1.zip"
-            Invoke-WebRequest `
-              -Uri "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip" `
-              -OutFile $archive
-            New-Item -ItemType Directory -Force -Path $ninjaRoot | Out-Null
-            Expand-Archive -Path $archive -DestinationPath $ninjaRoot -Force
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value $ninjaRoot
-          & $ninjaExe --version
+        run: >-
+          pwsh ./tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath "$env:RUNNER_TEMP\nw01-bootstrap-provenance.json"
 
-      - name: Initialize pinned VS 2022 MSVC 14.40 developer environment
+      - name: Export exact MSVC/SDK build environment
         shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere -PathType Leaf)) {
-            Write-Error "vswhere.exe not found at $vswhere"
-            exit 1
-          }
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
 
-          $vsInstall = & $vswhere `
-            -products Microsoft.VisualStudio.Product.BuildTools `
-            -version "[17.0,18.0)" `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath `
-            -latest
-
-          if (-not $vsInstall) {
-            Write-Error "Visual Studio 2022 Build Tools installation was not found."
-            exit 1
-          }
-
-          $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
-          if (-not (Test-Path $vcvars -PathType Leaf)) {
-            Write-Error "vcvars64.bat not found at $vcvars"
-            exit 1
-          }
-
-          # Use a real cmd file so cmd.exe quoting cannot silently skip vcvars64.bat.
-          $cmdFile = Join-Path $env:RUNNER_TEMP "init-vs2022-msvc-14.40.cmd"
-          @"
-          @echo off
-          call "$vcvars" 10.0.26100.0 -vcvars_ver=14.40
-          if errorlevel 1 exit /b %errorlevel%
-          set
-          "@ | Set-Content -Path $cmdFile -Encoding ascii
-
-          $envDump = & $env:ComSpec /d /c $cmdFile
-          $cmdExit = $LASTEXITCODE
-          if ($cmdExit -ne 0) {
-            Write-Error "vcvars64.bat failed with exit code $cmdExit."
-            exit 1
-          }
-
-          $requiredEnv = @(
-            "Path",
-            "INCLUDE",
-            "LIB",
-            "LIBPATH",
-            "VCINSTALLDIR",
-            "VCToolsInstallDir",
-            "VCToolsVersion",
-            "WindowsSdkDir",
-            "WindowsSDKVersion",
-            "WindowsSdkVerBinPath",
-            "UCRTVersion",
-            "UniversalCRTSdkDir"
-          )
-          $captured = @{}
-          foreach ($line in $envDump) {
-            if ($line -match "^([^=]+)=(.*)$") {
-              $name = $matches[1]
-              $value = $matches[2]
-              if ($requiredEnv -contains $name) {
-                $captured[$name] = $value
-                Set-Item -Path "Env:$name" -Value $value
-                Add-Content -Path $env:GITHUB_ENV -Value "$name=$value"
-              }
-            }
-          }
-
-          foreach ($name in @("VCToolsInstallDir", "VCToolsVersion", "WindowsSDKVersion", "INCLUDE", "LIB")) {
-            if (-not $captured.ContainsKey($name) -or [string]::IsNullOrWhiteSpace($captured[$name])) {
-              Write-Error "vcvars64.bat did not export required environment variable $name."
-              exit 1
-            }
-          }
-
-          if ($env:VCToolsVersion -notmatch "^14\.40\.") {
-            Write-Error "Expected MSVC toolset 14.40, got VCToolsVersion=$env:VCToolsVersion"
-            exit 1
-          }
-          if ($env:WindowsSDKVersion.TrimEnd('\') -ne "10.0.26100.0") {
-            Write-Error "Expected Windows SDK 10.0.26100.0, got WindowsSDKVersion=$env:WindowsSDKVersion"
-            exit 1
-          }
-
-          $clPath = (Get-Command cl.exe -ErrorAction Stop).Source
-          $linkPath = (Get-Command link.exe -ErrorAction Stop).Source
-          $vcRoot = [System.IO.Path]::GetFullPath($env:VCToolsInstallDir)
-          if (-not $clPath.StartsWith($vcRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-            Write-Error "cl.exe is outside the pinned VCToolsInstallDir: $clPath"
-            exit 1
-          }
-          if (-not $linkPath.StartsWith($vcRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-            Write-Error "link.exe is outside the pinned VCToolsInstallDir: $linkPath"
-            exit 1
-          }
-
-          Write-Host "VS2022 Build Tools: $vsInstall"
-          Write-Host "cl.exe: $clPath"
-          Write-Host "link.exe: $linkPath"
-          Write-Host "VCToolsVersion=$env:VCToolsVersion"
-          Write-Host "VCToolsInstallDir=$env:VCToolsInstallDir"
-          Write-Host "WindowsSDKVersion=$env:WindowsSDKVersion"
-      - name: Provision pinned LLVM clang-cl/lld-link 18.1.8
+      - name: Verify exact pinned toolchain
         shell: pwsh
-        run: |
-          $llvmRoot = "C:\Tools\LLVM-18.1.8"
-          if (-not (Test-Path "$llvmRoot\bin\clang-cl.exe")) {
-            $installer = Join-Path $env:RUNNER_TEMP "LLVM-18.1.8-win64.exe"
-            Invoke-WebRequest `
-              -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe" `
-              -OutFile $installer
-            Start-Process -Wait -FilePath $installer -ArgumentList '/S', "/D=$llvmRoot"
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value "$llvmRoot\bin"
-
-      - name: Provision pinned offline DXC 1.8.2407
-        shell: pwsh
-        run: |
-          $dxcRoot = "C:\Tools\dxc-1.8.2407"
-          if (-not (Test-Path "$dxcRoot\bin\x64\dxc.exe")) {
-            $archive = Join-Path $env:RUNNER_TEMP "dxc_2024_07_31.zip"
-            Invoke-WebRequest `
-              -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2407/dxc_2024_07_31.zip" `
-              -OutFile $archive
-            Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value "$dxcRoot\bin\x64"
-
-      - name: Verify pinned MSVC and Windows SDK selection
-        shell: pwsh
-        run: |
-          $clPath = (Get-Command cl.exe -ErrorAction Stop).Source
-          $linkPath = (Get-Command link.exe -ErrorAction Stop).Source
-          $clBanner = (& $clPath 2>&1 | Out-String)
-          $linkBanner = (& $linkPath 2>&1 | Out-String)
-
-          if ($clBanner -notmatch "Compiler Version 19\.40\.33821") {
-            Write-Error "Selected cl.exe does not report pinned MSVC 19.40.33821: $clBanner"
-            exit 1
-          }
-          if ($linkBanner -notmatch "Linker Version 14\.40\.33821\.0") {
-            Write-Error "Selected link.exe does not report pinned MSVC linker 14.40.33821.0: $linkBanner"
-            exit 1
-          }
-          if ($env:WindowsSDKVersion.TrimEnd('\') -ne "10.0.26100.0") {
-            Write-Error "Selected Windows SDK is not the pinned 10.0.26100.0: $env:WindowsSDKVersion"
-            exit 1
-          }
-
-          Write-Host "Verified cl.exe banner: $($clBanner.Trim())"
-          Write-Host "Verified link.exe banner: $($linkBanner.Trim())"
-          Write-Host "Verified Windows SDK $env:WindowsSDKVersion"
-          exit 0
-
-      - name: Report provisioned toolchain versions
-        shell: pwsh
-        run: |
-          cmake --version
-          ninja --version
-          clang-cl --version
-          lld-link --version
-          dxc --version
-          cl 2>&1 | Select-Object -First 2
-          link 2>&1 | Select-Object -First 2
+        run: pwsh ./tools/nw01/doctor.ps1
 
       - name: Run NW-01 contract test suite on Windows
         run: pytest -v
 
       - name: Verify NW-01 concrete build, reproducibility, dependency, and failure-recovery checks
         shell: pwsh
-        run: |
-          $summaryPath = Join-Path $env:RUNNER_TEMP "nw01-build-checks.json"
-          python tools/verify_nw01.py --mode BuildChecks --summary-json $summaryPath
-          $code = $LASTEXITCODE
-          if (-not (Test-Path $summaryPath)) {
-            Write-Error "BuildChecks did not produce a summary JSON (exit code $code)."
-            exit 1
-          }
-          $summary = Get-Content -Raw -Path $summaryPath | ConvertFrom-Json
-          if ($code -ne 0 -or $summary.build_checks_passed -ne $true) {
-            Write-Error "BuildChecks failed concrete checks (exit code $code, concrete_failures=$($summary.concrete_failures -join ','))."
-            exit 1
-          }
-          $requiredChecks = @(
-            "reproducibility_build",
-            "msvc_ltcg_build",
-            "clang_debug_symbols",
-            "msvc_debug_symbols",
-            "failure_recovery"
-          )
-          foreach ($name in $requiredChecks) {
-            if ($summary.checks.$name.passed -ne $true) {
-              Write-Error "Required concrete check '$name' did not pass."
-              exit 1
-            }
-          }
-          Write-Host "BuildChecks passed all concrete build/reproducibility/dependency/failure-recovery checks."
-          Write-Host "Physical RTX 4060/RTX 50-series and clean-system evidence remain unverified and are NOT claimed by this job."
+        run: >-
+          pwsh ./tools/nw01/run-build-checks.ps1
+          -SummaryPath "$env:RUNNER_TEMP\nw01-build-checks.json"
 
       - name: Upload NW-01 build-check evidence
         if: always()
@@ -294,6 +78,7 @@ jobs:
         with:
           name: nw01-windows-build-checks
           path: |
+            ${{ runner.temp }}/nw01-bootstrap-provenance.json
             ${{ runner.temp }}/nw01-build-checks.json
             benchmarks/reproducibility/*.json
             benchmarks/ledgers/*.json
@@ -306,7 +91,7 @@ jobs:
     runs-on: ${{ vars.NW_PHYSICAL_RUNNER_LABEL }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout4v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -316,16 +101,13 @@ jobs:
       - name: Install pytest
         run: python -m pip install pytest
 
-      - name: Verify pinned physical-host toolchain is present
+      - name: Enter pinned physical-host build environment
         shell: pwsh
-        run: |
-          cmake --version
-          ninja --version
-          clang-cl --version
-          lld-link --version
-          dxc --version
-          cl 2>&1 | Select-Object -First 2
-          link 2>&1 | Select-Object -First 2
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+
+      - name: Verify pinned physical-host toolchain
+        shell: pwsh
+        run: pwsh ./tools/nw01/doctor.ps1
 
       - name: Run NW-01 Full physical-evidence validation
         shell: pwsh
