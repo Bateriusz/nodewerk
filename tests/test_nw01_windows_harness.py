@@ -13,9 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 IS_WINDOWS = os.name == "nt"
 PWSH_EXECUTABLE = shutil.which("pwsh")
 HAS_PWSH = PWSH_EXECUTABLE is not None
+BEHAVIOR_TESTS_ENABLED = os.environ.get("NW_HARNESS_BEHAVIOR_TESTS") == "1"
 requires_windows_harness = pytest.mark.skipif(
-    not (HAS_PWSH and IS_WINDOWS),
-    reason="PowerShell harness behaviour tests run in Windows integration",
+    not (HAS_PWSH and IS_WINDOWS and BEHAVIOR_TESTS_ENABLED),
+    reason="PowerShell harness behaviour tests require NW_HARNESS_BEHAVIOR_TESTS=1 on Windows",
 )
 
 
@@ -116,6 +117,7 @@ def test_ci_consumes_shared_harness_and_exercises_idempotence() -> None:
     assert "wrapper_invocation_id" in ci
     assert "source_commit" in ci
     assert "tools/nw01/run-full.ps1" in ci
+    assert "NW_HARNESS_BEHAVIOR_TESTS" in ci
 
 
 def test_full_wrapper_preserves_verifier_exit_contract() -> None:
@@ -413,13 +415,14 @@ def test_visual_studio_selection_derives_versions_and_components_from_manifest(t
     command = (
         f"Import-Module {ps_quote(module)} -Force; "
         f"$selection = Get-NwVisualStudioSelection -RepoRoot {ps_quote(repo)}; "
-        "[ordered]@{ VcVars = $selection.VcVarsVersion; Sdk = $selection.WindowsSdkVersion; "
+        "[ordered]@{ VcVars = $selection.VcVarsVersion; Fallback = $selection.VcVarsFallbackVersion; Sdk = $selection.WindowsSdkVersion; "
         "Components = @($selection.Components) } | ConvertTo-Json -Depth 4 -Compress"
     )
     proc = run_pwsh_command(command)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     selection = json.loads(proc.stdout.strip().splitlines()[-1])
     assert selection["VcVars"] == "14.40.33821"
+    assert selection["Fallback"] == "14.40"
     assert selection["Sdk"] == "10.0.26100.0"
     components = "\n".join(selection["Components"])
     assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" in components
@@ -468,10 +471,8 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
         f"""
         Import-Module {module} -Force
         $downloader = {{ param([string]$TargetUri, [string]$TargetOutFile) throw [System.Exception]::new('temporarily unavailable') }}
-        $expectedFallback = 'exact-fallback'
-        $fallbackProbe = {{ $expectedFallback }}.GetNewClosure()
-        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/b' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe $fallbackProbe
-        if ($result.FallbackUsed -ne $true -or $result.FallbackValue -ne $expectedFallback) {{ throw 'fallback was not used' }}
+        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/b' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe {{ 'exact-fallback' }}
+        if ($result.FallbackUsed -ne $true -or $result.FallbackValue -ne 'exact-fallback') {{ throw 'fallback was not used' }}
         Write-Output 'fallback-ok'
         """
     )

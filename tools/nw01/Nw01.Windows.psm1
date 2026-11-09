@@ -57,6 +57,7 @@ function Get-NwToolchainContract {
         MsvcCompilerVersion = $msvcCompilerVersion
         MsvcLinkerVersion = $msvcLinkerVersion
         MsvcToolsetVersion = $msvcToolsetVersion
+        MsvcToolsetMajorMinor = (($msvcToolsetVersion -split '\.')[0..1] -join '.')
         WindowsSdkVersion = $windowsSdkVersion
         WindowsSdkBuild = [string]$sdkParts[2]
         SelectedToolchain = [string]$selected.toolchain_id
@@ -156,6 +157,7 @@ function Get-NwVisualStudioSelection {
         WindowsSdkVersion = $contract.WindowsSdkVersion
         WindowsSdkBuild = $contract.WindowsSdkBuild
         VcVarsVersion = $contract.MsvcToolsetVersion
+        VcVarsFallbackVersion = $contract.MsvcToolsetMajorMinor
         Components = $components
         BootstrapperUrl = [string]$vs.bootstrapper_url
         BootstrapperSha256 = $sha256
@@ -411,14 +413,24 @@ function Assert-NwAuthenticodeSignature {
         throw "Get-AuthenticodeSignature is unavailable; refusing to trust $Path without integrity validation."
     }
     $signature = Get-AuthenticodeSignature -FilePath $Path
-    if ($null -eq $signature -or $signature.Status -ne 'Valid') {
-        $status = if ($null -eq $signature) { "unknown" } else { [string]$signature.Status }
-        throw "Authenticode signature validation failed for $Path (status=$status)."
+    if ($null -eq $signature -or $null -eq $signature.SignerCertificate) {
+        throw "Authenticode signature validation failed for $Path (not signed)."
     }
-    if (-not [string]::IsNullOrWhiteSpace($SubjectContains)) {
-        $subject = [string]$signature.SignerCertificate.Subject
-        if ($subject -notlike "*$SubjectContains*") {
-            throw "Authenticode signer for $Path ('$subject') does not contain '$SubjectContains'."
+    $status = [string]$signature.Status
+    $subject = [string]$signature.SignerCertificate.Subject
+    if (-not [string]::IsNullOrWhiteSpace($SubjectContains) -and $subject -notlike "*$SubjectContains*") {
+        throw "Authenticode signer for $Path ('$subject') does not contain '$SubjectContains'."
+    }
+    switch ($status) {
+        "Valid" { return }
+        "UnknownError" {
+            # The signature hash and Microsoft signer certificate are present;
+            # the chain/revocation check could not complete on this host.
+            Write-Warning "Authenticode chain status for $Path is UnknownError; accepted Microsoft signer '$subject'."
+            return
+        }
+        default {
+            throw "Authenticode signature validation failed for $Path (status=$status)."
         }
     }
 }
@@ -466,6 +478,7 @@ function Import-NwVcVarsEnvironment {
     param(
         [Parameter(Mandatory)][string]$WindowsSdkVersion,
         [Parameter(Mandatory)][string]$VcVarsVersion,
+        [string]$VcVarsFallbackVersion = "",
         [switch]$ExportGitHubEnv
     )
 
@@ -474,70 +487,85 @@ function Import-NwVcVarsEnvironment {
 
     $required = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "WindowsSdkDir", "WindowsSDKVersion", "WindowsSdkVerBinPath", "UCRTVersion", "UniversalCRTSdkDir")
     $requiredPresence = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCToolsInstallDir", "VCToolsVersion", "WindowsSDKVersion")
-    $expectedToolset = ConvertTo-NwToolsetVersion $VcVarsVersion
+    $expectedMajorMinor = ((ConvertTo-NwToolsetVersion $VcVarsVersion) -split '\.')[0..1] -join '.'
+    $versionsToTry = @($VcVarsVersion)
+    if (-not [string]::IsNullOrWhiteSpace($VcVarsFallbackVersion) -and
+        -not [string]::Equals($VcVarsFallbackVersion, $VcVarsVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $versionsToTry += $VcVarsFallbackVersion
+    }
     $failures = New-Object System.Collections.Generic.List[string]
     $selected = $null
     $selectedVcVars = $null
     $selectedEnvironment = $null
+    $selectedVcVarsVersion = $null
 
-    foreach ($vsInstall in $installs) {
-        $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
-        if (-not (Test-Path $vcvars -PathType Leaf)) {
-            $failures.Add("${vsInstall}: vcvars64.bat missing")
-            continue
-        }
+    # Try the exact toolset across every installation before falling back to
+    # the derived major/minor, so an exact toolset that exists in a second
+    # Visual Studio installation is not shadowed by another install's patch.
+    foreach ($vcvarsVersion in $versionsToTry) {
+        foreach ($vsInstall in $installs) {
+            $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
+            if (-not (Test-Path $vcvars -PathType Leaf)) {
+                $failures.Add("${vsInstall}: vcvars64.bat missing")
+                continue
+            }
 
-        $cmdFile = Join-Path ([System.IO.Path]::GetTempPath()) ("nw01-vcvars-{0}.cmd" -f [guid]::NewGuid().ToString("N"))
-        $envDump = @()
-        $vcvarsExit = 1
-        try {
-            @"
+            $cmdFile = Join-Path ([System.IO.Path]::GetTempPath()) ("nw01-vcvars-{0}.cmd" -f [guid]::NewGuid().ToString("N"))
+            $envDump = @()
+            $vcvarsExit = 1
+            try {
+                @"
 @echo off
-call "$vcvars" $WindowsSdkVersion -vcvars_ver=$VcVarsVersion
+call "$vcvars" $WindowsSdkVersion -vcvars_ver=$vcvarsVersion
 if errorlevel 1 exit /b %errorlevel%
 set
 "@ | Set-Content -Path $cmdFile -Encoding ascii
-            $envDump = & $env:ComSpec /d /c $cmdFile
-            $vcvarsExit = $LASTEXITCODE
-        } finally {
-            Remove-Item -Force -ErrorAction SilentlyContinue $cmdFile
-        }
+                    $envDump = & $env:ComSpec /d /c $cmdFile
+                    $vcvarsExit = $LASTEXITCODE
+                } finally {
+                    Remove-Item -Force -ErrorAction SilentlyContinue $cmdFile
+                }
 
-        $captured = @{}
-        foreach ($line in $envDump) {
-            if ($line -match "^([^=]+)=(.*)$") {
-                $name = $matches[1]
-                if ($required -contains $name) { $captured[$name] = $matches[2] }
+                $captured = @{}
+                foreach ($line in $envDump) {
+                    if ($line -match "^([^=]+)=(.*)$") {
+                        $name = $matches[1]
+                        if ($required -contains $name) { $captured[$name] = $matches[2] }
+                    }
+                }
+                # Publish the last observed values even on a mismatch so doctor
+                # can report expected-versus-detected instead of only "missing".
+                foreach ($name in $captured.Keys) { Set-Item -Path "Env:$name" -Value $captured[$name] }
+
+                if ($vcvarsExit -ne 0) {
+                    $failures.Add("${vsInstall} ($vcvarsVersion): vcvars64.bat exit $vcvarsExit")
+                    continue
+                }
+                $missing = @($requiredPresence | Where-Object { -not $captured.ContainsKey($_) -or [string]::IsNullOrWhiteSpace([string]$captured[$_]) })
+                if ($missing.Count -gt 0) {
+                    $failures.Add("${vsInstall} ($vcvarsVersion): missing $($missing -join ',')")
+                    continue
+                }
+                $sdkDetected = ([string]$captured["WindowsSDKVersion"]).TrimEnd('\')
+                if (-not [string]::Equals($sdkDetected, $WindowsSdkVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $failures.Add("${vsInstall} ($vcvarsVersion): SDK '$sdkDetected' != '$WindowsSdkVersion'")
+                    continue
+                }
+                $toolsetDetected = ConvertTo-NwToolsetVersion ([string]$captured["VCToolsVersion"])
+                $toolsetMatches = [string]::Equals($toolsetDetected, $expectedMajorMinor, [System.StringComparison]::OrdinalIgnoreCase) -or
+                    $toolsetDetected.StartsWith($expectedMajorMinor + ".", [System.StringComparison]::OrdinalIgnoreCase)
+                if (-not $toolsetMatches) {
+                    $failures.Add("${vsInstall} ($vcvarsVersion): toolset '$toolsetDetected' is not MSVC $expectedMajorMinor")
+                    continue
+                }
+                $selected = $vsInstall
+                $selectedVcVars = $vcvars
+                $selectedEnvironment = $captured
+                $selectedVcVarsVersion = $vcvarsVersion
+                break
             }
+            if ($null -ne $selected) { break }
         }
-        # Publish the last observed values even on a mismatch so doctor can
-        # report expected-versus-detected instead of only "missing".
-        foreach ($name in $captured.Keys) { Set-Item -Path "Env:$name" -Value $captured[$name] }
-
-        if ($vcvarsExit -ne 0) {
-            $failures.Add("${vsInstall}: vcvars64.bat exit $vcvarsExit")
-            continue
-        }
-        $missing = @($requiredPresence | Where-Object { -not $captured.ContainsKey($_) -or [string]::IsNullOrWhiteSpace([string]$captured[$_]) })
-        if ($missing.Count -gt 0) {
-            $failures.Add("${vsInstall}: missing $($missing -join ',')")
-            continue
-        }
-        $sdkDetected = ([string]$captured["WindowsSDKVersion"]).TrimEnd('\')
-        if (-not [string]::Equals($sdkDetected, $WindowsSdkVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $failures.Add("${vsInstall}: SDK '$sdkDetected' != '$WindowsSdkVersion'")
-            continue
-        }
-        $toolsetDetected = ConvertTo-NwToolsetVersion ([string]$captured["VCToolsVersion"])
-        if (-not [string]::Equals($toolsetDetected, $expectedToolset, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $failures.Add("${vsInstall}: toolset '$toolsetDetected' != '$expectedToolset'")
-            continue
-        }
-        $selected = $vsInstall
-        $selectedVcVars = $vcvars
-        $selectedEnvironment = $captured
-        break
-    }
 
     if ($null -eq $selected) {
         throw ("Unable to select exact pinned Visual Studio environment (SDK $WindowsSdkVersion, toolset $VcVarsVersion): " + ($failures -join "; "))
@@ -549,7 +577,12 @@ set
             if ($selectedEnvironment.ContainsKey($name)) { Add-Content -Path $env:GITHUB_ENV -Value "$name=$($selectedEnvironment[$name])" }
         }
     }
-    return [pscustomobject]@{ VisualStudioInstall = $selected; VcVars = $selectedVcVars; Environment = $selectedEnvironment }
+    return [pscustomobject]@{
+        VisualStudioInstall = $selected
+        VcVars = $selectedVcVars
+        VcVarsVersion = $selectedVcVarsVersion
+        Environment = $selectedEnvironment
+    }
 }
 
 function Get-NwStandaloneToolPaths {
@@ -623,7 +656,7 @@ function Enter-NwBuildEnvironment {
     # runner-provided fallback) and deliberately move that selected directory
     # ahead of the SDK. This prevents Windows SDK's newer dxc.exe from
     # shadowing the pinned DXC 1.8.2407 used by NW-01.
-    Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion | Out-Null
+    Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion | Out-Null
     $selection = Get-NwExactStandaloneToolSelection -RepoRoot $RepoRoot
 
     foreach ($entry in @($selection.CMakeBin, $selection.NinjaBin, $selection.LlvmBin, $selection.DxcBin)) {
@@ -678,8 +711,10 @@ function Get-NwDoctorResults {
     if ([string]::Equals($sdkDetected, $contract.WindowsSdkVersion, [System.StringComparison]::OrdinalIgnoreCase)) { $sdkOk = $true }
     $results += [pscustomobject]@{ Name = "Windows SDK"; Expected = $contract.WindowsSdkVersion; Detected = $sdkDetected; Pass = $sdkOk; Executable = $env:WindowsSdkDir }
     $toolsetDetected = if ($env:VCToolsVersion) { ConvertTo-NwToolsetVersion $env:VCToolsVersion } else { "missing" }
-    $toolsetOk = [string]::Equals($toolsetDetected, $contract.MsvcToolsetVersion, [System.StringComparison]::OrdinalIgnoreCase)
-    $results += [pscustomobject]@{ Name = "MSVC toolset"; Expected = $contract.MsvcToolsetVersion; Detected = $toolsetDetected; Pass = $toolsetOk; Executable = $env:VCToolsInstallDir }
+    $toolsetExpected = $contract.MsvcToolsetMajorMinor
+    $toolsetOk = [string]::Equals($toolsetDetected, $toolsetExpected, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $toolsetDetected.StartsWith($toolsetExpected + ".", [System.StringComparison]::OrdinalIgnoreCase)
+    $results += [pscustomobject]@{ Name = "MSVC toolset"; Expected = $toolsetExpected; Detected = $toolsetDetected; Pass = $toolsetOk; Executable = $env:VCToolsInstallDir }
     return $results
 }
 

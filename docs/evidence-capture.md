@@ -72,9 +72,11 @@ environment of its already-running parent process.
 The MSVC environment reproduces the same `vcvars64.bat` selection mechanism that completed
 NW-01 on the physical RTX 4060 Ti host. The Windows SDK version is read from
 `benchmarks/toolchain-manifest.v1.json`; the `vcvars_ver` selector is derived from the manifest's
-pinned MSVC toolset (for example `14.40.33821`). `tools/nw01/toolchain-sources.json` only carries
-component templates, download locations, integrity digests and retry policy. There is no second
-independent copy of the toolset or SDK version pins.
+pinned MSVC toolset (for example `14.40.33821`), with a derived `14.40` major/minor fallback when
+the host only exposes a different 14.40 patch. The exact `cl.exe`/`link.exe` versions are still
+verified against the manifest. `tools/nw01/toolchain-sources.json` only carries component
+templates, download locations, integrity digests and retry policy. There is no second independent
+copy of the toolset or SDK version pins.
 
 ## 3. Run Full and preserve its summary
 

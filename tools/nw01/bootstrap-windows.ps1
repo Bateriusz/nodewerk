@@ -15,7 +15,7 @@ if (-not $IsWindows) {
 }
 
 $env:NW_TOOLS_ROOT = $ToolsRoot
-Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force -Scope Global
+Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force
 $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
 $sources = Get-NwProvisioningSources -RepoRoot $RepoRoot
 $visualStudio = Get-NwVisualStudioSelection -RepoRoot $RepoRoot
@@ -80,8 +80,9 @@ function Ensure-ZipTool(
     $probeTool = $Tool
     $probeExpected = $Expected
     $probeCandidate = $candidate
+    $findExact = ${function:Find-NwExactCommand}
     $fallbackProbe = {
-        Find-NwExactCommand -Name $probeCommand -Tool $probeTool -Expected $probeExpected -AdditionalCandidates @($probeCandidate)
+        & $findExact -Name $probeCommand -Tool $probeTool -Expected $probeExpected -AdditionalCandidates @($probeCandidate)
     }.GetNewClosure()
     $download = Invoke-NwDownloadWithFallback -Name $Name -Uri $Uri -OutFile $archive -RetryPolicy $retry -FallbackProbe $fallbackProbe
     if ($download.FallbackUsed) {
@@ -121,9 +122,10 @@ function Ensure-Llvm {
     $probeClang = $clang
     $probeLld = $lld
     $probeVersion = $contract.LlvmVersion
+    $findExact = ${function:Find-NwExactCommand}
     $fallbackProbe = {
-        $c = Find-NwExactCommand -Name "clang-cl.exe" -Tool "clang-cl" -Expected $probeVersion -AdditionalCandidates @($probeClang)
-        $l = Find-NwExactCommand -Name "lld-link.exe" -Tool "lld-link" -Expected $probeVersion -AdditionalCandidates @($probeLld)
+        $c = & $findExact -Name "clang-cl.exe" -Tool "clang-cl" -Expected $probeVersion -AdditionalCandidates @($probeClang)
+        $l = & $findExact -Name "lld-link.exe" -Tool "lld-link" -Expected $probeVersion -AdditionalCandidates @($probeLld)
         if ($c -and $l) { return (Split-Path -Parent $c) }
         return $null
     }.GetNewClosure()
@@ -147,7 +149,7 @@ function Ensure-Llvm {
 
 function Test-ExistingVisualStudio {
     try {
-        Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion | Out-Null
+        Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion | Out-Null
         $cl = (Get-Command cl.exe -ErrorAction Stop).Source
         $link = (Get-Command link.exe -ErrorAction Stop).Source
         return ((Test-NwExactVersion -Tool "cl" -Executable $cl -Expected $contract.MsvcCompilerVersion) -and
@@ -167,15 +169,18 @@ function Ensure-VisualStudio {
     Remove-Item -Force -ErrorAction SilentlyContinue $bootstrapper
     $probeSdk = $visualStudio.WindowsSdkVersion
     $probeVcVars = $visualStudio.VcVarsVersion
+    $probeVcVarsFallback = $visualStudio.VcVarsFallbackVersion
     $probeCompiler = $contract.MsvcCompilerVersion
     $probeLinker = $contract.MsvcLinkerVersion
+    $importVcVars = ${function:Import-NwVcVarsEnvironment}
+    $testExact = ${function:Test-NwExactVersion}
     $fallbackProbe = {
         try {
-            Import-NwVcVarsEnvironment -WindowsSdkVersion $probeSdk -VcVarsVersion $probeVcVars | Out-Null
+            & $importVcVars -WindowsSdkVersion $probeSdk -VcVarsVersion $probeVcVars -VcVarsFallbackVersion $probeVcVarsFallback | Out-Null
             $cl = (Get-Command cl.exe -ErrorAction Stop).Source
             $link = (Get-Command link.exe -ErrorAction Stop).Source
-            if ((Test-NwExactVersion -Tool "cl" -Executable $cl -Expected $probeCompiler) -and
-                (Test-NwExactVersion -Tool "link" -Executable $link -Expected $probeLinker)) {
+            if ((& $testExact -Tool "cl" -Executable $cl -Expected $probeCompiler) -and
+                (& $testExact -Tool "link" -Executable $link -Expected $probeLinker)) {
                 return $cl
             }
             return $null
