@@ -172,6 +172,10 @@ def test_documented_clean_system_role_never_bootstraps_full_toolchain() -> None:
     assert "source_commit" in clean
     assert "git -C $RepoRoot rev-parse HEAD" in clean
     assert "Refusing stale package" in clean
+    assert '$nvidiaSmiArgs = @(' in clean
+    assert '"--query-gpu=name,driver_version"' in clean
+    assert '"--format=csv,noheader,nounits"' in clean
+    assert "$nvidiaSmiExitCode = $LASTEXITCODE" in clean
 
     for path in (
         "tools/nw01/bootstrap-windows.ps1",
