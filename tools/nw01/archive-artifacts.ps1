@@ -64,7 +64,8 @@ function Get-NwCertificationProblems(
     $ToolchainManifest,
     [object[]]$Ledgers,
     $DeployHashes,
-    [string]$Toolchain
+    [string]$Toolchain,
+    [string]$ExpectedSourceCommit
 ) {
     $problems = New-Object System.Collections.Generic.List[string]
     if ([string]::IsNullOrWhiteSpace($Toolchain)) {
@@ -75,8 +76,18 @@ function Get-NwCertificationProblems(
         $problems.Add("$Kind records unknown toolchain '$Toolchain'.")
         return $problems.ToArray()
     }
-    if ($null -eq $BuildChecks -or (Get-NwValue $BuildChecks "full_baseline_passed" $false) -ne $true) {
-        $problems.Add("$Kind Full build evidence is missing or did not pass the full baseline.")
+    if ($null -eq $BuildChecks) {
+        $problems.Add("$Kind Full build evidence is missing.")
+    } else {
+        $buildChecksCommit = [string](Get-NwValue $BuildChecks "source_commit" "")
+        if ([string]::IsNullOrWhiteSpace($buildChecksCommit)) {
+            $problems.Add("$Kind build-checks.json does not record source_commit.")
+        } elseif (-not [string]::Equals($buildChecksCommit, $ExpectedSourceCommit, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $problems.Add("$Kind build-checks.json source_commit '$buildChecksCommit' does not match artifact source_commit '$ExpectedSourceCommit'.")
+        }
+        if ((Get-NwValue $BuildChecks "full_baseline_passed" $false) -ne $true) {
+            $problems.Add("$Kind Full build evidence did not pass the full baseline.")
+        }
     }
     $selected = [string](Get-NwValue (Get-NwValue $ToolchainManifest "selected_toolchain" $null) "toolchain_id" "")
     if ($selected -ne $Toolchain) {
@@ -170,10 +181,18 @@ function Assert-NwPackageDeployHashes([string]$PackageRoot, $Manifest) {
         }
         $actualHashes[$key] = $actual
     }
-    $unexpected = @(Get-ChildItem -Path (Join-Path $PackageRoot "deploy") -File -ErrorAction SilentlyContinue |
-        Where-Object { -not $expectedEntryNames.ContainsKey("deploy/$($_.Name)") })
+    $deployRoot = Join-Path $PackageRoot "deploy"
+    $subdirectories = @(Get-ChildItem -Path $deployRoot -Directory -Recurse -ErrorAction SilentlyContinue)
+    if ($subdirectories.Count -gt 0) {
+        throw "CleanSystem package deploy tree contains unrecorded subdirectory payloads: $($subdirectories.Name -join ', ')."
+    }
+    $unexpected = @(Get-ChildItem -Path $deployRoot -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object {
+            $relative = $_.FullName.Substring($deployRoot.Length).TrimStart('\', '/').Replace('\', '/')
+            -not $expectedEntryNames.ContainsKey("deploy/$relative")
+        })
     if ($unexpected.Count -gt 0) {
-        throw "CleanSystem package deploy directory contains unrecorded file(s): $($unexpected.Name -join ', ')."
+        throw "CleanSystem package deploy tree contains unrecorded file(s): $($unexpected.Name -join ', ')."
     }
     return $actualHashes
 }
@@ -305,7 +324,8 @@ try {
             -ToolchainManifest $packageToolchainManifest `
             -Ledgers $packageLedgers `
             -DeployHashes $packageDeployHashes `
-            -Toolchain ([string](Get-NwValue $packageManifest "toolchain" "")))
+            -Toolchain ([string](Get-NwValue $packageManifest "toolchain" "")) `
+            -ExpectedSourceCommit $packageCommit)
         if ($packageProblems.Count -eq 0) {
             $packageCertifies = $true
         } else {
@@ -378,7 +398,8 @@ try {
                     -ToolchainManifest $zipToolchainManifest `
                     -Ledgers $zipLedgers `
                     -DeployHashes $zipDeployHashes `
-                    -Toolchain $zipToolchain)
+                    -Toolchain $zipToolchain `
+                    -ExpectedSourceCommit $zipCommit)
                 if ($zipProblems.Count -eq 0 -and $certificationProblems.Count -eq 0) {
                     $zipCertifies = $true
                 } else {

@@ -409,7 +409,13 @@ def build_archive_package(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
     (evidence / "build-checks.json").write_text(
-        json.dumps({"full_baseline_passed": full_baseline_passed}) + "\n",
+        json.dumps(
+            {
+                "source_commit": source_commit,
+                "full_baseline_passed": full_baseline_passed,
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     (evidence / "toolchain-manifest.v1.json").write_text(
@@ -1050,7 +1056,8 @@ def test_run_full_preserves_all_verifier_exit_codes_and_exports_fresh_summary(tm
                 "NW_TEST_VERIFIER_SKIP_SUMMARY": "1",
             },
         )
-        assert proc.returncode == expected_code, proc.stdout + proc.stderr
+        expected_exit = expected_code if expected_code in (1, 2, 3) else 1
+        assert proc.returncode == expected_exit, proc.stdout + proc.stderr
         crash = json.loads(crash_summary.read_text(encoding="utf-8-sig"))
         assert crash["full_baseline_passed"] is False
         assert crash["wrapper_error"]["stage"] == "wrapper"
@@ -1151,6 +1158,22 @@ def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Pa
     assert proc.returncode != 0
     assert "does not match current measured" in (proc.stdout + proc.stderr)
     assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
+    git_run(repo, "checkout", "--", relative_status)
+
+    status_data = json.loads(status_path.read_text(encoding="utf-8"))
+    status_data["required_measured_evidence"][0]["files"] = "benchmarks/evidence-status.json"
+    status_path.write_text(json.dumps(status_data, indent=2) + "\n", encoding="utf-8")
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert "cyclic reference" in (proc.stdout + proc.stderr)
+    git_run(repo, "checkout", "--", relative_status)
+
+    status_data = json.loads(status_path.read_text(encoding="utf-8"))
+    status_data["required_measured_evidence"][0]["files"] = "../outside.json"
+    status_path.write_text(json.dumps(status_data, indent=2) + "\n", encoding="utf-8")
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert "outside the repository" in (proc.stdout + proc.stderr)
     git_run(repo, "checkout", "--", relative_status)
 
     # Malformed content is rejected before staging.
@@ -1466,6 +1489,25 @@ def test_archive_rejects_missing_and_tampered_package_deploy_files(tmp_path: Pat
     assert proc.returncode != 0
     assert "missing deploy executable" in (proc.stdout + proc.stderr).lower()
 
+    nested_package = tmp_path / "nested-package"
+    build_archive_package(nested_package, source_commit=head)
+    nested = nested_package / "deploy/extra"
+    nested.mkdir()
+    (nested / "payload.exe").write_bytes(b"unrecorded")
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        tmp_path / "nested-archive",
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        nested_package,
+    )
+    assert proc.returncode != 0
+    assert "unrecorded subdirectory" in (proc.stdout + proc.stderr).lower()
+
 
 @requires_windows_harness
 def test_archive_classifies_current_incomplete_full_as_non_certifying(tmp_path: Path) -> None:
@@ -1516,6 +1558,46 @@ def test_archive_classifies_current_incomplete_full_as_non_certifying(tmp_path: 
     manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
     assert manifest["evidence_class"] == "current-certifying"
     assert manifest["certifying"] is True
+
+
+@requires_windows_harness
+def test_archive_rejects_stale_package_build_checks_source(tmp_path: Path) -> None:
+    repo = init_git_repo(tmp_path / "archive stale build-checks repo")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    head = commit_all(repo)
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps({"source_commit": head, "full_baseline_passed": True}),
+        encoding="utf-8",
+    )
+    package = tmp_path / "package"
+    build_archive_package(package, source_commit=head)
+    build_checks_path = package / "evidence/build-checks.json"
+    build_checks = json.loads(build_checks_path.read_text(encoding="utf-8"))
+    build_checks["source_commit"] = "b" * 40
+    build_checks_path.write_text(json.dumps(build_checks), encoding="utf-8")
+
+    archive_root = tmp_path / "archive"
+    proc = run_pwsh_script(
+        ROOT / "tools/nw01/archive-artifacts.ps1",
+        "-ArchiveRoot",
+        archive_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        package,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    directory = next(path for path in archive_root.iterdir() if path.is_dir())
+    manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
+    assert manifest["evidence_class"] == "current-non-certifying"
+    assert manifest["certifying"] is False
+    assert any(
+        "build-checks.json source_commit" in problem
+        for problem in manifest["certification_problems"]
+    )
 
 
 @requires_windows_harness

@@ -228,15 +228,17 @@ pwsh ./tools/nw01/archive-artifacts.ps1 `
 The command refuses an archive root inside the repository and writes an archive manifest bound to
 the source revision recorded by the supplied Full summary and CleanSystem package artifact
 manifest. It rejects conflicting revisions and verifies every recorded package/ZIP deploy
-executable against its size and SHA-256. Labels are `current-certifying`, `current-non-certifying`
-or `historical`: a current source revision only certifies when the supplied Full summary reports
-`full_baseline_passed` and the package/ZIP toolchain manifest and verified release-ledger hashes
-match the deployed executables. Historical evidence is never relabelled as current certifying
-evidence. Prior archive directories are preserved; `-Replace` is required for an explicit
-overwrite. A supplied CleanSystem ZIP is inspected for its embedded
-`evidence/artifact-manifest.json`, `build-checks.json`, toolchain manifest and ledgers; missing or
-tampered deploy entries fail, and a ZIP without a usable manifest is explicitly recorded in
-`unverified_artifacts` instead of receiving current certifying provenance.
+executable against its size and SHA-256; unrecorded deploy files or subdirectories fail. Labels are
+`current-certifying`, `current-non-certifying` or `historical`: a current source revision only
+certifies when the supplied Full summary reports `full_baseline_passed`, the embedded
+`build-checks.json` source revision matches the artifact-manifest source revision, and the
+package/ZIP toolchain manifest and verified release-ledger hashes match the deployed executables.
+Historical evidence is never relabelled as current certifying evidence. Prior archive directories
+are preserved; `-Replace` is required for an explicit overwrite. A supplied CleanSystem ZIP is
+inspected for its embedded `evidence/artifact-manifest.json`, `build-checks.json`, toolchain
+manifest and ledgers; missing or tampered deploy entries fail, and a ZIP without a usable manifest
+is explicitly recorded in `unverified_artifacts` instead of receiving current certifying
+provenance.
 
 ## 9. Prepare repository evidence for Git
 
@@ -254,6 +256,8 @@ verification status and applicable provenance/hash relationship are validated. H
 CleanSystem and reproducibility evidence must match the selected toolchain's verified release
 ledgers; reproducibility hash pairs are tied to those ledgers rather than merely matching each
 other, and `benchmarks/evidence-status.json` must reference current, validated evidence files.
+Status references are confined to repository-relative, allowlisted evidence paths and are
+cycle-checked before staging.
 For example `benchmarks/hardware/credentials.json`, an unrelated `benchmarks/hardware/rtx.json`
 capture, a stale reproducibility report, or a status file referencing missing evidence is
 rejected.

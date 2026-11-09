@@ -137,13 +137,34 @@ function Assert-NwProvenance([string]$Kind, $Document, [string]$ToolchainId, $Le
     }
 }
 
-function Assert-NwEvidenceContent([string]$Root, [string]$RelativePath, [string]$SelectedToolchain, $LedgerHashes) {
+function Assert-NwEvidenceContent(
+    [string]$Root,
+    [string]$RelativePath,
+    [string]$SelectedToolchain,
+    $LedgerHashes,
+    [hashtable]$Active = $null
+) {
+    if ($null -eq $Active) { $Active = @{} }
     $normalized = $RelativePath.Replace('\', '/')
-    $fullPath = Join-Path $Root $normalized
-    if (-not (Test-Path $fullPath -PathType Leaf)) { throw "Evidence candidate is missing: $normalized" }
-    Assert-NwEvidenceSchema -Root $Root -RelativePath $normalized -FullPath $fullPath
+    if (-not (Test-AllowedEvidencePath $normalized)) {
+        throw "Evidence candidate '$normalized' is not in the explicit evidence allowlist."
+    }
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('\', '/'))
+    $fullPath = [System.IO.Path]::GetFullPath((Join-Path $Root $normalized))
+    $rootPrefix = $rootFull + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Evidence candidate '$normalized' escapes the repository root."
+    }
+    $activeKey = $normalized.ToLowerInvariant()
+    if ($Active.ContainsKey($activeKey)) {
+        throw "Evidence status contains a cyclic reference through '$normalized'."
+    }
+    $Active[$activeKey] = $true
+    try {
+        if (-not (Test-Path $fullPath -PathType Leaf)) { throw "Evidence candidate is missing: $normalized" }
+        Assert-NwEvidenceSchema -Root $Root -RelativePath $normalized -FullPath $fullPath
 
-    if ($normalized -match '^benchmarks/ledgers/') {
+        if ($normalized -match '^benchmarks/ledgers/') {
         $ledger = Read-NwJsonDocument $fullPath
         if ((Get-NwPropertyValue $ledger "verification_status") -ne "verified") { throw "Ledger '$normalized' is not verified." }
         if ((Get-NwPropertyValue $ledger "build_profile") -ne "release") { throw "Ledger '$normalized' is not a release ledger." }
@@ -284,13 +305,20 @@ function Assert-NwEvidenceContent([string]$Root, [string]$RelativePath, [string]
             if ([string]::IsNullOrWhiteSpace($filePattern)) {
                 throw "Evidence status item '$itemName' does not reference any files."
             }
-            $referenced = @(Get-ChildItem -Path (Join-Path $Root $filePattern) -File -ErrorAction SilentlyContinue)
+            $normalizedPattern = $filePattern.Replace('\', '/')
+            if ([System.IO.Path]::IsPathRooted($filePattern) -or
+                $normalizedPattern -match '(^|/)\.\.(/|$)' -or
+                $normalizedPattern -match '^[A-Za-z]:' -or
+                $normalizedPattern.StartsWith('//')) {
+                throw "Evidence status item '$itemName' uses a path outside the repository: '$filePattern'."
+            }
+            $referenced = @(Get-ChildItem -Path (Join-Path $Root $normalizedPattern) -File -ErrorAction SilentlyContinue)
             if ($referenced.Count -eq 0) {
                 throw "Evidence status item '$itemName' references no current files matching '$filePattern'."
             }
             foreach ($referencedFile in $referenced) {
                 $relative = $referencedFile.FullName.Substring($Root.Length).TrimStart('\', '/').Replace('\', '/')
-                Assert-NwEvidenceContent -Root $Root -RelativePath $relative -SelectedToolchain $SelectedToolchain -LedgerHashes $LedgerHashes
+                Assert-NwEvidenceContent -Root $Root -RelativePath $relative -SelectedToolchain $SelectedToolchain -LedgerHashes $LedgerHashes -Active $Active
             }
         }
         $measuredBuilds = @()
@@ -367,7 +395,10 @@ function Assert-NwEvidenceContent([string]$Root, [string]$RelativePath, [string]
         return
     }
 
-    throw "Unrecognized evidence candidate: $normalized"
+        throw "Unrecognized evidence candidate: $normalized"
+    } finally {
+        $Active.Remove($activeKey)
+    }
 }
 
 function Assert-NwNoHistoryOperationInProgress([string]$GitRoot) {

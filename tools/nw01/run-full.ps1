@@ -150,7 +150,10 @@ try {
     } catch {
         Write-Warning "[NW-FULL] unable to persist a failure summary at '$SummaryPath': $($_.Exception.Message)"
     }
-    $failureExitCode = if ($null -ne $verifierCode -and $verifierCode -ge 0 -and $verifierCode -le 3) {
+    # A verifier that claimed success but produced no usable summary is a
+    # wrapper-side failure (exit 1); preserve only the verifier's non-zero
+    # 1/2/3 contract on the failure path.
+    $failureExitCode = if ($null -ne $verifierCode -and $verifierCode -ge 1 -and $verifierCode -le 3) {
         [int]$verifierCode
     } else {
         1
