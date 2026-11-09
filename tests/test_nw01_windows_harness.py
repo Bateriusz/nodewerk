@@ -165,6 +165,10 @@ def test_documented_clean_system_role_never_bootstraps_full_toolchain() -> None:
     assert '[string]$RepoRoot = ""' in clean
     assert "$MyInvocation.MyCommand.Path" in clean
     assert "Resolve the repository root after entering the script body" in clean
+    assert "artifact-manifest.json" in clean
+    assert "source_commit" in clean
+    assert "git -C $RepoRoot rev-parse HEAD" in clean
+    assert "Refusing stale package" in clean
 
     for path in (
         "tools/nw01/bootstrap-windows.ps1",
