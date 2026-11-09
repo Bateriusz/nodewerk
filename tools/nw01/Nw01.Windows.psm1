@@ -75,6 +75,48 @@ function Get-NwProvisioningSources {
     return Get-Content -Raw $path | ConvertFrom-Json
 }
 
+function Get-NwToolVersionIdentities {
+    <#
+        Repository-owned mapping from a semantic pinned version to the exact
+        binary identity reported by the distributed executable. The pin in the
+        toolchain manifest is a contract version; some upstream release archives
+        report an additional build component (for example DXC 1.8.2407 reports
+        "1.8.2407.12"). This file is the single place where that identity is
+        recorded so the verifier does not accept an arbitrary nearby version.
+    #>
+    [CmdletBinding()]
+    param([string]$RepoRoot = "")
+    $root = Get-NwRepoRoot -RepoRoot $RepoRoot
+    $path = Join-Path $root "tools/nw01/tool-version-identities.json"
+    if (-not (Test-Path $path -PathType Leaf)) {
+        throw "Tool version identity mapping not found: $path"
+    }
+    return Get-Content -Raw $path | ConvertFrom-Json
+}
+
+function Get-NwReportedToolVersions {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Tool,
+        [Parameter(Mandatory)][string]$Expected,
+        [string]$RepoRoot = ""
+    )
+    $mapping = Get-NwToolVersionIdentities -RepoRoot $RepoRoot
+    $toolProperty = $mapping.PSObject.Properties[$Tool]
+    if ($null -eq $toolProperty -or $null -eq $toolProperty.Value) {
+        throw "Tool version identity mapping has no entry for '$Tool'."
+    }
+    $versionProperty = $toolProperty.Value.PSObject.Properties[$Expected]
+    if ($null -eq $versionProperty -or $null -eq $versionProperty.Value) {
+        throw "Tool version identity mapping has no exact identity for '$Tool' pinned version '$Expected'."
+    }
+    $reported = @($versionProperty.Value.reported_versions)
+    if ($reported.Count -eq 0 -or @($reported | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }).Count -gt 0) {
+        throw "Tool version identity mapping for '$Tool' pinned version '$Expected' does not list non-empty reported_versions."
+    }
+    return $reported
+}
+
 function ConvertTo-NwToolsetVersion {
     <# Normalize a Visual Studio toolset/compiler version to MAJOR.MINOR.PATCH. #>
     param([string]$Value)
@@ -182,7 +224,8 @@ function Test-NwExactVersion {
     param(
         [Parameter(Mandatory)][ValidateSet("cmake", "ninja", "clang-cl", "lld-link", "dxc", "cl", "link")][string]$Tool,
         [Parameter(Mandatory)][string]$Executable,
-        [Parameter(Mandatory)][string]$Expected
+        [Parameter(Mandatory)][string]$Expected,
+        [string]$RepoRoot = ""
     )
 
     if (-not (Test-Path $Executable -PathType Leaf)) { return $false }
@@ -196,17 +239,43 @@ function Test-NwExactVersion {
         "ninja" { return (($output -split "`r?`n")[0].Trim() -eq $Expected) }
         "clang-cl" { return $output -match ("clang version\s+" + [regex]::Escape($Expected) + "(?:\s|$)") }
         "lld-link" { return $output -match ("LLD\s+" + [regex]::Escape($Expected) + "(?:\s|$)") }
-        # DXC prints a bare semantic version (for example
-        # "dxcompiler.dll: 1.8.2407 (...); dxil.dll: 1.8.2407"). Bound the
-        # match to a complete numeric token so 1.8.24070 / 11.8.2407 cannot
-        # satisfy the 1.8.2407 pin.
-        "dxc" { return $output -match ("(?<![0-9.])" + [regex]::Escape($Expected) + "(?![0-9.])") }
+        # DXC release archives report a binary identity that carries an
+        # additional build component (the pinned 1.8.2407 release reports
+        # identities such as "1.8.2407.7"/"1.8.2407.12"). The repository-owned
+        # mapping is authoritative and the match remains exact: a different
+        # build suffix or a longer numeric token is still rejected.
+        "dxc" {
+            foreach ($identity in @(Get-NwReportedToolVersions -Tool "dxc" -Expected $Expected -RepoRoot $RepoRoot)) {
+                if ($output -match ("(?<![0-9.])" + [regex]::Escape([string]$identity) + "(?![0-9.])")) {
+                    return $true
+                }
+            }
+            return $false
+        }
         # MSVC localizes the surrounding banner text (for example Polish cl.exe
         # prints "wersja kompilatora"), so compiler/linker validation must bind
         # to the exact numeric version token rather than English words.
         "cl" { return $output -match ("(?<![0-9.])" + [regex]::Escape($Expected) + "(?![0-9.])") }
         "link" { return $output -match ("(?<![0-9.])" + [regex]::Escape($Expected) + "(?![0-9.])") }
     }
+}
+
+function Assert-NwExactToolVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Tool,
+        [Parameter(Mandatory)][string]$Executable,
+        [Parameter(Mandatory)][string]$Expected,
+        [string]$Label = "",
+        [string]$RepoRoot = ""
+    )
+    if (Test-NwExactVersion -Tool $Tool -Executable $Executable -Expected $Expected -RepoRoot $RepoRoot) {
+        return
+    }
+    $detected = Get-NwCommandOutput -Executable $Executable -Arguments $(if ($Tool -in @("cl", "link")) { @() } else { @("--version") })
+    if ([string]::IsNullOrWhiteSpace($detected)) { $detected = "<no version banner>" }
+    $name = if ([string]::IsNullOrWhiteSpace($Label)) { $Tool } else { $Label }
+    throw "$name exact version $Expected was not detected at ${Executable} (detected: $detected)"
 }
 
 function Find-NwExactCommand {
@@ -421,17 +490,12 @@ function Assert-NwAuthenticodeSignature {
     if (-not [string]::IsNullOrWhiteSpace($SubjectContains) -and $subject -notlike "*$SubjectContains*") {
         throw "Authenticode signer for $Path ('$subject') does not contain '$SubjectContains'."
     }
-    switch ($status) {
-        "Valid" { return }
-        "UnknownError" {
-            # The signature hash and Microsoft signer certificate are present;
-            # the chain/revocation check could not complete on this host.
-            Write-Warning "Authenticode chain status for $Path is UnknownError; accepted Microsoft signer '$subject'."
-            return
-        }
-        default {
-            throw "Authenticode signature validation failed for $Path (status=$status)."
-        }
+    if ($status -ne "Valid") {
+        # A certificate subject containing "Microsoft" is not publisher
+        # authenticity. Any non-Valid result (including an unknown/indeterminate
+        # chain or revocation result) is a hard failure unless the caller
+        # supplied an independently verified pinned digest.
+        throw "Authenticode signature validation failed for $Path (status=$status, signer='$subject')."
     }
 }
 
@@ -473,14 +537,66 @@ function Get-NwVisualStudioInstallPath {
     return [string]$paths[0]
 }
 
+function Assert-NwMsvcSelectedExecutables {
+    <#
+        Validate the cl.exe/link.exe that PATH actually selects after vcvars.
+        Searching every PATH candidate for *some* exact match is not sufficient:
+        a wrong 14.40 patch can be active while another installation happens to
+        expose the exact binary. Both executables must live under the selected
+        VCToolsInstallDir and report the exact pinned versions.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$MsvcCompilerVersion,
+        [Parameter(Mandatory)][string]$MsvcLinkerVersion
+    )
+    $toolsDirRaw = [string]$env:VCToolsInstallDir
+    if ([string]::IsNullOrWhiteSpace($toolsDirRaw)) {
+        throw "VCToolsInstallDir is not set; cannot verify the selected MSVC toolchain."
+    }
+    $toolsDir = [System.IO.Path]::GetFullPath($toolsDirRaw.TrimEnd('\'))
+    $toolsPrefix = $toolsDir + [System.IO.Path]::DirectorySeparatorChar
+    $failures = New-Object System.Collections.Generic.List[string]
+    foreach ($spec in @(
+        @{ Name = "cl.exe"; Tool = "cl"; Expected = $MsvcCompilerVersion },
+        @{ Name = "link.exe"; Tool = "link"; Expected = $MsvcLinkerVersion }
+    )) {
+        $cmd = Get-Command ([string]$spec.Name) -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $cmd -or [string]::IsNullOrWhiteSpace([string]$cmd.Source)) {
+            $failures.Add("$($spec.Name) is not resolvable from the activated PATH")
+            continue
+        }
+        $selectedPath = [System.IO.Path]::GetFullPath([string]$cmd.Source)
+        if (-not $selectedPath.StartsWith($toolsPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $failures.Add("$($spec.Name) '$selectedPath' is not owned by VCToolsInstallDir '$toolsDir'")
+            continue
+        }
+        if (-not (Test-NwExactVersion -Tool ([string]$spec.Tool) -Executable $selectedPath -Expected ([string]$spec.Expected))) {
+            $detected = Get-NwCommandOutput -Executable $selectedPath -Arguments @()
+            if ([string]::IsNullOrWhiteSpace($detected)) { $detected = "<no version banner>" }
+            $failures.Add("$($spec.Name) '$selectedPath' reports '$detected', expected exact $($spec.Expected)")
+        }
+    }
+    if ($failures.Count -gt 0) {
+        throw ("Selected MSVC executables are not the pinned toolchain: " + ($failures -join "; "))
+    }
+}
+
 function Import-NwVcVarsEnvironment {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$WindowsSdkVersion,
         [Parameter(Mandatory)][string]$VcVarsVersion,
         [string]$VcVarsFallbackVersion = "",
+        [string]$MsvcCompilerVersion = "",
+        [string]$MsvcLinkerVersion = "",
+        [string]$RepoRoot = "",
         [switch]$ExportGitHubEnv
     )
+
+    $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
+    if ([string]::IsNullOrWhiteSpace($MsvcCompilerVersion)) { $MsvcCompilerVersion = $contract.MsvcCompilerVersion }
+    if ([string]::IsNullOrWhiteSpace($MsvcLinkerVersion)) { $MsvcLinkerVersion = $contract.MsvcLinkerVersion }
 
     $installs = @(Get-NwVisualStudioInstallPaths)
     if ($installs.Count -eq 0) { throw "Visual Studio 2022 installation with VC tools was not found." }
@@ -488,6 +604,7 @@ function Import-NwVcVarsEnvironment {
     $required = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "WindowsSdkDir", "WindowsSDKVersion", "WindowsSdkVerBinPath", "UCRTVersion", "UniversalCRTSdkDir")
     $requiredPresence = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCToolsInstallDir", "VCToolsVersion", "WindowsSDKVersion")
     $expectedMajorMinor = ((ConvertTo-NwToolsetVersion $VcVarsVersion) -split '\.')[0..1] -join '.'
+    $expectedToolset = ConvertTo-NwToolsetVersion $contract.MsvcToolsetVersion
     $versionsToTry = @($VcVarsVersion)
     $discoveredVersions = New-Object System.Collections.Generic.List[string]
     foreach ($vsInstall in $installs) {
@@ -572,10 +689,14 @@ set
                     continue
                 }
                 $toolsetDetected = ConvertTo-NwToolsetVersion ([string]$captured["VCToolsVersion"])
-                $toolsetMatches = [string]::Equals($toolsetDetected, $expectedMajorMinor, [System.StringComparison]::OrdinalIgnoreCase) -or
-                    $toolsetDetected.StartsWith($expectedMajorMinor + ".", [System.StringComparison]::OrdinalIgnoreCase)
-                if (-not $toolsetMatches) {
-                    $failures.Add("${vsInstall} ($vcvarsVersion): toolset '$toolsetDetected' is not MSVC $expectedMajorMinor")
+                if (-not [string]::Equals($toolsetDetected, $expectedToolset, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $failures.Add("${vsInstall} ($vcvarsVersion): toolset '$toolsetDetected' is not exactly pinned MSVC $expectedToolset")
+                    continue
+                }
+                try {
+                    Assert-NwMsvcSelectedExecutables -MsvcCompilerVersion $MsvcCompilerVersion -MsvcLinkerVersion $MsvcLinkerVersion
+                } catch {
+                    $failures.Add("${vsInstall} ($vcvarsVersion): $($_.Exception.Message)")
                     continue
                 }
                 $selected = $vsInstall
@@ -676,12 +797,25 @@ function Enter-NwBuildEnvironment {
     # runner-provided fallback) and deliberately move that selected directory
     # ahead of the SDK. This prevents Windows SDK's newer dxc.exe from
     # shadowing the pinned DXC 1.8.2407 used by NW-01.
-    Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion | Out-Null
+    Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion -MsvcCompilerVersion $contract.MsvcCompilerVersion -MsvcLinkerVersion $contract.MsvcLinkerVersion -RepoRoot $RepoRoot | Out-Null
     $selection = Get-NwExactStandaloneToolSelection -RepoRoot $RepoRoot
 
     foreach ($entry in @($selection.CMakeBin, $selection.NinjaBin, $selection.LlvmBin, $selection.DxcBin)) {
         Add-NwPathEntry -Path $entry
     }
+
+    # Fail immediately if command resolution still disagrees with the exact
+    # pinned DXC path after vcvars/path activation.
+    $resolvedDxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+    if ([System.IO.Path]::GetFullPath($resolvedDxc) -ne [System.IO.Path]::GetFullPath($selection.DxcExecutable)) {
+        throw "Pinned DXC precedence failure: command resolution selected '$resolvedDxc', expected '$($selection.DxcExecutable)'"
+    }
+
+    # Re-assert the active compiler/linker after standalone PATH entries are
+    # prepended. The build environment is only entered when the selected
+    # executables are owned by the pinned VCToolsInstallDir and report exact
+    # manifest versions.
+    Assert-NwMsvcSelectedExecutables -MsvcCompilerVersion $contract.MsvcCompilerVersion -MsvcLinkerVersion $contract.MsvcLinkerVersion
 
     if ($ExportGitHubEnv) {
         if ([string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) {
@@ -693,13 +827,6 @@ function Enter-NwBuildEnvironment {
                 Add-Content -Path $env:GITHUB_ENV -Value "$name=$value"
             }
         }
-    }
-
-    # Fail immediately if command resolution still disagrees with the exact
-    # pinned DXC path after vcvars/path activation.
-    $resolvedDxc = (Get-Command dxc.exe -ErrorAction Stop).Source
-    if ([System.IO.Path]::GetFullPath($resolvedDxc) -ne [System.IO.Path]::GetFullPath($selection.DxcExecutable)) {
-        throw "Pinned DXC precedence failure: command resolution selected '$resolvedDxc', expected '$($selection.DxcExecutable)'"
     }
 
     return [pscustomobject]@{ Contract = $contract; VisualStudio = $visualStudio; Paths = $selection }
@@ -720,10 +847,29 @@ function Get-NwDoctorResults {
         @{ Name = "MSVC link"; Tool = "link"; Expected = $contract.MsvcLinkerVersion; Command = "link.exe"; Candidate = "" }
     )
     $results = foreach ($spec in $specs) {
-        $resolved = Resolve-NwToolCandidate -Name ([string]$spec.Command) -Tool ([string]$spec.Tool) -Expected ([string]$spec.Expected) -AdditionalCandidates @([string]$spec.Candidate)
-        $ok = ($null -ne $resolved) -and ($resolved.Exact -eq $true)
-        $detected = if ($null -eq $resolved) { "not found" } else { [string]$resolved.Detected }
-        $exe = if ($null -eq $resolved) { $null } else { [string]$resolved.Executable }
+        # Doctor must inspect the executable the activated environment actually
+        # selects. Scanning every PATH candidate could pass because an unrelated
+        # installation exposes an exact version while a wrong one is active.
+        $command = Get-Command ([string]$spec.Command) -ErrorAction SilentlyContinue | Select-Object -First 1
+        $exe = if ($null -ne $command -and -not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
+            [string]$command.Source
+        } elseif (-not [string]::IsNullOrWhiteSpace([string]$spec.Candidate)) {
+            [string]$spec.Candidate
+        } else {
+            $null
+        }
+        $ok = $false
+        $detected = "not found"
+        if (-not [string]::IsNullOrWhiteSpace($exe) -and (Test-Path $exe -PathType Leaf)) {
+            $args = if ([string]$spec.Tool -in @("cl", "link")) { @() } else { @("--version") }
+            $output = Get-NwCommandOutput -Executable $exe -Arguments $args
+            if (-not [string]::IsNullOrWhiteSpace($output)) {
+                $detected = (($output -split "`r?`n")[0]).Trim()
+            } else {
+                $detected = "no version banner"
+            }
+            $ok = Test-NwExactVersion -Tool ([string]$spec.Tool) -Executable $exe -Expected ([string]$spec.Expected)
+        }
         [pscustomobject]@{ Name = $spec.Name; Expected = [string]$spec.Expected; Detected = $detected; Pass = $ok; Executable = $exe }
     }
     $sdkOk = $false
@@ -731,9 +877,8 @@ function Get-NwDoctorResults {
     if ([string]::Equals($sdkDetected, $contract.WindowsSdkVersion, [System.StringComparison]::OrdinalIgnoreCase)) { $sdkOk = $true }
     $results += [pscustomobject]@{ Name = "Windows SDK"; Expected = $contract.WindowsSdkVersion; Detected = $sdkDetected; Pass = $sdkOk; Executable = $env:WindowsSdkDir }
     $toolsetDetected = if ($env:VCToolsVersion) { ConvertTo-NwToolsetVersion $env:VCToolsVersion } else { "missing" }
-    $toolsetExpected = $contract.MsvcToolsetMajorMinor
-    $toolsetOk = [string]::Equals($toolsetDetected, $toolsetExpected, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $toolsetDetected.StartsWith($toolsetExpected + ".", [System.StringComparison]::OrdinalIgnoreCase)
+    $toolsetExpected = $contract.MsvcToolsetVersion
+    $toolsetOk = [string]::Equals($toolsetDetected, $toolsetExpected, [System.StringComparison]::OrdinalIgnoreCase)
     $results += [pscustomobject]@{ Name = "MSVC toolset"; Expected = $toolsetExpected; Detected = $toolsetDetected; Pass = $toolsetOk; Executable = $env:VCToolsInstallDir }
     return $results
 }

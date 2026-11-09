@@ -88,8 +88,7 @@ jobs:
       - name: Run NW-01 contract test suite on Windows
         run: pytest -v
 
-      - name: Run NW-01 Windows harness behaviour tests (diagnostic)
-        continue-on-error: true
+      - name: Run NW-01 Windows harness behaviour tests (required)
         env:
           NW_HARNESS_BEHAVIOR_TESTS: "1"
         shell: pwsh

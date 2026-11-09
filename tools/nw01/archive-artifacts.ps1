@@ -25,6 +25,34 @@ function Test-NwCommit([string]$Value) {
     return ($Value -match '^[0-9a-fA-F]{40}$')
 }
 
+function Read-NwZipTextEntry([string]$ZipPath, [string]$EntryName) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entry = @($zip.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq $EntryName }) | Select-Object -First 1
+        if ($null -eq $entry) { return $null }
+        $reader = New-Object System.IO.StreamReader($entry.Open())
+        try {
+            return $reader.ReadToEnd()
+        } finally {
+            $reader.Dispose()
+        }
+    } finally {
+        $zip.Dispose()
+    }
+}
+
+function Get-NwManifestFileHashes($Manifest) {
+    $hashes = @{}
+    foreach ($item in @($Manifest.files)) {
+        $name = [string]$item.name
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+            $hashes[$name.ToLowerInvariant()] = ([string]$item.sha256).ToLowerInvariant()
+        }
+    }
+    return $hashes
+}
+
 try {
     $worktreeRoot = (& git -C $RepoRoot rev-parse --show-toplevel 2>$null | Select-Object -First 1)
     $worktreeRoot = ([string]$worktreeRoot).Trim()
@@ -44,6 +72,8 @@ try {
     # from, not merely the revision currently checked out. Historical evidence
     # stays historical and is never relabelled as current certifying evidence.
     $revisions = New-Object System.Collections.Generic.List[object]
+    $packageManifest = $null
+    $hasUnverifiedProvenance = $false
     if (-not [string]::IsNullOrWhiteSpace($FullSummary)) {
         $summary = Read-NwJsonFile $FullSummary
         if ($null -eq $summary) { throw "Archive input does not exist: $FullSummary" }
@@ -72,6 +102,42 @@ try {
         }
         $revisions.Add([pscustomobject]@{ Artifact = "clean-system-package"; SourceCommit = $packageCommit.ToLowerInvariant() })
     }
+    if (-not [string]::IsNullOrWhiteSpace($CleanSystemZip)) {
+        if (-not (Test-Path $CleanSystemZip -PathType Leaf)) { throw "Archive input does not exist: $CleanSystemZip" }
+        $zipManifestText = Read-NwZipTextEntry -ZipPath $CleanSystemZip -EntryName "evidence/artifact-manifest.json"
+        if ([string]::IsNullOrWhiteSpace($zipManifestText)) {
+            $hasUnverifiedProvenance = $true
+            Write-Warning "[NW-ARCHIVE] CleanSystem ZIP has no embedded evidence/artifact-manifest.json; classifying that artifact as unverified provenance."
+        } else {
+            try {
+                $zipManifest = $zipManifestText | ConvertFrom-Json
+            } catch {
+                throw "Unable to parse the CleanSystem ZIP artifact manifest: $($_.Exception.Message)"
+            }
+            if ($zipManifest.PSObject.Properties.Name -notcontains "source_commit") {
+                $hasUnverifiedProvenance = $true
+                Write-Warning "[NW-ARCHIVE] CleanSystem ZIP artifact manifest does not record source_commit; classifying that artifact as unverified provenance."
+            } else {
+                $zipCommit = ([string]$zipManifest.source_commit).Trim()
+                if (-not (Test-NwCommit $zipCommit)) {
+                    throw "CleanSystem ZIP source_commit '$zipCommit' is not a full Git revision."
+                }
+                $revisions.Add([pscustomobject]@{ Artifact = "clean-system-zip"; SourceCommit = $zipCommit.ToLowerInvariant() })
+                if ($null -ne $packageManifest) {
+                    $zipHashes = Get-NwManifestFileHashes $zipManifest
+                    $packageHashes = Get-NwManifestFileHashes $packageManifest
+                    if ($zipHashes.Count -ne $packageHashes.Count) {
+                        throw "CleanSystem ZIP manifest does not match the supplied package manifest (file count differs)."
+                    }
+                    foreach ($name in $packageHashes.Keys) {
+                        if (-not $zipHashes.ContainsKey($name) -or $zipHashes[$name] -ne $packageHashes[$name]) {
+                            throw "CleanSystem ZIP manifest does not match the supplied package manifest for '$name'."
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     $distinctCommits = @($revisions | ForEach-Object { $_.SourceCommit } | Select-Object -Unique)
     if ($distinctCommits.Count -gt 1) {
@@ -89,7 +155,7 @@ try {
         $sourceSource = "checkout-fallback"
     }
     $isCurrent = $sourceCommit -eq $checkoutCommit.ToLowerInvariant()
-    $evidenceClass = if ($isCurrent -and $sourceSource -ne "checkout-fallback") {
+    $evidenceClass = if ($isCurrent -and $sourceSource -ne "checkout-fallback" -and -not $hasUnverifiedProvenance) {
         "current-certifying"
     } elseif ($isCurrent) {
         "checkout-labelled-unverified-provenance"
@@ -140,6 +206,7 @@ try {
         archived_at_utc = [DateTime]::UtcNow.ToString("o")
         artifacts = $copied
         source_revisions = @($revisions | ForEach-Object { [ordered]@{ artifact = $_.Artifact; source_commit = $_.SourceCommit } })
+        unverified_artifacts = @(if ($hasUnverifiedProvenance) { "clean-system-zip" } else { @() })
         note = $note
     } | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $dest "archive-manifest.json")
 

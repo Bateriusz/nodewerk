@@ -53,18 +53,80 @@ try {
     $nvidiaSmi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
     if (-not $nvidiaSmi) { $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue }
     if (-not $nvidiaSmi) { throw "nvidia-smi was not found; GPU model/driver cannot be measured reliably." }
-    $gpuLine = (& $nvidiaSmi.Source --query-gpu=name,driver_version --format=csv,noheader,nounits | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gpuLine)) { throw "nvidia-smi did not return GPU model/driver metadata." }
-    $gpuParts = @($gpuLine -split ',', 2 | ForEach-Object { $_.Trim() })
-    if ($gpuParts.Count -ne 2) { throw "Unexpected nvidia-smi output: $gpuLine" }
-    $gpuModel = Get-RequiredText "GPU model" $gpuParts[0]
-    $nvidiaDriver = Get-RequiredText "NVIDIA driver" $gpuParts[1]
+    # Query all adapters with a stable identity (index + PCI bus + name + driver).
+    # Selecting only the first name match is unsafe on multi-GPU hosts: an
+    # unrelated NVIDIA adapter can precede the fixture's adapter and contribute
+    # a different driver/refresh pair while the GPU name still looks correct.
+    $gpuOutput = @(& $nvidiaSmi.Source --query-gpu=index,name,driver_version,pci.bus_id --format=csv,noheader,nounits)
+    if ($LASTEXITCODE -ne 0 -or $gpuOutput.Count -eq 0) { throw "nvidia-smi did not return GPU identity metadata." }
+    $gpuRows = @(
+        foreach ($line in $gpuOutput) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $parts = @($line -split ',' | ForEach-Object { $_.Trim() })
+            if ($parts.Count -lt 4) { throw "Unexpected nvidia-smi output: $line" }
+            [pscustomobject]@{
+                Index = [string]$parts[0]
+                Name = [string]$parts[1]
+                Driver = [string]$parts[2]
+                PciBusId = [string]$parts[3]
+            }
+        }
+    )
+    if ($gpuRows.Count -eq 0) { throw "nvidia-smi did not return any NVIDIA adapters." }
 
-    $video = Get-CimInstance Win32_VideoController | Where-Object { $_.Name -eq $gpuModel -or $_.Name -like "*NVIDIA*" } | Select-Object -First 1
-    if (-not $video) { throw "Win32_VideoController did not expose the executing NVIDIA adapter." }
-    $wddmDriver = Get-RequiredText "WDDM driver version" $video.DriverVersion
-    $refreshHz = [int]$video.CurrentRefreshRate
-    if ($refreshHz -le 0) { throw "Unable to measure a positive display refresh rate." }
+    $nvidiaControllers = @(Get-CimInstance Win32_VideoController | Where-Object { $_.Name -like "*NVIDIA*" })
+    $bindingProblem = $null
+    $selectedRow = $null
+    $selectedVideo = $null
+    if ($gpuRows.Count -eq 1) {
+        $candidateName = $gpuRows[0].Name
+        $matchingControllers = @($nvidiaControllers | Where-Object { [string]::Equals($_.Name, $candidateName, [System.StringComparison]::OrdinalIgnoreCase) })
+        if ($matchingControllers.Count -eq 1) {
+            $selectedRow = $gpuRows[0]
+            $selectedVideo = $matchingControllers[0]
+        } else {
+            $bindingProblem = "Win32_VideoController exposed $($matchingControllers.Count) adapters matching '$candidateName'"
+        }
+    } else {
+        # More than one NVIDIA adapter is present. Only bind when a single adapter
+        # name is unique in both enumerations; otherwise the executing fixture
+        # adapter cannot be identified safely from host metadata alone.
+        $uniqueNames = @(
+            $gpuRows | Group-Object Name | Where-Object { $_.Count -eq 1 } | ForEach-Object { $_.Name }
+        )
+        $candidateRows = @($gpuRows | Where-Object { $uniqueNames -contains $_.Name })
+        if ($candidateRows.Count -eq 1) {
+            $candidateName = $candidateRows[0].Name
+            $matchingControllers = @($nvidiaControllers | Where-Object { [string]::Equals($_.Name, $candidateName, [System.StringComparison]::OrdinalIgnoreCase) })
+            if ($matchingControllers.Count -eq 1) {
+                $selectedRow = $candidateRows[0]
+                $selectedVideo = $matchingControllers[0]
+            } else {
+                $bindingProblem = "no unique Win32_VideoController match for '$candidateName'"
+            }
+        } else {
+            $bindingProblem = "$($gpuRows.Count) NVIDIA adapters are present and no unique adapter identity can be selected"
+        }
+    }
+
+    if ($null -ne $selectedRow) {
+        $gpuModel = Get-RequiredText "GPU model" $selectedRow.Name
+        $nvidiaDriver = Get-RequiredText "NVIDIA driver" $selectedRow.Driver
+        $wddmDriver = Get-RequiredText "WDDM driver version" $selectedVideo.DriverVersion
+        $refreshHz = [int]$selectedVideo.CurrentRefreshRate
+        if ($refreshHz -le 0) { throw "Unable to measure a positive display refresh rate." }
+        Write-Host "[NW-HARDWARE] bound adapter index=$($selectedRow.Index) pci=$($selectedRow.PciBusId)"
+    } else {
+        # Ambiguous adapter identity: preserve the measured model for conflict
+        # detection but do not attribute driver/WDDM/refresh metadata to it. The
+        # verifier records these fields as unavailable, so the baseline remains
+        # explicitly unverified rather than mixed across adapters.
+        $gpuModel = Get-RequiredText "GPU model" $gpuRows[0].Name
+        $nvidiaDriver = ""
+        $wddmDriver = ""
+        $refreshHz = 0
+        Write-Warning "[NW-HARDWARE] adapter identity is ambiguous ($bindingProblem); driver/WDDM/refresh metadata will remain unverified."
+    }
 
     if ([string]::IsNullOrWhiteSpace($WindowsPowerPlan)) {
         $powerText = (powercfg /getactivescheme | Out-String).Trim()
@@ -118,18 +180,18 @@ try {
         "--binary-dir", $BinaryDir,
         "--os-build", $osBuild,
         "--gpu-model", $gpuModel,
-        "--nvidia-driver-version", $nvidiaDriver,
         "--cpu-model", $cpuModel,
         "--gpu-architecture", $GpuArchitecture,
-        "--wddm-driver-version", $wddmDriver,
         "--windows-power-plan", $WindowsPowerPlan,
         "--nvidia-power-management-mode", $NvidiaPowerManagementMode,
         "--pcie-power-management", $PciePowerManagement,
-        "--refresh-hz", [string]$refreshHz,
         "--driver-shader-cache-state", $DriverShaderCacheState,
         "--os-file-cache-state", $OsFileCacheState,
         "--summary-json", $SummaryPath
     )
+    if (-not [string]::IsNullOrWhiteSpace($nvidiaDriver)) { $args += @("--nvidia-driver-version", $nvidiaDriver) }
+    if (-not [string]::IsNullOrWhiteSpace($wddmDriver)) { $args += @("--wddm-driver-version", $wddmDriver) }
+    if ($refreshHz -gt 0) { $args += @("--refresh-hz", [string]$refreshHz) }
     & $python.Source @args
     $code = $LASTEXITCODE
     if (-not (Test-Path $SummaryPath -PathType Leaf)) { throw "Hardware capture did not produce summary JSON (exit code $code)." }

@@ -98,9 +98,7 @@ function Ensure-ZipTool(
     New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
     Expand-Archive -Path $archive -DestinationPath $InstallRoot -Force
     $installedExe = Join-Path $InstallRoot $ExecutableRelative
-    if (-not (Test-NwExactVersion -Tool $Tool -Executable $installedExe -Expected $Expected)) {
-        throw "$Name archive installed but exact version $Expected was not detected at $installedExe"
-    }
+    Assert-NwExactToolVersion -Tool $Tool -Executable $installedExe -Expected $Expected -Label "$Name archive installed" -RepoRoot $RepoRoot
     Record-Selection $Name $Expected $installedExe "downloaded-pinned-artifact"
     return (Join-Path $InstallRoot $PathRelative)
 }
@@ -139,21 +137,18 @@ function Ensure-Llvm {
     if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
     $process = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList '/S', "/D=$installRoot"
     if ($process.ExitCode -ne 0) { throw "LLVM installer failed with exit code $($process.ExitCode)" }
-    if (-not (Test-NwExactVersion -Tool "clang-cl" -Executable $clang -Expected $contract.LlvmVersion) -or
-        -not (Test-NwExactVersion -Tool "lld-link" -Executable $lld -Expected $contract.LlvmVersion)) {
-        throw "LLVM installation completed but clang-cl/lld-link do not match pinned $($contract.LlvmVersion)."
-    }
+    Assert-NwExactToolVersion -Tool "clang-cl" -Executable $clang -Expected $contract.LlvmVersion -Label "LLVM clang-cl installation" -RepoRoot $RepoRoot
+    Assert-NwExactToolVersion -Tool "lld-link" -Executable $lld -Expected $contract.LlvmVersion -Label "LLVM lld-link installation" -RepoRoot $RepoRoot
     Record-Selection "LLVM clang-cl/lld-link" $contract.LlvmVersion $clang "downloaded-pinned-artifact"
     return (Split-Path -Parent $clang)
 }
 
 function Test-ExistingVisualStudio {
     try {
-        Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion | Out-Null
-        $cl = (Get-Command cl.exe -ErrorAction Stop).Source
-        $link = (Get-Command link.exe -ErrorAction Stop).Source
-        return ((Test-NwExactVersion -Tool "cl" -Executable $cl -Expected $contract.MsvcCompilerVersion) -and
-                (Test-NwExactVersion -Tool "link" -Executable $link -Expected $contract.MsvcLinkerVersion))
+        # Import validates the exact toolset, the selected cl/link versions and
+        # their ownership by VCToolsInstallDir. It throws on any mismatch.
+        Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion -MsvcCompilerVersion $contract.MsvcCompilerVersion -MsvcLinkerVersion $contract.MsvcLinkerVersion -RepoRoot $RepoRoot | Out-Null
+        return $true
     } catch {
         return $false
     }
@@ -172,18 +167,13 @@ function Ensure-VisualStudio {
     $probeVcVarsFallback = $visualStudio.VcVarsFallbackVersion
     $probeCompiler = $contract.MsvcCompilerVersion
     $probeLinker = $contract.MsvcLinkerVersion
+    $probeRepoRoot = $RepoRoot
     $importVcVars = ${function:Import-NwVcVarsEnvironment}
-    $testExact = ${function:Test-NwExactVersion}
     $fallbackProbe = {
         try {
-            & $importVcVars -WindowsSdkVersion $probeSdk -VcVarsVersion $probeVcVars -VcVarsFallbackVersion $probeVcVarsFallback | Out-Null
+            & $importVcVars -WindowsSdkVersion $probeSdk -VcVarsVersion $probeVcVars -VcVarsFallbackVersion $probeVcVarsFallback -MsvcCompilerVersion $probeCompiler -MsvcLinkerVersion $probeLinker -RepoRoot $probeRepoRoot | Out-Null
             $cl = (Get-Command cl.exe -ErrorAction Stop).Source
-            $link = (Get-Command link.exe -ErrorAction Stop).Source
-            if ((& $testExact -Tool "cl" -Executable $cl -Expected $probeCompiler) -and
-                (& $testExact -Tool "link" -Executable $link -Expected $probeLinker)) {
-                return $cl
-            }
-            return $null
+            return $cl
         } catch {
             return $null
         }

@@ -44,6 +44,10 @@ def test_windows_harness_keeps_runtime_pins_in_existing_toolchain_manifest() -> 
     assert sources["visual_studio"]["bootstrapper_authenticode_subject_contains"]
     assert "bootstrapper_sha256" in sources["visual_studio"]
 
+    identities = json.loads(read("tools/nw01/tool-version-identities.json"))
+    assert identities["dxc"]["1.8.2407"]["reported_versions"]
+    assert "1.8.2407.7" in identities["dxc"]["1.8.2407"]["reported_versions"]
+
     assert "benchmarks/toolchain-manifest.v1.json" in module
     assert "Get-NwVisualStudioSelection" in module
     assert "MsvcToolsetVersion" in module
@@ -94,7 +98,12 @@ def test_bootstrap_is_exact_version_fail_closed_and_has_bounded_delivery_fallbac
     assert "checksum" in bootstrap.lower() or "sha256" in bootstrap.lower()
     assert "Invoke-NwDownloadWithFallback" in bootstrap
     assert "Assert-NwAuthenticodeSignature" in bootstrap
+    assert "Assert-NwExactToolVersion" in bootstrap
     assert "Invoke-NwDownloadWithFallback" in module
+    assert "tool-version-identities.json" in module
+    assert "Get-NwReportedToolVersions" in module
+    assert "UnknownError" not in module
+    assert "Assert-NwMsvcSelectedExecutables" in module
 
 
 def test_ci_consumes_shared_harness_and_exercises_idempotence() -> None:
@@ -118,6 +127,10 @@ def test_ci_consumes_shared_harness_and_exercises_idempotence() -> None:
     assert "source_commit" in ci
     assert "tools/nw01/run-full.ps1" in ci
     assert "NW_HARNESS_BEHAVIOR_TESTS" in ci
+    # Behavioural coverage is a required gate, not diagnostic output.
+    assert "NW-01 Windows harness behaviour tests (required)" in ci
+    behavior_step = ci[ci.index("NW-01 Windows harness behaviour tests (required)") :]
+    assert "continue-on-error" not in behavior_step[:200]
 
 
 def test_full_wrapper_preserves_verifier_exit_contract() -> None:
@@ -144,6 +157,7 @@ def test_hardware_capture_measures_host_fields_and_keeps_unreliable_inputs_expli
     assert "CurrentBuildNumber" in script and "UBR" in script
     assert "Get-CimInstance Win32_Processor" in script
     assert "nvidia-smi" in script
+    assert "--query-gpu=index,name,driver_version,pci.bus_id" in script
     assert "Win32_VideoController" in script
     assert "CurrentRefreshRate" in script
     assert "powercfg /getactivescheme" in script
@@ -160,6 +174,8 @@ def test_hardware_capture_measures_host_fields_and_keeps_unreliable_inputs_expli
     assert 'build\\msvc-release-ltcg-clean-a' in script
     assert 'build\\repro-clean-a' in script
     assert "Run tools/nw01/run-full.ps1 successfully before capture-hardware.ps1" in script
+    assert "adapter identity is ambiguous" in script
+    assert "will remain unverified" in script
 
 
 def test_clean_system_package_uses_local_git_sha_when_ci_sha_is_absent() -> None:
@@ -202,6 +218,11 @@ def test_archive_and_git_preparation_keep_non_repo_artifacts_out_and_stage_by_al
     assert "Assert-NwNoHistoryOperationInProgress" in stage
     assert "MERGE_HEAD" in stage and "rebase-merge" in stage and "rebase-apply" in stage
     assert "both staged and unstaged changes" in stage
+    assert "Assert-NwEvidenceContent" in stage
+    assert "stale" in stage
+    assert "benchmarks/hardware/rtx-4060-baseline\\.json" in stage
+    assert "benchmarks/hardware/rtx-50-series-baseline\\.json" in stage
+    assert "(hardware|clean-system|reproducibility|ledgers)" not in stage
     assert "build/" not in "\n".join(
         line for line in stage.splitlines() if line.strip().startswith("'")
     )
@@ -210,11 +231,17 @@ def test_archive_and_git_preparation_keep_non_repo_artifacts_out_and_stage_by_al
     )
 
 
-def test_evidence_summary_is_derived_from_existing_authoritative_artifacts() -> None:
+def test_evidence_summary_is_derived_from_validated_current_evidence() -> None:
     script = read("tools/nw01/evidence-summary.ps1")
 
     assert "benchmarks/toolchain-manifest.v1.json" in script
-    assert "benchmarks/evidence-status.json" in script
+    assert "benchmarks/evidence-status.json" not in script
+    assert "benchmarks/ledgers" in script
+    assert "benchmarks/hardware/rtx-4060-baseline.json" in script
+    assert "benchmarks/hardware/rtx-50-series-baseline.json" in script
+    assert "benchmarks/clean-system/clean-system-validation.json" in script
+    assert "stale" in script
+    assert "NOT_EVALUATED" in script
     assert "Derived convenience view only" in script
     assert "selected_toolchain" in script
     assert "full_baseline" in script
@@ -298,8 +325,13 @@ def run_pwsh(arguments: list[str], *, extra_env: dict[str, str] | None = None, t
     )
 
 
-def run_pwsh_script(script: Path, *arguments: object, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return run_pwsh(["-File", str(script), *[str(arg) for arg in arguments]], extra_env=extra_env)
+def run_pwsh_script(
+    script: Path,
+    *arguments: object,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = 240,
+) -> subprocess.CompletedProcess[str]:
+    return run_pwsh(["-File", str(script), *[str(arg) for arg in arguments]], extra_env=extra_env, timeout=timeout)
 
 
 def run_pwsh_command(command: str, *, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -348,7 +380,7 @@ def write_fake_tool(path: Path, output: str) -> None:
 
 
 @requires_windows_harness
-def test_dxc_exact_version_rejects_longer_substrings(tmp_path: Path) -> None:
+def test_dxc_exact_version_uses_pinned_release_identity_and_rejects_others(tmp_path: Path) -> None:
     module = ROOT / "tools/nw01/Nw01.Windows.psm1"
     executable = tmp_path / ("dxc.cmd" if IS_WINDOWS else "dxc")
 
@@ -361,9 +393,104 @@ def test_dxc_exact_version_rejects_longer_substrings(tmp_path: Path) -> None:
         )
         return run_pwsh_command(command).returncode
 
-    assert exact("dxcompiler.dll: 1.8.2407 (deadbeef); dxil.dll: 1.8.2407", "1.8.2407") == 0
-    assert exact("dxcompiler.dll: 1.8.24070 (deadbeef)", "1.8.2407") == 1
-    assert exact("dxcompiler.dll: 11.8.2407 (deadbeef)", "1.8.2407") == 1
+    # The real pinned distribution's banner carries the release build suffix.
+    assert exact("dxcompiler.dll: 1.8 - 1.8.2407.7", "1.8.2407") == 0
+    assert exact("dxcompiler.dll: 1.8 - 1.8.2407.12", "1.8.2407") == 0
+    assert exact("dxcompiler.dll: 1.8 - 1.8.2407.13", "1.8.2407") == 1
+    assert exact("dxcompiler.dll: 1.8.24070.12", "1.8.2407") == 1
+    assert exact("dxcompiler.dll: 11.8.2407.12", "1.8.2407") == 1
+
+
+@requires_windows_harness
+def test_version_identity_mapping_is_required_and_exact(tmp_path: Path) -> None:
+    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    command = (
+        f"Import-Module {ps_quote(module)} -Force; "
+        "$versions = @(Get-NwReportedToolVersions -Tool dxc -Expected '1.8.2407'); "
+        "[ordered]@{ Versions = $versions } | ConvertTo-Json -Compress"
+    )
+    proc = run_pwsh_command(command)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    versions = json.loads(proc.stdout.strip().splitlines()[-1])["Versions"]
+    assert "1.8.2407.7" in versions
+
+    proc = run_pwsh_command(
+        f"Import-Module {ps_quote(module)} -Force; "
+        "Get-NwReportedToolVersions -Tool dxc -Expected '9.9.9999' | Out-Null"
+    )
+    assert proc.returncode != 0
+    assert "exact identity" in (proc.stdout + proc.stderr)
+
+
+@requires_windows_harness
+def test_installed_dxc_banner_matches_repository_identity_mapping() -> None:
+    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    if not _exact_environment_available(module):
+        pytest.skip("exact pinned Windows toolchain is not provisioned on this host")
+    command = textwrap.dedent(
+        f"""
+        Import-Module {ps_quote(module)} -Force
+        $contract = Get-NwToolchainContract
+        $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+        $banner = (& $dxc --version 2>&1 | Out-String).Trim()
+        [ordered]@{{
+            Banner = $banner
+            Exact = Test-NwExactVersion -Tool dxc -Executable $dxc -Expected $contract.DxcVersion
+            Identities = @(Get-NwReportedToolVersions -Tool dxc -Expected $contract.DxcVersion)
+        }} | ConvertTo-Json -Compress
+        """
+    )
+    proc = run_pwsh_command(command)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert data["Exact"] is True
+    assert any(identity in data["Banner"] for identity in data["Identities"])
+
+
+@requires_windows_harness
+def test_authenticode_unknown_error_is_a_hard_failure(tmp_path: Path) -> None:
+    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    payload = tmp_path / "bootstrapper.exe"
+    payload.write_bytes(b"not really signed")
+    script = textwrap.dedent(
+        f"""
+        Import-Module {ps_quote(module)} -Force
+        function global:Get-AuthenticodeSignature {{
+            param([string]$FilePath)
+            return [pscustomobject]@{{
+                Status = 'UnknownError'
+                SignerCertificate = [pscustomobject]@{{ Subject = 'CN=Microsoft Corporation' }}
+            }}
+        }}
+        $threw = $false
+        try {{
+            Assert-NwAuthenticodeSignature -Path {ps_quote(payload)} -SubjectContains 'Microsoft'
+        }} catch {{ $threw = $true }}
+        if (-not $threw) {{ throw 'UnknownError signature status was accepted' }}
+        Write-Output 'unknown-rejected'
+        """
+    )
+    proc = run_pwsh_command(script)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "unknown-rejected" in proc.stdout
+
+    valid_script = textwrap.dedent(
+        f"""
+        Import-Module {ps_quote(module)} -Force
+        function global:Get-AuthenticodeSignature {{
+            param([string]$FilePath)
+            return [pscustomobject]@{{
+                Status = 'Valid'
+                SignerCertificate = [pscustomobject]@{{ Subject = 'CN=Microsoft Corporation' }}
+            }}
+        }}
+        Assert-NwAuthenticodeSignature -Path {ps_quote(payload)} -SubjectContains 'Microsoft'
+        Write-Output 'valid-accepted'
+        """
+    )
+    proc = run_pwsh_command(valid_script)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "valid-accepted" in proc.stdout
 
 
 @requires_windows_harness
@@ -400,6 +527,77 @@ def test_doctor_reports_expected_versus_detected_mismatch(tmp_path: Path) -> Non
     assert row["Expected"] == "3.30.2"
     assert "3.29.0" in row["Detected"]
     assert row["Pass"] is False
+
+
+@requires_windows_harness
+def test_msvc_selection_validates_active_paths_ownership_and_exact_versions(tmp_path: Path) -> None:
+    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    tools_root = tmp_path / "VC" / "Tools" / "MSVC" / "14.40.33821"
+    bin_dir = tools_root / "bin" / "Hostx64" / "x64"
+    cl = bin_dir / "cl.cmd"
+    link = bin_dir / "link.cmd"
+    write_fake_tool(cl, "Microsoft (R) C/C++ Optimizing Compiler Version 19.40.33821 for x64")
+    write_fake_tool(link, "Microsoft (R) Incremental Linker Version 14.40.33821.0")
+
+    def run(cl_path: Path, link_path: Path, tools_dir: Path, compiler: str = "19.40.33821", linker: str = "14.40.33821.0") -> subprocess.CompletedProcess[str]:
+        script = textwrap.dedent(
+            f"""
+            Import-Module {ps_quote(module)} -Force
+            function global:Get-Command {{
+                param([Parameter(Position=0)][string]$Name, [switch]$All, $ErrorAction)
+                if ($Name -eq 'cl.exe') {{ return [pscustomobject]@{{ Source = {ps_quote(cl_path)} }} }}
+                if ($Name -eq 'link.exe') {{ return [pscustomobject]@{{ Source = {ps_quote(link_path)} }} }}
+                return $null
+            }}
+            $env:VCToolsInstallDir = {ps_quote(tools_dir)}
+            Assert-NwMsvcSelectedExecutables -MsvcCompilerVersion {ps_quote(compiler)} -MsvcLinkerVersion {ps_quote(linker)}
+            Write-Output 'msvc-exact'
+            """
+        )
+        return run_pwsh_command(script)
+
+    proc = run(cl, link, tools_root)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "msvc-exact" in proc.stdout
+
+    wrong_patch = bin_dir / "cl-wrong.cmd"
+    write_fake_tool(wrong_patch, "Microsoft (R) C/C++ Optimizing Compiler Version 19.40.33807 for x64")
+    proc = run(wrong_patch, link, tools_root)
+    assert proc.returncode != 0
+    assert "expected exact 19.40.33821" in (proc.stdout + proc.stderr)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_cl = outside / "cl.cmd"
+    write_fake_tool(outside_cl, "Microsoft (R) C/C++ Optimizing Compiler Version 19.40.33821 for x64")
+    proc = run(outside_cl, link, tools_root)
+    assert proc.returncode != 0
+    assert "is not owned by VCToolsInstallDir" in (proc.stdout + proc.stderr)
+
+
+@requires_windows_harness
+def test_archive_installation_validation_rejects_wrong_and_malformed_tools(tmp_path: Path) -> None:
+    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    wrong = tmp_path / ("dxc.cmd" if IS_WINDOWS else "dxc")
+    write_fake_tool(wrong, "dxcompiler.dll: 1.8 - 1.8.2407.13")
+    missing = tmp_path / "missing-dxc.exe"
+    command = textwrap.dedent(
+        f"""
+        Import-Module {ps_quote(module)} -Force
+        $wrongRejected = $false
+        try {{ Assert-NwExactToolVersion -Tool dxc -Executable {ps_quote(wrong)} -Expected '1.8.2407' -Label 'DXC archive installed' }}
+        catch {{ $wrongRejected = $true }}
+        $missingRejected = $false
+        try {{ Assert-NwExactToolVersion -Tool dxc -Executable {ps_quote(missing)} -Expected '1.8.2407' -Label 'DXC archive installed' }}
+        catch {{ $missingRejected = $true }}
+        if (-not $wrongRejected) {{ throw 'wrong version was accepted' }}
+        if (-not $missingRejected) {{ throw 'missing executable was accepted' }}
+        Write-Output 'archive-validation-ok'
+        """
+    )
+    proc = run_pwsh_command(command)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "archive-validation-ok" in proc.stdout
 
 
 @requires_windows_harness
@@ -532,6 +730,72 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
     assert "content-validation-ok" in proc.stdout
 
 
+def _exact_environment_available(module: Path) -> bool:
+    command = (
+        f"Import-Module {ps_quote(module)} -Force; "
+        "try { Enter-NwBuildEnvironment | Out-Null; exit 0 } catch { Write-Output $_.Exception.Message; exit 1 }"
+    )
+    return run_pwsh_command(command).returncode == 0
+
+
+@requires_windows_harness
+def test_enter_build_environment_selects_owned_exact_cl_and_link(tmp_path: Path) -> None:
+    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    if not _exact_environment_available(module):
+        pytest.skip("exact pinned Windows build environment is not provisioned on this host")
+    command = textwrap.dedent(
+        f"""
+        Import-Module {ps_quote(module)} -Force
+        $entered = Enter-NwBuildEnvironment
+        $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+        $link = (Get-Command link.exe -ErrorAction Stop).Source
+        [ordered]@{{
+            Toolset = [string]$env:VCToolsVersion
+            VCToolsInstallDir = [string]$env:VCToolsInstallDir
+            Sdk = [string]$env:WindowsSDKVersion
+            Cl = [string]$cl
+            Link = [string]$link
+            ClExact = Test-NwExactVersion -Tool cl -Executable $cl -Expected $entered.Contract.MsvcCompilerVersion
+            LinkExact = Test-NwExactVersion -Tool link -Executable $link -Expected $entered.Contract.MsvcLinkerVersion
+            ExpectedToolset = $entered.Contract.MsvcToolsetVersion
+            ExpectedSdk = $entered.Contract.WindowsSdkVersion
+        }} | ConvertTo-Json -Compress
+        """
+    )
+    proc = run_pwsh_command(command)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout.strip().splitlines()[-1])
+    expected_tools = os.path.normcase(os.path.normpath(data["VCToolsInstallDir"].rstrip("\\/")))
+    for key in ("Cl", "Link"):
+        actual = os.path.normcase(os.path.normpath(data[key]))
+        assert actual == expected_tools or actual.startswith(expected_tools + os.sep)
+    assert data["ClExact"] is True
+    assert data["LinkExact"] is True
+    assert data["Toolset"].rstrip("\\/") == data["ExpectedToolset"]
+    assert data["Sdk"].rstrip("\\/") == data["ExpectedSdk"]
+
+
+@requires_windows_harness
+def test_bootstrap_reuses_already_correct_installations(tmp_path: Path) -> None:
+    module = ROOT / "tools/nw01/Nw01.Windows.psm1"
+    if not _exact_environment_available(module):
+        pytest.skip("exact pinned Windows toolchain is not provisioned on this host")
+    provenance = tmp_path / "bootstrap-provenance.json"
+    proc = run_pwsh_script(
+        ROOT / "tools/nw01/bootstrap-windows.ps1",
+        "-ProvenancePath",
+        provenance,
+        timeout=900,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(provenance.read_text(encoding="utf-8-sig"))
+    tools = data["tools"]
+    for name in ("CMake", "Ninja", "LLVM clang-cl/lld-link", "DXC", "MSVC/Windows SDK"):
+        assert name in tools
+        assert tools[name]["source"] == "preinstalled-exact", tools[name]
+        assert tools[name]["executable"]
+
+
 @requires_windows_harness
 def test_run_full_always_writes_fresh_failure_summary(tmp_path: Path) -> None:
     summary = tmp_path / "nw01-full-mode.json"
@@ -651,12 +915,19 @@ def test_run_full_preserves_all_verifier_exit_codes_and_exports_fresh_summary(tm
 @requires_windows_harness
 def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Path) -> None:
     repo = init_git_repo(tmp_path / "repo with spaces")
-    (repo / "benchmarks/hardware").mkdir(parents=True)
-    evidence = repo / "benchmarks/hardware/rtx.json"
-    evidence.write_text('{"value": 1}\n', encoding="utf-8")
+    shutil.copytree(ROOT / "benchmarks", repo / "benchmarks")
+    shutil.copytree(ROOT / "shaders", repo / "shaders")
+    shutil.copytree(ROOT / "fixtures/compute_shader", repo / "fixtures/compute_shader")
+    evidence = repo / "benchmarks/hardware/rtx-4060-baseline.json"
     (repo / "README.md").write_text("base\n", encoding="utf-8")
     commit_all(repo)
     script = ROOT / "tools/nw01/prepare-evidence-commit.ps1"
+    relative_evidence = "benchmarks/hardware/rtx-4060-baseline.json"
+
+    def mutate_hardware(value: str) -> None:
+        data = json.loads(evidence.read_text(encoding="utf-8"))
+        data["benchmark_id"] = f"nw01-hardware-rtx-4060-desktop-baseline-{value}"
+        evidence.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     proc = run_pwsh_script(script, "-RepoRoot", repo)
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -674,23 +945,51 @@ def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Pa
     assert "unexpected paths" in (proc.stdout + proc.stderr)
     (repo / "artifact.zip").unlink()
 
+    # An unexpected candidate inside an evidence directory is still rejected.
+    (repo / "benchmarks/hardware/credentials.json").write_text('{"secret": 1}\n', encoding="utf-8")
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert "unexpected paths" in (proc.stdout + proc.stderr)
+    (repo / "benchmarks/hardware/credentials.json").unlink()
+
     # AM (staged add + unstaged modification) must be rejected rather than
     # silently replacing the pre-staged content.
-    evidence.write_text('{"value": 2}\n', encoding="utf-8")
-    git_run(repo, "add", "--", "benchmarks/hardware/rtx.json")
-    evidence.write_text('{"value": 3}\n', encoding="utf-8")
+    mutate_hardware("staged")
+    git_run(repo, "add", "--", relative_evidence)
+    mutate_hardware("unstaged")
     proc = run_pwsh_script(script, "-RepoRoot", repo)
     assert proc.returncode != 0
     assert "both staged and unstaged changes" in (proc.stdout + proc.stderr)
-    git_run(repo, "reset", "-q", "--", "benchmarks/hardware/rtx.json")
-    git_run(repo, "checkout", "--", "benchmarks/hardware/rtx.json")
+    git_run(repo, "reset", "-q", "--", relative_evidence)
+    git_run(repo, "checkout", "--", relative_evidence)
+
+    # Stale provenance is rejected before the index changes.
+    data = json.loads(evidence.read_text(encoding="utf-8"))
+    data["artifact_provenance"]["artifact_sha256"]["clear_present"] = "0" * 64
+    evidence.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert "stale" in (proc.stdout + proc.stderr)
+    assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
+    git_run(repo, "checkout", "--", relative_evidence)
+
+    # Malformed content is rejected before staging.
+    evidence.write_text("{not-json\n", encoding="utf-8")
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert (
+        "Unable to parse JSON" in (proc.stdout + proc.stderr)
+        or "Schema validation failed" in (proc.stdout + proc.stderr)
+    )
+    assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
+    git_run(repo, "checkout", "--", relative_evidence)
 
     # An in-progress merge must never turn -Commit into a merge commit.
     git_dir = git_run(repo, "rev-parse", "--git-dir").stdout.strip()
     git_dir_path = Path(git_dir) if Path(git_dir).is_absolute() else repo / git_dir
     merge_head = git_dir_path / "MERGE_HEAD"
     merge_head.write_text("0" * 40 + "\n", encoding="utf-8")
-    evidence.write_text('{"value": 4}\n', encoding="utf-8")
+    mutate_hardware("merge")
     proc = run_pwsh_script(script, "-RepoRoot", repo, "-Commit")
     assert proc.returncode != 0
     assert "MERGE_HEAD" in (proc.stdout + proc.stderr)
@@ -721,6 +1020,24 @@ def test_clean_system_package_records_checkout_provenance_and_rejects_stale_inpu
     }
     for name, payload in executables.items():
         (deploy / name).write_bytes(payload)
+    # Rewrite the copied MSVC release ledgers to match the fake artifacts so the
+    # package can be validated against verified ledger hashes.
+    fixtures = {
+        "nw_empty_player.exe": ("empty-player-msvc-ltcg-release.json", "empty_player"),
+        "nw_clear_present_fixture.exe": ("clear-present-msvc-ltcg-release.json", "clear_present"),
+        "nw_compute_shader_fixture.exe": ("compute-fixture-msvc-ltcg-release.json", "compute_shader"),
+    }
+    ledger_hashes = {}
+    for name, (ledger_name, fixture_id) in fixtures.items():
+        ledger_path = repo / "benchmarks/ledgers" / ledger_name
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        payload = executables[name]
+        digest = hashlib.sha256(payload).hexdigest()
+        ledger["distributed_components"][0]["sha256"] = digest
+        ledger["distributed_components"][0]["size_bytes"] = len(payload)
+        ledger["total_distributed_bytes"] = len(payload)
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+        ledger_hashes[fixture_id] = digest
     head = commit_all(repo)
 
     summary = tmp_path / "full-summary.json"
@@ -730,7 +1047,22 @@ def test_clean_system_package_records_checkout_provenance_and_rejects_stale_inpu
                 "mode": "Full",
                 "source_commit": head,
                 "checks": {
-                    "size_ledgers": {"passed": True},
+                    "size_ledgers": {
+                        "passed": True,
+                        "recorded": {
+                            "msvc-ltcg": {
+                                "toolchain_id": "msvc-ltcg",
+                                "verification_status": "verified",
+                                "recorded_fixtures": {
+                                    fixture_id: {
+                                        "verification_status": "verified",
+                                        "sha256": digest,
+                                    }
+                                    for fixture_id, digest in ledger_hashes.items()
+                                },
+                            }
+                        },
+                    },
                     "fixture_validation": {"passed": True},
                     "msvc_fixture_validation": {"passed": True},
                 },
@@ -755,10 +1087,33 @@ def test_clean_system_package_records_checkout_provenance_and_rejects_stale_inpu
     assert manifest["source_commit"] == head
     assert manifest["source_revision_origin"] == "git-checkout-head"
     assert {entry["name"] for entry in manifest["files"]} == set(executables)
+    assert (output / "evidence/shaders-manifest.json").is_file()
+    assert (output / "evidence/toolchain-manifest.v1.json").is_file()
+    assert list((output / "evidence/ledgers").glob("*.json"))
+    assert list((output / "evidence/reproducibility").glob("*.json"))
     for entry in manifest["files"]:
         payload = (output / "deploy" / entry["name"]).read_bytes()
         assert entry["sha256"] == hashlib.sha256(payload).hexdigest()
         assert entry["bytes"] == len(payload)
+
+    # Replacing a binary after a successful Full run at the same HEAD must not
+    # produce a supposedly verified package.
+    (deploy / "nw_clear_present_fixture.exe").write_bytes(b"tampered after full run")
+    tampered_output = tmp_path / "tampered-output"
+    proc = run_pwsh_script(
+        script,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-OutputRoot",
+        tampered_output,
+        extra_env={"GITHUB_SHA": ""},
+    )
+    assert proc.returncode != 0
+    assert "does not match verified msvc-ltcg release-ledger hash" in (proc.stdout + proc.stderr)
+    assert not (tampered_output / "evidence/artifact-manifest.json").exists()
+    (deploy / "nw_clear_present_fixture.exe").write_bytes(executables["nw_clear_present_fixture.exe"])
 
     stale_sha_output = tmp_path / "stale-sha-output"
     proc = run_pwsh_script(
@@ -875,13 +1230,111 @@ def test_archive_uses_artifact_source_revision_and_preserves_prior_evidence(tmp_
 
 
 @requires_windows_harness
+def test_archive_validates_clean_system_zip_provenance(tmp_path: Path) -> None:
+    import zipfile
+
+    repo = init_git_repo(tmp_path / "archive zip repo")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    head = commit_all(repo)
+    archived_commit = "a" * 40
+
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps({"source_commit": archived_commit}), encoding="utf-8")
+    package = tmp_path / "package"
+    (package / "evidence").mkdir(parents=True)
+    files = [{"name": "nw_empty_player.exe", "sha256": "1" * 64, "bytes": 1}]
+    manifest = {"source_commit": archived_commit, "files": files}
+    (package / "evidence/artifact-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    def make_zip(path: Path, payload: dict | None) -> None:
+        with zipfile.ZipFile(path, "w") as archive:
+            if payload is not None:
+                archive.writestr("evidence/artifact-manifest.json", json.dumps(payload))
+
+    matching_zip = tmp_path / "matching.zip"
+    make_zip(matching_zip, manifest)
+    archive_root = tmp_path / "archive"
+    script = ROOT / "tools/nw01/archive-artifacts.ps1"
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        archive_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        package,
+        "-CleanSystemZip",
+        matching_zip,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    directory = next(path for path in archive_root.iterdir() if path.is_dir())
+    archive_manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
+    assert {entry["artifact"] for entry in archive_manifest["source_revisions"]} == {
+        "full-summary",
+        "clean-system-package",
+        "clean-system-zip",
+    }
+
+    conflicting_zip = tmp_path / "conflicting.zip"
+    make_zip(conflicting_zip, {"source_commit": "b" * 40, "files": files})
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        archive_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        package,
+        "-CleanSystemZip",
+        conflicting_zip,
+    )
+    assert proc.returncode != 0
+    assert "conflicting source revisions" in (proc.stdout + proc.stderr)
+
+    malformed_zip = tmp_path / "no-manifest.zip"
+    make_zip(malformed_zip, None)
+    before = {path.name for path in archive_root.iterdir() if path.is_dir()}
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        archive_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemZip",
+        malformed_zip,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    directory = next(
+        path for path in archive_root.iterdir() if path.is_dir() and path.name not in before
+    )
+    archive_manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
+    assert "clean-system-zip" in archive_manifest["unverified_artifacts"]
+    assert archive_manifest["evidence_class"] != "current-certifying"
+
+
+@requires_windows_harness
 def test_evidence_summary_distinguishes_current_and_historical_full_results(tmp_path: Path) -> None:
     repo = init_git_repo(tmp_path / "summary repo")
-    (repo / "benchmarks").mkdir()
-    shutil.copy(ROOT / "benchmarks/toolchain-manifest.v1.json", repo / "benchmarks/toolchain-manifest.v1.json")
-    shutil.copy(ROOT / "benchmarks/evidence-status.json", repo / "benchmarks/evidence-status.json")
+    shutil.copytree(ROOT / "benchmarks", repo / "benchmarks")
     head = commit_all(repo)
     script = ROOT / "tools/nw01/evidence-summary.ps1"
+
+    # Without a supplied Full result the baseline is explicitly not evaluated,
+    # while current file-level evidence is still validated against the ledgers.
+    no_summary_output = tmp_path / "no-summary-status.json"
+    proc = run_pwsh_script(script, "-RepoRoot", repo, "-JsonPath", no_summary_output)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(no_summary_output.read_text(encoding="utf-8-sig"))
+    assert data["full_baseline"] == "NOT_EVALUATED"
+    assert data["rtx_40_representative_hardware"] == "VERIFIED"
+    assert data["rtx_50_representative_hardware"] == "VERIFIED"
+    assert data["clean_system"] == "VERIFIED"
 
     current = tmp_path / "current.json"
     current.write_text(
@@ -960,6 +1413,23 @@ def test_evidence_summary_distinguishes_current_and_historical_full_results(tmp_
     data = json.loads(verified_output.read_text(encoding="utf-8-sig"))
     assert data["full_baseline"] == "VERIFIED"
     assert data["concrete_checks"] == "PASS"
+
+    # An executable/ledger change invalidates the physical captures even when a
+    # current exit-2 Full summary is supplied. The summary must not keep
+    # advertising stale hardware or CleanSystem evidence as verified.
+    ledger_path = repo / "benchmarks/ledgers/clear-present-msvc-ltcg-release.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["distributed_components"][0]["sha256"] = "f" * 64
+    ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    stale_output = tmp_path / "stale-status.json"
+    proc = run_pwsh_script(script, "-RepoRoot", repo, "-FullSummary", current, "-JsonPath", stale_output)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(stale_output.read_text(encoding="utf-8-sig"))
+    assert data["full_baseline"] == "INCOMPLETE"
+    assert data["rtx_40_representative_hardware"] == "PENDING"
+    assert data["rtx_50_representative_hardware"] == "PENDING"
+    assert data["clean_system"] == "PENDING"
+    assert "stale" in data["rtx_40_representative_hardware_reason"]
 
 
 @requires_windows_harness

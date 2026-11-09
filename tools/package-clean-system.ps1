@@ -110,21 +110,122 @@ if (-not [string]::Equals($summaryCommit, $sourceCommit, [System.StringCompariso
 
 $deployRoot = Join-Path $OutputRoot "deploy"
 $evidenceRoot = Join-Path $OutputRoot "evidence"
-New-Item -ItemType Directory -Force -Path $deployRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $evidenceRoot "ledgers") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $evidenceRoot "reproducibility") | Out-Null
 
 $requiredExecutables = @(
     "nw_empty_player.exe",
     "nw_clear_present_fixture.exe",
     "nw_compute_shader_fixture.exe"
 )
+$fixtureByExecutable = @{
+    "nw_empty_player.exe" = "empty_player"
+    "nw_clear_present_fixture.exe" = "clear_present"
+    "nw_compute_shader_fixture.exe" = "compute_shader"
+}
+
+# Before copying anything, bind each executable to the selected toolchain's
+# verified release ledgers. Copying current files and hashing them afterwards
+# would accept a binary swapped in after a successful Full run at the same HEAD.
+$toolchainData = Get-Content -Raw $toolchainManifestPath | ConvertFrom-Json
+$selectedEntry = @($toolchainData.evaluated_toolchains | Where-Object { $_.toolchain_id -eq $toolchain }) | Select-Object -First 1
+if ($null -eq $selectedEntry -or $selectedEntry.verification_status -ne "verified") {
+    Write-Error "Refusing to package: selected toolchain '$toolchain' is not verified in the toolchain manifest."
+    exit 1
+}
+if ($selectedEntry.fixture_execution_verified -ne $true -or
+    $selectedEntry.pdb_debugging_verified -ne $true -or
+    $selectedEntry.deterministic_repro_verified -ne $true -or
+    $selectedEntry.deployment_closure_identical -ne $true) {
+    Write-Error "Refusing to package: selected toolchain '$toolchain' lacks verified fixture, debug-symbol, reproducibility or deployment-closure evidence."
+    exit 1
+}
+$expectedHashes = @{}
+$expectedSizes = @{}
+foreach ($ledgerFile in @(Get-ChildItem -Path (Join-Path $RepoRoot "benchmarks/ledgers") -Filter "*.json" -File)) {
+    $ledger = Get-Content -Raw $ledgerFile.FullName | ConvertFrom-Json
+    if ($ledger.verification_status -ne "verified") { continue }
+    if ($ledger.build_profile -ne "release") { continue }
+    if ($ledger.toolchain_id -ne $toolchain) { continue }
+    $fixtureId = [string]$ledger.fixture_id
+    $exeName = @($fixtureByExecutable.Keys | Where-Object { $fixtureByExecutable[$_] -eq $fixtureId }) | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($exeName)) { continue }
+    $component = @($ledger.distributed_components | Where-Object { $_.category -eq "executable" }) | Select-Object -First 1
+    if ($null -eq $component -or [string]::IsNullOrWhiteSpace([string]$component.sha256)) { continue }
+    $expectedHashes[$exeName] = ([string]$component.sha256).ToLowerInvariant()
+    $expectedSizes[$exeName] = [int]$component.size_bytes
+}
+$missingLedgerHashes = @($requiredExecutables | Where-Object { -not $expectedHashes.ContainsKey($_) })
+if ($missingLedgerHashes.Count -gt 0) {
+    Write-Error "Refusing to package: selected toolchain '$toolchain' has no verified release-ledger executable hash for $($missingLedgerHashes -join ', ')."
+    exit 1
+}
+
+# If the Full summary records the measured ledger hashes, they must agree with
+# the verified ledger files before either can certify this package.
+$sizeLedgerCheck = $summary.checks.size_ledgers
+$summaryRecorded = $null
+if ($null -ne $sizeLedgerCheck) {
+    $recordedProperty = $sizeLedgerCheck.PSObject.Properties["recorded"]
+    if ($null -ne $recordedProperty -and $null -ne $recordedProperty.Value) {
+        $toolchainRecordedProperty = $recordedProperty.Value.PSObject.Properties[$toolchain]
+        if ($null -ne $toolchainRecordedProperty) { $summaryRecorded = $toolchainRecordedProperty.Value }
+    }
+}
+if ($null -eq $summaryRecorded) {
+    Write-Error "Refusing to package: Full summary does not record verified size-ledger hashes for '$toolchain'."
+    exit 1
+}
+if ($null -ne $summaryRecorded) {
+    $recordedToolchainProperty = $summaryRecorded.PSObject.Properties["toolchain_id"]
+    $recordedToolchain = if ($null -ne $recordedToolchainProperty) { [string]$recordedToolchainProperty.Value } else { "" }
+    $recordedVerificationProperty = $summaryRecorded.PSObject.Properties["verification_status"]
+    $recordedVerification = if ($null -ne $recordedVerificationProperty) { [string]$recordedVerificationProperty.Value } else { "" }
+    if ($recordedToolchain -ne $toolchain -or $recordedVerification -ne "verified") {
+        Write-Error "Refusing to package: Full summary size-ledger recording for '$toolchain' is not verified."
+        exit 1
+    }
+    $recordedFixturesProperty = $summaryRecorded.PSObject.Properties["recorded_fixtures"]
+    $recordedFixtures = if ($null -ne $recordedFixturesProperty) { $recordedFixturesProperty.Value } else { $null }
+    foreach ($exeName in $requiredExecutables) {
+        $fixtureId = $fixtureByExecutable[$exeName]
+        $recordedFixture = if ($null -ne $recordedFixtures) { $recordedFixtures.PSObject.Properties[$fixtureId] } else { $null }
+        if ($null -eq $recordedFixture) {
+            Write-Error "Refusing to package: Full summary has no recorded hash for $fixtureId."
+            exit 1
+        }
+        $recordedStatusProperty = $recordedFixture.Value.PSObject.Properties["verification_status"]
+        if ($null -eq $recordedStatusProperty -or [string]$recordedStatusProperty.Value -ne "verified") {
+            Write-Error "Refusing to package: Full summary recorded $fixtureId as not verified."
+            exit 1
+        }
+        $recordedHashProperty = $recordedFixture.Value.PSObject.Properties["sha256"]
+        $recordedHash = if ($null -ne $recordedHashProperty) { ([string]$recordedHashProperty.Value).ToLowerInvariant() } else { "" }
+        if ($recordedHash -ne $expectedHashes[$exeName]) {
+            Write-Error "Refusing to package: Full summary $fixtureId hash '$recordedHash' does not match verified ledger hash '$($expectedHashes[$exeName])'."
+            exit 1
+        }
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $deployRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $evidenceRoot "ledgers") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $evidenceRoot "reproducibility") | Out-Null
+
 $files = @()
 foreach ($name in $requiredExecutables) {
     $sourcePath = Join-Path $source $name
     if (-not (Test-Path $sourcePath -PathType Leaf)) {
         Write-Error "Required clean-system executable is missing: $sourcePath"
+        exit 1
+    }
+    $actualHash = (Get-FileHash -Algorithm SHA256 $sourcePath).Hash.ToLowerInvariant()
+    if ($actualHash -ne $expectedHashes[$name]) {
+        Write-Error "Refusing to package: '$name' hash '$actualHash' does not match verified $toolchain release-ledger hash '$($expectedHashes[$name])'."
+        exit 1
+    }
+    $actualSize = (Get-Item $sourcePath).Length
+    if ($expectedSizes.ContainsKey($name) -and $actualSize -ne $expectedSizes[$name]) {
+        Write-Error "Refusing to package: '$name' size $actualSize does not match verified ledger size $($expectedSizes[$name])."
         exit 1
     }
     $destinationPath = Join-Path $deployRoot $name

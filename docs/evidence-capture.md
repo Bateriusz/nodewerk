@@ -12,7 +12,10 @@ The two machine roles remain separate:
 
 Pinned versions are read from `benchmarks/toolchain-manifest.v1.json`. Download locations,
 integrity hashes, Visual Studio component identifiers, and bounded download retry policy live in
-`tools/nw01/toolchain-sources.json`.
+`tools/nw01/toolchain-sources.json`. The exact binary identity reported by a pinned upstream
+distribution is recorded in `tools/nw01/tool-version-identities.json`; for example the pinned DXC
+`1.8.2407` release reports `1.8.2407.7` / `1.8.2407.12`, and any other build suffix or nearby
+numeric token is rejected.
 
 ## Required Physical Targets
 
@@ -37,6 +40,10 @@ The bootstrap is idempotent. It first searches for an **exact** pinned installat
 Only missing or wrong components are provisioned. Standalone release artifacts are SHA-256
 verified before installation. The Visual Studio Build Tools bootstrapper is validated with its
 configured SHA-256 (when present) and its Authenticode signature before it is executed.
+Only an Authenticode status of `Valid` is accepted; unknown/indeterminate validation results are
+hard failures even when the certificate subject contains `Microsoft`. A downloaded archive that
+extracts but does not report the exact pinned binary identity is a hard failure and never enters
+the transient-failure fallback path.
 
 The Visual Studio component list uses manifest placeholders (`{msvc_toolset_major_minor}`,
 `{windows_sdk_build}`). They are expanded from `benchmarks/toolchain-manifest.v1.json`; a literal
@@ -73,10 +80,13 @@ The MSVC environment reproduces the same `vcvars64.bat` selection mechanism that
 NW-01 on the physical RTX 4060 Ti host. The Windows SDK version is read from
 `benchmarks/toolchain-manifest.v1.json`; the `vcvars_ver` selector is derived from the manifest's
 pinned MSVC toolset (for example `14.40.33821`), with a derived `14.40` major/minor fallback when
-the host only exposes a different 14.40 patch. The exact `cl.exe`/`link.exe` versions are still
-verified against the manifest. `tools/nw01/toolchain-sources.json` only carries component
-templates, download locations, integrity digests and retry policy. There is no second independent
-copy of the toolset or SDK version pins.
+the host exposes an alternate 14.40 installation. A different patch is never accepted: activation
+requires the selected `VCToolsVersion` to equal the manifest toolset exactly, and the active
+`cl.exe`/`link.exe` must both resolve under the selected `VCToolsInstallDir` and report the exact
+pinned compiler/linker versions. Doctor inspects those actually selected executables rather than
+scanning other PATH candidates for an exact match. `tools/nw01/toolchain-sources.json` only
+carries component templates, download locations, integrity digests and retry policy. There is no
+second independent copy of the toolset or SDK version pins.
 
 ## 3. Run Full and preserve its summary
 
@@ -155,6 +165,11 @@ package manifest, and creates a ZIP. The checked-out `git rev-parse HEAD` is aut
 summary from a different source revision is rejected as stale. A stale package therefore cannot
 silently certify a different source revision.
 
+Before copying any executable, packaging compares it byte-for-byte with the selected toolchain's
+verified release-ledger hash and size, and with the hashes recorded by the Full summary when
+present. A binary replaced after a successful Full run at the same HEAD is rejected rather than
+packaged and re-hashed.
+
 By default package output is kept outside the repository working tree.
 
 ## 6. Execute CleanSystem on an uncontaminated target
@@ -190,7 +205,12 @@ pwsh ./tools/nw01/evidence-summary.ps1 `
 
 This prints source commit, selected toolchain, concrete-check state, representative RTX 40/50
 coverage, CleanSystem state, and Full-baseline state. It is a convenience view derived from
-verifier/benchmark artifacts and is not an independent authority.
+verifier/benchmark artifacts and is not an independent authority. Hardware and CleanSystem
+states are recomputed from the current hardware/CleanSystem files by reconciling their artifact
+hashes against the selected toolchain's verified release ledgers; stale or incomplete evidence is
+reported as `PENDING` with a reason. Without a supplied Full result the Full baseline is
+`NOT_EVALUATED`, never `VERIFIED`. An exit-2 Full summary cannot promote stale physical evidence
+to verified.
 
 ## 8. Archive non-repository artifacts
 
@@ -208,7 +228,11 @@ The command refuses an archive root inside the repository and writes an archive 
 the source revision recorded by the supplied Full summary and CleanSystem package artifact
 manifest. It rejects conflicting revisions and labels the archive `current-certifying` or
 `historical`; historical evidence is never relabelled as current certifying evidence. Prior
-archive directories are preserved; `-Replace` is required for an explicit overwrite.
+archive directories are preserved; `-Replace` is required for an explicit overwrite. A supplied
+CleanSystem ZIP is inspected for its embedded `evidence/artifact-manifest.json`. Its source
+revision must agree with the package/summary and its executable hashes with the package; a ZIP
+without a usable manifest is explicitly recorded in `unverified_artifacts` instead of receiving
+current certifying provenance.
 
 ## 9. Prepare repository evidence for Git
 
@@ -221,7 +245,10 @@ pwsh ./tools/nw01/prepare-evidence-commit.ps1
 Only an explicit evidence allowlist is staged. Unexpected modified/untracked paths cause refusal;
 the command never uses `git add .`, never stages build/package/ZIP artifacts, and prints staged
 paths plus a diff stat. A path with both staged and unstaged changes is rejected rather than
-silently replacing pre-staged content.
+silently replacing pre-staged content. Before the index changes, each candidate's JSON shape,
+verification status and applicable provenance/hash relationship are validated. For example
+`benchmarks/hardware/credentials.json`, an unrelated `benchmarks/hardware/rtx.json` capture, or a
+hardware capture whose hashes no longer match the selected ledgers is rejected.
 
 To create an ordinary new commit:
 
@@ -237,7 +264,10 @@ refuses to stage or commit.
 
 GitHub Actions uses the same repository-owned bootstrap, environment activation, doctor, and
 BuildChecks entry points as local execution. The hosted Windows job also invokes bootstrap twice to
-exercise the already-correct/idempotent path.
+exercise the already-correct/idempotent path. The Windows harness behavioural pytest suite is a
+required gate (not `continue-on-error`); it executes bootstrap no-op reuse, exact environment
+selection, download retry/fallback, DXC release identity, Authenticode failure, MSVC ownership and
+archive validation in addition to source-level contract checks.
 
 Physical CI, when `NW_PHYSICAL_RUNNER_LABEL` is configured, uses the shared Full and CleanSystem
 packaging wrappers. The CleanSystem target itself remains a separate uncontaminated role.

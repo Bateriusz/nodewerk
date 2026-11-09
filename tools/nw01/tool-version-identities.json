@@ -1,0 +1,15 @@
+{
+  "schema_version": "1",
+  "description": "Repository-owned mapping from semantic toolchain pins to the exact binary identity reported by the pinned upstream distribution. Consumed by Nw01.Windows.psm1; exact rejection remains in force.",
+  "dxc": {
+    "1.8.2407": {
+      "distribution": "dxc_2024_07_31.zip",
+      "reported_versions": [
+        "1.8.2407.7",
+        "1.8.2407.12"
+      ],
+      "reported_banner": "dxcompiler.dll: 1.8 - 1.8.2407.7",
+      "notes": "1.8.2407.7 is recorded in the verified shaders/manifest.json measured evidence; 1.8.2407.12 is the build suffix reported by the dxc_2024_07_31.zip release asset on hosted runners. Both are exact identities of the same pinned DXC 1.8.2407 distribution; any other build suffix or numeric token is rejected."
+    }
+  }
+}
