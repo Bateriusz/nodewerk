@@ -163,3 +163,15 @@ def test_documented_clean_system_role_never_bootstraps_full_toolchain() -> None:
         "tools/nw01/capture-hardware.ps1",
     ):
         assert "artifacts\\nw01" not in read(path)
+
+
+def test_msvc_version_detection_is_locale_independent() -> None:
+    module = read("tools/nw01/Nw01.Windows.psm1")
+
+    # MSVC banners are localized by the installed Windows/VS language pack.
+    # Exact numeric version tokens, not English banner phrases, are the contract.
+    assert '"cl" { return $output -match ("(?<![0-9.])"' in module
+    assert '"link" { return $output -match ("(?<![0-9.])"' in module
+    assert "Compiler Version\\s+" not in module
+    assert "Linker Version\\s+" not in module
+    assert "MSVC localizes the surrounding banner text" in module

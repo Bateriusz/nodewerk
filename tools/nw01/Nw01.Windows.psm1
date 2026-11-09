@@ -89,8 +89,11 @@ function Test-NwExactVersion {
         "clang-cl" { return $output -match ("clang version\s+" + [regex]::Escape($Expected) + "(?:\s|$)") }
         "lld-link" { return $output -match ("LLD\s+" + [regex]::Escape($Expected) + "(?:\s|$)") }
         "dxc" { return $output -match [regex]::Escape($Expected) }
-        "cl" { return $output -match ("Compiler Version\s+" + [regex]::Escape($Expected) + "(?:\s|$)") }
-        "link" { return $output -match ("Linker Version\s+" + [regex]::Escape($Expected) + "(?:\s|$)") }
+        # MSVC localizes the surrounding banner text (for example Polish cl.exe
+        # prints "wersja kompilatora"), so compiler/linker validation must bind
+        # to the exact numeric version token rather than English words.
+        "cl" { return $output -match ("(?<![0-9.])" + [regex]::Escape($Expected) + "(?![0-9.])") }
+        "link" { return $output -match ("(?<![0-9.])" + [regex]::Escape($Expected) + "(?![0-9.])") }
     }
 }
 
