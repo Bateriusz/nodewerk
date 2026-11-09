@@ -565,7 +565,7 @@ def test_msvc_selection_validates_active_paths_ownership_and_exact_versions(tmp_
     assert "msvc-exact" in proc.stdout
 
     wrong_patch = bin_dir / "cl-wrong.cmd"
-    write_fake_tool(wrong_patch, "Microsoft (R) C/C++ Optimizing Compiler Version 19.40.33807 for x64")
+    write_fake_tool(wrong_patch, "Microsoft (R) C/C++ Optimizing Compiler Version 19.40.33822 for x64")
     proc = run(wrong_patch, link, tools_root)
     assert proc.returncode != 0
     assert "expected exact 19.40.33821" in (proc.stdout + proc.stderr)
@@ -645,7 +645,7 @@ def test_visual_studio_selection_derives_versions_and_components_from_manifest(t
 @requires_windows_harness
 def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> None:
     module = ps_quote(ROOT / "tools/nw01/Nw01.Windows.psm1")
-    retry = "[pscustomobject]@{ max_attempts = 4; initial_delay_seconds = 0; backoff_multiplier = 2 }"
+    retry = "([pscustomobject]@{ max_attempts = 4; initial_delay_seconds = 0; backoff_multiplier = 2 })"
     output = ps_quote(tmp_path / "artifact.bin")
 
     retry_script = textwrap.dedent(
@@ -1120,7 +1120,10 @@ def test_clean_system_package_records_checkout_provenance_and_rejects_stale_inpu
         extra_env={"GITHUB_SHA": ""},
     )
     assert proc.returncode != 0
-    assert "does not match verified msvc-ltcg release-ledger hash" in (proc.stdout + proc.stderr)
+    normalized_error = " ".join(
+        re.sub(r"\x1b\[[0-9;]*m", "", proc.stdout + proc.stderr).split()
+    )
+    assert "does not match verified msvc-ltcg release-ledger hash" in normalized_error
     assert not (tampered_output / "evidence/artifact-manifest.json").exists()
     (deploy / "nw_clear_present_fixture.exe").write_bytes(executables["nw_clear_present_fixture.exe"])
 
