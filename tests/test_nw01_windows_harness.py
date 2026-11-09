@@ -465,6 +465,38 @@ def write_fake_tool(path: Path, output: str) -> None:
         path.chmod(0o755)
 
 
+def recorded_size_ledger_hashes(repo: Path, toolchain: str = "msvc-ltcg") -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for ledger_path in sorted((repo / "benchmarks/ledgers").glob(f"*-{toolchain}-release.json")):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        component = next(
+            entry
+            for entry in ledger["distributed_components"]
+            if entry.get("category") == "executable"
+        )
+        hashes[str(ledger["fixture_id"])] = str(component["sha256"]).lower()
+    return hashes
+
+
+def size_ledger_summary_checks(repo: Path, toolchain: str = "msvc-ltcg") -> dict:
+    return {
+        "size_ledgers": {
+            "recorded": {
+                toolchain: {
+                    "toolchain_id": toolchain,
+                    "verification_status": "verified",
+                    "recorded_fixtures": {
+                        fixture: {"verification_status": "verified", "sha256": digest}
+                        for fixture, digest in recorded_size_ledger_hashes(
+                            repo, toolchain
+                        ).items()
+                    },
+                }
+            }
+        }
+    }
+
+
 @requires_windows_harness
 def test_dxc_exact_version_uses_pinned_release_identity_and_rejects_others(tmp_path: Path) -> None:
     module = ROOT / "tools/nw01/Nw01.Windows.psm1"
@@ -2036,6 +2068,7 @@ def test_evidence_summary_distinguishes_current_and_historical_full_results(tmp_
                 "source_commit": head,
                 "full_baseline_passed": True,
                 "concrete_failures": [],
+                "checks": size_ledger_summary_checks(repo),
             }
         ),
         encoding="utf-8",
@@ -2089,6 +2122,77 @@ def test_evidence_summary_distinguishes_current_and_historical_full_results(tmp_
     data = json.loads(stale_success_output.read_text(encoding="utf-8-sig"))
     assert data["full_baseline"] == "INCOMPLETE"
     assert "reconciliation" in data["full_baseline_reason"]
+
+    # Refreshing both the ledgers and the physical captures at the same HEAD
+    # keeps physical reconciliation green. An older successful summary that
+    # recorded different binaries must still not certify it.
+    refreshed_repo = init_git_repo(tmp_path / "refreshed summary repo")
+    shutil.copytree(ROOT / "benchmarks", refreshed_repo / "benchmarks")
+    refreshed_head = commit_all(refreshed_repo)
+    original_hashes = recorded_size_ledger_hashes(refreshed_repo)
+
+    old_summary = tmp_path / "refreshed-old-summary.json"
+    old_summary.write_text(
+        json.dumps(
+            {
+                "mode": "Full",
+                "source_commit": refreshed_head,
+                "full_baseline_passed": True,
+                "concrete_failures": [],
+                "checks": size_ledger_summary_checks(refreshed_repo),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    refreshed_hashes: dict[str, str] = {}
+    for ledger_path in sorted(
+        (refreshed_repo / "benchmarks/ledgers").glob("*-msvc-ltcg-release.json")
+    ):
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        fixture = str(ledger["fixture_id"])
+        refreshed_hash = hashlib.sha256(f"refreshed-{fixture}".encode("utf-8")).hexdigest()
+        refreshed_hashes[fixture] = refreshed_hash
+        for component in ledger["distributed_components"]:
+            if component.get("category") == "executable":
+                component["sha256"] = refreshed_hash
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
+    for relative in (
+        "benchmarks/hardware/rtx-4060-baseline.json",
+        "benchmarks/hardware/rtx-50-series-baseline.json",
+        "benchmarks/clean-system/clean-system-validation.json",
+    ):
+        evidence_path = refreshed_repo / relative
+        document = json.loads(evidence_path.read_text(encoding="utf-8"))
+        document["artifact_provenance"]["artifact_sha256"] = {
+            fixture: refreshed_hashes[fixture] for fixture in original_hashes
+        }
+        for result in document.get("fixture_results", []):
+            fixture = str(result.get("fixture_id"))
+            if fixture in refreshed_hashes:
+                result["sha256"] = refreshed_hashes[fixture]
+        evidence_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+    refreshed_output = tmp_path / "refreshed-status.json"
+    proc = run_pwsh_script(
+        script,
+        "-RepoRoot",
+        refreshed_repo,
+        "-FullSummary",
+        old_summary,
+        "-JsonPath",
+        refreshed_output,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(refreshed_output.read_text(encoding="utf-8-sig"))
+    # Physical evidence reconciles against the refreshed ledgers...
+    assert data["rtx_40_representative_hardware"] == "VERIFIED"
+    assert data["rtx_50_representative_hardware"] == "VERIFIED"
+    assert data["clean_system"] == "VERIFIED"
+    # ...but the old summary recorded different binaries, so Full is not current.
+    assert data["full_baseline"] == "INCOMPLETE"
+    assert "full_summary_ledgers" in data["full_baseline_reason"]
 
 
 @requires_windows_harness

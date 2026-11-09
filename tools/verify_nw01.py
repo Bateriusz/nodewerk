@@ -600,9 +600,13 @@ def evaluate_offline_shader(
     hlsl_violations = check_hlsl_source_constraints(hlsl_text)
 
     dxil_info: dict[str, Any] | None = None
-    pinned_dxc, shader_pin_drift = resolve_pinned_dxc_version(repo_root)
+    pinned_dxc, _ = resolve_pinned_dxc_version(repo_root)
     dxc_version_matches_pin = False
-    if dxc_executable is not None and shader_pin_drift is None:
+    # Validate the installed executable against the authoritative pin regardless
+    # of a stale recorded shader-manifest pin. Otherwise a pin change can never
+    # be repaired: the old pin would block validation and therefore block the
+    # fresh build from re-recording the manifest.
+    if dxc_executable is not None:
         measured_version = query_dxc_version(str(dxc_executable))
         dxc_version_matches_pin = bool(pinned_dxc) and pinned_dxc in measured_version
 
@@ -626,11 +630,16 @@ def evaluate_offline_shader(
                 record_shader_manifest_evidence(repo_root, primary_dxil, dxc_executable)
 
     evidence = check_shader_manifest_evidence(repo_root)
+    # Fresh-build recording refreshes the recorded pin. When no fresh evidence
+    # was recorded, a remaining disagreement with the authoritative pin still
+    # fails closed rather than certifying stale shader evidence.
+    _, remaining_pin_drift = resolve_pinned_dxc_version(repo_root)
     passed = (
         not hlsl_violations
         and evidence["verified"]
         and dxil_info is not None
         and dxc_version_matches_pin
+        and remaining_pin_drift is None
     )
     return {
         "passed": passed,
@@ -645,9 +654,9 @@ def evaluate_offline_shader(
             None
             if passed
             else (
-                f"shaders/manifest.json records pinned DXC {shader_pin_drift} but the authoritative "
+                f"shaders/manifest.json records pinned DXC {remaining_pin_drift} but the authoritative "
                 f"toolchain manifest pins {pinned_dxc}; re-record shader evidence with the pinned DXC."
-                if shader_pin_drift is not None
+                if remaining_pin_drift is not None
                 else "Offline DXC evidence is unverified; run on Windows 11 x64 with the pinned dxc "
                 f"({pinned_dxc or 'unknown'}) and a freshly built artifact to record shaders/manifest.json."
             )

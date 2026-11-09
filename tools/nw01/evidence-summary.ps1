@@ -80,6 +80,59 @@ function Test-NwProvenanceAgainstLedgers {
     return $null
 }
 
+function Test-NwFullSummaryLedgerBinding {
+    <#
+        A successful Full summary is only current evidence when the size-ledger
+        hashes it recorded for the selected toolchain still match the ledgers in
+        the checkout. Refreshing both ledgers and physical captures at the same
+        HEAD keeps the physical reconciliation green, so without this binding an
+        older summary could still advertise binaries that are no longer current.
+    #>
+    param($FullSummaryDocument, [string]$ToolchainId, $Ledgers)
+    $checks = Get-NwPropertyValue $FullSummaryDocument "checks"
+    $sizeLedgers = Get-NwPropertyValue $checks "size_ledgers"
+    $recordedContainer = Get-NwPropertyValue $sizeLedgers "recorded"
+    if ($null -eq $recordedContainer) {
+        return "Full summary does not record checks.size_ledgers.recorded hashes for the selected toolchain"
+    }
+    $recordedProperty = $recordedContainer.PSObject.Properties[$ToolchainId]
+    if ($null -eq $recordedProperty -or $null -eq $recordedProperty.Value) {
+        return "Full summary does not record size-ledger hashes for selected toolchain '$ToolchainId'"
+    }
+    $recorded = $recordedProperty.Value
+    $recordedToolchain = [string](Get-NwPropertyValue $recorded "toolchain_id" "")
+    if ($recordedToolchain -ne $ToolchainId) {
+        return "Full summary size-ledger toolchain '$recordedToolchain' does not match selected toolchain '$ToolchainId'"
+    }
+    if ([string](Get-NwPropertyValue $recorded "verification_status" "") -ne "verified") {
+        return "Full summary size-ledger recording for '$ToolchainId' is not verified"
+    }
+    $recordedFixtures = Get-NwPropertyValue $recorded "recorded_fixtures"
+    if ($null -eq $recordedFixtures) {
+        return "Full summary does not record per-fixture size-ledger hashes"
+    }
+    foreach ($fixture in @("empty_player", "clear_present", "compute_shader")) {
+        if (-not $Ledgers.Hashes.ContainsKey($fixture)) {
+            return "current ledgers have no verified release hash for $fixture"
+        }
+        $fixtureRecord = Get-NwPropertyValue $recordedFixtures $fixture
+        if ($null -eq $fixtureRecord) {
+            return "Full summary does not record the $fixture size-ledger hash"
+        }
+        if ([string](Get-NwPropertyValue $fixtureRecord "verification_status" "") -ne "verified") {
+            return "Full summary recorded $fixture as not verified"
+        }
+        $recordedHash = ([string](Get-NwPropertyValue $fixtureRecord "sha256" "")).ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($recordedHash)) {
+            return "Full summary does not record a $fixture size-ledger hash"
+        }
+        if ($recordedHash -ne $Ledgers.Hashes[$fixture]) {
+            return "Full summary $fixture size-ledger hash $recordedHash does not match current ledger $($Ledgers.Hashes[$fixture])"
+        }
+    }
+    return $null
+}
+
 function Get-NwHardwareStatus {
     param([string]$Root, [string]$RelativePath, [string]$Tier, [string]$ToolchainId, $Ledgers, [string[]]$EvidenceGaps)
     $path = Join-Path $Root $RelativePath
@@ -165,6 +218,7 @@ try {
     $concreteStatus = "UNKNOWN"
     $fullSummarySourceCommit = $null
     $fullSummaryMatchesCheckout = $true
+    $fullSummaryLedgerProblem = $null
     $evidenceGaps = @()
     if (-not [string]::IsNullOrWhiteSpace($FullSummary)) {
         if (-not (Test-Path $FullSummary -PathType Leaf)) { throw "Full summary not found: $FullSummary" }
@@ -197,6 +251,9 @@ try {
         $unmet = @((Get-NwPropertyValue $full "unmet_evidence" @()))
         if ($unmet.Count -eq 0) { $unmet = @((Get-NwPropertyValue $full "evidence_gaps" @())) }
         if ($fullSummaryMatchesCheckout) { $evidenceGaps = @($unmet) }
+        if ($fullStatus -eq "VERIFIED") {
+            $fullSummaryLedgerProblem = Test-NwFullSummaryLedgerBinding -FullSummaryDocument $full -ToolchainId $selectedToolchain -Ledgers $ledgers
+        }
     }
 
     $rtx40 = Get-NwHardwareStatus -Root $RepoRoot -RelativePath "benchmarks/hardware/rtx-4060-baseline.json" -Tier "rtx_4060_desktop" -ToolchainId $selectedToolchain -Ledgers $ledgers -EvidenceGaps $evidenceGaps
@@ -212,6 +269,7 @@ try {
     if ($rtx40.Status -ne "VERIFIED") { $reconciliationGaps += "rtx_40_representative_hardware=$($rtx40.Status)" }
     if ($rtx50.Status -ne "VERIFIED") { $reconciliationGaps += "rtx_50_representative_hardware=$($rtx50.Status)" }
     if ($clean.Status -ne "VERIFIED") { $reconciliationGaps += "clean_system=$($clean.Status)" }
+    if ($null -ne $fullSummaryLedgerProblem) { $reconciliationGaps += "full_summary_ledgers=$($fullSummaryLedgerProblem)" }
     $fullBaselineReason = $null
     if ($fullStatus -eq "VERIFIED" -and $reconciliationGaps.Count -gt 0) {
         $fullStatus = "INCOMPLETE"

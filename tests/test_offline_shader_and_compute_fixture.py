@@ -1247,3 +1247,65 @@ def test_verifier_dxc_pin_comes_from_authoritative_toolchain_manifest(
     assert pinned == "9.9.2407"
     assert drift == "1.8.2407"
     assert offline_shader_pack.load_pinned_dxc_version(repo) == "9.9.2407"
+
+
+def test_evaluate_offline_shader_records_fresh_build_across_pin_change(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "pin-change build repo"
+    for subdir in ("benchmarks", "shaders"):
+        shutil.copytree(REPO_ROOT / subdir, repo / subdir)
+
+    # The authoritative pin moved forward while the recorded shader evidence
+    # still carries the previous pin. A validated fresh build must be able to
+    # refresh that evidence instead of being blocked by the stale record.
+    toolchain_path = repo / "benchmarks" / "toolchain-manifest.v1.json"
+    toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    toolchain["pinned_dependencies"]["dxc_version"] = "9.9.2407"
+    toolchain_path.write_text(json.dumps(toolchain, indent=2) + "\n", encoding="utf-8")
+
+    shader_path = repo / "shaders" / "manifest.json"
+    shader_manifest = json.loads(shader_path.read_text(encoding="utf-8"))
+    shader_manifest["verification_status"] = "unverified"
+    shader_manifest.pop("unverified_reason", None)
+    shader_manifest["shaders"][0]["pinned_dxc_version"] = "1.8.2407"
+    shader_manifest["shaders"][0]["compiled_offline_with_dxc"] = False
+    shader_manifest["shaders"][0]["offline_dxil_bytes"] = None
+    shader_manifest["shaders"][0]["offline_dxil_sha256"] = None
+    shader_manifest["unavailable_measurements"] = []
+    shader_path.write_text(
+        json.dumps(shader_manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
+    dxil_blob = make_test_signed_dxil_container()
+    search_dirs: list[Path] = []
+    for name in ("clean-a", "clean-b"):
+        dxil_path = repo / "build" / name / "shaders" / "compute_fixture.dxil"
+        dxil_path.parent.mkdir(parents=True)
+        dxil_path.write_bytes(dxil_blob)
+        search_dirs.append(repo / "build" / name)
+
+    mock_dxc = tmp_path / "mock_dxc.py"
+    mock_dxc.write_text(
+        "import sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('dxcompiler.dll: 1.8 - 9.9.2407.12')\n",
+        encoding="utf-8",
+    )
+
+    result = verify_nw01.evaluate_offline_shader(
+        repo,
+        str(mock_dxc),
+        search_dirs=search_dirs,
+        record_from_build=True,
+    )
+    assert result["dxc_version_matches_pin"] is True
+    assert result["passed"] is True, result["reason"]
+
+    refreshed = json.loads(shader_path.read_text(encoding="utf-8"))
+    assert refreshed["verification_status"] == "verified"
+    assert refreshed["shaders"][0]["pinned_dxc_version"] == "9.9.2407"
+    assert refreshed["shaders"][0]["compiled_offline_with_dxc"] is True
+    assert refreshed["shaders"][0]["offline_dxil_sha256"] == hashlib.sha256(
+        dxil_blob
+    ).hexdigest()

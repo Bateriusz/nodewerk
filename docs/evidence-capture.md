@@ -218,7 +218,9 @@ reported as `PENDING` with a reason. Without a supplied Full result the Full bas
 `NOT_EVALUATED`, never `VERIFIED`. An exit-2 Full summary cannot promote stale physical evidence
 to verified. Likewise, a previously successful Full summary is downgraded to `INCOMPLETE` (with a
 `full_baseline_reason`) when current hardware or CleanSystem evidence no longer reconciles against
-the ledgers at the same HEAD.
+the ledgers at the same HEAD. The summary's `checks.size_ledgers.recorded` hashes for the selected
+toolchain must also match the current ledgers: refreshing ledgers and physical captures together
+does not make an older Full summary current for different binaries.
 
 ## 8. Archive non-repository artifacts
 
