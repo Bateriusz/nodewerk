@@ -534,48 +534,72 @@ def test_doctor_reports_expected_versus_detected_mismatch(tmp_path: Path) -> Non
 @requires_windows_harness
 def test_msvc_selection_validates_active_paths_ownership_and_exact_versions(tmp_path: Path) -> None:
     module = ROOT / "tools/nw01/Nw01.Windows.psm1"
-    # Visual Studio's package directory patch intentionally differs from the
-    # cl/link file-version patch on the verified NW-01 toolchain.
-    tools_root = tmp_path / "VC" / "Tools" / "MSVC" / "14.40.33807"
-    bin_dir = tools_root / "bin" / "Hostx64" / "x64"
-    cl = bin_dir / "cl.cmd"
-    link = bin_dir / "link.cmd"
-    write_fake_tool(cl, "Microsoft (R) C/C++ Optimizing Compiler Version 19.40.33821 for x64")
-    write_fake_tool(link, "Microsoft (R) Incremental Linker Version 14.40.33821.0")
+    if not _exact_environment_available(module):
+        pytest.skip("exact pinned Windows build environment is not provisioned on this host")
 
-    def run(cl_path: Path, link_path: Path, tools_dir: Path, compiler: str = "19.40.33821", linker: str = "14.40.33821.0") -> subprocess.CompletedProcess[str]:
-        script = textwrap.dedent(
-            f"""
-            Import-Module {ps_quote(module)} -Force
-            function global:Get-Command {{
-                param([Parameter(Position=0)][string]$Name, [switch]$All, $ErrorAction)
-                if ($Name -eq 'cl.exe') {{ return [pscustomobject]@{{ Source = {ps_quote(cl_path)} }} }}
-                if ($Name -eq 'link.exe') {{ return [pscustomobject]@{{ Source = {ps_quote(link_path)} }} }}
-                return $null
-            }}
-            $env:VCToolsInstallDir = {ps_quote(tools_dir)}
-            Assert-NwMsvcSelectedExecutables -MsvcCompilerVersion {ps_quote(compiler)} -MsvcLinkerVersion {ps_quote(linker)}
-            Write-Output 'msvc-exact'
-            """
-        )
-        return run_pwsh_command(script)
-
-    proc = run(cl, link, tools_root)
+    # Exercise the real activated toolchain rather than trying to override
+    # Get-Command from global scope (module command resolution has its own
+    # session state). The verified host intentionally has VCToolsVersion
+    # 14.40.33807 while cl/link report ...33821 file versions.
+    exact_script = textwrap.dedent(
+        f"""
+        Import-Module {ps_quote(module)} -Force
+        $entered = Enter-NwBuildEnvironment
+        Assert-NwMsvcSelectedExecutables `
+            -MsvcCompilerVersion $entered.Contract.MsvcCompilerVersion `
+            -MsvcLinkerVersion $entered.Contract.MsvcLinkerVersion
+        Write-Output 'msvc-exact'
+        """
+    )
+    proc = run_pwsh_command(exact_script)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "msvc-exact" in proc.stdout
 
-    wrong_patch = bin_dir / "cl-wrong.cmd"
-    write_fake_tool(wrong_patch, "Microsoft (R) C/C++ Optimizing Compiler Version 19.40.33822 for x64")
-    proc = run(wrong_patch, link, tools_root)
-    assert proc.returncode != 0
-    assert "expected exact 19.40.33821" in (proc.stdout + proc.stderr)
+    # Exact file-version validation must reject a nearby compiler version even
+    # though the selected executable is owned by the correct VCToolsInstallDir.
+    wrong_version_script = textwrap.dedent(
+        f"""
+        Import-Module {ps_quote(module)} -Force
+        $entered = Enter-NwBuildEnvironment
+        $threw = $false
+        try {{
+            Assert-NwMsvcSelectedExecutables `
+                -MsvcCompilerVersion '19.40.33822' `
+                -MsvcLinkerVersion $entered.Contract.MsvcLinkerVersion
+        }} catch {{
+            $threw = $true
+            Write-Output $_.Exception.Message
+        }}
+        if (-not $threw) {{ throw 'wrong active compiler version was accepted' }}
+        """
+    )
+    proc = run_pwsh_command(wrong_version_script)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "expected exact 19.40.33822" in (proc.stdout + proc.stderr)
 
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    outside_cl = outside / "cl.cmd"
-    write_fake_tool(outside_cl, "Microsoft (R) C/C++ Optimizing Compiler Version 19.40.33821 for x64")
-    proc = run(outside_cl, link, tools_root)
-    assert proc.returncode != 0
+    # Ownership is independently fail-closed: changing VCToolsInstallDir to an
+    # unrelated directory must make the same active cl/link unacceptable.
+    fake_tools = tmp_path / "VC" / "Tools" / "MSVC" / "14.40.99999"
+    fake_tools.mkdir(parents=True)
+    wrong_owner_script = textwrap.dedent(
+        f"""
+        Import-Module {ps_quote(module)} -Force
+        $entered = Enter-NwBuildEnvironment
+        $env:VCToolsInstallDir = {ps_quote(fake_tools)}
+        $threw = $false
+        try {{
+            Assert-NwMsvcSelectedExecutables `
+                -MsvcCompilerVersion $entered.Contract.MsvcCompilerVersion `
+                -MsvcLinkerVersion $entered.Contract.MsvcLinkerVersion
+        }} catch {{
+            $threw = $true
+            Write-Output $_.Exception.Message
+        }}
+        if (-not $threw) {{ throw 'foreign VCToolsInstallDir ownership was accepted' }}
+        """
+    )
+    proc = run_pwsh_command(wrong_owner_script)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "is not owned by VCToolsInstallDir" in (proc.stdout + proc.stderr)
 
 
@@ -1123,7 +1147,8 @@ def test_clean_system_package_records_checkout_provenance_and_rejects_stale_inpu
     normalized_error = " ".join(
         re.sub(r"\x1b\[[0-9;]*m", "", proc.stdout + proc.stderr).split()
     )
-    assert "does not match verified msvc-ltcg release-ledger hash" in normalized_error
+    assert "does not match verified msvc-ltcg" in normalized_error
+    assert "release-ledger hash" in normalized_error
     assert not (tampered_output / "evidence/artifact-manifest.json").exists()
     (deploy / "nw_clear_present_fixture.exe").write_bytes(executables["nw_clear_present_fixture.exe"])
 
