@@ -489,8 +489,22 @@ function Import-NwVcVarsEnvironment {
     $requiredPresence = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCToolsInstallDir", "VCToolsVersion", "WindowsSDKVersion")
     $expectedMajorMinor = ((ConvertTo-NwToolsetVersion $VcVarsVersion) -split '\.')[0..1] -join '.'
     $versionsToTry = @($VcVarsVersion)
+    $discoveredVersions = New-Object System.Collections.Generic.List[string]
+    foreach ($vsInstall in $installs) {
+        $toolsRoot = Join-Path $vsInstall "VC\Tools\MSVC"
+        if (-not (Test-Path $toolsRoot -PathType Container)) { continue }
+        foreach ($toolsetDir in @(Get-ChildItem -Path $toolsRoot -Directory -ErrorAction SilentlyContinue)) {
+            if ($toolsetDir.Name -match ('^' + [regex]::Escape($expectedMajorMinor) + '\.[0-9]+$')) {
+                $discoveredVersions.Add([string]$toolsetDir.Name)
+            }
+        }
+    }
+    foreach ($discovered in @($discoveredVersions | Sort-Object -Descending -Unique)) {
+        if (-not ($versionsToTry -contains $discovered)) { $versionsToTry += $discovered }
+    }
     if (-not [string]::IsNullOrWhiteSpace($VcVarsFallbackVersion) -and
-        -not [string]::Equals($VcVarsFallbackVersion, $VcVarsVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
+        -not [string]::Equals($VcVarsFallbackVersion, $VcVarsVersion, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not ($versionsToTry -contains $VcVarsFallbackVersion)) {
         $versionsToTry += $VcVarsFallbackVersion
     }
     $failures = New-Object System.Collections.Generic.List[string]
@@ -513,6 +527,7 @@ function Import-NwVcVarsEnvironment {
             $cmdFile = Join-Path ([System.IO.Path]::GetTempPath()) ("nw01-vcvars-{0}.cmd" -f [guid]::NewGuid().ToString("N"))
             $envDump = @()
             $vcvarsExit = 1
+            $vcvarsError = $null
             try {
                 @"
 @echo off
@@ -520,8 +535,12 @@ call "$vcvars" $WindowsSdkVersion -vcvars_ver=$vcvarsVersion
 if errorlevel 1 exit /b %errorlevel%
 set
 "@ | Set-Content -Path $cmdFile -Encoding ascii
-                    $envDump = & $env:ComSpec /d /c $cmdFile
+                    $envDump = & $env:ComSpec /d /c $cmdFile 2>&1
                     $vcvarsExit = $LASTEXITCODE
+                } catch {
+                    $vcvarsError = $_.Exception.Message
+                    $envDump = @()
+                    $vcvarsExit = 1
                 } finally {
                     Remove-Item -Force -ErrorAction SilentlyContinue $cmdFile
                 }
@@ -538,7 +557,8 @@ set
                 foreach ($name in $captured.Keys) { Set-Item -Path "Env:$name" -Value $captured[$name] }
 
                 if ($vcvarsExit -ne 0) {
-                    $failures.Add("${vsInstall} ($vcvarsVersion): vcvars64.bat exit $vcvarsExit")
+                    $detail = if ([string]::IsNullOrWhiteSpace($vcvarsError)) { "exit $vcvarsExit" } else { $vcvarsError }
+                    $failures.Add("${vsInstall} ($vcvarsVersion): vcvars64.bat $detail")
                     continue
                 }
                 $missing = @($requiredPresence | Where-Object { -not $captured.ContainsKey($_) -or [string]::IsNullOrWhiteSpace([string]$captured[$_]) })

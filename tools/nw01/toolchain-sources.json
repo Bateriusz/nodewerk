@@ -3,7 +3,7 @@
   "visual_studio": {
     "bootstrapper_url": "https://aka.ms/vs/17/release/vs_buildtools.exe",
     "bootstrapper_sha256": "",
-    "bootstrapper_authenticode_subject_contains": "Microsoft Corporation",
+    "bootstrapper_authenticode_subject_contains": "Microsoft",
     "components": [
       "Microsoft.VisualStudio.Workload.VCTools",
       "Microsoft.VisualStudio.Component.VC.{msvc_toolset_major_minor}.17.10.x86.x64",
