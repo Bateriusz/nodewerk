@@ -198,8 +198,13 @@ function Get-NwVisualStudioSelection {
     return [pscustomobject]@{
         WindowsSdkVersion = $contract.WindowsSdkVersion
         WindowsSdkBuild = $contract.WindowsSdkBuild
-        VcVarsVersion = $contract.MsvcToolsetVersion
-        VcVarsFallbackVersion = $contract.MsvcToolsetMajorMinor
+        # vcvars_ver selects the installed MSVC package family, not the file
+        # version reported by cl.exe/link.exe. For the verified NW-01 toolchain
+        # the package directory may be 14.40.33807 while the binaries report
+        # 19.40.33821 / 14.40.33821.0. Select the 14.40 family here and enforce
+        # the exact binary identity after activation.
+        VcVarsVersion = $contract.MsvcToolsetMajorMinor
+        VcVarsFallbackVersion = ""
         Components = $components
         BootstrapperUrl = [string]$vs.bootstrapper_url
         BootstrapperSha256 = $sha256
@@ -604,7 +609,6 @@ function Import-NwVcVarsEnvironment {
     $required = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "WindowsSdkDir", "WindowsSDKVersion", "WindowsSdkVerBinPath", "UCRTVersion", "UniversalCRTSdkDir")
     $requiredPresence = @("Path", "INCLUDE", "LIB", "LIBPATH", "VCToolsInstallDir", "VCToolsVersion", "WindowsSDKVersion")
     $expectedMajorMinor = ((ConvertTo-NwToolsetVersion $VcVarsVersion) -split '\.')[0..1] -join '.'
-    $expectedToolset = ConvertTo-NwToolsetVersion $contract.MsvcToolsetVersion
     $versionsToTry = @($VcVarsVersion)
     $discoveredVersions = New-Object System.Collections.Generic.List[string]
     foreach ($vsInstall in $installs) {
@@ -630,9 +634,11 @@ function Import-NwVcVarsEnvironment {
     $selectedEnvironment = $null
     $selectedVcVarsVersion = $null
 
-    # Try the exact toolset across every installation before falling back to
-    # the derived major/minor, so an exact toolset that exists in a second
-    # Visual Studio installation is not shadowed by another install's patch.
+    # The authoritative contract pins the active cl.exe/link.exe file versions,
+    # not Visual Studio's package-directory patch number. Try the requested
+    # major/minor family first, then each installed package directory in that
+    # family. Every candidate is accepted only if the activated executables
+    # belong to VCToolsInstallDir and report the exact pinned binary versions.
     foreach ($vcvarsVersion in $versionsToTry) {
         foreach ($vsInstall in $installs) {
             $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
@@ -689,8 +695,14 @@ set
                     continue
                 }
                 $toolsetDetected = ConvertTo-NwToolsetVersion ([string]$captured["VCToolsVersion"])
-                if (-not [string]::Equals($toolsetDetected, $expectedToolset, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $failures.Add("${vsInstall} ($vcvarsVersion): toolset '$toolsetDetected' is not exactly pinned MSVC $expectedToolset")
+                $toolsetDetectedParts = @($toolsetDetected -split '\.')
+                $toolsetDetectedMajorMinor = if ($toolsetDetectedParts.Count -ge 2) {
+                    ($toolsetDetectedParts[0..1] -join '.')
+                } else {
+                    $toolsetDetected
+                }
+                if (-not [string]::Equals($toolsetDetectedMajorMinor, $expectedMajorMinor, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $failures.Add("${vsInstall} ($vcvarsVersion): toolset '$toolsetDetected' is outside required MSVC family $expectedMajorMinor")
                     continue
                 }
                 try {
@@ -709,7 +721,7 @@ set
         }
 
     if ($null -eq $selected) {
-        throw ("Unable to select exact pinned Visual Studio environment (SDK $WindowsSdkVersion, toolset $VcVarsVersion): " + ($failures -join "; "))
+        throw ("Unable to select exact pinned Visual Studio environment (SDK $WindowsSdkVersion, MSVC family $expectedMajorMinor, cl $MsvcCompilerVersion, link $MsvcLinkerVersion): " + ($failures -join "; "))
     }
 
     if ($ExportGitHubEnv) {
@@ -877,9 +889,15 @@ function Get-NwDoctorResults {
     if ([string]::Equals($sdkDetected, $contract.WindowsSdkVersion, [System.StringComparison]::OrdinalIgnoreCase)) { $sdkOk = $true }
     $results += [pscustomobject]@{ Name = "Windows SDK"; Expected = $contract.WindowsSdkVersion; Detected = $sdkDetected; Pass = $sdkOk; Executable = $env:WindowsSdkDir }
     $toolsetDetected = if ($env:VCToolsVersion) { ConvertTo-NwToolsetVersion $env:VCToolsVersion } else { "missing" }
-    $toolsetExpected = $contract.MsvcToolsetVersion
-    $toolsetOk = [string]::Equals($toolsetDetected, $toolsetExpected, [System.StringComparison]::OrdinalIgnoreCase)
-    $results += [pscustomobject]@{ Name = "MSVC toolset"; Expected = $toolsetExpected; Detected = $toolsetDetected; Pass = $toolsetOk; Executable = $env:VCToolsInstallDir }
+    $toolsetExpected = $contract.MsvcToolsetMajorMinor
+    $toolsetDetectedParts = @($toolsetDetected -split '\.')
+    $toolsetDetectedMajorMinor = if ($toolsetDetectedParts.Count -ge 2) {
+        ($toolsetDetectedParts[0..1] -join '.')
+    } else {
+        $toolsetDetected
+    }
+    $toolsetOk = [string]::Equals($toolsetDetectedMajorMinor, $toolsetExpected, [System.StringComparison]::OrdinalIgnoreCase)
+    $results += [pscustomobject]@{ Name = "MSVC toolset family"; Expected = $toolsetExpected; Detected = $toolsetDetected; Pass = $toolsetOk; Executable = $env:VCToolsInstallDir }
     return $results
 }
 

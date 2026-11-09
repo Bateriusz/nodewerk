@@ -78,15 +78,16 @@ environment of its already-running parent process.
 
 The MSVC environment reproduces the same `vcvars64.bat` selection mechanism that completed
 NW-01 on the physical RTX 4060 Ti host. The Windows SDK version is read from
-`benchmarks/toolchain-manifest.v1.json`; the `vcvars_ver` selector is derived from the manifest's
-pinned MSVC toolset (for example `14.40.33821`), with a derived `14.40` major/minor fallback when
-the host exposes an alternate 14.40 installation. A different patch is never accepted: activation
-requires the selected `VCToolsVersion` to equal the manifest toolset exactly, and the active
-`cl.exe`/`link.exe` must both resolve under the selected `VCToolsInstallDir` and report the exact
-pinned compiler/linker versions. Doctor inspects those actually selected executables rather than
-scanning other PATH candidates for an exact match. `tools/nw01/toolchain-sources.json` only
-carries component templates, download locations, integrity digests and retry policy. There is no
-second independent copy of the toolset or SDK version pins.
+`benchmarks/toolchain-manifest.v1.json`; `vcvars_ver` selects the derived MSVC major/minor family
+(for example `14.40`). Visual Studio's installed package-directory patch is not the compiler/linker
+file version: the verified environment may expose `VCToolsVersion=14.40.33807` while `cl.exe`
+reports `19.40.33821` and `link.exe` reports `14.40.33821.0`. The harness therefore accepts only
+the required toolset family, then requires the active `cl.exe`/`link.exe` to resolve under the
+selected `VCToolsInstallDir` and report the exact pinned compiler/linker versions. Doctor inspects
+those actually selected executables rather than scanning other PATH candidates for an exact match.
+`tools/nw01/toolchain-sources.json` only carries component templates, download locations,
+integrity digests and retry policy. There is no second independent copy of the toolset or SDK
+version pins.
 
 ## 3. Run Full and preserve its summary
 

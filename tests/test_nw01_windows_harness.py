@@ -104,6 +104,8 @@ def test_bootstrap_is_exact_version_fail_closed_and_has_bounded_delivery_fallbac
     assert "Get-NwReportedToolVersions" in module
     assert "UnknownError" not in module
     assert "Assert-NwMsvcSelectedExecutables" in module
+    assert "is outside required MSVC family" in module
+    assert 'VcVarsVersion = $contract.MsvcToolsetMajorMinor' in module
 
 
 def test_ci_consumes_shared_harness_and_exercises_idempotence() -> None:
@@ -757,7 +759,7 @@ def test_enter_build_environment_selects_owned_exact_cl_and_link(tmp_path: Path)
             Link = [string]$link
             ClExact = Test-NwExactVersion -Tool cl -Executable $cl -Expected $entered.Contract.MsvcCompilerVersion
             LinkExact = Test-NwExactVersion -Tool link -Executable $link -Expected $entered.Contract.MsvcLinkerVersion
-            ExpectedToolset = $entered.Contract.MsvcToolsetVersion
+            ExpectedToolsetFamily = $entered.Contract.MsvcToolsetMajorMinor
             ExpectedSdk = $entered.Contract.WindowsSdkVersion
         }} | ConvertTo-Json -Compress
         """
@@ -771,7 +773,10 @@ def test_enter_build_environment_selects_owned_exact_cl_and_link(tmp_path: Path)
         assert actual == expected_tools or actual.startswith(expected_tools + os.sep)
     assert data["ClExact"] is True
     assert data["LinkExact"] is True
-    assert data["Toolset"].rstrip("\\/") == data["ExpectedToolset"]
+    toolset_parts = data["Toolset"].rstrip("\\/").split(".")
+    assert ".".join(toolset_parts[:2]) == data["ExpectedToolsetFamily"]
+    # Visual Studio's package directory patch is not required to equal the
+    # cl/link file-version patch. The exact binary checks above are authoritative.
     assert data["Sdk"].rstrip("\\/") == data["ExpectedSdk"]
 
 
