@@ -91,7 +91,7 @@ jobs:
     runs-on: ${{ vars.NW_PHYSICAL_RUNNER_LABEL }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout4v4
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
