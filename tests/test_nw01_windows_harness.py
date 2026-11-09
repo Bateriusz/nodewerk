@@ -621,8 +621,10 @@ def test_visual_studio_selection_derives_versions_and_components_from_manifest(t
     proc = run_pwsh_command(command)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     selection = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert selection["VcVars"] == "14.40.33821"
-    assert selection["Fallback"] == "14.40"
+    # vcvars selects the MSVC package family. Exactness is enforced by the
+    # active cl.exe/link.exe file versions, not by the package-directory patch.
+    assert selection["VcVars"] == "14.40"
+    assert selection["Fallback"] == ""
     assert selection["Sdk"] == "10.0.26100.0"
     components = "\n".join(selection["Components"])
     assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" in components
