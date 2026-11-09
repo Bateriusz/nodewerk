@@ -8,7 +8,16 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-if (-not $IsWindows) {
+
+# Windows PowerShell 5.1 is present on a stock Windows 11 target, while $IsWindows
+# exists only in PowerShell Core. Do not require PowerShell 7 on CleanSystem hosts.
+$isWindowsVariable = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue
+$runningOnWindows = if ($null -ne $isWindowsVariable) {
+    [bool]$isWindowsVariable.Value
+} else {
+    $env:OS -eq "Windows_NT"
+}
+if (-not $runningOnWindows) {
     Write-Error "NW-01 CleanSystem execution requires Windows."
     exit 1
 }
