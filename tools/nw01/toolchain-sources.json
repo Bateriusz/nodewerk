@@ -1,0 +1,33 @@
+{
+  "schema_version": "1",
+  "visual_studio": {
+    "bootstrapper_url": "https://aka.ms/vs/17/release/vs_buildtools.exe",
+    "vcvars_version": "14.40.33807",
+    "components": [
+      "Microsoft.VisualStudio.Workload.VCTools",
+      "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64",
+      "Microsoft.VisualStudio.Component.Windows11SDK.26100"
+    ]
+  },
+  "cmake": {
+    "url_template": "https://github.com/Kitware/CMake/releases/download/v{version}/cmake-{version}-windows-x86_64.zip",
+    "sha256": "48bf4b3dc2d668c578e0884cac7878e146b036ca6b5ce4f8b5572f861b004c25"
+  },
+  "ninja": {
+    "url_template": "https://github.com/ninja-build/ninja/releases/download/v{version}/ninja-win.zip",
+    "sha256": "f550fec705b6d6ff58f2db3c374c2277a37691678d6aba463adcbb129108467a"
+  },
+  "llvm": {
+    "url_template": "https://github.com/llvm/llvm-project/releases/download/llvmorg-{version}/LLVM-{version}-win64.exe",
+    "sha256": "94af030060d88cc17e9f00ef1663ebdc1126b35e16bebdfa1e807984b70abd8f"
+  },
+  "dxc": {
+    "url_template": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v{version}/dxc_2024_07_31.zip",
+    "sha256": "e2627f004f0f9424d8c71ea1314d04f38c5a5096884ae9217f1f18bd320267b5"
+  },
+  "download_retry": {
+    "max_attempts": 3,
+    "initial_delay_seconds": 2,
+    "backoff_multiplier": 2
+  }
+}
