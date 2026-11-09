@@ -60,3 +60,19 @@ add_executable(nw_compute_shader_fixture
 target_link_libraries(nw_compute_shader_fixture PRIVATE nw_player_bootstrap)
 nw_apply_player_profile(nw_compute_shader_fixture)
 nw_attach_dependency_check(nw_compute_shader_fixture "compute_shader")
+
+# NW-02: authoring/compiler-side typed operator graph. This target is portable
+# and deliberately has no D3D12/DXGI or player dependency.
+add_library(nw_graph STATIC
+    src/graph/nw_graph.cpp
+)
+target_include_directories(nw_graph PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/graph"
+)
+target_compile_features(nw_graph PUBLIC cxx_std_20)
+
+add_executable(nw_graph_cli
+    src/graph/nw_graph_cli.cpp
+)
+target_link_libraries(nw_graph_cli PRIVATE nw_graph)
+target_compile_features(nw_graph_cli PRIVATE cxx_std_20)

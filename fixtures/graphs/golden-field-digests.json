@@ -1,0 +1,8 @@
+{
+  "base": "sha256:v1:78860a3e259252d1eddb4da8a9181da663c70f522d6d7b969b17329ffff7d806",
+  "compiler-settings": "sha256:v1:2fa815d74abf13ac5fa1b4137eff8b31dbcb4fd59f8fd4a7abcd1d04dab1d6c9",
+  "float-normalization": "sha256:v1:d96998d49edfda59ae4905f26522b0b8cc507c69545b52a3becbc103c9fd92cf",
+  "quantization": "sha256:v1:d595b6dfff5f7fd3784c6300b22ea2b5235cd58e3077318a54952e45f21ccb63",
+  "upstream": "sha256:v1:3d05af3e169ef62f28364f4770b351858ff3693b2286d866ca22e5124cfa81dc",
+  "version": "sha256:v1:68476692d78be51ea17a70bf1a7cc045233292761f3b879f8aa28ff04eaed046"
+}
