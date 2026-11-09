@@ -534,7 +534,9 @@ def test_doctor_reports_expected_versus_detected_mismatch(tmp_path: Path) -> Non
 @requires_windows_harness
 def test_msvc_selection_validates_active_paths_ownership_and_exact_versions(tmp_path: Path) -> None:
     module = ROOT / "tools/nw01/Nw01.Windows.psm1"
-    tools_root = tmp_path / "VC" / "Tools" / "MSVC" / "14.40.33821"
+    # Visual Studio's package directory patch intentionally differs from the
+    # cl/link file-version patch on the verified NW-01 toolchain.
+    tools_root = tmp_path / "VC" / "Tools" / "MSVC" / "14.40.33807"
     bin_dir = tools_root / "bin" / "Hostx64" / "x64"
     cl = bin_dir / "cl.cmd"
     link = bin_dir / "link.cmd"
