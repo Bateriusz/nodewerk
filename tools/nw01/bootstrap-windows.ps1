@@ -26,7 +26,10 @@ New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 $git = Get-Command git -ErrorAction Stop
 $sourceCommit = (& $git.Source -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
 $sourceCommit = ([string]$sourceCommit).Trim()
-if ($sourceCommit -notmatch '^[0-9a-fA-F]{40}
+if ($sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw "Unable to resolve repository HEAD for bootstrap provenance."
+}
+
 $provenance = [ordered]@{
     schema_version = "1"
     generated_at_utc = [DateTime]::UtcNow.ToString("o")
