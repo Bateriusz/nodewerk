@@ -165,7 +165,7 @@ function Invoke-NwDownload {
     $multiplier = [double]$RetryPolicy.backoff_multiplier
     for ($attempt = 1; $attempt -le $attempts; $attempt++) {
         try {
-            Write-Host "[NW-BOOTSTRAP] download attempt $attempt/$attempts: $Uri"
+            Write-Host "[NW-BOOTSTRAP] download attempt $attempt/${attempts}: $Uri"
             Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
             return [pscustomobject]@{ Success = $true; TransientFailure = $false; Attempts = $attempt; Error = $null }
         } catch {
