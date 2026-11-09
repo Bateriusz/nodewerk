@@ -12,6 +12,7 @@ if (-not $IsWindows) {
 }
 
 Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force
+$activationError = $null
 try {
     # Activation is diagnostic here: any non-exact standalone tool makes
     # Enter-NwBuildEnvironment throw, but doctor still has to render the full
@@ -21,6 +22,7 @@ try {
     try {
         Enter-NwBuildEnvironment -RepoRoot $RepoRoot | Out-Null
     } catch {
+        $activationError = $_.Exception.Message
         Write-Warning "[NW-DOCTOR] build-environment activation reported: $($_.Exception.Message)"
     }
     $results = @(Get-NwDoctorResults -RepoRoot $RepoRoot)
@@ -35,6 +37,10 @@ try {
     if ($failures.Count -gt 0) {
         $details = @($failures | ForEach-Object { "$($_.Name) expected=$($_.Expected) detected=$($_.Detected)" })
         Write-Error "NW-01 doctor found $($failures.Count) pinned toolchain mismatch(es): $($details -join '; ')"
+        exit 1
+    }
+    if ($null -ne $activationError) {
+        Write-Error "NW-01 doctor could not activate the exact build environment: $activationError"
         exit 1
     }
     Write-Host "[NW-DOCTOR] all pinned toolchain requirements match exactly."

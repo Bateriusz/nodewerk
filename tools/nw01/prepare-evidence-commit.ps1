@@ -199,9 +199,29 @@ function Assert-NwEvidenceContent([string]$Root, [string]$RelativePath, [string]
             (Get-NwPropertyValue $document "all_artifacts_match") -ne $true) {
             throw "Reproducibility evidence '$normalized' is not verified."
         }
+        if ([string](Get-NwPropertyValue $document "toolchain_manifest_ref" "") -ne "benchmarks/toolchain-manifest.v1.json" -or
+            [string](Get-NwPropertyValue $document "build_profile" "") -ne "release") {
+            throw "Reproducibility evidence '$normalized' does not reference the release toolchain manifest."
+        }
         if (@((Get-NwPropertyValue $document "missing_files" @())).Count -gt 0) {
             throw "Reproducibility evidence '$normalized' is missing artifacts."
         }
+        $reportId = ([string](Get-NwPropertyValue $document "report_id" "")).ToLowerInvariant()
+        $reportDirectories = ("{0} {1}" -f
+            [string](Get-NwPropertyValue $document "directory_a" ""),
+            [string](Get-NwPropertyValue $document "directory_b" "")).ToLowerInvariant()
+        $reportToolchain = if ($reportId -like "*msvc-ltcg*" -or $reportDirectories -like "*msvc-release-ltcg*") {
+            "msvc-ltcg"
+        } elseif ($reportId -like "*clang-cl*" -or $reportDirectories -like "*repro-clean-*") {
+            "clang-cl-lld"
+        } else {
+            $null
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$reportToolchain)) {
+            throw "Reproducibility evidence '$normalized' does not identify a known toolchain."
+        }
+        $reportLedgerHashes = Get-NwSelectedLedgerHashes -Root $Root -ToolchainId $reportToolchain
+        $reportedFixtures = @()
         foreach ($artifact in @((Get-NwPropertyValue $document "artifacts" @()))) {
             if ((Get-NwPropertyValue $artifact "hash_match") -ne $true) {
                 throw "Reproducibility evidence '$normalized' contains a non-matching artifact."
@@ -210,6 +230,23 @@ function Assert-NwEvidenceContent([string]$Root, [string]$RelativePath, [string]
             $hashB = [string](Get-NwPropertyValue $artifact "sha256_b" "")
             if (-not (Test-NwSha256Hex $hashA) -or $hashA -ne $hashB) {
                 throw "Reproducibility evidence '$normalized' contains an invalid artifact hash pair."
+            }
+            $fixture = [string](Get-NwPropertyValue $artifact "fixture_id" "")
+            if ([string]::IsNullOrWhiteSpace($fixture)) {
+                throw "Reproducibility evidence '$normalized' has an artifact without a fixture_id."
+            }
+            $reportedFixtures += $fixture
+            if (-not $reportLedgerHashes.ContainsKey($fixture)) {
+                throw "Reproducibility evidence '$normalized' has no verified release ledger for $fixture."
+            }
+            $expectedHash = $reportLedgerHashes[$fixture]
+            if ($hashA.ToLowerInvariant() -ne $expectedHash -or $hashB.ToLowerInvariant() -ne $expectedHash) {
+                throw "Reproducibility evidence '$normalized' hash for $fixture is stale; expected $expectedHash."
+            }
+        }
+        foreach ($fixture in @("empty_player", "clear_present", "compute_shader")) {
+            if ($reportedFixtures -notcontains $fixture) {
+                throw "Reproducibility evidence '$normalized' does not record artifact $fixture."
             }
         }
         return
@@ -229,8 +266,54 @@ function Assert-NwEvidenceContent([string]$Root, [string]$RelativePath, [string]
 
     if ($normalized -eq "benchmarks/evidence-status.json") {
         $document = Read-NwJsonDocument $fullPath
-        if (@((Get-NwPropertyValue $document "required_measured_evidence" @())).Count -eq 0) {
+        if ((Get-NwPropertyValue $document "verification_status") -ne "verified" -or
+            (Get-NwPropertyValue $document "complete") -ne $true) {
+            throw "Evidence status is not complete and verified."
+        }
+        $required = @((Get-NwPropertyValue $document "required_measured_evidence" @()))
+        if ($required.Count -eq 0) {
             throw "Evidence status does not list required measured evidence."
+        }
+        foreach ($item in $required) {
+            $itemName = [string](Get-NwPropertyValue $item "item" "")
+            if ([string]::IsNullOrWhiteSpace($itemName) -or
+                [string](Get-NwPropertyValue $item "status" "") -ne "verified") {
+                throw "Evidence status item '$itemName' is not verified."
+            }
+            $filePattern = [string](Get-NwPropertyValue $item "files" "")
+            if ([string]::IsNullOrWhiteSpace($filePattern)) {
+                throw "Evidence status item '$itemName' does not reference any files."
+            }
+            $referenced = @(Get-ChildItem -Path (Join-Path $Root $filePattern) -File -ErrorAction SilentlyContinue)
+            if ($referenced.Count -eq 0) {
+                throw "Evidence status item '$itemName' references no current files matching '$filePattern'."
+            }
+            foreach ($referencedFile in $referenced) {
+                $relative = $referencedFile.FullName.Substring($Root.Length).TrimStart('\', '/').Replace('\', '/')
+                Assert-NwEvidenceContent -Root $Root -RelativePath $relative -SelectedToolchain $SelectedToolchain -LedgerHashes $LedgerHashes
+            }
+        }
+        $measuredBuilds = @()
+        foreach ($hardwareRelative in @(
+            "benchmarks/hardware/rtx-4060-baseline.json",
+            "benchmarks/hardware/rtx-50-series-baseline.json"
+        )) {
+            $hardwarePath = Join-Path $Root $hardwareRelative
+            if (-not (Test-Path $hardwarePath -PathType Leaf)) { continue }
+            $hardware = Read-NwJsonDocument $hardwarePath
+            $measuredBuild = [string](Get-NwPropertyValue (Get-NwPropertyValue $hardware "environment_metadata" $null) "os_build" "")
+            if (-not [string]::IsNullOrWhiteSpace($measuredBuild)) { $measuredBuilds += $measuredBuild }
+        }
+        $cleanRelative = "benchmarks/clean-system/clean-system-validation.json"
+        $cleanPath = Join-Path $Root $cleanRelative
+        if (Test-Path $cleanPath -PathType Leaf) {
+            $clean = Read-NwJsonDocument $cleanPath
+            $measuredBuild = [string](Get-NwPropertyValue (Get-NwPropertyValue $clean "system_environment" $null) "os_build" "")
+            if (-not [string]::IsNullOrWhiteSpace($measuredBuild)) { $measuredBuilds += $measuredBuild }
+        }
+        $statusBuild = [string](Get-NwPropertyValue $document "measured_minimum_windows_build" "")
+        if (-not [string]::IsNullOrWhiteSpace($statusBuild) -and $measuredBuilds -notcontains $statusBuild) {
+            throw "Evidence status measured_minimum_windows_build '$statusBuild' does not match current measured hardware/CleanSystem evidence."
         }
         return
     }

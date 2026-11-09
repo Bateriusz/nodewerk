@@ -2166,13 +2166,18 @@ def capture_benchmark_result(
             "recorded CPU metadata.",
         )
 
-    reported_adapter_descriptions = [
-        value for value in adapter_evidence["descriptions"].values() if value
+    required_adapter_fixtures = ("clear_present", "compute_shader")
+    missing_adapter_fixtures = [
+        fixture
+        for fixture in required_adapter_fixtures
+        if not adapter_evidence["descriptions"].get(fixture)
     ]
-    if not reported_adapter_descriptions:
+    if missing_adapter_fixtures:
         mark_unavailable(
             "environment_metadata.gpu_model",
-            "No adapter description was emitted by the executing fixtures; tier coverage cannot be bound to the observed GPU.",
+            "Adapter description was not emitted by required fixtures: "
+            + ", ".join(missing_adapter_fixtures)
+            + "; tier coverage cannot be bound to the observed GPU.",
         )
     elif not adapter_evidence["consistent"]:
         mark_unavailable(

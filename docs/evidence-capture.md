@@ -227,13 +227,16 @@ pwsh ./tools/nw01/archive-artifacts.ps1 `
 
 The command refuses an archive root inside the repository and writes an archive manifest bound to
 the source revision recorded by the supplied Full summary and CleanSystem package artifact
-manifest. It rejects conflicting revisions and labels the archive `current-certifying` or
-`historical`; historical evidence is never relabelled as current certifying evidence. Prior
-archive directories are preserved; `-Replace` is required for an explicit overwrite. A supplied
-CleanSystem ZIP is inspected for its embedded `evidence/artifact-manifest.json`. Its source
-revision must agree with the package/summary and its executable hashes with the package; a ZIP
-without a usable manifest is explicitly recorded in `unverified_artifacts` instead of receiving
-current certifying provenance.
+manifest. It rejects conflicting revisions and verifies every recorded package/ZIP deploy
+executable against its size and SHA-256. Labels are `current-certifying`, `current-non-certifying`
+or `historical`: a current source revision only certifies when the supplied Full summary reports
+`full_baseline_passed` and the package/ZIP toolchain manifest and verified release-ledger hashes
+match the deployed executables. Historical evidence is never relabelled as current certifying
+evidence. Prior archive directories are preserved; `-Replace` is required for an explicit
+overwrite. A supplied CleanSystem ZIP is inspected for its embedded
+`evidence/artifact-manifest.json`, `build-checks.json`, toolchain manifest and ledgers; missing or
+tampered deploy entries fail, and a ZIP without a usable manifest is explicitly recorded in
+`unverified_artifacts` instead of receiving current certifying provenance.
 
 ## 9. Prepare repository evidence for Git
 
@@ -247,9 +250,13 @@ Only an explicit evidence allowlist is staged. Unexpected modified/untracked pat
 the command never uses `git add .`, never stages build/package/ZIP artifacts, and prints staged
 paths plus a diff stat. A path with both staged and unstaged changes is rejected rather than
 silently replacing pre-staged content. Before the index changes, each candidate's JSON shape,
-verification status and applicable provenance/hash relationship are validated. For example
-`benchmarks/hardware/credentials.json`, an unrelated `benchmarks/hardware/rtx.json` capture, or a
-hardware capture whose hashes no longer match the selected ledgers is rejected.
+verification status and applicable provenance/hash relationship are validated. Hardware,
+CleanSystem and reproducibility evidence must match the selected toolchain's verified release
+ledgers; reproducibility hash pairs are tied to those ledgers rather than merely matching each
+other, and `benchmarks/evidence-status.json` must reference current, validated evidence files.
+For example `benchmarks/hardware/credentials.json`, an unrelated `benchmarks/hardware/rtx.json`
+capture, a stale reproducibility report, or a status file referencing missing evidence is
+rejected.
 
 To create an ordinary new commit:
 

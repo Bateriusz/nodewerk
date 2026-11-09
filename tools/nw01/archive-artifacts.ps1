@@ -42,15 +42,195 @@ function Read-NwZipTextEntry([string]$ZipPath, [string]$EntryName) {
     }
 }
 
-function Get-NwManifestFileHashes($Manifest) {
+function Test-NwSha256Hex([string]$Value) {
+    return ($Value -match '^[0-9a-fA-F]{64}$')
+}
+
+function Get-NwValue {
+    param($Object, [string]$Name, $Default = $null)
+    if ($null -eq $Object) { return $Default }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) { return $Object[$Name] }
+        return $Default
+    }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $Default }
+    return $property.Value
+}
+
+function Get-NwCertificationProblems(
+    [string]$Kind,
+    $BuildChecks,
+    $ToolchainManifest,
+    [object[]]$Ledgers,
+    $DeployHashes,
+    [string]$Toolchain
+) {
+    $problems = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace($Toolchain)) {
+        $problems.Add("$Kind does not record a toolchain.")
+        return $problems.ToArray()
+    }
+    if ($Toolchain -notin @("msvc-ltcg", "clang-cl-lld")) {
+        $problems.Add("$Kind records unknown toolchain '$Toolchain'.")
+        return $problems.ToArray()
+    }
+    if ($null -eq $BuildChecks -or (Get-NwValue $BuildChecks "full_baseline_passed" $false) -ne $true) {
+        $problems.Add("$Kind Full build evidence is missing or did not pass the full baseline.")
+    }
+    $selected = [string](Get-NwValue (Get-NwValue $ToolchainManifest "selected_toolchain" $null) "toolchain_id" "")
+    if ($selected -ne $Toolchain) {
+        $problems.Add("$Kind toolchain manifest selection '$selected' does not match '$Toolchain'.")
+    }
+    $fixtureExecutables = [ordered]@{
+        empty_player = "nw_empty_player.exe"
+        clear_present = "nw_clear_present_fixture.exe"
+        compute_shader = "nw_compute_shader_fixture.exe"
+    }
+    $safeLedgers = @($Ledgers | Where-Object { $null -ne $_ })
+    foreach ($fixture in $fixtureExecutables.Keys) {
+        $executable = $fixtureExecutables[$fixture]
+        $deployHash = [string]$DeployHashes[$executable.ToLowerInvariant()]
+        if (-not (Test-NwSha256Hex $deployHash)) {
+            $problems.Add("$Kind deploy hash for '$executable' is missing or invalid.")
+            continue
+        }
+        $ledger = $safeLedgers | Where-Object { [string](Get-NwValue $_ "fixture_id" "") -eq $fixture } | Select-Object -First 1
+        if ($null -eq $ledger) {
+            $problems.Add("$Kind has no ledger for $fixture.")
+            continue
+        }
+        if ((Get-NwValue $ledger "verification_status" "") -ne "verified" -or
+            (Get-NwValue $ledger "toolchain_id" "") -ne $Toolchain -or
+            (Get-NwValue $ledger "build_profile" "") -ne "release") {
+            $problems.Add("$Kind ledger for $fixture is not a verified release ledger for $Toolchain.")
+            continue
+        }
+        $component = @((Get-NwValue $ledger "distributed_components" @()) |
+            Where-Object { (Get-NwValue $_ "category" "") -eq "executable" }) | Select-Object -First 1
+        $ledgerHash = ([string](Get-NwValue $component "sha256" "")).ToLowerInvariant()
+        if (-not (Test-NwSha256Hex $ledgerHash) -or $ledgerHash -ne $deployHash) {
+            $problems.Add("$Kind ledger hash for $fixture does not match the verified deploy executable hash.")
+        }
+    }
+    return $problems.ToArray()
+}
+
+function Assert-NwManifestFileEntries($Manifest, [string]$Kind) {
+    $files = @(Get-NwValue $Manifest "files" @())
+    if ($files.Count -eq 0) { throw "$Kind artifact manifest does not list executable files." }
     $hashes = @{}
-    foreach ($item in @($Manifest.files)) {
+    foreach ($item in $files) {
         $name = [string]$item.name
-        if (-not [string]::IsNullOrWhiteSpace($name)) {
-            $hashes[$name.ToLowerInvariant()] = ([string]$item.sha256).ToLowerInvariant()
+        $sha256 = ([string]$item.sha256).ToLowerInvariant()
+        $bytes = 0
+        try { $bytes = [long]$item.bytes } catch { $bytes = 0 }
+        if ([string]::IsNullOrWhiteSpace($name) -or $name -match '[\\/]') {
+            throw "$Kind artifact manifest contains an invalid executable name '$name'."
+        }
+        if (-not (Test-NwSha256Hex $sha256)) {
+            throw "$Kind artifact manifest contains an invalid SHA-256 for '$name'."
+        }
+        if ($bytes -le 0) {
+            throw "$Kind artifact manifest contains an invalid byte count for '$name'."
+        }
+        $hashes[$name.ToLowerInvariant()] = [ordered]@{ name = $name; sha256 = $sha256; bytes = $bytes }
+    }
+    foreach ($required in @("nw_empty_player.exe", "nw_clear_present_fixture.exe", "nw_compute_shader_fixture.exe")) {
+        if (-not $hashes.ContainsKey($required.ToLowerInvariant())) {
+            throw "$Kind artifact manifest does not record required executable '$required'."
         }
     }
     return $hashes
+}
+
+function Assert-NwPackageDeployHashes([string]$PackageRoot, $Manifest) {
+    $expected = Assert-NwManifestFileEntries $Manifest "CleanSystem package"
+    $actualHashes = @{}
+    $expectedEntryNames = @{}
+    foreach ($key in $expected.Keys) {
+        $expectedEntryNames["deploy/$(Get-NwValue $expected[$key] 'name' '')"] = $true
+    }
+    foreach ($key in $expected.Keys) {
+        $entry = $expected[$key]
+        $entryName = [string](Get-NwValue $entry "name" "")
+        $entryBytes = [long](Get-NwValue $entry "bytes" 0)
+        $entrySha256 = [string](Get-NwValue $entry "sha256" "")
+        $deployPath = Join-Path (Join-Path $PackageRoot "deploy") $entryName
+        if (-not (Test-Path $deployPath -PathType Leaf)) {
+            throw "CleanSystem package is missing deploy executable '$entryName'."
+        }
+        $item = Get-Item $deployPath
+        if ($item.Length -ne $entryBytes) {
+            throw "CleanSystem package executable '$entryName' size $($item.Length) does not match recorded $entryBytes."
+        }
+        $actual = (Get-FileHash -Algorithm SHA256 -Path $deployPath).Hash.ToLowerInvariant()
+        if ($actual -ne $entrySha256) {
+            throw "CleanSystem package executable '$entryName' hash $actual does not match recorded $entrySha256."
+        }
+        $actualHashes[$key] = $actual
+    }
+    $unexpected = @(Get-ChildItem -Path (Join-Path $PackageRoot "deploy") -File -ErrorAction SilentlyContinue |
+        Where-Object { -not $expectedEntryNames.ContainsKey("deploy/$($_.Name)") })
+    if ($unexpected.Count -gt 0) {
+        throw "CleanSystem package deploy directory contains unrecorded file(s): $($unexpected.Name -join ', ')."
+    }
+    return $actualHashes
+}
+
+function Assert-NwZipDeployHashes([string]$ZipPath, $Manifest) {
+    $expected = Assert-NwManifestFileEntries $Manifest "CleanSystem ZIP"
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entries = @{}
+        foreach ($entry in $zip.Entries) {
+            $entries[$entry.FullName.Replace('\', '/')] = $entry
+        }
+        $actualHashes = @{}
+        foreach ($key in $expected.Keys) {
+            $recorded = $expected[$key]
+            $recordedName = [string](Get-NwValue $recorded "name" "")
+            $recordedBytes = [long](Get-NwValue $recorded "bytes" 0)
+            $recordedSha256 = [string](Get-NwValue $recorded "sha256" "")
+            $entryName = "deploy/$recordedName"
+            if (-not $entries.ContainsKey($entryName)) {
+                throw "CleanSystem ZIP is missing deploy executable '$recordedName'."
+            }
+            $entry = $entries[$entryName]
+            if ([long]$entry.Length -ne $recordedBytes) {
+                throw "CleanSystem ZIP executable '$recordedName' size $($entry.Length) does not match recorded $recordedBytes."
+            }
+            $stream = $entry.Open()
+            try {
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                try {
+                    $digest = $sha.ComputeHash($stream)
+                } finally {
+                    $sha.Dispose()
+                }
+            } finally {
+                $stream.Dispose()
+            }
+            $actual = -join ($digest | ForEach-Object { $_.ToString("x2") })
+            if ($actual -ne $recordedSha256) {
+                throw "CleanSystem ZIP executable '$recordedName' hash $actual does not match recorded $recordedSha256."
+            }
+            $actualHashes[$key] = $actual
+        }
+        $expectedEntryNames = @{}
+        foreach ($key in $expected.Keys) { $expectedEntryNames["deploy/$(Get-NwValue $expected[$key] 'name' '')"] = $true }
+        $unexpectedEntries = @($entries.Keys | Where-Object {
+            $_.StartsWith("deploy/", [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not $expectedEntryNames.ContainsKey($_)
+        })
+        if ($unexpectedEntries.Count -gt 0) {
+            throw "CleanSystem ZIP deploy entries are unrecorded: $($unexpectedEntries -join ', ')."
+        }
+        return $actualHashes
+    } finally {
+        $zip.Dispose()
+    }
 }
 
 try {
@@ -73,10 +253,20 @@ try {
     # stays historical and is never relabelled as current certifying evidence.
     $revisions = New-Object System.Collections.Generic.List[object]
     $packageManifest = $null
+    $packageDeployHashes = $null
+    $zipDeployHashes = $null
     $hasUnverifiedProvenance = $false
+    $summaryCertifies = $false
+    $packageCertifies = $false
+    $zipCertifies = $false
+    $certificationProblems = New-Object System.Collections.Generic.List[string]
     if (-not [string]::IsNullOrWhiteSpace($FullSummary)) {
         $summary = Read-NwJsonFile $FullSummary
         if ($null -eq $summary) { throw "Archive input does not exist: $FullSummary" }
+        $summaryCertifies = ((Get-NwValue $summary "full_baseline_passed" $false) -eq $true)
+        if (-not $summaryCertifies) {
+            $certificationProblems.Add("full-summary did not pass the full baseline.")
+        }
         if ($summary.PSObject.Properties.Name -contains "source_commit") {
             $summaryCommit = ([string]$summary.source_commit).Trim()
             if (-not [string]::IsNullOrWhiteSpace($summaryCommit)) {
@@ -101,12 +291,33 @@ try {
             throw "CleanSystem package source_commit '$packageCommit' is not a full Git revision."
         }
         $revisions.Add([pscustomobject]@{ Artifact = "clean-system-package"; SourceCommit = $packageCommit.ToLowerInvariant() })
+        $packageDeployHashes = Assert-NwPackageDeployHashes -PackageRoot $CleanSystemPackage -Manifest $packageManifest
+        $packageEvidence = Join-Path $CleanSystemPackage "evidence"
+        $packageBuildChecks = Read-NwJsonFile (Join-Path $packageEvidence "build-checks.json")
+        $packageToolchainManifest = Read-NwJsonFile (Join-Path $packageEvidence "toolchain-manifest.v1.json")
+        $packageLedgers = @()
+        foreach ($ledgerFile in @(Get-ChildItem -Path (Join-Path $packageEvidence "ledgers") -Filter "*.json" -File -ErrorAction SilentlyContinue)) {
+            $packageLedgers += Read-NwJsonFile $ledgerFile.FullName
+        }
+        $packageProblems = @(Get-NwCertificationProblems `
+            -Kind "clean-system-package" `
+            -BuildChecks $packageBuildChecks `
+            -ToolchainManifest $packageToolchainManifest `
+            -Ledgers $packageLedgers `
+            -DeployHashes $packageDeployHashes `
+            -Toolchain ([string](Get-NwValue $packageManifest "toolchain" "")))
+        if ($packageProblems.Count -eq 0) {
+            $packageCertifies = $true
+        } else {
+            foreach ($problem in $packageProblems) { $certificationProblems.Add($problem) }
+        }
     }
     if (-not [string]::IsNullOrWhiteSpace($CleanSystemZip)) {
         if (-not (Test-Path $CleanSystemZip -PathType Leaf)) { throw "Archive input does not exist: $CleanSystemZip" }
         $zipManifestText = Read-NwZipTextEntry -ZipPath $CleanSystemZip -EntryName "evidence/artifact-manifest.json"
         if ([string]::IsNullOrWhiteSpace($zipManifestText)) {
             $hasUnverifiedProvenance = $true
+            $certificationProblems.Add("clean-system-zip has no embedded artifact manifest.")
             Write-Warning "[NW-ARCHIVE] CleanSystem ZIP has no embedded evidence/artifact-manifest.json; classifying that artifact as unverified provenance."
         } else {
             try {
@@ -116,6 +327,7 @@ try {
             }
             if ($zipManifest.PSObject.Properties.Name -notcontains "source_commit") {
                 $hasUnverifiedProvenance = $true
+                $certificationProblems.Add("clean-system-zip artifact manifest does not record source_commit.")
                 Write-Warning "[NW-ARCHIVE] CleanSystem ZIP artifact manifest does not record source_commit; classifying that artifact as unverified provenance."
             } else {
                 $zipCommit = ([string]$zipManifest.source_commit).Trim()
@@ -123,14 +335,61 @@ try {
                     throw "CleanSystem ZIP source_commit '$zipCommit' is not a full Git revision."
                 }
                 $revisions.Add([pscustomobject]@{ Artifact = "clean-system-zip"; SourceCommit = $zipCommit.ToLowerInvariant() })
+                $zipDeployHashes = Assert-NwZipDeployHashes -ZipPath $CleanSystemZip -Manifest $zipManifest
+                $zipToolchain = [string](Get-NwValue $zipManifest "toolchain" "")
+                $zipBuildChecks = $null
+                $zipBuildChecksText = Read-NwZipTextEntry -ZipPath $CleanSystemZip -EntryName "evidence/build-checks.json"
+                if (-not [string]::IsNullOrWhiteSpace($zipBuildChecksText)) {
+                    try {
+                        $zipBuildChecks = $zipBuildChecksText | ConvertFrom-Json
+                    } catch {
+                        $certificationProblems.Add("clean-system-zip build-checks.json is malformed: $($_.Exception.Message)")
+                    }
+                }
+                $zipToolchainManifest = $null
+                $zipToolchainManifestText = Read-NwZipTextEntry -ZipPath $CleanSystemZip -EntryName "evidence/toolchain-manifest.v1.json"
+                if (-not [string]::IsNullOrWhiteSpace($zipToolchainManifestText)) {
+                    try {
+                        $zipToolchainManifest = $zipToolchainManifestText | ConvertFrom-Json
+                    } catch {
+                        $certificationProblems.Add("clean-system-zip toolchain-manifest.v1.json is malformed: $($_.Exception.Message)")
+                    }
+                }
+                $zipLedgers = @()
+                $fixtureFileNames = [ordered]@{
+                    empty_player = "empty-player"
+                    clear_present = "clear-present"
+                    compute_shader = "compute-fixture"
+                }
+                $ledgerSuffix = if ($zipToolchain -eq "clang-cl-lld") { "clang-cl" } else { $zipToolchain }
+                foreach ($fixture in $fixtureFileNames.Keys) {
+                    $ledgerEntry = "evidence/ledgers/{0}-{1}-release.json" -f $fixtureFileNames[$fixture], $ledgerSuffix
+                    $ledgerText = Read-NwZipTextEntry -ZipPath $CleanSystemZip -EntryName $ledgerEntry
+                    if ([string]::IsNullOrWhiteSpace($ledgerText)) { continue }
+                    try {
+                        $zipLedgers += $ledgerText | ConvertFrom-Json
+                    } catch {
+                        $certificationProblems.Add("clean-system-zip ledger '$ledgerEntry' is malformed: $($_.Exception.Message)")
+                    }
+                }
+                $zipProblems = @(Get-NwCertificationProblems `
+                    -Kind "clean-system-zip" `
+                    -BuildChecks $zipBuildChecks `
+                    -ToolchainManifest $zipToolchainManifest `
+                    -Ledgers $zipLedgers `
+                    -DeployHashes $zipDeployHashes `
+                    -Toolchain $zipToolchain)
+                if ($zipProblems.Count -eq 0 -and $certificationProblems.Count -eq 0) {
+                    $zipCertifies = $true
+                } else {
+                    foreach ($problem in $zipProblems) { $certificationProblems.Add($problem) }
+                }
                 if ($null -ne $packageManifest) {
-                    $zipHashes = Get-NwManifestFileHashes $zipManifest
-                    $packageHashes = Get-NwManifestFileHashes $packageManifest
-                    if ($zipHashes.Count -ne $packageHashes.Count) {
+                    if ($zipDeployHashes.Count -ne $packageDeployHashes.Count) {
                         throw "CleanSystem ZIP manifest does not match the supplied package manifest (file count differs)."
                     }
-                    foreach ($name in $packageHashes.Keys) {
-                        if (-not $zipHashes.ContainsKey($name) -or $zipHashes[$name] -ne $packageHashes[$name]) {
+                    foreach ($name in $packageDeployHashes.Keys) {
+                        if (-not $zipDeployHashes.ContainsKey($name) -or $zipDeployHashes[$name] -ne $packageDeployHashes[$name]) {
                             throw "CleanSystem ZIP manifest does not match the supplied package manifest for '$name'."
                         }
                     }
@@ -153,12 +412,18 @@ try {
         # explicitly as checkout-labelled rather than certifying evidence.
         $sourceCommit = $checkoutCommit.ToLowerInvariant()
         $sourceSource = "checkout-fallback"
+        $certificationProblems.Add("No supplied artifact exposes a source revision.")
     }
     $isCurrent = $sourceCommit -eq $checkoutCommit.ToLowerInvariant()
-    $evidenceClass = if ($isCurrent -and $sourceSource -ne "checkout-fallback" -and -not $hasUnverifiedProvenance) {
+    $inputCertifications = @()
+    if (-not [string]::IsNullOrWhiteSpace($FullSummary)) { $inputCertifications += $summaryCertifies }
+    if (-not [string]::IsNullOrWhiteSpace($CleanSystemPackage)) { $inputCertifications += $packageCertifies }
+    if (-not [string]::IsNullOrWhiteSpace($CleanSystemZip)) { $inputCertifications += $zipCertifies }
+    $allInputsCertify = ($inputCertifications.Count -gt 0) -and ($inputCertifications -notcontains $false)
+    $evidenceClass = if ($isCurrent -and $sourceSource -ne "checkout-fallback" -and -not $hasUnverifiedProvenance -and $allInputsCertify) {
         "current-certifying"
     } elseif ($isCurrent) {
-        "checkout-labelled-unverified-provenance"
+        "current-non-certifying"
     } else {
         "historical"
     }
@@ -194,6 +459,8 @@ try {
 
     $note = if ($evidenceClass -eq "current-certifying") {
         "Archive copy of artifacts produced from the checked-out revision; repository verifier provenance remains authoritative."
+    } elseif ($evidenceClass -eq "current-non-certifying") {
+        "Archive copy of current-revision artifacts that do not certify the full baseline; see certification_problems."
     } else {
         "Historical archive. It is not current certifying evidence for the checked-out revision."
     }
@@ -203,6 +470,8 @@ try {
         source_commit_origin = $sourceSource
         checkout_head = $checkoutCommit.ToLowerInvariant()
         evidence_class = $evidenceClass
+        certifying = ($evidenceClass -eq "current-certifying")
+        certification_problems = @($certificationProblems)
         archived_at_utc = [DateTime]::UtcNow.ToString("o")
         artifacts = $copied
         source_revisions = @($revisions | ForEach-Object { [ordered]@{ artifact = $_.Artifact; source_commit = $_.SourceCommit } })

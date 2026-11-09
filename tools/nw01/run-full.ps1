@@ -85,6 +85,7 @@ function Assert-NwFullSummaryWrittenByThisInvocation {
 # work so every invocation, including early failures, leaves a fresh summary
 # and can never expose a stale file to the downstream CI gate.
 $SummaryPath = Resolve-NwFullSummaryPath -Requested $SummaryPath -RepositoryRoot $RepoRoot -InvocationId $invocationId
+$verifierCode = $null
 try {
     if (Test-Path $SummaryPath -PathType Container) {
         throw "SummaryPath points at a directory: $SummaryPath"
@@ -114,6 +115,7 @@ try {
 
     & $python.Source $verifier --mode Full --summary-json $SummaryPath
     $code = $LASTEXITCODE
+    $verifierCode = $code
     $summary = Assert-NwFullSummaryWrittenByThisInvocation -Path $SummaryPath
 
     # Annotate the verifier summary with wrapper provenance. The invocation id
@@ -148,6 +150,11 @@ try {
     } catch {
         Write-Warning "[NW-FULL] unable to persist a failure summary at '$SummaryPath': $($_.Exception.Message)"
     }
-    Write-Error "[NW-FULL] $message"
-    exit 1
+    $failureExitCode = if ($null -ne $verifierCode -and $verifierCode -ge 0 -and $verifierCode -le 3) {
+        [int]$verifierCode
+    } else {
+        1
+    }
+    Write-Error "[NW-FULL] $message" -ErrorAction Continue
+    exit $failureExitCode
 }

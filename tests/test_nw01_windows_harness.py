@@ -372,6 +372,78 @@ def commit_all(repo: Path, message: str = "baseline") -> str:
     return git_run(repo, "rev-parse", "HEAD").stdout.strip()
 
 
+def build_archive_package(
+    package: Path,
+    *,
+    source_commit: str,
+    toolchain: str = "msvc-ltcg",
+    full_baseline_passed: bool = True,
+) -> dict:
+    fixture_executables = {
+        "empty_player": "nw_empty_player.exe",
+        "clear_present": "nw_clear_present_fixture.exe",
+        "compute_shader": "nw_compute_shader_fixture.exe",
+    }
+    deploy = package / "deploy"
+    evidence = package / "evidence"
+    ledger_dir = evidence / "ledgers"
+    deploy.mkdir(parents=True, exist_ok=True)
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+
+    files = []
+    fixture_hashes: dict[str, tuple[str, str]] = {}
+    for fixture, name in fixture_executables.items():
+        payload = (f"fixture-{fixture}-{toolchain}-".encode("ascii") * 48)
+        (deploy / name).write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        files.append({"name": name, "bytes": len(payload), "sha256": digest})
+        fixture_hashes[fixture] = (name, digest)
+
+    manifest = {
+        "schema_version": "1",
+        "source_commit": source_commit,
+        "toolchain": toolchain,
+        "files": files,
+    }
+    (evidence / "artifact-manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    (evidence / "build-checks.json").write_text(
+        json.dumps({"full_baseline_passed": full_baseline_passed}) + "\n",
+        encoding="utf-8",
+    )
+    (evidence / "toolchain-manifest.v1.json").write_text(
+        json.dumps({"selected_toolchain": {"toolchain_id": toolchain}}) + "\n",
+        encoding="utf-8",
+    )
+    for fixture, (name, digest) in fixture_hashes.items():
+        ledger = {
+            "fixture_id": fixture,
+            "toolchain_id": toolchain,
+            "build_profile": "release",
+            "verification_status": "verified",
+            "distributed_components": [
+                {"category": "executable", "name": name, "sha256": digest}
+            ],
+        }
+        (ledger_dir / f"{fixture.replace('_', '-')}-{toolchain}-release.json").write_text(
+            json.dumps(ledger) + "\n", encoding="utf-8"
+        )
+    return manifest
+
+
+def build_archive_zip(zip_path: Path, package: Path, *, replace: dict[str, bytes] | None = None) -> None:
+    import zipfile
+
+    replacements = replace or {}
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        for path in sorted(package.rglob("*")):
+            if not path.is_file():
+                continue
+            entry_name = path.relative_to(package).as_posix()
+            archive.writestr(entry_name, replacements.get(entry_name, path.read_bytes()))
+
+
 def write_fake_tool(path: Path, output: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if IS_WINDOWS:
@@ -529,6 +601,38 @@ def test_doctor_reports_expected_versus_detected_mismatch(tmp_path: Path) -> Non
     assert row["Expected"] == "3.30.2"
     assert "3.29.0" in row["Detected"]
     assert row["Pass"] is False
+
+
+@requires_windows_harness
+def test_doctor_fails_when_activation_fails_even_if_all_rows_pass(tmp_path: Path) -> None:
+    harness = tmp_path / "doctor-harness"
+    harness.mkdir()
+    shutil.copy(ROOT / "tools/nw01/doctor.ps1", harness / "doctor.ps1")
+    (harness / "Nw01.Windows.psm1").write_text(
+        textwrap.dedent(
+            """
+            function Enter-NwBuildEnvironment {
+                param([string]$RepoRoot = "", [switch]$ExportGitHubEnv)
+                throw "synthetic contract-level activation failure"
+            }
+            function Get-NwDoctorResults {
+                param([string]$RepoRoot = "")
+                @([pscustomobject]@{
+                    Name = "CMake"
+                    Expected = "3.30.2"
+                    Detected = "3.30.2"
+                    Pass = $true
+                    Executable = "cmake.exe"
+                })
+            }
+            Export-ModuleMember -Function *
+            """
+        ),
+        encoding="utf-8",
+    )
+    proc = run_pwsh_script(harness / "doctor.ps1", "-RepoRoot", tmp_path)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "could not activate" in (proc.stdout + proc.stderr).lower()
 
 
 @requires_windows_harness
@@ -927,22 +1031,23 @@ def test_run_full_preserves_all_verifier_exit_codes_and_exports_fresh_summary(tm
             # Exit 2 must never be advertised as a passing Full result.
             assert data["full_baseline_passed"] is False
 
-    crash_summary = tmp_path / "summary-crash.json"
-    proc = run_pwsh_script(
-        harness / "run-full.ps1",
-        "-RepoRoot",
-        fake_repo,
-        "-SummaryPath",
-        crash_summary,
-        extra_env={
-            "NW_TEST_VERIFIER_EXIT": "1",
-            "NW_TEST_VERIFIER_SKIP_SUMMARY": "1",
-        },
-    )
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    crash = json.loads(crash_summary.read_text(encoding="utf-8-sig"))
-    assert crash["full_baseline_passed"] is False
-    assert crash["wrapper_error"]["stage"] == "wrapper"
+    for expected_code in (0, 1, 2, 3):
+        crash_summary = tmp_path / f"summary-crash-{expected_code}.json"
+        proc = run_pwsh_script(
+            harness / "run-full.ps1",
+            "-RepoRoot",
+            fake_repo,
+            "-SummaryPath",
+            crash_summary,
+            extra_env={
+                "NW_TEST_VERIFIER_EXIT": str(expected_code),
+                "NW_TEST_VERIFIER_SKIP_SUMMARY": "1",
+            },
+        )
+        assert proc.returncode == expected_code, proc.stdout + proc.stderr
+        crash = json.loads(crash_summary.read_text(encoding="utf-8-sig"))
+        assert crash["full_baseline_passed"] is False
+        assert crash["wrapper_error"]["stage"] == "wrapper"
 
 
 @requires_windows_harness
@@ -1005,6 +1110,42 @@ def test_prepare_evidence_commit_guardrails_and_optional_new_commit(tmp_path: Pa
     assert "stale" in (proc.stdout + proc.stderr)
     assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
     git_run(repo, "checkout", "--", relative_evidence)
+
+    # An internally consistent but stale reproducibility report is rejected
+    # unless its hashes still match the verified release ledgers.
+    relative_reproducibility = "benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json"
+    reproducibility = repo / relative_reproducibility
+    repro_data = json.loads(reproducibility.read_text(encoding="utf-8"))
+    repro_data["artifacts"][0]["sha256_a"] = "1" * 64
+    repro_data["artifacts"][0]["sha256_b"] = "1" * 64
+    reproducibility.write_text(json.dumps(repro_data, indent=2) + "\n", encoding="utf-8")
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert "stale" in (proc.stdout + proc.stderr)
+    assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
+    git_run(repo, "checkout", "--", relative_reproducibility)
+
+    # Evidence status must reference current, validated evidence rather than a
+    # stale but syntactically valid list.
+    relative_status = "benchmarks/evidence-status.json"
+    status_path = repo / relative_status
+    status_data = json.loads(status_path.read_text(encoding="utf-8"))
+    status_data["required_measured_evidence"][0]["files"] = "benchmarks/ledgers/missing.json"
+    status_path.write_text(json.dumps(status_data, indent=2) + "\n", encoding="utf-8")
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert "references no current files" in (proc.stdout + proc.stderr)
+    assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
+    git_run(repo, "checkout", "--", relative_status)
+
+    status_data = json.loads(status_path.read_text(encoding="utf-8"))
+    status_data["measured_minimum_windows_build"] = "10.0.99999.0"
+    status_path.write_text(json.dumps(status_data, indent=2) + "\n", encoding="utf-8")
+    proc = run_pwsh_script(script, "-RepoRoot", repo)
+    assert proc.returncode != 0
+    assert "does not match current measured" in (proc.stdout + proc.stderr)
+    assert git_run(repo, "diff", "--cached", "--name-only").stdout.strip() == ""
+    git_run(repo, "checkout", "--", relative_status)
 
     # Malformed content is rejected before staging.
     evidence.write_text("{not-json\n", encoding="utf-8")
@@ -1205,12 +1346,12 @@ def test_archive_uses_artifact_source_revision_and_preserves_prior_evidence(tmp_
 
     archived_commit = "a" * 40
     summary = tmp_path / "summary.json"
-    summary.write_text(json.dumps({"source_commit": archived_commit}), encoding="utf-8")
-    package = tmp_path / "package"
-    (package / "evidence").mkdir(parents=True)
-    (package / "evidence/artifact-manifest.json").write_text(
-        json.dumps({"source_commit": archived_commit}), encoding="utf-8"
+    summary.write_text(
+        json.dumps({"source_commit": archived_commit, "full_baseline_passed": True}),
+        encoding="utf-8",
     )
+    package = tmp_path / "package"
+    build_archive_package(package, source_commit=archived_commit)
 
     archive_root = tmp_path / "archive"
     script = ROOT / "tools/nw01/archive-artifacts.ps1"
@@ -1235,10 +1376,15 @@ def test_archive_uses_artifact_source_revision_and_preserves_prior_evidence(tmp_
         assert manifest["source_commit"] == archived_commit
         assert manifest["checkout_head"] == head
         assert manifest["evidence_class"] == "historical"
+        assert manifest["certifying"] is False
+        assert manifest["certification_problems"] == []
         assert directory.name.startswith(archived_commit[:12])
 
     conflicting_summary = tmp_path / "conflicting.json"
-    conflicting_summary.write_text(json.dumps({"source_commit": "b" * 40}), encoding="utf-8")
+    conflicting_summary.write_text(
+        json.dumps({"source_commit": "b" * 40, "full_baseline_passed": True}),
+        encoding="utf-8",
+    )
     proc = run_pwsh_script(
         script,
         "-ArchiveRoot",
@@ -1267,6 +1413,106 @@ def test_archive_uses_artifact_source_revision_and_preserves_prior_evidence(tmp_
 
 
 @requires_windows_harness
+def test_archive_rejects_missing_and_tampered_package_deploy_files(tmp_path: Path) -> None:
+    repo = init_git_repo(tmp_path / "archive package repo")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    head = commit_all(repo)
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps({"source_commit": head, "full_baseline_passed": True}),
+        encoding="utf-8",
+    )
+    script = ROOT / "tools/nw01/archive-artifacts.ps1"
+
+    tampered_package = tmp_path / "tampered-package"
+    build_archive_package(tampered_package, source_commit=head)
+    executable = tampered_package / "deploy/nw_empty_player.exe"
+    payload = executable.read_bytes()
+    executable.write_bytes(bytes([payload[0] ^ 0xFF]) + payload[1:])
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        tmp_path / "tampered-archive",
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        tampered_package,
+    )
+    assert proc.returncode != 0
+    assert "does not match recorded" in (proc.stdout + proc.stderr).lower()
+
+    missing_package = tmp_path / "missing-package"
+    build_archive_package(missing_package, source_commit=head)
+    (missing_package / "deploy/nw_compute_shader_fixture.exe").unlink()
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        tmp_path / "missing-archive",
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        missing_package,
+    )
+    assert proc.returncode != 0
+    assert "missing deploy executable" in (proc.stdout + proc.stderr).lower()
+
+
+@requires_windows_harness
+def test_archive_classifies_current_incomplete_full_as_non_certifying(tmp_path: Path) -> None:
+    repo = init_git_repo(tmp_path / "archive classification repo")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    head = commit_all(repo)
+    script = ROOT / "tools/nw01/archive-artifacts.ps1"
+
+    incomplete = tmp_path / "incomplete.json"
+    incomplete.write_text(
+        json.dumps({"source_commit": head, "full_baseline_passed": False}),
+        encoding="utf-8",
+    )
+    incomplete_root = tmp_path / "incomplete-archive"
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        incomplete_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        incomplete,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    directory = next(path for path in incomplete_root.iterdir() if path.is_dir())
+    manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
+    assert manifest["evidence_class"] == "current-non-certifying"
+    assert manifest["certifying"] is False
+    assert any("full baseline" in problem for problem in manifest["certification_problems"])
+
+    complete = tmp_path / "complete.json"
+    complete.write_text(
+        json.dumps({"source_commit": head, "full_baseline_passed": True}),
+        encoding="utf-8",
+    )
+    complete_root = tmp_path / "complete-archive"
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        complete_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        complete,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    directory = next(path for path in complete_root.iterdir() if path.is_dir())
+    manifest = json.loads((directory / "archive-manifest.json").read_text(encoding="utf-8-sig"))
+    assert manifest["evidence_class"] == "current-certifying"
+    assert manifest["certifying"] is True
+
+
+@requires_windows_harness
 def test_archive_validates_clean_system_zip_provenance(tmp_path: Path) -> None:
     import zipfile
 
@@ -1276,20 +1522,15 @@ def test_archive_validates_clean_system_zip_provenance(tmp_path: Path) -> None:
     archived_commit = "a" * 40
 
     summary = tmp_path / "summary.json"
-    summary.write_text(json.dumps({"source_commit": archived_commit}), encoding="utf-8")
+    summary.write_text(
+        json.dumps({"source_commit": archived_commit, "full_baseline_passed": True}),
+        encoding="utf-8",
+    )
     package = tmp_path / "package"
-    (package / "evidence").mkdir(parents=True)
-    files = [{"name": "nw_empty_player.exe", "sha256": "1" * 64, "bytes": 1}]
-    manifest = {"source_commit": archived_commit, "files": files}
-    (package / "evidence/artifact-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-
-    def make_zip(path: Path, payload: dict | None) -> None:
-        with zipfile.ZipFile(path, "w") as archive:
-            if payload is not None:
-                archive.writestr("evidence/artifact-manifest.json", json.dumps(payload))
+    build_archive_package(package, source_commit=archived_commit)
 
     matching_zip = tmp_path / "matching.zip"
-    make_zip(matching_zip, manifest)
+    build_archive_zip(matching_zip, package)
     archive_root = tmp_path / "archive"
     script = ROOT / "tools/nw01/archive-artifacts.ps1"
     proc = run_pwsh_script(
@@ -1313,9 +1554,16 @@ def test_archive_validates_clean_system_zip_provenance(tmp_path: Path) -> None:
         "clean-system-package",
         "clean-system-zip",
     }
+    assert archive_manifest["certification_problems"] == []
 
     conflicting_zip = tmp_path / "conflicting.zip"
-    make_zip(conflicting_zip, {"source_commit": "b" * 40, "files": files})
+    conflicting_package = tmp_path / "conflicting-package"
+    shutil.copytree(package, conflicting_package)
+    conflicting_manifest_path = conflicting_package / "evidence/artifact-manifest.json"
+    conflicting_manifest = json.loads(conflicting_manifest_path.read_text(encoding="utf-8"))
+    conflicting_manifest["source_commit"] = "b" * 40
+    conflicting_manifest_path.write_text(json.dumps(conflicting_manifest), encoding="utf-8")
+    build_archive_zip(conflicting_zip, conflicting_package)
     proc = run_pwsh_script(
         script,
         "-ArchiveRoot",
@@ -1332,8 +1580,33 @@ def test_archive_validates_clean_system_zip_provenance(tmp_path: Path) -> None:
     assert proc.returncode != 0
     assert "conflicting source revisions" in (proc.stdout + proc.stderr)
 
+    tampered_payload = bytearray((package / "deploy/nw_empty_player.exe").read_bytes())
+    tampered_payload[0] ^= 0xFF
+    tampered_zip = tmp_path / "tampered.zip"
+    build_archive_zip(
+        tampered_zip,
+        package,
+        replace={"deploy/nw_empty_player.exe": bytes(tampered_payload)},
+    )
+    proc = run_pwsh_script(
+        script,
+        "-ArchiveRoot",
+        archive_root,
+        "-RepoRoot",
+        repo,
+        "-FullSummary",
+        summary,
+        "-CleanSystemPackage",
+        package,
+        "-CleanSystemZip",
+        tampered_zip,
+    )
+    assert proc.returncode != 0
+    assert "hash" in (proc.stdout + proc.stderr).lower()
+
     malformed_zip = tmp_path / "no-manifest.zip"
-    make_zip(malformed_zip, None)
+    with zipfile.ZipFile(malformed_zip, "w") as archive:
+        archive.writestr("deploy/nw_empty_player.exe", b"placeholder")
     before = {path.name for path in archive_root.iterdir() if path.is_dir()}
     proc = run_pwsh_script(
         script,
@@ -1576,8 +1849,21 @@ def test_capture_benchmark_rejects_adapter_conflicts_and_missing_metadata(
         for item in missing["unavailable_measurements"]
         if item["metric"] == "environment_metadata.gpu_model"
     ]
-    assert any("No adapter description" in reason for reason in reasons)
+    assert any("Adapter description was not emitted" in reason for reason in reasons)
     assert missing["benchmark_passed"] is False
+
+    partial = capture(
+        fixture_runs({"clear_present": "NVIDIA GeForce RTX 5070 Ti"}),
+        measured,
+    )
+    reasons = [
+        item["reason"]
+        for item in partial["unavailable_measurements"]
+        if item["metric"] == "environment_metadata.gpu_model"
+    ]
+    assert any("compute_shader" in reason for reason in reasons)
+    assert partial["environment_metadata"]["gpu_model"] is None
+    assert partial["benchmark_passed"] is False
 
     operator_conflict = capture(
         fixture_runs(same_adapter),
