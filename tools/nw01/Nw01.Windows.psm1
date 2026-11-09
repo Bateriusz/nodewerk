@@ -127,10 +127,26 @@ function Add-NwPathEntry {
     if (-not (Test-Path $Path -PathType Container)) {
         throw "PATH directory does not exist: $Path"
     }
-    $parts = @($env:PATH -split ';')
-    if ($parts -notcontains $Path) {
-        $env:PATH = "$Path;$env:PATH"
-    }
+
+    # vcvars64.bat prepends Windows SDK tool directories, and recent Windows SDK
+    # images may carry a newer dxc.exe. Merely detecting that our pinned path is
+    # already somewhere in PATH is therefore insufficient: deterministic
+    # execution requires the repository-selected standalone directory to be
+    # moved to the front every time the build environment is entered.
+    $normalized = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $parts = @(
+        $env:PATH -split ';' |
+            Where-Object {
+                if ([string]::IsNullOrWhiteSpace($_)) { return $false }
+                try {
+                    return [System.IO.Path]::GetFullPath($_).TrimEnd('\') -ne $normalized
+                } catch {
+                    return $_ -ne $Path
+                }
+            }
+    )
+    $env:PATH = (@($Path) + $parts) -join ';'
+
     if ($ExportGitHubPath) {
         if ([string]::IsNullOrWhiteSpace($env:GITHUB_PATH)) {
             throw "GITHUB_PATH is not available."
@@ -286,13 +302,38 @@ function Enter-NwBuildEnvironment {
     $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
     $sources = Get-NwProvisioningSources -RepoRoot $RepoRoot
     $paths = Get-NwStandaloneToolPaths -RepoRoot $RepoRoot
-    Import-NwVcVarsEnvironment -WindowsSdkVersion $contract.WindowsSdkVersion -VcVarsVersion ([string]$sources.visual_studio.vcvars_version) -ExportGitHubEnv:$ExportGitHubEnv | Out-Null
+    # Import vcvars first because it prepends SDK locations. Then deliberately
+    # move every pinned standalone tool directory ahead of the SDK. In
+    # particular this prevents Windows SDK's newer dxc.exe from shadowing the
+    # pinned DXC 1.8.2407 used by NW-01.
+    Import-NwVcVarsEnvironment -WindowsSdkVersion $contract.WindowsSdkVersion -VcVarsVersion ([string]$sources.visual_studio.vcvars_version) | Out-Null
 
     foreach ($entry in @($paths.CMakeBin, $paths.NinjaBin, $paths.LlvmBin, $paths.DxcBin)) {
         if (Test-Path $entry -PathType Container) {
-            Add-NwPathEntry -Path $entry -ExportGitHubPath:$ExportGitHubEnv
+            Add-NwPathEntry -Path $entry
         }
     }
+
+    if ($ExportGitHubEnv) {
+        if ([string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) {
+            throw "GITHUB_ENV is not available."
+        }
+        foreach ($name in @("Path", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "WindowsSdkDir", "WindowsSDKVersion", "WindowsSdkVerBinPath", "UCRTVersion", "UniversalCRTSdkDir")) {
+            $value = [Environment]::GetEnvironmentVariable($name, "Process")
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                Add-Content -Path $env:GITHUB_ENV -Value "$name=$value"
+            }
+        }
+    }
+
+    # Fail immediately if command resolution still disagrees with the exact
+    # pinned DXC path after vcvars/path activation.
+    $resolvedDxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+    $expectedDxc = Join-Path $paths.DxcBin "dxc.exe"
+    if ([System.IO.Path]::GetFullPath($resolvedDxc) -ne [System.IO.Path]::GetFullPath($expectedDxc)) {
+        throw "Pinned DXC precedence failure: command resolution selected '$resolvedDxc', expected '$expectedDxc'"
+    }
+
     return [pscustomobject]@{ Contract = $contract; Paths = $paths }
 }
 
