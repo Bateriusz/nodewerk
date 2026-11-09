@@ -79,8 +79,14 @@ try {
     $nvidiaSmi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
     if (-not $nvidiaSmi) { $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue }
     if (-not $nvidiaSmi) { throw "nvidia-smi is required to bind CleanSystem execution to the physical NVIDIA adapter." }
-    $gpuLine = (& $nvidiaSmi.Source --query-gpu=name,driver_version --format=csv,noheader,nounits | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gpuLine)) { throw "nvidia-smi did not return GPU model/driver metadata." }
+    $nvidiaSmiArgs = @(
+        "--query-gpu=name,driver_version",
+        "--format=csv,noheader,nounits"
+    )
+    $gpuOutput = @(& $nvidiaSmi.Source @nvidiaSmiArgs)
+    $nvidiaSmiExitCode = $LASTEXITCODE
+    $gpuLine = $gpuOutput | Select-Object -First 1
+    if ($nvidiaSmiExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($gpuLine)) { throw "nvidia-smi did not return GPU model/driver metadata." }
     $parts = @($gpuLine -split ',', 2 | ForEach-Object { $_.Trim() })
     if ($parts.Count -ne 2) { throw "Unexpected nvidia-smi output: $gpuLine" }
     $gpuModel = $parts[0]
