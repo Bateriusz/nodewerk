@@ -147,12 +147,16 @@ By default package output is kept outside the repository working tree.
 Transfer the prepared package to the CleanSystem machine. Do **not** run
 `bootstrap-windows.ps1` there.
 
-Run the CleanSystem-only entry point from the repository checkout:
+Run the CleanSystem-only entry point from the repository checkout. A stock Windows 11
+target does not need PowerShell 7 installed; Windows PowerShell 5.1 is supported:
 
 ```powershell
-pwsh ./tools/nw01/run-clean-system.ps1 `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\nw01\run-clean-system.ps1 `
   -PackageRoot <package>
 ```
+
+PowerShell 7 (`pwsh`) may also be used when it is already present, but it is not a CleanSystem
+prerequisite and should not be installed solely for this validation.
 
 The wrapper performs no provisioning or build-environment activation. It rejects obvious active
 SDK/DXC contamination, measures the exact Windows build plus executing NVIDIA GPU/driver, and then
