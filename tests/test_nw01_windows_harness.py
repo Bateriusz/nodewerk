@@ -55,6 +55,9 @@ def test_ci_consumes_shared_harness_and_exercises_idempotence() -> None:
     assert "tools/nw01/evidence-summary.ps1" in ci
     assert "Microsoft.VisualStudio.Component.VC.14.40.17.10.x86.x64" not in ci
     assert "vs_buildtools.exe" not in ci
+    assert "Parse CleanSystem runner with Windows PowerShell 5.1" in ci
+    assert "System.Management.Automation.Language.Parser" in ci
+    assert "shell: powershell" in ci
 
 
 def test_full_wrapper_preserves_verifier_exit_contract() -> None:
