@@ -159,6 +159,9 @@ def test_documented_clean_system_role_never_bootstraps_full_toolchain() -> None:
     assert "--mode" in clean and "CleanSystem" in clean
     assert "WindowsSdkDir" in clean
     assert "dxc.exe" in clean
+    assert "Get-Variable -Name IsWindows" in clean
+    assert '$env:OS -eq "Windows_NT"' in clean
+    assert "Do not require PowerShell 7 on CleanSystem hosts" in clean
 
     for path in (
         "tools/nw01/bootstrap-windows.ps1",
