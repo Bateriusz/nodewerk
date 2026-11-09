@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,7 +68,7 @@ def test_full_wrapper_preserves_verifier_exit_contract() -> None:
     assert "3 {" in script
     assert "INCOMPLETE" in script
     assert "exit $code" in script
-    assert "exit 2" not in script
+    assert re.search(r"(?m)^\\s*exit\\s+2\\s*$", script) is None
 
 
 def test_hardware_capture_measures_host_fields_and_keeps_unreliable_inputs_explicit() -> None:
