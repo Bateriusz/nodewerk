@@ -2156,7 +2156,8 @@ bool IsValidExpression(std::string_view expression,
 
     const auto operation_allowed = [&](std::string_view identifier) {
         for (const auto& operation : operations) {
-            if (std::string_view(operation) == identifier) {
+            if (std::string_view(operation.data(), operation.size()) ==
+                identifier) {
                 return true;
             }
         }
@@ -2834,6 +2835,7 @@ ParseResult ParseGraphText(std::string_view text,
             source.line = line_number;
             source.node_id = node.id;
             source.operator_id = node.operator_id;
+            source.port_id = tokens[1];
             if (spec == nullptr) {
                 result.diagnostics.push_back(MakeDiagnostic(
                     DiagnosticCode::UnknownParameter,
