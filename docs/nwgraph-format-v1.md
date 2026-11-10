@@ -27,7 +27,8 @@ residency     := "logical" | "cpu" | "gpu" | "readback"
 
 Quoted values use double quotes with `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
 Comments begin with `#` outside quoted strings. Numeric vector/matrix parameters
-accept whitespace- or comma-separated components.
+accept whitespace- or comma-separated components, including spaces after commas
+(`param value 1, 2, 3`).
 
 `profile` is required. A document without a `profile` directive is rejected
 rather than receiving the default capability identity implicitly.
@@ -72,7 +73,9 @@ operator's `shader_operations` whitelist. Numeric literals, swizzles (`.x`,
 `.xyzw`, `.rgba`), parentheses, commas, and arithmetic composition operators are
 syntax, not implicitly declared operations. Unknown function calls or
 identifiers fail with `invalid_expression` and identify the node and
-`expression` parameter.
+`expression` parameter. CPU-composed ShaderExpr values use ordinary decimal
+literals, never hexadecimal floating-point spelling, so generated composition
+text remains valid expression/HLSL syntax.
 
 ## Canonical semantic identity
 
@@ -119,6 +122,13 @@ Curve values carry their declared `linear` or `step` interpolation mode, and
 `nw.curve.sample` honors that mode. Texture resource bounds are enforced against
 the selected format's bytes-per-element as well as width/height limits; buffer
 and mesh recipes enforce their declared byte/vertex/index descriptors.
+
+`nw.curve.keyframes` requires non-empty `keys` entries of the form
+`<time>:<value>` with finite numeric time and value. Malformed or non-finite
+keyframes fail validation with a `keys`-port diagnostic instead of being
+silently dropped. `nw.control.seed` preserves an explicit seed value directly in
+its evaluated scalar output; graph-derived seeds retain their deterministic
+normalized range.
 
 `AuthoringSession::ApplyEdit` validates a complete new document before replacing
 the last valid immutable `GraphSnapshot`; invalid edits leave that snapshot and

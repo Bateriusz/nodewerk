@@ -1669,6 +1669,26 @@ std::string CanonicalNumberText(double value) {
     return std::string(buffer);
 }
 
+// Decimal spelling for expression text embedded in ShaderExpr values. This is
+// intentionally separate from CanonicalNumberText: canonical text uses the
+// exact hexadecimal spelling for diagnostics, while shader source must use
+// ordinary decimal literals accepted by the expression whitelist and HLSL.
+std::string ShaderNumberText(double value) {
+    if (!std::isfinite(value)) {
+        value = 0.0;
+    }
+    value = NormalizeZero(value);
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), "%.17g", value);
+    std::string text(buffer);
+    if (text.find('.') == std::string::npos &&
+        text.find('e') == std::string::npos &&
+        text.find('E') == std::string::npos) {
+        text += ".0";
+    }
+    return text;
+}
+
 std::string ParamCanonicalText(const ParamValue& value) {
     switch (value.type) {
     case ParamType::Float:
@@ -2420,8 +2440,9 @@ std::optional<ParamValue> ParseParamTokens(
     }
 
     // Vector / matrix component values.
-    std::vector<std::string> parts =
-        tokens.size() == 1u ? SplitCommaTokens(tokens) : tokens;
+    // Commas may be attached to tokens (`1, 2, 3` tokenizes as ["1,", "2,",
+    // "3"]) or separated by whitespace; normalize both forms.
+    std::vector<std::string> parts = SplitCommaTokens(tokens);
     if (spec.type == ParamType::Mat4) {
         if (parts.size() == 1u && Lower(parts[0]) == "identity") {
             value.component_count = 16u;
@@ -3093,6 +3114,94 @@ TopologyResult ComputeTopology(const GraphDocument& document) {
     return result;
 }
 
+std::string_view TrimAsciiWhitespace(std::string_view text) {
+    std::size_t begin = 0;
+    while (begin < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[begin]))) {
+        ++begin;
+    }
+    std::size_t end = text.size();
+    while (end > begin &&
+           std::isspace(static_cast<unsigned char>(text[end - 1u]))) {
+        --end;
+    }
+    return text.substr(begin, end - begin);
+}
+
+struct CurveKeyParseResult {
+    bool ok = true;
+    bool nonfinite = false;
+    std::string error;
+    std::vector<std::pair<double, double>> keys;
+};
+
+CurveKeyParseResult ParseCurveKeys(std::string_view text) {
+    CurveKeyParseResult result;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t end = text.find(';', start);
+        const std::string_view raw_entry = text.substr(
+            start, end == std::string_view::npos ? std::string_view::npos
+                                                 : end - start);
+        const std::string_view entry = TrimAsciiWhitespace(raw_entry);
+        if (entry.empty()) {
+            if (end != std::string_view::npos) {
+                result.ok = false;
+                result.error =
+                    "curve parameter 'keys' contains an empty keyframe entry";
+                return result;
+            }
+            break;
+        }
+        const std::size_t colon = entry.find(':');
+        if (colon == std::string_view::npos ||
+            entry.find(':', colon + 1u) != std::string_view::npos) {
+            result.ok = false;
+            result.error = "curve parameter 'keys' contains malformed keyframe "
+                           "entry '" +
+                           std::string(entry) +
+                           "'; expected '<time>:<value>'";
+            return result;
+        }
+        const std::string_view time_text =
+            TrimAsciiWhitespace(entry.substr(0, colon));
+        const std::string_view value_text =
+            TrimAsciiWhitespace(entry.substr(colon + 1u));
+        double time = 0.0;
+        double value = 0.0;
+        if (!ParseDouble(time_text, time) || !ParseDouble(value_text, value)) {
+            result.ok = false;
+            result.error = "curve parameter 'keys' contains malformed keyframe "
+                           "entry '" +
+                           std::string(entry) +
+                           "'; time and value must be numeric";
+            return result;
+        }
+        if (!std::isfinite(time) || !std::isfinite(value)) {
+            result.ok = false;
+            result.nonfinite = true;
+            result.error = "curve parameter 'keys' contains non-finite "
+                           "keyframe entry '" +
+                           std::string(entry) + "'";
+            return result;
+        }
+        result.keys.emplace_back(NormalizeZero(time), NormalizeZero(value));
+        if (end == std::string_view::npos) {
+            break;
+        }
+        start = end + 1u;
+    }
+    if (result.keys.empty()) {
+        result.ok = false;
+        result.error =
+            "curve parameter 'keys' must contain at least one keyframe";
+        return result;
+    }
+    std::sort(result.keys.begin(), result.keys.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    return result;
+}
+
 void ValidateParams(const NodeDefinition& node, const OperatorSchema& schema,
                     std::vector<Diagnostic>& diagnostics) {
     for (const auto& spec : schema.params) {
@@ -3176,6 +3285,22 @@ void ValidateParams(const NodeDefinition& node, const OperatorSchema& schema,
                 "unknown parameter '" + name + "' for operator '" +
                     schema.id + "'",
                 source));
+        }
+    }
+    if (schema.id == "nw.curve.keyframes") {
+        const auto keys = node.params.find("keys");
+        if (keys != node.params.end()) {
+            const CurveKeyParseResult parsed = ParseCurveKeys(keys->second.text);
+            if (!parsed.ok) {
+                DiagnosticSource source;
+                source.node_id = node.id;
+                source.operator_id = node.operator_id;
+                source.port_id = "keys";
+                diagnostics.push_back(MakeDiagnostic(
+                    parsed.nonfinite ? DiagnosticCode::NonFiniteParameter
+                                     : DiagnosticCode::InvalidParameterValue,
+                    parsed.error, source));
+            }
         }
     }
 }
@@ -4190,37 +4315,6 @@ EvaluationValue ImageOracle(const GraphSnapshot& snapshot,
     return image;
 }
 
-std::vector<std::pair<double, double>> ParseCurveKeys(const std::string& text) {
-    std::vector<std::pair<double, double>> keys;
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        const std::size_t end = text.find(';', start);
-        const std::string_view entry =
-            std::string_view(text.data(), text.size()).substr(
-                start, end == std::string::npos ? std::string::npos
-                                                : end - start);
-        if (!entry.empty()) {
-            const std::size_t colon = entry.find(':');
-            if (colon != std::string_view::npos) {
-                double time = 0.0;
-                double value = 0.0;
-                if (ParseDouble(entry.substr(0, colon), time) &&
-                    ParseDouble(entry.substr(colon + 1u), value) &&
-                    std::isfinite(time) && std::isfinite(value)) {
-                    keys.emplace_back(time, value);
-                }
-            }
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        start = end + 1u;
-    }
-    std::sort(keys.begin(), keys.end(),
-              [](const auto& a, const auto& b) { return a.first < b.first; });
-    return keys;
-}
-
 double SampleCurve(const std::vector<double>& samples, double t, bool step) {
     if (samples.size() < 2u) {
         return 0.0;
@@ -4358,8 +4452,16 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         return true;
     }
     if (op == "nw.control.seed") {
-        outputs["out"] = MakeScalar(UnitFromU64(DeriveSeed(snapshot, node,
-                                                           context)));
+        if (node.seed.behavior == SeedBehavior::Explicit &&
+            node.seed.has_explicit_seed) {
+            // Explicit seeds are semantic authoring values. Preserve them
+            // exactly instead of normalizing through the derived-seed range.
+            outputs["out"] =
+                MakeScalar(static_cast<double>(node.seed.explicit_seed));
+        } else {
+            outputs["out"] = MakeScalar(
+                UnitFromU64(DeriveSeed(snapshot, node, context)));
+        }
         return true;
     }
     if (op == "nw.control.image_cpu_passthrough") {
@@ -4415,10 +4517,14 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         EvaluationValue curve;
         curve.type = LogicalType::Curve;
         curve.residency = Residency::Cpu;
-        const auto keys = ParseCurveKeys(param("keys")->text);
-        curve.numbers[0] = static_cast<double>(keys.size());
+        const CurveKeyParseResult parsed = ParseCurveKeys(param("keys")->text);
+        if (!parsed.ok) {
+            failure = EvalDiagnostic(node, parsed.error);
+            return false;
+        }
+        curve.numbers[0] = static_cast<double>(parsed.keys.size());
         curve.component_count = 1u;
-        for (const auto& [time, value] : keys) {
+        for (const auto& [time, value] : parsed.keys) {
             curve.samples.push_back(time);
             curve.samples.push_back(value);
         }
@@ -4495,7 +4601,7 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         text << "vec4(";
         for (std::uint32_t i = 0; i < value->component_count; ++i) {
             if (i != 0) text << ", ";
-            text << CanonicalNumberText(value->components[i]);
+            text << ShaderNumberText(value->components[i]);
         }
         text << ")";
         outputs["out"] =
@@ -4520,7 +4626,7 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         outputs["out"] = MakeText(
             LogicalType::ShaderExpr,
             "mix(" + input("a")->text + ", " + input("b")->text + ", " +
-                CanonicalNumberText(param("factor")->number) + ")",
+                ShaderNumberText(param("factor")->number) + ")",
             Residency::Logical);
         return true;
     }

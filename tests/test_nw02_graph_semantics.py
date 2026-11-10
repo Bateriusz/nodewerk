@@ -129,6 +129,17 @@ def find_diagnostic(payload: dict, code: str) -> dict:
     raise AssertionError(f"missing diagnostic {code}: {payload}")
 
 
+def eval_numbers(payload: dict, operator: str, port: str = "out") -> list[float]:
+    for item in payload["values"]:
+        if item["operator"] == operator and item["port"] == port:
+            encoded = re.findall(r"f64:([0-9a-f]{16})", item["value"])
+            assert encoded, item
+            return [
+                struct.unpack(">d", bytes.fromhex(value))[0] for value in encoded
+            ]
+    raise AssertionError(f"missing evaluated value {operator}.{port}: {payload}")
+
+
 def split_graph(text: str) -> tuple[list[str], list[str], dict[str, list[str]], list[str]]:
     header: list[str] = []
     order: list[str] = []
@@ -292,6 +303,8 @@ INVALID_CASES = {
     "invalid_type_mismatch.nwgraph": "port_type_mismatch",
     "invalid_dimension_mismatch.nwgraph": "port_dimension_mismatch",
     "invalid_nonfinite_parameter.nwgraph": "non_finite_parameter",
+    "invalid_curve_malformed.nwgraph": "invalid_parameter_value",
+    "invalid_curve_nonfinite.nwgraph": "non_finite_parameter",
     "invalid_expression.nwgraph": "invalid_expression",
     "invalid_missing_profile.nwgraph": "parse_error",
     "invalid_frequency_transition.nwgraph": "frequency_transition",
@@ -941,3 +954,59 @@ def test_curve_interpolation_mode_changes_reference_evaluation(
         for item in samples
     )
     assert sample_values == [0.0, 0.5]
+
+
+def test_comma_separated_components_parse_with_spaces(
+    cli_binary: Path,
+) -> None:
+    proc, payload = run_json(
+        cli_binary, "validate", fixture("valid_comma_vectors.nwgraph")
+    )
+    assert proc.returncode == 0, payload
+    assert payload["valid"] is True
+
+    proc, evaluation = run_json(
+        cli_binary, "eval", fixture("valid_comma_vectors.nwgraph")
+    )
+    assert proc.returncode == 0, evaluation
+    assert eval_numbers(evaluation, "nw.math.vec3_const@1.0.0") == [1.0, 2.0, 3.0]
+
+
+def test_curve_keyframes_reject_malformed_and_nonfinite_keys(
+    cli_binary: Path,
+) -> None:
+    for fixture_name, code in (
+        ("invalid_curve_malformed.nwgraph", "invalid_parameter_value"),
+        ("invalid_curve_nonfinite.nwgraph", "non_finite_parameter"),
+    ):
+        proc, payload = run_json(
+            cli_binary, "validate", fixture(fixture_name)
+        )
+        assert proc.returncode != 0, payload
+        diagnostic = find_diagnostic(payload, code)
+        assert diagnostic["node_id"] == "bad_curve"
+        assert diagnostic["port_id"] == "keys"
+
+
+def test_shader_composition_uses_decimal_literals(cli_binary: Path) -> None:
+    proc, evaluation = run_json(
+        cli_binary, "eval", fixture("valid_shader_composition.nwgraph")
+    )
+    assert proc.returncode == 0, evaluation
+    shader_values = [
+        item["value"]
+        for item in evaluation["values"]
+        if item["type"] == "shader_expr"
+    ]
+    assert len(shader_values) == 3
+    assert all("0x" not in value.lower() for value in shader_values)
+    assert any("vec4(0.5, 0.25, -1.0, 2.0)" in value for value in shader_values)
+    assert any("mix(" in value and ", 0.5)" in value for value in shader_values)
+
+
+def test_explicit_seed_value_is_preserved_in_evaluation(cli_binary: Path) -> None:
+    proc, evaluation = run_json(
+        cli_binary, "eval", fixture("valid_explicit_seed.nwgraph")
+    )
+    assert proc.returncode == 0, evaluation
+    assert eval_numbers(evaluation, "nw.control.seed@1.0.0") == [42.0]
