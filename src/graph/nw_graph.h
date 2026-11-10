@@ -308,6 +308,7 @@ enum class DiagnosticCode {
     CapabilityProfileDigestMismatch,
     InvalidCompilerSetting,
     InvalidExpression,
+    MissingImplementation,
     EvaluationFailure,
     ParseError,
 };
@@ -419,6 +420,7 @@ public:
     const std::string& canonical_text() const noexcept { return canonical_text_; }
     const NodeDefinition* FindNode(std::string_view id) const;
     std::string StructuralHash(std::string_view node_id) const;
+    const std::vector<PortSpec>* OutputContract(std::string_view node_id) const;
 
 private:
     friend struct ValidationResult;
@@ -432,6 +434,7 @@ private:
     std::vector<std::string> topological_order_;
     std::map<std::string, std::size_t> index_by_id_;
     std::map<std::string, std::string> structural_hashes_;
+    std::map<std::string, std::vector<PortSpec>> output_contracts_;
     std::vector<std::uint8_t> canonical_bytes_;
     std::string canonical_text_;
     std::string semantic_digest_;

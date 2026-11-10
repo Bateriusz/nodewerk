@@ -995,6 +995,16 @@ bool RegisterAuthoringExtension(OperatorRegistry& registry,
             ok = false;
         }
     }
+    for (const auto& key : pending_schemas) {
+        if (pending_implementations.count(key) == 0u &&
+            RegisteredImplementations().count(key) == 0u) {
+            diagnostics.push_back(
+                "extension " + extension.extension_id +
+                " declares operator " + key +
+                " without an authoring implementation");
+            ok = false;
+        }
+    }
     if (!ok) {
         return false;
     }
@@ -1966,6 +1976,8 @@ std::string_view ToString(DiagnosticCode code) noexcept {
     case DiagnosticCode::InvalidCompilerSetting:
         return "invalid_compiler_setting";
     case DiagnosticCode::InvalidExpression: return "invalid_expression";
+    case DiagnosticCode::MissingImplementation:
+        return "missing_implementation";
     case DiagnosticCode::EvaluationFailure: return "evaluation_failure";
     case DiagnosticCode::ParseError: return "parse_error";
     }
@@ -4069,6 +4081,18 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
             }
             continue;
         }
+        if (!HasAuthoringImplementation(node.operator_id,
+                                        node.operator_version)) {
+            DiagnosticSource source;
+            source.node_id = node.id;
+            source.operator_id = node.operator_id;
+            diagnostics.push_back(MakeDiagnostic(
+                DiagnosticCode::MissingImplementation,
+                "operator '" + node.operator_id + "@" +
+                    node.operator_version.ToString() +
+                    "' has no registered authoring implementation",
+                source));
+        }
 
         if (node.frequency == Frequency::History) {
             DiagnosticSource source;
@@ -4403,6 +4427,13 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
         snapshot.index_by_id_[snapshot.nodes_[i].id] = i;
     }
     snapshot.structural_hashes_ = structural_hashes;
+    for (const auto& node : snapshot.nodes_) {
+        const OperatorSchema* schema =
+            registry.Find(node.operator_id, node.operator_version);
+        if (schema != nullptr) {
+            snapshot.output_contracts_[node.id] = schema->outputs;
+        }
+    }
     snapshot.canonical_bytes_ =
         BuildCanonicalSemanticBytes(normalized, structural_hashes);
     snapshot.semantic_digest_ =
@@ -4427,6 +4458,13 @@ std::string GraphSnapshot::StructuralHash(std::string_view node_id) const {
     const auto found =
         structural_hashes_.find(std::string(node_id.data(), node_id.size()));
     return found == structural_hashes_.end() ? std::string() : found->second;
+}
+
+const std::vector<PortSpec>* GraphSnapshot::OutputContract(
+    std::string_view node_id) const {
+    const auto found =
+        output_contracts_.find(std::string(node_id.data(), node_id.size()));
+    return found == output_contracts_.end() ? nullptr : &found->second;
 }
 
 MigrationResult MigrateGraphDocument(const GraphDocument& document,
@@ -4818,6 +4856,105 @@ bool OutputValuesAreFinite(const OutputValues& outputs,
     return true;
 }
 
+bool ValidateEvaluatedOutputContract(const GraphSnapshot& snapshot,
+                                     const NodeDefinition& node,
+                                     const OutputValues& outputs,
+                                     Diagnostic& failure) {
+    const std::vector<PortSpec>* contract = snapshot.OutputContract(node.id);
+    if (contract == nullptr) {
+        failure = EvalDiagnostic(
+            node, "node '" + node.id +
+                      "' has no declared output contract in the snapshot");
+        return false;
+    }
+    std::set<std::string> declared_ports;
+    for (const PortSpec& port : *contract) {
+        declared_ports.insert(port.id);
+        const auto found = outputs.find(port.id);
+        if (found == outputs.end()) {
+            failure = EvalDiagnostic(
+                node, "node '" + node.id +
+                          "' did not produce required output port '" +
+                          port.id + "'",
+                port.id);
+            return false;
+        }
+        const LogicalValue& value = found->second;
+        if (value.type != port.type) {
+            failure = EvalDiagnostic(
+                node, "node '" + node.id + "' output port '" + port.id +
+                          "' has type '" + std::string(ToString(value.type)) +
+                          "' but the schema requires '" +
+                          std::string(ToString(port.type)) + "'",
+                port.id);
+            return false;
+        }
+        if (value.residency != port.residency) {
+            failure = EvalDiagnostic(
+                node, "node '" + node.id + "' output port '" + port.id +
+                          "' has residency '" +
+                          std::string(ToString(value.residency)) +
+                          "' but the schema requires '" +
+                          std::string(ToString(port.residency)) + "'",
+                port.id);
+            return false;
+        }
+        if (port.type == LogicalType::Scalar &&
+            value.component_count != 1u) {
+            failure = EvalDiagnostic(
+                node, "node '" + node.id + "' scalar output port '" +
+                          port.id + "' has " +
+                          std::to_string(value.component_count) +
+                          " components but a scalar requires 1",
+                port.id);
+            return false;
+        }
+        if (port.type == LogicalType::Vector && port.dimension != 0u &&
+            value.component_count != port.dimension) {
+            failure = EvalDiagnostic(
+                node, "node '" + node.id + "' output port '" + port.id +
+                          "' has " + std::to_string(value.component_count) +
+                          " components but the schema requires " +
+                          std::to_string(port.dimension),
+                port.id);
+            return false;
+        }
+        if (port.type == LogicalType::Matrix && port.dimension != 0u) {
+            const std::uint64_t expected =
+                static_cast<std::uint64_t>(port.dimension) *
+                static_cast<std::uint64_t>(port.dimension);
+            if (value.component_count != expected) {
+                failure = EvalDiagnostic(
+                    node, "node '" + node.id + "' matrix output port '" +
+                              port.id + "' has " +
+                              std::to_string(value.component_count) +
+                              " components but the schema requires " +
+                              std::to_string(expected),
+                    port.id);
+                return false;
+            }
+        }
+        if (value.component_count > value.numbers.size()) {
+            failure = EvalDiagnostic(
+                node, "node '" + node.id + "' output port '" + port.id +
+                          "' declares more components than the value holds",
+                port.id);
+            return false;
+        }
+    }
+    for (const auto& [port, value] : outputs) {
+        (void)value;
+        if (declared_ports.count(port) == 0u) {
+            failure = EvalDiagnostic(
+                node, "node '" + node.id +
+                          "' produced undeclared output port '" + port + "'",
+                port);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
                   const std::map<std::string, OutputValues>& evaluated,
                   const EvaluationContext& context, OutputValues& outputs,
@@ -4838,6 +4975,40 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         }
         return nullptr;
     };
+
+    // Dispatch registered authoring/compiler implementations by the complete
+    // operator id/version pair before consulting the built-in reference
+    // implementations. This lets an extension supply a new semantic version of
+    // a familiar operator id without accidentally running the built-in
+    // behavior for that id.
+    const auto registered = RegisteredImplementations().find(
+        ImplementationKey(node.operator_id, node.operator_version));
+    if (registered != RegisteredImplementations().end()) {
+        Diagnostic implementation_failure;
+        if (!registered->second(snapshot, node, evaluated, context, outputs,
+                                implementation_failure)) {
+            failure = implementation_failure;
+            if (failure.message.empty()) {
+                failure = EvalDiagnostic(
+                    node, "registered implementation failed for operator '" +
+                              node.operator_id + "@" +
+                              node.operator_version.ToString() + "'");
+            } else {
+                if (failure.code == DiagnosticCode::ParseError) {
+                    failure.code = DiagnosticCode::EvaluationFailure;
+                }
+                failure.severity = DiagnosticSeverity::Error;
+                if (failure.source.node_id.empty()) {
+                    failure.source.node_id = node.id;
+                }
+                if (failure.source.operator_id.empty()) {
+                    failure.source.operator_id = node.operator_id;
+                }
+            }
+            return false;
+        }
+        return true;
+    }
 
     const std::string& op = node.operator_id;
     if (op == "nw.math.scalar_const") {
@@ -5195,34 +5366,6 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         return true;
     }
 
-    const auto implementation_it = RegisteredImplementations().find(
-        ImplementationKey(op, node.operator_version));
-    if (implementation_it != RegisteredImplementations().end()) {
-        Diagnostic implementation_failure;
-        if (!implementation_it->second(snapshot, node, evaluated, context,
-                                       outputs, implementation_failure)) {
-            failure = implementation_failure;
-            if (failure.message.empty()) {
-                failure = EvalDiagnostic(
-                    node, "registered implementation failed for operator '" +
-                              op + "'");
-            } else {
-                if (failure.code == DiagnosticCode::ParseError) {
-                    failure.code = DiagnosticCode::EvaluationFailure;
-                }
-                failure.severity = DiagnosticSeverity::Error;
-                if (failure.source.node_id.empty()) {
-                    failure.source.node_id = node.id;
-                }
-                if (failure.source.operator_id.empty()) {
-                    failure.source.operator_id = node.operator_id;
-                }
-            }
-            return false;
-        }
-        return true;
-    }
-
     failure = EvalDiagnostic(node,
                              "no CPU reference implementation for operator '" +
                                  op + "'");
@@ -5320,6 +5463,74 @@ std::uint64_t DeriveSeed(const GraphSnapshot& snapshot,
     return result;
 }
 
+namespace {
+
+std::string ComputeEvaluationIdentityImpl(
+    const GraphSnapshot& snapshot, std::string_view node_id,
+    std::map<std::string, std::string>& memo,
+    std::set<std::string>& visiting) {
+    const std::string id(node_id);
+    const auto memo_it = memo.find(id);
+    if (memo_it != memo.end()) {
+        return memo_it->second;
+    }
+    const NodeDefinition* node = snapshot.FindNode(id);
+    if (node == nullptr) {
+        return std::string();
+    }
+    CanonicalWriter writer;
+    writer.String("nwgraph.evaluation-identity.v1");
+    writer.String(snapshot.StructuralHash(id));
+    if (!visiting.insert(id).second) {
+        // Seed references are not ordinary DAG edges. If an explicit node-id
+        // seed chain loops, still produce a deterministic identity without
+        // recursing forever.
+        writer.String("seed-reference-cycle");
+        writer.String(snapshot.semantic_digest());
+        const auto digest =
+            Sha256Bytes(writer.bytes().data(), writer.bytes().size());
+        return HexBytes(digest.data(), digest.size());
+    }
+    if (node->seed.behavior == SeedBehavior::DerivedFromGraph) {
+        writer.String(snapshot.semantic_digest());
+    }
+    if (node->seed.behavior == SeedBehavior::ExplicitNodeId) {
+        writer.String(node->seed.node_id);
+        writer.String(ComputeEvaluationIdentityImpl(
+            snapshot, node->seed.node_id, memo, visiting));
+    }
+    std::vector<NodeInput> inputs = node->inputs;
+    std::sort(inputs.begin(), inputs.end(),
+              [](const NodeInput& a, const NodeInput& b) {
+                  return a.port < b.port;
+              });
+    writer.ListHeader(static_cast<std::uint32_t>(inputs.size()));
+    for (const NodeInput& input : inputs) {
+        writer.String(input.port);
+        writer.String(ComputeEvaluationIdentityImpl(
+            snapshot, input.source_node, memo, visiting));
+        writer.String(input.source_port);
+    }
+    visiting.erase(id);
+    const auto digest =
+        Sha256Bytes(writer.bytes().data(), writer.bytes().size());
+    const std::string identity = HexBytes(digest.data(), digest.size());
+    memo[id] = identity;
+    return identity;
+}
+
+std::map<std::string, std::string> ComputeEvaluationIdentities(
+    const GraphSnapshot& snapshot) {
+    std::map<std::string, std::string> memo;
+    std::set<std::string> visiting;
+    for (const NodeDefinition& node : snapshot.nodes()) {
+        ComputeEvaluationIdentityImpl(snapshot, node.id, memo, visiting);
+    }
+    return memo;
+}
+
+} // namespace
+
 GraphEvaluator::GraphEvaluator(const GraphSnapshot& snapshot)
     : snapshot_(std::make_shared<GraphSnapshot>(snapshot)) {
     RebuildDependents();
@@ -5378,12 +5589,20 @@ void GraphEvaluator::UpdateSnapshot(std::shared_ptr<const GraphSnapshot> snapsho
     if (!snapshot) {
         return;
     }
+    const std::map<std::string, std::string> old_identities =
+        snapshot_ ? ComputeEvaluationIdentities(*snapshot_)
+                  : std::map<std::string, std::string>{};
+    const std::map<std::string, std::string> new_identities =
+        ComputeEvaluationIdentities(*snapshot);
     std::set<std::string> changed;
     for (const auto& node : snapshot->nodes()) {
-        const std::string old_hash =
-            snapshot_ ? snapshot_->StructuralHash(node.id) : std::string();
-        const std::string new_hash = snapshot->StructuralHash(node.id);
-        if (old_hash != new_hash) {
+        const auto old_it = old_identities.find(node.id);
+        const auto new_it = new_identities.find(node.id);
+        const std::string old_identity =
+            old_it == old_identities.end() ? std::string() : old_it->second;
+        const std::string new_identity =
+            new_it == new_identities.end() ? std::string() : new_it->second;
+        if (old_identity != new_identity) {
             changed.insert(node.id);
         }
     }
@@ -5432,6 +5651,8 @@ bool GraphEvaluator::HasValidCacheEntry(const std::string& node_id) const {
 
 EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
     EvaluationResult result;
+    const std::map<std::string, std::string> identities =
+        ComputeEvaluationIdentities(*snapshot_);
     for (const std::string& node_id : snapshot_->topological_order()) {
         const NodeDefinition* node = snapshot_->FindNode(node_id);
         if (node == nullptr) {
@@ -5463,17 +5684,12 @@ EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
                            "'"));
             return result;
         }
-        std::string key = snapshot_->StructuralHash(node_id) + "|" + node_id +
-                          "|" + std::string(ToString(node->frequency));
-        if (node->seed.behavior == SeedBehavior::DerivedFromGraph) {
-            // These seed behaviors intentionally depend on graph-wide semantic
-            // identity. Include it in the cache key so a snapshot rebind cannot
-            // reuse a stale entry.
-            key += "|graph=" + snapshot_->semantic_digest();
-        } else if (node->seed.behavior == SeedBehavior::ExplicitNodeId) {
-            key += "|seed-node=" + node->seed.node_id + ":" +
-                   snapshot_->StructuralHash(node->seed.node_id);
-        }
+        const auto identity_it = identities.find(node_id);
+        const std::string identity =
+            identity_it == identities.end() ? snapshot_->StructuralHash(node_id)
+                                            : identity_it->second;
+        std::string key = identity + "|" + node_id + "|" +
+                          std::string(ToString(node->frequency));
         if (node->frequency == Frequency::Frame) {
             key += "|frame=" + std::to_string(context.frame_index);
             key += "|time=" + NumberBitsHex(context.time_seconds);
@@ -5507,6 +5723,12 @@ EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
         Diagnostic failure;
         if (!EvaluateNode(*snapshot_, *node, result.values_by_node, context,
                           outputs, failure)) {
+            result.ok = false;
+            result.diagnostics.push_back(std::move(failure));
+            return result;
+        }
+        if (!ValidateEvaluatedOutputContract(*snapshot_, *node, outputs,
+                                             failure)) {
             result.ok = false;
             result.diagnostics.push_back(std::move(failure));
             return result;

@@ -646,6 +646,12 @@ def test_selftest_covers_extension_implementation_and_malformed_values(
     checks = {check["name"]: check["passed"] for check in payload["checks"]}
     assert checks["authoring_extension_registration"] is True
     assert checks["authoring_extension_evaluation"] is True
+    assert checks["extension_requires_implementation"] is True
+    assert checks["validation_requires_authoring_implementation"] is True
+    assert checks["versioned_builtin_implementation_dispatched"] is True
+    assert checks["invalid_callback_outputs_rejected"] is True
+    assert checks["authoring_session_rejects_invalid_callback_outputs"] is True
+    assert checks["snapshot_update_propagates_seed_identity"] is True
     assert checks["malformed_component_counts_rejected"] is True
     assert checks["nonfinite_evaluation_results_rejected"] is True
 

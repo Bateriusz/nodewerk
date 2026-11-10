@@ -231,6 +231,28 @@ std::string EvalBlockJson(const GraphSnapshot& snapshot,
            ",\"values\":" + EvalValuesJson(snapshot, result) + "}";
 }
 
+const LogicalValue* FindEvaluatedInput(
+    const NodeDefinition& node,
+    const std::map<std::string, OutputValues>& evaluated,
+    std::string_view port) {
+    for (const auto& connection : node.inputs) {
+        if (std::string_view(connection.port.data(), connection.port.size()) !=
+            port) {
+            continue;
+        }
+        const auto node_it = evaluated.find(connection.source_node);
+        if (node_it == evaluated.end()) {
+            return nullptr;
+        }
+        const auto value_it = node_it->second.find(connection.source_port);
+        if (value_it == node_it->second.end()) {
+            return nullptr;
+        }
+        return &value_it->second;
+    }
+    return nullptr;
+}
+
 std::string ResourceJson(const ResourceDescriptor& descriptor) {
     std::ostringstream out;
     out << "{\"kind\":" << JsonString(descriptor.kind)
@@ -1020,6 +1042,350 @@ int SelfTestCommand(const OperatorRegistry& registry) {
                  extension_diagnostics.empty()});
         checks.push_back(
             {"authoring_extension_evaluation", extension_evaluates});
+    }
+    if (add != nullptr) {
+        auto make_scalar = [](const std::string& id, double value) {
+            NodeDefinition node;
+            node.id = id;
+            node.operator_id = "nw.math.scalar_const";
+            node.operator_version = SemanticVersion{1, 0, 0};
+            node.frequency = Frequency::Frame;
+            node.residency = Residency::Cpu;
+            ParamValue param;
+            param.type = ParamType::Float;
+            param.number = value;
+            node.params["value"] = std::move(param);
+            return node;
+        };
+        auto make_binary_graph = [&](const std::string& operator_id,
+                                     const SemanticVersion& version) {
+            GraphDocument document;
+            document.nodes.push_back(make_scalar("left", 5.0));
+            document.nodes.push_back(make_scalar("right", 2.0));
+            NodeDefinition binary;
+            binary.id = "binary";
+            binary.operator_id = operator_id;
+            binary.operator_version = version;
+            binary.frequency = Frequency::Frame;
+            binary.residency = Residency::Cpu;
+            NodeInput left;
+            left.port = "a";
+            left.source_node = "left";
+            left.source_port = "out";
+            NodeInput right;
+            right.port = "b";
+            right.source_node = "right";
+            right.source_port = "out";
+            binary.inputs = {left, right};
+            document.nodes.push_back(std::move(binary));
+            return document;
+        };
+
+        // An extension schema must ship with a matching authoring
+        // implementation; a failed registration must not publish the schema.
+        {
+            OperatorRegistry incomplete = OperatorRegistry::CreateDefault();
+            OperatorSchema schema = *add;
+            schema.id = "nw.extension.missing_impl";
+            schema.version = SemanticVersion{1, 0, 0};
+            ExtensionRegistration extension;
+            extension.extension_id = "nw.extension.missing_impl";
+            extension.version = SemanticVersion{1, 0, 0};
+            extension.operators = {schema};
+            std::vector<std::string> diagnostics;
+            const bool accepted = RegisterAuthoringExtension(
+                incomplete, extension, diagnostics);
+            const bool published =
+                incomplete.Find(schema.id, schema.version) != nullptr;
+            checks.push_back(
+                {"extension_requires_implementation",
+                 !accepted && !published && !diagnostics.empty()});
+        }
+
+        // A manually registered schema without a callback is rejected by both
+        // graph validation and compiler acceptance.
+        {
+            OperatorRegistry incomplete = OperatorRegistry::CreateDefault();
+            OperatorSchema schema = *add;
+            schema.id = "nw.extension.unregistered_impl";
+            schema.version = SemanticVersion{1, 0, 0};
+            incomplete.Register(schema);
+            GraphDocument document =
+                make_binary_graph(schema.id, schema.version);
+            ValidationResult validation =
+                ValidateGraphDocument(document, incomplete);
+            bool saw_missing = false;
+            for (const Diagnostic& diagnostic : validation.diagnostics) {
+                if (diagnostic.code ==
+                    DiagnosticCode::MissingImplementation) {
+                    saw_missing = true;
+                }
+            }
+            CompilerAcceptance acceptance = AcceptGraphForCompilation(
+                document, ObservedHardwareMetadata{}, false, incomplete);
+            bool accept_saw_missing = false;
+            for (const Diagnostic& diagnostic : acceptance.diagnostics) {
+                if (diagnostic.code ==
+                    DiagnosticCode::MissingImplementation) {
+                    accept_saw_missing = true;
+                }
+            }
+            checks.push_back(
+                {"validation_requires_authoring_implementation",
+                 !validation.ok() && saw_missing && !acceptance.accepted &&
+                     accept_saw_missing});
+        }
+
+        // A newly registered semantic version of a built-in id must dispatch
+        // to its registered implementation, not the built-in 1.0.0 body.
+        {
+            OperatorRegistry versioned = OperatorRegistry::CreateDefault();
+            OperatorSchema schema = *add;
+            schema.version = SemanticVersion{2, 0, 0};
+            schema.summary = "Versioned extension scalar subtraction";
+            ExtensionRegistration extension;
+            extension.extension_id = "nw.extension.versioned";
+            extension.version = SemanticVersion{2, 0, 0};
+            extension.operators = {schema};
+            extension.implementations.push_back(
+                {schema.id, schema.version,
+                 [](const GraphSnapshot&, const NodeDefinition& node,
+                    const std::map<std::string, OutputValues>& evaluated,
+                    const EvaluationContext&, OutputValues& outputs,
+                    Diagnostic& failure) {
+                     const LogicalValue* a =
+                         FindEvaluatedInput(node, evaluated, "a");
+                     const LogicalValue* b =
+                         FindEvaluatedInput(node, evaluated, "b");
+                     if (a == nullptr || b == nullptr ||
+                         a->component_count == 0u ||
+                         b->component_count == 0u) {
+                         failure.severity = DiagnosticSeverity::Error;
+                         failure.code = DiagnosticCode::EvaluationFailure;
+                         failure.message =
+                             "versioned extension is missing scalar inputs";
+                         failure.source.node_id = node.id;
+                         failure.source.operator_id = node.operator_id;
+                         return false;
+                     }
+                     LogicalValue out;
+                     out.type = LogicalType::Scalar;
+                     out.residency = Residency::Cpu;
+                     out.component_count = 1u;
+                     out.numbers[0] = a->numbers[0] - b->numbers[0];
+                     outputs["out"] = std::move(out);
+                     return true;
+                 }});
+            std::vector<std::string> diagnostics;
+            const bool registered = RegisterAuthoringExtension(
+                versioned, extension, diagnostics);
+            bool dispatched = false;
+            if (registered) {
+                GraphDocument document =
+                    make_binary_graph(schema.id, schema.version);
+                ValidationResult validation =
+                    ValidateGraphDocument(document, versioned);
+                if (validation.ok()) {
+                    GraphEvaluator evaluator(*validation.snapshot);
+                    EvaluationResult evaluation =
+                        evaluator.Evaluate(EvaluationContext{});
+                    const auto node_it =
+                        evaluation.values_by_node.find("binary");
+                    if (evaluation.ok &&
+                        node_it != evaluation.values_by_node.end()) {
+                        const auto value_it = node_it->second.find("out");
+                        dispatched =
+                            value_it != node_it->second.end() &&
+                            value_it->second.component_count != 0u &&
+                            value_it->second.numbers[0] == 3.0;
+                    }
+                }
+            }
+            checks.push_back(
+                {"versioned_builtin_implementation_dispatched", dispatched});
+        }
+
+        // Callback results must satisfy the declared output contract.
+        {
+            OperatorRegistry bad_outputs =
+                OperatorRegistry::CreateDefault();
+            OperatorSchema schema = *add;
+            schema.id = "nw.extension.empty_output";
+            schema.version = SemanticVersion{1, 0, 0};
+            ExtensionRegistration extension;
+            extension.extension_id = "nw.extension.empty_output";
+            extension.version = SemanticVersion{1, 0, 0};
+            extension.operators = {schema};
+            extension.implementations.push_back(
+                {schema.id, schema.version,
+                 [](const GraphSnapshot&, const NodeDefinition&,
+                    const std::map<std::string, OutputValues>&,
+                    const EvaluationContext&, OutputValues& outputs,
+                    Diagnostic&) {
+                     outputs.clear();
+                     return true;
+                 }});
+            std::vector<std::string> diagnostics;
+            const bool registered = RegisterAuthoringExtension(
+                bad_outputs, extension, diagnostics);
+            bool rejected = false;
+            bool session_rejected = false;
+            if (registered) {
+                GraphDocument document =
+                    make_binary_graph(schema.id, schema.version);
+                ValidationResult validation =
+                    ValidateGraphDocument(document, bad_outputs);
+                if (validation.ok()) {
+                    GraphEvaluator evaluator(*validation.snapshot);
+                    EvaluationResult evaluation =
+                        evaluator.Evaluate(EvaluationContext{});
+                    bool saw_failure = false;
+                    for (const Diagnostic& diagnostic :
+                         evaluation.diagnostics) {
+                        if (diagnostic.code ==
+                                DiagnosticCode::EvaluationFailure &&
+                            diagnostic.source.node_id == "binary" &&
+                            diagnostic.source.port_id == "out") {
+                            saw_failure = true;
+                        }
+                    }
+                    rejected = !evaluation.ok && saw_failure;
+                }
+                GraphDocument valid_document = make_binary_graph(
+                    "nw.math.add", SemanticVersion{1, 0, 0});
+                AuthoringSession session(bad_outputs);
+                ValidationResult first = session.ApplyEdit(
+                    EmitDocumentText(valid_document), "selftest-valid");
+                const std::string before =
+                    session.LastValid() ? session.LastValid()->semantic_digest()
+                                        : std::string();
+                ValidationResult bad_edit = session.ApplyEdit(
+                    EmitDocumentText(document), "selftest-bad-output");
+                const std::string after =
+                    session.LastValid() ? session.LastValid()->semantic_digest()
+                                        : std::string();
+                bool session_failure = false;
+                for (const Diagnostic& diagnostic : bad_edit.diagnostics) {
+                    if (diagnostic.code ==
+                        DiagnosticCode::EvaluationFailure) {
+                        session_failure = true;
+                    }
+                }
+                session_rejected = first.ok() && !bad_edit.ok() &&
+                                   !before.empty() && before == after &&
+                                   session_failure;
+            }
+            checks.push_back(
+                {"invalid_callback_outputs_rejected", rejected});
+            checks.push_back(
+                {"authoring_session_rejects_invalid_callback_outputs",
+                 session_rejected});
+        }
+    }
+    {
+        auto make_scalar = [](const std::string& id, double value) {
+            NodeDefinition node;
+            node.id = id;
+            node.operator_id = "nw.math.scalar_const";
+            node.operator_version = SemanticVersion{1, 0, 0};
+            node.frequency = Frequency::Frame;
+            node.residency = Residency::Cpu;
+            ParamValue param;
+            param.type = ParamType::Float;
+            param.number = value;
+            node.params["value"] = std::move(param);
+            return node;
+        };
+        auto scalar_output = [](const EvaluationResult& result,
+                                const std::string& node_id,
+                                const std::string& port)
+            -> std::optional<double> {
+            const auto node_it = result.values_by_node.find(node_id);
+            if (node_it == result.values_by_node.end()) {
+                return std::nullopt;
+            }
+            const auto value_it = node_it->second.find(port);
+            if (value_it == node_it->second.end() ||
+                value_it->second.component_count == 0u) {
+                return std::nullopt;
+            }
+            return value_it->second.numbers[0];
+        };
+        auto run_seed_case = [&](SeedBehavior behavior) {
+            GraphDocument base;
+            base.nodes.push_back(make_scalar("source", 0.25));
+            NodeDefinition seed;
+            seed.id = "seed";
+            seed.operator_id = "nw.control.seed";
+            seed.operator_version = SemanticVersion{1, 0, 0};
+            seed.frequency = Frequency::Frame;
+            seed.residency = Residency::Cpu;
+            seed.seed.behavior = behavior;
+            if (behavior == SeedBehavior::ExplicitNodeId) {
+                seed.seed.node_id = "source";
+            }
+            base.nodes.push_back(std::move(seed));
+            NodeDefinition sine;
+            sine.id = "sin";
+            sine.operator_id = "nw.math.sin";
+            sine.operator_version = SemanticVersion{1, 0, 0};
+            sine.frequency = Frequency::Frame;
+            sine.residency = Residency::Cpu;
+            NodeInput input;
+            input.port = "x";
+            input.source_node = "seed";
+            input.source_port = "out";
+            sine.inputs = {input};
+            base.nodes.push_back(std::move(sine));
+
+            GraphDocument edited = base;
+            for (auto& node : edited.nodes) {
+                if (node.id == "source") {
+                    node.params["value"].number = 0.5;
+                }
+            }
+            ValidationResult base_validation =
+                ValidateGraphDocument(base, registry);
+            ValidationResult edited_validation =
+                ValidateGraphDocument(edited, registry);
+            if (!base_validation.ok() || !edited_validation.ok()) {
+                return false;
+            }
+            GraphEvaluator evaluator(*base_validation.snapshot);
+            EvaluationResult initial =
+                evaluator.Evaluate(EvaluationContext{});
+            EvaluationResult repeat =
+                evaluator.Evaluate(EvaluationContext{});
+            if (!initial.ok || !repeat.ok) {
+                return false;
+            }
+            evaluator.UpdateSnapshot(*edited_validation.snapshot);
+            EvaluationResult updated =
+                evaluator.Evaluate(EvaluationContext{});
+            GraphEvaluator fresh(*edited_validation.snapshot);
+            EvaluationResult expected =
+                fresh.Evaluate(EvaluationContext{});
+            if (!updated.ok || !expected.ok) {
+                return false;
+            }
+            const auto initial_seed = scalar_output(initial, "seed", "out");
+            const auto updated_seed = scalar_output(updated, "seed", "out");
+            const auto updated_sin = scalar_output(updated, "sin", "out");
+            const auto expected_sin = scalar_output(expected, "sin", "out");
+            const auto sin_hit = updated.cache_hit_by_node.find("sin");
+            return initial_seed.has_value() && updated_seed.has_value() &&
+                   updated_sin.has_value() && expected_sin.has_value() &&
+                   *initial_seed != *updated_seed &&
+                   *updated_sin == *expected_sin &&
+                   sin_hit != updated.cache_hit_by_node.end() &&
+                   sin_hit->second == false;
+        };
+        const bool derived = run_seed_case(SeedBehavior::DerivedFromGraph);
+        const bool explicit_node =
+            run_seed_case(SeedBehavior::ExplicitNodeId);
+        checks.push_back(
+            {"snapshot_update_propagates_seed_identity",
+             derived && explicit_node});
     }
     {
         bool rejected = true;

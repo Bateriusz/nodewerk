@@ -129,16 +129,24 @@ selection, semantic hashes, seed derivation, or compiler acceptance.
 ## CPU reference evaluation and caching
 
 `GraphEvaluator` executes a deterministic topological order and memoizes each
-node's typed multi-output values. Cache keys include the node's structural
-semantic identity, the frequency domain, and the frame/seed context. Seed
-behaviors that intentionally depend on graph-wide identity include the snapshot
-semantic digest in their key as well. Missing and corrupt entries are cache
-misses.
+node's typed multi-output values. Cache keys include an effective evaluation
+identity that composes the node's structural semantic identity, declared
+upstream effective identities, and any graph-wide or explicit-node-id seed
+identity, plus the frequency domain and frame/seed context. Missing and corrupt
+entries are cache misses.
 `ApplyInputChange` invalidates only the changed node and its transitive
 dependent closure. `GraphEvaluator::UpdateSnapshot` rebinds to a new immutable
-snapshot and invalidates every node whose semantic identity changed plus its
-dependent closure; unrelated entries remain reusable. Evaluation failures
+snapshot and recomputes effective evaluation identities, so a producer whose
+output changes only because a graph-wide seed changed invalidates its consumers
+even when its structural hash is unchanged. Changed nodes and their dependent
+closure are invalidated; unrelated entries remain reusable. Evaluation failures
 return diagnostics and never publish a replacement snapshot.
+
+Before a node result is cached, the evaluator checks the declared output
+contract: every schema output port must be present, with the declared logical
+type, residency, and vector/matrix component dimension. Missing, extra, or
+incompatible callback outputs are evaluation failures, so an incomplete
+callback result cannot be cached or published by `AuthoringSession`.
 
 Curve values carry their declared `linear` or `step` interpolation mode, and
 `nw.curve.sample` honors that mode. Texture resource bounds are enforced against
@@ -173,9 +181,18 @@ observe the exact old snapshot.
 An `ExtensionRegistration` may register both operator schemas and
 `OperatorImplementation` callbacks. Registration is atomic: duplicate ids,
 missing callbacks, or implementations without a matching schema reject the
-whole extension before any schema is published. The callback registry is an
-in-process authoring/compiler facility only. It is not a player plugin ABI and
-does not introduce a graph parser or operator interpreter into the player.
+whole extension before any schema is published. Every schema declared by an
+extension must have a matching callback (from the same registration or an
+existing in-process authoring registration). `ValidateGraphDocument` and
+`AcceptGraphForCompilation` reject nodes whose complete operator id/version pair
+has no authoring implementation. The callback registry is an in-process
+authoring/compiler facility only. It is not a player plugin ABI and does not
+introduce a graph parser or operator interpreter into the player.
+
+Evaluation dispatches registered callbacks by the complete operator id and
+semantic version before consulting built-in reference implementations. A new
+version of a built-in operator id therefore runs its registered behavior rather
+than the built-in version's body.
 
 Programmatic parameter values are shape-checked before any component traversal:
 `vec2`, `vec3`, `vec4`/`color`, and `mat4` require exactly 2, 3, 4, and 16
