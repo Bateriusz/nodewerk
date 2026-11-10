@@ -22,6 +22,19 @@ import verify_nw03  # noqa: E402
 FIXTURE = REPO_ROOT / "fixtures" / "nw03" / "math_noise.nwgraph"
 
 
+def test_load_graph_preserves_raw_newlines_for_source_hash(tmp_path: Path) -> None:
+    fixture_text = FIXTURE.read_text(encoding="utf-8")
+    fixture_text = fixture_text.replace("\r\n", "\n").replace("\r", "\n")
+    raw_source = fixture_text.replace("\n", "\r\n").encode("utf-8")
+    graph_path = tmp_path / "math_noise_crlf.nwgraph"
+    graph_path.write_bytes(raw_source)
+
+    document = compiler.load_graph(graph_path)
+
+    assert document.source_text.encode("utf-8") == raw_source
+    assert hashlib.sha256(document.source_text.encode("utf-8")).hexdigest() == hashlib.sha256(raw_source).hexdigest()
+
+
 def make_dxil_container() -> bytes:
     sfi0 = b"SFI0" + struct.pack("<I", 8) + struct.pack("<Q", 0)
     psv0_info = bytearray(36)
