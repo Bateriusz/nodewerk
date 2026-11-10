@@ -10,6 +10,27 @@ Nodewerk is a size-conscious procedural demoscene authoring and playback system 
 
 See [`docs/README.md`](docs/README.md) for the full NW-01 Architecture Decision Records, dependency inventory, capability and toolchain manifests, size ledgers, and verification entry points.
 
+## NW-03 Compiler-to-Player Contract
+
+`nodewerkc` validates a typed graph, lowers reachable `ShaderExpr` DAGs to fused
+specialized HLSL, compiles offline with pinned DXC (`1.8.2407`), validates and
+strips DXIL, and atomically publishes a reproducible `.nwp` v1 package. Source
+maps, reflection tables, compiler/profile fingerprints, and the original graph
+remain development sidecars/build reports.
+
+```bash
+python tools/nodewerkc.py validate fixtures/nw03/math_noise.nwgraph
+python tools/nodewerkc.py compile-package fixtures/nw03/math_noise.nwgraph build/math_noise.nwp \
+    --report build/math_noise-report.json --dev-sidecar build/math_noise.dev.json
+python tools/nodewerkc.py inspect build/math_noise.nwp
+python tools/verify_nw03.py --mode Full --summary-json build/nw03-verify.json
+```
+
+See [`docs/nw03-compiler-player-contract.md`](docs/nw03-compiler-player-contract.md)
+and [`docs/nwp-format-v1.md`](docs/nwp-format-v1.md). `verify_nw03.py --mode Full`
+requires real pinned-DXC compilation and sanitizer-backed parser fuzzing and
+returns nonzero if any required check is unavailable.
+
 ## Verification Entry Point (`NW-01`)
 
 - **Cross-platform schema, dependency closure, reproducibility, and fixture contract suite:**

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nwp-v1.schema.json",
+  "title": "Nodewerk .nwp v1 inspection record",
+  "description": "JSON representation emitted by `nodewerkc inspect` for an .nwp v1 package. The binary container itself is specified in docs/nwp-format-v1.md.",
+  "type": "object",
+  "required": ["format", "version", "valid", "size_bytes", "checksum", "diagnostics"],
+  "properties": {
+    "format": { "const": "nwp" },
+    "version": {
+      "type": "object",
+      "required": ["major", "minor"],
+      "properties": {
+        "major": { "const": 1 },
+        "minor": { "const": 0 }
+      },
+      "additionalProperties": false
+    },
+    "valid": { "type": "boolean" },
+    "size_bytes": { "type": "integer", "minimum": 96 },
+    "checksum": {
+      "type": "object",
+      "required": ["algorithm", "digest", "purpose"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "purpose": { "const": "corruption_detection_not_authenticity" }
+      },
+      "additionalProperties": false
+    },
+    "package_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "severity", "code", "message"],
+        "properties": {
+          "category": { "const": "package_validation" },
+          "severity": { "enum": ["error"] },
+          "code": { "type": "string", "minLength": 1 },
+          "message": { "type": "string", "minLength": 1 },
+          "section": { "type": "string" },
+          "offset": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "properties": {
+        "profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
+        "requirements_digest": {
+          "const": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
+        },
+        "feature_level": { "const": 49152 },
+        "shader_model": { "const": 96 },
+        "resource_binding_tier": { "const": 2 },
+        "resource_heap_tier": { "const": 2 },
+        "runtime_dxc_dependency": { "const": false },
+        "runtime_slang_dependency": { "const": false },
+        "emitted_shader_targets": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["cs_6_0", "vs_6_0", "ps_6_0"] }
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "properties": {
+        "contains_authoring_metadata": { "const": false },
+        "contains_source_paths": { "const": false },
+        "contains_source_text": { "const": false },
+        "contains_reflection_tables": { "const": false }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -30,6 +30,9 @@ jobs:
       - name: Run NW-01 automated contract and schema test suite
         run: pytest -v
 
+      - name: Run NW-03 package/oracle/lowering contract checks
+        run: python tools/verify_nw03.py --mode ContractsOnly --summary-json "$RUNNER_TEMP/nw03-contracts.json"
+
       - name: Run NW-01 ContractsOnly verification
         run: python tools/verify_nw01.py --mode ContractsOnly
 

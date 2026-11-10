@@ -1,0 +1,19 @@
+{
+  "fixture": "math_noise",
+  "expression": "vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), mix(uv.y, cos(uv.x * 13.0 - time), 0.25), sin(uv.x * 31.0 + time) * 0.5 + 0.5, 1.0)",
+  "absolute_tolerance": 1e-05,
+  "relative_tolerance": 0.0001,
+  "samples": [
+    {
+      "uv": [0.0, 0.0],
+      "time": 0.0,
+      "expected": [0.0, 0.25, 0.5, 1.0]
+    },
+    {
+      "uv": [0.5, 0.25],
+      "time": 0.5,
+      "expected": [-0.024752476141382318, 0.42754257166259146, 0.35604834166746735, 1.0]
+    }
+  ],
+  "note": "Authoritative oracle is tools/nw03_oracle.py; expected is derived by the same documented expression, not copied from GPU execution."
+}

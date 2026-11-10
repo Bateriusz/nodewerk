@@ -311,6 +311,9 @@ enum class DiagnosticCode {
     MissingImplementation,
     EvaluationFailure,
     ParseError,
+    // NW-03: diagnostics that originate at the compiler-to-player package
+    // boundary, before any GPU allocation or submission.
+    PackageValidation,
 };
 
 std::string_view ToString(DiagnosticCode code) noexcept;

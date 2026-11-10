@@ -18,10 +18,15 @@ graph semantics and `.nwgraph` schema.
 9. [Initialization Exit Codes, Diagnostics & Inbox-Runtime Blocker Semantics](exit-codes-and-diagnostics.md)
 10. [Preserved Toolchain, Compact-Profile & CRT Experiments](experiments-and-blockers.md)
 11. [Measured Evidence Capture Requirements](evidence-capture.md)
+12. [NW-03 Compiler-to-Player Contract](nw03-compiler-player-contract.md)
+13. [`.nwp` Version 1 Container Contract](nwp-format-v1.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
 - `.nwgraph` v1 JSON representation: [`schemas/nwgraph-v1.schema.json`](../schemas/nwgraph-v1.schema.json) (textual grammar: [`docs/nwgraph-format-v1.md`](nwgraph-format-v1.md))
+- `.nwp` v1 binary contract and inspection schema:
+  [`docs/nwp-format-v1.md`](nwp-format-v1.md),
+  [`schemas/nwp-v1.schema.json`](../schemas/nwp-v1.schema.json)
 - Capability Manifest: [`benchmarks/capability-manifest.v1.json`](../benchmarks/capability-manifest.v1.json) (validated by [`schemas/capability-manifest.schema.json`](../schemas/capability-manifest.schema.json))
 - Reproducible Toolchain Manifest: [`benchmarks/toolchain-manifest.v1.json`](../benchmarks/toolchain-manifest.v1.json) (validated by [`schemas/toolchain-manifest.schema.json`](../schemas/toolchain-manifest.schema.json))
 - Dependency Inventory: [`benchmarks/dependency-inventory.v1.json`](../benchmarks/dependency-inventory.v1.json) (validated by [`schemas/dependency-inventory.schema.json`](../schemas/dependency-inventory.schema.json))

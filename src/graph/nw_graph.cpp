@@ -1982,6 +1982,7 @@ std::string_view ToString(DiagnosticCode code) noexcept {
         return "missing_implementation";
     case DiagnosticCode::EvaluationFailure: return "evaluation_failure";
     case DiagnosticCode::ParseError: return "parse_error";
+    case DiagnosticCode::PackageValidation: return "package_validation";
     }
     return "parse_error";
 }
