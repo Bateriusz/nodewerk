@@ -891,6 +891,38 @@ int SelfTestCommand(const OperatorRegistry& registry) {
             {"programmatic_migration_preserves_explicit_seed_none",
              preserved && rejected});
     }
+    {
+        GraphDocument document;
+        document.schema_version = 0u;
+        NodeDefinition node;
+        node.id = "programmatic_residency";
+        node.operator_id = "nw.math.scalar_const";
+        node.residency = Residency::Gpu;
+        document.nodes.push_back(std::move(node));
+        MigrationResult migration =
+            MigrateGraphDocument(document, registry);
+        bool preserved = migration.ok() && migration.document.has_value() &&
+                         migration.document->nodes.size() == 1u;
+        bool rejected = false;
+        bool emitted = false;
+        if (preserved) {
+            const NodeDefinition& migrated = migration.document->nodes[0];
+            preserved = migrated.residency == Residency::Gpu &&
+                        migrated.has_declared_residency;
+            emitted = EmitDocumentText(*migration.document)
+                          .find("residency=gpu") != std::string::npos;
+            ValidationResult validation =
+                ValidateGraphDocument(*migration.document, registry);
+            for (const Diagnostic& diagnostic : validation.diagnostics) {
+                if (diagnostic.code == DiagnosticCode::InvalidResidency) {
+                    rejected = true;
+                }
+            }
+        }
+        checks.push_back(
+            {"programmatic_migration_preserves_nondefault_residency",
+             preserved && emitted && rejected});
+    }
     bool all = true;
     std::cout << "{\"ok\":true,\"checks\":[";
     for (std::size_t i = 0; i < checks.size(); ++i) {

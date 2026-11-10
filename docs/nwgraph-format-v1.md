@@ -51,10 +51,12 @@ exported content.
   rejected for operators whose schemas do not allow `none`. An explicit
   `seed explicit` without a value is preserved without inventing `0`, so
   validation reports `missing_explicit_seed`.
-- Programmatic `GraphDocument` nodes preserve non-default frequency and seed
-  behavior during migration. Callers must set `has_declared_frequency` or
-  `has_declared_seed_behavior` when an explicit declaration happens to equal
-  the `NodeDefinition` default (for example `seed none`).
+- Programmatic `GraphDocument` nodes preserve non-default frequency, seed
+  behavior, and residency during migration; preserved non-primary residency is
+  emitted and validated as an explicit declaration. Callers must set the
+  corresponding declaration flag when an explicit value happens to equal the
+  `NodeDefinition` default (for example `seed none` or `residency=cpu` on a
+  GPU-primary operator).
 - Unknown future schema versions are rejected with `unknown_schema_version`.
 - Unknown operator ids and unknown operator versions are rejected. Operator
   semantic changes require a new semantic version; operator contract hashes

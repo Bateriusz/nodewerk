@@ -3721,7 +3721,7 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
             }
         }
 
-        if (node.has_declared_residency &&
+        if ((node.has_declared_residency || node.residency != Residency::Cpu) &&
             node.residency != schema->PrimaryResidency()) {
             DiagnosticSource source;
             source.node_id = node.id;
@@ -4106,7 +4106,12 @@ MigrationResult MigrateGraphDocument(const GraphDocument& document,
             // validation must reject it rather than the migration silently
             // changing authoring semantics.
             if (!node.has_declared_residency) {
-                node.residency = schema->PrimaryResidency();
+                if (node.residency == Residency::Cpu) {
+                    node.residency = schema->PrimaryResidency();
+                }
+                if (node.residency != schema->PrimaryResidency()) {
+                    node.has_declared_residency = true;
+                }
             }
             if (!node.has_declared_seed_behavior &&
                 node.seed.behavior == SeedBehavior::None &&
@@ -4163,7 +4168,8 @@ std::string EmitDocumentText(const GraphDocument& document) {
         out << "node " << node->id << " " << node->operator_id << "@"
             << node->operator_version.ToString()
             << " frequency=" << ToString(node->frequency);
-        if (node->has_declared_residency) {
+        if (node->has_declared_residency ||
+            node->residency != Residency::Cpu) {
             out << " residency=" << ToString(node->residency);
         }
         out << "\n";
