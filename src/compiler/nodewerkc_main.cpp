@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -176,9 +177,12 @@ int InspectCommand(const std::string& path) {
                   << "}\n";
         return 1;
     }
-    std::vector<std::uint8_t> data(
-        (std::istreambuf_iterator<char>(input)),
-        std::istreambuf_iterator<char>());
+    const std::string text((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+    std::vector<std::uint8_t> data(text.size());
+    if (!data.empty()) {
+        std::memcpy(data.data(), text.data(), text.size());
+    }
     nw::package::Package package;
     std::vector<nw::package::Diagnostic> diagnostics;
     const bool valid = nw::package::DecodePackage(

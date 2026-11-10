@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -144,8 +145,13 @@ std::string EmitComputeHlsl(const std::string& expression,
 std::vector<std::uint8_t> ReadFileBytes(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) return {};
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(input),
-                                     std::istreambuf_iterator<char>());
+    const std::string text((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+    std::vector<std::uint8_t> bytes(text.size());
+    if (!bytes.empty()) {
+        std::memcpy(bytes.data(), text.data(), text.size());
+    }
+    return bytes;
 }
 
 bool WriteFileBytes(const std::filesystem::path& path,
@@ -376,8 +382,11 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
         const auto hlsl_path = temporary / ("shader_" + std::to_string(index) + ".hlsl");
         const auto dxil_path = temporary / ("shader_" + std::to_string(index) + ".dxil");
         const auto log_path = temporary / ("shader_" + std::to_string(index) + ".log");
-        const std::vector<std::uint8_t> hlsl_bytes(shader.hlsl.begin(),
-                                                   shader.hlsl.end());
+        std::vector<std::uint8_t> hlsl_bytes(shader.hlsl.size());
+        if (!hlsl_bytes.empty()) {
+            std::memcpy(hlsl_bytes.data(), shader.hlsl.data(),
+                        shader.hlsl.size());
+        }
         if (!WriteFileBytes(hlsl_path, hlsl_bytes)) {
             result.diagnostics.push_back(MakeDiagnostic(
                 "shader_compilation_failed", "cannot write temporary HLSL",

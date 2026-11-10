@@ -95,7 +95,10 @@ python tools/nodewerkc.py compile-package \
 python tools/nodewerkc.py inspect build/math_noise.nwp
 ```
 
-The C++ frontend built by CMake exposes the same three commands as `nodewerkc`.
+The optional C++ frontend exposes the same three commands as `nodewerkc` after
+an explicit `cmake --build <build-dir> --target nodewerkc`. On Windows it is
+excluded from the default build so the NW-01 concrete-build gate does not depend
+on authoring-tool compilation; POSIX builds include it normally.
 `python tools/nodewerkc.py --help` is authoritative for options. Diagnostics
 are JSON with `category`, `code`, `message`, and source fields; failures exit
 nonzero.

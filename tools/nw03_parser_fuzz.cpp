@@ -8,8 +8,10 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iterator>
+#include <string>
 #include <vector>
 
 int main(int argc, char** argv) {
@@ -22,9 +24,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "cannot read %s\n", argv[1]);
         return 2;
     }
-    std::vector<std::uint8_t> data(
-        (std::istreambuf_iterator<char>(input)),
-        std::istreambuf_iterator<char>());
+    const std::string text((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+    std::vector<std::uint8_t> data(text.size());
+    if (!data.empty()) {
+        std::memcpy(data.data(), text.data(), text.size());
+    }
     if (data.empty()) {
         return 0;
     }

@@ -2460,7 +2460,10 @@ std::vector<std::string> CheckReleaseLeakage(
         "src\\graph", "nwgraph", "editor_layout", "source_map", "reflection",
         "DXIL debug", "#line", "expression:", "authoring"};
     std::vector<std::string> findings;
-    const std::string text(package_bytes.begin(), package_bytes.end());
+    std::string text(package_bytes.size(), '\0');
+    if (!package_bytes.empty()) {
+        std::memcpy(&text[0], package_bytes.data(), package_bytes.size());
+    }
     for (const auto& needle : kForbidden) {
         if (text.find(needle) != std::string::npos) {
             findings.push_back("forbidden release string present: " + needle);

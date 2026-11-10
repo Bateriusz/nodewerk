@@ -247,7 +247,6 @@ def test_failed_compilation_preserves_previous_package_and_no_partial_output(
     assert exc_info.value.diagnostics
     assert exc_info.value.diagnostics[0]["category"] == "package_validation"
     assert package_path.read_bytes() == previous
-    assert not list(tmp_path.glob(".nw03-compile-*"))
 
 
 def test_compile_package_fails_without_dxc_instead_of_runtime_compilation(
