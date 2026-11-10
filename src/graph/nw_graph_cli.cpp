@@ -642,7 +642,8 @@ int LastValidCommand(const std::vector<std::string>& args,
               << (!invalid.ok() ? "true" : "false")
               << ",\"initial_digest\":" << JsonString(before)
               << ",\"after_invalid_digest\":" << JsonString(after)
-              << ",\"retained\":" << (!before.empty() && before == after)
+              << ",\"retained\":"
+              << ((!before.empty() && before == after) ? "true" : "false")
               << ",\"diagnostics\":"
               << DiagnosticsJson(invalid.diagnostics) << "}\n";
     return valid.ok() && !invalid.ok() && !before.empty() && before == after
