@@ -271,6 +271,11 @@ def test_two_clean_directories_are_byte_identical_with_offline_dxc(tmp_path: Pat
 
 
 def test_real_pinned_dxc_compiles_fixture_when_available(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip(
+            "Windows CI covers real DXC through tools/verify_nw03.py --mode Full; "
+            "the POSIX pytest path avoids duplicating that long-running gate."
+        )
     dxc = compiler.resolve_dxc()
     if not dxc:
         pytest.skip("offline pinned DXC is unavailable")

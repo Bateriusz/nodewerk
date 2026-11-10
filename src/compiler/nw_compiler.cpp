@@ -10,10 +10,10 @@
 #include <functional>
 #include <iterator>
 #include <map>
-#include <regex>
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <utility>
 
 namespace nw::compiler {
 
@@ -24,11 +24,6 @@ bool IsShaderOperator(std::string_view id) {
            id == "nw.shader.add" || id == "nw.shader.mul" ||
            id == "nw.shader.mix";
 }
-
-struct NwRegexPair {
-    std::regex pattern;
-    const char* replacement;
-};
 
 LoweringDiagnostic MakeDiagnostic(std::string code, std::string message,
                                   std::string node_id = {},
@@ -44,13 +39,6 @@ LoweringDiagnostic MakeDiagnostic(std::string code, std::string message,
 }
 
 std::string ReplaceShaderTokens(std::string expression, std::string& error) {
-    static const NwRegexPair kReplacements[] = {
-        {std::regex("\\bvec2\\b"), "float2"},
-        {std::regex("\\bvec3\\b"), "float3"},
-        {std::regex("\\bvec4\\b"), "float4"},
-        {std::regex("\\bmix\\b"), "lerp"},
-        {std::regex("\\btime\\b"), "g_time"},
-    };
     if (expression.find("texture2d") != std::string::npos ||
         expression.find("sample(") != std::string::npos) {
         error =
@@ -58,10 +46,43 @@ std::string ReplaceShaderTokens(std::string expression, std::string& error) {
             "pass family";
         return {};
     }
-    for (const auto& [pattern, replacement] : kReplacements) {
-        expression = std::regex_replace(expression, pattern, replacement);
+    const std::pair<std::string_view, std::string_view> replacements[] = {
+        {"vec2", "float2"},
+        {"vec3", "float3"},
+        {"vec4", "float4"},
+        {"mix", "lerp"},
+        {"time", "g_time"},
+    };
+    std::string replaced;
+    replaced.reserve(expression.size() + 32u);
+    std::size_t position = 0;
+    while (position < expression.size()) {
+        const unsigned char character =
+            static_cast<unsigned char>(expression[position]);
+        if (std::isalpha(character) || character == '_') {
+            const std::size_t start = position++;
+            while (position < expression.size()) {
+                const unsigned char next =
+                    static_cast<unsigned char>(expression[position]);
+                if (!std::isalnum(next) && next != '_') break;
+                ++position;
+            }
+            const std::string_view token(expression.data() + start,
+                                         position - start);
+            bool replaced_token = false;
+            for (const auto& [from, to] : replacements) {
+                if (token == from) {
+                    replaced.append(to.data(), to.size());
+                    replaced_token = true;
+                    break;
+                }
+            }
+            if (!replaced_token) replaced.append(token.data(), token.size());
+        } else {
+            replaced.push_back(expression[position++]);
+        }
     }
-    return expression;
+    return replaced;
 }
 
 std::vector<std::string> TransitiveDependencies(
