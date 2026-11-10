@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nwgraph-v1.schema.json",
+  "title": "Nodewerk .nwgraph version 1 document",
+  "description": "JSON representation of the versioned textual .nwgraph authoring/compiler schema. The normative interchange form is the deterministic textual grammar documented in docs/nwgraph-format-v1.md; this schema describes the parsed document used by tooling. Editor layout is authoring metadata and is excluded from canonical semantic encoding.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "profile",
+    "compiler_settings",
+    "nodes",
+    "editor_layout",
+    "textual_schema"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "textual_schema": {
+      "const": "nwgraph-v1"
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id", "requirements_digest"],
+      "properties": {
+        "id": {
+          "const": "nw.common.d3d12.fl12_0.sm6_0.v1"
+        },
+        "requirements_digest": {
+          "const": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
+        }
+      },
+      "additionalProperties": false
+    },
+    "compiler_settings": {
+      "type": "object",
+      "required": [
+        "optimization",
+        "deterministic",
+        "api",
+        "feature_level",
+        "shader_model",
+        "frequency_policy",
+        "shader_blob_policy",
+        "quantization_policy",
+        "quantization_bits",
+        "quantization_step"
+      ],
+      "properties": {
+        "optimization": {
+          "enum": ["O0", "O1", "O2", "O3"]
+        },
+        "deterministic": {
+          "type": "boolean"
+        },
+        "api": {
+          "const": "d3d12"
+        },
+        "feature_level": {
+          "const": "12_0"
+        },
+        "shader_model": {
+          "const": "6_0"
+        },
+        "frequency_policy": {
+          "const": "strict"
+        },
+        "shader_blob_policy": {
+          "const": "stable"
+        },
+        "quantization_policy": {
+          "enum": ["none", "unorm8", "uint8", "float16"]
+        },
+        "quantization_bits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "quantization_step": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "operator_id",
+          "operator_version",
+          "frequency",
+          "residency",
+          "seed",
+          "parameters",
+          "inputs"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operator_id": {
+            "type": "string",
+            "pattern": "^nw\\."
+          },
+          "operator_version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          },
+          "frequency": {
+            "enum": ["compile-time", "initialization", "frame"]
+          },
+          "residency": {
+            "enum": ["logical", "cpu", "gpu", "readback"]
+          },
+          "seed": {
+            "type": "object",
+            "required": ["behavior", "explicit", "value", "node_id"],
+            "properties": {
+              "behavior": {
+                "enum": [
+                  "none",
+                  "explicit",
+                  "derived-graph",
+                  "derived-upstream",
+                  "node-id"
+                ]
+              },
+              "explicit": {
+                "type": "boolean"
+              },
+              "value": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "node_id": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["port", "source_node", "source_port"],
+              "properties": {
+                "port": {
+                  "type": "string"
+                },
+                "source_node": {
+                  "type": "string"
+                },
+                "source_port": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "editor_layout": {
+      "type": "object",
+      "description": "Editor-only node positions. Never included in canonical semantic bytes, hashes, seed derivation, or exported player content.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["x", "y", "collapsed"],
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "collapsed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

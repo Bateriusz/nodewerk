@@ -1,0 +1,4 @@
+nwgraph 1
+
+node lone nw.math.scalar_const@1.0.0 frequency=frame
+  param value 1.0

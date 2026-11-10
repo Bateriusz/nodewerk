@@ -1,0 +1,5 @@
+nwgraph 1
+profile nw.common.d3d12.fl12_0.sm6_0.v1 sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a
+
+node comma_vec nw.math.vec3_const@1.0.0 frequency=frame
+  param value 1, 2, 3

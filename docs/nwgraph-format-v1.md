@@ -1,0 +1,204 @@
+# `.nwgraph` Version 1 Textual Schema
+
+The `.nwgraph` file is the authoring/compiler interchange form for NW-02. It is
+parsed only by `nodewerkc`-side code (`src/graph/`). It is never linked into
+`nodewerk-player`, which has no graph parser, plugin ABI, or runtime operator
+interpreter.
+
+## Grammar
+
+```text
+document      := header, profile, setting*, (node | layout)*
+header        := "nwgraph", version
+profile       := "profile", capability-id, requirements-digest
+setting       := "setting", setting-key, value
+node          := "node", node-id, operator-id, "@", semantic-version,
+                 ("frequency=", frequency)?, ("residency=", residency)?
+                parameter* | input* | seed?
+parameter     := "param", parameter-id, value-token+
+input         := "input", input-port, source-node, ".", source-port
+seed          := "seed", (uint64 | seed-behavior |
+                          "explicit", uint64 |
+                          "node-id", node-id)
+layout        := "layout", node-id, x, y, ("collapsed=true")?
+frequency     := "compile-time" | "initialization" | "frame"
+residency     := "logical" | "cpu" | "gpu" | "readback"
+```
+
+Quoted values use double quotes with `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
+Comments begin with `#` outside quoted strings. Numeric vector/matrix parameters
+accept whitespace- or comma-separated components, including spaces after commas
+(`param value 1, 2, 3`).
+
+`profile` is required. A document without a `profile` directive is rejected
+rather than receiving the default capability identity implicitly.
+
+`layout` records editor-only positions. It is parsed into `EditorLayout` and is
+excluded from canonical semantic bytes, semantic hashes, seed derivation, and
+exported content.
+
+## Versioning and migrations
+
+- Schema version `1` is current.
+- Schema version `0` is legacy and is **rejected** by default with
+  `migration_required`.
+- `nw_graph_cli migrate` and `validate --migrate` apply the explicit
+  `nwgraph-v0-to-v1` migration, which adds the registered semantic operator
+  version to legacy node declarations. The migration preserves an explicitly
+  declared legacy residency, frequency, and seed behavior so validation can
+  reject incompatible declarations; it never silently repairs authoring
+  semantics. For example, an explicit legacy `seed none` is preserved and
+  rejected for operators whose schemas do not allow `none`. An explicit
+  `seed explicit` without a value is preserved without inventing `0`, so
+  validation reports `missing_explicit_seed`.
+- Programmatic `GraphDocument` nodes preserve non-default frequency, seed
+  behavior, and residency during migration; preserved non-primary residency is
+  emitted and validated as an explicit declaration. Callers must set the
+  corresponding declaration flag when an explicit value happens to equal the
+  `NodeDefinition` default (for example `seed none` or `residency=cpu` on a
+  GPU-primary operator).
+- Unknown future schema versions are rejected with `unknown_schema_version`.
+- Unknown operator ids and unknown operator versions are rejected. Operator
+  semantic changes require a new semantic version; operator contract hashes
+  include the version and every port/parameter/resource/lowering declaration.
+
+## Frequency and residency
+
+Frequency ordering is `compile-time` < `initialization` < `frame`. A consumer
+may not run earlier than any producer (`frequency_transition`).
+
+`history` is parsed only so it can be rejected explicitly. It is reserved for
+NW-09 and is invalid in initial graph exports.
+
+Residency conversions are explicit. Render images are produced in `gpu`
+residency. CPU readback requires `nw.residency.gpu_to_cpu` or
+`nw.readback.scalar`; a direct GPU-to-CPU connection is `implicit_readback`.
+Logical recipes require an explicit upload (`nw.residency.upload_*`); a direct
+logical-to-GPU connection is `implicit_upload`.
+
+## Shader expressions
+
+`nw.shader.expr` accepts only identifiers and functions declared in the
+operator's `shader_operations` whitelist. Numeric literals, swizzles (`.x`,
+`.xyzw`, `.rgba`), parentheses, commas, and arithmetic composition operators are
+syntax, not implicitly declared operations. Unknown function calls or
+identifiers fail with `invalid_expression` and identify the node and
+`expression` parameter. CPU-composed ShaderExpr values use ordinary decimal
+literals, never hexadecimal floating-point spelling, so generated composition
+text remains valid expression/HLSL syntax.
+
+The expression parser checks the supported grammar rather than only token
+membership: unbalanced grouping, empty calls, missing argument separators,
+trailing input, and calls with the wrong number of arguments (for example
+`sin()` or `vec4(1, 2)`) are rejected. Numeric literals must parse to finite
+IEEE-754 values; a literal such as `1e999` is rejected with
+`invalid_expression`.
+
+## Canonical semantic identity
+
+Semantic identity is SHA-256 over length-prefixed, type-tagged canonical fields:
+
+- schema version,
+- capability-profile id and canonical requirements digest,
+- compiler settings,
+- quantization policy (recorded separately from full-precision authoring
+  values), and
+- sorted structural node hashes.
+
+Each structural node hash covers the stable operator id, semantic version,
+frequency, operator contract hash, seed behavior, canonical parameters, and
+sorted upstream structural hashes with their source ports. Node ids are not
+included unless a node explicitly uses `seed node-id <node-id>`. Editor layout is
+never included.
+
+Canonical floating-point fields are finite IEEE-754 doubles, treat `-0.0` as
+`+0.0`, and are encoded as big-endian bit patterns. Struct padding and raw
+parameter memory are never hashed.
+
+The common capability-profile identity is:
+
+```text
+nw.common.d3d12.fl12_0.sm6_0.v1
+sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a
+```
+
+Observed GPU model, generation, marketing name, adapter description, and PCI
+identifiers are metadata only. They are never inputs to target-profile
+selection, semantic hashes, seed derivation, or compiler acceptance.
+
+## CPU reference evaluation and caching
+
+`GraphEvaluator` executes a deterministic topological order and memoizes each
+node's typed multi-output values. Cache keys include an effective evaluation
+identity that composes the node's structural semantic identity, declared
+upstream effective identities, and any graph-wide or explicit-node-id seed
+identity, plus the frequency domain and frame/seed context. Missing and corrupt
+entries are cache misses.
+`ApplyInputChange` invalidates only the changed node and its transitive
+dependent closure. `GraphEvaluator::UpdateSnapshot` rebinds to a new immutable
+snapshot and recomputes effective evaluation identities, so a producer whose
+output changes only because a graph-wide seed changed invalidates its consumers
+even when its structural hash is unchanged. Changed nodes and their dependent
+closure are invalidated; unrelated entries remain reusable. Evaluation failures
+return diagnostics and never publish a replacement snapshot.
+
+Before a node result is cached, the evaluator checks the declared output
+contract: every schema output port must be present, with the declared logical
+type, residency, and vector/matrix component dimension. Missing, extra, or
+incompatible callback outputs are evaluation failures, so an incomplete
+callback result cannot be cached or published by `AuthoringSession`.
+
+Curve values carry their declared `linear` or `step` interpolation mode, and
+`nw.curve.sample` honors that mode. Texture resource bounds are enforced against
+the selected format's bytes-per-element as well as width/height limits; buffer
+and mesh recipes enforce their declared byte/vertex/index descriptors.
+
+`nw.curve.keyframes` requires non-empty `keys` entries of the form
+`<time>:<value>` with finite numeric time and value. Malformed or non-finite
+keyframes fail validation with a `keys`-port diagnostic instead of being
+silently dropped. `nw.control.seed` preserves an explicit seed value directly in
+its evaluated scalar output; graph-derived seeds retain their deterministic
+normalized range.
+
+Parameters declared with `NormalizationRule::Clamp01` (currently material
+metallic/specular and shader mix factor) are clamped to `[0, 1]` during
+authoring normalization and evaluation. Non-finite values are never clamped;
+they remain finite-validation failures (`non_finite_parameter`). GPU-pass
+resource ports and image passthrough operations carry bounded render-target
+descriptors.
+
+`AuthoringSession::ApplyEdit` validates a complete new document before replacing
+the last valid immutable `GraphSnapshot`; invalid edits leave that snapshot and
+its editor layout untouched. The session also runs the CPU reference evaluator
+on the candidate before publishing, so a graph that validates structurally but
+fails evaluation (for example non-finite arithmetic or a missing extension
+implementation) cannot replace the last valid snapshot. Snapshots are owned by
+shared immutable handles, so evaluators constructed before an edit continue to
+observe the exact old snapshot.
+
+## Authoring extension implementations
+
+An `ExtensionRegistration` may register both operator schemas and
+`OperatorImplementation` callbacks. Registration is atomic: duplicate ids,
+missing callbacks, or implementations without a matching schema reject the
+whole extension before any schema is published. Every schema declared by an
+extension must have a matching callback (from the same registration or an
+existing in-process authoring registration). `ValidateGraphDocument` and
+`AcceptGraphForCompilation` reject nodes whose complete operator id/version pair
+has no authoring implementation. The callback registry is an in-process
+authoring/compiler facility only. It is not a player plugin ABI and does not
+introduce a graph parser or operator interpreter into the player.
+
+Evaluation dispatches registered callbacks by the complete operator id and
+semantic version before consulting built-in reference implementations. A new
+version of a built-in operator id therefore runs its registered behavior rather
+than the built-in version's body. An existing id/version pair, including every
+built-in operator version, cannot be replaced by an implementation-only
+registration; attempts are rejected so previously validated snapshots keep the
+semantics captured by their semantic digest.
+
+Programmatic parameter values are shape-checked before any component traversal:
+`vec2`, `vec3`, `vec4`/`color`, and `mat4` require exactly 2, 3, 4, and 16
+components respectively, and non-vector parameters require zero components.
+Malformed component counts are `invalid_parameter_value` diagnostics and can
+never index past the 16-element storage.
