@@ -547,6 +547,54 @@ def test_explicit_node_id_seed_changes_randomness_but_other_renames_do_not(
     assert base_seeds != seed_seeds
 
 
+def test_upstream_derived_seed_ignores_unrelated_disconnected_edits(
+    cli_binary: Path, tmp_path: Path
+) -> None:
+    base = fixture("valid_seed_sources.nwgraph").read_text(encoding="utf-8")
+    base = base.replace("  input seed source_b.out\n",
+                        "  input seed source_b.out\n  seed derived-upstream\n")
+    unrelated = (
+        "\nnode unrelated nw.math.scalar_const@1.0.0 frequency=frame\n"
+        "  param value 2.0\n"
+    )
+    base_path = write_variant(tmp_path, "seed_upstream_base.nwgraph",
+                              base + unrelated)
+    edited_path = write_variant(
+        tmp_path,
+        "seed_upstream_edited.nwgraph",
+        base + unrelated.replace("param value 2.0", "param value 3.0"),
+    )
+
+    _, base_seeds = run_json(cli_binary, "seed", base_path)
+    _, edited_seeds = run_json(cli_binary, "seed", edited_path)
+
+    def procedural_seed(payload: dict) -> str:
+        matching = [
+            row
+            for row in payload["seeds"]
+            if row["operator"] == "nw.proc.hash_noise@1.0.0"
+        ]
+        assert len(matching) == 1, payload
+        return matching[0]["seed"]
+
+    assert procedural_seed(base_seeds) == procedural_seed(edited_seeds)
+
+    _, base_eval = run_json(cli_binary, "eval", base_path)
+    _, edited_eval = run_json(cli_binary, "eval", edited_path)
+
+    def procedural_value(payload: dict) -> str:
+        matching = [
+            row["value"]
+            for row in payload["values"]
+            if row["operator"] == "nw.proc.hash_noise@1.0.0"
+            and row["port"] == "out"
+        ]
+        assert len(matching) == 1, payload
+        return matching[0]
+
+    assert procedural_value(base_eval) == procedural_value(edited_eval)
+
+
 def test_semantic_digest_sensitive_to_versions_upstream_settings_and_quantization(
     cli_binary: Path, tmp_path: Path
 ) -> None:
@@ -588,6 +636,18 @@ def test_semantic_digest_sensitive_to_versions_upstream_settings_and_quantizatio
     assert proc.returncode == 0, selftest
     assert selftest["all_passed"] is True
     assert all(check["passed"] for check in selftest["checks"])
+
+
+def test_selftest_covers_extension_implementation_and_malformed_values(
+    cli_binary: Path,
+) -> None:
+    proc, payload = run_json(cli_binary, "selftest")
+    assert proc.returncode == 0, payload
+    checks = {check["name"]: check["passed"] for check in payload["checks"]}
+    assert checks["authoring_extension_registration"] is True
+    assert checks["authoring_extension_evaluation"] is True
+    assert checks["malformed_component_counts_rejected"] is True
+    assert checks["nonfinite_evaluation_results_rejected"] is True
 
 
 def _canonical_field_bytes() -> dict[str, bytes]:
@@ -872,6 +932,67 @@ def test_cache_invalidates_only_dependent_closure_and_recovers_corruption(
     assert after_corrupt["cache"]["regenerated"] == 1
 
 
+def test_session_edit_preserves_immutable_snapshot_and_cache_identity(
+    cli_binary: Path, tmp_path: Path
+) -> None:
+    base = fixture("valid_cache.nwgraph")
+    edited_text = base.read_text(encoding="utf-8").replace(
+        "param value 0.125", "param value 0.25"
+    )
+    edited = write_variant(tmp_path, "edited_constant.nwgraph", edited_text)
+
+    proc, payload = run_json(cli_binary, "session-eval", base, edited)
+    assert proc.returncode == 0, payload
+    assert payload["ok"] is True
+    assert payload["initial_digest"] != payload["edited_digest"]
+    # The evaluator retained the original immutable snapshot after the edit.
+    assert payload["old_snapshot_after_edit"] == payload["initial_digest"]
+    assert all(payload["repeat"]["stats"]["hits_by_node"].values())
+    assert all(payload["old_after_edit"]["stats"]["hits_by_node"].values())
+    assert payload["old_after_edit"]["values"] == payload["initial"]["values"]
+
+    before = eval_numbers(payload["initial"], "nw.math.mul@1.0.0")
+    after = eval_numbers(payload["after_update"], "nw.math.mul@1.0.0")
+    assert before != after
+    assert payload["after_update"]["values"] != payload["initial"]["values"]
+
+    hits = payload["after_update"]["stats"]["hits_by_node"]
+    for changed in ("a", "b", "c", "d"):
+        assert hits[changed] is False
+    assert hits["unrelated"] is True
+    assert hits["unrelated_sin"] is True
+    assert payload["after_update"]["stats"]["cache"]["misses"] == 4
+    assert all(
+        payload["after_update_repeat"]["stats"]["hits_by_node"].values()
+    )
+
+
+def test_nonfinite_arithmetic_evaluation_fails_without_publishing(
+    cli_binary: Path, tmp_path: Path
+) -> None:
+    overflow = fixture("valid_cache.nwgraph").read_text(encoding="utf-8").replace(
+        "param value 0.125", "param value 1e308"
+    )
+    overflow_path = write_variant(tmp_path, "overflow.nwgraph", overflow)
+    proc, payload = run_json(cli_binary, "eval", overflow_path)
+    assert proc.returncode != 0, payload
+    assert payload["ok"] is False
+    failure = find_diagnostic(payload, "evaluation_failure")
+    assert failure["node_id"] == "d"
+    assert failure["port_id"] == "out"
+
+    # A structurally valid candidate whose reference evaluation overflows must
+    # not replace the last valid AuthoringSession snapshot.
+    proc, retained = run_json(
+        cli_binary, "last-valid", fixture("valid_cache.nwgraph"), overflow_path
+    )
+    assert proc.returncode == 0, retained
+    assert retained["invalid_edit_rejected"] is True
+    assert retained["retained"] is True
+    assert retained["initial_digest"] == retained["after_invalid_digest"]
+    assert "evaluation_failure" in diagnostic_codes(retained)
+
+
 def test_invalid_edit_retains_last_valid_snapshot(cli_binary: Path) -> None:
     proc, payload = run_json(
         cli_binary,
@@ -969,6 +1090,28 @@ def test_shader_expression_rejects_undeclared_operations(
     )
     assert proc.returncode == 0, payload
     assert payload["valid"] is True
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        '"("',
+        '"sin()"',
+        '"vec4(1, 2)"',
+        '"vec4(1e999, 0, 0, 1)"',
+    ],
+)
+def test_shader_expression_grammar_arity_and_finite_literals(
+    cli_binary: Path, tmp_path: Path, expression: str
+) -> None:
+    base = fixture("invalid_expression.nwgraph").read_text(encoding="utf-8")
+    text = base.replace('"customFunction(uv)"', expression)
+    path = write_variant(tmp_path, "bad_expression.nwgraph", text)
+    proc, payload = run_json(cli_binary, "validate", path)
+    assert proc.returncode != 0, payload
+    diagnostic = find_diagnostic(payload, "invalid_expression")
+    assert diagnostic["node_id"] == "shade"
+    assert diagnostic["port_id"] == "expression"
 
 
 def test_curve_interpolation_mode_changes_reference_evaluation(

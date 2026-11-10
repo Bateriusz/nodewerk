@@ -170,6 +170,37 @@ bool IsSemanticFloatFinite(double value) {
     return std::isfinite(value);
 }
 
+std::optional<std::uint32_t> ExpectedComponentCount(ParamType type) {
+    switch (type) {
+    case ParamType::Vec2:
+        return 2u;
+    case ParamType::Vec3:
+        return 3u;
+    case ParamType::Vec4:
+    case ParamType::Color:
+        return 4u;
+    case ParamType::Mat4:
+        return 16u;
+    case ParamType::Float:
+    case ParamType::Int:
+    case ParamType::Bool:
+    case ParamType::String:
+    case ParamType::Enum:
+    case ParamType::Version:
+    case ParamType::Expression:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+bool HasMalformedComponentCount(const ParamValue& value) {
+    const auto expected = ExpectedComponentCount(value.type);
+    if (expected.has_value()) {
+        return value.component_count != *expected;
+    }
+    return value.component_count != 0u;
+}
+
 bool AnyComponentNonFinite(const ParamValue& value) {
     if (value.type == ParamType::Float) {
         return !IsSemanticFloatFinite(value.number);
@@ -177,7 +208,15 @@ bool AnyComponentNonFinite(const ParamValue& value) {
     if (value.type == ParamType::Vec2 || value.type == ParamType::Vec3 ||
         value.type == ParamType::Vec4 || value.type == ParamType::Color ||
         value.type == ParamType::Mat4) {
-        for (std::uint32_t i = 0; i < value.component_count; ++i) {
+        // Never trust component_count before validation. This helper is also
+        // called by normalization paths, so clamp the traversal to the declared
+        // physical capacity and to the type's expected width.
+        const auto expected = ExpectedComponentCount(value.type);
+        const std::uint32_t limit =
+            expected.has_value()
+                ? std::min(*expected, value.component_count)
+                : 0u;
+        for (std::uint32_t i = 0; i < limit; ++i) {
             if (!IsSemanticFloatFinite(value.components[i])) {
                 return true;
             }
@@ -457,8 +496,15 @@ void EncodeParam(CanonicalWriter& writer, const ParamValue& value) {
     case ParamType::Color:
     case ParamType::Mat4:
         writer.U64(value.component_count);
-        for (std::uint32_t i = 0; i < value.component_count; ++i) {
-            writer.F64(value.components[i]);
+        {
+            const auto expected = ExpectedComponentCount(value.type);
+            const std::uint32_t limit =
+                expected.has_value()
+                    ? std::min(*expected, value.component_count)
+                    : 0u;
+            for (std::uint32_t i = 0; i < limit; ++i) {
+                writer.F64(value.components[i]);
+            }
         }
         break;
     }
@@ -874,10 +920,25 @@ const OperatorSchema* OperatorRegistry::FindAny(std::string_view id) const {
     return nullptr;
 }
 
+namespace {
+
+std::string ImplementationKey(std::string_view operator_id,
+                              const SemanticVersion& version) {
+    return std::string(operator_id) + "@" + version.ToString();
+}
+
+std::map<std::string, NodeEvaluationFunction>& RegisteredImplementations() {
+    static std::map<std::string, NodeEvaluationFunction> implementations;
+    return implementations;
+}
+
+} // namespace
+
 bool RegisterAuthoringExtension(OperatorRegistry& registry,
                                 const ExtensionRegistration& extension,
                                 std::vector<std::string>& diagnostics) {
     bool ok = true;
+    std::set<std::string> pending_schemas;
     for (const auto& schema : extension.operators) {
         if (schema.id.empty() || schema.version == SemanticVersion{}) {
             diagnostics.push_back("extension " + extension.extension_id +
@@ -885,14 +946,80 @@ bool RegisterAuthoringExtension(OperatorRegistry& registry,
             ok = false;
             continue;
         }
-        if (!registry.Register(schema)) {
+        const std::string key = ImplementationKey(schema.id, schema.version);
+        if (!pending_schemas.insert(key).second) {
+            diagnostics.push_back("extension " + extension.extension_id +
+                                  " declares duplicate operator " + key);
+            ok = false;
+            continue;
+        }
+        if (registry.Find(schema.id, schema.version) != nullptr) {
             diagnostics.push_back("duplicate operator registration: " +
-                                  schema.id + "@" +
-                                  schema.version.ToString());
+                                  key);
             ok = false;
         }
     }
-    return ok;
+    std::set<std::string> pending_implementations;
+    for (const auto& implementation : extension.implementations) {
+        const std::string key = ImplementationKey(
+            implementation.operator_id, implementation.operator_version);
+        if (implementation.operator_id.empty() ||
+            implementation.operator_version == SemanticVersion{}) {
+            diagnostics.push_back(
+                "extension " + extension.extension_id +
+                " contains an implementation without a stable id/version");
+            ok = false;
+            continue;
+        }
+        if (!implementation.evaluate) {
+            diagnostics.push_back("extension " + extension.extension_id +
+                                  " contains an empty implementation for " +
+                                  key);
+            ok = false;
+            continue;
+        }
+        if (!pending_implementations.insert(key).second ||
+            RegisteredImplementations().count(key) != 0u) {
+            diagnostics.push_back(
+                "duplicate operator implementation registration: " + key);
+            ok = false;
+            continue;
+        }
+        const bool declared_here = pending_schemas.count(key) != 0u;
+        if (!declared_here &&
+            registry.Find(implementation.operator_id,
+                          implementation.operator_version) == nullptr) {
+            diagnostics.push_back(
+                "implementation " + key +
+                " does not correspond to a declared operator schema");
+            ok = false;
+        }
+    }
+    if (!ok) {
+        return false;
+    }
+
+    // Commit only after the whole registration passed validation so a failed
+    // extension cannot leave a partially registered authoring surface.
+    for (const auto& schema : extension.operators) {
+        registry.Register(schema);
+    }
+    for (const auto& implementation : extension.implementations) {
+        RegisteredImplementations()[ImplementationKey(
+            implementation.operator_id, implementation.operator_version)] =
+            implementation.evaluate;
+    }
+    return true;
+}
+
+bool HasAuthoringImplementation(std::string_view operator_id,
+                                const SemanticVersion& version) {
+    if (RegisteredImplementations().count(
+            ImplementationKey(operator_id, version)) != 0u) {
+        return true;
+    }
+    static const OperatorRegistry defaults = OperatorRegistry::CreateDefault();
+    return defaults.Find(operator_id, version) != nullptr;
 }
 
 namespace {
@@ -1711,7 +1838,12 @@ std::string ParamCanonicalText(const ParamValue& value) {
     case ParamType::Color:
     case ParamType::Mat4: {
         std::string out;
-        for (std::uint32_t i = 0; i < value.component_count; ++i) {
+        const auto expected = ExpectedComponentCount(value.type);
+        const std::uint32_t limit =
+            expected.has_value()
+                ? std::min(*expected, value.component_count)
+                : 0u;
+        for (std::uint32_t i = 0; i < limit; ++i) {
             if (i != 0) {
                 out.push_back(' ');
             }
@@ -2153,6 +2285,11 @@ bool IsSwizzleSelector(std::string_view selector) {
     return true;
 }
 
+struct ShaderArity {
+    std::size_t min_args = 0;
+    std::size_t max_args = 0;
+};
+
 bool IsValidExpression(std::string_view expression,
                        const std::vector<std::string>& operations,
                        std::string& reason) {
@@ -2187,118 +2324,329 @@ bool IsValidExpression(std::string_view expression,
         return false;
     };
 
-    std::size_t i = 0;
-    while (i < expression.size()) {
-        const char c = expression[i];
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            ++i;
-            continue;
+    const auto operation_arity =
+        [](std::string_view identifier) -> std::optional<ShaderArity> {
+        if (identifier == "vec2") return ShaderArity{2u, 2u};
+        if (identifier == "vec3") return ShaderArity{3u, 3u};
+        if (identifier == "vec4") return ShaderArity{4u, 4u};
+        if (identifier == "mat3") return ShaderArity{9u, 9u};
+        if (identifier == "mat4") return ShaderArity{16u, 16u};
+        if (identifier == "sin" || identifier == "cos" ||
+            identifier == "tan" || identifier == "abs" ||
+            identifier == "sqrt" || identifier == "floor" ||
+            identifier == "ceil" || identifier == "frac" ||
+            identifier == "fract" || identifier == "exp" ||
+            identifier == "log" || identifier == "round" ||
+            identifier == "sign" || identifier == "saturate" ||
+            identifier == "normalize" || identifier == "length") {
+            return ShaderArity{1u, 1u};
+        }
+        if (identifier == "mix" || identifier == "lerp" ||
+            identifier == "clamp" || identifier == "smoothstep" ||
+            identifier == "select") {
+            return ShaderArity{3u, 3u};
+        }
+        if (identifier == "texture2d" || identifier == "sample" ||
+            identifier == "pow" || identifier == "min" ||
+            identifier == "max" || identifier == "step" ||
+            identifier == "dot" || identifier == "cross" ||
+            identifier == "add" || identifier == "mul") {
+            return ShaderArity{2u, 2u};
+        }
+        if (identifier == "uv" || identifier == "time") {
+            return ShaderArity{0u, 0u};
+        }
+        if (identifier == "const") return ShaderArity{1u, 1u};
+        return std::nullopt;
+    };
+
+    class Parser {
+    public:
+        Parser(std::string_view text,
+               std::function<bool(std::string_view)> allowed,
+               std::function<std::optional<ShaderArity>(std::string_view)>
+                   arity)
+            : text_(text),
+              allowed_(std::move(allowed)),
+              arity_(std::move(arity)) {}
+
+        bool Parse(std::string& error) {
+            if (!ParseExpression()) {
+                error = error_;
+                return false;
+            }
+            SkipWhitespace();
+            if (position_ != text_.size()) {
+                error = "shader expression contains trailing input at byte " +
+                        std::to_string(position_);
+                return false;
+            }
+            return true;
         }
 
-        // Numeric literal (including a leading decimal point such as ".5").
-        if ((c >= '0' && c <= '9') ||
-            (c == '.' && i + 1u < expression.size() &&
-             expression[i + 1u] >= '0' && expression[i + 1u] <= '9')) {
-            const std::size_t start = i;
-            if (c == '.') {
-                ++i;
+    private:
+        void SkipWhitespace() {
+            while (position_ < text_.size() &&
+                   std::isspace(static_cast<unsigned char>(text_[position_]))) {
+                ++position_;
             }
-            while (i < expression.size() && expression[i] >= '0' &&
-                   expression[i] <= '9') {
-                ++i;
+        }
+
+        bool AtEnd() const { return position_ >= text_.size(); }
+
+        bool Peek(char c) const {
+            return !AtEnd() && text_[position_] == c;
+        }
+
+        bool Fail(std::string message) {
+            if (error_.empty()) {
+                error_ = std::move(message);
             }
-            if (i < expression.size() && expression[i] == '.') {
-                ++i;
-                while (i < expression.size() && expression[i] >= '0' &&
-                       expression[i] <= '9') {
-                    ++i;
+            return false;
+        }
+
+        bool ParseExpression() {
+            if (!ParseAdditive()) {
+                return false;
+            }
+            return true;
+        }
+
+        bool ParseAdditive() {
+            if (!ParseMultiplicative()) {
+                return false;
+            }
+            while (true) {
+                SkipWhitespace();
+                if (Peek('+') || Peek('-')) {
+                    ++position_;
+                    if (!ParseMultiplicative()) {
+                        return false;
+                    }
+                    continue;
+                }
+                break;
+            }
+            return true;
+        }
+
+        bool ParseMultiplicative() {
+            if (!ParseUnary()) {
+                return false;
+            }
+            while (true) {
+                SkipWhitespace();
+                if (Peek('*') || Peek('/')) {
+                    ++position_;
+                    if (!ParseUnary()) {
+                        return false;
+                    }
+                    continue;
+                }
+                break;
+            }
+            return true;
+        }
+
+        bool ParseUnary() {
+            SkipWhitespace();
+            if (Peek('+') || Peek('-')) {
+                ++position_;
+                return ParseUnary();
+            }
+            return ParsePostfix();
+        }
+
+        bool ParsePostfix() {
+            if (!ParsePrimary()) {
+                return false;
+            }
+            while (true) {
+                SkipWhitespace();
+                if (!Peek('.')) {
+                    break;
+                }
+                ++position_;
+                const std::size_t start = position_;
+                while (!AtEnd() &&
+                       IsShaderIdentifierChar(text_[position_])) {
+                    ++position_;
+                }
+                const std::string_view selector =
+                    text_.substr(start, position_ - start);
+                if (!IsSwizzleSelector(selector)) {
+                    return Fail("shader expression contains unsupported "
+                                "member selector '." +
+                                std::string(selector) + "'");
                 }
             }
-            if (i < expression.size() &&
-                (expression[i] == 'e' || expression[i] == 'E')) {
-                ++i;
-                if (i < expression.size() &&
-                    (expression[i] == '+' || expression[i] == '-')) {
-                    ++i;
-                }
-                const std::size_t exponent_start = i;
-                while (i < expression.size() && expression[i] >= '0' &&
-                       expression[i] <= '9') {
-                    ++i;
-                }
-                if (i == exponent_start) {
-                    reason = "shader expression contains a malformed numeric "
-                             "literal";
+            return true;
+        }
+
+        bool ParsePrimary() {
+            SkipWhitespace();
+            if (AtEnd()) {
+                return Fail("shader expression ends unexpectedly");
+            }
+            const char c = text_[position_];
+            if ((c >= '0' && c <= '9') ||
+                (c == '.' && position_ + 1u < text_.size() &&
+                 text_[position_ + 1u] >= '0' &&
+                 text_[position_ + 1u] <= '9')) {
+                return ParseNumber();
+            }
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
+                return ParseIdentifierOrCall();
+            }
+            if (c == '(') {
+                ++position_;
+                if (!ParseExpression()) {
                     return false;
                 }
+                SkipWhitespace();
+                if (!Peek(')')) {
+                    return Fail("shader expression is missing ')'");
+                }
+                ++position_;
+                return true;
             }
-            const std::size_t number_end = i;
-            if (i < expression.size() &&
-                (expression[i] == 'f' || expression[i] == 'F')) {
-                ++i;
+            return Fail(std::string("shader expression contains unsupported "
+                                    "character '") +
+                        c + "'");
+        }
+
+        bool ParseNumber() {
+            const std::size_t start = position_;
+            if (Peek('.')) {
+                ++position_;
+            }
+            while (!AtEnd() && text_[position_] >= '0' &&
+                   text_[position_] <= '9') {
+                ++position_;
+            }
+            if (!AtEnd() && text_[position_] == '.') {
+                ++position_;
+                while (!AtEnd() && text_[position_] >= '0' &&
+                       text_[position_] <= '9') {
+                    ++position_;
+                }
+            }
+            if (!AtEnd() &&
+                (text_[position_] == 'e' || text_[position_] == 'E')) {
+                ++position_;
+                if (!AtEnd() &&
+                    (text_[position_] == '+' || text_[position_] == '-')) {
+                    ++position_;
+                }
+                const std::size_t exponent_start = position_;
+                while (!AtEnd() && text_[position_] >= '0' &&
+                       text_[position_] <= '9') {
+                    ++position_;
+                }
+                if (position_ == exponent_start) {
+                    return Fail("shader expression contains a malformed numeric "
+                                "literal");
+                }
+            }
+            const std::size_t number_end = position_;
+            if (!AtEnd() &&
+                (text_[position_] == 'f' || text_[position_] == 'F')) {
+                ++position_;
             }
             double parsed = 0.0;
-            if (!ParseDouble(expression.substr(start, number_end - start),
+            if (!ParseDouble(text_.substr(start, number_end - start),
                              parsed)) {
-                reason = "shader expression contains a malformed numeric "
-                         "literal";
-                return false;
+                return Fail("shader expression contains a malformed numeric "
+                            "literal");
             }
-            continue;
+            if (!std::isfinite(parsed)) {
+                return Fail("shader expression contains a non-finite numeric "
+                            "literal");
+            }
+            return true;
         }
 
-        // Identifier: function/constructor name, keyword, input name, or
-        // type name. Every identifier must be declared by the operator's
-        // shader_operations whitelist.
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
-            const std::size_t start = i;
-            while (i < expression.size() &&
-                   IsShaderIdentifierChar(expression[i])) {
-                ++i;
+        bool ParseIdentifierOrCall() {
+            const std::size_t start = position_;
+            while (!AtEnd() && IsShaderIdentifierChar(text_[position_])) {
+                ++position_;
             }
             const std::string_view identifier =
-                expression.substr(start, i - start);
-            if (!operation_allowed(identifier)) {
-                reason = "shader expression references unsupported operation "
-                         "or identifier '" +
-                         std::string(identifier) + "'";
-                return false;
+                text_.substr(start, position_ - start);
+            if (!allowed_(identifier)) {
+                return Fail(
+                    "shader expression references unsupported operation or "
+                    "identifier '" +
+                    std::string(identifier) + "'");
             }
-            continue;
+            const auto declared_arity = arity_(identifier);
+            SkipWhitespace();
+            if (!Peek('(')) {
+                if (declared_arity.has_value() &&
+                    declared_arity->max_args > 0u) {
+                    return Fail("shader expression uses operation '" +
+                                std::string(identifier) +
+                                "' without a call argument list");
+                }
+                return true;
+            }
+            ++position_;
+            std::size_t argument_count = 0u;
+            SkipWhitespace();
+            if (Peek(')')) {
+                ++position_;
+            } else {
+                while (true) {
+                    if (!ParseExpression()) {
+                        return false;
+                    }
+                    ++argument_count;
+                    SkipWhitespace();
+                    if (Peek(',')) {
+                        ++position_;
+                        continue;
+                    }
+                    if (Peek(')')) {
+                        ++position_;
+                        break;
+                    }
+                    return Fail("shader expression is missing ',' or ')' in "
+                                "the argument list for '" +
+                                std::string(identifier) + "'");
+                }
+            }
+            if (!declared_arity.has_value()) {
+                // Extension schemas may declare additional supported
+                // operations. Their arity is not part of the built-in table,
+                // so accept a non-empty argument list while still requiring a
+                // well-formed call.
+                if (argument_count == 0u) {
+                    return Fail("shader expression operation '" +
+                                std::string(identifier) +
+                                "' requires at least one argument");
+                }
+                return true;
+            }
+            if (argument_count < declared_arity->min_args ||
+                argument_count > declared_arity->max_args) {
+                return Fail("shader expression operation '" +
+                            std::string(identifier) + "' expects " +
+                            std::to_string(declared_arity->min_args) +
+                            " argument(s) but received " +
+                            std::to_string(argument_count));
+            }
+            return true;
         }
 
-        // Member/swizzle selection, e.g. uv.x or vec4(...).rgb. The selector
-        // itself is composition syntax rather than an operator token.
-        if (c == '.') {
-            ++i;
-            const std::size_t start = i;
-            while (i < expression.size() &&
-                   IsShaderIdentifierChar(expression[i])) {
-                ++i;
-            }
-            const std::string_view selector =
-                expression.substr(start, i - start);
-            if (!IsSwizzleSelector(selector)) {
-                reason = "shader expression contains unsupported member "
-                         "selector '." +
-                         std::string(selector) + "'";
-                return false;
-            }
-            continue;
-        }
+        std::string_view text_;
+        std::function<bool(std::string_view)> allowed_;
+        std::function<std::optional<ShaderArity>(std::string_view)> arity_;
+        std::size_t position_ = 0u;
+        std::string error_;
+    };
 
-        if (c == '+' || c == '-' || c == '*' || c == '/' || c == '(' ||
-            c == ')' || c == ',') {
-            ++i;
-            continue;
-        }
-
-        reason = std::string("shader expression contains unsupported "
-                             "character '") +
-                 c + "'";
-        return false;
-    }
-    return true;
+    Parser parser(expression, operation_allowed, operation_arity);
+    return parser.Parse(reason);
 }
 
 bool IsEnumValue(const ParamSpec& spec, std::string_view value) {
@@ -2322,7 +2670,12 @@ void ApplyClamp01Normalization(const ParamSpec& spec, ParamValue& value) {
     }
     if (value.type == ParamType::Vec2 || value.type == ParamType::Vec3 ||
         value.type == ParamType::Vec4 || value.type == ParamType::Color) {
-        for (std::uint32_t i = 0; i < value.component_count; ++i) {
+        const auto expected = ExpectedComponentCount(value.type);
+        const std::uint32_t limit =
+            expected.has_value()
+                ? std::min(*expected, value.component_count)
+                : 0u;
+        for (std::uint32_t i = 0; i < limit; ++i) {
             if (std::isfinite(value.components[i])) {
                 value.components[i] =
                     NormalizeZero(std::clamp(value.components[i], 0.0, 1.0));
@@ -2368,7 +2721,12 @@ bool CheckFiniteAndRange(const ParamSpec& spec, const ParamValue& value,
     if (value.type == ParamType::Vec2 || value.type == ParamType::Vec3 ||
         value.type == ParamType::Vec4 || value.type == ParamType::Color ||
         value.type == ParamType::Mat4) {
-        for (std::uint32_t i = 0; i < value.component_count; ++i) {
+        const auto expected = ExpectedComponentCount(value.type);
+        const std::uint32_t limit =
+            expected.has_value()
+                ? std::min(*expected, value.component_count)
+                : 0u;
+        for (std::uint32_t i = 0; i < limit; ++i) {
             if (!check_one(value.components[i])) {
                 return false;
             }
@@ -3267,6 +3625,22 @@ void ValidateParams(const NodeDefinition& node, const OperatorSchema& schema,
                 source));
             continue;
         }
+        if (HasMalformedComponentCount(value)) {
+            std::string expected;
+            const auto expected_count = ExpectedComponentCount(value.type);
+            if (expected_count.has_value()) {
+                expected = std::to_string(*expected_count);
+            } else {
+                expected = "0";
+            }
+            diagnostics.push_back(MakeDiagnostic(
+                DiagnosticCode::InvalidParameterValue,
+                "parameter '" + spec.id + "' declares " +
+                    std::to_string(value.component_count) +
+                    " components but its type requires " + expected,
+                source));
+            continue;
+        }
         if (AnyComponentNonFinite(value)) {
             diagnostics.push_back(MakeDiagnostic(
                 DiagnosticCode::NonFiniteParameter,
@@ -3293,7 +3667,12 @@ void ValidateParams(const NodeDefinition& node, const OperatorSchema& schema,
         if (spec.normalization == NormalizationRule::NormalizeVector &&
             value.component_count != 0u) {
             double length_squared = 0.0;
-            for (std::uint32_t i = 0; i < value.component_count; ++i) {
+            const auto expected = ExpectedComponentCount(value.type);
+            const std::uint32_t limit =
+                expected.has_value()
+                    ? std::min(*expected, value.component_count)
+                    : 0u;
+            for (std::uint32_t i = 0; i < limit; ++i) {
                 length_squared += value.components[i] * value.components[i];
             }
             if (!(length_squared > 0.0) || !std::isfinite(length_squared)) {
@@ -4219,9 +4598,10 @@ std::string EmitDocumentText(const GraphDocument& document) {
 namespace {
 
 std::string NumberBitsHex(double value) {
-    if (!std::isfinite(value)) {
-        value = 0.0;
-    }
+    // This helper is used for cache-key context and for canonical evaluation
+    // text. Evaluated numeric results are checked for finiteness before they
+    // reach this function, so encoding the exact bit pattern is safe and avoids
+    // silently turning an infinity into a plausible-looking zero.
     value = NormalizeZero(value);
     std::uint64_t bits = 0;
     std::memcpy(&bits, &value, sizeof(bits));
@@ -4242,7 +4622,10 @@ void EncodeEvaluationValue(CanonicalWriter& writer,
     writer.String(ToString(value.type));
     writer.String(ToString(value.residency));
     writer.U64(value.component_count);
-    for (std::uint32_t i = 0; i < value.component_count; ++i) {
+    const std::uint32_t safe_count = std::min<std::uint32_t>(
+        value.component_count,
+        static_cast<std::uint32_t>(value.numbers.size()));
+    for (std::uint32_t i = 0; i < safe_count; ++i) {
         writer.F64(value.numbers[i]);
     }
     writer.String(value.text);
@@ -4391,11 +4774,48 @@ double SampleCurve(const std::vector<double>& samples, double t, bool step) {
 }
 
 Diagnostic EvalDiagnostic(const NodeDefinition& node,
-                          const std::string& message) {
+                          const std::string& message,
+                          const std::string& port = std::string()) {
     DiagnosticSource source;
     source.node_id = node.id;
     source.operator_id = node.operator_id;
+    source.port_id = port;
     return MakeDiagnostic(DiagnosticCode::EvaluationFailure, message, source);
+}
+
+bool EvaluationValueIsFinite(const EvaluationValue& value,
+                             std::string& offending_field) {
+    if (value.component_count > value.numbers.size()) {
+        offending_field = "components";
+        return false;
+    }
+    for (std::uint32_t i = 0; i < value.component_count; ++i) {
+        if (!std::isfinite(value.numbers[i])) {
+            offending_field = "components";
+            return false;
+        }
+    }
+    if (!value.samples.empty()) {
+        for (double sample : value.samples) {
+            if (!std::isfinite(sample)) {
+                offending_field = "samples";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool OutputValuesAreFinite(const OutputValues& outputs,
+                           std::string& offending_port,
+                           std::string& offending_field) {
+    for (const auto& [port, value] : outputs) {
+        if (!EvaluationValueIsFinite(value, offending_field)) {
+            offending_port = port;
+            return false;
+        }
+    }
+    return true;
 }
 
 bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
@@ -4431,7 +4851,12 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         out.type = LogicalType::Vector;
         out.residency = Residency::Cpu;
         out.component_count = value->component_count;
-        for (std::uint32_t i = 0; i < value->component_count; ++i) {
+        const auto expected = ExpectedComponentCount(value->type);
+        const std::uint32_t limit =
+            expected.has_value()
+                ? std::min(*expected, value->component_count)
+                : 0u;
+        for (std::uint32_t i = 0; i < limit; ++i) {
             out.numbers[i] = value->components[i];
         }
         outputs["out"] = out;
@@ -4443,7 +4868,12 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         out.type = LogicalType::Matrix;
         out.residency = Residency::Cpu;
         out.component_count = value->component_count;
-        for (std::uint32_t i = 0; i < value->component_count; ++i) {
+        const auto expected = ExpectedComponentCount(value->type);
+        const std::uint32_t limit =
+            expected.has_value()
+                ? std::min(*expected, value->component_count)
+                : 0u;
+        for (std::uint32_t i = 0; i < limit; ++i) {
             out.numbers[i] = value->components[i];
         }
         outputs["out"] = out;
@@ -4650,7 +5080,9 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         const ParamValue* value = param("value");
         std::ostringstream text;
         text << "vec4(";
-        for (std::uint32_t i = 0; i < value->component_count; ++i) {
+        const std::uint32_t limit =
+            std::min<std::uint32_t>(4u, value->component_count);
+        for (std::uint32_t i = 0; i < limit; ++i) {
             if (i != 0) text << ", ";
             text << ShaderNumberText(value->components[i]);
         }
@@ -4763,6 +5195,34 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         return true;
     }
 
+    const auto implementation_it = RegisteredImplementations().find(
+        ImplementationKey(op, node.operator_version));
+    if (implementation_it != RegisteredImplementations().end()) {
+        Diagnostic implementation_failure;
+        if (!implementation_it->second(snapshot, node, evaluated, context,
+                                       outputs, implementation_failure)) {
+            failure = implementation_failure;
+            if (failure.message.empty()) {
+                failure = EvalDiagnostic(
+                    node, "registered implementation failed for operator '" +
+                              op + "'");
+            } else {
+                if (failure.code == DiagnosticCode::ParseError) {
+                    failure.code = DiagnosticCode::EvaluationFailure;
+                }
+                failure.severity = DiagnosticSeverity::Error;
+                if (failure.source.node_id.empty()) {
+                    failure.source.node_id = node.id;
+                }
+                if (failure.source.operator_id.empty()) {
+                    failure.source.operator_id = node.operator_id;
+                }
+            }
+            return false;
+        }
+        return true;
+    }
+
     failure = EvalDiagnostic(node,
                              "no CPU reference implementation for operator '" +
                                  op + "'");
@@ -4778,8 +5238,10 @@ std::string EvaluationValue::CanonicalText() const {
     if (component_count == 0u) {
         out << "components=0";
     } else {
+        const std::uint32_t safe_count = std::min<std::uint32_t>(
+            component_count, static_cast<std::uint32_t>(numbers.size()));
         out << "components=" << component_count << ";values=";
-        for (std::uint32_t i = 0; i < component_count; ++i) {
+        for (std::uint32_t i = 0; i < safe_count; ++i) {
             if (i != 0) {
                 out << ",";
             }
@@ -4815,8 +5277,34 @@ std::uint64_t DeriveSeed(const GraphSnapshot& snapshot,
     }
     CanonicalWriter writer;
     writer.String("nwgraph.seed.v1");
-    writer.String(snapshot.semantic_digest());
-    writer.String(snapshot.StructuralHash(node.id));
+    if (node.seed.behavior == SeedBehavior::DerivedFromUpstream) {
+        // Upstream-derived seeds must depend only on the declared upstream
+        // closure and context. In particular they must not inherit the whole
+        // graph's semantic digest: editing a disconnected node must not perturb
+        // an unrelated procedural result or invalidate its cache entry.
+        writer.String("derived-upstream");
+        std::vector<NodeInput> inputs = node.inputs;
+        std::sort(inputs.begin(), inputs.end(),
+                  [](const NodeInput& a, const NodeInput& b) {
+                      return a.port < b.port;
+                  });
+        writer.ListHeader(static_cast<std::uint32_t>(inputs.size()));
+        for (const NodeInput& input : inputs) {
+            writer.String(input.port);
+            writer.String(snapshot.StructuralHash(input.source_node));
+            writer.String(input.source_port);
+        }
+    } else if (node.seed.behavior == SeedBehavior::ExplicitNodeId) {
+        // An explicitly supplied node id is semantic, but unrelated graph edits
+        // must not perturb it. Bind the seed to that id and the referenced
+        // node's own semantic identity only.
+        writer.String("explicit-node-id");
+        writer.String(node.seed.node_id);
+        writer.String(snapshot.StructuralHash(node.seed.node_id));
+    } else {
+        writer.String(snapshot.semantic_digest());
+        writer.String(snapshot.StructuralHash(node.id));
+    }
     writer.String(ToString(node.seed.behavior));
     writer.U64(node.seed.explicit_seed);
     writer.String(node.seed.behavior == SeedBehavior::ExplicitNodeId
@@ -4833,8 +5321,21 @@ std::uint64_t DeriveSeed(const GraphSnapshot& snapshot,
 }
 
 GraphEvaluator::GraphEvaluator(const GraphSnapshot& snapshot)
-    : snapshot_(snapshot) {
-    for (const auto& node : snapshot_.nodes()) {
+    : snapshot_(std::make_shared<GraphSnapshot>(snapshot)) {
+    RebuildDependents();
+}
+
+GraphEvaluator::GraphEvaluator(std::shared_ptr<const GraphSnapshot> snapshot)
+    : snapshot_(std::move(snapshot)) {
+    if (!snapshot_) {
+        snapshot_ = std::make_shared<GraphSnapshot>();
+    }
+    RebuildDependents();
+}
+
+void GraphEvaluator::RebuildDependents() {
+    dependents_.clear();
+    for (const auto& node : snapshot_->nodes()) {
         for (const auto& input : node.inputs) {
             auto& dependents = dependents_[input.source_node];
             if (std::find(dependents.begin(), dependents.end(), node.id) ==
@@ -4845,9 +5346,10 @@ GraphEvaluator::GraphEvaluator(const GraphSnapshot& snapshot)
     }
 }
 
-void GraphEvaluator::ApplyInputChange(const std::string& node_id) {
+void GraphEvaluator::InvalidateClosure(
+    const std::set<std::string>& node_ids) {
     std::set<std::string> closure;
-    std::vector<std::string> stack{node_id};
+    std::vector<std::string> stack(node_ids.begin(), node_ids.end());
     while (!stack.empty()) {
         const std::string current = stack.back();
         stack.pop_back();
@@ -4870,6 +5372,39 @@ void GraphEvaluator::ApplyInputChange(const std::string& node_id) {
             entry.invalid = true;
         }
     }
+}
+
+void GraphEvaluator::UpdateSnapshot(std::shared_ptr<const GraphSnapshot> snapshot) {
+    if (!snapshot) {
+        return;
+    }
+    std::set<std::string> changed;
+    for (const auto& node : snapshot->nodes()) {
+        const std::string old_hash =
+            snapshot_ ? snapshot_->StructuralHash(node.id) : std::string();
+        const std::string new_hash = snapshot->StructuralHash(node.id);
+        if (old_hash != new_hash) {
+            changed.insert(node.id);
+        }
+    }
+    if (snapshot_) {
+        for (const auto& node : snapshot_->nodes()) {
+            if (snapshot->FindNode(node.id) == nullptr) {
+                entries_.erase(node.id);
+            }
+        }
+    }
+    snapshot_ = std::move(snapshot);
+    RebuildDependents();
+    InvalidateClosure(changed);
+}
+
+void GraphEvaluator::UpdateSnapshot(const GraphSnapshot& snapshot) {
+    UpdateSnapshot(std::make_shared<GraphSnapshot>(snapshot));
+}
+
+void GraphEvaluator::ApplyInputChange(const std::string& node_id) {
+    InvalidateClosure(std::set<std::string>{node_id});
 }
 
 void GraphEvaluator::CorruptCacheEntry(const std::string& node_id) {
@@ -4897,8 +5432,8 @@ bool GraphEvaluator::HasValidCacheEntry(const std::string& node_id) const {
 
 EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
     EvaluationResult result;
-    for (const std::string& node_id : snapshot_.topological_order()) {
-        const NodeDefinition* node = snapshot_.FindNode(node_id);
+    for (const std::string& node_id : snapshot_->topological_order()) {
+        const NodeDefinition* node = snapshot_->FindNode(node_id);
         if (node == nullptr) {
             continue;
         }
@@ -4928,7 +5463,17 @@ EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
                            "'"));
             return result;
         }
-        std::string key = node_id + "|" + std::string(ToString(node->frequency));
+        std::string key = snapshot_->StructuralHash(node_id) + "|" + node_id +
+                          "|" + std::string(ToString(node->frequency));
+        if (node->seed.behavior == SeedBehavior::DerivedFromGraph) {
+            // These seed behaviors intentionally depend on graph-wide semantic
+            // identity. Include it in the cache key so a snapshot rebind cannot
+            // reuse a stale entry.
+            key += "|graph=" + snapshot_->semantic_digest();
+        } else if (node->seed.behavior == SeedBehavior::ExplicitNodeId) {
+            key += "|seed-node=" + node->seed.node_id + ":" +
+                   snapshot_->StructuralHash(node->seed.node_id);
+        }
         if (node->frequency == Frequency::Frame) {
             key += "|frame=" + std::to_string(context.frame_index);
             key += "|time=" + NumberBitsHex(context.time_seconds);
@@ -4960,10 +5505,22 @@ EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
 
         OutputValues outputs;
         Diagnostic failure;
-        if (!EvaluateNode(snapshot_, *node, result.values_by_node, context,
+        if (!EvaluateNode(*snapshot_, *node, result.values_by_node, context,
                           outputs, failure)) {
             result.ok = false;
             result.diagnostics.push_back(std::move(failure));
+            return result;
+        }
+        std::string offending_port;
+        std::string offending_field;
+        if (!OutputValuesAreFinite(outputs, offending_port, offending_field)) {
+            result.ok = false;
+            result.diagnostics.push_back(EvalDiagnostic(
+                *node,
+                "evaluation of node '" + node->id +
+                    "' produced a non-finite numeric result on output port '" +
+                    offending_port + "' (" + offending_field + ")",
+                offending_port));
             return result;
         }
 
@@ -5032,7 +5589,22 @@ ValidationResult AuthoringSession::ApplyEdit(std::string_view text,
         last_diagnostics_ = validation.diagnostics;
         return validation;
     }
-    last_valid_ = *validation.snapshot;
+    // Publish only after the CPU reference evaluator accepts the complete
+    // candidate graph. A graph that validates structurally but cannot evaluate
+    // (for example a missing extension implementation or non-finite arithmetic)
+    // must not replace the last valid immutable snapshot.
+    GraphEvaluator evaluator(*validation.snapshot);
+    EvaluationResult evaluation = evaluator.Evaluate(EvaluationContext{});
+    if (!evaluation.ok) {
+        std::vector<Diagnostic> diagnostics = validation.diagnostics;
+        diagnostics.insert(diagnostics.end(), evaluation.diagnostics.begin(),
+                           evaluation.diagnostics.end());
+        validation.diagnostics = std::move(diagnostics);
+        validation.snapshot.reset();
+        last_diagnostics_ = validation.diagnostics;
+        return validation;
+    }
+    last_valid_ = std::make_shared<GraphSnapshot>(*validation.snapshot);
     last_layout_ = parsed.document->layout;
     last_diagnostics_ = validation.diagnostics;
     return validation;

@@ -225,6 +225,12 @@ std::string EvalValuesJson(const GraphSnapshot& snapshot,
     return out;
 }
 
+std::string EvalBlockJson(const GraphSnapshot& snapshot,
+                          const EvaluationResult& result) {
+    return "{\"stats\":" + EvalStatsJson(result) +
+           ",\"values\":" + EvalValuesJson(snapshot, result) + "}";
+}
+
 std::string ResourceJson(const ResourceDescriptor& descriptor) {
     std::ostringstream out;
     out << "{\"kind\":" << JsonString(descriptor.kind)
@@ -614,6 +620,85 @@ int CacheCommand(const std::vector<std::string>& args,
     return 0;
 }
 
+int SessionEvalCommand(const std::vector<std::string>& args,
+                       const OperatorRegistry& registry) {
+    if (args.size() < 2u) {
+        std::cerr << "usage: nw_graph_cli session-eval <base-file> "
+                     "<edited-file> [--frame N] [--seed N] [--workers N]\n";
+        return 2;
+    }
+    std::string base_text;
+    std::string edited_text;
+    if (!ReadFile(args[0], base_text) || !ReadFile(args[1], edited_text)) {
+        std::cerr << "cannot read input files\n";
+        return 1;
+    }
+    EvaluationContext context;
+    std::string value;
+    if (OptionValue(args, "--frame", value)) {
+        ParseU64(value, context.frame_index);
+    }
+    if (OptionValue(args, "--seed", value)) {
+        ParseU64(value, context.seed_base);
+    }
+    if (OptionValue(args, "--workers", value)) {
+        std::uint64_t workers = 1;
+        ParseU64(value, workers);
+        context.worker_count = static_cast<unsigned>(workers);
+    }
+
+    AuthoringSession session(registry);
+    ValidationResult initial = session.ApplyEdit(base_text, args[0]);
+    if (!initial.ok() || session.LastValid() == nullptr) {
+        std::cout << "{\"ok\":false,\"stage\":\"initial\",\"diagnostics\":"
+                  << DiagnosticsJson(initial.diagnostics) << "}\n";
+        return 1;
+    }
+    std::shared_ptr<const GraphSnapshot> initial_snapshot =
+        session.LastValidShared();
+    const std::string initial_digest = initial_snapshot->semantic_digest();
+    GraphEvaluator evaluator(initial_snapshot);
+    EvaluationResult initial_eval = evaluator.Evaluate(context);
+    EvaluationResult repeat_eval = evaluator.Evaluate(context);
+
+    ValidationResult edited = session.ApplyEdit(edited_text, args[1]);
+    if (!edited.ok() || session.LastValid() == nullptr) {
+        std::cout << "{\"ok\":false,\"stage\":\"edit\""
+                  << ",\"initial_digest\":" << JsonString(initial_digest)
+                  << ",\"retained_digest\":"
+                  << JsonString(initial_snapshot->semantic_digest())
+                  << ",\"diagnostics\":"
+                  << DiagnosticsJson(edited.diagnostics) << "}\n";
+        return 1;
+    }
+    std::shared_ptr<const GraphSnapshot> edited_snapshot =
+        session.LastValidShared();
+    // The old evaluator must still see the original immutable snapshot.
+    EvaluationResult old_after_edit = evaluator.Evaluate(context);
+    evaluator.UpdateSnapshot(edited_snapshot);
+    EvaluationResult after_update = evaluator.Evaluate(context);
+    EvaluationResult after_update_repeat = evaluator.Evaluate(context);
+
+    std::cout << "{\"ok\":true"
+              << ",\"initial_digest\":" << JsonString(initial_digest)
+              << ",\"edited_digest\":"
+              << JsonString(edited_snapshot->semantic_digest())
+              << ",\"old_snapshot_after_edit\":"
+              << JsonString(initial_snapshot->semantic_digest())
+              << ",\"initial\":"
+              << EvalBlockJson(*initial_snapshot, initial_eval)
+              << ",\"repeat\":"
+              << EvalBlockJson(*initial_snapshot, repeat_eval)
+              << ",\"old_after_edit\":"
+              << EvalBlockJson(*initial_snapshot, old_after_edit)
+              << ",\"after_update\":"
+              << EvalBlockJson(*edited_snapshot, after_update)
+              << ",\"after_update_repeat\":"
+              << EvalBlockJson(*edited_snapshot, after_update_repeat)
+              << "}\n";
+    return 0;
+}
+
 int LastValidCommand(const std::vector<std::string>& args,
                      const OperatorRegistry& registry) {
     if (args.size() < 2u) {
@@ -824,16 +909,199 @@ int SelfTestCommand(const OperatorRegistry& registry) {
         extension.extension_id = "nw.extension.test";
         extension.version = SemanticVersion{1, 0, 0};
         extension.operators = {extension_operator};
+        extension.implementations.push_back(
+            {"nw.extension.test_add",
+             SemanticVersion{1, 0, 0},
+             [](const GraphSnapshot&, const NodeDefinition& node,
+                const std::map<std::string, OutputValues>& evaluated,
+                const EvaluationContext&, OutputValues& outputs,
+                Diagnostic& failure) {
+                 const auto find_input =
+                     [&](std::string_view port) -> const LogicalValue* {
+                     for (const auto& connection : node.inputs) {
+                         if (std::string_view(connection.port.data(),
+                                              connection.port.size()) != port) {
+                             continue;
+                         }
+                         const auto node_it =
+                             evaluated.find(connection.source_node);
+                         if (node_it == evaluated.end()) {
+                             return nullptr;
+                         }
+                         const auto value_it =
+                             node_it->second.find(connection.source_port);
+                         if (value_it == node_it->second.end()) {
+                             return nullptr;
+                         }
+                         return &value_it->second;
+                     }
+                     return nullptr;
+                 };
+                 const LogicalValue* a = find_input("a");
+                 const LogicalValue* b = find_input("b");
+                 if (a == nullptr || b == nullptr ||
+                     a->component_count == 0u ||
+                     b->component_count == 0u) {
+                     failure.severity = DiagnosticSeverity::Error;
+                     failure.code = DiagnosticCode::EvaluationFailure;
+                     failure.message =
+                         "extension test add is missing scalar inputs";
+                     failure.source.node_id = node.id;
+                     failure.source.operator_id = node.operator_id;
+                     return false;
+                 }
+                 LogicalValue out;
+                 out.type = LogicalType::Scalar;
+                 out.residency = Residency::Cpu;
+                 out.component_count = 1u;
+                 out.numbers[0] = a->numbers[0] + b->numbers[0];
+                 outputs["out"] = std::move(out);
+                 return true;
+             }});
         extension.lowering_namespace = "nw.extension.test";
         std::vector<std::string> extension_diagnostics;
         const bool registered = RegisterAuthoringExtension(
             extended, extension, extension_diagnostics);
+        bool extension_evaluates = false;
+        if (registered &&
+            extended.Find("nw.extension.test_add",
+                          SemanticVersion{1, 0, 0}) != nullptr &&
+            extension_diagnostics.empty()) {
+            GraphDocument document;
+            auto scalar = [](const std::string& id, double value) {
+                NodeDefinition node;
+                node.id = id;
+                node.operator_id = "nw.math.scalar_const";
+                node.operator_version = SemanticVersion{1, 0, 0};
+                node.frequency = Frequency::Frame;
+                node.residency = Residency::Cpu;
+                ParamValue param;
+                param.type = ParamType::Float;
+                param.number = value;
+                node.params["value"] = std::move(param);
+                return node;
+            };
+            document.nodes.push_back(scalar("ext_a", 1.5));
+            document.nodes.push_back(scalar("ext_b", 2.5));
+            NodeDefinition sum;
+            sum.id = "ext_sum";
+            sum.operator_id = "nw.extension.test_add";
+            sum.operator_version = SemanticVersion{1, 0, 0};
+            sum.frequency = Frequency::Frame;
+            sum.residency = Residency::Cpu;
+            NodeInput first;
+            first.port = "a";
+            first.source_node = "ext_a";
+            first.source_port = "out";
+            NodeInput second;
+            second.port = "b";
+            second.source_node = "ext_b";
+            second.source_port = "out";
+            sum.inputs = {first, second};
+            document.nodes.push_back(std::move(sum));
+            ValidationResult validation =
+                ValidateGraphDocument(document, extended);
+            if (validation.ok()) {
+                GraphEvaluator evaluator(*validation.snapshot);
+                EvaluationResult evaluation =
+                    evaluator.Evaluate(EvaluationContext{});
+                const auto found = evaluation.values_by_node.find("ext_sum");
+                extension_evaluates =
+                    evaluation.ok && found != evaluation.values_by_node.end() &&
+                    found->second.count("out") != 0u &&
+                    found->second.at("out").numbers[0] == 4.0;
+            }
+        }
         checks.push_back(
             {"authoring_extension_registration",
              registered &&
                  extended.Find("nw.extension.test_add",
                                SemanticVersion{1, 0, 0}) != nullptr &&
                  extension_diagnostics.empty()});
+        checks.push_back(
+            {"authoring_extension_evaluation", extension_evaluates});
+    }
+    {
+        bool rejected = true;
+        for (std::uint32_t count : {0u, 1u, 2u, 17u}) {
+            GraphDocument document;
+            NodeDefinition node;
+            node.id = "bad_components";
+            node.operator_id = "nw.math.vec3_const";
+            node.operator_version = SemanticVersion{1, 0, 0};
+            node.frequency = Frequency::Frame;
+            node.residency = Residency::Cpu;
+            ParamValue value;
+            value.type = ParamType::Vec3;
+            value.component_count = count;
+            node.params["value"] = std::move(value);
+            document.nodes.push_back(std::move(node));
+            ValidationResult validation =
+                ValidateGraphDocument(document, registry);
+            bool saw_shape_error = false;
+            for (const Diagnostic& diagnostic : validation.diagnostics) {
+                if (diagnostic.code == DiagnosticCode::InvalidParameterValue &&
+                    diagnostic.source.port_id == "value") {
+                    saw_shape_error = true;
+                }
+            }
+            rejected = rejected && !validation.ok() && saw_shape_error;
+        }
+        checks.push_back({"malformed_component_counts_rejected", rejected});
+    }
+    {
+        GraphDocument document;
+        auto scalar = [](const std::string& id, double value) {
+            NodeDefinition node;
+            node.id = id;
+            node.operator_id = "nw.math.scalar_const";
+            node.operator_version = SemanticVersion{1, 0, 0};
+            node.frequency = Frequency::Frame;
+            node.residency = Residency::Cpu;
+            ParamValue param;
+            param.type = ParamType::Float;
+            param.number = value;
+            node.params["value"] = std::move(param);
+            return node;
+        };
+        document.nodes.push_back(scalar("overflow_a", 1.0e308));
+        document.nodes.push_back(scalar("overflow_b", 1.0e308));
+        NodeDefinition mul;
+        mul.id = "overflow_mul";
+        mul.operator_id = "nw.math.mul";
+        mul.operator_version = SemanticVersion{1, 0, 0};
+        mul.frequency = Frequency::Frame;
+        mul.residency = Residency::Cpu;
+        NodeInput first;
+        first.port = "a";
+        first.source_node = "overflow_a";
+        first.source_port = "out";
+        NodeInput second;
+        second.port = "b";
+        second.source_node = "overflow_b";
+        second.source_port = "out";
+        mul.inputs = {first, second};
+        document.nodes.push_back(std::move(mul));
+        ValidationResult validation =
+            ValidateGraphDocument(document, registry);
+        bool rejected = validation.ok();
+        if (validation.ok()) {
+            GraphEvaluator evaluator(*validation.snapshot);
+            EvaluationResult evaluation =
+                evaluator.Evaluate(EvaluationContext{});
+            bool saw_failure = false;
+            for (const Diagnostic& diagnostic : evaluation.diagnostics) {
+                if (diagnostic.code == DiagnosticCode::EvaluationFailure &&
+                    diagnostic.source.node_id == "overflow_mul" &&
+                    diagnostic.source.port_id == "out") {
+                    saw_failure = true;
+                }
+            }
+            rejected = !evaluation.ok && saw_failure;
+        } else {
+            rejected = false;
+        }
+        checks.push_back({"nonfinite_evaluation_results_rejected", rejected});
     }
     {
         GraphDocument document;
@@ -986,6 +1254,9 @@ int main(int argc, char** argv) {
     }
     if (command == "cache") {
         return CacheCommand(args, registry);
+    }
+    if (command == "session-eval") {
+        return SessionEvalCommand(args, registry);
     }
     if (command == "last-valid") {
         return LastValidCommand(args, registry);

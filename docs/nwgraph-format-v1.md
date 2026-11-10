@@ -87,6 +87,13 @@ identifiers fail with `invalid_expression` and identify the node and
 literals, never hexadecimal floating-point spelling, so generated composition
 text remains valid expression/HLSL syntax.
 
+The expression parser checks the supported grammar rather than only token
+membership: unbalanced grouping, empty calls, missing argument separators,
+trailing input, and calls with the wrong number of arguments (for example
+`sin()` or `vec4(1, 2)`) are rejected. Numeric literals must parse to finite
+IEEE-754 values; a literal such as `1e999` is rejected with
+`invalid_expression`.
+
 ## Canonical semantic identity
 
 Semantic identity is SHA-256 over length-prefixed, type-tagged canonical fields:
@@ -122,11 +129,16 @@ selection, semantic hashes, seed derivation, or compiler acceptance.
 ## CPU reference evaluation and caching
 
 `GraphEvaluator` executes a deterministic topological order and memoizes each
-node's typed multi-output values. Cache keys include the frequency domain and
-frame/seed context. Missing and corrupt entries are cache misses.
+node's typed multi-output values. Cache keys include the node's structural
+semantic identity, the frequency domain, and the frame/seed context. Seed
+behaviors that intentionally depend on graph-wide identity include the snapshot
+semantic digest in their key as well. Missing and corrupt entries are cache
+misses.
 `ApplyInputChange` invalidates only the changed node and its transitive
-dependent closure. Evaluation failures return diagnostics and never publish a
-replacement snapshot.
+dependent closure. `GraphEvaluator::UpdateSnapshot` rebinds to a new immutable
+snapshot and invalidates every node whose semantic identity changed plus its
+dependent closure; unrelated entries remain reusable. Evaluation failures
+return diagnostics and never publish a replacement snapshot.
 
 Curve values carry their declared `linear` or `step` interpolation mode, and
 `nw.curve.sample` honors that mode. Texture resource bounds are enforced against
@@ -149,4 +161,24 @@ descriptors.
 
 `AuthoringSession::ApplyEdit` validates a complete new document before replacing
 the last valid immutable `GraphSnapshot`; invalid edits leave that snapshot and
-its editor layout untouched.
+its editor layout untouched. The session also runs the CPU reference evaluator
+on the candidate before publishing, so a graph that validates structurally but
+fails evaluation (for example non-finite arithmetic or a missing extension
+implementation) cannot replace the last valid snapshot. Snapshots are owned by
+shared immutable handles, so evaluators constructed before an edit continue to
+observe the exact old snapshot.
+
+## Authoring extension implementations
+
+An `ExtensionRegistration` may register both operator schemas and
+`OperatorImplementation` callbacks. Registration is atomic: duplicate ids,
+missing callbacks, or implementations without a matching schema reject the
+whole extension before any schema is published. The callback registry is an
+in-process authoring/compiler facility only. It is not a player plugin ABI and
+does not introduce a graph parser or operator interpreter into the player.
+
+Programmatic parameter values are shape-checked before any component traversal:
+`vec2`, `vec3`, `vec4`/`color`, and `mat4` require exactly 2, 3, 4, and 16
+components respectively, and non-vector parameters require zero components.
+Malformed component counts are `invalid_parameter_value` diagnostics and can
+never index past the 16-element storage.

@@ -43,11 +43,18 @@ contracts.
 6. **CPU reference behavior.** Control/math, curve, scene/camera/light/material,
    ShaderExpr composition, and practical procedural oracles have deterministic
    CPU reference evaluation. Cache invalidation is limited to the dependent
-   closure; missing/corrupt entries are misses.
+   closure; missing/corrupt entries are misses. Cache keys include structural
+   semantic identity, and snapshot rebinding invalidates only semantically
+   changed nodes and their dependents. Evaluated non-finite results are
+   evaluation failures rather than cacheable zero values.
 7. **No player runtime graph.** The player has no plugin ABI, graph parser, or
    operator interpreter. Logical types and serialization contain no D3D12
    resource pointers. GPU image correctness remains tolerance-based outside
    this task.
+8. **Authoring implementations are explicit.** Extensions register operator
+   schemas and CPU authoring/compiler callbacks atomically. The callback
+   registry lives only in the authoring translation unit; it is not a player
+   ABI.
 
 ## Explicit non-goals
 

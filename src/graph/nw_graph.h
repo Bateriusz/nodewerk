@@ -9,8 +9,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -236,19 +239,6 @@ public:
 private:
     std::vector<OperatorSchema> operators_;
 };
-
-struct ExtensionRegistration {
-    std::string extension_id;
-    SemanticVersion version{};
-    std::vector<OperatorSchema> operators;
-    std::string lowering_namespace;
-};
-
-// Authoring/compiler registration point. This is a static in-process registry;
-// there is no dynamic player plugin ABI and no runtime interpreter.
-bool RegisterAuthoringExtension(OperatorRegistry& registry,
-                                const ExtensionRegistration& extension,
-                                std::vector<std::string>& diagnostics);
 
 // ---------------------------------------------------------------------------
 // Capability profile identity and observed (non-semantic) hardware metadata
@@ -541,6 +531,42 @@ using LogicalValue = EvaluationValue;
 
 using OutputValues = std::map<std::string, LogicalValue>;
 
+// Authoring/compiler-side implementation entry point for an operator. The
+// function receives the immutable snapshot, the node declaration, and all
+// already-evaluated upstream values. It must be deterministic and must not
+// contain graphics-API objects. This in-process type is intentionally not a
+// dynamic player plugin ABI; the player never links this translation unit.
+using NodeEvaluationFunction = std::function<bool(
+    const GraphSnapshot&, const NodeDefinition&,
+    const std::map<std::string, OutputValues>&, const EvaluationContext&,
+    OutputValues&, Diagnostic&)>;
+
+struct OperatorImplementation {
+    std::string operator_id;
+    SemanticVersion operator_version{};
+    NodeEvaluationFunction evaluate;
+};
+
+struct ExtensionRegistration {
+    std::string extension_id;
+    SemanticVersion version{};
+    std::vector<OperatorSchema> operators;
+    std::vector<OperatorImplementation> implementations;
+    std::string lowering_namespace;
+};
+
+// Authoring/compiler registration point. This is a static in-process registry;
+// there is no dynamic player plugin ABI and no runtime interpreter. A failed
+// registration is atomic: neither schemas nor implementations are published.
+bool RegisterAuthoringExtension(OperatorRegistry& registry,
+                                const ExtensionRegistration& extension,
+                                std::vector<std::string>& diagnostics);
+
+// True when the operator has either a built-in CPU reference implementation or
+// an implementation registered by an authoring extension.
+bool HasAuthoringImplementation(std::string_view operator_id,
+                                const SemanticVersion& version);
+
 struct CacheStats {
     std::uint64_t hits = 0;
     std::uint64_t misses = 0;
@@ -558,8 +584,15 @@ struct EvaluationResult {
 class GraphEvaluator {
 public:
     explicit GraphEvaluator(const GraphSnapshot& snapshot);
+    explicit GraphEvaluator(std::shared_ptr<const GraphSnapshot> snapshot);
 
     EvaluationResult Evaluate(const EvaluationContext& context);
+
+    // Rebinds the evaluator to a new immutable snapshot. Cache entries for
+    // nodes whose semantic identity changed are invalidated together with their
+    // dependent closure; unrelated entries remain reusable.
+    void UpdateSnapshot(const GraphSnapshot& snapshot);
+    void UpdateSnapshot(std::shared_ptr<const GraphSnapshot> snapshot);
 
     // Invalidates only the changed node and its transitive dependent closure.
     void ApplyInputChange(const std::string& node_id);
@@ -570,6 +603,9 @@ public:
     bool HasValidCacheEntry(const std::string& node_id) const;
 
 private:
+    void RebuildDependents();
+    void InvalidateClosure(const std::set<std::string>& node_ids);
+
     struct CacheEntry {
         std::string key;
         OutputValues outputs;
@@ -577,7 +613,7 @@ private:
         bool corrupt = false;
     };
 
-    const GraphSnapshot& snapshot_;
+    std::shared_ptr<const GraphSnapshot> snapshot_;
     std::map<std::string, std::vector<std::string>> dependents_;
     std::map<std::string, std::vector<CacheEntry>> entries_;
 };
@@ -615,6 +651,9 @@ public:
     const GraphSnapshot* LastValid() const {
         return last_valid_ ? &*last_valid_ : nullptr;
     }
+    std::shared_ptr<const GraphSnapshot> LastValidShared() const {
+        return last_valid_;
+    }
     const EditorLayout& LastLayout() const { return last_layout_; }
     const std::vector<Diagnostic>& LastDiagnostics() const {
         return last_diagnostics_;
@@ -622,7 +661,7 @@ public:
 
 private:
     OperatorRegistry registry_;
-    std::optional<GraphSnapshot> last_valid_;
+    std::shared_ptr<GraphSnapshot> last_valid_;
     EditorLayout last_layout_;
     std::vector<Diagnostic> last_diagnostics_;
 };
