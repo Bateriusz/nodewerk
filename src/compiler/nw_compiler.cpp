@@ -197,10 +197,32 @@ std::string QueryDxcVersion(const std::string& dxc) {
 #else
     pclose(pipe);
 #endif
-    const std::regex version_pattern("([0-9]+\\.[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)");
-    std::smatch match;
-    if (std::regex_search(output, match, version_pattern)) {
-        return match.group(1);
+    // Extract the first dotted numeric version.  This deliberately avoids
+    // <regex> so the authoring frontend remains buildable with the same
+    // minimal standard-library subset used by the concrete Windows gate.
+    for (std::size_t i = 0; i < output.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(output[i]))) continue;
+        if (i != 0u &&
+            std::isdigit(static_cast<unsigned char>(output[i - 1u]))) {
+            continue;
+        }
+        std::size_t position = i;
+        int dot_count = 0;
+        while (position < output.size()) {
+            if (std::isdigit(static_cast<unsigned char>(output[position]))) {
+                ++position;
+                continue;
+            }
+            if (output[position] == '.' && dot_count < 3) {
+                ++dot_count;
+                ++position;
+                continue;
+            }
+            break;
+        }
+        if (dot_count >= 2) {
+            return output.substr(i, position - i);
+        }
     }
     return output.empty() ? "unknown" : output.substr(0, output.find('\n'));
 }
