@@ -1333,8 +1333,9 @@ def _validate_declared_shader_operations(
 def load_graph(path: str | os.PathLike[str]) -> GraphDocument:
     path = Path(path)
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+        source_bytes = path.read_bytes()
+        text = source_bytes.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
         raise CompilerError(f"cannot read graph '{path}': {exc}") from exc
     document, diagnostics = parse_graph_text(text, source_name=str(path))
     if document is None:
