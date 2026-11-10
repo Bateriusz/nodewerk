@@ -134,8 +134,10 @@ normalized range.
 
 Parameters declared with `NormalizationRule::Clamp01` (currently material
 metallic/specular and shader mix factor) are clamped to `[0, 1]` during
-authoring normalization and evaluation. GPU-pass resource ports and image
-passthrough operations carry bounded render-target descriptors.
+authoring normalization and evaluation. Non-finite values are never clamped;
+they remain finite-validation failures (`non_finite_parameter`). GPU-pass
+resource ports and image passthrough operations carry bounded render-target
+descriptors.
 
 `AuthoringSession::ApplyEdit` validates a complete new document before replacing
 the last valid immutable `GraphSnapshot`; invalid edits leave that snapshot and

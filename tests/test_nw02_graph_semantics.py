@@ -303,6 +303,8 @@ INVALID_CASES = {
     "invalid_type_mismatch.nwgraph": "port_type_mismatch",
     "invalid_dimension_mismatch.nwgraph": "port_dimension_mismatch",
     "invalid_nonfinite_parameter.nwgraph": "non_finite_parameter",
+    "invalid_clamp01_nonfinite_material.nwgraph": "non_finite_parameter",
+    "invalid_clamp01_nonfinite_shader.nwgraph": "non_finite_parameter",
     "invalid_curve_malformed.nwgraph": "invalid_parameter_value",
     "invalid_curve_nonfinite.nwgraph": "non_finite_parameter",
     "invalid_expression.nwgraph": "invalid_expression",

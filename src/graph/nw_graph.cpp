@@ -2315,14 +2315,18 @@ void ApplyClamp01Normalization(const ParamSpec& spec, ParamValue& value) {
         return;
     }
     if (value.type == ParamType::Float) {
-        value.number = NormalizeZero(std::clamp(value.number, 0.0, 1.0));
+        if (std::isfinite(value.number)) {
+            value.number = NormalizeZero(std::clamp(value.number, 0.0, 1.0));
+        }
         return;
     }
     if (value.type == ParamType::Vec2 || value.type == ParamType::Vec3 ||
         value.type == ParamType::Vec4 || value.type == ParamType::Color) {
         for (std::uint32_t i = 0; i < value.component_count; ++i) {
-            value.components[i] =
-                NormalizeZero(std::clamp(value.components[i], 0.0, 1.0));
+            if (std::isfinite(value.components[i])) {
+                value.components[i] =
+                    NormalizeZero(std::clamp(value.components[i], 0.0, 1.0));
+            }
         }
     }
 }
