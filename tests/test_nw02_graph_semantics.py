@@ -23,8 +23,14 @@ COMMON_DIGEST = (
 def _find_cxx() -> str | None:
     configured = os.environ.get("CXX")
     if configured:
-        candidate = shutil.which(configured) or (configured if Path(configured).exists() else None)
-        if candidate:
+        candidate = shutil.which(configured) or (
+            configured if Path(configured).exists() else None
+        )
+        configured_name = Path(candidate or configured).name.lower()
+        if candidate and (
+            "++" in configured_name
+            or configured_name in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"}
+        ):
             return candidate
     for name in ("c++", "g++", "clang++", "cl", "cl.exe"):
         found = shutil.which(name)

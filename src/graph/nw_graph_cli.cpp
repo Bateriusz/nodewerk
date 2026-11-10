@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <sstream>
 #include <string>

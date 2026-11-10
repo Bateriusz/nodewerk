@@ -815,7 +815,7 @@ bool operator<(const SemanticVersion& a, const SemanticVersion& b) noexcept {
 
 const PortSpec* OperatorSchema::FindInput(std::string_view id) const {
     for (const auto& port : inputs) {
-        if (std::string_view(port.id) == id) {
+        if (std::string_view(port.id.data(), port.id.size()) == id) {
             return &port;
         }
     }
@@ -824,7 +824,7 @@ const PortSpec* OperatorSchema::FindInput(std::string_view id) const {
 
 const PortSpec* OperatorSchema::FindOutput(std::string_view id) const {
     for (const auto& port : outputs) {
-        if (std::string_view(port.id) == id) {
+        if (std::string_view(port.id.data(), port.id.size()) == id) {
             return &port;
         }
     }
@@ -833,7 +833,7 @@ const PortSpec* OperatorSchema::FindOutput(std::string_view id) const {
 
 const ParamSpec* OperatorSchema::FindParam(std::string_view id) const {
     for (const auto& param : params) {
-        if (std::string_view(param.id) == id) {
+        if (std::string_view(param.id.data(), param.id.size()) == id) {
             return &param;
         }
     }
@@ -857,7 +857,7 @@ bool OperatorRegistry::Register(OperatorSchema schema) {
 const OperatorSchema* OperatorRegistry::Find(
     std::string_view id, const SemanticVersion& version) const {
     for (const auto& schema : operators_) {
-        if (std::string_view(schema.id) == id &&
+        if (std::string_view(schema.id.data(), schema.id.size()) == id &&
             schema.version == version) {
             return &schema;
         }
@@ -867,7 +867,7 @@ const OperatorSchema* OperatorRegistry::Find(
 
 const OperatorSchema* OperatorRegistry::FindAny(std::string_view id) const {
     for (const auto& schema : operators_) {
-        if (std::string_view(schema.id) == id) {
+        if (std::string_view(schema.id.data(), schema.id.size()) == id) {
             return &schema;
         }
     }
@@ -1062,11 +1062,20 @@ ResourceDescriptor RenderImageDescriptor() {
     return descriptor;
 }
 
-const std::vector<Frequency> kAllFrequencies = {
-    Frequency::CompileTime, Frequency::Initialization, Frequency::Frame};
-const std::vector<Frequency> kRuntimeFrequencies = {
-    Frequency::Initialization, Frequency::Frame};
-const std::vector<Frequency> kFrameFrequency = {Frequency::Frame};
+const std::vector<Frequency>& AllFrequencies() {
+    static const std::vector<Frequency> frequencies = {
+        Frequency::CompileTime, Frequency::Initialization, Frequency::Frame};
+    return frequencies;
+}
+const std::vector<Frequency>& RuntimeFrequencies() {
+    static const std::vector<Frequency> frequencies = {
+        Frequency::Initialization, Frequency::Frame};
+    return frequencies;
+}
+const std::vector<Frequency>& FrameFrequency() {
+    static const std::vector<Frequency> frequencies = {Frequency::Frame};
+    return frequencies;
+}
 
 } // namespace
 
@@ -1077,7 +1086,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.scalar_const", OperatorKind::CpuControl,
-            "Full-precision scalar authoring constant", kAllFrequencies,
+            "Full-precision scalar authoring constant", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.math");
         schema.outputs = {Port("out", LogicalType::Scalar, Residency::Cpu)};
         schema.params = {FloatParam("value", 0.0)};
@@ -1092,7 +1101,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
              {"nw.math.vec4_const", 4u}}) {
         OperatorSchema schema = BaseOperator(
             id, OperatorKind::CpuControl,
-            "Full-precision vector authoring constant", kAllFrequencies,
+            "Full-precision vector authoring constant", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.math");
         schema.outputs = {
             Port("out", LogicalType::Vector, Residency::Cpu, dimension)};
@@ -1105,7 +1114,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.mat4_const", OperatorKind::CpuControl,
-            "Full-precision matrix authoring constant", kAllFrequencies,
+            "Full-precision matrix authoring constant", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.math");
         schema.outputs = {
             Port("out", LogicalType::Matrix, Residency::Cpu, 4u)};
@@ -1115,7 +1124,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.add", OperatorKind::CpuControl, "Scalar addition",
-            kAllFrequencies, Frequency::Frame, "nw.lower.cpu.math");
+            AllFrequencies(), Frequency::Frame, "nw.lower.cpu.math");
         schema.inputs = {Port("a", LogicalType::Scalar, Residency::Cpu),
                          Port("b", LogicalType::Scalar, Residency::Cpu)};
         schema.outputs = {Port("out", LogicalType::Scalar, Residency::Cpu)};
@@ -1124,7 +1133,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.mul", OperatorKind::CpuControl, "Scalar multiplication",
-            kAllFrequencies, Frequency::Frame, "nw.lower.cpu.math");
+            AllFrequencies(), Frequency::Frame, "nw.lower.cpu.math");
         schema.inputs = {Port("a", LogicalType::Scalar, Residency::Cpu),
                          Port("b", LogicalType::Scalar, Residency::Cpu)};
         schema.outputs = {Port("out", LogicalType::Scalar, Residency::Cpu)};
@@ -1133,7 +1142,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.sin", OperatorKind::CpuControl, "Scalar sine",
-            kAllFrequencies, Frequency::Frame, "nw.lower.cpu.math");
+            AllFrequencies(), Frequency::Frame, "nw.lower.cpu.math");
         schema.inputs = {Port("x", LogicalType::Scalar, Residency::Cpu)};
         schema.outputs = {Port("out", LogicalType::Scalar, Residency::Cpu)};
         registry.Register(std::move(schema));
@@ -1141,7 +1150,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.clamp01", OperatorKind::CpuControl,
-            "Clamp scalar to the unit interval", kAllFrequencies,
+            "Clamp scalar to the unit interval", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.math");
         schema.inputs = {Port("x", LogicalType::Scalar, Residency::Cpu)};
         schema.outputs = {Port("out", LogicalType::Scalar, Residency::Cpu)};
@@ -1150,7 +1159,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.vec4_scale", OperatorKind::CpuControl,
-            "Scale a vec4 by a scalar", kAllFrequencies, Frequency::Frame,
+            "Scale a vec4 by a scalar", AllFrequencies(), Frequency::Frame,
             "nw.lower.cpu.math");
         schema.inputs = {Port("v", LogicalType::Vector, Residency::Cpu, 4u),
                          Port("s", LogicalType::Scalar, Residency::Cpu)};
@@ -1161,7 +1170,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.vec4_split", OperatorKind::CpuControl,
-            "Split a vec4 into four scalar outputs", kAllFrequencies,
+            "Split a vec4 into four scalar outputs", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.math");
         schema.inputs = {Port("v", LogicalType::Vector, Residency::Cpu, 4u)};
         schema.outputs = {
@@ -1174,7 +1183,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.math.dot", OperatorKind::CpuControl, "Vec3 dot product",
-            kAllFrequencies, Frequency::Frame, "nw.lower.cpu.math");
+            AllFrequencies(), Frequency::Frame, "nw.lower.cpu.math");
         schema.inputs = {Port("a", LogicalType::Vector, Residency::Cpu, 3u),
                          Port("b", LogicalType::Vector, Residency::Cpu, 3u)};
         schema.outputs = {Port("out", LogicalType::Scalar, Residency::Cpu)};
@@ -1183,7 +1192,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.control.smoothstep", OperatorKind::CpuControl,
-            "Deterministic scalar smoothstep", kAllFrequencies,
+            "Deterministic scalar smoothstep", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.control");
         schema.inputs = {Port("edge0", LogicalType::Scalar, Residency::Cpu),
                          Port("edge1", LogicalType::Scalar, Residency::Cpu),
@@ -1194,7 +1203,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.control.seed", OperatorKind::CpuControl,
-            "Explicit or graph-derived deterministic seed", kAllFrequencies,
+            "Explicit or graph-derived deterministic seed", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.control");
         schema.outputs = {Port("out", LogicalType::Scalar, Residency::Cpu)};
         schema.default_seed_behavior = SeedBehavior::DerivedFromGraph;
@@ -1206,7 +1215,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.control.image_cpu_passthrough", OperatorKind::CpuControl,
-            "Explicit CPU-resident render-image passthrough", kAllFrequencies,
+            "Explicit CPU-resident render-image passthrough", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.control");
         schema.inputs = {Port("image", LogicalType::RenderImage,
                               Residency::Cpu)};
@@ -1217,7 +1226,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.proc.hash_noise", OperatorKind::CpuControl,
-            "Deterministic hash-noise procedural oracle", kAllFrequencies,
+            "Deterministic hash-noise procedural oracle", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.procedural");
         schema.inputs = {Port("seed", LogicalType::Scalar, Residency::Cpu)};
         schema.outputs = {Port("out", LogicalType::Scalar, Residency::Cpu)};
@@ -1230,7 +1239,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.proc.value_noise", OperatorKind::CpuControl,
-            "Deterministic value-noise procedural oracle", kAllFrequencies,
+            "Deterministic value-noise procedural oracle", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.procedural");
         schema.inputs = {
             Port("position", LogicalType::Vector, Residency::Cpu, 3u)};
@@ -1240,7 +1249,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.proc.checker", OperatorKind::CpuControl,
-            "Deterministic checker procedural oracle", kAllFrequencies,
+            "Deterministic checker procedural oracle", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.procedural");
         schema.inputs = {
             Port("uv", LogicalType::Vector, Residency::Cpu, 2u),
@@ -1251,7 +1260,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.proc.palette", OperatorKind::CpuControl,
-            "Deterministic cosine palette procedural oracle", kAllFrequencies,
+            "Deterministic cosine palette procedural oracle", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.procedural");
         schema.inputs = {Port("t", LogicalType::Scalar, Residency::Cpu)};
         schema.outputs = {
@@ -1261,7 +1270,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.curve.keyframes", OperatorKind::CpuControl,
-            "Canonical keyframe curve authoring value", kAllFrequencies,
+            "Canonical keyframe curve authoring value", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.curve");
         schema.outputs = {Port("out", LogicalType::Curve, Residency::Cpu)};
         schema.params = {
@@ -1272,7 +1281,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.curve.sample", OperatorKind::CpuControl,
-            "Sample a canonical curve at a scalar time", kAllFrequencies,
+            "Sample a canonical curve at a scalar time", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.curve");
         schema.inputs = {Port("curve", LogicalType::Curve, Residency::Cpu),
                          Port("t", LogicalType::Scalar, Residency::Cpu)};
@@ -1282,7 +1291,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.scene.flat", OperatorKind::CpuControl,
-            "Flat scene table authoring value", kAllFrequencies,
+            "Flat scene table authoring value", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.scene");
         schema.outputs = {
             Port("out", LogicalType::SceneTable, Residency::Cpu)};
@@ -1292,7 +1301,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.camera.perspective", OperatorKind::CpuControl,
-            "Perspective camera authoring value", kAllFrequencies,
+            "Perspective camera authoring value", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.camera");
         schema.outputs = {Port("out", LogicalType::Camera, Residency::Cpu)};
         schema.params = {
@@ -1306,7 +1315,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.light.directional", OperatorKind::CpuControl,
-            "Directional light authoring value", kAllFrequencies,
+            "Directional light authoring value", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.light");
         schema.outputs = {Port("out", LogicalType::Light, Residency::Cpu)};
         ParamSpec direction = VectorParam("direction", ParamType::Vec3);
@@ -1321,7 +1330,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.material.describe", OperatorKind::CpuControl,
-            "Material description authoring value", kAllFrequencies,
+            "Material description authoring value", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.material");
         schema.inputs = {
             Port("base_color", LogicalType::Vector, Residency::Cpu, 4u),
@@ -1339,7 +1348,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.shader.vec4_const", OperatorKind::PureShaderExpr,
-            "Shader expression vec4 constant", kAllFrequencies,
+            "Shader expression vec4 constant", AllFrequencies(),
             Frequency::Frame, "nw.lower.shader.expr");
         schema.outputs = {
             Port("out", LogicalType::ShaderExpr, Residency::Logical)};
@@ -1350,7 +1359,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.shader.expr", OperatorKind::PureShaderExpr,
-            "Supported-operation shader expression", kAllFrequencies,
+            "Supported-operation shader expression", AllFrequencies(),
             Frequency::Frame, "nw.lower.shader.expr");
         schema.outputs = {
             Port("out", LogicalType::ShaderExpr, Residency::Logical)};
@@ -1365,7 +1374,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.shader.add", OperatorKind::PureShaderExpr,
-            "Pure ShaderExpr addition", kAllFrequencies, Frequency::Frame,
+            "Pure ShaderExpr addition", AllFrequencies(), Frequency::Frame,
             "nw.lower.shader.expr");
         schema.inputs = {
             Port("a", LogicalType::ShaderExpr, Residency::Logical),
@@ -1378,7 +1387,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.shader.mul", OperatorKind::PureShaderExpr,
-            "Pure ShaderExpr multiplication", kAllFrequencies, Frequency::Frame,
+            "Pure ShaderExpr multiplication", AllFrequencies(), Frequency::Frame,
             "nw.lower.shader.expr");
         schema.inputs = {
             Port("a", LogicalType::ShaderExpr, Residency::Logical),
@@ -1391,7 +1400,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.shader.mix", OperatorKind::PureShaderExpr,
-            "Pure ShaderExpr mix", kAllFrequencies, Frequency::Frame,
+            "Pure ShaderExpr mix", AllFrequencies(), Frequency::Frame,
             "nw.lower.shader.expr");
         schema.inputs = {
             Port("a", LogicalType::ShaderExpr, Residency::Logical),
@@ -1408,7 +1417,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.texture.procedural", OperatorKind::CpuControl,
-            "Bounded procedural texture recipe", kAllFrequencies,
+            "Bounded procedural texture recipe", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.recipe");
         schema.outputs = {ResourcePort(
             "out", LogicalType::TextureRecipe, Residency::Logical,
@@ -1425,7 +1434,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.buffer.recipe", OperatorKind::CpuControl,
-            "Bounded buffer recipe", kAllFrequencies, Frequency::Frame,
+            "Bounded buffer recipe", AllFrequencies(), Frequency::Frame,
             "nw.lower.cpu.recipe");
         schema.outputs = {ResourcePort(
             "out", LogicalType::BufferRecipe, Residency::Logical,
@@ -1439,7 +1448,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.mesh.recipe", OperatorKind::CpuControl,
-            "Bounded procedural mesh recipe", kAllFrequencies,
+            "Bounded procedural mesh recipe", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.recipe");
         schema.outputs = {ResourcePort(
             "out", LogicalType::MeshRecipe, Residency::Logical,
@@ -1453,7 +1462,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.residency.upload_texture", OperatorKind::GpuPass,
-            "Explicit texture recipe upload", kRuntimeFrequencies,
+            "Explicit texture recipe upload", RuntimeFrequencies(),
             Frequency::Frame, "nw.lower.hlsl.residency");
         schema.inputs = {ResourcePort(
             "texture", LogicalType::TextureRecipe, Residency::Logical,
@@ -1469,7 +1478,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.residency.upload_buffer", OperatorKind::GpuPass,
-            "Explicit buffer recipe upload", kRuntimeFrequencies,
+            "Explicit buffer recipe upload", RuntimeFrequencies(),
             Frequency::Frame, "nw.lower.hlsl.residency");
         schema.inputs = {ResourcePort(
             "buffer", LogicalType::BufferRecipe, Residency::Logical,
@@ -1485,7 +1494,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.residency.upload_mesh", OperatorKind::GpuPass,
-            "Explicit mesh recipe upload", kRuntimeFrequencies,
+            "Explicit mesh recipe upload", RuntimeFrequencies(),
             Frequency::Frame, "nw.lower.hlsl.residency");
         schema.inputs = {ResourcePort(
             "mesh", LogicalType::MeshRecipe, Residency::Logical,
@@ -1517,7 +1526,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.residency.cpu_to_gpu", OperatorKind::GpuPass,
-            "Explicit render-image upload", kRuntimeFrequencies,
+            "Explicit render-image upload", RuntimeFrequencies(),
             Frequency::Frame, "nw.lower.hlsl.residency");
         schema.inputs = {
             ResourcePort("image", LogicalType::RenderImage, Residency::Cpu,
@@ -1547,7 +1556,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         OperatorSchema schema = BaseOperator(
             "nw.render.fullscreen", OperatorKind::GpuPass,
             "Fullscreen shader pass producing a render image",
-            kRuntimeFrequencies, Frequency::Frame, "nw.lower.hlsl.render");
+            RuntimeFrequencies(), Frequency::Frame, "nw.lower.hlsl.render");
         schema.inputs = {
             Port("shader", LogicalType::ShaderExpr, Residency::Logical),
             ResourcePort("texture", LogicalType::TextureRecipe,
@@ -1563,7 +1572,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         OperatorSchema schema = BaseOperator(
             "nw.render.gbuffer", OperatorKind::GpuPass,
             "G-buffer pass with typed multi-output render images",
-            kRuntimeFrequencies, Frequency::Frame, "nw.lower.hlsl.render");
+            RuntimeFrequencies(), Frequency::Frame, "nw.lower.hlsl.render");
         schema.inputs = {
             ResourcePort("mesh", LogicalType::MeshRecipe, Residency::Gpu,
                          MeshDescriptor()),
@@ -1583,7 +1592,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.render.composite", OperatorKind::GpuPass,
-            "Composite typed render images", kRuntimeFrequencies,
+            "Composite typed render images", RuntimeFrequencies(),
             Frequency::Frame, "nw.lower.hlsl.render");
         schema.inputs = {
             ResourcePort("color", LogicalType::RenderImage, Residency::Gpu,
@@ -1600,7 +1609,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     {
         OperatorSchema schema = BaseOperator(
             "nw.render.present", OperatorKind::GpuPass,
-            "Presentable render image", kFrameFrequency, Frequency::Frame,
+            "Presentable render image", FrameFrequency(), Frequency::Frame,
             "nw.lower.hlsl.render");
         schema.inputs = {
             ResourcePort("image", LogicalType::RenderImage, Residency::Gpu,
@@ -3920,7 +3929,8 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
     };
     const auto input = [&](std::string_view port) -> const EvaluationValue* {
         for (const auto& connection : node.inputs) {
-            if (std::string_view(connection.port) == port) {
+            if (std::string_view(connection.port.data(),
+                                 connection.port.size()) == port) {
                 return FindInputValue(
                     evaluated, connection,
                     std::string(port.data(), port.size()));
