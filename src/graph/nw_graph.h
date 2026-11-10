@@ -371,6 +371,10 @@ struct NodeDefinition {
     SemanticVersion operator_version{};
     Frequency frequency = Frequency::Frame;
     Residency residency = Residency::Cpu;
+    // Set by ParseGraphText when the field was present in authoring text.
+    // Programmatic migrations preserve non-default values even without these
+    // flags; set them when an explicit declaration happens to equal the
+    // NodeDefinition default (for example an explicit `seed none`).
     bool has_declared_frequency = false;
     bool has_declared_residency = false;
     bool has_declared_seed_behavior = false;

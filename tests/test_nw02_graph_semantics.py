@@ -735,6 +735,28 @@ def test_migration_preserves_explicit_legacy_seed_none(
     assert "unsupported_seed_behavior" in diagnostic_codes(payload)
 
 
+def test_migration_does_not_invent_missing_explicit_seed_value(
+    cli_binary: Path, tmp_path: Path
+) -> None:
+    legacy = fixture("invalid_legacy_missing_explicit_seed.nwgraph")
+    migrated = run_cli(cli_binary, "migrate", legacy)
+    assert migrated.returncode == 0, migrated.stderr
+    assert "seed explicit\n" in migrated.stdout
+    assert "seed explicit 0" not in migrated.stdout
+
+    migrated_path = write_variant(
+        tmp_path, "legacy_missing_explicit_seed.nwgraph", migrated.stdout
+    )
+    proc, payload = run_json(cli_binary, "validate", migrated_path)
+    assert proc.returncode != 0, payload
+    diagnostic = find_diagnostic(payload, "missing_explicit_seed")
+    assert diagnostic["node_id"] == "legacy_missing_seed"
+
+    proc, payload = run_json(cli_binary, "validate", legacy, "--migrate")
+    assert proc.returncode != 0, payload
+    assert "missing_explicit_seed" in diagnostic_codes(payload)
+
+
 def test_missing_profile_directive_is_rejected(cli_binary: Path) -> None:
     proc, payload = run_json(cli_binary, "validate", fixture("invalid_missing_profile.nwgraph"))
     assert proc.returncode != 0, payload

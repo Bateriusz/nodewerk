@@ -48,7 +48,13 @@ exported content.
   declared legacy residency, frequency, and seed behavior so validation can
   reject incompatible declarations; it never silently repairs authoring
   semantics. For example, an explicit legacy `seed none` is preserved and
-  rejected for operators whose schemas do not allow `none`.
+  rejected for operators whose schemas do not allow `none`. An explicit
+  `seed explicit` without a value is preserved without inventing `0`, so
+  validation reports `missing_explicit_seed`.
+- Programmatic `GraphDocument` nodes preserve non-default frequency and seed
+  behavior during migration. Callers must set `has_declared_frequency` or
+  `has_declared_seed_behavior` when an explicit declaration happens to equal
+  the `NodeDefinition` default (for example `seed none`).
 - Unknown future schema versions are rejected with `unknown_schema_version`.
 - Unknown operator ids and unknown operator versions are rejected. Operator
   semantic changes require a new semantic version; operator contract hashes

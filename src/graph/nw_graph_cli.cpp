@@ -835,6 +835,62 @@ int SelfTestCommand(const OperatorRegistry& registry) {
                                SemanticVersion{1, 0, 0}) != nullptr &&
                  extension_diagnostics.empty()});
     }
+    {
+        GraphDocument document;
+        document.schema_version = 0u;
+        NodeDefinition node;
+        node.id = "programmatic_legacy";
+        node.operator_id = "nw.math.scalar_const";
+        node.frequency = Frequency::Initialization;
+        node.seed.behavior = SeedBehavior::Explicit;
+        node.seed.has_explicit_seed = true;
+        node.seed.explicit_seed = 7u;
+        document.nodes.push_back(std::move(node));
+        MigrationResult migration =
+            MigrateGraphDocument(document, registry);
+        bool preserved = migration.ok() && migration.document.has_value() &&
+                         migration.document->nodes.size() == 1u;
+        if (preserved) {
+            const NodeDefinition& migrated = migration.document->nodes[0];
+            preserved = migrated.frequency == Frequency::Initialization &&
+                        migrated.seed.behavior == SeedBehavior::Explicit &&
+                        migrated.seed.has_explicit_seed &&
+                        migrated.seed.explicit_seed == 7u;
+        }
+        checks.push_back(
+            {"programmatic_migration_preserves_nondefault_declarations",
+             preserved});
+    }
+    {
+        GraphDocument document;
+        document.schema_version = 0u;
+        NodeDefinition node;
+        node.id = "programmatic_seed_none";
+        node.operator_id = "nw.control.seed";
+        node.has_declared_seed_behavior = true;
+        node.seed.behavior = SeedBehavior::None;
+        document.nodes.push_back(std::move(node));
+        MigrationResult migration =
+            MigrateGraphDocument(document, registry);
+        bool preserved = migration.ok() && migration.document.has_value() &&
+                         migration.document->nodes.size() == 1u &&
+                         migration.document->nodes[0].seed.behavior ==
+                             SeedBehavior::None;
+        bool rejected = false;
+        if (migration.document.has_value()) {
+            ValidationResult validation =
+                ValidateGraphDocument(*migration.document, registry);
+            for (const Diagnostic& diagnostic : validation.diagnostics) {
+                if (diagnostic.code ==
+                    DiagnosticCode::UnsupportedSeedBehavior) {
+                    rejected = true;
+                }
+            }
+        }
+        checks.push_back(
+            {"programmatic_migration_preserves_explicit_seed_none",
+             preserved && rejected});
+    }
     bool all = true;
     std::cout << "{\"ok\":true,\"checks\":[";
     for (std::size_t i = 0; i < checks.size(); ++i) {

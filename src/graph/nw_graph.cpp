@@ -4097,7 +4097,8 @@ MigrationResult MigrateGraphDocument(const GraphDocument& document,
         const OperatorSchema* schema =
             registry.Find(node.operator_id, node.operator_version);
         if (schema != nullptr) {
-            if (!node.has_declared_frequency) {
+            if (!node.has_declared_frequency &&
+                node.frequency == Frequency::Frame) {
                 node.frequency = schema->frequency_policy.default_frequency;
             }
             // Do not repair an explicit legacy residency declaration. If the
@@ -4107,7 +4108,9 @@ MigrationResult MigrateGraphDocument(const GraphDocument& document,
             if (!node.has_declared_residency) {
                 node.residency = schema->PrimaryResidency();
             }
-            if (!node.has_declared_seed_behavior) {
+            if (!node.has_declared_seed_behavior &&
+                node.seed.behavior == SeedBehavior::None &&
+                schema->default_seed_behavior != SeedBehavior::None) {
                 node.seed.behavior = schema->default_seed_behavior;
             }
         }
@@ -4171,7 +4174,11 @@ std::string EmitDocumentText(const GraphDocument& document) {
         if (node->seed.behavior != SeedBehavior::None ||
             node->has_declared_seed_behavior) {
             if (node->seed.behavior == SeedBehavior::Explicit) {
-                out << "  seed explicit " << node->seed.explicit_seed << "\n";
+                out << "  seed explicit";
+                if (node->seed.has_explicit_seed) {
+                    out << " " << node->seed.explicit_seed;
+                }
+                out << "\n";
             } else if (node->seed.behavior == SeedBehavior::ExplicitNodeId) {
                 out << "  seed node-id " << node->seed.node_id << "\n";
             } else {
