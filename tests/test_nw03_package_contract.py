@@ -350,6 +350,11 @@ def test_package_optional_profile_identity_roundtrips() -> None:
 
 
 def test_cpp_package_reader_parity_when_compiler_available(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip(
+            "Cross-language package parity is exercised on POSIX hosts; "
+            "Windows CMake builds cover the native package library."
+        )
     compiler = None
     for name in ("clang++", "g++", "c++"):
         compiler = shutil.which(name)

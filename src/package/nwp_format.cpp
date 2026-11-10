@@ -212,20 +212,6 @@ bool HasErrors(const std::vector<Diagnostic>& diagnostics) {
     return !diagnostics.empty();
 }
 
-std::string Join(const std::vector<std::string>& values, std::string_view sep) {
-    std::string out;
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        if (i != 0) out += sep;
-        out += values[i];
-    }
-    return out;
-}
-
-template <typename T>
-bool Contains(const std::vector<T>& values, const T& value) {
-    return std::find(values.begin(), values.end(), value) != values.end();
-}
-
 std::uint16_t ReadU16(const std::uint8_t* data) {
     return static_cast<std::uint16_t>(data[0]) |
            static_cast<std::uint16_t>(data[1] << 8);
@@ -436,19 +422,6 @@ enum class FieldType : std::uint8_t {
     Bytes = 7,
 };
 
-std::string_view FieldTypeName(FieldType type) {
-    switch (type) {
-    case FieldType::U32: return "u32";
-    case FieldType::U64: return "u64";
-    case FieldType::I64: return "i64";
-    case FieldType::Bool: return "bool";
-    case FieldType::String: return "string";
-    case FieldType::StringList: return "string_list";
-    case FieldType::Bytes: return "bytes";
-    }
-    return "unknown";
-}
-
 std::map<std::string, FieldType> CapabilityFields() {
     return {
         {"agility_sdk_required", FieldType::Bool},
@@ -489,7 +462,8 @@ std::string CanonicalCapabilityJson(const CapabilityRecord& capability) {
     std::ostringstream out;
     out << "{";
     bool first = true;
-    for (const auto& [name, type] : fields) {
+    for (const auto& entry : fields) {
+        const std::string& name = entry.first;
         if (name == "profile_fingerprint") {
             continue;
         }
@@ -1779,8 +1753,8 @@ std::vector<std::uint8_t> EncodePackage(
         writer.U64(size);
         writer.U32(0);
     }
-    for (const auto& [name, _offset, _size] : entries) {
-        const auto& payload = sections.at(name);
+    for (const auto& entry : entries) {
+        const auto& payload = sections.at(std::get<0>(entry));
         writer.bytes.insert(writer.bytes.end(), payload.begin(), payload.end());
     }
     const std::string checksum = Sha256Hex(writer.bytes);
@@ -2098,7 +2072,8 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                           std::string(kSectionCapability));
             return false;
         }
-        for (const auto& [name, _type] : fields) {
+        for (const auto& field_entry : fields) {
+            const std::string& name = field_entry.first;
             if (seen_fields.count(name) == 0u) {
                 AddDiagnostic(diagnostics, "package_capability_missing_field",
                               "CAP section is missing required field '" + name + "'",

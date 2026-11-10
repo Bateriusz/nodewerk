@@ -554,14 +554,23 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="nw03-verify-") as temporary:
         work_root = Path(temporary)
         results = run_contract_checks(work_root)
-        results.append(check_sanitizer_fuzz(work_root))
         if args.mode == "Full":
+            results.append(check_sanitizer_fuzz(work_root))
             results.append(check_clean_directory_reproducibility(args.dxc, work_root))
             if not args.skip_pytest:
                 results.append(_run_pytest())
         else:
             # ContractsOnly still verifies the package/lowering contract but
             # deliberately treats unavailable DXC/sanitizer as non-required.
+            results.append(
+                CheckResult(
+                    "sanitizer_native_parser_fuzz",
+                    False,
+                    False,
+                    "not run in ContractsOnly mode",
+                    unavailable=True,
+                )
+            )
             results.append(
                 CheckResult(
                     "offline_dxc_compilation",

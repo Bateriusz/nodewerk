@@ -221,7 +221,7 @@ LoweringResult LowerGraphSnapshot(const graph::GraphSnapshot& snapshot,
     if (!evaluation.ok) {
         for (const auto& diagnostic : evaluation.diagnostics) {
             LoweringDiagnostic lowered;
-            lowered.code = graph::ToString(diagnostic.code);
+            lowered.code = std::string(graph::ToString(diagnostic.code));
             lowered.message = diagnostic.message;
             lowered.node_id = diagnostic.source.node_id;
             lowered.operator_id = diagnostic.source.operator_id;
