@@ -29,6 +29,9 @@ Quoted values use double quotes with `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
 Comments begin with `#` outside quoted strings. Numeric vector/matrix parameters
 accept whitespace- or comma-separated components.
 
+`profile` is required. A document without a `profile` directive is rejected
+rather than receiving the default capability identity implicitly.
+
 `layout` records editor-only positions. It is parsed into `EditorLayout` and is
 excluded from canonical semantic bytes, semantic hashes, seed derivation, and
 exported content.
@@ -40,7 +43,9 @@ exported content.
   `migration_required`.
 - `nw_graph_cli migrate` and `validate --migrate` apply the explicit
   `nwgraph-v0-to-v1` migration, which adds the registered semantic operator
-  version to legacy node declarations.
+  version to legacy node declarations. The migration preserves an explicitly
+  declared legacy residency so validation can reject it if it is incompatible
+  with the operator; it never silently repairs authoring semantics.
 - Unknown future schema versions are rejected with `unknown_schema_version`.
 - Unknown operator ids and unknown operator versions are rejected. Operator
   semantic changes require a new semantic version; operator contract hashes
@@ -59,6 +64,15 @@ residency. CPU readback requires `nw.residency.gpu_to_cpu` or
 `nw.readback.scalar`; a direct GPU-to-CPU connection is `implicit_readback`.
 Logical recipes require an explicit upload (`nw.residency.upload_*`); a direct
 logical-to-GPU connection is `implicit_upload`.
+
+## Shader expressions
+
+`nw.shader.expr` accepts only identifiers and functions declared in the
+operator's `shader_operations` whitelist. Numeric literals, swizzles (`.x`,
+`.xyzw`, `.rgba`), parentheses, commas, and arithmetic composition operators are
+syntax, not implicitly declared operations. Unknown function calls or
+identifiers fail with `invalid_expression` and identify the node and
+`expression` parameter.
 
 ## Canonical semantic identity
 
@@ -100,6 +114,11 @@ frame/seed context. Missing and corrupt entries are cache misses.
 `ApplyInputChange` invalidates only the changed node and its transitive
 dependent closure. Evaluation failures return diagnostics and never publish a
 replacement snapshot.
+
+Curve values carry their declared `linear` or `step` interpolation mode, and
+`nw.curve.sample` honors that mode. Texture resource bounds are enforced against
+the selected format's bytes-per-element as well as width/height limits; buffer
+and mesh recipes enforce their declared byte/vertex/index descriptors.
 
 `AuthoringSession::ApplyEdit` validates a complete new document before replacing
 the last valid immutable `GraphSnapshot`; invalid edits leave that snapshot and

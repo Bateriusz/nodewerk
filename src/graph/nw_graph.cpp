@@ -1209,7 +1209,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         schema.default_seed_behavior = SeedBehavior::DerivedFromGraph;
         schema.allowed_seed_behaviors = {
             SeedBehavior::Explicit, SeedBehavior::DerivedFromGraph,
-            SeedBehavior::DerivedFromUpstream, SeedBehavior::ExplicitNodeId};
+            SeedBehavior::ExplicitNodeId};
         registry.Register(std::move(schema));
     }
     {
@@ -2112,7 +2112,27 @@ std::vector<std::string> SplitCommaTokens(const std::vector<std::string>& tokens
     return out;
 }
 
-bool IsValidExpression(std::string_view expression, std::string& reason) {
+bool IsShaderIdentifierChar(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+bool IsSwizzleSelector(std::string_view selector) {
+    if (selector.empty() || selector.size() > 4u) {
+        return false;
+    }
+    static constexpr std::string_view kSwizzleChars = "xyzwrgbastpq";
+    for (char c : selector) {
+        if (kSwizzleChars.find(c) == std::string_view::npos) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IsValidExpression(std::string_view expression,
+                       const std::vector<std::string>& operations,
+                       std::string& reason) {
     if (expression.empty()) {
         reason = "shader expression is empty";
         return false;
@@ -2132,6 +2152,127 @@ bool IsValidExpression(std::string_view expression, std::string& reason) {
             reason = "shader expression contains unsupported character";
             return false;
         }
+    }
+
+    const auto operation_allowed = [&](std::string_view identifier) {
+        for (const auto& operation : operations) {
+            if (std::string_view(operation) == identifier) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    std::size_t i = 0;
+    while (i < expression.size()) {
+        const char c = expression[i];
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            ++i;
+            continue;
+        }
+
+        // Numeric literal (including a leading decimal point such as ".5").
+        if ((c >= '0' && c <= '9') ||
+            (c == '.' && i + 1u < expression.size() &&
+             expression[i + 1u] >= '0' && expression[i + 1u] <= '9')) {
+            const std::size_t start = i;
+            if (c == '.') {
+                ++i;
+            }
+            while (i < expression.size() && expression[i] >= '0' &&
+                   expression[i] <= '9') {
+                ++i;
+            }
+            if (i < expression.size() && expression[i] == '.') {
+                ++i;
+                while (i < expression.size() && expression[i] >= '0' &&
+                       expression[i] <= '9') {
+                    ++i;
+                }
+            }
+            if (i < expression.size() &&
+                (expression[i] == 'e' || expression[i] == 'E')) {
+                ++i;
+                if (i < expression.size() &&
+                    (expression[i] == '+' || expression[i] == '-')) {
+                    ++i;
+                }
+                const std::size_t exponent_start = i;
+                while (i < expression.size() && expression[i] >= '0' &&
+                       expression[i] <= '9') {
+                    ++i;
+                }
+                if (i == exponent_start) {
+                    reason = "shader expression contains a malformed numeric "
+                             "literal";
+                    return false;
+                }
+            }
+            const std::size_t number_end = i;
+            if (i < expression.size() &&
+                (expression[i] == 'f' || expression[i] == 'F')) {
+                ++i;
+            }
+            double parsed = 0.0;
+            if (!ParseDouble(expression.substr(start, number_end - start),
+                             parsed)) {
+                reason = "shader expression contains a malformed numeric "
+                         "literal";
+                return false;
+            }
+            continue;
+        }
+
+        // Identifier: function/constructor name, keyword, input name, or
+        // type name. Every identifier must be declared by the operator's
+        // shader_operations whitelist.
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
+            const std::size_t start = i;
+            while (i < expression.size() &&
+                   IsShaderIdentifierChar(expression[i])) {
+                ++i;
+            }
+            const std::string_view identifier =
+                expression.substr(start, i - start);
+            if (!operation_allowed(identifier)) {
+                reason = "shader expression references unsupported operation "
+                         "or identifier '" +
+                         std::string(identifier) + "'";
+                return false;
+            }
+            continue;
+        }
+
+        // Member/swizzle selection, e.g. uv.x or vec4(...).rgb. The selector
+        // itself is composition syntax rather than an operator token.
+        if (c == '.') {
+            ++i;
+            const std::size_t start = i;
+            while (i < expression.size() &&
+                   IsShaderIdentifierChar(expression[i])) {
+                ++i;
+            }
+            const std::string_view selector =
+                expression.substr(start, i - start);
+            if (!IsSwizzleSelector(selector)) {
+                reason = "shader expression contains unsupported member "
+                         "selector '." +
+                         std::string(selector) + "'";
+                return false;
+            }
+            continue;
+        }
+
+        if (c == '+' || c == '-' || c == '*' || c == '/' || c == '(' ||
+            c == ')' || c == ',') {
+            ++i;
+            continue;
+        }
+
+        reason = std::string("shader expression contains unsupported "
+                             "character '") +
+                 c + "'";
+        return false;
     }
     return true;
 }
@@ -2191,8 +2332,10 @@ bool CheckFiniteAndRange(const ParamSpec& spec, const ParamValue& value,
 }
 
 std::optional<ParamValue> ParseParamTokens(
-    const ParamSpec& spec, const std::vector<std::string>& tokens,
-    const DiagnosticSource& source, std::vector<Diagnostic>& diagnostics) {
+    const ParamSpec& spec,
+    const std::vector<std::string>& shader_operations,
+    const std::vector<std::string>& tokens, const DiagnosticSource& source,
+    std::vector<Diagnostic>& diagnostics) {
     ParamValue value;
     value.type = spec.type;
     value.authoring_text = Join(tokens, " ");
@@ -2268,7 +2411,7 @@ std::optional<ParamValue> ParseParamTokens(
         }
         if (spec.type == ParamType::Expression) {
             std::string reason;
-            if (!IsValidExpression(value.text, reason)) {
+            if (!IsValidExpression(value.text, shader_operations, reason)) {
                 return failure(DiagnosticCode::InvalidExpression, reason);
             }
         }
@@ -2399,6 +2542,7 @@ ParseResult ParseGraphText(std::string_view text,
     GraphDocument document;
     document.source_name = std::move(source_name);
     bool saw_header = false;
+    bool saw_profile = false;
     std::size_t current_node = std::string::npos;
     std::set<std::string> node_ids;
 
@@ -2457,6 +2601,7 @@ ParseResult ParseGraphText(std::string_view text,
             } else {
                 document.profile.id = tokens[1];
                 document.profile.requirements_digest = tokens[2];
+                saw_profile = true;
             }
         } else if (directive == "setting") {
             current_node = std::string::npos;
@@ -2699,8 +2844,9 @@ ParseResult ParseGraphText(std::string_view text,
                 continue;
             }
             std::vector<std::string> values(tokens.begin() + 2, tokens.end());
-            auto parsed = ParseParamTokens(*spec, values, source,
-                                           result.diagnostics);
+            auto parsed = ParseParamTokens(
+                *spec, schema->shader_operations, values, source,
+                result.diagnostics);
             if (parsed) {
                 node.params[spec->id] = std::move(*parsed);
             }
@@ -2843,6 +2989,17 @@ ParseResult ParseGraphText(std::string_view text,
             DiagnosticCode::ParseError,
             "missing 'nwgraph <version>' header"));
     }
+    if (!saw_profile) {
+        result.diagnostics.push_back(MakeDiagnostic(
+            DiagnosticCode::ParseError,
+            "missing required 'profile <id> <requirements-digest>' "
+            "directive"));
+        // Do not silently attach the default capability identity to a
+        // document that never declared one. Even a caller that ignores parse
+        // diagnostics sees an empty identity and validation rejects it.
+        document.profile.id.clear();
+        document.profile.requirements_digest.clear();
+    }
     result.document = std::move(document);
     return result;
 }
@@ -2983,7 +3140,8 @@ void ValidateParams(const NodeDefinition& node, const OperatorSchema& schema,
         }
         if (spec.type == ParamType::Expression) {
             std::string reason;
-            if (!IsValidExpression(value.text, reason)) {
+            if (!IsValidExpression(value.text, schema.shader_operations,
+                                   reason)) {
                 diagnostics.push_back(MakeDiagnostic(
                     DiagnosticCode::InvalidExpression, reason, source));
             }
@@ -3016,6 +3174,173 @@ void ValidateParams(const NodeDefinition& node, const OperatorSchema& schema,
                 "unknown parameter '" + name + "' for operator '" +
                     schema.id + "'",
                 source));
+        }
+    }
+}
+
+const ParamValue* FindParamValue(const NodeDefinition& node,
+                                 const OperatorSchema& schema,
+                                 std::string_view id) {
+    const auto found = node.params.find(std::string(id.data(), id.size()));
+    if (found != node.params.end()) {
+        return &found->second;
+    }
+    const ParamSpec* spec = schema.FindParam(id);
+    return spec != nullptr && spec->default_value ? &*spec->default_value
+                                                  : nullptr;
+}
+
+std::optional<std::uint64_t> FormatBytesPerElement(std::string_view format) {
+    if (format == "rgba32f") {
+        return 16u;
+    }
+    if (format == "r8g8b8a8_unorm" || format == "rgba8_unorm" ||
+        format == "r32_uint" || format == "r32_float") {
+        return 4u;
+    }
+    if (format == "r16g16b16a16_float") {
+        return 8u;
+    }
+    return std::nullopt;
+}
+
+void ValidateResourceBounds(const NodeDefinition& node,
+                            const OperatorSchema& schema,
+                            std::vector<Diagnostic>& diagnostics) {
+    const ResourceDescriptor* descriptor = nullptr;
+    if (schema.resource_descriptor) {
+        descriptor = &*schema.resource_descriptor;
+    } else {
+        for (const auto& port : schema.outputs) {
+            if (port.descriptor) {
+                descriptor = &*port.descriptor;
+                break;
+            }
+        }
+    }
+    if (descriptor == nullptr || !descriptor->bounded) {
+        return;
+    }
+
+    const auto emit = [&](std::string_view port_id,
+                          const std::string& message) {
+        DiagnosticSource source;
+        source.node_id = node.id;
+        source.operator_id = node.operator_id;
+        source.port_id = std::string(port_id);
+        diagnostics.push_back(MakeDiagnostic(
+            DiagnosticCode::BoundedResourceExceeded, message, source));
+    };
+    const auto int_param = [&](std::string_view id)
+        -> std::optional<std::int64_t> {
+        const ParamValue* value = FindParamValue(node, schema, id);
+        if (value == nullptr || value->type != ParamType::Int) {
+            return std::nullopt;
+        }
+        return value->integer;
+    };
+    const auto string_param = [&](std::string_view id)
+        -> std::optional<std::string> {
+        const ParamValue* value = FindParamValue(node, schema, id);
+        if (value == nullptr) {
+            return std::nullopt;
+        }
+        return value->text;
+    };
+    const auto check_bound = [&](std::string_view port_id,
+                                 std::string_view label,
+                                 std::int64_t actual,
+                                 std::uint64_t limit) {
+        if (limit != 0u &&
+            (actual < 0 ||
+             static_cast<std::uint64_t>(actual) > limit)) {
+            emit(port_id, "node '" + node.id + "' " + std::string(label) +
+                              " " + std::to_string(actual) +
+                              " exceeds operator '" + node.operator_id +
+                              "' resource bound " + std::to_string(limit));
+            return false;
+        }
+        return true;
+    };
+
+    if (descriptor->kind == "texture2d" ||
+        descriptor->kind == "render_target") {
+        const auto width = int_param("width");
+        const auto height = int_param("height");
+        const auto depth = int_param("depth");
+        bool dimensions_ok = true;
+        if (width) {
+            dimensions_ok =
+                check_bound("width", "width", *width,
+                            descriptor->max_width) &&
+                dimensions_ok;
+        }
+        if (height) {
+            dimensions_ok =
+                check_bound("height", "height", *height,
+                            descriptor->max_height) &&
+                dimensions_ok;
+        }
+        if (depth) {
+            dimensions_ok =
+                check_bound("depth", "depth", *depth,
+                            descriptor->max_depth) &&
+                dimensions_ok;
+        }
+        if (!dimensions_ok || !width.has_value() ||
+            !height.has_value() || descriptor->max_bytes == 0u) {
+            return;
+        }
+        const std::string format =
+            string_param("format").value_or(descriptor->format_class);
+        std::optional<std::uint64_t> bytes_per_element =
+            FormatBytesPerElement(format);
+        if (!bytes_per_element) {
+            bytes_per_element =
+                FormatBytesPerElement(descriptor->format_class);
+        }
+        if (!bytes_per_element) {
+            return;
+        }
+        const std::uint64_t depth_count =
+            depth.has_value() && *depth > 0
+                ? static_cast<std::uint64_t>(*depth)
+                : 1u;
+        const std::uint64_t total_bytes =
+            static_cast<std::uint64_t>(*width) *
+            static_cast<std::uint64_t>(*height) * depth_count *
+            *bytes_per_element;
+        if (total_bytes > descriptor->max_bytes) {
+            emit("format",
+                 "node '" + node.id + "' texture format '" + format +
+                     "' at " + std::to_string(*width) + "x" +
+                     std::to_string(*height) + "x" +
+                     std::to_string(depth_count) + " requires " +
+                     std::to_string(total_bytes) +
+                     " bytes, exceeding operator '" + node.operator_id +
+                     "' bound " + std::to_string(descriptor->max_bytes) +
+                     " bytes");
+        }
+        return;
+    }
+    if (descriptor->kind == "buffer") {
+        const auto bytes = int_param("bytes");
+        if (bytes) {
+            check_bound("bytes", "byte size", *bytes,
+                        descriptor->max_bytes);
+        }
+        return;
+    }
+    if (descriptor->kind == "mesh") {
+        const auto vertices = int_param("vertices");
+        const auto indices = int_param("indices");
+        if (vertices) {
+            check_bound("vertices", "vertex count", *vertices,
+                        descriptor->max_vertices);
+        }
+        if (indices) {
+            check_bound("indices", "index count", *indices,
+                        descriptor->max_indices);
         }
     }
 }
@@ -3301,6 +3626,7 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
         }
 
         ValidateParams(node, *schema, diagnostics);
+        ValidateResourceBounds(node, *schema, diagnostics);
 
         std::set<std::string> seen_input_ports;
         for (const auto& input : node.inputs) {
@@ -3609,7 +3935,13 @@ MigrationResult MigrateGraphDocument(const GraphDocument& document,
                 schema->frequency_policy.default_frequency != Frequency::Frame) {
                 node.frequency = schema->frequency_policy.default_frequency;
             }
-            node.residency = schema->PrimaryResidency();
+            // Do not repair an explicit legacy residency declaration. If the
+            // declared residency is incompatible with the operator, normal
+            // validation must reject it rather than the migration silently
+            // changing authoring semantics.
+            if (!node.has_declared_residency) {
+                node.residency = schema->PrimaryResidency();
+            }
             if (node.seed.behavior == SeedBehavior::None &&
                 schema->default_seed_behavior != SeedBehavior::None) {
                 node.seed.behavior = schema->default_seed_behavior;
@@ -3736,6 +4068,7 @@ void EncodeEvaluationValue(CanonicalWriter& writer,
         writer.F64(value.numbers[i]);
     }
     writer.String(value.text);
+    writer.String(value.interpolation);
     writer.ListHeader(static_cast<std::uint32_t>(value.samples.size()));
     for (double sample : value.samples) {
         writer.F64(sample);
@@ -4088,12 +4421,13 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
             curve.samples.push_back(value);
         }
         curve.text = param("keys")->text;
+        curve.interpolation = param("interpolation")->text;
         outputs["out"] = std::move(curve);
         return true;
     }
     if (op == "nw.curve.sample") {
         const EvaluationValue* curve = input("curve");
-        const bool step = false;
+        const bool step = curve->interpolation == "step";
         outputs["out"] = MakeScalar(
             SampleCurve(curve->samples, input("t")->numbers[0], step));
         return true;
@@ -4295,6 +4629,9 @@ std::string EvaluationValue::CanonicalText() const {
     }
     if (!text.empty()) {
         out << ";text=" << text;
+    }
+    if (!interpolation.empty()) {
+        out << ";interpolation=" << interpolation;
     }
     if (!samples.empty()) {
         out << ";samples=";

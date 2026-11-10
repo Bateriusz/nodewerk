@@ -292,9 +292,12 @@ INVALID_CASES = {
     "invalid_type_mismatch.nwgraph": "port_type_mismatch",
     "invalid_dimension_mismatch.nwgraph": "port_dimension_mismatch",
     "invalid_nonfinite_parameter.nwgraph": "non_finite_parameter",
+    "invalid_expression.nwgraph": "invalid_expression",
+    "invalid_missing_profile.nwgraph": "parse_error",
     "invalid_frequency_transition.nwgraph": "frequency_transition",
     "invalid_history.nwgraph": "history_not_supported",
     "invalid_bounded_resource.nwgraph": "bounded_resource_exceeded",
+    "invalid_texture_byte_budget.nwgraph": "bounded_resource_exceeded",
     "invalid_implicit_readback.nwgraph": "implicit_readback",
     "invalid_implicit_upload.nwgraph": "implicit_upload",
     "invalid_unknown_profile.nwgraph": "unknown_capability_profile",
@@ -679,6 +682,66 @@ def test_versioned_migrations_are_explicit_and_unknown_versions_rejected(
     assert "nwgraph-v0-to-v1" in migration_ids
 
 
+def test_migration_preserves_explicit_legacy_residency(
+    cli_binary: Path, tmp_path: Path
+) -> None:
+    legacy = fixture("invalid_legacy_residency.nwgraph")
+    migrated = run_cli(cli_binary, "migrate", legacy)
+    assert migrated.returncode == 0, migrated.stderr
+    assert "residency=gpu" in migrated.stdout
+
+    migrated_path = write_variant(tmp_path, "legacy_residency.nwgraph", migrated.stdout)
+    proc, payload = run_json(cli_binary, "validate", migrated_path)
+    assert proc.returncode != 0, payload
+    diagnostic = find_diagnostic(payload, "invalid_residency")
+    assert diagnostic["node_id"] == "legacy_bad"
+
+    proc, payload = run_json(cli_binary, "validate", legacy, "--migrate")
+    assert proc.returncode != 0, payload
+    assert "invalid_residency" in diagnostic_codes(payload)
+
+
+def test_missing_profile_directive_is_rejected(cli_binary: Path) -> None:
+    proc, payload = run_json(cli_binary, "validate", fixture("invalid_missing_profile.nwgraph"))
+    assert proc.returncode != 0, payload
+    assert payload["profile_id"] == ""
+    assert payload["requirements_digest"] == ""
+    parse_error = find_diagnostic(payload, "parse_error")
+    assert "profile" in parse_error["message"]
+
+
+def test_texture_resource_bounds_are_format_aware(cli_binary: Path) -> None:
+    proc, payload = run_json(
+        cli_binary, "validate", fixture("invalid_texture_byte_budget.nwgraph")
+    )
+    assert proc.returncode != 0, payload
+    diagnostic = find_diagnostic(payload, "bounded_resource_exceeded")
+    assert diagnostic["node_id"] == "large_rgba32f"
+    assert "rgba32f" in diagnostic["message"]
+
+    proc, payload = run_json(
+        cli_binary, "validate", fixture("valid_texture_byte_budget.nwgraph")
+    )
+    assert proc.returncode == 0, payload
+    assert payload["valid"] is True
+
+
+def test_control_seed_never_advertises_unavailable_upstream_seed(
+    cli_binary: Path,
+) -> None:
+    proc, payload = run_json(cli_binary, "registry")
+    assert proc.returncode == 0, payload
+    for operator in payload["operators"]:
+        if "derived-upstream" in operator["allowed_seed_behaviors"]:
+            assert operator["inputs"], operator["id"]
+    control_seed = next(
+        operator
+        for operator in payload["operators"]
+        if operator["id"] == "nw.control.seed"
+    )
+    assert "derived-upstream" not in control_seed["allowed_seed_behaviors"]
+
+
 def test_profile_identity_and_hardware_metadata_independence(cli_binary: Path) -> None:
     proc, payload = run_json(cli_binary, "profile", COMMON_PROFILE, COMMON_DIGEST)
     assert proc.returncode == 0
@@ -828,3 +891,53 @@ def test_positive_frequency_and_residency_fixtures(cli_binary: Path) -> None:
     proc, payload = run_json(cli_binary, "validate", fixture("valid_typed_pipeline.nwgraph"))
     assert proc.returncode == 0, payload
     assert payload["valid"] is True
+
+
+def test_shader_expression_rejects_undeclared_operations(
+    cli_binary: Path,
+) -> None:
+    proc, payload = run_json(cli_binary, "validate", fixture("invalid_expression.nwgraph"))
+    assert proc.returncode != 0, payload
+    diagnostic = find_diagnostic(payload, "invalid_expression")
+    assert diagnostic["node_id"] == "shade"
+    assert diagnostic["port_id"] == "expression"
+    assert "customFunction" in diagnostic["message"]
+
+    proc, payload = run_json(cli_binary, "accept", fixture("invalid_expression.nwgraph"))
+    assert proc.returncode != 0, payload
+    assert payload["accepted"] is False
+    assert "invalid_expression" in diagnostic_codes(payload)
+
+    proc, payload = run_json(
+        cli_binary, "validate", fixture("valid_typed_pipeline.nwgraph")
+    )
+    assert proc.returncode == 0, payload
+    assert payload["valid"] is True
+
+
+def test_curve_interpolation_mode_changes_reference_evaluation(
+    cli_binary: Path,
+) -> None:
+    proc, evaluation = run_json(cli_binary, "eval", fixture("valid_curve_modes.nwgraph"))
+    assert proc.returncode == 0, evaluation
+    assert evaluation["ok"] is True
+    samples = [
+        item
+        for item in evaluation["values"]
+        if item["operator"] == "nw.curve.sample@1.0.0"
+        and item["port"] == "out"
+    ]
+    assert len(samples) == 2
+    # Linear interpolation yields 0.5 at t=0.5; step interpolation yields the
+    # value of the previous key (0.0). Both must be present, proving the
+    # declared interpolation mode reaches CPU evaluation.
+    sample_values = sorted(
+        struct.unpack(
+            ">d",
+            bytes.fromhex(
+                re.search(r"values=f64:([0-9a-f]{16})", item["value"]).group(1)
+            ),
+        )[0]
+        for item in samples
+    )
+    assert sample_values == [0.0, 0.5]

@@ -520,6 +520,10 @@ struct EvaluationValue {
     std::uint32_t component_count = 0;
     std::array<double, 16> numbers{};
     std::string text;
+    // Curve interpolation mode ("linear" or "step"). Empty for non-curves.
+    // The value-level mode travels with the curve so downstream sampling does
+    // not have to re-read (or guess at) the producing node's parameters.
+    std::string interpolation;
     std::vector<double> samples;
 
     std::string CanonicalText() const;
