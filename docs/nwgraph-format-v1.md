@@ -192,7 +192,10 @@ introduce a graph parser or operator interpreter into the player.
 Evaluation dispatches registered callbacks by the complete operator id and
 semantic version before consulting built-in reference implementations. A new
 version of a built-in operator id therefore runs its registered behavior rather
-than the built-in version's body.
+than the built-in version's body. An existing id/version pair, including every
+built-in operator version, cannot be replaced by an implementation-only
+registration; attempts are rejected so previously validated snapshots keep the
+semantics captured by their semantic digest.
 
 Programmatic parameter values are shape-checked before any component traversal:
 `vec2`, `vec3`, `vec4`/`color`, and `mat4` require exactly 2, 3, 4, and 16

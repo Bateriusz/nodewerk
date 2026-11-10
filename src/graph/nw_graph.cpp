@@ -979,9 +979,11 @@ bool RegisterAuthoringExtension(OperatorRegistry& registry,
             continue;
         }
         if (!pending_implementations.insert(key).second ||
-            RegisteredImplementations().count(key) != 0u) {
+            HasAuthoringImplementation(implementation.operator_id,
+                                       implementation.operator_version)) {
             diagnostics.push_back(
-                "duplicate operator implementation registration: " + key);
+                "duplicate or already-implemented operator registration: " +
+                key);
             ok = false;
             continue;
         }

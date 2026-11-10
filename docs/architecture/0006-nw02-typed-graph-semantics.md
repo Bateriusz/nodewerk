@@ -59,6 +59,9 @@ contracts.
    ABI. Every extension schema requires a callback, compiler validation rejects
    operators without an implementation, and callbacks dispatch by complete
    operator id/version so a new version cannot silently run built-in semantics.
+   Implementation-only registrations cannot replace an already implemented
+   id/version pair, including built-ins, so snapshots retain the semantics
+   committed by their semantic digest.
 
 ## Explicit non-goals
 

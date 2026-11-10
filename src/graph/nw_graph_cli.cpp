@@ -1205,6 +1205,76 @@ int SelfTestCommand(const OperatorRegistry& registry) {
                 {"versioned_builtin_implementation_dispatched", dispatched});
         }
 
+        // An implementation-only registration must never replace an already
+        // implemented id/version, especially a built-in. Existing snapshots
+        // must keep their original semantics.
+        {
+            GraphDocument document =
+                make_binary_graph("nw.math.add", SemanticVersion{1, 0, 0});
+            ValidationResult validation =
+                ValidateGraphDocument(document, registry);
+            const auto output_value =
+                [](const EvaluationResult& result) -> std::optional<double> {
+                const auto node_it = result.values_by_node.find("binary");
+                if (node_it == result.values_by_node.end()) {
+                    return std::nullopt;
+                }
+                const auto value_it = node_it->second.find("out");
+                if (value_it == node_it->second.end() ||
+                    value_it->second.component_count == 0u) {
+                    return std::nullopt;
+                }
+                return value_it->second.numbers[0];
+            };
+            bool unchanged = false;
+            if (validation.ok()) {
+                GraphEvaluator cached(*validation.snapshot);
+                EvaluationResult initial =
+                    cached.Evaluate(EvaluationContext{});
+
+                OperatorRegistry overridden = OperatorRegistry::CreateDefault();
+                ExtensionRegistration extension;
+                extension.extension_id = "nw.extension.override_builtin";
+                extension.version = SemanticVersion{1, 0, 0};
+                extension.implementations.push_back(
+                    {"nw.math.add",
+                     SemanticVersion{1, 0, 0},
+                     [](const GraphSnapshot&, const NodeDefinition&,
+                        const std::map<std::string, OutputValues>&,
+                        const EvaluationContext&, OutputValues& outputs,
+                        Diagnostic&) {
+                         LogicalValue out;
+                         out.type = LogicalType::Scalar;
+                         out.residency = Residency::Cpu;
+                         out.component_count = 1u;
+                         out.numbers[0] = 999.0;
+                         outputs["out"] = std::move(out);
+                         return true;
+                     }});
+                std::vector<std::string> diagnostics;
+                const bool accepted = RegisterAuthoringExtension(
+                    overridden, extension, diagnostics);
+
+                EvaluationResult cached_after =
+                    cached.Evaluate(EvaluationContext{});
+                GraphEvaluator fresh(*validation.snapshot);
+                EvaluationResult fresh_after =
+                    fresh.Evaluate(EvaluationContext{});
+                const auto initial_value = output_value(initial);
+                const auto cached_value = output_value(cached_after);
+                const auto fresh_value = output_value(fresh_after);
+                unchanged =
+                    !accepted && !diagnostics.empty() && initial.ok &&
+                    cached_after.ok && fresh_after.ok &&
+                    initial_value.has_value() &&
+                    cached_value.has_value() && fresh_value.has_value() &&
+                    *initial_value == 7.0 && *cached_value == 7.0 &&
+                    *fresh_value == 7.0;
+            }
+            checks.push_back(
+                {"builtin_implementation_override_rejected", unchanged});
+        }
+
         // Callback results must satisfy the declared output contract.
         {
             OperatorRegistry bad_outputs =
