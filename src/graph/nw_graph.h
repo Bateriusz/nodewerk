@@ -371,7 +371,9 @@ struct NodeDefinition {
     SemanticVersion operator_version{};
     Frequency frequency = Frequency::Frame;
     Residency residency = Residency::Cpu;
+    bool has_declared_frequency = false;
     bool has_declared_residency = false;
+    bool has_declared_seed_behavior = false;
     SeedSpec seed;
     std::map<std::string, ParamValue> params;
     std::vector<NodeInput> inputs;

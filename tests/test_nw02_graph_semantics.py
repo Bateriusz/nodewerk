@@ -405,7 +405,8 @@ def test_operator_registry_declarations_are_complete(cli_binary: Path) -> None:
                 "buffer_recipe",
                 "mesh_recipe",
                 "render_image",
-            } and port["resource"] is not None:
+            }:
+                assert port["resource"] is not None, (operator["id"], port)
                 assert port["resource"]["bounded"] is True
         for param in operator["params"]:
             assert param["id"]
@@ -714,6 +715,24 @@ def test_migration_preserves_explicit_legacy_residency(
     assert "invalid_residency" in diagnostic_codes(payload)
 
 
+def test_migration_preserves_explicit_legacy_seed_none(
+    cli_binary: Path, tmp_path: Path
+) -> None:
+    legacy = fixture("invalid_legacy_seed_none.nwgraph")
+    migrated = run_cli(cli_binary, "migrate", legacy)
+    assert migrated.returncode == 0, migrated.stderr
+    assert "seed none" in migrated.stdout
+
+    migrated_path = write_variant(tmp_path, "legacy_seed_none.nwgraph", migrated.stdout)
+    proc, payload = run_json(cli_binary, "validate", migrated_path)
+    assert proc.returncode != 0, payload
+    assert "unsupported_seed_behavior" in diagnostic_codes(payload)
+
+    proc, payload = run_json(cli_binary, "validate", legacy, "--migrate")
+    assert proc.returncode != 0, payload
+    assert "unsupported_seed_behavior" in diagnostic_codes(payload)
+
+
 def test_missing_profile_directive_is_rejected(cli_binary: Path) -> None:
     proc, payload = run_json(cli_binary, "validate", fixture("invalid_missing_profile.nwgraph"))
     assert proc.returncode != 0, payload
@@ -1010,3 +1029,35 @@ def test_explicit_seed_value_is_preserved_in_evaluation(cli_binary: Path) -> Non
     )
     assert proc.returncode == 0, evaluation
     assert eval_numbers(evaluation, "nw.control.seed@1.0.0") == [42.0]
+
+
+def test_clamp01_normalization_is_applied_consistently(
+    cli_binary: Path,
+) -> None:
+    proc, evaluation = run_json(
+        cli_binary, "eval", fixture("valid_clamp01.nwgraph")
+    )
+    assert proc.returncode == 0, evaluation
+    mix_text = next(
+        item["value"]
+        for item in evaluation["values"]
+        if item["operator"] == "nw.shader.mix@1.0.0"
+    )
+    assert ", 1.0)" in mix_text
+
+
+def test_image_passthrough_declares_bounded_resource_ports(
+    cli_binary: Path,
+) -> None:
+    proc, payload = run_json(cli_binary, "registry")
+    assert proc.returncode == 0, payload
+    operator = next(
+        item
+        for item in payload["operators"]
+        if item["id"] == "nw.control.image_cpu_passthrough"
+    )
+    assert operator["resource"] is not None
+    assert operator["resource"]["kind"] == "render_target"
+    for port in operator["inputs"] + operator["outputs"]:
+        assert port["resource"] is not None
+        assert port["resource"]["bounded"] is True

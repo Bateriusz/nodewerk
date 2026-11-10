@@ -1217,10 +1217,13 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             "nw.control.image_cpu_passthrough", OperatorKind::CpuControl,
             "Explicit CPU-resident render-image passthrough", AllFrequencies(),
             Frequency::Frame, "nw.lower.cpu.control");
-        schema.inputs = {Port("image", LogicalType::RenderImage,
-                              Residency::Cpu)};
-        schema.outputs = {Port("out", LogicalType::RenderImage,
-                               Residency::Cpu)};
+        schema.inputs = {ResourcePort("image", LogicalType::RenderImage,
+                                      Residency::Cpu,
+                                      RenderImageDescriptor())};
+        schema.outputs = {ResourcePort("out", LogicalType::RenderImage,
+                                       Residency::Cpu,
+                                       RenderImageDescriptor())};
+        schema.resource_descriptor = RenderImageDescriptor();
         registry.Register(std::move(schema));
     }
     {
@@ -2307,6 +2310,23 @@ bool IsEnumValue(const ParamSpec& spec, std::string_view value) {
     return false;
 }
 
+void ApplyClamp01Normalization(const ParamSpec& spec, ParamValue& value) {
+    if (spec.normalization != NormalizationRule::Clamp01) {
+        return;
+    }
+    if (value.type == ParamType::Float) {
+        value.number = NormalizeZero(std::clamp(value.number, 0.0, 1.0));
+        return;
+    }
+    if (value.type == ParamType::Vec2 || value.type == ParamType::Vec3 ||
+        value.type == ParamType::Vec4 || value.type == ParamType::Color) {
+        for (std::uint32_t i = 0; i < value.component_count; ++i) {
+            value.components[i] =
+                NormalizeZero(std::clamp(value.components[i], 0.0, 1.0));
+        }
+    }
+}
+
 bool CheckFiniteAndRange(const ParamSpec& spec, const ParamValue& value,
                          const DiagnosticSource& source,
                          std::vector<Diagnostic>& diagnostics) {
@@ -2316,7 +2336,8 @@ bool CheckFiniteAndRange(const ParamSpec& spec, const ParamValue& value,
             "parameter '" + spec.id + "' must be finite", source));
         return false;
     }
-    if (!spec.has_range) {
+    if (!spec.has_range ||
+        spec.normalization == NormalizationRule::Clamp01) {
         return true;
     }
     auto check_one = [&](double number) {
@@ -2379,6 +2400,7 @@ std::optional<ParamValue> ParseParamTokens(
                                "' is not a valid floating-point value");
         }
         value.number = NormalizeZero(parsed);
+        ApplyClamp01Normalization(spec, value);
         if (!CheckFiniteAndRange(spec, value, source, diagnostics)) {
             return std::nullopt;
         }
@@ -2482,6 +2504,7 @@ std::optional<ParamValue> ParseParamTokens(
         }
         value.components[i] = NormalizeZero(parsed);
     }
+    ApplyClamp01Normalization(spec, value);
     if (spec.normalization == NormalizationRule::NormalizeVector &&
         value.component_count != 0u) {
         double length_squared = 0.0;
@@ -2749,6 +2772,7 @@ ParseResult ParseGraphText(std::string_view text,
                                 "unsupported frequency '" + value + "'", source));
                         } else {
                             node.frequency = *frequency;
+                            node.has_declared_frequency = true;
                         }
                     } else if (key == "residency") {
                         const auto residency = ParseResidency(value);
@@ -2769,9 +2793,11 @@ ParseResult ParseGraphText(std::string_view text,
                             node.seed.behavior = SeedBehavior::Explicit;
                             node.seed.has_explicit_seed = true;
                             node.seed.explicit_seed = seed;
+                            node.has_declared_seed_behavior = true;
                         } else if (const auto behavior =
                                        ParseSeedBehavior(value)) {
                             node.seed.behavior = *behavior;
+                            node.has_declared_seed_behavior = true;
                         } else {
                             DiagnosticSource source;
                             source.line = line_number;
@@ -2793,6 +2819,7 @@ ParseResult ParseGraphText(std::string_view text,
                     const auto frequency = ParseFrequency(attribute);
                     if (frequency) {
                         node.frequency = *frequency;
+                        node.has_declared_frequency = true;
                     } else {
                         DiagnosticSource source;
                         source.line = line_number;
@@ -2959,6 +2986,8 @@ ParseResult ParseGraphText(std::string_view text,
                     "expected 'seed <value>', 'seed <behavior>', "
                     "'seed explicit <value>' or 'seed node-id <node>'",
                     source));
+            } else {
+                node.has_declared_seed_behavior = true;
             }
         } else if (directive == "layout") {
             current_node = std::string::npos;
@@ -3490,6 +3519,12 @@ void FillDefaultParams(GraphDocument& document,
             if (param.default_value &&
                 node.params.count(param.id) == 0u) {
                 node.params[param.id] = *param.default_value;
+            }
+        }
+        for (const auto& param : schema->params) {
+            const auto found = node.params.find(param.id);
+            if (found != node.params.end()) {
+                ApplyClamp01Normalization(param, found->second);
             }
         }
     }
@@ -4058,8 +4093,7 @@ MigrationResult MigrateGraphDocument(const GraphDocument& document,
         const OperatorSchema* schema =
             registry.Find(node.operator_id, node.operator_version);
         if (schema != nullptr) {
-            if (node.frequency == Frequency::Frame &&
-                schema->frequency_policy.default_frequency != Frequency::Frame) {
+            if (!node.has_declared_frequency) {
                 node.frequency = schema->frequency_policy.default_frequency;
             }
             // Do not repair an explicit legacy residency declaration. If the
@@ -4069,8 +4103,7 @@ MigrationResult MigrateGraphDocument(const GraphDocument& document,
             if (!node.has_declared_residency) {
                 node.residency = schema->PrimaryResidency();
             }
-            if (node.seed.behavior == SeedBehavior::None &&
-                schema->default_seed_behavior != SeedBehavior::None) {
+            if (!node.has_declared_seed_behavior) {
                 node.seed.behavior = schema->default_seed_behavior;
             }
         }
@@ -4131,7 +4164,8 @@ std::string EmitDocumentText(const GraphDocument& document) {
             out << "  param " << name << " " << ParamCanonicalText(value)
                 << "\n";
         }
-        if (node->seed.behavior != SeedBehavior::None) {
+        if (node->seed.behavior != SeedBehavior::None ||
+            node->has_declared_seed_behavior) {
             if (node->seed.behavior == SeedBehavior::Explicit) {
                 out << "  seed explicit " << node->seed.explicit_seed << "\n";
             } else if (node->seed.behavior == SeedBehavior::ExplicitNodeId) {

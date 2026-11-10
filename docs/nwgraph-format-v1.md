@@ -45,8 +45,10 @@ exported content.
 - `nw_graph_cli migrate` and `validate --migrate` apply the explicit
   `nwgraph-v0-to-v1` migration, which adds the registered semantic operator
   version to legacy node declarations. The migration preserves an explicitly
-  declared legacy residency so validation can reject it if it is incompatible
-  with the operator; it never silently repairs authoring semantics.
+  declared legacy residency, frequency, and seed behavior so validation can
+  reject incompatible declarations; it never silently repairs authoring
+  semantics. For example, an explicit legacy `seed none` is preserved and
+  rejected for operators whose schemas do not allow `none`.
 - Unknown future schema versions are rejected with `unknown_schema_version`.
 - Unknown operator ids and unknown operator versions are rejected. Operator
   semantic changes require a new semantic version; operator contract hashes
@@ -129,6 +131,11 @@ keyframes fail validation with a `keys`-port diagnostic instead of being
 silently dropped. `nw.control.seed` preserves an explicit seed value directly in
 its evaluated scalar output; graph-derived seeds retain their deterministic
 normalized range.
+
+Parameters declared with `NormalizationRule::Clamp01` (currently material
+metallic/specular and shader mix factor) are clamped to `[0, 1]` during
+authoring normalization and evaluation. GPU-pass resource ports and image
+passthrough operations carry bounded render-target descriptors.
 
 `AuthoringSession::ApplyEdit` validates a complete new document before replacing
 the last valid immutable `GraphSnapshot`; invalid edits leave that snapshot and
