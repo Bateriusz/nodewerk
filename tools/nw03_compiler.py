@@ -2160,7 +2160,13 @@ def compile_package(
         )
     )
     compiled: dict[str, dict[str, Any]] = {}
-    staging_root = Path(tempfile.mkdtemp(prefix=".nw03-compile-", dir=str(output_path.parent if output_path.parent.exists() else Path("."))))
+    # Publish targets may live in a directory that does not exist yet.  Create
+    # it up front so the staging directory never falls back to the (possibly
+    # read-only) process working directory.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(
+        tempfile.mkdtemp(prefix=".nw03-compile-", dir=str(output_path.parent))
+    )
     try:
         for index, shader in enumerate(sorted(generated, key=lambda item: item.specialization_id)):
             cache_key = ShaderCache.make_key(

@@ -506,7 +506,9 @@ def check_sanitizer_fuzz(work_root: Path, budget: int = 256) -> CheckResult:
 
 def _run_pytest() -> CheckResult:
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q"],
+        # Disable pytest's repository-root cache provider so verification is
+        # hermetic and works in read-only/sandboxed checkouts.
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,

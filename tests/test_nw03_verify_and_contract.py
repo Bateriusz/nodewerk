@@ -8,9 +8,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_verify_nw03_contracts_only_entry_point() -> None:
-    summary_path = REPO_ROOT / "build" / "pytest-nw03-contracts.json"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
+def test_verify_nw03_contracts_only_entry_point(tmp_path: Path) -> None:
+    summary_path = tmp_path / "pytest-nw03-contracts.json"
     proc = subprocess.run(
         [
             sys.executable,

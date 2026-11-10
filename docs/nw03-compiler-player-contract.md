@@ -103,6 +103,14 @@ on authoring-tool compilation; POSIX builds include it normally.
 are JSON with `category`, `code`, `message`, and source fields; failures exit
 nonzero.
 
+The native frontend intentionally implements a subset of `compile-package`:
+`--dxc <path>` only. Build reports (`--report`/`--build-report`), development
+sidecars (`--dev-sidecar`/`--sidecar`), shader-cache directories
+(`--cache-dir`/`--shader-cache`), and `--optimization` are Python-frontend
+features, as is `--allow-unpinned-dxc`. Passing one of those options to the
+native binary fails with an explicit "use tools/nodewerkc.py" diagnostic
+instead of silently ignoring it.
+
 ## Verification
 
 ```bash

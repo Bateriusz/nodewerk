@@ -279,6 +279,16 @@ void Usage() {
         << "  nodewerkc inspect <package.nwp>\n";
 }
 
+int UnsupportedCompileOption(const std::string& option) {
+    std::cerr << "{\"ok\":false,\"valid\":false,\"error\":"
+              << JsonEscape(
+                     "native nodewerkc does not implement " + option +
+                     "; use tools/nodewerkc.py for build reports, development "
+                     "sidecars, and shader-cache control")
+              << "}\n";
+    return 2;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -299,10 +309,31 @@ int main(int argc, char** argv) {
             return 2;
         }
         std::string dxc = "dxc";
-        for (int index = 4; index + 1 < argc; ++index) {
-            if (std::string(argv[index]) == "--dxc") {
-                dxc = argv[index + 1];
+        for (int index = 4; index < argc; ++index) {
+            const std::string option = argv[index];
+            if (option == "--dxc") {
+                if (index + 1 >= argc) {
+                    std::cerr << "{\"ok\":false,\"valid\":false,\"error\":"
+                              << JsonEscape("missing value for --dxc") << "}\n";
+                    return 2;
+                }
+                dxc = argv[++index];
+                continue;
             }
+            // The native frontend intentionally implements only the minimal
+            // offline compile subset.  Reject the Python-only options rather
+            // than silently ignoring them.
+            if (option == "--report" || option == "--build-report" ||
+                option == "--dev-sidecar" || option == "--sidecar" ||
+                option == "--cache-dir" || option == "--shader-cache" ||
+                option == "--optimization" || option == "--allow-unpinned-dxc") {
+                return UnsupportedCompileOption(option);
+            }
+            std::cerr << "{\"ok\":false,\"valid\":false,\"error\":"
+                      << JsonEscape("unknown compile-package option '" + option +
+                                    "'")
+                      << "}\n";
+            return 2;
         }
         return CompilePackageCommand(argv[2], argv[3], dxc);
     }
