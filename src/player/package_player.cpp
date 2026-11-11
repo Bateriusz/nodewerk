@@ -1554,8 +1554,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
             if (shader->target != "cs_6_0") {
                 return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
-                            "unsupported_shader_target", "cs_6_0",
-                            shader->target, "init.create_pipeline",
+                            "unsupported_shader_target", "shader_target",
+                            "cs_6_0", shader->target, "init.create_pipeline",
                             "minimal NW-04 player realizes compute pipelines");
             }
             D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc{};
