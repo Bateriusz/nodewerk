@@ -106,7 +106,7 @@ def test_package_roundtrip_is_deterministic_and_inspectable(tmp_path: Path) -> N
     assert payload["capability"]["shader_model_text"] == "6_0"
     assert payload["capability"]["resource_binding_tier"] == 2
     assert payload["capability"]["resource_heap_tier"] == 2
-    assert payload["capability"]["limits"]["max_root_signature_dword_cost"] == 4
+    assert payload["capability"]["limits"]["max_root_signature_dword_cost"] == 5
     assert payload["capability"]["runtime_requirements"]["runtime_dxc_dependency"] is False
     assert payload["capability"]["optional_profile"]["profile_id"] == ""
     assert payload["capability"]["emitted_shader_targets"] == ["cs_6_0"]
@@ -892,6 +892,8 @@ def test_texture_resource_allocations_are_bounded() -> None:
         ({"array_size": 0}, "package_resource_dimensions"),
         ({"array_size": nwp.MAX_TEXTURE_ARRAY_SIZE + 1}, "package_resource_dimensions"),
         ({"mip_levels": nwp.MAX_MIP_LEVELS + 1}, "package_resource_dimensions"),
+        ({"mip_levels": 33}, "package_resource_dimensions"),
+        ({"mip_levels": 0xFFFFFFFF}, "package_resource_dimensions"),
         ({"usage": "cbv"}, "package_resource_usage"),
     ):
         values = {
@@ -913,6 +915,23 @@ def test_texture_resource_allocations_are_bounded() -> None:
         )
         assert any(item["code"] == code for item in diagnostics), change
 
+    one_by_one = replace(
+        output,
+        kind="texture2d",
+        width=1,
+        height=1,
+        depth=0,
+        array_size=1,
+        mip_levels=2,
+        size_bytes=5,
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, resources=[package.resources[0], one_by_one])
+    )
+    assert any(
+        item["code"] == "package_resource_dimensions" for item in diagnostics
+    )
+
 
 def test_root_signature_blob_is_serialized_d3d12_signature() -> None:
     package = valid_package()
@@ -925,6 +944,9 @@ def test_root_signature_blob_is_serialized_d3d12_signature() -> None:
     assert parameters[0][0] == 1  # 32-bit root constants for b0
     assert parameters[1][0] == 0  # descriptor table for u0
     assert ranges[0][0] == 1  # D3D12_DESCRIPTOR_RANGE_TYPE_UAV
+    # The descriptor-table record stores an absolute RTS0-payload offset.
+    payload_offset = 44
+    assert struct.unpack_from("<I", blob, payload_offset + 64)[0] == 68
 
     wrong = replace(
         root,
@@ -940,6 +962,48 @@ def test_root_signature_blob_is_serialized_d3d12_signature() -> None:
         for item in diagnostics
     )
 
+    # Shader visibility and descriptor counts are part of the serialized
+    # contract, not fields the record can disagree with silently.
+    for mutate, expected_code in (
+        (
+            lambda data: struct.pack_into("<I", data, payload_offset + 40, 4),
+            "package_root_signature_blob_mismatch",
+        ),
+        (
+            lambda data: struct.pack_into(
+                "<I", data, payload_offset + 72, 8
+            ),
+            "package_root_signature_blob_mismatch",
+        ),
+    ):
+        mutated = bytearray(blob)
+        mutate(mutated)
+        diagnostics = nwp.validate_package_model(
+            replace(
+                package,
+                root_signatures=[replace(root, blob=bytes(mutated))],
+            )
+        )
+        assert any(
+            item["code"] == expected_code for item in diagnostics
+        )
+
+    # 16 root constants plus a descriptor table is a 17-DWORD signature.
+    oversized = bytearray(blob)
+    struct.pack_into("<I", oversized, payload_offset + 56, 16)
+    diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            root_signatures=[
+                replace(root, blob=bytes(oversized), dword_cost=16)
+            ],
+        )
+    )
+    assert any(
+        item["code"] == "package_root_signature_cost"
+        for item in diagnostics
+    )
+
 
 def test_capability_requirements_are_exact_for_emitted_resources() -> None:
     package = valid_package()
@@ -950,7 +1014,7 @@ def test_capability_requirements_are_exact_for_emitted_resources() -> None:
     )
     assert capability.max_sampler_descriptors_per_frame == 0
     assert capability.max_cbv_srv_uav_descriptors_per_frame == 1
-    assert capability.max_root_signature_dword_cost == 4
+    assert capability.max_root_signature_dword_cost == 5
     assert capability.limit_max_texture_2d_dimension == 0
     assert capability.limit_max_buffer_bytes == 256 * 16
     assert capability.limit_swap_chain_buffer_count == 0
@@ -1030,3 +1094,20 @@ def test_sections_must_be_contiguous_and_canonically_ordered() -> None:
     valid, diagnostics = nwp.validate_package_bytes(bytes(reordered))
     assert not valid
     assert any(item["code"] == "package_section_order" for item in diagnostics)
+
+
+def test_deduplicated_blob_reference_budget_is_enforced() -> None:
+    large_blob = _with_extra_dxil_chunk(
+        make_dxil_container(), b"JUNK", b"\x00" * (8 * 1024 * 1024)
+    )
+    package = nwp.make_test_package(
+        shader_blob=large_blob, specialization_count=40
+    )
+    diagnostics = nwp.validate_package_model(package)
+    assert any(
+        item["code"] == "package_decode_limit"
+        and "aggregate decoded payload" in item["message"]
+        for item in diagnostics
+    )
+    with pytest.raises(nwp.PackageValidationError):
+        nwp.encode_package(package)

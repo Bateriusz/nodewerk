@@ -491,7 +491,7 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
     root_signature.root_signature_id = 1u;
     root_signature.family = "compute.math_noise";
     root_signature.convention = "compute.math_noise.v1";
-    root_signature.dword_cost = 4u;
+    root_signature.dword_cost = 5u;
     root_signature.bindings = {params, output};
     root_signature.blob =
         package::MakeRootSignatureBlob(root_signature.family,

@@ -164,7 +164,9 @@ follow D3D12 (`descriptor table = 0`, `32-bit constants = 1`; `SRV = 0`,
 `UAV = 1`, `CBV = 2`, `sampler = 3`). `ID3D12Device::CreateRootSignature`
 therefore receives serialized signature bytes; the package never stores a
 private binding-list format. Static samplers are not part of the baseline
-family. Cross-blob function sharing is never assumed.
+family. Root-signature `dword_cost` is the total D3D12 cost of all parameters
+(one DWORD per descriptor table plus the number of 32-bit constants), not just
+the constant count. Cross-blob function sharing is never assumed.
 
 The reader checks DXBC magic, container size, chunk count/offsets/sizes, SFI0
 feature flags, PSV0 presence, DXIL program version (`cs_6_0`, `vs_6_0`, or

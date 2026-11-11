@@ -657,6 +657,32 @@ def _duplicate_reuse_bytes(records: list[dict[str, Any]]) -> int:
     return reused
 
 
+def _check_decoded_blob_budget(
+    records: Sequence[Any],
+    diagnostics: list[dict[str, Any]],
+    section: str,
+) -> None:
+    """Match the native reader's deduplicated-table + reference accounting."""
+    unique_sizes: dict[str, int] = {}
+    total = 0
+    for record in records:
+        blob = getattr(record, "blob", b"")
+        digest = sha256_hex(blob)
+        if digest not in unique_sizes:
+            unique_sizes[digest] = len(blob)
+            total += len(blob)
+        total += len(blob)
+        if total > MAX_DECODED_BYTES:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_decode_limit",
+                    "aggregate decoded payload exceeds the v1 memory budget",
+                    section=section,
+                )
+            )
+            return
+
+
 # ---------------------------------------------------------------------------
 # Little-endian binary helpers (shared with the C++ reader/writer contract)
 # ---------------------------------------------------------------------------
@@ -1867,25 +1893,25 @@ def _validate_capability(
                     "package_capability_contradictory",
                     f"CAP field '{name}' is {actual!r}, emitted requirement is {expected!r}",
                 )
-        if (
-            capability.max_cbv_srv_uav_descriptors_per_frame
-            > MAX_CBV_SRV_UAV_DESCRIPTORS_PER_FRAME
-            or capability.max_sampler_descriptors_per_frame
-            > MAX_SAMPLER_DESCRIPTORS_PER_FRAME
-            or capability.max_root_signature_dword_cost
-            > MAX_ROOT_SIGNATURE_DWORD_COST
-            or capability.limit_max_texture_2d_dimension
-            > MAX_TEXTURE_2D_DIMENSION
-            or capability.limit_max_compute_threads_per_group
-            > MAX_COMPUTE_THREADS_PER_GROUP
-            or capability.limit_max_buffer_bytes > MAX_BUFFER_BYTES
-            or capability.limit_swap_chain_buffer_count
-            > SWAP_CHAIN_BUFFER_COUNT
-        ):
-            error(
-                "package_capability_contradictory",
-                "emitted requirement exceeds the baseline profile limit",
-            )
+    if (
+        capability.max_cbv_srv_uav_descriptors_per_frame
+        > MAX_CBV_SRV_UAV_DESCRIPTORS_PER_FRAME
+        or capability.max_sampler_descriptors_per_frame
+        > MAX_SAMPLER_DESCRIPTORS_PER_FRAME
+        or capability.max_root_signature_dword_cost
+        > MAX_ROOT_SIGNATURE_DWORD_COST
+        or capability.limit_max_texture_2d_dimension
+        > MAX_TEXTURE_2D_DIMENSION
+        or capability.limit_max_compute_threads_per_group
+        > MAX_COMPUTE_THREADS_PER_GROUP
+        or capability.limit_max_buffer_bytes > MAX_BUFFER_BYTES
+        or capability.limit_swap_chain_buffer_count
+        > SWAP_CHAIN_BUFFER_COUNT
+    ):
+        error(
+            "package_capability_contradictory",
+            "emitted requirement exceeds the baseline profile limit",
+        )
     formats = tuple(capability.required_dxgi_formats)
     if len(set(formats)) != len(formats):
         error("package_capability_contradictory", "required DXGI formats contain duplicates")
@@ -2017,6 +2043,11 @@ def _validate_resources(
                     "package_resource_usage",
                     f"texture2d resource '{resource.name}' has incompatible usage '{resource.usage}'",
                 )
+            dimensions_valid = (
+                1 <= resource.width <= MAX_TEXTURE_2D_DIMENSION
+                and 1 <= resource.height <= MAX_TEXTURE_2D_DIMENSION
+                and resource.depth in (0, 1)
+            )
             if not (1 <= resource.width <= MAX_TEXTURE_2D_DIMENSION):
                 error(
                     "package_resource_dimensions",
@@ -2037,10 +2068,19 @@ def _validate_resources(
                     "package_resource_dimensions",
                     f"texture2d '{resource.name}' array_size {resource.array_size} is outside 1..{MAX_TEXTURE_ARRAY_SIZE}",
                 )
-            if not (1 <= resource.mip_levels <= MAX_MIP_LEVELS):
+            max_mip_levels = (
+                max(1, resource.width, resource.height).bit_length()
+                if resource.width > 0 and resource.height > 0
+                else 0
+            )
+            if not (
+                1
+                <= resource.mip_levels
+                <= min(MAX_MIP_LEVELS, max_mip_levels)
+            ):
                 error(
                     "package_resource_dimensions",
-                    f"texture2d '{resource.name}' mip_levels {resource.mip_levels} is outside 1..{MAX_MIP_LEVELS}",
+                    f"texture2d '{resource.name}' mip_levels {resource.mip_levels} is invalid for its dimensions",
                 )
             bytes_per_element = {
                 "DXGI_FORMAT_R8G8B8A8_UNORM": 4,
@@ -2051,10 +2091,11 @@ def _validate_resources(
             computed = 0
             if (
                 bytes_per_element
-                and resource.width > 0
-                and resource.height > 0
-                and resource.mip_levels >= 1
-                and resource.array_size >= 1
+                and dimensions_valid
+                and 1 <= resource.array_size <= MAX_TEXTURE_ARRAY_SIZE
+                and 1
+                <= resource.mip_levels
+                <= min(MAX_MIP_LEVELS, max_mip_levels)
             ):
                 for mip in range(resource.mip_levels):
                     level_width = max(1, resource.width >> mip)
@@ -2065,7 +2106,7 @@ def _validate_resources(
                         * bytes_per_element
                         * resource.array_size
                     )
-            if (
+            if dimensions_valid and (
                 computed == 0
                 or computed > MAX_BUFFER_BYTES
                 or resource.size_bytes != computed
@@ -2080,6 +2121,10 @@ def _validate_resources(
                     "package_resource_usage",
                     f"texture3d resource '{resource.name}' has incompatible usage '{resource.usage}'",
                 )
+            dimensions_valid = all(
+                1 <= value <= 2048
+                for value in (resource.width, resource.height, resource.depth)
+            )
             for label, value in (
                 ("width", resource.width),
                 ("height", resource.height),
@@ -2095,10 +2140,21 @@ def _validate_resources(
                     "package_resource_dimensions",
                     f"texture3d '{resource.name}' must be a single array slice",
                 )
-            if not (1 <= resource.mip_levels <= MAX_MIP_LEVELS):
+            max_mip_levels = (
+                max(
+                    resource.width, resource.height, resource.depth
+                ).bit_length()
+                if dimensions_valid
+                else 0
+            )
+            if not (
+                1
+                <= resource.mip_levels
+                <= min(MAX_MIP_LEVELS, max_mip_levels)
+            ):
                 error(
                     "package_resource_dimensions",
-                    f"texture3d '{resource.name}' mip_levels {resource.mip_levels} is outside 1..{MAX_MIP_LEVELS}",
+                    f"texture3d '{resource.name}' mip_levels {resource.mip_levels} is invalid for its dimensions",
                 )
             bytes_per_element = {
                 "DXGI_FORMAT_R8G8B8A8_UNORM": 4,
@@ -2109,10 +2165,11 @@ def _validate_resources(
             computed = 0
             if (
                 bytes_per_element
-                and resource.width >= 1
-                and resource.height >= 1
-                and resource.depth >= 1
-                and resource.mip_levels >= 1
+                and dimensions_valid
+                and resource.array_size == 1
+                and 1
+                <= resource.mip_levels
+                <= min(MAX_MIP_LEVELS, max_mip_levels)
             ):
                 for mip in range(resource.mip_levels):
                     level_width = max(1, resource.width >> mip)
@@ -2124,7 +2181,7 @@ def _validate_resources(
                         * level_depth
                         * bytes_per_element
                     )
-            if (
+            if dimensions_valid and resource.array_size == 1 and (
                 computed == 0
                 or computed > MAX_BUFFER_BYTES
                 or resource.size_bytes != computed
@@ -2600,15 +2657,14 @@ def _decode_root_signature_blob(
                 )
                 if (
                     range_count > MAX_RECORD_COUNT
-                    or ranges_offset < 8
+                    or ranges_offset < 24
                 ):
                     malformed("descriptor table range header is invalid")
                     return None
                 start = len(range_rows)
                 for range_index in range(range_count):
                     offset = (
-                        data_offset
-                        + ranges_offset
+                        ranges_offset
                         + range_index * 20
                     )
                     if offset + 20 > len(payload):
@@ -2686,17 +2742,26 @@ def _validate_root_signatures(
             if decoded is not None:
                 parameters, ranges = decoded
                 same_bindings = len(parameters) == len(record.bindings)
+                used_parameters: set[int] = set()
+                referenced_ranges: set[int] = set()
                 for binding in record.bindings:
-                    if not same_bindings or binding.root_parameter >= len(parameters):
+                    if (
+                        not same_bindings
+                        or binding.root_parameter >= len(parameters)
+                    ):
                         same_bindings = False
                         break
+                    used_parameters.add(binding.root_parameter)
                     parameter = parameters[binding.root_parameter]
+                    if parameter[1] != 0:  # D3D12_SHADER_VISIBILITY_ALL
+                        same_bindings = False
+                        break
                     if binding.usage == "cbv":
                         if (
                             parameter[0] != 1
                             or parameter[2] != binding.slot
                             or parameter[3] != binding.space
-                            or parameter[4] != record.dword_cost
+                            or parameter[4] != 4
                         ):
                             same_bindings = False
                             break
@@ -2709,7 +2774,7 @@ def _validate_root_signatures(
                         if expected_range_type is None:
                             same_bindings = False
                             break
-                        if parameter[0] != 0 or parameter[3] == 0:
+                        if parameter[0] != 0 or parameter[3] != 1:
                             same_bindings = False
                             break
                         range_offset = parameter[2]
@@ -2717,19 +2782,53 @@ def _validate_root_signatures(
                         if range_offset + range_count > len(ranges):
                             same_bindings = False
                             break
-                        descriptor_range = ranges[range_offset]
-                        if (
-                            descriptor_range[0] != expected_range_type
-                            or descriptor_range[2] != binding.slot
-                            or descriptor_range[3] != binding.space
+                        for range_index in range(
+                            range_offset, range_offset + range_count
                         ):
-                            same_bindings = False
+                            referenced_ranges.add(range_index)
+                            descriptor_range = ranges[range_index]
+                            if (
+                                descriptor_range[0] != expected_range_type
+                                or descriptor_range[1] != 1
+                                or descriptor_range[2] != binding.slot
+                                or descriptor_range[3] != binding.space
+                                or descriptor_range[4] != 0
+                            ):
+                                same_bindings = False
+                                break
+                        if not same_bindings:
                             break
+                if (
+                    used_parameters != set(range(len(parameters)))
+                    or referenced_ranges != set(range(len(ranges)))
+                ):
+                    same_bindings = False
                 if not same_bindings:
                     error(
                         "package_root_signature_blob_mismatch",
                         f"root signature {record.root_signature_id} serialized "
                         "signature does not match the record bindings",
+                    )
+                expected_cost = (
+                    sum(
+                        parameter[4]
+                        for parameter in parameters
+                        if parameter[0] == 1
+                    )
+                    + sum(1 for parameter in parameters if parameter[0] == 0)
+                )
+                if expected_cost != record.dword_cost:
+                    error(
+                        "package_root_signature_cost",
+                        f"root signature {record.root_signature_id} records "
+                        f"dword_cost {record.dword_cost}, serialized cost is "
+                        f"{expected_cost}",
+                    )
+                if expected_cost > MAX_ROOT_SIGNATURE_DWORD_COST:
+                    error(
+                        "package_root_signature_cost",
+                        f"root signature {record.root_signature_id} serialized "
+                        f"cost {expected_cost} exceeds {MAX_ROOT_SIGNATURE_DWORD_COST}",
                     )
         if record.dword_cost > MAX_ROOT_SIGNATURE_DWORD_COST:
             error(
@@ -3016,6 +3115,10 @@ def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
     _validate_parameters(package.parameters, diagnostics)
     _validate_root_signatures(package.root_signatures, package.resources, diagnostics)
     _validate_shaders(package.shaders, package.root_signatures, diagnostics)
+    _check_decoded_blob_budget(
+        package.root_signatures, diagnostics, SECTION_ROOT_SIGNATURES
+    )
+    _check_decoded_blob_budget(package.shaders, diagnostics, SECTION_SHADERS)
     _validate_instructions(
         package.initialization,
         package.frame,
@@ -3178,7 +3281,7 @@ def _decode_dev_metadata(payload: bytes, diagnostics: list[dict[str, Any]]) -> b
             )
         )
         return None
-    return payload
+    return bytes(payload)
 
 
 def decode_package(
@@ -3448,18 +3551,31 @@ def decode_package(
             )
         )
 
-    payloads = {
-        name: data[offset : offset + size]
+    bounded_data = memoryview(data)
+    entry_by_name = {
+        name: (offset, size)
         for name, _index, _record_count, offset, size, _entry_offset in entries
     }
-    capability = _decode_capability(payloads[SECTION_CAPABILITY], diagnostics)
+    capability_offset, capability_size = entry_by_name[SECTION_CAPABILITY]
+    capability = _decode_capability(
+        bounded_data[capability_offset : capability_offset + capability_size],
+        diagnostics,
+    )
     if diagnostics:
         raise PackageValidationError(diagnostics)
     assert capability is not None
-    identity_diagnostics: list[dict[str, Any]] = []
-    _validate_capability_identity(capability, identity_diagnostics)
-    if identity_diagnostics:
-        raise PackageValidationError(identity_diagnostics)
+    capability_diagnostics: list[dict[str, Any]] = []
+    _validate_capability(
+        capability,
+        capability_diagnostics,
+        release=bool(flags & 1),
+    )
+    if capability_diagnostics:
+        raise PackageValidationError(capability_diagnostics)
+    payloads = {
+        name: bounded_data[offset : offset + size]
+        for name, (offset, size) in entry_by_name.items()
+    }
     resources = _decode_resources(payloads[SECTION_RESOURCES], diagnostics)
     if diagnostics:
         raise PackageValidationError(diagnostics)
@@ -3786,8 +3902,9 @@ def make_root_signature_blob(
                 )
             )
         parameter_rows.append((0, 0, data_offset))
-        # Descriptor-table data: range count, offset to ranges, then ranges.
-        data += struct.pack("<II", 1, 8)
+        # Descriptor-table data: range count and an absolute RTS0-payload
+        # offset to the ranges, followed by the ranges themselves.
+        data += struct.pack("<II", 1, data_offset + 8)
         data += struct.pack(
             "<IIIII", range_type, 1, binding.slot, binding.space, 0
         )
@@ -3847,7 +3964,7 @@ def make_test_package(
         root_signature_id=1,
         family="compute.math_noise",
         convention="compute.math_noise.v1",
-        dword_cost=4,
+        dword_cost=5,
         blob=root_blob,
         bindings=bindings,
     )

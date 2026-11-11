@@ -16,7 +16,10 @@ metadata enters the release package.
 
 ## Pipeline
 
-1. Parse and validate the `.nwgraph` document and its canonical semantic digest.
+1. Parse and validate the `.nwgraph` document and consume NW-02's canonical
+   semantic digest (the Python frontend builds/uses the authoritative
+   `nw_graph_cli digest` helper when a host compiler is available and falls
+   back to the same typed-value canonical fields otherwise).
 2. Find reachable `ShaderExpr` entry points from GPU pass `shader` inputs (or
    terminal standalone expressions when there is no GPU pass).
 3. Evaluate the immutable snapshot and fuse the reachable expression DAG.

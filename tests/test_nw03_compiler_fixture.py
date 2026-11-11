@@ -568,3 +568,36 @@ def test_mock_dxc_requires_explicit_test_payload_opt_in(tmp_path: Path) -> None:
     )
     assert not result.passed
     assert "mock" in result.detail.lower()
+
+
+def test_semantic_digest_matches_nw02_canonical_cli() -> None:
+    binary = compiler._ensure_nw02_digest_binary()
+    if binary is None:
+        pytest.skip("no host C++ compiler for the NW-02 digest CLI")
+    document = compiler.load_graph(FIXTURE)
+    proc = subprocess.run(
+        [str(binary), "digest", str(FIXTURE)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert document.semantic_digest() == proc.stdout.strip()
+
+
+def test_semantic_digest_canonicalizes_numeric_spellings() -> None:
+    first, diagnostics = compiler.parse_graph_text(
+        _graph_text(
+            "node value nw.math.vec4_const@1.0.0 frequency=frame\n"
+            "  param value 1 2 3 4\n"
+        )
+    )
+    second, second_diagnostics = compiler.parse_graph_text(
+        _graph_text(
+            "node value nw.math.vec4_const@1.0.0 frequency=frame\n"
+            "  param value 1.0 2.0 3.0 4.0\n"
+        )
+    )
+    assert diagnostics == [] and second_diagnostics == []
+    assert first is not None and second is not None
+    assert first.semantic_digest() == second.semantic_digest()

@@ -73,6 +73,9 @@ OUTPUT_ELEMENT_COUNT = 256
 PARAMETER_BUFFER_BYTES = 64
 OUTPUT_BUFFER_BYTES = OUTPUT_ELEMENT_COUNT * 16
 
+_NW02_DIGEST_BINARY: Path | None | bool = None
+_NW02_DIGEST_CACHE: dict[str, str] = {}
+
 
 class CompilerError(RuntimeError):
     """Raised when lowering/compilation/package validation fails."""
@@ -473,6 +476,9 @@ class GraphDocument:
         return [self.nodes[node_id] for node_id in self.nodes]
 
     def semantic_digest(self) -> str:
+        native = _native_nw02_digest(self)
+        if native is not None:
+            return native
         canonical = {
             "schema_version": self.schema_version,
             "profile": {
@@ -487,7 +493,7 @@ class GraphDocument:
                     "frequency": node.frequency,
                     "residency": node.residency,
                     "params": {
-                        name: list(values)
+                        name: _canonical_param_tokens(values)
                         for name, values in sorted(node.params.items())
                     },
                     "inputs": {
@@ -852,6 +858,121 @@ def _apply_clamp01_normalisation(nodes: dict[str, GraphNode]) -> None:
                 )
             if valid:
                 node.params[name] = [" ".join(normalized)]
+
+
+def _ensure_nw02_digest_binary() -> Path | None:
+    """Build the authoritative NW-02 digest CLI once when a compiler exists."""
+    global _NW02_DIGEST_BINARY
+    if _NW02_DIGEST_BINARY is not None:
+        return _NW02_DIGEST_BINARY or None  # type: ignore[return-value]
+    compiler = None
+    for name in ("c++", "g++", "clang++", "clang-cl", "cl"):
+        compiler = shutil.which(name)
+        if compiler:
+            break
+    if compiler is None:
+        _NW02_DIGEST_BINARY = False
+        return None
+    source_dir = REPO_ROOT / "src" / "graph"
+    sources = [source_dir / "nw_graph.cpp", source_dir / "nw_graph_cli.cpp"]
+    if not all(path.is_file() for path in sources):
+        _NW02_DIGEST_BINARY = False
+        return None
+    digest = hashlib.sha256()
+    for source in sources:
+        digest.update(source.read_bytes())
+    output_dir = Path(tempfile.gettempdir()) / (
+        "nw03-nw02-digest-" + digest.hexdigest()[:16]
+    )
+    executable = output_dir / (
+        "nw_graph_cli.exe" if os.name == "nt" else "nw_graph_cli"
+    )
+    if not executable.is_file():
+        output_dir.mkdir(parents=True, exist_ok=True)
+        compiler_name = Path(compiler).name.lower()
+        if compiler_name in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"}:
+            command = [
+                compiler,
+                "/nologo",
+                "/std:c++20",
+                "/EHsc",
+                "/O2",
+                "/I",
+                str(source_dir),
+                *[str(source) for source in sources],
+                f"/Fe:{executable}",
+            ]
+        else:
+            command = [
+                compiler,
+                "-std=c++20",
+                "-O2",
+                "-I",
+                str(source_dir),
+                *[str(source) for source in sources],
+                "-o",
+                str(executable),
+            ]
+        process = subprocess.run(
+            command, capture_output=True, text=True, check=False, timeout=120
+        )
+        if process.returncode != 0 or not executable.is_file():
+            _NW02_DIGEST_BINARY = False
+            return None
+    _NW02_DIGEST_BINARY = executable
+    return executable
+
+
+def _native_nw02_digest(document: GraphDocument) -> str | None:
+    key = hashlib.sha256(document.source_text.encode("utf-8")).hexdigest()
+    cached = _NW02_DIGEST_CACHE.get(key)
+    if cached is not None:
+        return cached
+    executable = _ensure_nw02_digest_binary()
+    if executable is None:
+        return None
+    temporary = None
+    try:
+        fd, raw_path = tempfile.mkstemp(
+            prefix="nw02-digest-", suffix=".nwgraph"
+        )
+        temporary = Path(raw_path)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(document.source_text.encode("utf-8"))
+        process = subprocess.run(
+            [str(executable), "digest", str(temporary)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if process.returncode != 0:
+            return None
+        for line in reversed(process.stdout.splitlines()):
+            value = line.strip()
+            if value.startswith("sha256:v1:") and len(value) == 74:
+                _NW02_DIGEST_CACHE[key] = value
+                return value
+        return None
+    except Exception:
+        return None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
+def _canonical_param_tokens(tokens: Sequence[str]) -> list[Any]:
+    """Typed fallback: numeric spellings canonicalize to values, not text."""
+    numeric: list[float] = []
+    for token in tokens:
+        value = _parse_numeric_token(token)
+        if value is None or not math.isfinite(value):
+            return list(tokens)
+        numeric.append(_normalise_zero(value))
+    return numeric
 
 
 def _validate_node_parameters(node: GraphNode) -> list[dict[str, Any]]:
@@ -1975,7 +2096,7 @@ def _build_package(
         root_signature_id=1,
         family=PASS_FAMILY,
         convention=ROOT_SIGNATURE_CONVENTION,
-        dword_cost=4,
+        dword_cost=5,
         blob=root_blob,
         bindings=bindings,
     )
