@@ -123,6 +123,78 @@ jobs:
             benchmarks/toolchain-manifest.v1.json
           if-no-files-found: warn
 
+  nw04-native-verification:
+    name: NW-04 Native Player Lifecycle & D3D12 Validation
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Bootstrap exact NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh ./tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath "$env:RUNNER_TEMP\nw01-bootstrap-provenance.json"
+
+      - name: Export exact MSVC/SDK build environment
+        shell: pwsh
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+
+      - name: Verify exact pinned toolchain
+        shell: pwsh
+        run: pwsh ./tools/nw01/doctor.ps1
+
+      - name: Enable the D3D12 debug layer for validation
+        shell: pwsh
+        run: |
+          $capability = Get-WindowsCapability -Online |
+            Where-Object { $_.Name -like 'Tools.Graphics.DirectX*' } |
+            Select-Object -First 1
+          if ($null -eq $capability) {
+            Write-Error "The Windows Graphics Tools capability is unavailable; D3D12 validation cannot run."
+            exit 1
+          }
+          if ($capability.State -ne 'Installed') {
+            Add-WindowsCapability -Online -Name $capability.Name
+          }
+
+      - name: Build explicit NW-04 player/package artifacts
+        shell: pwsh
+        run: |
+          cmake --preset clang-cl-dev
+          cmake --build build/clang-cl-dev --target nw_package_player_fixture nodewerkc
+          $fixture = Join-Path $PWD "build/clang-cl-dev/nw_package_player_fixture.exe"
+          if (-not (Test-Path $fixture -PathType Leaf)) {
+            Write-Error "NW-04 player fixture was not built."
+            exit 1
+          }
+          $dxc = (Get-Command dxc -ErrorAction Stop).Source
+          $computePackage = Join-Path $env:RUNNER_TEMP "nw04-compute.nwp"
+          $displayPackage = Join-Path $env:RUNNER_TEMP "nw04-compute-display.nwp"
+          python tools/nodewerkc.py compile-package fixtures/graphs/nw03_math_noise.nwgraph $computePackage --dxc $dxc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw04_fixture.py --from-package $computePackage --output $displayPackage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "NW04_FIXTURE=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "NW04_PACKAGE=$displayPackage" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Run required NW-04 native lifecycle and D3D12-validation verification
+        env:
+          NW04_ALLOW_SOFTWARE_ADAPTER: "1"
+        shell: pwsh
+        run: |
+          python tools/verify_nw04.py --mode Full --fixture "$env:NW04_FIXTURE" --package "$env:NW04_PACKAGE" --summary-json "$env:RUNNER_TEMP\nw04-full.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   windows-physical-evidence:
     name: Physical Windows 11 x64 GPU Evidence & CleanSystem Package
     if: vars.NW_PHYSICAL_RUNNER_LABEL != ''
@@ -156,21 +228,48 @@ jobs:
           -SummaryPath "$env:RUNNER_TEMP\nw01-full-mode.json"
           -ExportGitHubEnv
 
-      - name: Capture NW-04 player evidence when artifacts are available
-        if: always()
-        continue-on-error: true
+      - name: Build explicit NW-04 player/package artifacts
         shell: pwsh
         run: |
-          $fixture = Get-ChildItem -Path . -Recurse -Filter nw_package_player_fixture.exe -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-          $package = Get-ChildItem -Path . -Recurse -Filter '*.nwp' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notlike '*fixtures\nw04*' } |
-            Select-Object -First 1
-          if ($null -eq $fixture -or $null -eq $package) {
-            Write-Host "[NW04-EVIDENCE] player/package artifacts unavailable; Ada/Blackwell evidence remains pending_unverified."
-            exit 0
+          cmake --preset clang-cl-dev
+          cmake --build build/clang-cl-dev --target nw_package_player_fixture nodewerkc
+          $fixture = Join-Path $PWD "build/clang-cl-dev/nw_package_player_fixture.exe"
+          if (-not (Test-Path $fixture -PathType Leaf)) {
+            Write-Error "NW-04 player fixture was not built."
+            exit 1
           }
-          pwsh ./tools/nw01/capture-nw04-player.ps1 -Fixture $fixture.FullName -Package $package.FullName -Tier auto
+          $dxc = (Get-Command dxc -ErrorAction Stop).Source
+          $computePackage = Join-Path $env:RUNNER_TEMP "nw04-compute.nwp"
+          $displayPackage = Join-Path $env:RUNNER_TEMP "nw04-compute-display.nwp"
+          python tools/nodewerkc.py compile-package fixtures/graphs/nw03_math_noise.nwgraph $computePackage --dxc $dxc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw04_fixture.py --from-package $computePackage --output $displayPackage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "NW04_FIXTURE=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "NW04_PACKAGE=$displayPackage" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Run required NW-04 native compatibility and validation checks
+        shell: pwsh
+        run: |
+          python tools/verify_nw04.py --mode Full --fixture "$env:NW04_FIXTURE" --package "$env:NW04_PACKAGE" --summary-json "$env:RUNNER_TEMP\nw04-full.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Capture NW-04 representative hardware evidence
+        shell: pwsh
+        run: |
+          if (-not (Test-Path $env:NW04_FIXTURE -PathType Leaf) -or
+              -not (Test-Path $env:NW04_PACKAGE -PathType Leaf)) {
+            Write-Error "NW-04 player/package artifacts are unavailable; Ada/Blackwell qualification cannot be claimed."
+            exit 1
+          }
+          pwsh ./tools/nw01/capture-nw04-player.ps1 -Fixture $env:NW04_FIXTURE -Package $env:NW04_PACKAGE -Tier auto
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Require both representative NW-04 qualifications
+        shell: pwsh
+        run: |
+          python tools/verify_nw04.py --mode Hardware --fixture "$env:NW04_FIXTURE" --package "$env:NW04_PACKAGE" --summary-json "$env:RUNNER_TEMP\nw04-hardware.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package verified CleanSystem deployment
         if: always() && env.NW_FULL_SUMMARY != ''
@@ -206,6 +305,8 @@ jobs:
           path: |
             ${{ runner.temp }}/nw01-full-mode.json
             ${{ runner.temp }}/nw01-evidence-summary.json
+            ${{ runner.temp }}/nw04-full.json
+            ${{ runner.temp }}/nw04-hardware.json
             benchmarks/reproducibility/*.json
             benchmarks/ledgers/*.json
             benchmarks/toolchain-manifest.v1.json

@@ -164,14 +164,48 @@ def record_execution(
         "--tick-step",
         "1",
         "--resize-sequence",
+        "--win32-minimize-restore",
         "--emit-benchmark-metrics",
         "--validation",
         "--diagnostics",
     ]
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
     metrics = _parse_kv(proc.stdout)
+    expected_frames = 122
+    completion_failures: list[str] = []
+    for key, expected in (
+        ("NW_PLAYER_INITIALIZATION_COUNT", "1"),
+        ("NW_PLAYER_FRAMES", str(expected_frames)),
+        ("NW_PLAYER_PRESENTS", str(expected_frames)),
+        ("NW_PLAYER_POST_INIT_ALLOCATION_VIOLATION", "0"),
+        ("NW_PLAYER_NON_ALIASED_PLACEMENTS", "1"),
+        ("NW_PLAYER_MINIMIZE_RESTORE_RENDERED", "1"),
+    ):
+        if metrics.get(key) != expected:
+            completion_failures.append(
+                f"{key}={metrics.get(key, 'unavailable')} (expected {expected})"
+            )
+    try:
+        resize_count = int(metrics.get("NW_PLAYER_RESIZE_COUNT", "-1"))
+    except ValueError:
+        resize_count = -1
+    if resize_count < 2:
+        completion_failures.append(
+            f"NW_PLAYER_RESIZE_COUNT={resize_count} (expected >= 2)"
+        )
+    try:
+        uav_barriers = int(metrics.get("NW_PLAYER_UAV_BARRIERS", "-1"))
+    except ValueError:
+        uav_barriers = -1
+    if uav_barriers < 1:
+        completion_failures.append(
+            f"NW_PLAYER_UAV_BARRIERS={uav_barriers} (expected > 0)"
+        )
+    if "NW_D3D12_VALIDATION_ERROR=" in (proc.stdout + proc.stderr):
+        completion_failures.append("D3D12 validation error was emitted")
+    execution_passed = proc.returncode == 0 and not completion_failures
     observed_tier = metrics.get("NW_PLAYER_ADAPTER_GENERATION", "").strip()
-    if proc.returncode == 0:
+    if execution_passed:
         if tier == "auto":
             if observed_tier not in ("ada", "blackwell"):
                 print(
@@ -209,11 +243,11 @@ def record_execution(
     record = _load_record(output_path)
     record["generated_at_utc"] = datetime.now(timezone.utc).isoformat()
     record["verification_status"] = (
-        "executed_failure" if proc.returncode != 0 else "execution_recorded"
+        "executed_failure" if not execution_passed else "execution_recorded"
     )
     execution: dict[str, Any] = {
         "hardware_tier": tier,
-        "execution_status": "passed" if proc.returncode == 0 else "failed",
+        "execution_status": "passed" if execution_passed else "failed",
         "exit_code": proc.returncode,
         "package": {
             "path": str(package_path),
@@ -292,8 +326,17 @@ def record_execution(
         "non_aliased_placements": metrics.get(
             "NW_PLAYER_NON_ALIASED_PLACEMENTS", "unavailable"
         ),
-        "d3d12_validation_clean": proc.returncode == 0
-        and "NW_D3D12_VALIDATION_ERROR" not in (proc.stdout + proc.stderr),
+        "render": {
+            "frames": metrics.get("NW_PLAYER_FRAMES", "unavailable"),
+            "presents": metrics.get("NW_PLAYER_PRESENTS", "unavailable"),
+            "resize_count": metrics.get("NW_PLAYER_RESIZE_COUNT", "unavailable"),
+            "uav_barriers": metrics.get("NW_PLAYER_UAV_BARRIERS", "unavailable"),
+            "present_resource_id": metrics.get(
+                "NW_PLAYER_PRESENT_RESOURCE_ID", "unavailable"
+            ),
+        },
+        "d3d12_validation_clean": execution_passed,
+        "completion_failures": completion_failures,
         "stdout": proc.stdout,
         "stderr": proc.stderr,
         "command": command,
@@ -316,7 +359,7 @@ def record_execution(
     # A run only fills the tier that was actually executed.  It never marks the
     # other representative tier as verified, and a failed run stays failed.
     if tier in record["qualifications"]:
-        if proc.returncode == 0:
+        if execution_passed:
             record["qualifications"][tier] = {
                 "hardware_tier": record["qualifications"][tier]["hardware_tier"],
                 "status": "execution_recorded",
@@ -336,21 +379,18 @@ def record_execution(
     statuses = {
         entry["status"] for entry in record["qualifications"].values()
     }
-    if any(
+    any_failed = any(
         execution.get("execution_status") != "passed"
         for execution in record.get("executions", [])
-    ):
+    )
+    if any_failed:
         record["verification_status"] = "executed_failure"
-    if statuses and statuses <= {"execution_recorded", "verified"}:
+    elif statuses and statuses <= {"execution_recorded", "verified"}:
         successful = [
             execution
             for execution in record.get("executions", [])
             if execution.get("execution_status") == "passed"
         ]
-        any_failed = any(
-            execution.get("execution_status") != "passed"
-            for execution in record.get("executions", [])
-        )
         package_hashes = {
             execution["package"]["sha256"] for execution in successful
         }
@@ -358,8 +398,7 @@ def record_execution(
             execution["player"]["sha256"] for execution in successful
         }
         if (
-            not any_failed
-            and len(package_hashes) == 1
+            len(package_hashes) == 1
             and len(player_hashes) == 1
             and all(
                 execution.get("d3d12_validation_clean") is True
@@ -379,7 +418,7 @@ def record_execution(
     output_path.write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    return 0 if proc.returncode == 0 else 1
+    return 0 if execution_passed else 1
 
 
 def main() -> int:

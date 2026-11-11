@@ -27,9 +27,17 @@ LRESULT CALLBACK Nw04WindowProc(HWND hwnd, UINT message, WPARAM wparam,
                                 LPARAM lparam) {
     switch (message) {
         case WM_SIZE: {
-            (void)hwnd;
-            (void)lparam;
-            (void)wparam;
+            auto* window = reinterpret_cast<Win32Window*>(
+                GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+            if (window != nullptr) {
+                const bool minimized =
+                    wparam == static_cast<WPARAM>(SIZE_MINIMIZED);
+                window->ApplySize(
+                    minimized ? 0u : static_cast<std::uint32_t>(LOWORD(lparam)),
+                    minimized ? 0u
+                              : static_cast<std::uint32_t>(HIWORD(lparam)),
+                    minimized);
+            }
             return 0;
         }
         case WM_GETMINMAXINFO: {
@@ -97,6 +105,8 @@ bool Win32Window::Create(const WindowConfig& config) noexcept {
     created_ = true;
     closed_ = false;
     minimized_ = false;
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(this));
     if (config.visible) {
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
@@ -140,10 +150,6 @@ bool Win32Window::PumpMessages() noexcept {
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
-        if (message.message == static_cast<UINT>(WM_SIZE)) {
-            minimized_ = (message.wParam ==
-                          static_cast<WPARAM>(SIZE_MINIMIZED));
-        }
     }
     if (native_handle_ != nullptr) {
         HWND hwnd = static_cast<HWND>(native_handle_);
@@ -155,9 +161,9 @@ bool Win32Window::PumpMessages() noexcept {
         if (GetClientRect(hwnd, &client) != FALSE) {
             width_ = static_cast<std::uint32_t>(client.right - client.left);
             height_ = static_cast<std::uint32_t>(client.bottom - client.top);
-            if (IsIconic(hwnd) != FALSE) {
-                minimized_ = true;
-            }
+            // Track both transitions.  An ordinary restore must clear the
+            // minimized state even when the client size is unchanged.
+            minimized_ = IsIconic(hwnd) != FALSE;
         }
     }
 #endif
@@ -210,7 +216,24 @@ void Win32Window::RequestClientSize(std::uint32_t width,
 void* Win32Window::NativeHandle() const noexcept { return native_handle_; }
 
 void Win32Window::SetSimulatedMinimized(bool minimized) noexcept {
+#if defined(_WIN32)
+    if (native_handle_ != nullptr) {
+        HWND hwnd = static_cast<HWND>(native_handle_);
+        ShowWindow(hwnd, minimized ? SW_MINIMIZE : SW_RESTORE);
+        (void)PumpMessages();
+    }
+#endif
     minimized_ = minimized;
+}
+
+void Win32Window::ApplySize(std::uint32_t width,
+                            std::uint32_t height,
+                            bool minimized) noexcept {
+    minimized_ = minimized;
+    if (!minimized) {
+        width_ = width;
+        height_ = height;
+    }
 }
 
 } // namespace nw::platform

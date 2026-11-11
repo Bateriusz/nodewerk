@@ -62,11 +62,16 @@ explicit allocation path.
 
 ## Display and Barriers
 
-Compute work is package-driven. A `frame.present` instruction drives the visible
-frame: the player transitions the current swap-chain back buffer from `PRESENT` to
-`RENDER_TARGET`, clears it fullscreen, transitions it back to `PRESENT`, executes
-the frame command list, and presents with the single direct queue. Ordinary
-resource barriers only; enhanced barriers are not used.
+Compute work is package-driven. A `frame.present` instruction names the package
+output it displays. The player validates during planning that the operand is a
+UAV buffer containing complete RGBA32F pixels. At execution it binds that raw
+`RWByteAddressBuffer` (R32_TYPELESS raw UAV) and a player-owned
+R8G8B8A8_UNORM display texture to an offline-compiled fullscreen compute
+shader, writes the display texture, copies it to the current swap-chain back
+buffer, transitions the back buffer to `PRESENT`, and presents with the single
+direct queue. Changing the compute output or the supplied tick therefore
+changes the displayed image. Ordinary resource barriers only; enhanced barriers
+are not used, and no frame instruction performs a CPU readback.
 
 `frame.barrier` operand 0 uses this stable player mapping:
 
@@ -91,6 +96,18 @@ degrade to `COMMON`. A requested state is also checked against the target
 resource's heap and usage (for example, a readback resource may only remain
 `COPY_DEST`, and `UNORDERED_ACCESS` requires UAV usage). Descriptor-table
 targets must resolve to a descriptor that actually exists in the named heap.
+When a `frame.barrier` requests `UNORDERED_ACCESS` while the resource already
+remains in that state, the player emits a UAV barrier. Dependent dispatches
+that reuse a UAV in the same command list also get a UAV barrier before the
+second access.
+
+Planning validates instruction operands against their actual targets before
+any initialization upload or frame submission: root-constant counts are bounded
+by the active serialized root signature's 32-bit constants width, descriptor
+tables must match the active root binding slot/space, dispatches must reference
+the active root signature, and `frame.copy_buffer` rejects self-copies,
+non-buffer operands, readback sources, and byte counts larger than either
+resource.
 
 `frame.set_timeline` selects a package parameter by id and advances it from the
 emitted tick base by the tick supplied to `renderAtTick`. The bounded constant
@@ -109,9 +126,14 @@ tick update writes the parameter's complete declared width.
 - Allocation, pipeline, submission, resize, and device failures use their
   existing stable categories.
 - Minimized or zero-sized windows suspend presentation and return success
-  without resizing the swap chain.
+  without resizing the swap chain. An ordinary Win32 restore clears suspension
+  even when the client size is unchanged, so the next tick resumes rendering
+  without a needless `ResizeBuffers`.
 - Device removal returns `DeviceRemoved` (`51`) and shuts down cleanly. There is
   no automatic device-loss replay.
+- `shutdown()` drains the final asynchronous frame and returns any fence,
+  device-removal, or D3D12-validation failure it observed while still
+  completing cleanup.
 
 ## Instrumentation
 
@@ -130,6 +152,9 @@ is linked into the player.
 - `fixtures/nw04/compute_display.nwp` is a deterministic NW-03 test-container
   fixture used for cross-platform contract checks. It is **not** hardware
   evidence.
+- `python tools/nw04_fixture.py --from-package <real.nwp> --output
+  <display.nwp>` composes the display stream onto a real offline-compiled
+  NW-03 package without changing the container format.
 - `python tools/verify_nw04.py --mode ContractsOnly` runs GPU-less contract,
   capability-failure, rejection-before-allocation, lifecycle/ownership, and
   release-closure checks.

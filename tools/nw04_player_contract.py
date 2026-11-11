@@ -825,8 +825,15 @@ def validate_frame_plan(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
     """
     failures: list[CapabilityMismatch] = []
     resources = {resource.resource_id: resource for resource in package.resources}
+    shaders = {shader.shader_id: shader for shader in package.shaders}
+    roots = {
+        record.root_signature_id: record
+        for record in package.root_signatures
+    }
     pending_timeline_parameters: set[int] = set()
     parameter_ids = {parameter.parameter_id for parameter in package.parameters}
+    active_root_signature_id: int | None = None
+    present_resource_id: int | None = None
     for instruction in package.frame:
         if instruction.opcode == "frame.draw":
             failures.append(
@@ -839,6 +846,22 @@ def validate_frame_plan(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
                     "the minimal NW-04 player only realizes compute pipelines",
                 )
             )
+        elif instruction.opcode == "frame.set_root_signature":
+            root_id = instruction.operands[0].value
+            if root_id not in roots:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_reference",
+                        "root_signature_id",
+                        str(root_id),
+                        "missing",
+                        "frame.set_root_signature references a missing root "
+                        "signature",
+                    )
+                )
+            else:
+                active_root_signature_id = root_id
         elif instruction.opcode == "frame.set_descriptor_table":
             heap_name = instruction.operands[1].value
             resource = resources.get(instruction.operands[2].value)
@@ -884,6 +907,43 @@ def validate_frame_plan(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
                             "without a compatible descriptor",
                         )
                     )
+                else:
+                    root = roots.get(active_root_signature_id)
+                    binding = next(
+                        (
+                            item
+                            for item in (root.bindings if root else ())
+                            if item.root_parameter
+                            == instruction.operands[0].value
+                        ),
+                        None,
+                    )
+                    usage_matches = binding is not None and (
+                        binding.usage == "sampler"
+                        if heap_name == "sampler"
+                        else binding.usage in {"uav", "srv"}
+                    )
+                    if (
+                        not usage_matches
+                        or binding.slot != resource.binding_slot
+                        or binding.space != resource.binding_space
+                    ):
+                        failures.append(
+                            _failure(
+                                package,
+                                "package_descriptor_table_binding",
+                                "root_parameter",
+                                str(instruction.operands[0].value),
+                                "missing root binding"
+                                if binding is None
+                                else (
+                                    f"{binding.usage}:{binding.slot}:"
+                                    f"{binding.space}"
+                                ),
+                                "frame.set_descriptor_table does not match the "
+                                "active root signature binding",
+                            )
+                        )
         elif instruction.opcode == "frame.barrier":
             code = instruction.operands[0].value
             resource = resources.get(instruction.operands[1].value)
@@ -921,6 +981,161 @@ def validate_frame_plan(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
                         "resource heap/usage",
                     )
                 )
+        elif instruction.opcode == "frame.dispatch":
+            groups = tuple(operand.value for operand in instruction.operands[:3])
+            shader = shaders.get(instruction.operands[3].value)
+            if any(group < 1 or group > 65535 for group in groups):
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_dispatch_bounds",
+                        "dispatch_groups",
+                        "1..65535",
+                        "x".join(str(group) for group in groups),
+                        "frame.dispatch group dimensions are out of bounds",
+                    )
+                )
+            elif shader is None:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_reference",
+                        "shader_id",
+                        str(instruction.operands[3].value),
+                        "missing",
+                        "frame.dispatch references a missing shader",
+                    )
+                )
+            elif (
+                active_root_signature_id is None
+                or shader.root_signature_id != active_root_signature_id
+            ):
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_root_signature",
+                        "root_signature_id",
+                        str(shader.root_signature_id),
+                        str(active_root_signature_id)
+                        if active_root_signature_id is not None
+                        else "no active frame.set_root_signature",
+                        "frame.dispatch shader does not match the active root "
+                        "signature",
+                    )
+                )
+        elif instruction.opcode == "frame.copy_buffer":
+            source = resources.get(instruction.operands[0].value)
+            destination = resources.get(instruction.operands[1].value)
+            byte_count = instruction.operands[2].value
+            if source is None or destination is None:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_reference",
+                        "copy_resource",
+                        f"{instruction.operands[0].value}->"
+                        f"{instruction.operands[1].value}",
+                        "source missing"
+                        if source is None
+                        else "destination missing",
+                        "frame.copy_buffer references a missing resource",
+                    )
+                )
+            elif source is destination:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_copy_self",
+                        "copy_resources",
+                        "distinct source and destination",
+                        str(source.resource_id),
+                        "frame.copy_buffer must not copy a resource onto itself",
+                    )
+                )
+            elif source.kind != "buffer" or destination.kind != "buffer":
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_copy_kind",
+                        "resource_kind",
+                        "buffer",
+                        f"source={source.kind} destination={destination.kind}",
+                        "frame.copy_buffer only supports buffer resources",
+                    )
+                )
+            elif source.usage == "readback":
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_copy_readback_source",
+                        "source_usage",
+                        "writable or shader-visible resource",
+                        "readback",
+                        "readback-heap resources may only be copy destinations",
+                    )
+                )
+            elif (
+                byte_count <= 0
+                or byte_count % 4
+                or byte_count > min(source.size_bytes, destination.size_bytes)
+            ):
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_copy_bounds",
+                        "byte_count",
+                        f"1..{min(source.size_bytes, destination.size_bytes)} "
+                        "(multiple of 4)",
+                        str(byte_count),
+                        "frame.copy_buffer byte count exceeds the smaller "
+                        "resource or is not DWORD aligned",
+                    )
+                )
+        elif instruction.opcode == "frame.present":
+            resource = resources.get(instruction.operands[0].value)
+            if resource is None or resource.kind != "buffer" or resource.usage != "uav":
+                failures.append(
+                    _failure(
+                        package,
+                        "package_present_target",
+                        "present_resource",
+                        "UAV buffer package output",
+                        "missing"
+                        if resource is None
+                        else f"{resource.kind}:{resource.usage}",
+                        "frame.present must reference a package UAV buffer that "
+                        "the fullscreen display pass can read",
+                    )
+                )
+            elif resource.size_bytes < 16 or resource.size_bytes % 16:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_present_target_size",
+                        "size_bytes",
+                        "non-zero multiple of 16",
+                        str(resource.size_bytes),
+                        "fullscreen display output must contain complete "
+                        "RGBA32F pixels",
+                    )
+                )
+            elif (
+                present_resource_id is not None
+                and present_resource_id != resource.resource_id
+            ):
+                failures.append(
+                    _failure(
+                        package,
+                        "package_present_multiple_targets",
+                        "present_resource",
+                        str(present_resource_id),
+                        str(resource.resource_id),
+                        "all frame.present instructions must reference the same "
+                        "package display output",
+                    )
+                )
+            else:
+                present_resource_id = resource.resource_id
         elif instruction.opcode == "frame.set_timeline":
             parameter_id = instruction.operands[0].value
             if parameter_id not in parameter_ids:
@@ -937,14 +1152,95 @@ def validate_frame_plan(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
             else:
                 pending_timeline_parameters.add(parameter_id)
         elif instruction.opcode == "frame.set_root_constants":
-            constant_count = min(instruction.operands[2].value, 16)
-            entries, entry_failures = _root_constant_entries(
-                package, constant_count
+            constant_count = instruction.operands[2].value
+            root = roots.get(active_root_signature_id)
+            binding = next(
+                (
+                    item
+                    for item in (root.bindings if root else ())
+                    if item.root_parameter == instruction.operands[0].value
+                ),
+                None,
             )
-            failures.extend(entry_failures)
-            pending_timeline_parameters.difference_update(
-                entry[0] for entry in entries
-            )
+            resource = resources.get(instruction.operands[1].value)
+            if binding is None or binding.usage != "cbv":
+                failures.append(
+                    _failure(
+                        package,
+                        "package_root_constant_target",
+                        "root_parameter",
+                        str(instruction.operands[0].value),
+                        "not a root-constant parameter"
+                        if binding is None
+                        else binding.usage,
+                        "frame.set_root_constants must target the active root "
+                        "signature's root-constant parameter",
+                    )
+                )
+            elif (
+                resource is None
+                or resource.usage != "cbv"
+                or resource.binding_slot != binding.slot
+                or resource.binding_space != binding.space
+            ):
+                failures.append(
+                    _failure(
+                        package,
+                        "package_root_constant_resource",
+                        "resource_ref",
+                        str(instruction.operands[1].value),
+                        "missing" if resource is None else resource.name,
+                        "frame.set_root_constants references a resource that "
+                        "does not match the active root signature binding",
+                    )
+                )
+            else:
+                decoded = None
+                try:
+                    decoded = nwp._decode_root_signature_blob(root.blob, [])
+                except Exception:
+                    decoded = None
+                parameter = None
+                if decoded is not None:
+                    parameters, _ranges = decoded
+                    index = instruction.operands[0].value
+                    if 0 <= index < len(parameters):
+                        parameter = parameters[index]
+                if parameter is None or parameter[0] != 1:
+                    failures.append(
+                        _failure(
+                            package,
+                            "package_root_constant_signature",
+                            "root_parameter",
+                            str(instruction.operands[0].value),
+                            "not a 32-bit constants root parameter",
+                            "active root signature does not declare a 32-bit "
+                            "constants parameter at this index",
+                        )
+                    )
+                elif (
+                    constant_count > parameter[4]
+                    or constant_count > nwp.MAX_ROOT_SIGNATURE_DWORD_COST
+                ):
+                    failures.append(
+                        _failure(
+                            package,
+                            "package_root_constant_bound",
+                            "constant_count",
+                            str(parameter[4]),
+                            str(constant_count),
+                            "frame.set_root_constants exceeds the active root "
+                            "signature's 32-bit constants width",
+                        )
+                    )
+                else:
+                    entries, entry_failures = _root_constant_entries(
+                        package, constant_count
+                    )
+                    failures.extend(entry_failures)
+                    pending_timeline_parameters.difference_update(
+                        entry[0] for entry in entries
+                    )
     for parameter_id in sorted(pending_timeline_parameters):
         failures.append(
             _failure(

@@ -154,7 +154,8 @@ def test_hermetic_cmake_shader_compilation_rules() -> None:
     assert 'OUTPUT "${output_dxil}" "${output_header}"' in compile_shaders
     assert 'DEPENDS "${output_dxil}" "${output_header}"' in compile_shaders
     assert '-Fh "${output_header}"' in compile_shaders
-    assert "-Vn kComputeFixtureDxil" in compile_shaders
+    assert '-Vn "${_symbol_name}"' in compile_shaders
+    assert 'set(_symbol_name "kComputeFixtureDxil")' in compile_shaders
 
 
 def test_hlsl_source_constraint_checker_rejects_non_baseline_features() -> None:

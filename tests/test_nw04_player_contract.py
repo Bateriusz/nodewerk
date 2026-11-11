@@ -49,6 +49,7 @@ def test_nw04_fixture_is_a_valid_nw03_package_with_present() -> None:
         "frame.set_descriptor_table",
         "frame.barrier",
         "frame.dispatch",
+        "frame.dispatch",
         "frame.present",
     ]
     assert package.flags & 1, "fixture must be a release package"
@@ -734,6 +735,36 @@ def test_nw04_fixture_is_deterministic() -> None:
     second = nw04_fixture.package_bytes()
     assert first == second
     assert hashlib.sha256(first).digest() == hashlib.sha256(second).digest()
+    assert (
+        REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp"
+    ).read_bytes() == first
+
+
+def test_compose_display_stream_onto_compute_only_package() -> None:
+    compute_only = nwp.make_test_package(
+        shader_blob=nw04_fixture.make_dxil_container()
+    )
+    assert "frame.present" not in {
+        instruction.opcode for instruction in compute_only.frame
+    }
+    composed = nw04_fixture.compose_compute_display_package(compute_only)
+    data = nwp.encode_package(composed)
+    assert nwp.inspect_package_bytes(data).valid
+    assert "frame.present" in {
+        instruction.opcode for instruction in composed.frame
+    }
+    present = next(
+        instruction
+        for instruction in composed.frame
+        if instruction.opcode == "frame.present"
+    )
+    output = next(
+        resource
+        for resource in composed.resources
+        if resource.usage == "uav" and resource.kind == "buffer"
+    )
+    assert present.operands[0].value == output.resource_id
+    assert contract.validate_frame_plan(composed) == []
 
 
 def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
@@ -748,6 +779,9 @@ def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
     for tier in ("ada", "blackwell"):
         assert evidence["qualifications"][tier]["status"] == "pending_unverified"
         assert "No representative" in evidence["qualifications"][tier]["reason"]
+    completion = verify_nw04.check_hardware_evidence_complete(evidence_path)
+    assert not completion.passed
+    assert "unverified tiers" in completion.detail
 
 
 def test_synthetic_contract_fixture_cannot_certify_hardware() -> None:
@@ -756,3 +790,206 @@ def test_synthetic_contract_fixture_cannot_certify_hardware() -> None:
     )
     assert not result.passed
     assert "real offline-compiled artifact" in result.detail
+
+
+def test_planner_rejects_root_constants_beyond_active_signature() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    frame = []
+    for instruction in package.frame:
+        if instruction.opcode == "frame.set_root_constants":
+            operands = list(instruction.operands)
+            operands[2] = nwp.InstructionOperand("u32", 5)
+            instruction = nwp.Instruction(
+                "frame.set_root_constants", tuple(operands)
+            )
+        frame.append(instruction)
+    failures = contract.validate_frame_plan(
+        nwp.replace(package, frame=tuple(frame))
+    )
+    matching = [
+        failure
+        for failure in failures
+        if failure.code == "package_root_constant_bound"
+    ]
+    assert matching
+    assert matching[0].required == "4"
+    assert matching[0].observed == "5"
+
+
+def _copy_buffer_package() -> nwp.NwpPackage:
+    package = nw04_fixture.build_compute_display_package()
+    resources = tuple(package.resources) + (
+        nwp.ResourceDescriptor(
+            resource_id=3,
+            name="shadow",
+            kind="buffer",
+            format="DXGI_FORMAT_R32_UINT",
+            usage="uav",
+            pass_family="compute.math_noise",
+            size_bytes=4096,
+        ),
+        nwp.ResourceDescriptor(
+            resource_id=4,
+            name="preview",
+            kind="texture2d",
+            format="DXGI_FORMAT_R8G8B8A8_UNORM",
+            usage="uav",
+            pass_family="compute.math_noise",
+            width=16,
+            height=16,
+            size_bytes=1024,
+        ),
+        nwp.ResourceDescriptor(
+            resource_id=5,
+            name="readback",
+            kind="buffer",
+            format="DXGI_FORMAT_R32_UINT",
+            usage="readback",
+            pass_family="compute.math_noise",
+            size_bytes=4096,
+        ),
+    )
+    present_index = next(
+        index
+        for index, instruction in enumerate(package.frame)
+        if instruction.opcode == "frame.present"
+    )
+    frame = list(package.frame)
+    frame.insert(
+        present_index,
+        nwp.Instruction(
+            "frame.copy_buffer",
+            (
+                nwp.InstructionOperand("resource_ref", 2),
+                nwp.InstructionOperand("resource_ref", 3),
+                nwp.InstructionOperand("u64", 4096),
+            ),
+        ),
+    )
+    return nwp.replace(package, resources=resources, frame=tuple(frame))
+
+
+def test_planner_validates_copy_buffer_targets_and_bounds() -> None:
+    package = _copy_buffer_package()
+    assert not [
+        failure
+        for failure in contract.validate_frame_plan(package)
+        if failure.code.startswith("package_instruction_copy")
+    ]
+
+    def rewrite(source: int, destination: int, byte_count: int) -> nwp.NwpPackage:
+        frame = []
+        for instruction in package.frame:
+            if instruction.opcode == "frame.copy_buffer":
+                instruction = nwp.Instruction(
+                    "frame.copy_buffer",
+                    (
+                        nwp.InstructionOperand("resource_ref", source),
+                        nwp.InstructionOperand("resource_ref", destination),
+                        nwp.InstructionOperand("u64", byte_count),
+                    ),
+                )
+            frame.append(instruction)
+        return nwp.replace(package, frame=tuple(frame))
+
+    codes = lambda pkg: {  # noqa: E731
+        failure.code for failure in contract.validate_frame_plan(pkg)
+    }
+    assert "package_instruction_copy_bounds" in codes(rewrite(2, 3, 4096 + 4))
+    assert "package_instruction_copy_self" in codes(rewrite(3, 3, 4096))
+    assert "package_instruction_copy_kind" in codes(rewrite(4, 3, 16))
+    assert "package_instruction_copy_readback_source" in codes(
+        rewrite(5, 3, 16)
+    )
+
+
+def test_planner_rejects_present_targets_that_are_not_uav_buffers() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    frame = []
+    for instruction in package.frame:
+        if instruction.opcode == "frame.present":
+            instruction = nwp.Instruction(
+                "frame.present",
+                (nwp.InstructionOperand("resource_ref", 1),),
+            )
+        frame.append(instruction)
+    failures = contract.validate_frame_plan(
+        nwp.replace(package, frame=tuple(frame))
+    )
+    assert any(
+        failure.code == "package_present_target" for failure in failures
+    )
+
+
+def test_hardware_package_requires_compute_display_stream(
+    tmp_path: Path,
+) -> None:
+    compute_only = nwp.make_test_package(
+        shader_blob=nw04_fixture.make_dxil_container()
+    )
+    package_path = tmp_path / "nw04-compute-only.nwp"
+    package_path.write_bytes(nwp.encode_package(compute_only))
+    result = verify_nw04._validate_hardware_package(package_path)
+    assert not result.passed
+    assert "compute/display" in result.detail
+
+
+def test_evidence_preserves_failure_after_later_successes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    import nw04_evidence
+
+    fixture = tmp_path / "player.exe"
+    fixture.write_bytes(b"player")
+    package_path = tmp_path / "package.nwp"
+    package_path.write_bytes(nw04_fixture.package_bytes())
+    output = tmp_path / "evidence.json"
+    monkeypatch.setattr(
+        verify_nw04,
+        "_validate_hardware_package",
+        lambda path: verify_nw04.CheckResult(
+            "nw04_hardware_package", True, True
+        ),
+    )
+
+    def metrics(tier: str) -> str:
+        return "\n".join(
+            (
+                "NW_PLAYER_INITIALIZATION_COUNT=1",
+                "NW_PLAYER_FRAMES=122",
+                "NW_PLAYER_PRESENTS=122",
+                "NW_PLAYER_POST_INIT_ALLOCATION_VIOLATION=0",
+                "NW_PLAYER_NON_ALIASED_PLACEMENTS=1",
+                "NW_PLAYER_MINIMIZE_RESTORE_RENDERED=1",
+                "NW_PLAYER_RESIZE_COUNT=4",
+                "NW_PLAYER_UAV_BARRIERS=3",
+                f"NW_PLAYER_ADAPTER_GENERATION={tier}",
+                "NW_PLAYER_ADAPTER_DESCRIPTION=representative",
+            )
+        )
+
+    results = [
+        types.SimpleNamespace(returncode=1, stdout="", stderr="failure"),
+        types.SimpleNamespace(returncode=0, stdout=metrics("ada"), stderr=""),
+        types.SimpleNamespace(
+            returncode=0, stdout=metrics("blackwell"), stderr=""
+        ),
+    ]
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        return results.pop(0)
+
+    monkeypatch.setattr(nw04_evidence.subprocess, "run", fake_run)
+    assert nw04_evidence.record_execution(
+        fixture, package_path, "ada", output
+    ) == 1
+    assert nw04_evidence.record_execution(
+        fixture, package_path, "ada", output
+    ) == 0
+    assert nw04_evidence.record_execution(
+        fixture, package_path, "blackwell", output
+    ) == 0
+    record = json.loads(output.read_text(encoding="utf-8"))
+    assert record["verification_status"] == "executed_failure"

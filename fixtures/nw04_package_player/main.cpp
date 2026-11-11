@@ -26,10 +26,12 @@ struct FixtureArgs {
     std::uint32_t height = 720u;
     bool diagnostics = false;
     bool headless = false;
+    bool allow_software_adapter = false;
     bool emit_benchmark_metrics = false;
     bool validation = false;
     bool resize_sequence = false;
     bool simulate_minimize = false;
+    bool win32_minimize_restore = false;
     bool simulate_device_removal = false;
     bool simulate_allocation_failure = false;
     bool simulate_capability_failure = false;
@@ -88,6 +90,8 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             args->diagnostics = true;
         } else if (std::strcmp(arg, "--headless") == 0) {
             args->headless = true;
+        } else if (std::strcmp(arg, "--allow-software-adapter") == 0) {
+            args->allow_software_adapter = true;
         } else if (std::strcmp(arg, "--emit-benchmark-metrics") == 0) {
             args->emit_benchmark_metrics = true;
         } else if (std::strcmp(arg, "--validation") == 0) {
@@ -98,6 +102,8 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             args->resize_sequence = true;
         } else if (std::strcmp(arg, "--simulate-minimize") == 0) {
             args->simulate_minimize = true;
+        } else if (std::strcmp(arg, "--win32-minimize-restore") == 0) {
+            args->win32_minimize_restore = true;
         } else if (std::strcmp(arg, "--simulate-device-removal") == 0) {
             args->simulate_device_removal = true;
         } else if (std::strcmp(arg, "--simulate-allocation-failure") == 0) {
@@ -143,8 +149,10 @@ int main(int argc, char** argv) {
             "usage: nw_package_player_fixture --package <file.nwp> "
             "[--frames N] [--tick-start N] [--tick-step N] [--width N] "
             "[--height N] [--diagnostics] [--headless] "
+            "[--allow-software-adapter] "
             "[--emit-benchmark-metrics] [--resize-sequence] "
-            "[--simulate-minimize] [--simulate-device-removal] "
+            "[--simulate-minimize] [--win32-minimize-restore] "
+            "[--simulate-device-removal] "
             "[--simulate-allocation-failure] [--simulate-capability-failure] "
             "[--simulate-pipeline-failure] "
             "[--simulate-root-signature-failure] "
@@ -159,6 +167,9 @@ int main(int argc, char** argv) {
     config.width = args.width;
     config.height = args.height;
     config.headless = args.headless;
+    config.allow_software_adapter =
+        args.allow_software_adapter ||
+        std::getenv("NW04_ALLOW_SOFTWARE_ADAPTER") != nullptr;
     config.enable_validation = args.validation;
     config.emit_benchmark_metrics = args.emit_benchmark_metrics;
     config.wait_for_gpu_each_frame = args.emit_benchmark_metrics;
@@ -248,6 +259,111 @@ int main(int argc, char** argv) {
                     package.parameters.front().type = "double";
                     mutated = true;
                 }
+            } else if (std::strcmp(args.planner_mutation,
+                                   "root-constant-bound") == 0) {
+                for (auto& instruction : package.frame) {
+                    if (instruction.opcode == "frame.set_root_constants" &&
+                        instruction.operands.size() == 3u) {
+                        instruction.operands[2].u32 = 5u;
+                        mutated = true;
+                        break;
+                    }
+                }
+            } else if (std::strcmp(args.planner_mutation,
+                                   "copy-bounds") == 0) {
+                package.frame.push_back(nw::package::Instruction{
+                    "frame.copy_buffer",
+                    {nw::package::InstructionOperand{
+                         nw::package::OperandType::ResourceRef, 1u, 0u, 0, false,
+                         0.0, ""},
+                     nw::package::InstructionOperand{
+                         nw::package::OperandType::ResourceRef, 2u, 0u, 0, false,
+                         0.0, ""},
+                     nw::package::InstructionOperand{
+                         nw::package::OperandType::U64, 0u, 1ull << 40, 0, false,
+                         0.0, ""}}});
+                mutated = true;
+            } else if (std::strcmp(args.planner_mutation, "copy-self") == 0) {
+                package.frame.push_back(nw::package::Instruction{
+                    "frame.copy_buffer",
+                    {nw::package::InstructionOperand{
+                         nw::package::OperandType::ResourceRef, 2u, 0u, 0, false,
+                         0.0, ""},
+                     nw::package::InstructionOperand{
+                         nw::package::OperandType::ResourceRef, 2u, 0u, 0, false,
+                         0.0, ""},
+                     nw::package::InstructionOperand{
+                         nw::package::OperandType::U64, 0u, 16u, 0, false, 0.0,
+                         ""}}});
+                mutated = true;
+            } else if (std::strcmp(args.planner_mutation,
+                                   "copy-texture") == 0) {
+                nw::package::ResourceDescriptor texture{};
+                texture.resource_id = 99u;
+                texture.name = "planner_texture";
+                texture.kind = "texture2d";
+                texture.format = "DXGI_FORMAT_R8G8B8A8_UNORM";
+                texture.usage = "uav";
+                texture.pass_family = "compute.math_noise";
+                texture.width = 4u;
+                texture.height = 4u;
+                texture.size_bytes = 64u;
+                package.resources.push_back(texture);
+                package.frame.push_back(nw::package::Instruction{
+                    "frame.copy_buffer",
+                    {nw::package::InstructionOperand{
+                         nw::package::OperandType::ResourceRef, 99u, 0u, 0,
+                         false, 0.0, ""},
+                     nw::package::InstructionOperand{
+                         nw::package::OperandType::ResourceRef, 2u, 0u, 0, false,
+                         0.0, ""},
+                     nw::package::InstructionOperand{
+                         nw::package::OperandType::U64, 0u, 16u, 0, false, 0.0,
+                         ""}}});
+                mutated = true;
+            } else if (std::strcmp(args.planner_mutation,
+                                   "copy-readback-source") == 0) {
+                nw::package::ResourceDescriptor readback{};
+                readback.resource_id = 98u;
+                readback.name = "planner_readback";
+                readback.kind = "buffer";
+                readback.format = "DXGI_FORMAT_R32_UINT";
+                readback.usage = "readback";
+                readback.pass_family = "compute.math_noise";
+                readback.size_bytes = 64u;
+                package.resources.push_back(readback);
+                package.frame.push_back(nw::package::Instruction{
+                    "frame.copy_buffer",
+                    {nw::package::InstructionOperand{
+                         nw::package::OperandType::ResourceRef, 98u, 0u, 0,
+                         false, 0.0, ""},
+                     nw::package::InstructionOperand{
+                         nw::package::OperandType::ResourceRef, 2u, 0u, 0, false,
+                         0.0, ""},
+                     nw::package::InstructionOperand{
+                         nw::package::OperandType::U64, 0u, 16u, 0, false, 0.0,
+                         ""}}});
+                mutated = true;
+            } else if (std::strcmp(args.planner_mutation,
+                                   "present-target") == 0) {
+                for (auto& instruction : package.frame) {
+                    if (instruction.opcode == "frame.present" &&
+                        instruction.operands.size() == 1u) {
+                        instruction.operands[0].u32 = 1u;
+                        mutated = true;
+                        break;
+                    }
+                }
+            } else if (std::strcmp(args.planner_mutation,
+                                   "dispatch-root") == 0) {
+                for (auto& instruction : package.frame) {
+                    if (instruction.opcode == "frame.dispatch" &&
+                        instruction.operands.size() == 4u) {
+                        instruction.operands[3].u32 = 99u;
+                        mutated = true;
+                        break;
+                    }
+                }
             }
             if (!mutated) {
                 std::fprintf(stderr, "unknown planner mutation: %s\n",
@@ -334,6 +450,40 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (args.win32_minimize_restore) {
+        // Exercise the real WM_SIZE/SW_MINIMIZE/SW_RESTORE transitions.  An
+        // ordinary restore returns to the same client size, so this path must
+        // resume rendering without requiring ResizeBuffers.
+        code = player.renderAtTick(args.tick_start);
+        if (code != nw::player::ExitCode::Success) {
+            return player.Report(true);
+        }
+        const std::uint64_t before_minimize = player.frames_rendered();
+        if (!player.SetWindowMinimizedForTesting(true)) {
+            std::fprintf(stderr, "could not simulate Win32 minimize\n");
+            return static_cast<int>(nw::player::ExitCode::WindowCreationFailed);
+        }
+        code = player.renderAtTick(args.tick_start + 1u);
+        if (code != nw::player::ExitCode::Success ||
+            player.frames_rendered() != before_minimize) {
+            std::fprintf(stderr, "minimized window did not suspend rendering\n");
+            return player.Report(true);
+        }
+        if (!player.SetWindowMinimizedForTesting(false)) {
+            std::fprintf(stderr, "could not simulate Win32 restore\n");
+            return static_cast<int>(nw::player::ExitCode::WindowCreationFailed);
+        }
+        code = player.renderAtTick(args.tick_start + 2u);
+        if (code != nw::player::ExitCode::Success ||
+            player.frames_rendered() != before_minimize + 1u) {
+            std::fprintf(stderr,
+                         "restored window did not resume rendering at the "
+                         "unchanged client size\n");
+            return player.Report(true);
+        }
+        std::printf("NW_PLAYER_MINIMIZE_RESTORE_RENDERED=1\n");
+    }
+
     if (args.simulate_device_removal) {
         player.SetForceDeviceRemovedForTesting(true);
         code = player.renderAtTick(args.tick_start);
@@ -372,10 +522,16 @@ int main(int argc, char** argv) {
                 player.initialization_count());
     std::printf("NW_PLAYER_FRAMES=%llu\n",
                 static_cast<unsigned long long>(player.frames_rendered()));
+    std::printf("NW_PLAYER_PRESENTS=%llu\n",
+                static_cast<unsigned long long>(player.frames_presented()));
+    std::printf("NW_PLAYER_PRESENT_RESOURCE_ID=%u\n",
+                player.present_resource_id());
     std::printf("NW_PLAYER_RESIZE_COUNT=%llu\n",
                 static_cast<unsigned long long>(stats.resize_count));
     std::printf("NW_PLAYER_UPLOAD_REUSE_WAITS=%llu\n",
                 static_cast<unsigned long long>(stats.upload_reuse_waits));
+    std::printf("NW_PLAYER_UAV_BARRIERS=%llu\n",
+                static_cast<unsigned long long>(stats.uav_barrier_count));
     std::printf("NW_PLAYER_LAST_TIMELINE_PARAMETER_ID=%u\n",
                 player.last_timeline_parameter_id());
     std::printf("NW_PLAYER_LAST_TIMELINE_VALUE=%llu\n",

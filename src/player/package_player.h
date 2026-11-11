@@ -36,6 +36,10 @@ struct PlayerConfig {
     bool visible_window = true;
     bool enable_validation = false;
     bool headless = false;
+    // Diagnostic/CI only: allow the Microsoft Basic Render Driver (WARP)
+    // adapter for native lifecycle and D3D12-validation execution.  Hardware
+    // qualification never sets this flag.
+    bool allow_software_adapter = false;
     bool emit_benchmark_metrics = false;
     bool emit_readback_values = false;
     bool wait_for_gpu_each_frame = false;
@@ -64,6 +68,8 @@ struct PlayerAllocationStats {
     std::uint64_t resize_count = 0u;
     std::uint64_t upload_reuse_waits = 0u;
     std::uint64_t frames_rendered = 0u;
+    std::uint64_t frames_presented = 0u;
+    std::uint64_t uav_barrier_count = 0u;
     bool post_initialization_allocation_violation = false;
 };
 
@@ -110,6 +116,12 @@ public:
     }
     std::uint64_t last_timeline_value() const noexcept {
         return timeline_tick_;
+    }
+    std::uint32_t present_resource_id() const noexcept {
+        return present_resource_id_;
+    }
+    std::uint64_t frames_presented() const noexcept {
+        return frames_presented_;
     }
     const std::array<std::uint32_t,
                      package::kMaxRootSignatureDwordCost>&
@@ -158,6 +170,9 @@ public:
     // Diagnostic-only seam that injects one tracked engine allocation into the
     // render path so the post-initialization allocation guard is exercised.
     void SetSimulatePostInitializationAllocationForTesting(bool allocate) noexcept;
+    // Test seam that drives the real Win32 WM_SIZE/SW_MINIMIZE/SW_RESTORE
+    // transitions on Windows; host simulation simply flips the tracked state.
+    bool SetWindowMinimizedForTesting(bool minimized) noexcept;
     // Host-simulation planner checks.  They exercise the exact frame-plan
     // validation and timeline constant application without a GPU.
     bool BuildFramePlanForTesting(const package::Package& pkg);
@@ -219,6 +234,7 @@ private:
     std::uint32_t initialization_count_ = 0u;
     std::uint64_t shutdown_count_ = 0u;
     std::uint64_t frames_rendered_ = 0u;
+    std::uint64_t frames_presented_ = 0u;
     std::uint64_t last_tick_ = 0u;
     std::uint64_t next_fence_value_ = 1u;
     std::uint32_t width_ = 1280u;
@@ -236,6 +252,10 @@ private:
     std::uint32_t timeline_parameter_id_ = 0u;
     std::uint64_t timeline_tick_ = 0u;
     bool timeline_override_active_ = false;
+    // Resolved from the validated frame.present operand during planning.
+    std::uint32_t present_resource_id_ = 0u;
+    std::uint32_t present_source_width_ = 0u;
+    std::uint32_t present_source_height_ = 0u;
     std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
         last_root_constants_{};
     std::uint32_t last_root_constant_count_ = 0u;

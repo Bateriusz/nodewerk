@@ -47,6 +47,12 @@ public:
     // minimize/zero-sized behavior deterministically.
     void SetSimulatedMinimized(bool minimized) noexcept;
 
+    // Win32 WM_SIZE transition handler.  Public only so the module-local
+    // window procedure can update the owning object through GWLP_USERDATA.
+    void ApplySize(std::uint32_t width,
+                   std::uint32_t height,
+                   bool minimized) noexcept;
+
 private:
     bool created_ = false;
     bool closed_ = false;

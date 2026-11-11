@@ -8,6 +8,10 @@ find_program(NW_DXC_EXECUTABLE NAMES dxc dxc.exe)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 
 function(nw_add_offline_compute_shader target_name hlsl_file entry_point profile output_dxil output_header)
+    set(_symbol_name "kComputeFixtureDxil")
+    if(ARGC GREATER 6)
+        set(_symbol_name "${ARGV6}")
+    endif()
     get_filename_component(_dxil_dir "${output_dxil}" DIRECTORY)
     get_filename_component(_header_dir "${output_header}" DIRECTORY)
 
@@ -53,6 +57,7 @@ function(nw_add_offline_compute_shader target_name hlsl_file entry_point profile
                 --hlsl "${hlsl_file}"
                 --dxil "${output_dxil}"
                 --output-header "${output_header}"
+                --symbol "${_symbol_name}"
             DEPENDS
                 "${hlsl_file}"
                 "${CMAKE_SOURCE_DIR}/tools/offline_shader_pack.py"
@@ -76,7 +81,7 @@ function(nw_add_offline_compute_shader target_name hlsl_file entry_point profile
                 -Qstrip_debug
                 -Fo "${output_dxil}"
                 -Fh "${output_header}"
-                -Vn kComputeFixtureDxil
+                -Vn "${_symbol_name}"
                 "${hlsl_file}"
             DEPENDS "${hlsl_file}"
             COMMENT "Compiling offline SM 6.0 shader ${hlsl_file} (${entry_point}) via DXC (-Fo/-Fh) into build directory"

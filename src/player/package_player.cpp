@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -28,6 +29,10 @@
 #if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
 #include <d3d12sdklayers.h>
 #endif
+
+namespace nw::shaders {
+#include "display_fixture_dxil.h"
+} // namespace nw::shaders
 #endif
 
 namespace nw::player {
@@ -245,6 +250,108 @@ void WriteTimelineTick(std::uint32_t* words,
     }
 }
 
+// Read one serialized D3D12 root parameter out of an RTS0 payload.  The
+// package planner needs the *actual* root-constant width of the referenced
+// parameter instead of accepting the package-wide 16-DWORD ceiling.
+bool ReadRootSignatureParameterType(
+    const package::RootSignatureRecord& record,
+    std::uint32_t root_parameter,
+    std::uint32_t* parameter_type,
+    std::uint32_t* constant_dwords) {
+    if (parameter_type == nullptr || constant_dwords == nullptr) return false;
+    *parameter_type = 0xFFFFFFFFu;
+    *constant_dwords = 0u;
+    const std::vector<std::uint8_t>& blob = record.blob;
+    if (blob.size() < 44u || std::memcmp(blob.data(), "DXBC", 4u) != 0) {
+        return false;
+    }
+    std::uint16_t major = 0u;
+    std::uint16_t minor = 0u;
+    std::uint32_t total_size = 0u;
+    std::uint32_t chunk_count = 0u;
+    std::memcpy(&major, blob.data() + 20u, sizeof(major));
+    std::memcpy(&minor, blob.data() + 22u, sizeof(minor));
+    std::memcpy(&total_size, blob.data() + 24u, sizeof(total_size));
+    std::memcpy(&chunk_count, blob.data() + 28u, sizeof(chunk_count));
+    if (major != 1u || minor != 0u || total_size != blob.size() ||
+        chunk_count == 0u || chunk_count > 64u ||
+        32u + chunk_count * 4u > blob.size()) {
+        return false;
+    }
+    for (std::uint32_t index = 0u; index < chunk_count; ++index) {
+        std::uint32_t chunk_offset = 0u;
+        std::memcpy(&chunk_offset, blob.data() + 32u + index * 4u,
+                    sizeof(chunk_offset));
+        if (chunk_offset > blob.size() || blob.size() - chunk_offset < 8u) {
+            return false;
+        }
+        std::uint32_t chunk_size = 0u;
+        std::memcpy(&chunk_size, blob.data() + chunk_offset + 4u,
+                    sizeof(chunk_size));
+        if (chunk_size > blob.size() - chunk_offset - 8u) return false;
+        if (std::memcmp(blob.data() + chunk_offset, "RTS0", 4u) != 0) {
+            continue;
+        }
+        const std::uint8_t* payload = blob.data() + chunk_offset + 8u;
+        const std::size_t payload_size = chunk_size;
+        if (payload_size < 24u) return false;
+        std::uint32_t version = 0u;
+        std::uint32_t parameter_count = 0u;
+        std::uint32_t parameter_offset = 0u;
+        std::uint32_t static_sampler_count = 0u;
+        std::uint32_t flags = 0u;
+        std::memcpy(&version, payload, sizeof(version));
+        std::memcpy(&parameter_count, payload + 4u, sizeof(parameter_count));
+        std::memcpy(&parameter_offset, payload + 8u,
+                    sizeof(parameter_offset));
+        std::memcpy(&static_sampler_count, payload + 12u,
+                    sizeof(static_sampler_count));
+        std::memcpy(&flags, payload + 20u, sizeof(flags));
+        if ((version != 1u && version != 2u) || flags != 0u ||
+            static_sampler_count != 0u ||
+            root_parameter >= parameter_count) {
+            return false;
+        }
+        const std::uint64_t row_offset =
+            static_cast<std::uint64_t>(parameter_offset) +
+            static_cast<std::uint64_t>(root_parameter) * 12u;
+        if (row_offset + 12u > payload_size) return false;
+        std::uint32_t type = 0u;
+        std::uint32_t data_offset = 0u;
+        std::memcpy(&type, payload + row_offset, sizeof(type));
+        std::memcpy(&data_offset, payload + row_offset + 8u,
+                    sizeof(data_offset));
+        *parameter_type = type;
+        if (type == 1u) {
+            if (static_cast<std::uint64_t>(data_offset) + 12u > payload_size) {
+                return false;
+            }
+            std::uint32_t dwords = 0u;
+            std::memcpy(&dwords, payload + data_offset + 8u, sizeof(dwords));
+            *constant_dwords = dwords;
+        }
+        return true;
+    }
+    return false;
+}
+
+const package::RootSignatureRecord* FindRootSignatureRecord(
+    const package::Package& pkg, std::uint32_t root_signature_id) noexcept {
+    for (const auto& record : pkg.root_signatures) {
+        if (record.root_signature_id == root_signature_id) return &record;
+    }
+    return nullptr;
+}
+
+const package::RootBinding* FindRootBinding(
+    const package::RootSignatureRecord& record,
+    std::uint32_t root_parameter) noexcept {
+    for (const auto& binding : record.bindings) {
+        if (binding.root_parameter == root_parameter) return &binding;
+    }
+    return nullptr;
+}
+
 #if defined(_WIN32)
 // Metadata-only classification for evidence.  This value is never consulted
 // by capability eligibility or package selection.
@@ -283,6 +390,9 @@ struct PlatformState {
         D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle{};
         std::uint32_t descriptor_index = 0xFFFFFFFFu;
         bool has_descriptor = false;
+        // UAV ordering is explicit: two dependent dispatches that leave the
+        // resource in UNORDERED_ACCESS still need a UAV barrier between them.
+        bool uav_accessed_in_frame = false;
     };
 
     struct RootSlot {
@@ -313,6 +423,18 @@ struct PlatformState {
     std::vector<ID3D12Resource*> backbuffers;
     std::vector<D3D12_RESOURCE_STATES> backbuffer_states;
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv_handles;
+
+    // Package-driven fullscreen display.  The display source is the UAV
+    // resource referenced by frame.present; the player-owned compute shader
+    // blits it into an offscreen texture which is copied to the back buffer.
+    ID3D12RootSignature* display_root_signature = nullptr;
+    ID3D12PipelineState* display_pipeline = nullptr;
+    ID3D12Resource* display_texture = nullptr;
+    D3D12_RESOURCE_STATES display_texture_state =
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_CPU_DESCRIPTOR_HANDLE display_uav_cpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE display_uav_gpu{};
+    std::uint32_t display_uav_descriptor_index = 0xFFFFFFFFu;
 
     ID3D12DescriptorHeap* cbv_srv_uav_heap = nullptr;
     ID3D12DescriptorHeap* sampler_heap = nullptr;
@@ -724,6 +846,11 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     // A timeline selection is only effective if a later root-constant
     // instruction can consume it. Track unresolved selections in frame order.
     std::set<std::uint32_t> pending_timeline_parameters;
+    bool has_active_root_signature = false;
+    std::uint32_t active_root_signature_id = 0u;
+    present_resource_id_ = 0u;
+    present_source_width_ = 0u;
+    present_source_height_ = 0u;
     for (const auto& instruction : package_.frame) {
         bool known = true;
         FrameOp::Type type = FrameOp::Type::Present;
@@ -767,6 +894,29 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 return false;
             }
             op.root_parameter = instruction.operands[0].u32;
+            if (instruction.operands[0].type !=
+                package::OperandType::RootSignatureRef) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand", "operand_type",
+                     "root_signature_ref",
+                     std::string(
+                         package::ToString(instruction.operands[0].type)),
+                     "frame_plan",
+                     "frame.set_root_signature operand type is invalid");
+                return false;
+            }
+            if (FindRootSignatureRecord(package_, op.root_parameter) ==
+                nullptr) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_reference", "root_signature_id",
+                     std::to_string(op.root_parameter), "missing",
+                     "frame_plan",
+                     "frame.set_root_signature references a missing root "
+                     "signature");
+                return false;
+            }
+            has_active_root_signature = true;
+            active_root_signature_id = op.root_parameter;
         } else if (type == FrameOp::Type::SetRootConstants) {
             if (instruction.operands.size() != 3u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -777,9 +927,78 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             op.root_parameter = instruction.operands[0].u32;
             op.resource_a = instruction.operands[1].u32;
-            op.constant_count =
-                std::min(instruction.operands[2].u32,
-                         package::kMaxRootSignatureDwordCost);
+            op.constant_count = instruction.operands[2].u32;
+            if (instruction.operands[0].type != package::OperandType::U32 ||
+                instruction.operands[1].type !=
+                    package::OperandType::ResourceRef ||
+                instruction.operands[2].type != package::OperandType::U32) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand", "operand_types",
+                     "u32,resource_ref,u32", "invalid", "frame_plan",
+                     "frame.set_root_constants operand types are invalid");
+                return false;
+            }
+            const package::RootSignatureRecord* root_record =
+                has_active_root_signature
+                    ? FindRootSignatureRecord(package_,
+                                              active_root_signature_id)
+                    : nullptr;
+            const package::RootBinding* binding =
+                root_record == nullptr
+                    ? nullptr
+                    : FindRootBinding(*root_record, op.root_parameter);
+            if (binding == nullptr || binding->usage != "cbv") {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_root_constant_target",
+                     "root_parameter", std::to_string(op.root_parameter),
+                     binding == nullptr ? "not a root-constant parameter"
+                                        : binding->usage,
+                     "frame_plan",
+                     "frame.set_root_constants must target the active root "
+                     "signature's root-constant parameter");
+                return false;
+            }
+            const package::ResourceDescriptor* constants_resource =
+                FindPackageResource(package_, op.resource_a);
+            if (constants_resource == nullptr ||
+                constants_resource->usage != "cbv" ||
+                constants_resource->binding_slot != binding->slot ||
+                constants_resource->binding_space != binding->space) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_root_constant_resource", "resource_ref",
+                     std::to_string(op.resource_a),
+                     constants_resource == nullptr
+                         ? "missing"
+                         : constants_resource->name,
+                     "frame_plan",
+                     "frame.set_root_constants references a resource that "
+                     "does not match the active root signature binding");
+                return false;
+            }
+            std::uint32_t parameter_type = 0xFFFFFFFFu;
+            std::uint32_t allowed_dwords = 0u;
+            if (!ReadRootSignatureParameterType(*root_record, op.root_parameter,
+                                                &parameter_type,
+                                                &allowed_dwords) ||
+                parameter_type != 1u) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_root_constant_signature", "root_parameter",
+                     std::to_string(op.root_parameter),
+                     "not a 32-bit constants root parameter", "frame_plan",
+                     "active root signature does not declare a 32-bit "
+                     "constants parameter at this index");
+                return false;
+            }
+            if (op.constant_count > allowed_dwords ||
+                op.constant_count > package::kMaxRootSignatureDwordCost) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_root_constant_bound", "constant_count",
+                     std::to_string(allowed_dwords),
+                     std::to_string(op.constant_count), "frame_plan",
+                     "frame.set_root_constants exceeds the active root "
+                     "signature's 32-bit constants width");
+                return false;
+            }
             // Pack immutable parameter values into the bounded root-constant
             // block.  This is done once during initialization, never per frame.
             std::size_t byte_offset = 0u;
@@ -878,6 +1097,35 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "compatible descriptor");
                 return false;
             }
+            const package::RootSignatureRecord* root_record =
+                has_active_root_signature
+                    ? FindRootSignatureRecord(package_,
+                                              active_root_signature_id)
+                    : nullptr;
+            const package::RootBinding* binding =
+                root_record == nullptr
+                    ? nullptr
+                    : FindRootBinding(*root_record, op.root_parameter);
+            const bool binding_usage_matches =
+                binding != nullptr &&
+                (sampler_table ? binding->usage == "sampler"
+                               : binding->usage == "uav" ||
+                                     binding->usage == "srv");
+            if (!binding_usage_matches || binding->slot != resource->binding_slot ||
+                binding->space != resource->binding_space) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_descriptor_table_binding", "root_parameter",
+                     std::to_string(op.root_parameter),
+                     binding == nullptr ? "missing root binding"
+                                        : binding->usage + ":" +
+                                              std::to_string(binding->slot) +
+                                              ":" +
+                                              std::to_string(binding->space),
+                     "frame_plan",
+                     "frame.set_descriptor_table does not match the active "
+                     "root signature binding");
+                return false;
+            }
         } else if (type == FrameOp::Type::Barrier) {
             if (instruction.operands.size() != 2u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -927,6 +1175,58 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.group_y = instruction.operands[1].u32;
             op.group_z = instruction.operands[2].u32;
             op.shader_id = instruction.operands[3].u32;
+            if (instruction.operands[0].type != package::OperandType::U32 ||
+                instruction.operands[1].type != package::OperandType::U32 ||
+                instruction.operands[2].type != package::OperandType::U32 ||
+                instruction.operands[3].type !=
+                    package::OperandType::ShaderRef) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand", "operand_types",
+                     "u32,u32,u32,shader_ref", "invalid", "frame_plan",
+                     "frame.dispatch operand types are invalid");
+                return false;
+            }
+            if (op.group_x == 0u || op.group_y == 0u || op.group_z == 0u ||
+                op.group_x > 65535u || op.group_y > 65535u ||
+                op.group_z > 65535u) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_dispatch_bounds", "dispatch_groups",
+                     "1..65535",
+                     std::to_string(op.group_x) + "x" +
+                         std::to_string(op.group_y) + "x" +
+                         std::to_string(op.group_z),
+                     "frame_plan",
+                     "frame.dispatch group dimensions are out of bounds");
+                return false;
+            }
+            const package::ShaderRecord* dispatch_shader = nullptr;
+            for (const auto& candidate : package_.shaders) {
+                if (candidate.shader_id == op.shader_id) {
+                    dispatch_shader = &candidate;
+                    break;
+                }
+            }
+            if (dispatch_shader == nullptr) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_reference", "shader_id",
+                     std::to_string(op.shader_id), "missing", "frame_plan",
+                     "frame.dispatch references a missing shader");
+                return false;
+            }
+            if (!has_active_root_signature ||
+                dispatch_shader->root_signature_id !=
+                    active_root_signature_id) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_root_signature", "root_signature_id",
+                     std::to_string(dispatch_shader->root_signature_id),
+                     has_active_root_signature
+                         ? std::to_string(active_root_signature_id)
+                         : "no active frame.set_root_signature",
+                     "frame_plan",
+                     "frame.dispatch shader does not match the active root "
+                     "signature");
+                return false;
+            }
         } else if (type == FrameOp::Type::Draw) {
             Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
                  "frame_draw_requires_raster_pipeline", "pipeline",
@@ -945,6 +1245,71 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.resource_a = instruction.operands[0].u32;
             op.resource_b = instruction.operands[1].u32;
             op.byte_count = instruction.operands[2].u64;
+            if (instruction.operands[0].type !=
+                    package::OperandType::ResourceRef ||
+                instruction.operands[1].type !=
+                    package::OperandType::ResourceRef ||
+                instruction.operands[2].type != package::OperandType::U64) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand", "operand_types",
+                     "resource_ref,resource_ref,u64", "invalid", "frame_plan",
+                     "frame.copy_buffer operand types are invalid");
+                return false;
+            }
+            const package::ResourceDescriptor* copy_source =
+                FindPackageResource(package_, op.resource_a);
+            const package::ResourceDescriptor* copy_destination =
+                FindPackageResource(package_, op.resource_b);
+            if (copy_source == nullptr || copy_destination == nullptr) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_reference", "copy_resource",
+                     std::to_string(op.resource_a) + "->" +
+                         std::to_string(op.resource_b),
+                     copy_source == nullptr ? "source missing"
+                                            : "destination missing",
+                     "frame_plan",
+                     "frame.copy_buffer references a missing resource");
+                return false;
+            }
+            if (copy_source == copy_destination) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_copy_self", "copy_resources",
+                     "distinct source and destination",
+                     std::to_string(op.resource_a), "frame_plan",
+                     "frame.copy_buffer must not copy a resource onto itself");
+                return false;
+            }
+            if (copy_source->kind != "buffer" ||
+                copy_destination->kind != "buffer") {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_copy_kind", "resource_kind", "buffer",
+                     "source=" + copy_source->kind +
+                         " destination=" + copy_destination->kind,
+                     "frame_plan",
+                     "frame.copy_buffer only supports buffer resources");
+                return false;
+            }
+            if (copy_source->usage == "readback") {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_copy_readback_source",
+                     "source_usage", "writable or shader-visible resource",
+                     "readback", "frame_plan",
+                     "readback-heap resources may only be copy destinations");
+                return false;
+            }
+            const std::uint64_t maximum_copy =
+                std::min(copy_source->size_bytes,
+                         copy_destination->size_bytes);
+            if (op.byte_count == 0u || op.byte_count % 4u != 0u ||
+                op.byte_count > maximum_copy) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_copy_bounds", "byte_count",
+                     "1.." + std::to_string(maximum_copy) + " (multiple of 4)",
+                     std::to_string(op.byte_count), "frame_plan",
+                     "frame.copy_buffer byte count exceeds the smaller "
+                     "resource or is not DWORD aligned");
+                return false;
+            }
         } else if (type == FrameOp::Type::SetTimeline) {
             if (instruction.operands.size() != 2u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -979,6 +1344,65 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 return false;
             }
             op.resource_a = instruction.operands[0].u32;
+            if (instruction.operands[0].type !=
+                package::OperandType::ResourceRef) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand", "operand_type",
+                     "resource_ref", "invalid", "frame_plan",
+                     "frame.present operand type is invalid");
+                return false;
+            }
+            const package::ResourceDescriptor* present_resource =
+                FindPackageResource(package_, op.resource_a);
+            if (present_resource == nullptr ||
+                present_resource->kind != "buffer" ||
+                present_resource->usage != "uav") {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_present_target", "present_resource",
+                     "UAV buffer package output",
+                     present_resource == nullptr
+                         ? "missing"
+                         : present_resource->kind + ":" +
+                               present_resource->usage,
+                     "frame_plan",
+                     "frame.present must reference a package UAV buffer that "
+                     "the fullscreen display pass can read");
+                return false;
+            }
+            if (present_resource->size_bytes < 16u ||
+                present_resource->size_bytes % 16u != 0u) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_present_target_size", "size_bytes",
+                     "non-zero multiple of 16",
+                     std::to_string(present_resource->size_bytes),
+                     "frame_plan",
+                     "fullscreen display output must contain complete "
+                     "RGBA32F pixels");
+                return false;
+            }
+            const std::uint64_t pixel_count =
+                present_resource->size_bytes / 16u;
+            const std::uint32_t side = static_cast<std::uint32_t>(
+                std::sqrt(static_cast<double>(pixel_count)));
+            if (static_cast<std::uint64_t>(side) * side == pixel_count) {
+                present_source_width_ = side;
+                present_source_height_ = side;
+            } else {
+                present_source_width_ =
+                    static_cast<std::uint32_t>(pixel_count);
+                present_source_height_ = 1u;
+            }
+            if (present_resource_id_ != 0u &&
+                present_resource_id_ != op.resource_a) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_present_multiple_targets", "present_resource",
+                     std::to_string(present_resource_id_),
+                     std::to_string(op.resource_a), "frame_plan",
+                     "all frame.present instructions must reference the same "
+                     "package display output");
+                return false;
+            }
+            present_resource_id_ = op.resource_a;
         }
         frame_ops_.push_back(std::move(op));
         last_frame_order_.push_back(instruction.opcode);
@@ -1074,7 +1498,8 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             candidate->Release();
             continue;
         }
-        if ((adapter_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0u) {
+        if ((adapter_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0u &&
+            !config_.allow_software_adapter) {
             candidate->Release();
             continue;
         }
@@ -1407,7 +1832,9 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         }
     }
 
-    const std::size_t cbv_count = CountCbvSrvUavDescriptors(package_);
+    const bool has_present_output = present_resource_id_ != 0u;
+    const std::size_t cbv_count =
+        CountCbvSrvUavDescriptors(package_) + (has_present_output ? 1u : 0u);
     const std::size_t sampler_count = CountSamplerDescriptors(package_);
     if (cbv_count > 0u) {
         D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
@@ -1432,6 +1859,19 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         stats_.engine_descriptor_count += cbv_count;
         stats_.descriptor_allocation_calls += cbv_count;
         ++stats_.engine_heap_count;
+        if (has_present_output) {
+            state->display_uav_descriptor_index =
+                static_cast<std::uint32_t>(
+                    CountCbvSrvUavDescriptors(package_));
+            state->display_uav_cpu = state->cbv_srv_uav_cpu_start;
+            state->display_uav_cpu.ptr +=
+                static_cast<SIZE_T>(state->display_uav_descriptor_index) *
+                state->cbv_srv_uav_increment;
+            state->display_uav_gpu = state->cbv_srv_uav_gpu_start;
+            state->display_uav_gpu.ptr +=
+                static_cast<UINT64>(state->display_uav_descriptor_index) *
+                state->cbv_srv_uav_increment;
+        }
     }
     if (sampler_count > 0u) {
         D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
@@ -1476,6 +1916,43 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
     }
     state->root_signatures.reserve(package_.root_signatures.size());
     state->pipelines.reserve(package_.shaders.size());
+
+    if (has_present_output) {
+        // Fixed, engine-owned fullscreen display root signature.  It consumes
+        // the package's raw UAV output and writes the player display texture.
+        const std::vector<package::RootBinding> display_bindings = {
+            package::RootBinding{"display_params", "cbv", 0u, 0u, 0u},
+            package::RootBinding{"display_source", "uav", 0u, 0u, 1u},
+            package::RootBinding{"display_target", "uav", 1u, 0u, 2u},
+        };
+        const std::vector<std::uint8_t> display_root_blob =
+            package::MakeRootSignatureBlob("nw04.display.fullscreen",
+                                           display_bindings);
+        if (display_root_blob.empty() ||
+            FAILED(state->device->CreateRootSignature(
+                0u, display_root_blob.data(), display_root_blob.size(),
+                IID_PPV_ARGS(&state->display_root_signature))) ||
+            state->display_root_signature == nullptr) {
+            return Fail(ExitCode::RootSignatureCreationFailed, "pipeline",
+                        "display_root_signature_failed", "root_signature",
+                        "fullscreen display", "creation failed", "swapchain",
+                        "could not create the fullscreen display root "
+                        "signature");
+        }
+        D3D12_COMPUTE_PIPELINE_STATE_DESC display_pso{};
+        display_pso.pRootSignature = state->display_root_signature;
+        display_pso.CS.pShaderBytecode = nw::shaders::kDisplayFixtureDxil;
+        display_pso.CS.BytecodeLength =
+            sizeof(nw::shaders::kDisplayFixtureDxil);
+        if (FAILED(state->device->CreateComputePipelineState(
+                &display_pso, IID_PPV_ARGS(&state->display_pipeline))) ||
+            state->display_pipeline == nullptr) {
+            return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
+                        "display_pipeline_failed", "pipeline",
+                        "fullscreen display", "creation failed", "swapchain",
+                        "could not create the fullscreen display pipeline");
+        }
+    }
 
     if (FAILED(state->device->CreateFence(
             0u, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&state->fence))) ||
@@ -1613,6 +2090,55 @@ ExitCode PackagePlayer::RecreateRenderTargets() {
         state->rtv_handles[index] = handle;
     }
     state->swapchain_valid = true;
+
+    if (state->display_texture != nullptr) {
+        state->display_texture->Release();
+        state->display_texture = nullptr;
+    }
+    if (present_resource_id_ != 0u && width_ > 0u && height_ > 0u) {
+        if (state->display_uav_cpu.ptr == 0u) {
+            return Fail(ExitCode::DescriptorHeapCreationFailed, "descriptor",
+                        "display_descriptor_unavailable", "display_uav",
+                        "reserved", "unavailable", "swapchain",
+                        "fullscreen display descriptor was not reserved");
+        }
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width_;
+        desc.Height = height_;
+        desc.DepthOrArraySize = 1u;
+        desc.MipLevels = 1u;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1u;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (FAILED(state->device->CreateCommittedResource(
+                &heap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_COMMON, nullptr,
+                IID_PPV_ARGS(&state->display_texture))) ||
+            state->display_texture == nullptr) {
+            state->display_texture = nullptr;
+            return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                        "display_texture_failed", "display_texture",
+                        "allocated", "allocation failed", "swapchain",
+                        "could not allocate the fullscreen display texture");
+        }
+        state->display_texture_state = D3D12_RESOURCE_STATE_COMMON;
+        NoteEngineAllocation(
+            static_cast<std::uint64_t>(width_) *
+                static_cast<std::uint64_t>(height_) * 4u,
+            0u, false, false, resize_in_progress_);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Texture2D.MipSlice = 0u;
+        uav.Texture2D.PlaneSlice = 0u;
+        state->device->CreateUnorderedAccessView(
+            state->display_texture, nullptr, &uav,
+            state->display_uav_cpu);
+    }
 #endif
     return ExitCode::Success;
 }
@@ -1801,27 +2327,96 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         state->device->CreateConstantBufferView(&view, handle);
                     } else if (placement->descriptor.usage == "uav") {
                         D3D12_UNORDERED_ACCESS_VIEW_DESC view{};
-                        view.Format = DXGI_FORMAT_UNKNOWN;
-                        view.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-                        view.Buffer.FirstElement = 0u;
-                        view.Buffer.NumElements = static_cast<UINT>(
-                            placement->descriptor.size_bytes /
-                            sizeof(std::uint32_t));
-                        view.Buffer.StructureByteStride = 0u;
+                        if (placement->descriptor.kind == "buffer") {
+                            // NW-03's compute output is a RWByteAddressBuffer.
+                            // D3D12 requires a raw UAV: R32_TYPELESS with the
+                            // RAW flag and a zero structure stride.  A typed or
+                            // UNKNOWN-format structured view is invalid.
+                            view.Format = DXGI_FORMAT_R32_TYPELESS;
+                            view.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                            view.Buffer.FirstElement = 0u;
+                            view.Buffer.NumElements = static_cast<UINT>(
+                                placement->descriptor.size_bytes /
+                                sizeof(std::uint32_t));
+                            view.Buffer.StructureByteStride = 0u;
+                            view.Buffer.CounterOffsetInBytes = 0u;
+                            view.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+                        } else if (placement->descriptor.kind == "texture2d") {
+                            view.Format =
+                                MapFormat(placement->descriptor.format);
+                            if (placement->descriptor.array_size > 1u) {
+                                view.ViewDimension =
+                                    D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+                                view.Texture2DArray.MipSlice = 0u;
+                                view.Texture2DArray.FirstArraySlice = 0u;
+                                view.Texture2DArray.ArraySize =
+                                    placement->descriptor.array_size;
+                                view.Texture2DArray.PlaneSlice = 0u;
+                            } else {
+                                view.ViewDimension =
+                                    D3D12_UAV_DIMENSION_TEXTURE2D;
+                                view.Texture2D.MipSlice = 0u;
+                                view.Texture2D.PlaneSlice = 0u;
+                            }
+                        } else {
+                            view.Format =
+                                MapFormat(placement->descriptor.format);
+                            view.ViewDimension =
+                                D3D12_UAV_DIMENSION_TEXTURE3D;
+                            view.Texture3D.MipSlice = 0u;
+                            view.Texture3D.FirstWSlice = 0u;
+                            view.Texture3D.WSize =
+                                placement->descriptor.depth;
+                        }
                         state->device->CreateUnorderedAccessView(
                             slot->resource, nullptr, &view, handle);
                     } else if (placement->descriptor.usage == "srv") {
                         D3D12_SHADER_RESOURCE_VIEW_DESC view{};
-                        view.Format = MapFormat(placement->descriptor.format);
-                        view.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
                         view.Shader4ComponentMapping =
                             D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-                        view.Buffer.FirstElement = 0u;
-                        view.Buffer.NumElements = static_cast<UINT>(
-                            placement->descriptor.size_bytes /
-                            std::max<std::uint32_t>(
-                                1u, BytesPerElement(
-                                        placement->descriptor.format)));
+                        if (placement->descriptor.kind == "buffer") {
+                            view.Format =
+                                MapFormat(placement->descriptor.format);
+                            view.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+                            view.Buffer.FirstElement = 0u;
+                            view.Buffer.NumElements = static_cast<UINT>(
+                                placement->descriptor.size_bytes /
+                                std::max<std::uint32_t>(
+                                    1u, BytesPerElement(
+                                            placement->descriptor.format)));
+                        } else if (placement->descriptor.kind == "texture2d") {
+                            view.Format =
+                                MapFormat(placement->descriptor.format);
+                            if (placement->descriptor.array_size > 1u) {
+                                view.ViewDimension =
+                                    D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+                                view.Texture2DArray.MostDetailedMip = 0u;
+                                view.Texture2DArray.MipLevels =
+                                    placement->descriptor.mip_levels;
+                                view.Texture2DArray.FirstArraySlice = 0u;
+                                view.Texture2DArray.ArraySize =
+                                    placement->descriptor.array_size;
+                                view.Texture2DArray.PlaneSlice = 0u;
+                                view.Texture2DArray.ResourceMinLODClamp = 0.0f;
+                            } else {
+                                view.ViewDimension =
+                                    D3D12_SRV_DIMENSION_TEXTURE2D;
+                                view.Texture2D.MostDetailedMip = 0u;
+                                view.Texture2D.MipLevels =
+                                    placement->descriptor.mip_levels;
+                                view.Texture2D.PlaneSlice = 0u;
+                                view.Texture2D.ResourceMinLODClamp = 0.0f;
+                            }
+                        } else {
+                            view.Format =
+                                MapFormat(placement->descriptor.format);
+                            view.ViewDimension =
+                                D3D12_SRV_DIMENSION_TEXTURE3D;
+                            view.Texture3D.MostDetailedMip = 0u;
+                            view.Texture3D.MipLevels =
+                                placement->descriptor.mip_levels;
+                            view.Texture3D.ResourceMinLODClamp = 0.0f;
+                        }
                         state->device->CreateShaderResourceView(
                             slot->resource, &view, handle);
                     } else if (placement->descriptor.usage == "rtv") {
@@ -2213,6 +2808,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     if (heap_count > 0u) {
         list->SetDescriptorHeaps(heap_count, heaps);
     }
+    for (auto& slot : state->resources) {
+        slot.uav_accessed_in_frame = false;
+    }
 
 #if NW_PLAYER_DIAGNOSTICS
     const bool timestamping = state->timestamp_heap != nullptr &&
@@ -2352,6 +2950,16 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     list->ResourceBarrier(1u, &barrier);
                     slot->state = after;
                 }
+                if (after == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+                    // A requested UAV state is also an ordering request for
+                    // dependent dispatches that remain in UAV state.
+                    D3D12_RESOURCE_BARRIER uav_barrier{};
+                    uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                    uav_barrier.UAV.pResource = slot->resource;
+                    list->ResourceBarrier(1u, &uav_barrier);
+                    ++stats_.uav_barrier_count;
+                    slot->uav_accessed_in_frame = true;
+                }
                 break;
             }
             case FrameOp::Type::Dispatch: {
@@ -2380,6 +2988,18 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         }
                         const D3D12_RESOURCE_STATES working =
                             WorkingStateForUsage(descriptor);
+                        if (working ==
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
+                            candidate.state ==
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
+                            candidate.uav_accessed_in_frame) {
+                            D3D12_RESOURCE_BARRIER uav_barrier{};
+                            uav_barrier.Type =
+                                D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                            uav_barrier.UAV.pResource = candidate.resource;
+                            list->ResourceBarrier(1u, &uav_barrier);
+                            ++stats_.uav_barrier_count;
+                        }
                         if (candidate.state != working) {
                             D3D12_RESOURCE_BARRIER barrier{};
                             barrier.Type =
@@ -2392,6 +3012,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
                             list->ResourceBarrier(1u, &barrier);
                             candidate.state = working;
+                        }
+                        if (working ==
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+                            candidate.uav_accessed_in_frame = true;
                         }
                     }
                 }
@@ -2479,6 +3103,97 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 if (state->swapchain == nullptr || !state->swapchain_valid) {
                     break;
                 }
+                if (state->display_pipeline == nullptr ||
+                    state->display_root_signature == nullptr ||
+                    state->display_texture == nullptr) {
+                    return Fail(ExitCode::PipelineStateCreationFailed,
+                                "pipeline", "display_resources_unavailable",
+                                "fullscreen display", "initialized",
+                                "unavailable", "renderAtTick",
+                                "frame.present requires the fullscreen display "
+                                "pipeline and target texture");
+                }
+                if (op.resource_a != present_resource_id_) {
+                    return Fail(ExitCode::PackageValidationFailed,
+                                "package_validation",
+                                "package_present_target_mismatch",
+                                "present_resource",
+                                std::to_string(present_resource_id_),
+                                std::to_string(op.resource_a), "renderAtTick",
+                                "frame.present operand does not match the "
+                                "validated display output");
+                }
+                PlatformState::ResourceSlot* source_slot = nullptr;
+                for (auto& candidate : state->resources) {
+                    if (candidate.resource_id == op.resource_a) {
+                        source_slot = &candidate;
+                        break;
+                    }
+                }
+                if (source_slot == nullptr ||
+                    source_slot->resource == nullptr ||
+                    !source_slot->has_descriptor) {
+                    return Fail(ExitCode::ResourceAllocationFailed,
+                                "resource", "present_source_missing",
+                                "present_resource",
+                                std::to_string(op.resource_a), "missing",
+                                "renderAtTick",
+                                "frame.present source has no realized UAV");
+                }
+                if (source_slot->state !=
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+                    D3D12_RESOURCE_BARRIER to_uav{};
+                    to_uav.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                    to_uav.Transition.pResource = source_slot->resource;
+                    to_uav.Transition.StateBefore = source_slot->state;
+                    to_uav.Transition.StateAfter =
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                    to_uav.Transition.Subresource =
+                        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                    list->ResourceBarrier(1u, &to_uav);
+                    source_slot->state =
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                }
+                if (state->display_texture_state !=
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+                    D3D12_RESOURCE_BARRIER to_uav{};
+                    to_uav.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                    to_uav.Transition.pResource = state->display_texture;
+                    to_uav.Transition.StateBefore =
+                        state->display_texture_state;
+                    to_uav.Transition.StateAfter =
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                    to_uav.Transition.Subresource =
+                        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                    list->ResourceBarrier(1u, &to_uav);
+                    state->display_texture_state =
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                }
+                if (source_slot->uav_accessed_in_frame) {
+                    // The display pass reads the exact UAV the compute
+                    // dispatches wrote; remaining in UAV state still requires
+                    // explicit UAV ordering before the dependent read.
+                    D3D12_RESOURCE_BARRIER uav_barrier{};
+                    uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                    uav_barrier.UAV.pResource = source_slot->resource;
+                    list->ResourceBarrier(1u, &uav_barrier);
+                    ++stats_.uav_barrier_count;
+                    source_slot->uav_accessed_in_frame = false;
+                }
+                list->SetComputeRootSignature(state->display_root_signature);
+                const std::array<std::uint32_t, 4> display_constants = {
+                    present_source_width_, present_source_height_, width_,
+                    height_};
+                list->SetComputeRoot32BitConstants(
+                    0u, static_cast<UINT>(display_constants.size()),
+                    display_constants.data(), 0u);
+                list->SetComputeRootDescriptorTable(
+                    1u, source_slot->gpu_handle);
+                list->SetComputeRootDescriptorTable(
+                    2u, state->display_uav_gpu);
+                list->SetPipelineState(state->display_pipeline);
+                list->Dispatch((width_ + 7u) / 8u, (height_ + 7u) / 8u, 1u);
+
                 const UINT backbuffer_index =
                     state->swapchain->GetCurrentBackBufferIndex();
                 if (backbuffer_index >= state->backbuffers.size()) {
@@ -2490,27 +3205,37 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "swap-chain reported an out-of-range back-buffer "
                                 "index");
                 }
-                D3D12_RESOURCE_BARRIER to_render{};
-                to_render.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                to_render.Transition.pResource =
-                    state->backbuffers[backbuffer_index];
-                to_render.Transition.StateBefore =
-                    state->backbuffer_states[backbuffer_index];
-                to_render.Transition.StateAfter =
-                    D3D12_RESOURCE_STATE_RENDER_TARGET;
-                to_render.Transition.Subresource =
+                D3D12_RESOURCE_BARRIER to_copy_source{};
+                to_copy_source.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                to_copy_source.Transition.pResource = state->display_texture;
+                to_copy_source.Transition.StateBefore =
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                to_copy_source.Transition.StateAfter =
+                    D3D12_RESOURCE_STATE_COPY_SOURCE;
+                to_copy_source.Transition.Subresource =
                     D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                if (to_render.Transition.StateBefore !=
-                    D3D12_RESOURCE_STATE_RENDER_TARGET) {
-                    list->ResourceBarrier(1u, &to_render);
+                list->ResourceBarrier(1u, &to_copy_source);
+                state->display_texture_state =
+                    D3D12_RESOURCE_STATE_COPY_SOURCE;
+                if (state->backbuffer_states[backbuffer_index] !=
+                    D3D12_RESOURCE_STATE_COPY_DEST) {
+                    D3D12_RESOURCE_BARRIER to_copy_dest{};
+                    to_copy_dest.Type =
+                        D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                    to_copy_dest.Transition.pResource =
+                        state->backbuffers[backbuffer_index];
+                    to_copy_dest.Transition.StateBefore =
+                        state->backbuffer_states[backbuffer_index];
+                    to_copy_dest.Transition.StateAfter =
+                        D3D12_RESOURCE_STATE_COPY_DEST;
+                    to_copy_dest.Transition.Subresource =
+                        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                    list->ResourceBarrier(1u, &to_copy_dest);
                     state->backbuffer_states[backbuffer_index] =
-                        D3D12_RESOURCE_STATE_RENDER_TARGET;
+                        D3D12_RESOURCE_STATE_COPY_DEST;
                 }
-                const D3D12_CPU_DESCRIPTOR_HANDLE rtv =
-                    state->rtv_handles[backbuffer_index];
-                list->OMSetRenderTargets(1u, &rtv, FALSE, nullptr);
-                const float clear_color[4] = {0.02f, 0.03f, 0.05f, 1.0f};
-                list->ClearRenderTargetView(rtv, clear_color, 0u, nullptr);
+                list->CopyResource(state->backbuffers[backbuffer_index],
+                                   state->display_texture);
                 break;
             }
         }
@@ -2619,6 +3344,8 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         "present_failed", "present", "succeeded", "failed",
                         "renderAtTick", "IDXGISwapChain3::Present failed");
         }
+        ++frames_presented_;
+        stats_.frames_presented = frames_presented_;
         if (CheckD3D12Validation("renderAtTick_present")) {
             return last_exit_;
         }
@@ -2672,6 +3399,10 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     timeline_parameter_id_ = 0u;
     timeline_tick_ = 0u;
     timeline_override_active_ = false;
+    present_resource_id_ = 0u;
+    present_source_width_ = 0u;
+    present_source_height_ = 0u;
+    frames_presented_ = 0u;
     width_ = config_.width;
     height_ = config_.height;
     minimized_ = false;
@@ -2877,6 +3608,13 @@ ExitCode PackagePlayer::renderAtTick(std::uint64_t tick) {
             suspended_ = true;
             return ExitCode::Success;
         }
+        // An ordinary minimize/restore can return to the exact same client
+        // size, so resize() is not called.  Clear suspension on the restore
+        // transition itself rather than waiting for a ResizeBuffers path.
+        if (minimized_ || suspended_) {
+            minimized_ = false;
+            suspended_ = false;
+        }
     }
     if (minimized_ || suspended_ || width_ == 0u || height_ == 0u) {
         suspended_ = true;
@@ -2973,6 +3711,10 @@ ExitCode PackagePlayer::resize(std::uint32_t width, std::uint32_t height) {
                         "resize_buffers_failed", "swapchain", "resized",
                         "failed", "resize", "IDXGISwapChain3::ResizeBuffers failed");
         }
+        // The display texture is recreated at the new client size, so apply
+        // the validated dimensions before rebuilding render targets.
+        width_ = width;
+        height_ = height;
         const ExitCode recreate = RecreateRenderTargets();
         if (recreate != ExitCode::Success) {
             resize_in_progress_ = false;
@@ -3003,8 +3745,16 @@ ExitCode PackagePlayer::shutdown() {
         return ExitCode::Success;
     }
     shutting_down_ = true;
+    ExitCode result = ExitCode::Success;
     if (initialized_) {
-        (void)WaitForAllFrames("shutdown");
+        result = WaitForAllFrames("shutdown");
+        // Drain validation messages before the info queue and every other
+        // device object are released.  A fence/device/validation failure must
+        // remain the observable shutdown result even though cleanup continues.
+        if (CheckD3D12Validation("shutdown") &&
+            result == ExitCode::Success) {
+            result = last_exit_;
+        }
     }
     ReleasePlatform();
     initialized_ = false;
@@ -3012,7 +3762,10 @@ ExitCode PackagePlayer::shutdown() {
     suspended_ = false;
     ++shutdown_count_;
     shutting_down_ = false;
-    return ExitCode::Success;
+    if (result != ExitCode::Success) {
+        last_exit_ = result;
+    }
+    return result;
 }
 
 void PackagePlayer::ReleasePlatform() noexcept {
@@ -3055,6 +3808,18 @@ void PackagePlayer::ReleasePlatform() noexcept {
         if (backbuffer != nullptr) backbuffer->Release();
     }
     state->backbuffers.clear();
+    if (state->display_texture != nullptr) {
+        state->display_texture->Release();
+        state->display_texture = nullptr;
+    }
+    if (state->display_pipeline != nullptr) {
+        state->display_pipeline->Release();
+        state->display_pipeline = nullptr;
+    }
+    if (state->display_root_signature != nullptr) {
+        state->display_root_signature->Release();
+        state->display_root_signature = nullptr;
+    }
     if (state->timestamp_readback != nullptr) {
         state->timestamp_readback->Release();
     }
@@ -3171,6 +3936,14 @@ void PackagePlayer::SetForcePipelineCreationFailureForTesting(
 void PackagePlayer::SetSimulatePostInitializationAllocationForTesting(
     bool allocate) noexcept {
     simulate_post_initialization_allocation_ = allocate;
+}
+
+bool PackagePlayer::SetWindowMinimizedForTesting(bool minimized) noexcept {
+    if (platform_ == nullptr) {
+        return false;
+    }
+    platform_->window.SetSimulatedMinimized(minimized);
+    return true;
 }
 
 bool PackagePlayer::BuildFramePlanForTesting(const package::Package& pkg) {

@@ -537,6 +537,26 @@ def check_player_source_contract() -> CheckResult:
         "UsesOnlyNonAliasedPlacements",
         "SetResourceAllocationQueryForTesting",
         "SetForceDeviceRemovedForTesting",
+        # Raw RWByteAddressBuffer UAV realization and texture-dimension views.
+        "D3D12_BUFFER_UAV_FLAG_RAW",
+        "DXGI_FORMAT_R32_TYPELESS",
+        "D3D12_UAV_DIMENSION_TEXTURE2D",
+        # Dependent UAV ordering and fullscreen package-output display.
+        "D3D12_RESOURCE_BARRIER_TYPE_UAV",
+        "nw04.display.fullscreen",
+        "display_fixture_dxil.h",
+        "CopyResource",
+        # Planning-time target-bound validation.
+        "package_root_constant_bound",
+        "package_root_constant_signature",
+        "package_instruction_copy_bounds",
+        "package_instruction_copy_readback_source",
+        "package_instruction_copy_self",
+        "package_present_target",
+        # Restore transition and drain failure propagation.
+        "SetWindowMinimizedForTesting",
+        "An ordinary minimize/restore",
+        "CheckD3D12Validation(\"shutdown\")",
     ]
     for token in required_source:
         if token not in source + plan + header:
@@ -674,6 +694,53 @@ def _validate_hardware_package(package_path: Path) -> CheckResult:
             False,
             contract.format_failures(failures),
         )
+    plan_failures = contract.validate_frame_plan(package)
+    if plan_failures:
+        return CheckResult(
+            "nw04_hardware_package",
+            True,
+            False,
+            contract.format_failures(plan_failures),
+        )
+    frame_opcodes = [instruction.opcode for instruction in package.frame]
+    if (
+        "frame.dispatch" not in frame_opcodes
+        or "frame.present" not in frame_opcodes
+    ):
+        return CheckResult(
+            "nw04_hardware_package",
+            True,
+            False,
+            "hardware package must contain a compute/display instruction "
+            "stream (frame.dispatch and frame.present); a compute-only package "
+            "cannot certify a visible render",
+            evidence={"frame": frame_opcodes},
+        )
+    present_resources = {
+        instruction.operands[0].value
+        for instruction in package.frame
+        if instruction.opcode == "frame.present"
+        and instruction.operands
+        and instruction.operands[0].type == "resource_ref"
+    }
+    display_outputs = {
+        resource.resource_id
+        for resource in package.resources
+        if resource.resource_id in present_resources
+        and resource.kind == "buffer"
+        and resource.usage == "uav"
+        and resource.size_bytes >= 16
+        and resource.size_bytes % 16 == 0
+    }
+    if present_resources != display_outputs:
+        return CheckResult(
+            "nw04_hardware_package",
+            True,
+            False,
+            "frame.present does not reference a displayable package UAV buffer "
+            "output",
+            evidence={"present_resources": sorted(present_resources)},
+        )
     # Hardware qualification must use the real offline-compiled NW-03 package,
     # never the synthetic contract fixture.
     try:
@@ -697,6 +764,101 @@ def _validate_hardware_package(package_path: Path) -> CheckResult:
             "package_size_bytes": len(data),
             "profile_id": package.capability.profile_id,
             "requirements_digest": package.capability.requirements_digest,
+            "frame": frame_opcodes,
+            "present_resources": sorted(present_resources),
+        },
+    )
+
+
+def check_hardware_evidence_complete(
+    record_path: Path | None = None,
+) -> CheckResult:
+    """Require executed Ada and Blackwell qualification for identical artifacts."""
+    path = record_path or (REPO_ROOT / "benchmarks" / "nw04-hardware-evidence.json")
+    if not path.exists():
+        return CheckResult(
+            "nw04_hardware_qualification",
+            True,
+            False,
+            f"hardware evidence record is unavailable: {path}",
+            unavailable=True,
+        )
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return CheckResult(
+            "nw04_hardware_qualification", True, False, str(exc)
+        )
+    qualifications = record.get("qualifications", {})
+    missing = [
+        tier
+        for tier in ("ada", "blackwell")
+        if qualifications.get(tier, {}).get("status") != "verified"
+    ]
+    successful = [
+        execution
+        for execution in record.get("executions", [])
+        if execution.get("execution_status") == "passed"
+    ]
+    package_hashes = {entry["package"]["sha256"] for entry in successful}
+    player_hashes = {entry["player"]["sha256"] for entry in successful}
+    verified_tiers = {
+        entry.get("hardware_tier") for entry in successful
+    }
+    failures: list[str] = []
+    if record.get("verification_status") != "verified":
+        failures.append(
+            f"verification_status={record.get('verification_status', 'unavailable')}"
+        )
+    if missing:
+        failures.append("unverified tiers: " + ",".join(missing))
+    if not {"ada", "blackwell"} <= verified_tiers:
+        failures.append("no passed execution for both Ada and Blackwell")
+    if len(package_hashes) != 1 or len(player_hashes) != 1:
+        failures.append("qualification did not use identical player/package hashes")
+    if any(
+        execution.get("d3d12_validation_clean") is not True
+        for execution in successful
+    ):
+        failures.append("a retained execution was not D3D12-validation-clean")
+    for execution in successful:
+        render = execution.get("render", {})
+        try:
+            frames = int(render.get("frames", "-1"))
+            presents = int(render.get("presents", "-1"))
+            resize_count = int(render.get("resize_count", "-1"))
+            uav_barriers = int(render.get("uav_barriers", "-1"))
+        except (TypeError, ValueError):
+            failures.append("execution render counts are unavailable")
+            continue
+        if frames <= 0 or presents != frames:
+            failures.append(
+                "execution did not complete the requested visible renders"
+            )
+        if resize_count < 2:
+            failures.append("execution did not exercise resize")
+        if uav_barriers < 1:
+            failures.append("execution did not record dependent UAV barriers")
+        if execution.get("post_initialization_allocation_violation") != "0":
+            failures.append("execution reported a post-initialization allocation")
+        if execution.get("non_aliased_placements") != "1":
+            failures.append("execution did not use non-aliased placements")
+    if failures:
+        return CheckResult(
+            "nw04_hardware_qualification",
+            True,
+            False,
+            "; ".join(failures),
+            evidence={"record": str(path)},
+        )
+    return CheckResult(
+        "nw04_hardware_qualification",
+        True,
+        True,
+        evidence={
+            "record": str(path),
+            "package_sha256": next(iter(package_hashes)),
+            "player_sha256": next(iter(player_hashes)),
         },
     )
 
@@ -724,6 +886,7 @@ def run_native_fixture(
     frames = 8
     tick_start = 0
     tick_step = 1
+    expected_frames = frames + 2
     last_tick = tick_start + (frames - 1) * tick_step
     expected_upload_reuse = max(
         0,
@@ -749,6 +912,7 @@ def run_native_fixture(
         str(tick_step),
         "--resize-sequence",
         "--simulate-minimize",
+        "--win32-minimize-restore",
         "--emit-benchmark-metrics",
         "--validation",
         *extra,
@@ -769,6 +933,8 @@ def run_native_fixture(
         "NW_PLAYER_POST_INIT_ALLOCATION_VIOLATION=0",
         "NW_PLAYER_READBACK=not_performed",
         "NW_PLAYER_LAST_TIMELINE_PARAMETER_ID=",
+        "NW_PLAYER_MINIMIZE_RESTORE_RENDERED=1",
+        "NW_PLAYER_UAV_BARRIERS=",
     )
     for line in required_lines:
         if line not in output:
@@ -789,6 +955,15 @@ def run_native_fixture(
             f"(expected {expected_upload_reuse})",
             evidence={"stdout": output, "stderr": proc.stderr},
         )
+    uav_barriers = re.search(r"NW_PLAYER_UAV_BARRIERS=(\d+)", output)
+    if uav_barriers is None or int(uav_barriers.group(1)) < 2:
+        return CheckResult(
+            "nw04_native_fixture",
+            True,
+            False,
+            "native fixture did not report dependent UAV barriers",
+            evidence={"stdout": output, "stderr": proc.stderr},
+        )
     if expected_timeline is not None:
         expected_line = f"NW_PLAYER_LAST_TIMELINE_VALUE={expected_timeline}"
         if expected_line not in output:
@@ -799,6 +974,59 @@ def run_native_fixture(
                 f"native fixture did not report {expected_line}",
                 evidence={"stdout": output, "stderr": proc.stderr},
             )
+    frames_match = re.search(r"NW_PLAYER_FRAMES=(\d+)", output)
+    presents_match = re.search(r"NW_PLAYER_PRESENTS=(\d+)", output)
+    if (
+        frames_match is None
+        or presents_match is None
+        or int(frames_match.group(1)) != expected_frames
+        or int(presents_match.group(1)) != expected_frames
+    ):
+        return CheckResult(
+            "nw04_native_fixture",
+            True,
+            False,
+            "native fixture did not complete the requested visible renders "
+            f"(expected {expected_frames} frames/presents)",
+            evidence={"stdout": output, "stderr": proc.stderr},
+        )
+    present_resource = next(
+        (
+            instruction.operands[0].value
+            for instruction in package.frame
+            if instruction.opcode == "frame.present"
+            and instruction.operands
+        ),
+        None,
+    )
+    if (
+        present_resource is None
+        or f"NW_PLAYER_PRESENT_RESOURCE_ID={present_resource}" not in output
+    ):
+        return CheckResult(
+            "nw04_native_fixture",
+            True,
+            False,
+            "native fixture did not resolve the package frame.present output",
+            evidence={"stdout": output, "stderr": proc.stderr},
+        )
+    resize_match = re.search(r"NW_PLAYER_RESIZE_COUNT=(\d+)", output)
+    if resize_match is None or int(resize_match.group(1)) < 2:
+        return CheckResult(
+            "nw04_native_fixture",
+            True,
+            False,
+            "native fixture did not execute the resize sequence",
+            evidence={"stdout": output, "stderr": proc.stderr},
+        )
+    if "NW_D3D12_VALIDATION_ERROR=" in (output + proc.stderr):
+        return CheckResult(
+            "nw04_native_fixture",
+            True,
+            False,
+            "D3D12 validation emitted an error during the native run",
+            evidence={"stdout": output, "stderr": proc.stderr},
+        )
     if last_constants:
         expected_root0 = f"NW_PLAYER_LAST_ROOT_CONSTANT0=0x{struct.unpack_from('<I', last_constants, 0)[0]:08X}"
         if expected_root0 not in output:
@@ -1147,6 +1375,27 @@ def run_planner_self_test(fixture: Path, package_path: Path) -> CheckResult:
         mutations.append(
             ("timeline-type", "package_parameter_type_unsupported")
         )
+    if (
+        exercise_negative_mutations
+        and "frame.set_root_constants" in frame_opcodes
+    ):
+        mutations.append(
+            ("root-constant-bound", "package_root_constant_bound")
+        )
+    if exercise_negative_mutations and "frame.present" in frame_opcodes:
+        mutations.append(("present-target", "package_present_target"))
+    if exercise_negative_mutations and "frame.dispatch" in frame_opcodes:
+        mutations.append(("dispatch-root", "package_instruction_reference"))
+    if exercise_negative_mutations:
+        mutations.extend(
+            [
+                ("copy-bounds", "package_instruction_copy_bounds"),
+                ("copy-self", "package_instruction_copy_self"),
+                ("copy-texture", "package_instruction_copy_kind"),
+                ("copy-readback-source",
+                 "package_instruction_copy_readback_source"),
+            ]
+        )
     for mutation, expected_code in mutations:
         mutation_proc = subprocess.run(
             [*command, "--planner-mutation", mutation],
@@ -1188,6 +1437,11 @@ def run_planner_self_test(fixture: Path, package_path: Path) -> CheckResult:
 
 def build_summary(mode: str, results: list[CheckResult]) -> dict[str, Any]:
     passed = all(result.passed for result in results if result.required)
+    hardware_complete = mode == "Hardware" and any(
+        result.name == "nw04_hardware_qualification" and result.passed
+        for result in results
+    )
+    hardware_status = "verified" if hardware_complete else "pending_unverified"
     mode_status = {
         "ContractsOnly": "contracts_only_verified",
         "Full": "full_execution_verified",
@@ -1200,11 +1454,13 @@ def build_summary(mode: str, results: list[CheckResult]) -> dict[str, Any]:
         "verification_status": mode_status if passed else "failed",
         # Representative Ada/Blackwell qualification remains mandatory and is
         # not implied by any GPU-less or single-machine check.
-        "overall_status": "pending_unverified",
+        "overall_status": (
+            "verified" if hardware_complete and passed else "pending_unverified"
+        ),
         "checks": [result.to_dict() for result in results],
         "hardware_qualification": {
-            "ada": "pending_unverified",
-            "blackwell": "pending_unverified",
+            "ada": hardware_status,
+            "blackwell": hardware_status,
             "note": (
                 "Representative Ada/Blackwell qualification is recorded through "
                 "the NW-01B hardware evidence harness; missing coverage is "
@@ -1334,6 +1590,8 @@ def main() -> int:
                     results.append(
                         run_planner_self_test(args.fixture, args.package)
                     )
+    if args.mode == "Hardware":
+        results.append(check_hardware_evidence_complete())
 
     passed = all(result.passed for result in results if result.required)
     summary = build_summary(args.mode, results)

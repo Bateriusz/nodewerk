@@ -19,6 +19,19 @@ nw_add_offline_compute_shader(
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/compute_fixture_dxil.h"
 )
 
+# NW-04 player-owned fullscreen display pass.  It is compiled offline by the
+# same pinned DXC as the compute fixture and embedded into the player, so the
+# release binary never needs a runtime shader compiler.
+nw_add_offline_compute_shader(
+    nw_offline_display_shader
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/display_fixture.hlsl"
+    "DisplayCS"
+    "cs_6_0"
+    "${CMAKE_CURRENT_BINARY_DIR}/shaders/display_fixture.dxil"
+    "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/display_fixture_dxil.h"
+    "kDisplayFixtureDxil"
+)
+
 add_library(nw_player_bootstrap STATIC
     src/player/diagnostics.cpp
     src/player/capability_check.cpp
@@ -39,6 +52,7 @@ target_include_directories(nw_player_bootstrap PUBLIC
 )
 nw_apply_player_profile(nw_player_bootstrap)
 add_dependencies(nw_player_bootstrap nw_offline_shaders)
+add_dependencies(nw_player_bootstrap nw_offline_display_shader)
 
 if(WIN32)
     target_link_libraries(nw_player_bootstrap PUBLIC

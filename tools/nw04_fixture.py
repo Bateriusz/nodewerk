@@ -73,53 +73,123 @@ def build_compute_display_package(*, specialization_count: int = 1) -> nwp.NwpPa
         shader_blob=make_dxil_container(),
         specialization_count=specialization_count,
     )
+    return compose_compute_display_package(package)
+
+
+def compose_compute_display_package(
+    package: nwp.NwpPackage,
+) -> nwp.NwpPackage:
+    """Append the NW-04 display instruction stream to a valid NW-03 package.
+
+    The container format, profile identity, shader blobs, and root signatures
+    are unchanged.  Only the ordered initialization/frame stream gains the
+    uploads and ``frame.present`` needed for a visible compute/display run.
+    """
     initialization = list(package.initialization)
-    initialization.append(
-        nwp.Instruction(
-            "init.upload_resource",
-            (nwp.InstructionOperand("resource_ref", 1),),
+    uploaded = {
+        instruction.operands[0].value
+        for instruction in initialization
+        if instruction.opcode == "init.upload_resource"
+        and instruction.operands
+        and instruction.operands[0].type == "resource_ref"
+    }
+    for resource in package.resources:
+        if resource.usage not in {"cbv", "uav"}:
+            continue
+        if resource.resource_id in uploaded:
+            continue
+        initialization.append(
+            nwp.Instruction(
+                "init.upload_resource",
+                (nwp.InstructionOperand("resource_ref", resource.resource_id),),
+            )
         )
-    )
-    # A second upload exercises the bounded per-frame upload ring: the ring's
-    # owning frame fence must be observed before the mapped bytes are reused.
-    initialization.append(
-        nwp.Instruction(
-            "init.upload_resource",
-            (nwp.InstructionOperand("resource_ref", 2),),
-        )
-    )
+
     frame = list(package.frame)
-    frame.insert(
-        0,
-        nwp.Instruction(
-            "frame.set_timeline",
-            (
-                nwp.InstructionOperand("u32", 1),
-                nwp.InstructionOperand("u64", 0),
-            ),
-        ),
-    )
-    barrier_index = next(
-        index
-        for index, instruction in enumerate(frame)
-        if instruction.opcode == "frame.set_descriptor_table"
-    )
-    frame.insert(
-        barrier_index + 1,
-        nwp.Instruction(
-            "frame.barrier",
-            (
-                nwp.InstructionOperand("u32", 4),
-                nwp.InstructionOperand("resource_ref", 2),
-            ),
-        ),
-    )
-    frame.append(
-        nwp.Instruction(
-            "frame.present",
-            (nwp.InstructionOperand("resource_ref", 2),),
+    if (
+        package.parameters
+        and not any(
+            instruction.opcode == "frame.set_timeline"
+            for instruction in frame
         )
+    ):
+        frame.insert(
+            0,
+            nwp.Instruction(
+                "frame.set_timeline",
+                (
+                    nwp.InstructionOperand(
+                        "u32", package.parameters[0].parameter_id
+                    ),
+                    nwp.InstructionOperand("u64", 0),
+                ),
+            ),
+        )
+    output = next(
+        (
+            resource
+            for resource in package.resources
+            if resource.usage == "uav" and resource.kind == "buffer"
+        ),
+        None,
     )
+    if output is None:
+        raise ValueError("package has no UAV buffer output for display")
+    if not any(
+        instruction.opcode == "frame.barrier" for instruction in frame
+    ):
+        barrier_index = next(
+            (
+                index
+                for index, instruction in enumerate(frame)
+                if instruction.opcode == "frame.set_descriptor_table"
+            ),
+            len(frame) - 1,
+        )
+        frame.insert(
+            barrier_index + 1,
+            nwp.Instruction(
+                "frame.barrier",
+                (
+                    nwp.InstructionOperand("u32", 4),
+                    nwp.InstructionOperand(
+                        "resource_ref", output.resource_id
+                    ),
+                ),
+            ),
+        )
+    if not any(
+        instruction.opcode == "frame.present" for instruction in frame
+    ):
+        frame.append(
+            nwp.Instruction(
+                "frame.present",
+                (
+                    nwp.InstructionOperand(
+                        "resource_ref", output.resource_id
+                    ),
+                ),
+            )
+        )
+    # Exercise dependent accesses that remain in UAV state: the second
+    # dispatch reads/writes the same output and must be preceded by a UAV
+    # barrier even though no transition is needed.
+    if not any(
+        instruction.opcode == "frame.dispatch"
+        and index > 0
+        and frame[index - 1].opcode == "frame.dispatch"
+        for index, instruction in enumerate(frame)
+    ):
+        dispatch_index = next(
+            (
+                index
+                for index in range(len(frame) - 1, -1, -1)
+                if frame[index].opcode == "frame.dispatch"
+            ),
+            None,
+        )
+        if dispatch_index is not None:
+            frame.insert(dispatch_index + 1, frame[dispatch_index])
     derived = nwp.derive_capability_requirements(
         package.resources,
         initialization,
@@ -169,7 +239,24 @@ def main() -> int:
         default=REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp",
     )
     parser.add_argument("--print-sha256", action="store_true")
+    parser.add_argument(
+        "--from-package",
+        type=Path,
+        default=None,
+        help=(
+            "Compose the display stream onto an existing real offline-compiled "
+            "NW-03 package instead of the synthetic contract fixture."
+        ),
+    )
     args = parser.parse_args()
+    if args.from_package is not None:
+        package = nwp.decode_package(args.from_package.read_bytes())
+        data = nwp.encode_package(compose_compute_display_package(package))
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_bytes(data)
+        if args.print_sha256:
+            print(hashlib.sha256(data).hexdigest())
+        return 0
     digest = write_fixture(args.output)
     if args.print_sha256:
         print(digest)
