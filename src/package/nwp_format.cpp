@@ -1297,6 +1297,7 @@ bool ValidateInstructions(
     const std::vector<ResourceDescriptor>& resources,
     const std::vector<RootSignatureRecord>& root_signatures,
     const std::vector<ShaderRecord>& shaders,
+    const std::map<std::uint32_t, std::uint32_t>& pipeline_roots,
     const std::set<std::uint32_t>& resource_ids,
     const std::set<std::uint32_t>& shader_ids,
     const std::set<std::uint32_t>& root_ids,
@@ -1316,7 +1317,6 @@ bool ValidateInstructions(
     for (const auto& shader : shaders) {
         shader_root_ids[shader.shader_id] = shader.root_signature_id;
     }
-    std::map<std::uint32_t, std::uint32_t> pipeline_roots;
     bool has_active_root_signature = false;
     std::uint32_t active_root_signature_id = 0u;
     for (std::size_t index = 0; index < instructions.size(); ++index) {
@@ -1353,7 +1353,6 @@ bool ValidateInstructions(
             instruction.operands[1].type == OperandType::RootSignatureRef) {
             const std::uint32_t shader_id = instruction.operands[0].u32;
             const std::uint32_t root_id = instruction.operands[1].u32;
-            pipeline_roots[shader_id] = root_id;
             auto shader_root = shader_root_ids.find(shader_id);
             if (shader_root != shader_root_ids.end() &&
                 root_ids.count(root_id) != 0u &&
@@ -2004,15 +2003,26 @@ bool ValidatePackage(const Package& package,
         root_ids.insert(root.root_signature_id);
     for (const auto& parameter : package.parameters)
         parameter_ids.insert(parameter.parameter_id);
+    std::map<std::uint32_t, std::uint32_t> pipeline_roots;
+    for (const auto& instruction : package.initialization) {
+        if (instruction.opcode == "init.create_pipeline" &&
+            instruction.operands.size() == 2u &&
+            instruction.operands[0].type == OperandType::ShaderRef &&
+            instruction.operands[1].type == OperandType::RootSignatureRef) {
+            pipeline_roots[instruction.operands[0].u32] =
+                instruction.operands[1].u32;
+        }
+    }
     std::set<std::string> init_opcodes;
     std::set<std::string> frame_opcodes;
     ValidateInstructions(package.initialization, "initialization",
                          package.resources, package.root_signatures,
-                         package.shaders,
+                         package.shaders, pipeline_roots,
                          resource_ids, shader_ids, root_ids, parameter_ids,
                          init_opcodes, diagnostics);
     ValidateInstructions(package.frame, "frame", package.resources,
                          package.root_signatures, package.shaders,
+                         pipeline_roots,
                          resource_ids, shader_ids, root_ids, parameter_ids,
                          frame_opcodes, diagnostics);
     ValidateCrossReferences(package.capability, package.initialization,
