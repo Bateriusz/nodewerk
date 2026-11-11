@@ -111,6 +111,14 @@ public:
     std::uint64_t last_timeline_value() const noexcept {
         return timeline_tick_;
     }
+    const std::array<std::uint32_t,
+                     package::kMaxRootSignatureDwordCost>&
+    last_root_constants() const noexcept {
+        return last_root_constants_;
+    }
+    std::uint32_t last_root_constant_count() const noexcept {
+        return last_root_constant_count_;
+    }
     std::uint32_t width() const noexcept { return width_; }
     std::uint32_t height() const noexcept { return height_; }
     bool minimized() const noexcept { return minimized_; }
@@ -150,6 +158,10 @@ public:
     // Diagnostic-only seam that injects one tracked engine allocation into the
     // render path so the post-initialization allocation guard is exercised.
     void SetSimulatePostInitializationAllocationForTesting(bool allocate) noexcept;
+    // Host-simulation planner checks.  They exercise the exact frame-plan
+    // validation and timeline constant application without a GPU.
+    bool BuildFramePlanForTesting(const package::Package& pkg);
+    bool ApplyFramePlanForTesting(std::uint64_t tick);
 
     std::uint64_t upload_reuse_waits() const noexcept {
         return stats_.upload_reuse_waits;
@@ -224,6 +236,9 @@ private:
     std::uint32_t timeline_parameter_id_ = 0u;
     std::uint64_t timeline_tick_ = 0u;
     bool timeline_override_active_ = false;
+    std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+        last_root_constants_{};
+    std::uint32_t last_root_constant_count_ = 0u;
 
     ResourceAllocationQueryFn allocation_query_ = nullptr;
     void* allocation_user_data_ = nullptr;
@@ -268,6 +283,8 @@ private:
             parameter_offsets{};
         std::array<std::uint8_t, package::kMaxRootSignatureDwordCost>
             parameter_tick_kinds{};
+        std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+            parameter_sizes{};
         std::uint32_t parameter_count = 0u;
     };
     std::vector<FrameOp> frame_ops_;

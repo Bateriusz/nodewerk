@@ -160,6 +160,52 @@ def check_exact_capability_contract() -> CheckResult:
     )
 
 
+def check_fixture_planner_contract() -> CheckResult:
+    package = nw04_fixture.build_compute_display_package()
+    failures = contract.validate_frame_plan(package)
+    if failures:
+        return CheckResult(
+            "nw04_fixture_planner_contract",
+            True,
+            False,
+            contract.format_failures(failures),
+        )
+    first, _ = contract.apply_frame_constants(package, 0)
+    last, timeline = contract.apply_frame_constants(package, 7)
+    if first is None or last is None:
+        return CheckResult(
+            "nw04_fixture_planner_contract",
+            True,
+            False,
+            "fixture does not emit a root-constant block",
+        )
+    if first[:4] == last[:4]:
+        return CheckResult(
+            "nw04_fixture_planner_contract",
+            True,
+            False,
+            "frame.set_timeline did not change the emitted constant bytes",
+            evidence={"first": first[:16].hex(), "last": last[:16].hex()},
+        )
+    if timeline is None:
+        return CheckResult(
+            "nw04_fixture_planner_contract",
+            True,
+            False,
+            "fixture does not exercise frame.set_timeline",
+        )
+    return CheckResult(
+        "nw04_fixture_planner_contract",
+        True,
+        True,
+        evidence={
+            "first_constants": first[:16].hex(),
+            "last_constants": last[:16].hex(),
+            "timeline_value": timeline,
+        },
+    )
+
+
 def _assert_failure(
     name: str,
     mutate: Callable[[dict[str, Any]], None],
@@ -428,6 +474,8 @@ def check_player_source_contract() -> CheckResult:
         "simulate_post_initialization_allocation_",
         "SetSimulatePostInitializationAllocationForTesting",
         "SetForcePipelineCreationFailureForTesting",
+        "TryParameterTickLayout",
+        "frame_timeline_parameter_not_bound",
         "UsesOnlyNonAliasedPlacements",
         "SetResourceAllocationQueryForTesting",
         "SetForceDeviceRemovedForTesting",
@@ -537,6 +585,7 @@ def run_contracts_only() -> list[CheckResult]:
     return [
         check_fixture_roundtrip(),
         check_exact_capability_contract(),
+        check_fixture_planner_contract(),
         check_capability_failure_matrix(),
         check_package_rejection_before_allocation(),
         check_player_source_contract(),
@@ -604,16 +653,41 @@ def run_native_fixture(
             f"fixture binary is unavailable: {fixture}",
             unavailable=True,
         )
+    try:
+        package = nwp.decode_package(package_path.read_bytes())
+    except Exception as exc:
+        return CheckResult(
+            "nw04_native_fixture",
+            True,
+            False,
+            f"native fixture package could not be decoded: {exc}",
+        )
+    frames = 8
+    tick_start = 0
+    tick_step = 1
+    last_tick = tick_start + (frames - 1) * tick_step
+    expected_upload_reuse = max(
+        0,
+        sum(
+            1
+            for instruction in package.initialization
+            if instruction.opcode == "init.upload_resource"
+        )
+        - 1,
+    )
+    last_constants, expected_timeline = contract.apply_frame_constants(
+        package, last_tick
+    )
     command = [
         str(fixture),
         "--package",
         str(package_path),
         "--frames",
-        "8",
+        str(frames),
         "--tick-start",
-        "0",
+        str(tick_start),
         "--tick-step",
-        "1",
+        str(tick_step),
         "--resize-sequence",
         "--simulate-minimize",
         "--emit-benchmark-metrics",
@@ -635,7 +709,7 @@ def run_native_fixture(
         "NW_PLAYER_NON_ALIASED_PLACEMENTS=1",
         "NW_PLAYER_POST_INIT_ALLOCATION_VIOLATION=0",
         "NW_PLAYER_READBACK=not_performed",
-        "NW_PLAYER_LAST_TIMELINE_VALUE=7",
+        "NW_PLAYER_LAST_TIMELINE_PARAMETER_ID=",
     )
     for line in required_lines:
         if line not in output:
@@ -647,14 +721,36 @@ def run_native_fixture(
                 evidence={"stdout": output, "stderr": proc.stderr},
             )
     upload_reuse = re.search(r"NW_PLAYER_UPLOAD_REUSE_WAITS=(\d+)", output)
-    if upload_reuse is None or int(upload_reuse.group(1)) < 1:
+    if upload_reuse is None or int(upload_reuse.group(1)) != expected_upload_reuse:
         return CheckResult(
             "nw04_native_fixture",
             True,
             False,
-            "native fixture did not exercise upload-ring fence reuse",
+            "native fixture upload-ring reuse does not match the package "
+            f"(expected {expected_upload_reuse})",
             evidence={"stdout": output, "stderr": proc.stderr},
         )
+    if expected_timeline is not None:
+        expected_line = f"NW_PLAYER_LAST_TIMELINE_VALUE={expected_timeline}"
+        if expected_line not in output:
+            return CheckResult(
+                "nw04_native_fixture",
+                True,
+                False,
+                f"native fixture did not report {expected_line}",
+                evidence={"stdout": output, "stderr": proc.stderr},
+            )
+    if last_constants is not None:
+        expected_root0 = f"NW_PLAYER_LAST_ROOT_CONSTANT0=0x{struct.unpack_from('<I', last_constants, 0)[0]:08X}"
+        if expected_root0 not in output:
+            return CheckResult(
+                "nw04_native_fixture",
+                True,
+                False,
+                "native fixture root-constant bytes do not match the package "
+                f"(expected {expected_root0})",
+                evidence={"stdout": output, "stderr": proc.stderr},
+            )
     return CheckResult(
         "nw04_native_fixture",
         True,
@@ -879,6 +975,147 @@ def run_frame_allocation_detection_check(
     )
 
 
+def run_planner_self_test(fixture: Path, package_path: Path) -> CheckResult:
+    if not fixture.exists():
+        return CheckResult(
+            "nw04_host_simulation_planner",
+            True,
+            False,
+            f"fixture binary is unavailable: {fixture}",
+            unavailable=True,
+        )
+    try:
+        package = nwp.decode_package(package_path.read_bytes())
+    except Exception as exc:
+        return CheckResult(
+            "nw04_host_simulation_planner",
+            True,
+            False,
+            f"planner package could not be decoded: {exc}",
+        )
+    failures = contract.validate_frame_plan(package)
+    if failures:
+        return CheckResult(
+            "nw04_host_simulation_planner",
+            True,
+            False,
+            contract.format_failures(failures),
+        )
+    last_constants, expected_timeline = contract.apply_frame_constants(
+        package, 7
+    )
+    command = [
+        str(fixture),
+        "--package",
+        str(package_path),
+        "--frames",
+        "8",
+        "--tick-start",
+        "0",
+        "--tick-step",
+        "1",
+        "--planner-self-test",
+    ]
+    proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return CheckResult(
+            "nw04_host_simulation_planner",
+            True,
+            False,
+            f"planner self-test exited {proc.returncode}",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if "NW_PLAYER_PLANNER_SELF_TEST=1" not in proc.stdout:
+        return CheckResult(
+            "nw04_host_simulation_planner",
+            True,
+            False,
+            "planner self-test evidence line is missing",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if expected_timeline is not None:
+        expected_line = f"NW_PLAYER_LAST_TIMELINE_VALUE={expected_timeline}"
+        if expected_line not in proc.stdout:
+            return CheckResult(
+                "nw04_host_simulation_planner",
+                True,
+                False,
+                f"planner self-test did not report {expected_line}",
+                evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+            )
+    if last_constants is not None:
+        expected_root0 = (
+            "NW_PLAYER_LAST_ROOT_CONSTANT0=0x"
+            f"{struct.unpack_from('<I', last_constants, 0)[0]:08X}"
+        )
+        if expected_root0 not in proc.stdout:
+            return CheckResult(
+                "nw04_host_simulation_planner",
+                True,
+                False,
+                "planner self-test root-constant bytes do not match the "
+                f"expected update ({expected_root0})",
+                evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+            )
+    frame_opcodes = {instruction.opcode for instruction in package.frame}
+    mutations: list[tuple[str, str]] = []
+    if "frame.barrier" in frame_opcodes:
+        mutations.extend(
+            [
+                ("barrier-state", "package_instruction_barrier_state"),
+                ("barrier-usage", "package_instruction_barrier_usage"),
+            ]
+        )
+    if "frame.set_descriptor_table" in frame_opcodes:
+        mutations.extend(
+            [
+                ("descriptor-heap", "package_instruction_descriptor_heap"),
+                ("descriptor-target", "package_instruction_descriptor_target"),
+            ]
+        )
+    if "frame.set_timeline" in frame_opcodes and package.parameters:
+        mutations.append(
+            ("timeline-type", "package_parameter_type_unsupported")
+        )
+    for mutation, expected_code in mutations:
+        mutation_proc = subprocess.run(
+            [*command, "--planner-mutation", mutation],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        combined = mutation_proc.stdout + mutation_proc.stderr
+        if mutation_proc.returncode == 0:
+            return CheckResult(
+                "nw04_host_simulation_planner",
+                True,
+                False,
+                f"planner accepted mutation {mutation}",
+                evidence={"stdout": combined},
+            )
+        if (
+            "NW_PLAYER_PLANNER_REJECTED=1" not in mutation_proc.stdout
+            or expected_code not in combined
+        ):
+            return CheckResult(
+                "nw04_host_simulation_planner",
+                True,
+                False,
+                f"planner mutation {mutation} did not emit {expected_code}",
+                evidence={"stdout": combined},
+            )
+    return CheckResult(
+        "nw04_host_simulation_planner",
+        True,
+        True,
+        evidence={
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "command": command,
+        },
+    )
+
+
 def build_summary(mode: str, results: list[CheckResult]) -> dict[str, Any]:
     passed = all(result.passed for result in results if result.required)
     mode_status = {
@@ -925,6 +1162,15 @@ def main() -> int:
     args = parser.parse_args()
 
     results = run_contracts_only()
+    if args.mode == "ContractsOnly" and args.fixture is not None:
+        # Optional GPU-less host-simulation execution of the real planner over
+        # the in-repo package fixture.  It requires no device or window.
+        results.append(
+            run_planner_self_test(
+                args.fixture,
+                REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp",
+            )
+        )
     if args.mode in ("Full", "Hardware"):
         if args.fixture is None:
             results.append(
@@ -971,6 +1217,9 @@ def main() -> int:
                         run_frame_allocation_detection_check(
                             args.fixture, args.package
                         )
+                    )
+                    results.append(
+                        run_planner_self_test(args.fixture, args.package)
                     )
 
     passed = all(result.passed for result in results if result.required)

@@ -6,6 +6,7 @@
 // compiles shaders at runtime.
 
 #include "package_player.h"
+#include "package_loader.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,8 @@ struct FixtureArgs {
     bool simulate_pipeline_failure = false;
     bool simulate_root_signature_failure = false;
     bool simulate_frame_allocation = false;
+    bool planner_self_test = false;
+    const char* planner_mutation = nullptr;
 };
 
 bool ParseU32(const char* text, std::uint32_t* value) {
@@ -108,6 +111,11 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             args->simulate_root_signature_failure = true;
         } else if (std::strcmp(arg, "--simulate-frame-allocation") == 0) {
             args->simulate_frame_allocation = true;
+        } else if (std::strcmp(arg, "--planner-self-test") == 0) {
+            args->planner_self_test = true;
+        } else if (std::strcmp(arg, "--planner-mutation") == 0) {
+            if (++index >= argc) return false;
+            args->planner_mutation = argv[index];
         } else {
             return false;
         }
@@ -141,6 +149,8 @@ int main(int argc, char** argv) {
             "[--simulate-pipeline-failure] "
             "[--simulate-root-signature-failure] "
             "[--simulate-frame-allocation] "
+            "[--planner-self-test] "
+            "[--planner-mutation name] "
             "[--validation]\n");
         return static_cast<int>(nw::player::ExitCode::InvalidArguments);
     }
@@ -180,6 +190,100 @@ int main(int argc, char** argv) {
     }
     if (args.simulate_frame_allocation) {
         player.SetSimulatePostInitializationAllocationForTesting(true);
+    }
+    if (args.planner_self_test) {
+        const nw::player::PackageLoadResult loaded =
+            nw::player::LoadPackageFromFile(args.package_path);
+        if (loaded.exit_code != nw::player::ExitCode::Success) {
+            std::fprintf(stderr, "planner self-test package load failed\n");
+            return static_cast<int>(loaded.exit_code);
+        }
+        nw::package::Package package = loaded.package;
+        if (args.planner_mutation != nullptr) {
+            bool mutated = false;
+            if (std::strcmp(args.planner_mutation, "barrier-state") == 0) {
+                for (auto& instruction : package.frame) {
+                    if (instruction.opcode == "frame.barrier" &&
+                        instruction.operands.size() == 2u) {
+                        instruction.operands[0].u32 = 99u;
+                        mutated = true;
+                        break;
+                    }
+                }
+            } else if (std::strcmp(args.planner_mutation,
+                                   "barrier-usage") == 0) {
+                for (auto& instruction : package.frame) {
+                    if (instruction.opcode == "frame.barrier" &&
+                        instruction.operands.size() == 2u) {
+                        instruction.operands[0].u32 = 4u;
+                        instruction.operands[1].u32 = 1u;
+                        mutated = true;
+                        break;
+                    }
+                }
+            } else if (std::strcmp(args.planner_mutation,
+                                   "descriptor-heap") == 0) {
+                for (auto& instruction : package.frame) {
+                    if (instruction.opcode == "frame.set_descriptor_table" &&
+                        instruction.operands.size() == 3u) {
+                        instruction.operands[1].string_value =
+                            "unexpected_heap";
+                        mutated = true;
+                        break;
+                    }
+                }
+            } else if (std::strcmp(args.planner_mutation,
+                                   "descriptor-target") == 0) {
+                for (auto& instruction : package.frame) {
+                    if (instruction.opcode == "frame.set_descriptor_table" &&
+                        instruction.operands.size() == 3u) {
+                        instruction.operands[2].u32 = 1u;
+                        mutated = true;
+                        break;
+                    }
+                }
+            } else if (std::strcmp(args.planner_mutation,
+                                   "timeline-type") == 0) {
+                for (auto& parameter : package.parameters) {
+                    parameter.type = "double";
+                    mutated = true;
+                    break;
+                }
+            }
+            if (!mutated) {
+                std::fprintf(stderr, "unknown planner mutation: %s\n",
+                             args.planner_mutation);
+                return static_cast<int>(
+                    nw::player::ExitCode::InvalidArguments);
+            }
+        }
+        if (!player.BuildFramePlanForTesting(package)) {
+            std::printf("NW_PLAYER_PLANNER_REJECTED=1\n");
+            std::fprintf(stderr, "planner self-test rejected the package: %s\n",
+                         player.diagnostics_json().c_str());
+            return player.Report(true);
+        }
+        for (std::uint32_t frame = 0u; frame < args.frames; ++frame) {
+            const std::uint64_t tick = args.tick_start +
+                                       static_cast<std::uint64_t>(frame) *
+                                           args.tick_step;
+            if (!player.ApplyFramePlanForTesting(tick)) {
+                return player.Report(true);
+            }
+        }
+        std::printf("NW_PLAYER_PLANNER_SELF_TEST=1\n");
+        std::printf("NW_PLAYER_LAST_ROOT_CONSTANT_COUNT=%u\n",
+                    player.last_root_constant_count());
+        if (player.last_root_constant_count() > 0u) {
+            std::printf("NW_PLAYER_LAST_ROOT_CONSTANT0=0x%08X\n",
+                        player.last_root_constants()[0]);
+        }
+        std::printf("NW_PLAYER_LAST_TIMELINE_PARAMETER_ID=%u\n",
+                    player.last_timeline_parameter_id());
+        std::printf("NW_PLAYER_LAST_TIMELINE_VALUE=%llu\n",
+                    static_cast<unsigned long long>(
+                        player.last_timeline_value()));
+        return 0;
     }
     nw::player::ExitCode code = player.initializeFromFile(args.package_path);
     if (code != nw::player::ExitCode::Success) {
@@ -277,6 +381,12 @@ int main(int argc, char** argv) {
                 player.last_timeline_parameter_id());
     std::printf("NW_PLAYER_LAST_TIMELINE_VALUE=%llu\n",
                 static_cast<unsigned long long>(player.last_timeline_value()));
+    std::printf("NW_PLAYER_LAST_ROOT_CONSTANT_COUNT=%u\n",
+                player.last_root_constant_count());
+    if (player.last_root_constant_count() > 0u) {
+        std::printf("NW_PLAYER_LAST_ROOT_CONSTANT0=0x%08X\n",
+                    player.last_root_constants()[0]);
+    }
     std::printf("NW_PLAYER_NON_ALIASED_PLACEMENTS=%d\n",
                 player.resource_plan().UsesOnlyNonAliasedPlacements() ? 1 : 0);
     std::printf("NW_PLAYER_ENGINE_RESOURCE_BYTES=%llu\n",

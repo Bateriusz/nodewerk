@@ -182,11 +182,40 @@ bool BarrierStateCodeCompatibleWithUsage(std::uint32_t code,
     return true;
 }
 
-std::uint8_t TickKindForParameter(const package::ParameterRecord& parameter) {
-    if (parameter.type == "uint") return 1u;
-    if (parameter.type == "int") return 2u;
-    if (parameter.type.rfind("float", 0u) == 0u) return 0u;
-    return 3u;
+bool TryParameterTickLayout(const package::ParameterRecord& parameter,
+                            std::uint8_t* tick_kind,
+                            std::uint32_t* parameter_bytes) {
+    if (tick_kind == nullptr || parameter_bytes == nullptr) return false;
+    std::uint32_t components = 0u;
+    if (parameter.type == "float") {
+        *tick_kind = 0u;
+        components = 1u;
+    } else if (parameter.type == "float2") {
+        *tick_kind = 0u;
+        components = 2u;
+    } else if (parameter.type == "float3") {
+        *tick_kind = 0u;
+        components = 3u;
+    } else if (parameter.type == "float4") {
+        *tick_kind = 0u;
+        components = 4u;
+    } else if (parameter.type == "uint") {
+        *tick_kind = 1u;
+        components = 1u;
+    } else if (parameter.type == "int") {
+        *tick_kind = 2u;
+        components = 1u;
+    } else {
+        return false;
+    }
+    *parameter_bytes = components * 4u;
+    // The canonical parameter value must match the declared type exactly; a
+    // truncated or over-wide value would make a tick update silently partial.
+    if (parameter.component_count != components ||
+        parameter.value.size() != *parameter_bytes) {
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -487,19 +516,27 @@ bool TryBarrierStateFromCode(std::uint32_t code,
 
 void WriteTimelineTick(std::uint32_t* words,
                        std::uint32_t byte_offset,
+                       std::uint32_t parameter_bytes,
                        std::uint8_t tick_kind,
                        std::uint64_t tick) {
     auto* destination =
         reinterpret_cast<std::uint8_t*>(words) + byte_offset;
-    if (tick_kind == 0u) {
-        const float value = static_cast<float>(tick);
-        std::memcpy(destination, &value, sizeof(value));
-    } else if (tick_kind == 1u) {
-        const std::uint32_t value = static_cast<std::uint32_t>(tick);
-        std::memcpy(destination, &value, sizeof(value));
-    } else if (tick_kind == 2u) {
-        const std::int32_t value = static_cast<std::int32_t>(tick);
-        std::memcpy(destination, &value, sizeof(value));
+    if (parameter_bytes == 0u || parameter_bytes % 4u != 0u) return;
+    const std::uint32_t component_count = parameter_bytes / 4u;
+    for (std::uint32_t component = 0u; component < component_count;
+         ++component) {
+        std::uint8_t* component_destination =
+            destination + static_cast<std::size_t>(component) * 4u;
+        if (tick_kind == 0u) {
+            const float value = static_cast<float>(tick);
+            std::memcpy(component_destination, &value, sizeof(value));
+        } else if (tick_kind == 1u) {
+            const std::uint32_t value = static_cast<std::uint32_t>(tick);
+            std::memcpy(component_destination, &value, sizeof(value));
+        } else if (tick_kind == 2u) {
+            const std::int32_t value = static_cast<std::int32_t>(tick);
+            std::memcpy(component_destination, &value, sizeof(value));
+        }
     }
 }
 
@@ -637,6 +674,8 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     last_frame_order_.clear();
     frame_ops_.reserve(package_.frame.size());
     last_frame_order_.reserve(package_.frame.size());
+    std::set<std::uint32_t> timeline_parameters;
+    std::set<std::uint32_t> recorded_constant_parameters;
     for (const auto& instruction : package_.frame) {
         bool known = true;
         FrameOp::Type type = FrameOp::Type::Present;
@@ -697,6 +736,21 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             // block.  This is done once during initialization, never per frame.
             std::size_t byte_offset = 0u;
             for (const auto& parameter : package_.parameters) {
+                std::uint8_t tick_kind = 0u;
+                std::uint32_t declared_bytes = 0u;
+                if (!TryParameterTickLayout(parameter, &tick_kind,
+                                            &declared_bytes)) {
+                    Fail(ExitCode::PackageValidationFailed,
+                         "package_validation",
+                         "package_parameter_type_unsupported", "parameter_type",
+                         "float|float2|float3|float4|uint|int",
+                         parameter.type.empty() ? "unavailable"
+                                                : parameter.type,
+                         "frame_plan",
+                         "parameter type/width is not representable by the "
+                         "bounded root-constant timeline update");
+                    return false;
+                }
                 const std::size_t parameter_bytes =
                     std::min<std::size_t>(
                         parameter.value.size(),
@@ -708,15 +762,19 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                     op.time_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
                 }
-                if (parameter_bytes >= 4u &&
+                const bool full_parameter_fits =
+                    parameter_bytes == declared_bytes;
+                if (full_parameter_fits &&
                     op.parameter_count <
                         package::kMaxRootSignatureDwordCost) {
                     const std::uint32_t entry = op.parameter_count++;
                     op.parameter_ids[entry] = parameter.parameter_id;
                     op.parameter_offsets[entry] =
                         static_cast<std::int32_t>(byte_offset);
-                    op.parameter_tick_kinds[entry] =
-                        TickKindForParameter(parameter);
+                    op.parameter_tick_kinds[entry] = tick_kind;
+                    op.parameter_sizes[entry] = declared_bytes;
+                    recorded_constant_parameters.insert(
+                        parameter.parameter_id);
                 }
                 std::memcpy(
                     reinterpret_cast<std::uint8_t*>(op.constants.data()) +
@@ -849,6 +907,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             op.parameter_id = instruction.operands[0].u32;
             op.tick_value = instruction.operands[1].u64;
+            timeline_parameters.insert(op.parameter_id);
             bool parameter_known = false;
             for (const auto& parameter : package_.parameters) {
                 if (parameter.parameter_id == op.parameter_id) {
@@ -875,6 +934,17 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
         }
         frame_ops_.push_back(std::move(op));
         last_frame_order_.push_back(instruction.opcode);
+    }
+    for (std::uint32_t parameter_id : timeline_parameters) {
+        if (recorded_constant_parameters.count(parameter_id) == 0u) {
+            Fail(ExitCode::PackageValidationFailed, "package_validation",
+                 "frame_timeline_parameter_not_bound", "parameter_id",
+                 std::to_string(parameter_id),
+                 "not present in a full root-constant block", "frame_plan",
+                 "frame.set_timeline selects a parameter that no bounded "
+                 "root-constant upload can update");
+            return false;
+        }
     }
     return true;
 }
@@ -2079,6 +2149,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 values.data(),
                                 static_cast<std::uint32_t>(
                                     op.parameter_offsets[entry]),
+                                op.parameter_sizes[entry],
                                 op.parameter_tick_kinds[entry],
                                 timeline_value);
                             timeline_applied = true;
@@ -2097,6 +2168,8 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     list->SetComputeRoot32BitConstants(
                         op.root_parameter, op.constant_count,
                         values.data(), 0u);
+                    last_root_constants_ = values;
+                    last_root_constant_count_ = op.constant_count;
                 }
                 break;
             case FrameOp::Type::SetDescriptorTable: {
@@ -2427,31 +2500,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     }
 #else
     // Host simulation executes the same ordered frame contract without a GPU.
-    bool timeline_override = timeline_override_active_;
-    std::uint32_t timeline_parameter = timeline_parameter_id_;
-    std::uint64_t timeline_value = timeline_tick_;
-    for (const auto& op : frame_ops_) {
-        if (op.type == FrameOp::Type::Draw) {
-            return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
-                        "frame_draw_requires_raster_pipeline", "pipeline",
-                        "package raster pipeline", "unsupported",
-                        "renderAtTick",
-                        "frame.draw is outside the minimal NW-04 player");
-        }
-        if (op.type == FrameOp::Type::SetTimeline) {
-            timeline_override = true;
-            timeline_parameter = op.parameter_id;
-            timeline_value =
-                op.tick_value >
-                        std::numeric_limits<std::uint64_t>::max() - tick
-                    ? std::numeric_limits<std::uint64_t>::max()
-                    : op.tick_value + tick;
-            timeline_parameter_id_ = timeline_parameter;
-            timeline_tick_ = timeline_value;
-            timeline_override_active_ = true;
-        }
+    if (!ApplyFramePlanForTesting(tick)) {
+        return last_exit_;
     }
-    (void)timeline_override;
     if (simulate_post_initialization_allocation_) {
         NoteEngineAllocation(64u, 0u, true, true, false);
     }
@@ -2944,6 +2995,74 @@ void PackagePlayer::SetForcePipelineCreationFailureForTesting(
 void PackagePlayer::SetSimulatePostInitializationAllocationForTesting(
     bool allocate) noexcept {
     simulate_post_initialization_allocation_ = allocate;
+}
+
+bool PackagePlayer::BuildFramePlanForTesting(const package::Package& pkg) {
+    diagnostics_.clear();
+    last_exit_ = ExitCode::Success;
+    package_ = pkg;
+    last_root_constants_.fill(0u);
+    last_root_constant_count_ = 0u;
+    timeline_parameter_id_ = 0u;
+    timeline_tick_ = 0u;
+    timeline_override_active_ = false;
+    return BuildFrameInstructionPlan();
+}
+
+bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
+    bool timeline_override = timeline_override_active_;
+    std::uint32_t timeline_parameter = timeline_parameter_id_;
+    std::uint64_t timeline_value = timeline_tick_;
+    last_root_constants_.fill(0u);
+    last_root_constant_count_ = 0u;
+    for (const auto& op : frame_ops_) {
+        if (op.type == FrameOp::Type::SetTimeline) {
+            timeline_override = true;
+            timeline_parameter = op.parameter_id;
+            timeline_value =
+                op.tick_value >
+                        std::numeric_limits<std::uint64_t>::max() - tick
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : op.tick_value + tick;
+            timeline_parameter_id_ = timeline_parameter;
+            timeline_tick_ = timeline_value;
+            timeline_override_active_ = true;
+        } else if (op.type == FrameOp::Type::SetRootConstants &&
+                   op.constant_count > 0u) {
+            std::array<std::uint32_t,
+                       package::kMaxRootSignatureDwordCost>
+                values = op.constants;
+            bool timeline_applied = false;
+            if (timeline_override) {
+                for (std::uint32_t entry = 0u; entry < op.parameter_count;
+                     ++entry) {
+                    if (op.parameter_ids[entry] != timeline_parameter) {
+                        continue;
+                    }
+                    WriteTimelineTick(
+                        values.data(),
+                        static_cast<std::uint32_t>(
+                            op.parameter_offsets[entry]),
+                        op.parameter_sizes[entry],
+                        op.parameter_tick_kinds[entry], timeline_value);
+                    timeline_applied = true;
+                    break;
+                }
+            }
+            if (!timeline_applied && op.time_byte_offset >= 0 &&
+                static_cast<std::uint32_t>(op.time_byte_offset) + 4u <=
+                    op.constant_count * 4u) {
+                const float time_value = static_cast<float>(tick);
+                std::memcpy(
+                    reinterpret_cast<std::uint8_t*>(values.data()) +
+                        op.time_byte_offset,
+                    &time_value, sizeof(time_value));
+            }
+            last_root_constants_ = values;
+            last_root_constant_count_ = op.constant_count;
+        }
+    }
+    return true;
 }
 
 #if NW_PLAYER_DIAGNOSTICS

@@ -8,6 +8,7 @@ player; these checks never claim that a GPU qualification happened.
 
 from __future__ import annotations
 
+import struct
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -679,3 +680,314 @@ def format_failures(failures: list[CapabilityMismatch]) -> str:
         f"profile={failure.profile_id} digest={failure.requirements_digest}"
         for failure in failures
     )
+
+
+_PARAMETER_LAYOUTS = {
+    "float": (0, 1),
+    "float2": (0, 2),
+    "float3": (0, 3),
+    "float4": (0, 4),
+    "uint": (1, 1),
+    "int": (2, 1),
+}
+
+
+def _parameter_layout(parameter: nwp.ParameterRecord) -> tuple[int, int] | None:
+    layout = _PARAMETER_LAYOUTS.get(parameter.type)
+    if layout is None:
+        return None
+    tick_kind, components = layout
+    size_bytes = components * 4
+    if (
+        parameter.component_count != components
+        or len(parameter.value) != size_bytes
+    ):
+        return None
+    return tick_kind, size_bytes
+
+
+def _resource_needs_cbv_srv_uav_descriptor(
+    package: nwp.NwpPackage, resource: nwp.ResourceDescriptor
+) -> bool:
+    if resource.usage in {"srv", "uav"}:
+        return True
+    if resource.usage != "cbv":
+        return False
+    for instruction in package.frame:
+        if (
+            instruction.opcode == "frame.set_root_constants"
+            and len(instruction.operands) == 3
+            and instruction.operands[1].type == "resource_ref"
+            and instruction.operands[1].value == resource.resource_id
+        ):
+            return False
+    return True
+
+
+def _barrier_usage_compatible(code: int, usage: str) -> bool:
+    if usage == "readback":
+        return code == 9
+    if code == 11:
+        return False
+    if code == 4 and usage != "uav":
+        return False
+    if code == 3 and usage != "rtv":
+        return False
+    if code in (5, 6) and usage != "dsv":
+        return False
+    return True
+
+
+def _root_constant_entries(
+    package: nwp.NwpPackage, constant_count: int
+) -> tuple[list[tuple[int, int, int, int]], list[CapabilityMismatch]]:
+    failures: list[CapabilityMismatch] = []
+    entries: list[tuple[int, int, int, int]] = []
+    byte_offset = 0
+    total_bytes = constant_count * 4
+    for parameter in package.parameters:
+        layout = _parameter_layout(parameter)
+        if layout is None:
+            failures.append(
+                _failure(
+                    package,
+                    "package_parameter_type_unsupported",
+                    "parameter_type",
+                    "float|float2|float3|float4|uint|int",
+                    parameter.type or "unavailable",
+                    "parameter type/width is not representable by the bounded "
+                    "root-constant timeline update",
+                )
+            )
+            break
+        tick_kind, size_bytes = layout
+        remaining = total_bytes - byte_offset
+        if remaining <= 0 or size_bytes > remaining:
+            break
+        entries.append((parameter.parameter_id, byte_offset, tick_kind, size_bytes))
+        byte_offset += size_bytes
+        if byte_offset >= total_bytes:
+            break
+    return entries, failures
+
+
+def validate_frame_plan(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
+    """Mirror PackagePlayer::BuildFrameInstructionPlan.
+
+    This is the GPU-less/host-simulation planner check used by the repository
+    verification suite.  It covers the bounded descriptor-table, barrier, and
+    timeline rules that are enforced before any GPU submission.
+    """
+    failures: list[CapabilityMismatch] = []
+    resources = {resource.resource_id: resource for resource in package.resources}
+    timeline_parameters: set[int] = set()
+    recorded_parameters: set[int] = set()
+    parameter_ids = {parameter.parameter_id for parameter in package.parameters}
+    for instruction in package.frame:
+        if instruction.opcode == "frame.draw":
+            failures.append(
+                _failure(
+                    package,
+                    "frame_draw_requires_raster_pipeline",
+                    "pipeline",
+                    "package raster pipeline",
+                    "unsupported",
+                    "the minimal NW-04 player only realizes compute pipelines",
+                )
+            )
+        elif instruction.opcode == "frame.set_descriptor_table":
+            heap_name = instruction.operands[1].value
+            resource = resources.get(instruction.operands[2].value)
+            if resource is None:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_reference",
+                        "descriptor_table_resource",
+                        str(instruction.operands[2].value),
+                        "missing",
+                        "frame.set_descriptor_table references a missing resource",
+                    )
+                )
+            elif heap_name not in {"cbv_srv_uav", "sampler"}:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_descriptor_heap",
+                        "heap_name",
+                        "cbv_srv_uav|sampler",
+                        heap_name or "unavailable",
+                        "frame.set_descriptor_table names an unsupported heap",
+                    )
+                )
+            else:
+                available = (
+                    resource.usage == "sampler"
+                    if heap_name == "sampler"
+                    else _resource_needs_cbv_srv_uav_descriptor(
+                        package, resource
+                    )
+                )
+                if not available:
+                    failures.append(
+                        _failure(
+                            package,
+                            "package_instruction_descriptor_target",
+                            "descriptor_table_resource",
+                            resource.name,
+                            f"no descriptor in {heap_name}",
+                            "frame.set_descriptor_table targets a resource "
+                            "without a compatible descriptor",
+                        )
+                    )
+        elif instruction.opcode == "frame.barrier":
+            code = instruction.operands[0].value
+            resource = resources.get(instruction.operands[1].value)
+            if code > 12:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_barrier_state",
+                        "barrier_state",
+                        "0..12",
+                        str(code),
+                        "frame.barrier uses an unknown resource-state code",
+                    )
+                )
+            elif resource is None:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_reference",
+                        "barrier_resource",
+                        str(instruction.operands[1].value),
+                        "missing",
+                        "frame.barrier references a missing resource",
+                    )
+                )
+            elif not _barrier_usage_compatible(code, resource.usage):
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_barrier_usage",
+                        "resource_usage",
+                        resource.usage,
+                        f"state code {code} is incompatible with {resource.usage}",
+                        "frame.barrier state is incompatible with the target "
+                        "resource heap/usage",
+                    )
+                )
+        elif instruction.opcode == "frame.set_timeline":
+            parameter_id = instruction.operands[0].value
+            if parameter_id not in parameter_ids:
+                failures.append(
+                    _failure(
+                        package,
+                        "package_instruction_reference",
+                        "parameter_id",
+                        str(parameter_id),
+                        "missing",
+                        "frame.set_timeline references a missing parameter",
+                    )
+                )
+            timeline_parameters.add(parameter_id)
+        elif instruction.opcode == "frame.set_root_constants":
+            constant_count = min(instruction.operands[2].value, 16)
+            entries, entry_failures = _root_constant_entries(
+                package, constant_count
+            )
+            failures.extend(entry_failures)
+            recorded_parameters.update(entry[0] for entry in entries)
+    for parameter_id in sorted(timeline_parameters):
+        if parameter_id not in recorded_parameters:
+            failures.append(
+                _failure(
+                    package,
+                    "frame_timeline_parameter_not_bound",
+                    "parameter_id",
+                    str(parameter_id),
+                    "not present in a full root-constant block",
+                    "frame.set_timeline selects a parameter that no bounded "
+                    "root-constant upload can update",
+                )
+            )
+    return failures
+
+
+def _write_timeline_tick(
+    values: bytearray, byte_offset: int, tick_kind: int, size_bytes: int, tick: int
+) -> None:
+    for component in range(size_bytes // 4):
+        offset = byte_offset + component * 4
+        if tick_kind == 0:
+            values[offset : offset + 4] = struct.pack("<f", float(tick))
+        elif tick_kind == 1:
+            values[offset : offset + 4] = struct.pack("<I", tick & 0xFFFFFFFF)
+        else:
+            signed = tick & 0xFFFFFFFF
+            if signed >= 0x80000000:
+                signed -= 0x100000000
+            values[offset : offset + 4] = struct.pack("<i", signed)
+
+
+def apply_frame_constants(
+    package: nwp.NwpPackage, tick: int
+) -> tuple[bytes | None, int | None]:
+    """Mirror the bounded set_timeline -> set_root_constants update.
+
+    Returns the last emitted root-constant bytes and the applied timeline value,
+    or ``None`` for each when the package does not use the respective feature.
+    """
+    timeline_active = False
+    timeline_parameter = 0
+    timeline_value = 0
+    last_constants: bytes | None = None
+    last_timeline: int | None = None
+    for instruction in package.frame:
+        if instruction.opcode == "frame.set_timeline":
+            timeline_active = True
+            timeline_parameter = instruction.operands[0].value
+            timeline_value = instruction.operands[1].value + tick
+            last_timeline = timeline_value
+        elif instruction.opcode == "frame.set_root_constants":
+            constant_count = min(instruction.operands[2].value, 16)
+            values = bytearray(constant_count * 4)
+            entries, _ = _root_constant_entries(package, constant_count)
+            offset = 0
+            for parameter in package.parameters:
+                remaining = len(values) - offset
+                if remaining <= 0:
+                    break
+                copy_bytes = min(len(parameter.value), remaining)
+                values[offset : offset + copy_bytes] = parameter.value[:copy_bytes]
+                offset += copy_bytes
+                if offset >= len(values):
+                    break
+            applied = False
+            if timeline_active:
+                for parameter_id, parameter_offset, kind, size_bytes in entries:
+                    if parameter_id == timeline_parameter:
+                        _write_timeline_tick(
+                            values,
+                            parameter_offset,
+                            kind,
+                            size_bytes,
+                            timeline_value,
+                        )
+                        applied = True
+                        break
+            if not applied:
+                for parameter in package.parameters:
+                    if parameter.name == "time" and len(parameter.value) >= 4:
+                        offset = 0
+                        for preceding in package.parameters:
+                            if preceding is parameter:
+                                break
+                            offset += len(preceding.value)
+                        if offset + 4 <= len(values):
+                            values[offset : offset + 4] = struct.pack(
+                                "<f", float(tick)
+                            )
+                        break
+            last_constants = bytes(values)
+    return last_constants, last_timeline

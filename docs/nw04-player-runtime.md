@@ -95,7 +95,11 @@ targets must resolve to a descriptor that actually exists in the named heap.
 `frame.set_timeline` selects a package parameter by id and advances it from the
 emitted tick base by the tick supplied to `renderAtTick`. The bounded constant
 block is updated in place from the pre-built frame plan; no allocation,
-reflection, or re-planning occurs per frame.
+reflection, or re-planning occurs per frame. Frame planning rejects parameter
+types outside `float`/`float2`/`float3`/`float4`/`uint`/`int`, rejects values
+whose component width does not match the declared type, and rejects timeline
+parameters that are not fully present in a bounded root-constant block. The
+tick update writes the parameter's complete declared width.
 
 ## Failure Behavior
 
