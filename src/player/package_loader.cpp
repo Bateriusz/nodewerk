@@ -83,9 +83,19 @@ PackageLoadResult LoadPackageFromBytes(const std::uint8_t* data,
     result.package_size_bytes = static_cast<std::uint64_t>(size_bytes);
     result.package_sha256 = package::Sha256Hex(data, size_bytes);
     if ((result.package.flags & 1u) == 0u) {
-        return LoadFailure(ExitCode::PackageValidationFailed,
-                           "package_release_flag_required",
-                           "the player executes release .nwp v1 packages only");
+        result.exit_code = ExitCode::PackageValidationFailed;
+        CapabilityRequirementFailure failure{};
+        failure.code = "package_release_flag_required";
+        failure.requirement = "release_flag";
+        failure.required_value = "1";
+        failure.observed_value = std::to_string(result.package.flags);
+        failure.profile_id = result.package.capability.profile_id;
+        failure.requirements_digest =
+            result.package.capability.requirements_digest;
+        failure.detail =
+            "the player executes release .nwp v1 packages only";
+        result.failures.push_back(std::move(failure));
+        return result;
     }
     const PackageCapabilityEvaluation exact =
         ValidateEmittedRequirementsAgainstPackage(result.package);

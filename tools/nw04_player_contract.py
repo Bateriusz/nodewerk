@@ -616,6 +616,10 @@ def evaluate_package_against_adapter(
         for resource in package.resources:
             if resource.format != format_name:
                 continue
+            if resource.usage == "sampler":
+                # The native player treats samplers as always available and
+                # never requires resource-format support for them.
+                continue
             dimension_key = (
                 "buffer" if resource.kind == "buffer" else "texture2d"
             )
@@ -629,8 +633,7 @@ def evaluate_package_against_adapter(
                 "uav": support.get("unordered_access", False),
                 "rtv": support.get("render_target", False),
                 "dsv": support.get("depth_stencil", False),
-                "sampler": True,
-            }.get(resource.usage, False)
+            }.get(resource.usage, True)
             supported = (
                 support.get("supported", False)
                 and support.get(dimension_key, False)

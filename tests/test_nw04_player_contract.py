@@ -311,6 +311,62 @@ def test_missing_and_unsupported_formats_are_rejected() -> None:
     )
 
 
+def test_readback_and_sampler_usages_follow_native_format_rules() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    readback = nwp.ResourceDescriptor(
+        resource_id=3,
+        name="readback",
+        kind="buffer",
+        format="DXGI_FORMAT_R32_UINT",
+        usage="readback",
+        pass_family="compute.math_noise",
+        size_bytes=4096,
+    )
+    sampler = nwp.ResourceDescriptor(
+        resource_id=4,
+        name="sampler",
+        kind="buffer",
+        format="DXGI_FORMAT_R8G8B8A8_UNORM",
+        usage="sampler",
+        pass_family="compute.math_noise",
+        size_bytes=4,
+    )
+    resources = package.resources + [readback, sampler]
+    derived = nwp.derive_capability_requirements(
+        resources,
+        package.initialization,
+        package.frame,
+        package.shaders,
+        package.root_signatures,
+    )
+    capability = nwp.replace(package.capability, **derived)
+    capability = nwp.replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
+    package = nwp.replace(
+        package,
+        resources=resources,
+        capability=capability,
+    )
+    assert contract.validate_package_requirements(package) == []
+    adapter = contract.baseline_adapter()
+    adapter["formats"]["DXGI_FORMAT_R8G8B8A8_UNORM"] = {
+        "supported": False,
+        "buffer": False,
+        "texture2d": False,
+        "shader_resource": False,
+        "unordered_access": False,
+        "render_target": False,
+        "depth_stencil": False,
+    }
+    failures = contract.evaluate_package_against_adapter(package, adapter)
+    assert not any(
+        failure.code == "package_capability_format_usage"
+        for failure in failures
+    ), [failure.code for failure in failures]
+
+
 def test_unknown_profile_and_digest_are_rejected() -> None:
     package = nw04_fixture.build_compute_display_package()
     unknown = nwp.replace(
