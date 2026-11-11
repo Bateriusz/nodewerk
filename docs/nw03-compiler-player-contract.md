@@ -55,8 +55,12 @@ player never performs runtime reflection.
 ## Numerical tolerances
 
 The CPU oracle evaluates the same expression in double precision and in a
-float32-quantized mode. Comparisons use absolute tolerance `1e-5` and relative
-tolerance `1e-4` (documented in `tools/nw03_oracle.py`). The fixture
+float32-quantized mode. The generated HLSL `float4 nw_value = ...` expression is
+also evaluated in float32 mode and compared against the double-precision
+reference for each reachable specialization, so fusion/lowering changes are
+exercised rather than re-running the source expression. Comparisons use
+absolute tolerance `1e-5` and relative tolerance `1e-4` (documented in
+`tools/nw03_oracle.py`). The fixture
 `fixtures/nw03/math_noise.nwgraph` uses a fused math/noise-like expression;
 `fixtures/graphs/valid_shader_composition.nwgraph` remains the shape-only
 composition fixture.
@@ -95,6 +99,10 @@ python tools/nodewerkc.py compile-package \
 python tools/nodewerkc.py inspect build/math_noise.nwp
 ```
 
+Release `inspect` also runs the leakage scan and exits nonzero if the package
+contains authoring names, source paths/text, debug data, or reflection tables.
+`--allow-dev` is required for development sidecar sections.
+
 The optional C++ frontend exposes the same three commands as `nodewerkc` after
 an explicit `cmake --build <build-dir> --target nodewerkc`. On Windows it is
 excluded from the default build so the NW-01 concrete-build gate does not depend
@@ -128,10 +136,11 @@ nonzero if a required check fails or is unavailable. The ordinary repository
 The native parser campaign is reproducible: `tools/verify_nw03.py` builds
 `tools/nw03_parser_fuzz.cpp` with
 `-fsanitize=address,undefined -fno-sanitize-recover=all`, generates a
-deterministic 32-file corpus from a valid package using seed `0x4E573033`, and
-executes the campaign within the recorded 256-iteration budget (the summary
-JSON records the compiler, sanitizer flags, corpus size, seed, budget, and
-elapsed time). The Python bounded fuzz check uses 512 iterations by default.
+deterministic 256-file corpus (the valid package plus 255 mutations) from seed
+`0x4E573033`, and executes every file within the recorded 256-iteration budget
+(the summary JSON records the compiler, sanitizer flags, corpus size, seed,
+budget, and elapsed time). The Python bounded fuzz check uses 512 iterations by
+default.
 
 ## Explicit boundaries
 

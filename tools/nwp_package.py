@@ -689,6 +689,13 @@ class _Writer:
         self.buffer += data
 
     def bytes(self, data: bytes) -> None:
+        if len(data) > MAX_BLOB_BYTES:
+            raise PackageValidationError(
+                package_diagnostic(
+                    "package_decode_limit",
+                    f"blob field exceeds {MAX_BLOB_BYTES} bytes",
+                )
+            )
         self.u32(len(data))
         self.buffer += data
 
@@ -908,6 +915,7 @@ _FIELD_CODE_TYPE = {
 def _encode_capability(capability: CapabilityRecord) -> bytes:
     writer = _Writer()
     writer.u16(1)
+    writer.u16(0)  # flags, must be zero in v1
     fields = capability.to_dict()
     ordered_names = sorted(fields)
     writer.u32(len(ordered_names))
@@ -931,6 +939,18 @@ def _decode_capability(
             package_diagnostic(
                 "package_unknown_section_version",
                 f"CAP section version {version} is not supported",
+                section=SECTION_CAPABILITY,
+            )
+        )
+        return None
+    flags = reader.u16()
+    if flags is None:
+        return None
+    if flags != 0:
+        diagnostics.append(
+            package_diagnostic(
+                "package_capability_flags",
+                f"CAP section flags 0x{flags:04x} must be zero in v1",
                 section=SECTION_CAPABILITY,
             )
         )
@@ -1942,6 +1962,11 @@ def _validate_resources(
 
         family_contract = PASS_FAMILY_BINDINGS.get(resource.pass_family)
         if family_contract is None:
+            error(
+                "package_pass_family_unknown",
+                f"resource '{resource.name}' uses unknown pass family "
+                f"'{resource.pass_family}'",
+            )
             continue
         allowed = tuple(family_contract.values())
         if (resource.usage, resource.binding_slot, resource.binding_space) not in allowed:
@@ -2083,6 +2108,48 @@ def _validate_instructions(
                             f"root constants reference resource {operand.value} without cbv usage",
                         )
 
+            # Root-parameter operands must select the binding that names the
+            # referenced resource.  This catches ambiguous root parameter 0
+            # usage for both root constants and descriptor tables.
+            if (
+                instruction.opcode
+                in {"frame.set_root_constants", "frame.set_descriptor_table"}
+                and len(instruction.operands) == len(operand_types)
+                and instruction.operands[0].type == "u32"
+            ):
+                resource_operand = (
+                    instruction.operands[1]
+                    if instruction.opcode == "frame.set_root_constants"
+                    else instruction.operands[2]
+                )
+                if resource_operand.type == "resource_ref":
+                    resource = next(
+                        (
+                            item
+                            for item in resources
+                            if item.resource_id == resource_operand.value
+                        ),
+                        None,
+                    )
+                    if resource is not None:
+                        root_parameter = instruction.operands[0].value
+                        matched = any(
+                            binding.root_parameter == root_parameter
+                            and binding.name == resource.name
+                            and binding.usage == resource.usage
+                            and binding.slot == resource.binding_slot
+                            and binding.space == resource.binding_space
+                            for root in root_signatures
+                            for binding in root.bindings
+                        )
+                        if not matched:
+                            error(
+                                "package_root_signature_binding",
+                                f"instruction '{instruction.opcode}' references root "
+                                f"parameter {root_parameter} that does not bind resource "
+                                f"'{resource.name}'",
+                            )
+
     for phase_name, actual, required in (
         ("initialization", actual_init, set(CapabilityRecord().required_init_instructions)),
         ("frame", actual_frame, set(CapabilityRecord().required_frame_instructions)),
@@ -2170,6 +2237,77 @@ def _validate_parameters(
                 )
 
 
+def _decode_root_signature_blob(
+    blob: bytes | bytearray | memoryview,
+    diagnostics: list[dict[str, Any]],
+) -> tuple[str, tuple[RootBinding, ...]] | None:
+    """Decode the canonical ``NWRS`` root-signature payload.
+
+    Publication-side validation parses this payload so a record cannot carry a
+    blob with different family or binding semantics than the record itself.
+    """
+    reader = _Reader(blob, diagnostics, SECTION_ROOT_SIGNATURES)
+    magic = reader._take(4)
+    if magic is None:
+        return None
+    if bytes(magic) != b"NWRS":
+        diagnostics.append(
+            package_diagnostic(
+                "package_root_signature_malformed",
+                "root signature blob magic is not 'NWRS'",
+                section=SECTION_ROOT_SIGNATURES,
+            )
+        )
+        return None
+    version = reader.u16()
+    if version is None:
+        return None
+    if version != 1:
+        diagnostics.append(
+            package_diagnostic(
+                "package_unknown_section_version",
+                f"root signature blob version {version} is not supported",
+                section=SECTION_ROOT_SIGNATURES,
+            )
+        )
+        return None
+    family = reader.string()
+    if family is None:
+        return None
+    count = reader.u16()
+    if count is None:
+        return None
+    if count > MAX_RECORD_COUNT:
+        diagnostics.append(
+            package_diagnostic(
+                "package_decode_limit",
+                f"root signature blob binding count {count} exceeds {MAX_RECORD_COUNT}",
+                section=SECTION_ROOT_SIGNATURES,
+            )
+        )
+        return None
+    bindings: list[RootBinding] = []
+    for _ in range(count):
+        name = reader.string()
+        usage = reader.string()
+        slot = reader.u32()
+        space = reader.u32()
+        root_parameter = reader.u32()
+        if None in (name, usage, slot, space, root_parameter):
+            return None
+        bindings.append(RootBinding(name, usage, slot, space, root_parameter))
+    if not reader.at_end():
+        diagnostics.append(
+            package_diagnostic(
+                "package_trailing_data",
+                f"root signature blob has {reader.remaining} trailing bytes",
+                section=SECTION_ROOT_SIGNATURES,
+            )
+        )
+        return None
+    return family, tuple(bindings)
+
+
 def _validate_root_signatures(
     root_signatures: Sequence[RootSignatureRecord],
     resources: Sequence[ResourceDescriptor],
@@ -2194,18 +2332,93 @@ def _validate_root_signatures(
                 f"duplicate root signature id {record.root_signature_id}",
             )
         seen_ids.add(record.root_signature_id)
+        if record.family not in PASS_FAMILY_BINDINGS:
+            error(
+                "package_pass_family_unknown",
+                f"root signature {record.root_signature_id} uses unknown pass family "
+                f"'{record.family}'",
+            )
+        elif record.convention != f"{record.family}.v1":
+            error(
+                "package_root_signature_convention",
+                f"root signature {record.root_signature_id} convention "
+                f"'{record.convention}' does not match '{record.family}.v1'",
+            )
         if not record.blob:
             error("package_root_signature_malformed", "root signature blob is empty")
+        else:
+            decoded = _decode_root_signature_blob(record.blob, diagnostics)
+            if decoded is not None:
+                blob_family, blob_bindings = decoded
+                if blob_family != record.family:
+                    error(
+                        "package_root_signature_blob_mismatch",
+                        f"root signature {record.root_signature_id} blob family "
+                        f"'{blob_family}' does not match record family '{record.family}'",
+                    )
+                if blob_bindings != tuple(record.bindings):
+                    error(
+                        "package_root_signature_blob_mismatch",
+                        f"root signature {record.root_signature_id} blob bindings do "
+                        "not match the record bindings",
+                    )
         if record.dword_cost > MAX_ROOT_SIGNATURE_DWORD_COST:
             error(
                 "package_root_signature_cost",
                 f"root signature dword cost {record.dword_cost} exceeds {MAX_ROOT_SIGNATURE_DWORD_COST}",
             )
+        root_parameters: set[int] = set()
+        contract = PASS_FAMILY_BINDINGS.get(record.family, {})
         for binding in record.bindings:
+            if binding.root_parameter in root_parameters:
+                error(
+                    "package_root_signature_root_parameter",
+                    f"root signature {record.root_signature_id} reuses root parameter "
+                    f"{binding.root_parameter} for multiple bindings",
+                )
+            root_parameters.add(binding.root_parameter)
+            expected = contract.get(binding.name)
+            if expected is not None:
+                if (binding.usage, binding.slot, binding.space) != expected:
+                    error(
+                        "package_resource_binding_contract",
+                        f"root signature binding '{binding.name}' does not obey the "
+                        f"fixed {record.family} convention",
+                    )
+            elif record.family in PASS_FAMILY_BINDINGS:
+                error(
+                    "package_root_signature_binding",
+                    f"root signature binding '{binding.name}' is not declared by the "
+                    f"{record.family} pass-family contract",
+                )
             if (record.family, binding.name) not in resource_names:
                 error(
                     "package_root_signature_binding",
                     f"root signature binding '{binding.name}' has no matching resource descriptor",
+                )
+                continue
+            matching = next(
+                (
+                    item
+                    for item in resources
+                    if item.pass_family == record.family
+                    and item.name == binding.name
+                ),
+                None,
+            )
+            if matching is not None and (
+                binding.usage,
+                binding.slot,
+                binding.space,
+            ) != (
+                matching.usage,
+                matching.binding_slot,
+                matching.binding_space,
+            ):
+                error(
+                    "package_root_signature_binding",
+                    f"root signature binding '{binding.name}' does not match its "
+                    "resource descriptor usage/slot/space",
                 )
 
 
@@ -2216,6 +2429,9 @@ def _validate_shaders(
 ) -> None:
     seen_ids: set[int] = set()
     root_ids = {record.root_signature_id for record in root_signatures}
+    root_families = {
+        record.root_signature_id: record.family for record in root_signatures
+    }
     for shader in shaders:
         def error(code: str, message: str) -> None:
             diagnostics.append(
@@ -2251,6 +2467,20 @@ def _validate_shaders(
             )
         if not shader.family:
             error("package_shader_malformed", f"shader {shader.shader_id} has no pass family")
+        elif shader.family not in PASS_FAMILY_BINDINGS:
+            error(
+                "package_pass_family_unknown",
+                f"shader {shader.shader_id} uses unknown pass family '{shader.family}'",
+            )
+        if (
+            shader.root_signature_id in root_families
+            and shader.family != root_families[shader.root_signature_id]
+        ):
+            error(
+                "package_shader_root_signature",
+                f"shader {shader.shader_id} pass family '{shader.family}' does not "
+                f"match root signature family '{root_families[shader.root_signature_id]}'",
+            )
         for label, value in (
             ("thread_group_x", shader.thread_group_x),
             ("thread_group_y", shader.thread_group_y),
@@ -2273,7 +2503,7 @@ def _validate_shaders(
         if not shader.blob:
             error("package_shader_malformed", f"shader {shader.shader_id} blob is empty")
             continue
-        if shader.target == "cs_6_0" and validate_dxil_container is not None:
+        if validate_dxil_container is not None:
             try:
                 info = validate_dxil_container(shader.blob, allow_test_container=True)
             except Exception as exc:
@@ -2329,6 +2559,38 @@ def _validate_cross_references(
                 section=SECTION_CAPABILITY,
             )
         )
+
+    pipeline_shaders = {
+        instruction.operands[0].value
+        for instruction in initialization
+        if instruction.opcode == "init.create_pipeline"
+        and instruction.operands
+        and instruction.operands[0].type == "shader_ref"
+    }
+    dispatched_shaders = {
+        instruction.operands[-1].value
+        for instruction in frame
+        if instruction.opcode == "frame.dispatch"
+        and instruction.operands
+        and instruction.operands[-1].type == "shader_ref"
+    }
+    for shader in shaders:
+        if shader.shader_id not in pipeline_shaders:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_shader_unreferenced",
+                    f"shader {shader.shader_id} has no init.create_pipeline instruction",
+                    section=SECTION_INITIALIZATION,
+                )
+            )
+        if shader.shader_id not in dispatched_shaders:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_shader_unreferenced",
+                    f"shader {shader.shader_id} has no frame.dispatch instruction",
+                    section=SECTION_FRAME,
+                )
+            )
 
 
 def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
@@ -2413,6 +2675,24 @@ def encode_package(package: NwpPackage) -> bytes:
     }
     if package.dev_metadata is not None:
         record_counts[SECTION_DEV] = 0
+    for name, payload in sections.items():
+        if len(payload) > MAX_SECTION_BYTES:
+            raise PackageValidationError(
+                package_diagnostic(
+                    "package_decode_limit",
+                    f"section {name} is {len(payload)} bytes, exceeding {MAX_SECTION_BYTES}",
+                    section=name,
+                )
+            )
+    for name, count in record_counts.items():
+        if count > MAX_RECORD_COUNT:
+            raise PackageValidationError(
+                package_diagnostic(
+                    "package_decode_limit",
+                    f"section {name} has {count} records, exceeding {MAX_RECORD_COUNT}",
+                    section=name,
+                )
+            )
     cursor = directory_end
     for name in section_order:
         payload = sections[name]
@@ -3059,47 +3339,54 @@ def make_test_package(
                 flags=1 if duplicate_blob and index > 0 else 0,
             )
         )
-    return NwpPackage(
-        capability=capability,
-        resources=resources,
-        initialization=[
-            Instruction("init.create_resource", (InstructionOperand("resource_ref", 1),)),
-            Instruction("init.create_resource", (InstructionOperand("resource_ref", 2),)),
-            Instruction(
-                "init.create_root_signature",
-                (InstructionOperand("root_signature_ref", 1),),
+    initialization = [
+        Instruction("init.create_resource", (InstructionOperand("resource_ref", 1),)),
+        Instruction("init.create_resource", (InstructionOperand("resource_ref", 2),)),
+        Instruction(
+            "init.create_root_signature",
+            (InstructionOperand("root_signature_ref", 1),),
+        ),
+    ]
+    frame = [
+        Instruction(
+            "frame.set_root_signature",
+            (InstructionOperand("root_signature_ref", 1),),
+        ),
+        Instruction(
+            "frame.set_descriptor_table",
+            (
+                InstructionOperand("u32", 1),
+                InstructionOperand("string", "cbv_srv_uav"),
+                InstructionOperand("resource_ref", 2),
             ),
+        ),
+    ]
+    for shader in shaders:
+        initialization.append(
             Instruction(
                 "init.create_pipeline",
                 (
-                    InstructionOperand("shader_ref", 1),
+                    InstructionOperand("shader_ref", shader.shader_id),
                     InstructionOperand("root_signature_ref", 1),
                 ),
-            ),
-        ],
-        frame=[
-            Instruction(
-                "frame.set_root_signature",
-                (InstructionOperand("root_signature_ref", 1),),
-            ),
-            Instruction(
-                "frame.set_descriptor_table",
-                (
-                    InstructionOperand("u32", 0),
-                    InstructionOperand("string", "cbv_srv_uav"),
-                    InstructionOperand("resource_ref", 2),
-                ),
-            ),
+            )
+        )
+        frame.append(
             Instruction(
                 "frame.dispatch",
                 (
                     InstructionOperand("u32", 4),
                     InstructionOperand("u32", 1),
                     InstructionOperand("u32", 1),
-                    InstructionOperand("shader_ref", 1),
+                    InstructionOperand("shader_ref", shader.shader_id),
                 ),
-            ),
-        ],
+            )
+        )
+    return NwpPackage(
+        capability=capability,
+        resources=resources,
+        initialization=initialization,
+        frame=frame,
         parameters=parameters,
         shaders=shaders,
         root_signatures=[root],

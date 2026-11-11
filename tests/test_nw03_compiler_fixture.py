@@ -7,6 +7,7 @@ import shutil
 import struct
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -132,6 +133,31 @@ def test_oracle_matches_documented_tolerance() -> None:
     assert "g_time" in lowered
 
 
+def test_generated_hlsl_expression_matches_cpu_oracle() -> None:
+    document = compiler.load_graph(FIXTURE)
+    generated, diagnostics = compiler.lower_to_fused_hlsl(document)
+    assert diagnostics == []
+    report = oracle.oracle_report(
+        hlsl_expressions=[
+            (shader.root_expression, shader.hlsl) for shader in generated
+        ]
+    )
+    assert report["passed"], report["hlsl_expression_evaluation"]["failures"]
+    evaluation = report["hlsl_expression_evaluation"]
+    assert evaluation["source_count"] == 2
+    assert evaluation["sample_count"] >= 32
+    assert evaluation["passed"] is True
+
+    # A deliberate artifact mutation must be detected, proving the comparison
+    # evaluates generated HLSL rather than replaying the source expression.
+    mutated = generated[0].hlsl.replace("17.0", "18.0")
+    bad_report = oracle.oracle_report(
+        samples=[((0.25, 0.75), 0.0)],
+        hlsl_expressions=[(generated[0].root_expression, mutated)],
+    )
+    assert bad_report["passed"] is False
+
+
 def test_fixture_expected_json_matches_cpu_oracle() -> None:
     expected = json.loads(
         (REPO_ROOT / "fixtures" / "nw03" / "math_noise_expected.json").read_text(
@@ -170,6 +196,18 @@ def test_compile_package_with_offline_dxc_and_dev_sidecar(tmp_path: Path) -> Non
     assert inspection.package.capability.emitted_shader_targets == ("cs_6_0",)
     assert len(inspection.package.shaders) == 2
     assert len({shader.blob for shader in inspection.package.shaders}) == 1
+    pipeline_shaders = [
+        instruction.operands[0].value
+        for instruction in inspection.package.initialization
+        if instruction.opcode == "init.create_pipeline"
+    ]
+    dispatched_shaders = [
+        instruction.operands[-1].value
+        for instruction in inspection.package.frame
+        if instruction.opcode == "frame.dispatch"
+    ]
+    assert pipeline_shaders == [1, 2]
+    assert dispatched_shaders == [1, 2]
     assert nwp.check_release_leakage(data) == []
     assert b"math_noise.nwgraph" not in data
     assert b"nw.shader.expr" not in data
@@ -342,6 +380,31 @@ def test_nodewerkc_cli_validate_compile_and_inspect(tmp_path: Path) -> None:
     assert inspection["valid"] is True
     assert inspection["capability"]["profile_id"] == nwp.COMMON_PROFILE_ID
     assert inspection["release"]["contains_authoring_metadata"] is False
+
+
+def test_nodewerkc_inspect_rejects_release_leakage(tmp_path: Path) -> None:
+    package = nwp.make_test_package(
+        shader_blob=make_dxil_container(), specialization_count=1
+    )
+    leaky = replace(
+        package,
+        parameters=[replace(package.parameters[0], name="nwgraph")],
+    )
+    data = nwp.encode_package(leaky)
+    assert nwp.leak_scan_report(data)["valid"] is False
+    package_path = tmp_path / "leaky.nwp"
+    package_path.write_bytes(data)
+    cli = REPO_ROOT / "tools" / "nodewerkc.py"
+    proc = subprocess.run(
+        [sys.executable, str(cli), "inspect", str(package_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["valid"] is False
+    assert payload["leak_scan"]["valid"] is False
 
 
 def test_nodewerkc_validate_rejects_all_invalid_graph_fixtures() -> None:

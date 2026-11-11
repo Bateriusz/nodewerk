@@ -16,6 +16,7 @@ more closely.
 from __future__ import annotations
 
 import math
+import re
 import struct
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
@@ -637,6 +638,53 @@ def evaluate_text(
     return evaluate(parse_expression(text), variables=variables, float32=float32)
 
 
+_HLSL_REFERENCE_TOKENS = {
+    "float2": "vec2",
+    "float3": "vec3",
+    "float4": "vec4",
+    "lerp": "mix",
+    "g_time": "time",
+}
+
+
+def hlsl_fused_expression(hlsl_source: str) -> str:
+    """Extract the fused ``float4 nw_value = ...;`` expression from generated HLSL."""
+    match = re.search(
+        r"\bfloat4\s+nw_value\s*=\s*(.*?);", hlsl_source, re.DOTALL
+    )
+    if match is None:
+        raise ExpressionError("generated HLSL has no fused nw_value expression")
+    return match.group(1).strip()
+
+
+def hlsl_expression_to_reference_text(hlsl_source: str) -> str:
+    """Translate the emitted HLSL scalar expression into reference-parser syntax."""
+    expression = hlsl_fused_expression(hlsl_source)
+
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return _HLSL_REFERENCE_TOKENS.get(token, token)
+
+    return re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b", replace, expression)
+
+
+def evaluate_hlsl_source(
+    hlsl_source: str,
+    uv: Sequence[float],
+    time_seconds: float,
+    *,
+    float32: bool = True,
+) -> tuple[float, float, float, float]:
+    """Evaluate the generated HLSL fused expression against the same CPU oracle."""
+    result = evaluate_text(
+        hlsl_expression_to_reference_text(hlsl_source),
+        variables={"uv": (uv[0], uv[1]), "time": time_seconds},
+        float32=float32,
+    )
+    assert isinstance(result, tuple) and len(result) == 4
+    return tuple(float(component) for component in result)  # type: ignore[return-value]
+
+
 def math_noise_oracle(
     uv: Sequence[float],
     time_seconds: float,
@@ -677,8 +725,16 @@ def tolerance_failure(
 
 def oracle_report(
     samples: Iterable[tuple[tuple[float, float], float]] | None = None,
+    hlsl_expressions: Iterable[tuple[str, str]] = (),
 ) -> dict[str, Any]:
-    """Build a deterministic oracle report for the math/noise fixture."""
+    """Build a deterministic oracle report for the math/noise fixture.
+
+    When ``(source_expression, generated_hlsl)`` pairs are supplied, each fused
+    ``nw_value`` expression is evaluated in float32 mode and compared against a
+    double-precision evaluation of its originating source expression.  This
+    exercises the emitted artifact rather than comparing two runs of the same
+    source expression.
+    """
     if samples is None:
         samples = tuple(
             ((x / 8.0, y / 8.0), index / 16.0)
@@ -686,6 +742,7 @@ def oracle_report(
                 ((x, y) for y in range(4) for x in range(4))
             )
         )
+    hlsl_expressions = tuple(hlsl_expressions)
     rows = []
     for uv, time_value in samples:
         reference = math_noise_oracle(uv, time_value)
@@ -701,12 +758,59 @@ def oracle_report(
             }
         )
     failures = [row for row in rows if row["tolerance_failure"]]
+    hlsl_rows: list[dict[str, Any]] = []
+    hlsl_failures: list[dict[str, Any]] = []
+    for source_index, (source_expression, hlsl_source) in enumerate(
+        hlsl_expressions
+    ):
+        source_parsed = parse_expression(source_expression)
+        for row in rows:
+            try:
+                source_reference = evaluate(
+                    source_parsed,
+                    variables={
+                        "uv": (row["uv"][0], row["uv"][1]),
+                        "time": row["time"],
+                    },
+                    float32=False,
+                )
+                assert isinstance(source_reference, tuple)
+                actual = evaluate_hlsl_source(
+                    hlsl_source, row["uv"], row["time"]
+                )
+                failure = tolerance_failure(source_reference, actual)
+            except Exception as exc:
+                source_reference = None
+                actual = None
+                failure = f"HLSL evaluation failed: {exc}"
+            hlsl_row = {
+                "source_index": source_index,
+                "source_expression": source_expression,
+                "uv": row["uv"],
+                "time": row["time"],
+                "reference": list(source_reference)
+                if source_reference is not None
+                else None,
+                "hlsl_float32": list(actual) if actual is not None else None,
+                "tolerance_failure": failure,
+            }
+            hlsl_rows.append(hlsl_row)
+            if failure:
+                hlsl_failures.append(hlsl_row)
+    hlsl_passed = not hlsl_failures
     return {
         "expression": MATH_NOISE_EXPRESSION,
         "sample_count": len(rows),
         "absolute_tolerance": NUMERIC_TOLERANCE_ABSOLUTE,
         "relative_tolerance": NUMERIC_TOLERANCE_RELATIVE,
-        "passed": not failures,
+        "passed": not failures and hlsl_passed,
         "failures": failures,
         "samples": rows,
+        "hlsl_expression_evaluation": {
+            "source_count": len(hlsl_expressions),
+            "sample_count": len(hlsl_rows),
+            "passed": hlsl_passed,
+            "failures": hlsl_failures,
+            "samples": hlsl_rows,
+        },
     }

@@ -256,7 +256,9 @@ bool ValidatePackage(const Package& package,
 std::string InspectJson(const Package& package, bool valid,
                         const std::vector<Diagnostic>& diagnostics,
                         std::size_t package_size_bytes,
-                        std::string_view checksum_hex);
+                        std::string_view checksum_hex,
+                        const std::vector<std::string>& leakage =
+                            std::vector<std::string>());
 
 std::vector<std::string> CheckReleaseLeakage(
     const std::vector<std::uint8_t>& package_bytes);

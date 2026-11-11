@@ -99,7 +99,6 @@ def _fixture_graph() -> Path:
 
 def check_oracle_and_lowering() -> CheckResult:
     try:
-        report = nw03_oracle.oracle_report()
         document = nw03_compiler.load_graph(_fixture_graph())
         generated, diagnostics = nw03_compiler.lower_to_fused_hlsl(document)
         if diagnostics:
@@ -109,6 +108,11 @@ def check_oracle_and_lowering() -> CheckResult:
                 False,
                 "lowering diagnostics: " + json.dumps(diagnostics),
             )
+        report = nw03_oracle.oracle_report(
+            hlsl_expressions=[
+                (shader.root_expression, shader.hlsl) for shader in generated
+            ]
+        )
         if not report["passed"]:
             return CheckResult(
                 "fixture_oracle_and_lowering",
@@ -142,6 +146,15 @@ def check_oracle_and_lowering() -> CheckResult:
                 "sample_count": report["sample_count"],
                 "specialization_count": len(generated),
                 "reachable_roots": [shader.specialization_id for shader in generated],
+                "hlsl_expression_evaluation": {
+                    "source_count": report["hlsl_expression_evaluation"][
+                        "source_count"
+                    ],
+                    "sample_count": report["hlsl_expression_evaluation"][
+                        "sample_count"
+                    ],
+                    "passed": report["hlsl_expression_evaluation"]["passed"],
+                },
             },
         )
     except Exception as exc:
@@ -440,7 +453,7 @@ def check_sanitizer_fuzz(work_root: Path, budget: int = 256) -> CheckResult:
     (corpus_dir / "valid.nwp").write_bytes(base)
     rng = random.Random(0x4E573033)
     corpus_files = [corpus_dir / "valid.nwp"]
-    for index in range(31):
+    for index in range(max(1, budget - 1)):
         candidate = bytearray(base)
         if index % 3 == 0:
             candidate = candidate[: rng.randrange(0, len(candidate) + 1)]

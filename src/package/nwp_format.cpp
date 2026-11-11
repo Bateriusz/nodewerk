@@ -235,6 +235,8 @@ std::uint64_t ReadU64(const std::uint8_t* data) {
 class Writer {
 public:
     std::vector<std::uint8_t> bytes;
+    bool ok = true;
+    std::string failure;
 
     void U8(std::uint8_t value) { bytes.push_back(value); }
 
@@ -262,6 +264,8 @@ public:
 
     void String(std::string_view value) {
         if (value.size() > kMaxStringBytes) {
+            ok = false;
+            failure = "string field exceeds the v1 string limit";
             return;
         }
         U16(static_cast<std::uint16_t>(value.size()));
@@ -269,11 +273,21 @@ public:
     }
 
     void Blob(const std::vector<std::uint8_t>& value) {
+        if (value.size() > kMaxBlobBytes) {
+            ok = false;
+            failure = "blob field exceeds the v1 blob limit";
+            return;
+        }
         U32(static_cast<std::uint32_t>(value.size()));
         bytes.insert(bytes.end(), value.begin(), value.end());
     }
 
     void StringList(const std::vector<std::string>& values) {
+        if (values.size() > kMaxRecordCount) {
+            ok = false;
+            failure = "string list exceeds the v1 record limit";
+            return;
+        }
         U16(static_cast<std::uint16_t>(values.size()));
         for (const auto& value : values) {
             String(value);
@@ -557,6 +571,7 @@ std::string CanonicalCapabilityJson(const CapabilityRecord& capability) {
 std::vector<std::uint8_t> EncodeCapability(const CapabilityRecord& capability) {
     Writer writer;
     writer.U16(1);
+    writer.U16(0); // flags, must be zero in v1
     const auto fields = CapabilityFields();
     writer.U32(static_cast<std::uint32_t>(fields.size()));
     for (const auto& [name, type] : fields) {
@@ -624,7 +639,7 @@ std::vector<std::uint8_t> EncodeCapability(const CapabilityRecord& capability) {
             writer.String(capability.toolchain_identity);
         }
     }
-    return writer.bytes;
+    return writer.ok ? writer.bytes : std::vector<std::uint8_t>{};
 }
 
 std::vector<std::uint8_t> EncodeResources(
@@ -649,7 +664,7 @@ std::vector<std::uint8_t> EncodeResources(
         writer.U64(resource.size_bytes);
         writer.U32(resource.flags);
     }
-    return writer.bytes;
+    return writer.ok ? writer.bytes : std::vector<std::uint8_t>{};
 }
 
 std::vector<std::uint8_t> EncodeInstructions(
@@ -692,7 +707,7 @@ std::vector<std::uint8_t> EncodeInstructions(
             }
         }
     }
-    return writer.bytes;
+    return writer.ok ? writer.bytes : std::vector<std::uint8_t>{};
 }
 
 std::vector<std::uint8_t> EncodeParameters(
@@ -712,7 +727,7 @@ std::vector<std::uint8_t> EncodeParameters(
         writer.U32(parameter.timeline_step);
         writer.String(parameter.timeline_interpolation);
     }
-    return writer.bytes;
+    return writer.ok ? writer.bytes : std::vector<std::uint8_t>{};
 }
 
 template <typename Record, typename GetBlob>
@@ -745,7 +760,7 @@ std::vector<std::uint8_t> EncodeBlobTableRecords(
     for (std::size_t i = 0; i < records.size(); ++i) {
         write_record(writer, records[i], record_indices[i]);
     }
-    return writer.bytes;
+    return writer.ok ? writer.bytes : std::vector<std::uint8_t>{};
 }
 
 std::vector<std::uint8_t> EncodeRootSignatures(
@@ -797,7 +812,8 @@ std::vector<std::uint8_t> EncodeShaders(
 // ---------------------------------------------------------------------------
 
 bool ValidateDxilContainer(const std::vector<std::uint8_t>& blob,
-                           std::string& reason) {
+                           std::string& reason,
+                           std::string* measured_model = nullptr) {
     if (blob.size() < 44u) {
         reason = "DXIL container too small";
         return false;
@@ -878,10 +894,21 @@ bool ValidateDxilContainer(const std::vector<std::uint8_t>& blob,
             const std::uint32_t shader_type = (program_version >> 16u) & 0xffffu;
             const std::uint32_t shader_major = (program_version >> 4u) & 0x0fu;
             const std::uint32_t shader_minor = program_version & 0x0fu;
-            shader_model = std::string(shader_type == 5u ? "cs_" : "type") +
+            std::string shader_type_name;
+            if (shader_type == 5u) {
+                shader_type_name = "cs";
+            } else if (shader_type == 1u) {
+                shader_type_name = "vs";
+            } else if (shader_type == 0u) {
+                shader_type_name = "ps";
+            } else {
+                shader_type_name = "type" + std::to_string(shader_type);
+            }
+            shader_model = shader_type_name + "_" +
                            std::to_string(shader_major) + "_" +
                            std::to_string(shader_minor);
-            if (shader_type != 5u || shader_major != 6u || shader_minor != 0u) {
+            if ((shader_type != 5u && shader_type != 1u && shader_type != 0u) ||
+                shader_major != 6u || shader_minor != 0u) {
                 reason = "unexpected shader model '" + shader_model + "'";
                 return false;
             }
@@ -943,6 +970,7 @@ bool ValidateDxilContainer(const std::vector<std::uint8_t>& blob,
         reason = "DXBC container is missing required PSV0 chunk";
         return false;
     }
+    if (measured_model != nullptr) *measured_model = shader_model;
     return true;
 }
 
@@ -1196,6 +1224,9 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
             }
             has_params = has_params || params;
             has_output = has_output || output;
+        } else {
+            error("package_pass_family_unknown",
+                  "resource uses an unknown pass family");
         }
     }
     // Family contract applies when a compute.math_noise resource is present.
@@ -1247,6 +1278,8 @@ std::vector<OperandContract> InstructionContracts() {
 bool ValidateInstructions(
     const std::vector<Instruction>& instructions,
     std::string_view phase,
+    const std::vector<ResourceDescriptor>& resources,
+    const std::vector<RootSignatureRecord>& root_signatures,
     const std::set<std::uint32_t>& resource_ids,
     const std::set<std::uint32_t>& shader_ids,
     const std::set<std::uint32_t>& root_ids,
@@ -1328,6 +1361,46 @@ bool ValidateInstructions(
                       "root constants dword count exceeds the baseline limit");
             }
         }
+        if ((instruction.opcode == "frame.set_root_constants" ||
+             instruction.opcode == "frame.set_descriptor_table") &&
+            instruction.operands.size() == contract->operands.size() &&
+            instruction.operands[0].type == OperandType::U32) {
+            const auto& root_operand = instruction.operands[0];
+            const auto& resource_operand =
+                instruction.opcode == "frame.set_root_constants"
+                    ? instruction.operands[1]
+                    : instruction.operands[2];
+            if (resource_operand.type == OperandType::ResourceRef) {
+                const ResourceDescriptor* matching = nullptr;
+                for (const auto& resource : resources) {
+                    if (resource.resource_id == resource_operand.u32) {
+                        matching = &resource;
+                        break;
+                    }
+                }
+                if (matching != nullptr) {
+                    bool bound = false;
+                    for (const auto& root : root_signatures) {
+                        for (const auto& binding : root.bindings) {
+                            if (binding.root_parameter == root_operand.u32 &&
+                                binding.name == matching->name &&
+                                binding.usage == matching->usage &&
+                                binding.slot == matching->binding_slot &&
+                                binding.space == matching->binding_space) {
+                                bound = true;
+                                break;
+                            }
+                        }
+                        if (bound) break;
+                    }
+                    if (!bound) {
+                        error("package_root_signature_binding",
+                              "instruction root parameter does not bind the "
+                              "referenced resource");
+                    }
+                }
+            }
+        }
     }
     if (instructions.empty()) {
         AddDiagnostic(diagnostics, "package_instruction_missing",
@@ -1401,6 +1474,81 @@ bool ValidateParameters(const std::vector<ParameterRecord>& parameters,
     return diagnostics.size() == before;
 }
 
+bool IsKnownPassFamily(std::string_view family) {
+    return family == "compute.math_noise";
+}
+
+bool MatchesFixedFamilyBinding(std::string_view family,
+                               const RootBinding& binding) {
+    if (family != "compute.math_noise") return false;
+    if (binding.name == "params") {
+        return binding.usage == "cbv" && binding.slot == 0u &&
+               binding.space == 0u;
+    }
+    if (binding.name == "output") {
+        return binding.usage == "uav" && binding.slot == 0u &&
+               binding.space == 0u;
+    }
+    if (binding.name == "input") {
+        return binding.usage == "srv" && binding.slot == 0u &&
+               binding.space == 0u;
+    }
+    if (binding.name == "sampler") {
+        return binding.usage == "sampler" && binding.slot == 0u &&
+               binding.space == 0u;
+    }
+    return false;
+}
+
+bool ParseRootSignatureBlob(const std::vector<std::uint8_t>& blob,
+                            std::string& family,
+                            std::vector<RootBinding>& bindings,
+                            std::vector<Diagnostic>& diagnostics) {
+    Reader reader{blob.data(), blob.size(), 0, &diagnostics,
+                  std::string(kSectionRootSignatures)};
+    const std::uint8_t* magic = nullptr;
+    if (!reader.Take(4u, magic)) return false;
+    if (std::memcmp(magic, "NWRS", 4u) != 0) {
+        AddDiagnostic(diagnostics, "package_root_signature_malformed",
+                      "root signature blob magic is not 'NWRS'",
+                      std::string(kSectionRootSignatures));
+        return false;
+    }
+    std::uint16_t version = 0;
+    if (!reader.U16(version)) return false;
+    if (version != 1u) {
+        AddDiagnostic(diagnostics, "package_unknown_section_version",
+                      "root signature blob version is not supported",
+                      std::string(kSectionRootSignatures));
+        return false;
+    }
+    if (!reader.String(family)) return false;
+    std::uint16_t count = 0;
+    if (!reader.U16(count)) return false;
+    if (count > kMaxRecordCount) {
+        AddDiagnostic(diagnostics, "package_decode_limit",
+                      "root signature blob binding count exceeds the v1 limit",
+                      std::string(kSectionRootSignatures));
+        return false;
+    }
+    for (std::uint16_t index = 0; index < count; ++index) {
+        RootBinding binding;
+        if (!reader.String(binding.name) || !reader.String(binding.usage) ||
+            !reader.U32(binding.slot) || !reader.U32(binding.space) ||
+            !reader.U32(binding.root_parameter)) {
+            return false;
+        }
+        bindings.push_back(std::move(binding));
+    }
+    if (!reader.AtEnd()) {
+        AddDiagnostic(diagnostics, "package_trailing_data",
+                      "root signature blob has trailing bytes",
+                      std::string(kSectionRootSignatures));
+        return false;
+    }
+    return true;
+}
+
 bool ValidateRootSignatures(
     const std::vector<RootSignatureRecord>& records,
     const std::vector<ResourceDescriptor>& resources,
@@ -1419,26 +1567,79 @@ bool ValidateRootSignatures(
         if (!ids.insert(record.root_signature_id).second) {
             error("package_root_signature_id", "duplicate root signature id");
         }
+        if (!IsKnownPassFamily(record.family)) {
+            error("package_pass_family_unknown",
+                  "root signature uses an unknown pass family");
+        } else if (record.convention != record.family + ".v1") {
+            error("package_root_signature_convention",
+                  "root signature convention does not match its pass family");
+        }
         if (record.blob.empty()) {
             error("package_root_signature_malformed",
                   "root signature blob is empty");
+        } else if (record.blob.size() > kMaxBlobBytes) {
+            error("package_decode_limit",
+                  "root signature blob exceeds the v1 blob size limit");
+        } else {
+            std::string blob_family;
+            std::vector<RootBinding> blob_bindings;
+            if (ParseRootSignatureBlob(record.blob, blob_family,
+                                       blob_bindings, diagnostics)) {
+                if (blob_family != record.family) {
+                    error("package_root_signature_blob_mismatch",
+                          "root signature blob family does not match the record");
+                }
+                bool same_bindings = blob_bindings.size() == record.bindings.size();
+                if (same_bindings) {
+                    for (std::size_t i = 0; i < blob_bindings.size(); ++i) {
+                        const auto& left = blob_bindings[i];
+                        const auto& right = record.bindings[i];
+                        if (left.name != right.name ||
+                            left.usage != right.usage ||
+                            left.slot != right.slot ||
+                            left.space != right.space ||
+                            left.root_parameter != right.root_parameter) {
+                            same_bindings = false;
+                            break;
+                        }
+                    }
+                }
+                if (!same_bindings) {
+                    error("package_root_signature_blob_mismatch",
+                          "root signature blob bindings do not match the record");
+                }
+            }
         }
         if (record.dword_cost > kMaxRootSignatureDwordCost) {
             error("package_root_signature_cost",
                   "root signature dword cost exceeds the baseline limit");
         }
+        std::set<std::uint32_t> root_parameters;
         for (const auto& binding : record.bindings) {
-            bool found = false;
+            if (!root_parameters.insert(binding.root_parameter).second) {
+                error("package_root_signature_root_parameter",
+                      "root signature reuses a root parameter index");
+            }
+            if (!MatchesFixedFamilyBinding(record.family, binding)) {
+                error("package_resource_binding_contract",
+                      "root signature binding does not obey the fixed pass-family convention");
+            }
+            const ResourceDescriptor* matching = nullptr;
             for (const auto& resource : resources) {
                 if (resource.pass_family == record.family &&
                     resource.name == binding.name) {
-                    found = true;
+                    matching = &resource;
                     break;
                 }
             }
-            if (!found) {
+            if (matching == nullptr) {
                 error("package_root_signature_binding",
                       "root signature binding has no matching resource");
+            } else if (matching->usage != binding.usage ||
+                       matching->binding_slot != binding.slot ||
+                       matching->binding_space != binding.space) {
+                error("package_root_signature_binding",
+                      "root signature binding does not match its resource descriptor");
             }
         }
     }
@@ -1451,7 +1652,10 @@ bool ValidateShaders(const std::vector<ShaderRecord>& shaders,
     const std::size_t before = diagnostics.size();
     std::set<std::uint32_t> ids;
     std::set<std::uint32_t> root_ids;
+    std::map<std::uint32_t, std::string> root_families;
     for (const auto& root : roots) root_ids.insert(root.root_signature_id);
+    for (const auto& root : roots)
+        root_families[root.root_signature_id] = root.family;
     for (const auto& shader : shaders) {
         auto error = [&](std::string code, std::string message) {
             AddDiagnostic(diagnostics, std::move(code), std::move(message),
@@ -1481,6 +1685,15 @@ bool ValidateShaders(const std::vector<ShaderRecord>& shaders,
         }
         if (shader.family.empty()) {
             error("package_shader_malformed", "shader pass family is empty");
+        } else if (!IsKnownPassFamily(shader.family)) {
+            error("package_pass_family_unknown",
+                  "shader uses an unknown pass family");
+        }
+        auto root_family = root_families.find(shader.root_signature_id);
+        if (root_family != root_families.end() &&
+            shader.family != root_family->second) {
+            error("package_shader_root_signature",
+                  "shader pass family does not match its root signature");
         }
         if (shader.thread_group_x == 0u || shader.thread_group_y == 0u ||
             shader.thread_group_z == 0u ||
@@ -1494,10 +1707,20 @@ bool ValidateShaders(const std::vector<ShaderRecord>& shaders,
             error("package_shader_malformed", "shader blob is empty");
             continue;
         }
-        if (shader.target == "cs_6_0") {
+        if (shader.blob.size() > kMaxBlobBytes) {
+            error("package_decode_limit",
+                  "shader blob exceeds the v1 blob size limit");
+        }
+        if (shader.target == "cs_6_0" || shader.target == "vs_6_0" ||
+            shader.target == "ps_6_0") {
             std::string reason;
-            if (!ValidateDxilContainer(shader.blob, reason)) {
+            std::string measured_model;
+            if (!ValidateDxilContainer(shader.blob, reason, &measured_model)) {
                 error("package_shader_payload_invalid", reason);
+            } else if (measured_model != shader.target) {
+                error("package_shader_target_mismatch",
+                      "shader declares target '" + shader.target +
+                          "' but DXIL contains '" + measured_model + "'");
             }
         }
     }
@@ -1534,6 +1757,34 @@ bool ValidateCrossReferences(const CapabilityRecord& capability,
                       "package_capability_shader_target_mismatch",
                       "CAP emitted_shader_targets do not match emitted shaders",
                       std::string(kSectionCapability));
+    }
+    std::set<std::uint32_t> pipeline_shaders;
+    std::set<std::uint32_t> dispatched_shaders;
+    for (const auto& instruction : initialization) {
+        if (instruction.opcode == "init.create_pipeline" &&
+            !instruction.operands.empty() &&
+            instruction.operands[0].type == OperandType::ShaderRef) {
+            pipeline_shaders.insert(instruction.operands[0].u32);
+        }
+    }
+    for (const auto& instruction : frame) {
+        if (instruction.opcode == "frame.dispatch" &&
+            !instruction.operands.empty() &&
+            instruction.operands.back().type == OperandType::ShaderRef) {
+            dispatched_shaders.insert(instruction.operands.back().u32);
+        }
+    }
+    for (const auto& shader : shaders) {
+        if (pipeline_shaders.count(shader.shader_id) == 0u) {
+            AddDiagnostic(diagnostics, "package_shader_unreferenced",
+                          "shader has no init.create_pipeline instruction",
+                          std::string(kSectionInitialization));
+        }
+        if (dispatched_shaders.count(shader.shader_id) == 0u) {
+            AddDiagnostic(diagnostics, "package_shader_unreferenced",
+                          "shader has no frame.dispatch instruction",
+                          std::string(kSectionFrame));
+        }
     }
     return diagnostics.size() == before;
 }
@@ -1627,7 +1878,7 @@ std::vector<std::uint8_t> MakeRootSignatureBlob(
         writer.U32(binding.space);
         writer.U32(binding.root_parameter);
     }
-    return writer.bytes;
+    return writer.ok ? writer.bytes : std::vector<std::uint8_t>{};
 }
 
 bool ValidatePackage(const Package& package,
@@ -1654,9 +1905,11 @@ bool ValidatePackage(const Package& package,
     std::set<std::string> init_opcodes;
     std::set<std::string> frame_opcodes;
     ValidateInstructions(package.initialization, "initialization",
+                         package.resources, package.root_signatures,
                          resource_ids, shader_ids, root_ids, parameter_ids,
                          init_opcodes, diagnostics);
-    ValidateInstructions(package.frame, "frame", resource_ids, shader_ids,
+    ValidateInstructions(package.frame, "frame", package.resources,
+                         package.root_signatures, resource_ids, shader_ids,
                          root_ids, parameter_ids, frame_opcodes, diagnostics);
     ValidateCrossReferences(package.capability, package.initialization,
                             package.frame, package.shaders, diagnostics);
@@ -1715,6 +1968,28 @@ std::vector<std::uint8_t> EncodePackage(
         static_cast<std::uint32_t>(package.shaders.size());
     if (package.dev_metadata.has_value()) {
         record_counts[std::string(kSectionDev)] = 0u;
+    }
+    for (const auto& [name, payload] : sections) {
+        if (name != std::string(kSectionDev) && payload.empty()) {
+            AddDiagnostic(diagnostics, "package_decode_limit",
+                          "section '" + name +
+                              "' exceeds the v1 writer limits");
+            return {};
+        }
+        if (payload.size() > kMaxSectionBytes) {
+            AddDiagnostic(diagnostics, "package_decode_limit",
+                          "section '" + name +
+                              "' exceeds the v1 section size limit");
+            return {};
+        }
+    }
+    for (const auto& [name, count] : record_counts) {
+        if (count > kMaxRecordCount) {
+            AddDiagnostic(diagnostics, "package_decode_limit",
+                          "section '" + name +
+                              "' exceeds the v1 record count limit");
+            return {};
+        }
     }
     const std::uint64_t directory_end =
         kHeaderSize + static_cast<std::uint64_t>(kSectionEntrySize) *
@@ -1968,6 +2243,14 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         if (version != 1u) {
             AddDiagnostic(diagnostics, "package_unknown_section_version",
                           "CAP section version is not supported",
+                          std::string(kSectionCapability));
+            return false;
+        }
+        std::uint16_t section_flags = 0;
+        if (!reader.U16(section_flags)) return false;
+        if (section_flags != 0u) {
+            AddDiagnostic(diagnostics, "package_capability_flags",
+                          "CAP section flags must be zero in v1",
                           std::string(kSectionCapability));
             return false;
         }
@@ -2490,7 +2773,8 @@ bool ValidateDxilPayload(const std::vector<std::uint8_t>& blob,
 std::string InspectJson(const Package& package, bool valid,
                         const std::vector<Diagnostic>& diagnostics,
                         std::size_t package_size_bytes,
-                        std::string_view checksum_hex) {
+                        std::string_view checksum_hex,
+                        const std::vector<std::string>& leakage) {
     std::ostringstream out;
     out << "{\"valid\":" << (valid ? "true" : "false")
         << ",\"format\":\"nwp\",\"version\":{\"major\":1,\"minor\":0}"
@@ -2682,6 +2966,13 @@ std::string InspectJson(const Package& package, bool valid,
             << ",\"contains_source_text\":false"
             << ",\"contains_reflection_tables\":false}";
     }
+    out << ",\"leak_scan\":{\"valid\":"
+        << (leakage.empty() ? "true" : "false") << ",\"findings\":[";
+    for (std::size_t i = 0; i < leakage.size(); ++i) {
+        if (i != 0) out << ",";
+        out << JsonEscape(leakage[i]);
+    }
+    out << "]}";
     out << "}";
     return out.str();
 }

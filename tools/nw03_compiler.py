@@ -1898,7 +1898,7 @@ def _build_package(
 ) -> NwpPackage:
     bindings = (
         RootBinding("params", "cbv", 0, 0, 0),
-        RootBinding("output", "uav", 0, 0, 0),
+        RootBinding("output", "uav", 0, 0, 1),
     )
     root_blob = nwp_package.make_root_signature_blob(PASS_FAMILY, bindings)
     root_signature = RootSignatureRecord(
@@ -1976,13 +1976,6 @@ def _build_package(
             "init.upload_resource",
             (InstructionOperand("resource_ref", 1),),
         ),
-        Instruction(
-            "init.create_pipeline",
-            (
-                InstructionOperand("shader_ref", 1),
-                InstructionOperand("root_signature_ref", 1),
-            ),
-        ),
     ]
     frame = [
         Instruction(
@@ -2000,21 +1993,33 @@ def _build_package(
         Instruction(
             "frame.set_descriptor_table",
             (
-                InstructionOperand("u32", 0),
+                InstructionOperand("u32", 1),
                 InstructionOperand("string", "cbv_srv_uav"),
                 InstructionOperand("resource_ref", 2),
             ),
         ),
-        Instruction(
-            "frame.dispatch",
-            (
-                InstructionOperand("u32", DISPATCH_GROUPS[0]),
-                InstructionOperand("u32", DISPATCH_GROUPS[1]),
-                InstructionOperand("u32", DISPATCH_GROUPS[2]),
-                InstructionOperand("shader_ref", 1),
-            ),
-        ),
     ]
+    for shader in shaders:
+        initialization.append(
+            Instruction(
+                "init.create_pipeline",
+                (
+                    InstructionOperand("shader_ref", shader.shader_id),
+                    InstructionOperand("root_signature_ref", 1),
+                ),
+            )
+        )
+        frame.append(
+            Instruction(
+                "frame.dispatch",
+                (
+                    InstructionOperand("u32", DISPATCH_GROUPS[0]),
+                    InstructionOperand("u32", DISPATCH_GROUPS[1]),
+                    InstructionOperand("u32", DISPATCH_GROUPS[2]),
+                    InstructionOperand("shader_ref", shader.shader_id),
+                ),
+            )
+        )
     capability = CapabilityRecord(
         emitted_shader_targets=tuple(sorted({shader.target for shader in generated})),
         required_init_instructions=tuple(sorted({item.opcode for item in initialization})),

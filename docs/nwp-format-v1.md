@@ -130,6 +130,11 @@ NW-03 emits the initial `compute.math_noise` family without runtime reflection:
 | `output` | `u0` | UAV output |
 | `sampler` | `s0` | Optional sampler |
 
+Root parameters are also fixed: `params` occupies root parameter 0 (root
+constants) and `output` occupies root parameter 1 (descriptor table). Every
+`frame.set_root_constants` / `frame.set_descriptor_table` operand must select
+the same root parameter as the binding it references.
+
 The resource descriptors, root-signature records, and dependent instruction
 operands must agree. Duplicate bindings, out-of-contract bindings, missing
 required `b0`/`u0` bindings, unknown pass families, and undeclared formats are
@@ -144,8 +149,10 @@ specialization. `RSIG` stores raw canonical root-signature payloads with the sam
 deduplication rule. Cross-blob function sharing is never assumed.
 
 The reader checks DXBC magic, container size, chunk count/offsets/sizes, SFI0
-feature flags, PSV0 presence, DXIL program version (`cs_6_0`), DXIL version, and
-LLVM 3.7 bitcode framing. Unknown shader targets are rejected. Release
+feature flags, PSV0 presence, DXIL program version (`cs_6_0`, `vs_6_0`, or
+`ps_6_0`), DXIL version, and LLVM 3.7 bitcode framing. Every permitted target
+is structurally validated and must match the declared shader target; unknown
+targets are rejected. Release
 inspection and leakage tests verify that source paths, source text, editor
 names, debug data, and reflection tables are absent while execution-required
 DXIL metadata remains.

@@ -129,9 +129,19 @@ def command_inspect(args: argparse.Namespace) -> int:
     )
     payload = inspection.to_dict()
     if inspection.package is not None:
-        payload["leak_scan"] = nwp_package.leak_scan_report(data)
+        leak_scan = nwp_package.leak_scan_report(data)
+        payload["leak_scan"] = leak_scan
+        if args.release and not leak_scan["valid"]:
+            payload["valid"] = False
+            payload["ok"] = False
+            payload.setdefault("diagnostics", []).extend(
+                nwp_package.package_diagnostic(
+                    "package_release_leakage", finding
+                )
+                for finding in leak_scan["findings"]
+            )
     _emit(payload)
-    return 0 if inspection.valid else 1
+    return 0 if payload["valid"] else 1
 
 
 def build_parser() -> argparse.ArgumentParser:

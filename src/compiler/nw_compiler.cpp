@@ -20,6 +20,8 @@ namespace nw::compiler {
 
 namespace {
 
+constexpr char kPinnedDxcVersion[] = "1.8.2407";
+
 bool IsShaderOperator(std::string_view id) {
     return id == "nw.shader.expr" || id == "nw.shader.vec4_const" ||
            id == "nw.shader.add" || id == "nw.shader.mul" ||
@@ -29,13 +31,21 @@ bool IsShaderOperator(std::string_view id) {
 LoweringDiagnostic MakeDiagnostic(std::string code, std::string message,
                                   std::string node_id = {},
                                   std::string operator_id = {},
-                                  std::string port_id = {}) {
+                                  std::string port_id = {},
+                                  std::string category = "graph_validation",
+                                  std::string section = {},
+                                  std::uint64_t offset = 0,
+                                  bool has_offset = false) {
     LoweringDiagnostic diagnostic;
+    diagnostic.category = std::move(category);
     diagnostic.code = std::move(code);
     diagnostic.message = std::move(message);
     diagnostic.node_id = std::move(node_id);
     diagnostic.operator_id = std::move(operator_id);
     diagnostic.port_id = std::move(port_id);
+    diagnostic.section = std::move(section);
+    diagnostic.offset = offset;
+    diagnostic.has_offset = has_offset;
     return diagnostic;
 }
 
@@ -389,6 +399,15 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
     result.diagnostics = lowering.diagnostics;
     if (!lowering.ok()) return result;
     const std::string dxc_version = QueryDxcVersion(dxc_executable);
+    if (dxc_version == "unknown" ||
+        dxc_version.find(kPinnedDxcVersion) == std::string::npos) {
+        result.diagnostics.push_back(MakeDiagnostic(
+            "toolchain_version_mismatch",
+            "DXC version '" + dxc_version + "' does not match pinned '" +
+                kPinnedDxcVersion + "'",
+            "", "", "", "package_validation"));
+        return result;
+    }
     const std::string dxc_identity = "dxc:" + dxc_version;
     const std::filesystem::path temporary =
         std::filesystem::temp_directory_path() /
@@ -451,7 +470,7 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
     package::Package package;
     package.flags = 1u;
     package::RootBinding params{"params", "cbv", 0u, 0u, 0u};
-    package::RootBinding output{"output", "uav", 0u, 0u, 0u};
+    package::RootBinding output{"output", "uav", 0u, 0u, 1u};
     package::RootSignatureRecord root_signature;
     root_signature.root_signature_id = 1u;
     root_signature.family = "compute.math_noise";
@@ -526,12 +545,12 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
     package::InstructionOperand root_one;
     root_one.type = package::OperandType::RootSignatureRef;
     root_one.u32 = 1u;
-    package::InstructionOperand shader_one;
-    shader_one.type = package::OperandType::ShaderRef;
-    shader_one.u32 = 1u;
     package::InstructionOperand zero_u32;
     zero_u32.type = package::OperandType::U32;
     zero_u32.u32 = 0u;
+    package::InstructionOperand one_u32;
+    one_u32.type = package::OperandType::U32;
+    one_u32.u32 = 1u;
     package::InstructionOperand four_u32;
     four_u32.type = package::OperandType::U32;
     four_u32.u32 = 4u;
@@ -552,15 +571,23 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
         {"init.create_resource", {resource_two}},
         {"init.create_root_signature", {root_one}},
         {"init.upload_resource", {resource_one}},
-        {"init.create_pipeline", {shader_one, root_one}},
     };
     package.frame = {
         {"frame.set_root_signature", {root_one}},
         {"frame.set_root_constants", {zero_u32, resource_one, four_u32}},
         {"frame.set_descriptor_table",
-         {zero_u32, descriptor_type, resource_two}},
-        {"frame.dispatch", {dispatch_x, dispatch_y, dispatch_z, shader_one}},
+         {one_u32, descriptor_type, resource_two}},
     };
+    for (std::size_t index = 0; index < sorted_shaders.size(); ++index) {
+        package::InstructionOperand shader_ref;
+        shader_ref.type = package::OperandType::ShaderRef;
+        shader_ref.u32 = static_cast<std::uint32_t>(index + 1u);
+        package.initialization.push_back(
+            {"init.create_pipeline", {shader_ref, root_one}});
+        package.frame.push_back(
+            {"frame.dispatch",
+             {dispatch_x, dispatch_y, dispatch_z, shader_ref}});
+    }
     std::set<std::string> targets;
     std::set<std::string> init_opcodes;
     std::set<std::string> frame_opcodes;
@@ -575,7 +602,7 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
                                                          init_opcodes.end());
     package.capability.required_frame_instructions.assign(frame_opcodes.begin(),
                                                           frame_opcodes.end());
-    package.capability.toolchain_dxc_version = "1.8.2407";
+    package.capability.toolchain_dxc_version = dxc_version;
     package.capability.toolchain_identity = dxc_identity;
     result.compiler_fingerprint =
         CompilerFingerprint(snapshot, lowering.shaders, dxc_identity,
@@ -590,7 +617,9 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
     if (result.package_bytes.empty()) {
         for (const auto& diagnostic : validation) {
             result.diagnostics.push_back(
-                MakeDiagnostic(diagnostic.code, diagnostic.message));
+                MakeDiagnostic(diagnostic.code, diagnostic.message, "", "",
+                               "", "package_validation", diagnostic.section,
+                               diagnostic.offset, diagnostic.has_offset));
         }
         return result;
     }
@@ -598,7 +627,8 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
     if (!leakage.empty()) {
         for (const auto& finding : leakage) {
             result.diagnostics.push_back(
-                MakeDiagnostic("release_leakage", finding));
+                MakeDiagnostic("release_leakage", finding, "", "", "",
+                               "package_validation"));
         }
         return result;
     }

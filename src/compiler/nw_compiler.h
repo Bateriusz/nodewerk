@@ -55,6 +55,9 @@ struct LoweringDiagnostic {
     std::string node_id;
     std::string operator_id;
     std::string port_id;
+    std::string section;
+    std::uint64_t offset = 0;
+    bool has_offset = false;
     std::uint32_t line = 0;
     std::uint32_t column = 0;
 };

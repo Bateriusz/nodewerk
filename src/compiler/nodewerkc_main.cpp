@@ -23,6 +23,16 @@
 #include <system_error>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 
 std::string JsonEscape(std::string_view text) {
@@ -57,6 +67,18 @@ bool ReadTextFile(const std::string& path, std::string& text) {
     buffer << input.rdbuf();
     text = buffer.str();
     return true;
+}
+
+bool ReplaceFileAtomically(const std::filesystem::path& source,
+                           const std::filesystem::path& destination) {
+#if defined(_WIN32)
+    return MoveFileExW(source.wstring().c_str(), destination.wstring().c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    std::error_code error;
+    std::filesystem::rename(source, destination, error);
+    return !error;
+#endif
 }
 
 std::string DiagnosticsJson(
@@ -154,8 +176,15 @@ int ValidateCommand(const std::string& path) {
                       << JsonEscape(diagnostic.category)
                       << ",\"severity\":\"error\",\"code\":"
                       << JsonEscape(diagnostic.code)
-                      << ",\"message\":" << JsonEscape(diagnostic.message)
-                      << ",\"source\":{\"node_id\":"
+                      << ",\"message\":" << JsonEscape(diagnostic.message);
+            if (!diagnostic.section.empty()) {
+                std::cout << ",\"section\":"
+                          << JsonEscape(diagnostic.section);
+            }
+            if (diagnostic.has_offset) {
+                std::cout << ",\"offset\":" << diagnostic.offset;
+            }
+            std::cout << ",\"source\":{\"node_id\":"
                       << JsonEscape(diagnostic.node_id)
                       << ",\"operator_id\":"
                       << JsonEscape(diagnostic.operator_id)
@@ -197,10 +226,13 @@ int InspectCommand(const std::string& path) {
             ? nw::package::BytesToHex(
                   data.data() + checksum_offset, nw::package::kChecksumSize)
             : std::string();
-    std::cout << nw::package::InspectJson(package, valid, diagnostics,
-                                           data.size(), checksum_hex)
+    const std::vector<std::string> leakage =
+        nw::package::CheckReleaseLeakage(data);
+    const bool inspect_valid = valid && leakage.empty();
+    std::cout << nw::package::InspectJson(package, inspect_valid, diagnostics,
+                                           data.size(), checksum_hex, leakage)
               << "\n";
-    return valid ? 0 : 1;
+    return inspect_valid ? 0 : 1;
 }
 
 int CompilePackageCommand(const std::string& graph_path,
@@ -225,8 +257,15 @@ int CompilePackageCommand(const std::string& graph_path,
                       << ",\"severity\":\"error\",\"code\":"
                       << JsonEscape(diagnostic.code)
                       << ",\"message\":"
-                      << JsonEscape(diagnostic.message)
-                      << ",\"source\":{\"node_id\":"
+                      << JsonEscape(diagnostic.message);
+            if (!diagnostic.section.empty()) {
+                std::cerr << ",\"section\":"
+                          << JsonEscape(diagnostic.section);
+            }
+            if (diagnostic.has_offset) {
+                std::cerr << ",\"offset\":" << diagnostic.offset;
+            }
+            std::cerr << ",\"source\":{\"node_id\":"
                       << JsonEscape(diagnostic.node_id)
                       << ",\"operator_id\":"
                       << JsonEscape(diagnostic.operator_id)
@@ -250,11 +289,7 @@ int CompilePackageCommand(const std::string& graph_path,
             return 1;
         }
     }
-#if defined(_WIN32)
-    std::filesystem::remove(destination, error);
-#endif
-    std::filesystem::rename(temporary, destination, error);
-    if (error) {
+    if (!ReplaceFileAtomically(temporary, destination)) {
         std::filesystem::remove(temporary, error);
         std::cerr << "{\"ok\":false,\"error\":\"cannot publish package\"}\n";
         return 1;
