@@ -447,6 +447,7 @@ std::uint32_t QueryWindowsBuild() noexcept {
     return 0u;
 }
 
+} // namespace
 #endif // _WIN32
 
 PackagePlayer::PackagePlayer() : PackagePlayer(PlayerConfig{}) {}

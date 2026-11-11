@@ -98,7 +98,14 @@ PackageLoadResult LoadPackageFromFile(const char* path) {
         return LoadFailure(ExitCode::InvalidArguments, "package_path_missing",
                            "package path is empty");
     }
-    std::FILE* file = std::fopen(path, "rb");
+    std::FILE* file = nullptr;
+#if defined(_MSC_VER)
+    if (::fopen_s(&file, path, "rb") != 0) {
+        file = nullptr;
+    }
+#else
+    file = std::fopen(path, "rb");
+#endif
     if (file == nullptr) {
         return LoadFailure(ExitCode::PackageValidationFailed,
                            "package_open_failed",
