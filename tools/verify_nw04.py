@@ -919,6 +919,12 @@ def run_native_fixture(
     ]
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
+        if proc.stdout:
+            print("[NW04-NATIVE-STDOUT]", file=sys.stderr)
+            print(proc.stdout, file=sys.stderr, end="" if proc.stdout.endswith("\n") else "\n")
+        if proc.stderr:
+            print("[NW04-NATIVE-STDERR]", file=sys.stderr)
+            print(proc.stderr, file=sys.stderr, end="" if proc.stderr.endswith("\n") else "\n")
         return CheckResult(
             "nw04_native_fixture",
             True,

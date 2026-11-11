@@ -1548,6 +1548,13 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
                         "available", "unavailable", "validation",
                         "D3D12 debug layer enabled without an info queue");
         }
+        // Validation is a CI gate, not an interactive debugger.  Do not let
+        // the debug layer raise an unhandled 0x87D break exception before the
+        // stored message can be converted into D3D12ValidationError (61).
+        (void)platform_->info_queue->SetBreakOnSeverity(
+            D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
+        (void)platform_->info_queue->SetBreakOnSeverity(
+            D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
     }
 #endif
 
