@@ -60,6 +60,19 @@ bool ParseU64(const char* text, std::uint64_t* value) {
     return true;
 }
 
+bool HasEnvironmentVariable(const char* name) {
+#if defined(_WIN32)
+    char* value = nullptr;
+    std::size_t length = 0u;
+    const int error = _dupenv_s(&value, &length, name);
+    const bool present = error == 0 && value != nullptr;
+    std::free(value);
+    return present;
+#else
+    return std::getenv(name) != nullptr;
+#endif
+}
+
 bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
     for (int index = 1; index < argc; ++index) {
         const char* arg = argv[index];
@@ -169,7 +182,7 @@ int main(int argc, char** argv) {
     config.headless = args.headless;
     config.allow_software_adapter =
         args.allow_software_adapter ||
-        std::getenv("NW04_ALLOW_SOFTWARE_ADAPTER") != nullptr;
+        HasEnvironmentVariable("NW04_ALLOW_SOFTWARE_ADAPTER");
     config.enable_validation = args.validation;
     config.emit_benchmark_metrics = args.emit_benchmark_metrics;
     config.wait_for_gpu_each_frame = args.emit_benchmark_metrics;

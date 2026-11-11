@@ -131,7 +131,14 @@ def compile_cpp_dxil_validator_harness(
             "    if (argc < 2) {\n"
             "        return 2;\n"
             "    }\n"
+            "#if defined(_WIN32)\n"
+            "    std::FILE* f = nullptr;\n"
+            '    if (fopen_s(&f, argv[1], "rb") != 0) {\n'
+            "        f = nullptr;\n"
+            "    }\n"
+            "#else\n"
             '    std::FILE* f = std::fopen(argv[1], "rb");\n'
+            "#endif\n"
             "    if (!f) {\n"
             "        return 3;\n"
             "    }\n"
@@ -527,7 +534,10 @@ def pack_dxil_to_header(
                 "CMake requested C++ ValidateOfflineDxilContainer validation but no host C++ "
                 "compiler was found (pass --cxx-compiler or add clang-cl/cl/clang++/g++ to PATH)."
             )
-        cpp_dir = work_dir or (output_header_path.parent / "cpp_validator_check")
+        cpp_dir = work_dir or (
+            output_header_path.parent
+            / f"cpp_validator_check_{output_header_path.stem}"
+        )
         harness_exe = compile_cpp_dxil_validator_harness(
             cpp_dir,
             repo_root=repo_root,
