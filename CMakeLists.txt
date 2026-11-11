@@ -76,3 +76,38 @@ add_executable(nw_graph_cli
 )
 target_link_libraries(nw_graph_cli PRIVATE nw_graph)
 target_compile_features(nw_graph_cli PRIVATE cxx_std_20)
+
+# NW-03: compiler-to-player `.nwp` v1 package contract, compiler-side
+# expression lowering, and the `nodewerkc` command frontend.  These targets are
+# authoring/compiler-side and never linked into the player.
+set(NW_NATIVE_TOOL_EXCLUDE_FROM_ALL "")
+if(WIN32)
+    # The NW-01 Windows concrete-build/reproducibility gate builds the default
+    # player/fixture target set.  Native authoring tools remain available via
+    # `cmake --build <dir> --target nodewerkc`, but are not a prerequisite for
+    # that player-only gate.
+    set(NW_NATIVE_TOOL_EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
+endif()
+
+add_library(nw_package STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
+    src/package/nwp_format.cpp
+)
+target_include_directories(nw_package PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+)
+target_compile_features(nw_package PUBLIC cxx_std_20)
+
+add_library(nw_compiler STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
+    src/compiler/nw_compiler.cpp
+)
+target_include_directories(nw_compiler PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/compiler"
+)
+target_link_libraries(nw_compiler PUBLIC nw_graph nw_package)
+target_compile_features(nw_compiler PUBLIC cxx_std_20)
+
+add_executable(nodewerkc ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
+    src/compiler/nodewerkc_main.cpp
+)
+target_link_libraries(nodewerkc PRIVATE nw_compiler nw_graph nw_package)
+target_compile_features(nodewerkc PRIVATE cxx_std_20)

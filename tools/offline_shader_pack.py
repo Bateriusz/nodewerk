@@ -28,6 +28,8 @@ PSV0_CHUNK_FOURCC = b"PSV0"
 HASH_CHUNK_FOURCC = b"HASH"
 # D3D12 Compute Shader version token for SM 6.0: program_type=5 (CS), major=6, minor=0
 CS_6_0_PROGRAM_VERSION = (5 << 16) | (6 << 4) | 0
+# DXIL program version shader types used by the `.nwp` v1 baseline.
+_SHADER_TYPE_NAMES = {0: "ps", 1: "vs", 5: "cs"}
 # SFI0 bits 32 & 33: ResourceDescriptorHeapIndexing and SamplerDescriptorHeapIndexing (SM 6.6)
 FORBIDDEN_SM66_HEAP_INDEXING_MASK = (1 << 32) | (1 << 33)
 
@@ -212,7 +214,12 @@ def query_dxc_version(dxc_bin: str) -> str:
     return match.group(1) if match else (combined.splitlines()[0] if combined else "unknown")
 
 
-def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -> dict[str, Any]:
+def validate_dxil_container(
+    blob: bytes,
+    *,
+    allow_test_container: bool = True,
+    reject_debug_reflection: bool = False,
+) -> dict[str, Any]:
     """Validate that a DXIL container has a genuine signed DXBC header, PSV0, SFI0, and SM 6.0 DXIL bitcode."""
     if len(blob) < 44:
         raise ValueError(f"DXIL container too small ({len(blob)} bytes)")
@@ -243,6 +250,7 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
     feature_flags = 0
     shader_model = None
     bitcode_size = 0
+    forbidden_metadata_chunks: list[str] = []
 
     for offset in offsets:
         if offset < header_end or offset + 8 > len(blob):
@@ -253,6 +261,10 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
             raise ValueError(f"Chunk {fourcc!r} size {chunk_size} exceeds container bounds")
         raw_chunks.append(blob[offset : offset + 8 + chunk_size])
         chunk_payload = blob[offset + 8 : offset + 8 + chunk_size]
+        if fourcc in {b"ILDB", b"ILDN", b"STAT", b"RDEF", b"RDAT", b"SPDB", b"SPDN"}:
+            forbidden_metadata_chunks.append(
+                fourcc.decode("ascii", "replace")
+            )
 
         if fourcc == SFI0_CHUNK_FOURCC:
             if chunk_size != 8:
@@ -276,9 +288,17 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
             sm_type = (prog_ver >> 16) & 0xFFFF
             sm_major = (prog_ver >> 4) & 0xF
             sm_minor = prog_ver & 0xF
-            shader_model = f"cs_{sm_major}_{sm_minor}" if sm_type == 5 else f"type{sm_type}_{sm_major}_{sm_minor}"
-            if prog_ver != CS_6_0_PROGRAM_VERSION:
-                raise ValueError(f"Unexpected shader model '{shader_model}', baseline requires 'cs_6_0'")
+            shader_type_name = _SHADER_TYPE_NAMES.get(sm_type)
+            shader_model = (
+                f"{shader_type_name}_{sm_major}_{sm_minor}"
+                if shader_type_name is not None
+                else f"type{sm_type}_{sm_major}_{sm_minor}"
+            )
+            if shader_type_name is None or (sm_major, sm_minor) != (6, 0):
+                raise ValueError(
+                    f"Unexpected shader model '{shader_model}', baseline requires "
+                    "'cs_6_0', 'vs_6_0', or 'ps_6_0'"
+                )
             if size_in_uint32 < 6 or size_in_uint32 * 4 > chunk_size:
                 raise ValueError(
                     f"DXIL chunk SizeInUint32 out of bounds ({size_in_uint32 * 4} vs chunk_size={chunk_size})"
@@ -323,6 +343,11 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
         raise ValueError("DXBC container is missing required DXIL chunk")
     if not found_psv0:
         raise ValueError("DXBC container is missing required PSV0 pipeline state validation chunk")
+    if forbidden_metadata_chunks and reject_debug_reflection:
+        raise ValueError(
+            "DXBC container contains forbidden debug/reflection chunk(s): "
+            + ", ".join(sorted(set(forbidden_metadata_chunks)))
+        )
 
     return {
         "valid": True,
@@ -339,6 +364,7 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
         "requires_enhanced_barriers": False,
         "requires_mesh_shaders": False,
         "requires_ray_tracing": False,
+        "debug_reflection_chunks": sorted(set(forbidden_metadata_chunks)),
     }
 
 

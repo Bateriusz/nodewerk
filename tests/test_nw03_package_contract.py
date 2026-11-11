@@ -1,0 +1,1157 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+
+import nwp_package as nwp  # noqa: E402
+
+
+def make_dxil_container(*, shader_type: int = 5, major: int = 6, minor: int = 0) -> bytes:
+    sfi0 = b"SFI0" + struct.pack("<I", 8) + struct.pack("<Q", 0)
+    psv0_info = bytearray(36)
+    struct.pack_into("<III", psv0_info, 12, 64, 1, 1)
+    psv0_payload = (
+        struct.pack("<I", len(psv0_info)) + bytes(psv0_info) + struct.pack("<II", 0, 1)
+    )
+    psv0 = b"PSV0" + struct.pack("<I", len(psv0_payload)) + psv0_payload
+    words = [0x00000021, 0x00000002, 0x00000021, 0x0000000C] + [0] * 16
+    bitcode = b"BC\xc0\xde" + struct.pack(f"<{len(words)}I", *words)
+    dxil_payload = (
+        struct.pack(
+            "<II4sIII",
+            (shader_type << 16) | (major << 4) | minor,
+            (24 + len(bitcode)) // 4,
+            b"DXIL",
+            0x00010100,
+            16,
+            len(bitcode),
+        )
+        + bitcode
+    )
+    dxil = b"DXIL" + struct.pack("<I", len(dxil_payload)) + dxil_payload
+    chunks = [sfi0, psv0, dxil]
+    header_size = 32 + len(chunks) * 4
+    offsets = []
+    cursor = header_size
+    for chunk in chunks:
+        offsets.append(cursor)
+        cursor += len(chunk)
+    joined = b"".join(chunks)
+    digest = hashlib.blake2s(b"dxc-retail-sig:" + joined, digest_size=16).digest()
+    header = (
+        b"DXBC"
+        + digest
+        + struct.pack("<HHII", 1, 0, cursor, len(chunks))
+        + struct.pack(f"<{len(chunks)}I", *offsets)
+    )
+    return header + joined
+
+
+def section_payload_offset(data: bytes, section_id: bytes) -> int:
+    assert len(section_id) == 4
+    section_count = struct.unpack_from("<I", data, 40)[0]
+    for index in range(section_count):
+        entry = 64 + index * 32
+        if data[entry : entry + 4] == section_id:
+            return struct.unpack_from("<Q", data, entry + 12)[0]
+    raise AssertionError(f"section {section_id!r} not found")
+
+
+def valid_package() -> nwp.NwpPackage:
+    return nwp.make_test_package(
+        shader_blob=make_dxil_container(), specialization_count=2
+    )
+
+
+def test_package_roundtrip_is_deterministic_and_inspectable(tmp_path: Path) -> None:
+    package = valid_package()
+    first = nwp.encode_package(package)
+    second = nwp.encode_package(valid_package())
+    assert first == second
+    assert nwp.sha256_hex(first) == nwp.sha256_hex(second)
+    # The canonical directory records semantic record counts.
+    assert struct.unpack_from("<I", first, 64 + 8)[0] == 1  # CAP record
+    assert (
+        struct.unpack_from("<I", first, 64 + 32 + 8)[0] == len(package.frame)
+    )
+
+    decoded = nwp.decode_package(first)
+    assert nwp.encode_package(decoded) == first
+
+    inspection = nwp.inspect_package_bytes(first)
+    assert inspection.valid
+    assert inspection.diagnostics == ()
+    payload = inspection.to_dict()
+    assert payload["format"] == "nwp"
+    assert payload["version"] == {"major": 1, "minor": 0}
+    assert payload["checksum"]["purpose"] == "corruption_detection_not_authenticity"
+    assert payload["package_sha256"] == hashlib.sha256(first).hexdigest()
+    assert payload["capability"]["profile_id"] == nwp.COMMON_PROFILE_ID
+    assert payload["capability"]["requirements_digest"] == nwp.COMMON_REQUIREMENTS_DIGEST
+    assert payload["capability"]["feature_level"] == 0xC000
+    assert payload["capability"]["feature_level_text"] == "12_0"
+    assert payload["capability"]["shader_model"] == 0x60
+    assert payload["capability"]["shader_model_text"] == "6_0"
+    assert payload["capability"]["resource_binding_tier"] == 2
+    assert payload["capability"]["resource_heap_tier"] == 2
+    assert payload["capability"]["limits"]["max_root_signature_dword_cost"] == 5
+    assert payload["capability"]["runtime_requirements"]["runtime_dxc_dependency"] is False
+    assert payload["capability"]["optional_profile"]["profile_id"] == ""
+    assert payload["capability"]["emitted_shader_targets"] == ["cs_6_0"]
+    assert payload["deduplication"]["shader_specialization_count"] == 2
+    assert payload["deduplication"]["unique_shader_blob_count"] == 1
+    assert payload["release"]["contains_authoring_metadata"] is False
+    assert payload["diagnostics"] == []
+
+
+def test_package_writer_is_reproducible_across_directories(tmp_path: Path) -> None:
+    hashes = []
+    for name in ("a", "b"):
+        directory = tmp_path / name
+        directory.mkdir()
+        destination = directory / "fixture.nwp"
+        nwp.write_package_atomic(valid_package(), destination)
+        hashes.append(hashlib.sha256(destination.read_bytes()).hexdigest())
+    assert hashes[0] == hashes[1]
+
+
+def test_capability_payload_matches_documented_v1_layout() -> None:
+    package = valid_package()
+    data = nwp.encode_package(package)
+    cap_offset = section_payload_offset(data, b"CAP ")
+    version, flags, field_count = struct.unpack_from("<HHI", data, cap_offset)
+    assert version == 1
+    assert flags == 0
+    assert field_count == len(package.capability.to_dict())
+
+    flagged = bytearray(data)
+    struct.pack_into("<H", flagged, cap_offset + 2, 1)
+    valid, diagnostics = nwp.validate_package_bytes(_with_recomputed_checksum(flagged))
+    assert not valid
+    assert any(item["code"] == "package_capability_flags" for item in diagnostics)
+
+
+def test_root_signature_root_parameters_must_be_unique_and_match_blob() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    duplicate = replace(
+        root,
+        bindings=(
+            root.bindings[0],
+            replace(root.bindings[1], root_parameter=0),
+        ),
+    )
+    duplicate = replace(
+        duplicate,
+        blob=nwp.make_root_signature_blob(duplicate.family, duplicate.bindings),
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, root_signatures=[duplicate])
+    )
+    assert any(
+        item["code"] == "package_root_signature_root_parameter"
+        for item in diagnostics
+    )
+
+    mismatch = replace(
+        root,
+        blob=nwp.make_root_signature_blob(
+            root.family,
+            (root.bindings[0], replace(root.bindings[1], slot=3)),
+        ),
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, root_signatures=[mismatch])
+    )
+    assert any(
+        item["code"] == "package_root_signature_blob_mismatch"
+        for item in diagnostics
+    )
+
+    wrong_root_parameter = replace(
+        package,
+        frame=[
+            replace(
+                instruction,
+                operands=(
+                    nwp.InstructionOperand("u32", 0),
+                    *instruction.operands[1:],
+                ),
+            )
+            if instruction.opcode == "frame.set_descriptor_table"
+            else instruction
+            for instruction in package.frame
+        ],
+    )
+    diagnostics = nwp.validate_package_model(wrong_root_parameter)
+    assert any(
+        item["code"] == "package_root_signature_binding"
+        for item in diagnostics
+    )
+
+
+def test_root_signature_requires_fixed_root_parameter_mapping() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    params, output = root.bindings
+    for required_name, bad_binding, code in (
+        (
+            "params",
+            replace(params, root_parameter=5),
+            "package_root_signature_root_parameter",
+        ),
+        (
+            "output",
+            replace(output, root_parameter=6),
+            "package_root_signature_root_parameter",
+        ),
+    ):
+        bindings = (
+            (bad_binding, output)
+            if required_name == "params"
+            else (params, bad_binding)
+        )
+        bad_root = replace(
+            root,
+            bindings=bindings,
+            blob=nwp.make_root_signature_blob(root.family, bindings),
+        )
+        diagnostics = nwp.validate_package_model(
+            replace(package, root_signatures=[bad_root])
+        )
+        assert any(item["code"] == code for item in diagnostics), required_name
+
+    missing_params = (output,)
+    missing_root = replace(
+        root,
+        bindings=missing_params,
+        blob=nwp.make_root_signature_blob(root.family, missing_params),
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, root_signatures=[missing_root])
+    )
+    assert any(
+        item["code"] == "package_root_signature_binding"
+        and "params" in item["message"]
+        for item in diagnostics
+    )
+
+
+def test_root_signature_rejects_duplicate_binding_names() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    params, output = root.bindings
+    bindings = (params, output, replace(params, root_parameter=5))
+    duplicate = replace(
+        root,
+        bindings=bindings,
+        blob=nwp.make_root_signature_blob(root.family, bindings),
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, root_signatures=[duplicate])
+    )
+    assert any(
+        item["code"] == "package_root_signature_duplicate_binding"
+        for item in diagnostics
+    )
+
+
+def test_instruction_root_parameter_uses_active_root_signature() -> None:
+    package = valid_package()
+    active_root = package.root_signatures[0]
+    input_resource = nwp.ResourceDescriptor(
+        resource_id=3,
+        name="input",
+        kind="buffer",
+        format="DXGI_FORMAT_R32G32B32A32_FLOAT",
+        usage="srv",
+        pass_family=active_root.family,
+        binding_slot=0,
+        binding_space=0,
+        size_bytes=64,
+    )
+    inactive_bindings = active_root.bindings + (
+        nwp.RootBinding("input", "srv", 0, 0, 2),
+    )
+    inactive_root = replace(
+        active_root,
+        root_signature_id=2,
+        bindings=inactive_bindings,
+        blob=nwp.make_root_signature_blob(
+            active_root.family, inactive_bindings
+        ),
+    )
+    frame = [
+        replace(
+            instruction,
+            operands=(
+                nwp.InstructionOperand("u32", 2),
+                nwp.InstructionOperand("string", "cbv_srv_uav"),
+                nwp.InstructionOperand("resource_ref", 3),
+            ),
+        )
+        if instruction.opcode == "frame.set_descriptor_table"
+        else instruction
+        for instruction in package.frame
+    ]
+    candidate = replace(
+        package,
+        resources=[*package.resources, input_resource],
+        frame=frame,
+        root_signatures=[active_root, inactive_root],
+    )
+    diagnostics = nwp.validate_package_model(candidate)
+    assert any(
+        item["code"] == "package_root_signature_binding"
+        and "active root signature" in item["message"]
+        for item in diagnostics
+    )
+
+
+def test_pipeline_root_signature_must_match_shader_record() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    second_root = replace(root, root_signature_id=2)
+    shaders = [
+        replace(package.shaders[0], root_signature_id=2),
+        *package.shaders[1:],
+    ]
+    diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            root_signatures=[root, second_root],
+            shaders=shaders,
+        )
+    )
+    assert any(
+        item["code"] == "package_shader_root_signature"
+        and "pipeline" in item["message"]
+        for item in diagnostics
+    )
+
+
+def test_frame_root_signature_must_match_pipeline_and_shader_record() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    second_root = replace(root, root_signature_id=2)
+    frame = [
+        replace(
+            instruction,
+            operands=(nwp.InstructionOperand("root_signature_ref", 2),),
+        )
+        if instruction.opcode == "frame.set_root_signature"
+        else instruction
+        for instruction in package.frame
+    ]
+    diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            frame=frame,
+            root_signatures=[root, second_root],
+        )
+    )
+    assert any(
+        item["code"] == "package_shader_root_signature"
+        and "frame root signature" in item["message"]
+        for item in diagnostics
+    )
+
+
+def test_release_capability_requires_pinned_consistent_toolchain() -> None:
+    package = valid_package()
+    for version, identity in (
+        ("9.9", "dxc:9.9"),
+        ("1.8.2407.12", "dxc:1.8.9999.1"),
+    ):
+        capability = replace(
+            package.capability,
+            toolchain_dxc_version=version,
+            toolchain_identity=identity,
+        )
+        capability = replace(
+            capability,
+            profile_fingerprint=capability.computed_profile_fingerprint(),
+        )
+        diagnostics = nwp.validate_package_model(
+            replace(package, capability=capability)
+        )
+        assert any(
+            item["code"] == "package_toolchain_identity"
+            for item in diagnostics
+        ), (version, identity)
+
+
+def test_python_model_validation_enforces_blob_size_limits() -> None:
+    package = valid_package()
+    oversized_blob = b"\x00" * (nwp.MAX_BLOB_BYTES + 1)
+    shader_diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            shaders=[replace(package.shaders[0], blob=oversized_blob)],
+        )
+    )
+    assert any(
+        item["code"] == "package_decode_limit"
+        and "shader" in item["message"]
+        for item in shader_diagnostics
+    )
+    root_diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            root_signatures=[
+                replace(package.root_signatures[0], blob=oversized_blob)
+            ],
+        )
+    )
+    assert any(
+        item["code"] == "package_decode_limit"
+        and "root signature" in item["message"]
+        for item in root_diagnostics
+    )
+
+
+def test_unknown_pass_families_are_rejected() -> None:
+    package = valid_package()
+    unknown_resource = replace(
+        package.resources[0], pass_family="compute.unknown_family"
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, resources=[unknown_resource, *package.resources[1:]])
+    )
+    assert any(
+        item["code"] == "package_pass_family_unknown" for item in diagnostics
+    )
+    with pytest.raises(nwp.PackageValidationError):
+        nwp.encode_package(
+            replace(package, resources=[unknown_resource, *package.resources[1:]])
+        )
+
+
+def test_all_permitted_shader_targets_are_structurally_validated() -> None:
+    for shader_type, target in ((0, "ps_6_0"), (1, "vs_6_0"), (5, "cs_6_0")):
+        info = nwp.validate_dxil_container(
+            make_dxil_container(shader_type=shader_type),
+            allow_test_container=True,
+        )
+        assert info["shader_model"] == target
+
+    cs_package = nwp.make_test_package(
+        shader_blob=make_dxil_container(shader_type=5),
+        specialization_count=1,
+    )
+    mismatch = replace(
+        cs_package,
+        shaders=[
+            replace(cs_package.shaders[0], blob=make_dxil_container(shader_type=0))
+        ],
+    )
+    diagnostics = nwp.validate_package_model(mismatch)
+    assert any(
+        item["code"] == "package_shader_target_mismatch" for item in diagnostics
+    )
+
+    # A shader that is structurally a pixel shader cannot be dispatched.
+    ps_package = replace(
+        cs_package,
+        shaders=[
+            replace(
+                cs_package.shaders[0],
+                target="ps_6_0",
+                blob=make_dxil_container(shader_type=0),
+            )
+        ],
+    )
+    diagnostics = nwp.validate_package_model(ps_package)
+    assert any(
+        item["code"] == "package_dispatch_shader_target" for item in diagnostics
+    )
+
+
+def test_every_specialization_has_pipeline_and_dispatch() -> None:
+    package = valid_package()
+    pipelines = [
+        instruction.operands[0].value
+        for instruction in package.initialization
+        if instruction.opcode == "init.create_pipeline"
+    ]
+    dispatches = [
+        instruction.operands[-1].value
+        for instruction in package.frame
+        if instruction.opcode == "frame.dispatch"
+    ]
+    assert pipelines == [1, 2]
+    assert dispatches == [1, 2]
+
+
+def test_writer_rejects_payloads_its_bounded_reader_would_reject() -> None:
+    oversized = replace(
+        valid_package(),
+        flags=0,
+        dev_metadata=b"\x00" * (nwp.MAX_SECTION_BYTES + 1),
+    )
+    with pytest.raises(nwp.PackageValidationError) as exc_info:
+        nwp.encode_package(oversized)
+    assert any(
+        item["code"] == "package_decode_limit"
+        for item in exc_info.value.diagnostics
+    )
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda package: replace(
+            package,
+            capability=replace(
+                package.capability,
+                profile_id="nw.common.d3d12.fl12_0.sm6_0.v2",
+            ),
+        ),
+        lambda package: replace(
+            package,
+            capability=replace(
+                package.capability,
+                requirements_digest="sha256:v1:" + "a" * 64,
+            ),
+        ),
+        lambda package: replace(
+            package,
+            capability=replace(package.capability, shader_model=0x66),
+        ),
+        lambda package: replace(
+            package,
+            capability=replace(package.capability, feature_level=0xC100),
+        ),
+        lambda package: replace(
+            package,
+            capability=replace(package.capability, runtime_dxc_dependency=True),
+        ),
+        lambda package: replace(
+            package,
+            capability=replace(package.capability, runtime_slang_dependency=True),
+        ),
+        lambda package: replace(
+            package,
+            capability=replace(
+                package.capability,
+                optional_profile_id="nw.optional.unknown.v1",
+                optional_requirements_digest="sha256:v1:" + "b" * 64,
+            ),
+        ),
+        lambda package: replace(
+            package,
+            resources=[
+                replace(package.resources[1], width=8193),
+                package.resources[0],
+            ],
+        ),
+        lambda package: replace(
+            package,
+            resources=[
+                replace(package.resources[1], size_bytes=0),
+                package.resources[0],
+            ],
+        ),
+        lambda package: replace(
+            package,
+            frame=[nwp.Instruction("frame.unknown_primitive")],
+        ),
+        lambda package: replace(
+            package,
+            frame=[
+                replace(
+                    package.frame[0],
+                    operands=(nwp.InstructionOperand("root_signature_ref", 99),),
+                )
+            ],
+        ),
+        lambda package: replace(
+            package,
+            parameters=[
+                replace(package.parameters[0], component_count=4, value=b"\x00" * 4)
+            ],
+        ),
+        lambda package: replace(
+            package,
+            shaders=[
+                replace(package.shaders[0], target="gs_6_0"),
+                package.shaders[1],
+            ],
+        ),
+    ],
+)
+def test_package_validation_rejects_contradictions(mutator) -> None:
+    package = valid_package()
+    bad = mutator(package)
+    diagnostics = nwp.validate_package_model(bad)
+    assert diagnostics
+    assert all(item["category"] == "package_validation" for item in diagnostics)
+    with pytest.raises(nwp.PackageValidationError):
+        nwp.encode_package(bad)
+
+
+def _with_recomputed_checksum(data: bytes) -> bytes:
+    mutated = bytearray(data)
+    checksum_offset = struct.unpack_from("<Q", mutated, 48)[0]
+    mutated[checksum_offset:] = hashlib.sha256(bytes(mutated[:checksum_offset])).digest()
+    return bytes(mutated)
+
+
+def test_package_reader_rejects_header_directory_and_checksum_defects() -> None:
+    data = nwp.encode_package(valid_package())
+
+    cases = {
+        "magic": b"BAD!" + data[4:],
+        "version": _with_recomputed_checksum(
+            (lambda value: value)(bytearray(data[:8] + struct.pack("<H", 2) + data[10:]))
+        ),
+        "checksum": data[:-1] + bytes([data[-1] ^ 1]),
+        "truncated": data[:-1],
+    }
+    for name, candidate in cases.items():
+        valid, diagnostics = nwp.validate_package_bytes(candidate)
+        assert not valid, name
+        assert diagnostics
+        assert all(item["category"] == "package_validation" for item in diagnostics)
+
+    # Section count cannot exceed the directory/filesize bounds.
+    bad_count = bytearray(data)
+    struct.pack_into("<I", bad_count, 40, nwp.MAX_SECTION_COUNT + 1)
+    assert not nwp.validate_package_bytes(_with_recomputed_checksum(bad_count))[0]
+
+    # Unknown section ID reaches the checked directory validator.
+    unknown = bytearray(data)
+    unknown[64:68] = b"ZZZZ"
+    valid, diagnostics = nwp.validate_package_bytes(_with_recomputed_checksum(unknown))
+    assert not valid
+    assert any(item["code"] == "package_section_unknown" for item in diagnostics)
+
+    # Directory record counts must agree with the decoded section payload.
+    bad_records = bytearray(data)
+    struct.pack_into("<I", bad_records, 64 + 8, 999)
+    valid, diagnostics = nwp.validate_package_bytes(
+        _with_recomputed_checksum(bad_records)
+    )
+    assert not valid
+    assert any(item["code"] == "package_section_record_count" for item in diagnostics)
+
+
+def test_reader_rejects_duplicate_blob_tables() -> None:
+    package = valid_package()
+    data = bytearray(nwp.encode_package(package))
+    # Locate SHDR and its blob table, then append a second complete blob and
+    # update counts by rebuilding the section through the private encoder path.
+    shdr_payload = nwp._encode_shaders(package.shaders)
+    duplicate = (
+        shdr_payload[:2]
+        + struct.pack("<I", 2)
+        + struct.pack("<I", len(package.shaders[0].blob))
+        + package.shaders[0].blob
+        + struct.pack("<I", len(package.shaders[0].blob))
+        + package.shaders[0].blob
+        + shdr_payload[6:]
+    )
+    diagnostics: list[dict] = []
+    decoded = nwp._decode_shaders(duplicate, diagnostics)
+    assert decoded is None
+    assert any(item["code"] == "package_shader_blob_not_deduplicated" for item in diagnostics)
+
+
+def test_release_and_development_metadata_are_separated(tmp_path: Path) -> None:
+    dev_package = replace(valid_package(), flags=0, dev_metadata=b'{"kind":"dev"}')
+    dev_bytes = nwp.encode_package(dev_package)
+    valid, diagnostics = nwp.validate_package_bytes(dev_bytes, allow_dev=False)
+    assert not valid
+    assert any(item["code"] == "package_section_forbidden" for item in diagnostics)
+    valid, diagnostics = nwp.validate_package_bytes(dev_bytes, allow_dev=True)
+    assert valid, diagnostics
+
+    release_bytes = nwp.encode_package(valid_package())
+    report = nwp.leak_scan_report(release_bytes)
+    assert report["valid"], report
+    assert report["checks"]["no_source_paths"]
+    assert report["checks"]["no_reflection_tables"]
+
+
+def test_atomic_publication_preserves_previous_output_on_failure(tmp_path: Path) -> None:
+    destination = tmp_path / "fixture.nwp"
+    nwp.write_package_atomic(valid_package(), destination)
+    previous = destination.read_bytes()
+    bad = replace(
+        valid_package(),
+        capability=replace(
+            valid_package().capability,
+            requirements_digest="sha256:v1:" + "f" * 64,
+        ),
+    )
+    with pytest.raises(nwp.PackageValidationError):
+        nwp.write_package_atomic(bad, destination)
+    assert destination.read_bytes() == previous
+    assert not list(tmp_path.glob(".nwp-*.tmp"))
+
+
+def test_package_capability_rejects_unused_requirements() -> None:
+    package = valid_package()
+    bad = replace(
+        package,
+        capability=replace(
+            package.capability,
+            required_dxgi_formats=nwp.REQUIRED_DXGI_FORMATS
+            + ("DXGI_FORMAT_R16G16B16A16_FLOAT",),
+        ),
+    )
+    diagnostics = nwp.validate_package_model(bad)
+    assert any(item["code"] == "package_capability_format_set" for item in diagnostics)
+
+
+def test_package_optional_profile_identity_roundtrips() -> None:
+    package = valid_package()
+    optional = replace(
+        package,
+        capability=replace(
+            package.capability,
+            optional_profile_id=nwp.OPTIONAL_PROFILE_WAVE_OPS,
+            optional_requirements_digest=nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST,
+            optional_profile_separate_artifact=True,
+        ),
+    )
+    optional = replace(
+        optional,
+        capability=replace(
+            optional.capability,
+            profile_fingerprint=optional.capability.computed_profile_fingerprint(),
+        ),
+    )
+    data = nwp.encode_package(optional)
+    decoded = nwp.decode_package(data)
+    assert decoded.capability.optional_profile_id == nwp.OPTIONAL_PROFILE_WAVE_OPS
+    assert (
+        decoded.capability.optional_requirements_digest
+        == nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST
+    )
+
+
+def test_cpp_package_reader_parity_when_compiler_available(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip(
+            "Cross-language package parity is exercised on POSIX hosts; "
+            "Windows CMake builds cover the native package library."
+        )
+    compiler = None
+    for name in ("clang++", "g++", "c++"):
+        compiler = shutil.which(name)
+        if compiler:
+            break
+    if compiler is None:
+        pytest.skip("no host C++ compiler is available")
+    package_bytes = nwp.encode_package(valid_package())
+    package_path = tmp_path / "python.nwp"
+    package_path.write_bytes(package_bytes)
+    harness = tmp_path / "harness.cpp"
+    harness.write_text(
+        '#include "nwp_format.h"\n'
+        "#include <cstdio>\n"
+        "#include <fstream>\n"
+        "#include <iterator>\n"
+        "#include <vector>\n"
+        "int main(int argc, char** argv) {\n"
+        "  if (argc < 3) return 2;\n"
+        "  std::ifstream in(argv[1], std::ios::binary);\n"
+        "  std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(in)),\n"
+        "                                 std::istreambuf_iterator<char>());\n"
+        "  nw::package::Package package;\n"
+        "  std::vector<nw::package::Diagnostic> diagnostics;\n"
+        "  if (!nw::package::DecodePackage(data.data(), data.size(), package, diagnostics)) {\n"
+        "    for (const auto& d : diagnostics) std::fprintf(stderr, \"%s: %s\\n\", d.code.c_str(), d.message.c_str());\n"
+        "    return 3;\n"
+        "  }\n"
+        "  diagnostics.clear();\n"
+        "  auto encoded = nw::package::EncodePackage(package, diagnostics);\n"
+        "  if (encoded.empty()) return 4;\n"
+        "  std::ofstream out(argv[2], std::ios::binary);\n"
+        "  out.write(reinterpret_cast<const char*>(encoded.data()), static_cast<std::streamsize>(encoded.size()));\n"
+        "  return out.good() ? 0 : 5;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    executable = tmp_path / ("nwp_harness.exe" if os.name == "nt" else "nwp_harness")
+    command = [
+        compiler,
+        "-std=c++20",
+        "-O1",
+        "-I",
+        str(REPO_ROOT / "src" / "package"),
+        str(harness),
+        str(REPO_ROOT / "src" / "package" / "nwp_format.cpp"),
+        "-o",
+        str(executable),
+    ]
+    build = subprocess.run(command, capture_output=True, text=True, check=False)
+    if build.returncode != 0:
+        pytest.fail(f"C++ package library failed to build:\n{build.stdout}\n{build.stderr}")
+    output_path = tmp_path / "cpp.nwp"
+    run = subprocess.run(
+        [str(executable), str(package_path), str(output_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    assert output_path.read_bytes() == package_bytes
+
+
+def _with_extra_dxil_chunk(blob: bytes, fourcc: bytes, payload: bytes) -> bytes:
+    chunk_count = struct.unpack_from("<I", blob, 28)[0]
+    chunks = []
+    for index in range(chunk_count):
+        offset = struct.unpack_from("<I", blob, 32 + index * 4)[0]
+        size = struct.unpack_from("<I", blob, offset + 4)[0]
+        chunks.append(blob[offset : offset + 8 + size])
+    chunks.append(fourcc + struct.pack("<I", len(payload)) + payload)
+    header_size = 32 + len(chunks) * 4
+    offsets = []
+    cursor = header_size
+    for chunk in chunks:
+        offsets.append(cursor)
+        cursor += len(chunk)
+    joined = b"".join(chunks)
+    digest = hashlib.blake2s(b"dxc-retail-sig:" + joined, digest_size=16).digest()
+    header = (
+        b"DXBC"
+        + digest
+        + struct.pack("<HHII", 1, 0, cursor, len(chunks))
+        + struct.pack(f"<{len(chunks)}I", *offsets)
+    )
+    return header + joined
+
+
+def test_dispatch_validates_all_dimensions_and_requires_compute() -> None:
+    package = valid_package()
+    for operand_index in (0, 1, 2):
+        frame = []
+        for instruction in package.frame:
+            if instruction.opcode == "frame.dispatch":
+                operands = list(instruction.operands)
+                operands[operand_index] = nwp.InstructionOperand("u32", 0xFFFFFFFF)
+                instruction = replace(instruction, operands=tuple(operands))
+            frame.append(instruction)
+        diagnostics = nwp.validate_package_model(replace(package, frame=frame))
+        assert any(
+            item["code"] == "package_instruction_operand" for item in diagnostics
+        ), operand_index
+
+    ps_package = replace(
+        package,
+        shaders=[
+            replace(
+                package.shaders[0],
+                target="ps_6_0",
+                blob=make_dxil_container(shader_type=0),
+            )
+        ],
+    )
+    diagnostics = nwp.validate_package_model(ps_package)
+    assert any(
+        item["code"] == "package_dispatch_shader_target" for item in diagnostics
+    )
+
+
+def test_texture_resource_allocations_are_bounded() -> None:
+    package = valid_package()
+    output = package.resources[1]
+    invalid_texture = replace(
+        output,
+        kind="texture3d",
+        width=1,
+        height=1,
+        depth=1,
+        array_size=1,
+        mip_levels=1,
+        size_bytes=2**64 - 1,
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, resources=[package.resources[0], invalid_texture])
+    )
+    assert any(
+        item["code"] == "package_resource_dimensions" for item in diagnostics
+    )
+
+    for change, code in (
+        ({"array_size": 0}, "package_resource_dimensions"),
+        ({"array_size": nwp.MAX_TEXTURE_ARRAY_SIZE + 1}, "package_resource_dimensions"),
+        ({"mip_levels": nwp.MAX_MIP_LEVELS + 1}, "package_resource_dimensions"),
+        ({"mip_levels": 33}, "package_resource_dimensions"),
+        ({"mip_levels": 0xFFFFFFFF}, "package_resource_dimensions"),
+        ({"usage": "cbv"}, "package_resource_usage"),
+    ):
+        values = {
+            "kind": "texture2d",
+            "width": 8,
+            "height": 8,
+            "depth": 0,
+            "array_size": 1,
+            "mip_levels": 1,
+            "size_bytes": 8 * 8 * 4,
+        }
+        values.update(change)
+        texture = replace(
+            output,
+            **values,
+        )
+        diagnostics = nwp.validate_package_model(
+            replace(package, resources=[package.resources[0], texture])
+        )
+        assert any(item["code"] == code for item in diagnostics), change
+
+    one_by_one = replace(
+        output,
+        kind="texture2d",
+        width=1,
+        height=1,
+        depth=0,
+        array_size=1,
+        mip_levels=2,
+        size_bytes=5,
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, resources=[package.resources[0], one_by_one])
+    )
+    assert any(
+        item["code"] == "package_resource_dimensions" for item in diagnostics
+    )
+
+
+def test_root_signature_blob_is_serialized_d3d12_signature() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    blob = root.blob
+    assert blob[:4] == b"DXBC"
+    assert blob[36:40] == b"RTS0"
+    parameters, ranges = nwp._decode_root_signature_blob(blob, [])
+    assert len(parameters) == 2
+    assert parameters[0][0] == 1  # 32-bit root constants for b0
+    assert parameters[1][0] == 0  # descriptor table for u0
+    assert ranges[0][0] == 1  # D3D12_DESCRIPTOR_RANGE_TYPE_UAV
+    # The descriptor-table record stores an absolute RTS0-payload offset.
+    payload_offset = 44
+    assert struct.unpack_from("<I", blob, payload_offset + 64)[0] == 68
+
+    wrong = replace(
+        root,
+        blob=nwp.make_root_signature_blob(
+            root.family, (root.bindings[0], replace(root.bindings[1], slot=2))
+        ),
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, root_signatures=[wrong])
+    )
+    assert any(
+        item["code"] == "package_root_signature_blob_mismatch"
+        for item in diagnostics
+    )
+
+    # Shader visibility and descriptor counts are part of the serialized
+    # contract, not fields the record can disagree with silently.
+    for mutate, expected_code in (
+        (
+            lambda data: struct.pack_into("<I", data, payload_offset + 40, 4),
+            "package_root_signature_blob_mismatch",
+        ),
+        (
+            lambda data: struct.pack_into(
+                "<I", data, payload_offset + 72, 8
+            ),
+            "package_root_signature_blob_mismatch",
+        ),
+    ):
+        mutated = bytearray(blob)
+        mutate(mutated)
+        diagnostics = nwp.validate_package_model(
+            replace(
+                package,
+                root_signatures=[replace(root, blob=bytes(mutated))],
+            )
+        )
+        assert any(
+            item["code"] == expected_code for item in diagnostics
+        )
+
+    # 16 root constants plus a descriptor table is a 17-DWORD signature.
+    oversized = bytearray(blob)
+    struct.pack_into("<I", oversized, payload_offset + 56, 16)
+    diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            root_signatures=[
+                replace(root, blob=bytes(oversized), dword_cost=16)
+            ],
+        )
+    )
+    assert any(
+        item["code"] == "package_root_signature_cost"
+        for item in diagnostics
+    )
+
+
+def test_capability_requirements_are_exact_for_emitted_resources() -> None:
+    package = valid_package()
+    capability = package.capability
+    assert capability.required_dxgi_formats == (
+        "DXGI_FORMAT_R32G32B32A32_FLOAT",
+        "DXGI_FORMAT_R32_UINT",
+    )
+    assert capability.max_sampler_descriptors_per_frame == 0
+    assert capability.max_cbv_srv_uav_descriptors_per_frame == 1
+    assert capability.max_root_signature_dword_cost == 5
+    assert capability.limit_max_texture_2d_dimension == 0
+    assert capability.limit_max_buffer_bytes == 256 * 16
+    assert capability.limit_swap_chain_buffer_count == 0
+
+    unused = replace(
+        capability,
+        required_dxgi_formats=capability.required_dxgi_formats
+        + ("DXGI_FORMAT_R8G8B8A8_UNORM",),
+    )
+    unused = replace(
+        unused,
+        profile_fingerprint=unused.computed_profile_fingerprint(),
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, capability=unused)
+    )
+    assert any(
+        item["code"] == "package_capability_contradictory"
+        for item in diagnostics
+    )
+
+
+def test_release_leakage_rejects_debug_and_reflection_chunks() -> None:
+    for fourcc, payload in (
+        (b"ILDB", b"debug"),
+        (b"ILDN", b"name"),
+        (b"STAT", b"stats"),
+        (b"RDEF", b"reflection"),
+        (b"RDAT", b"reflection-data"),
+    ):
+        blob = _with_extra_dxil_chunk(make_dxil_container(), fourcc, payload)
+        package = nwp.make_test_package(shader_blob=blob, specialization_count=1)
+        with pytest.raises(nwp.PackageValidationError) as exc_info:
+            nwp.encode_package(package)
+        assert any(
+            item["code"] == "package_shader_payload_invalid"
+            for item in exc_info.value.diagnostics
+        )
+
+        # Leakage inspection also detects the chunk types directly.
+        dev_package = replace(package, flags=0)
+        data = nwp.encode_package(dev_package)
+        report = nwp.leak_scan_report(data)
+        assert not report["valid"], fourcc
+        assert any(fourcc.decode() in item for item in report["findings"])
+
+
+def test_sections_must_be_contiguous_and_canonically_ordered() -> None:
+    data = nwp.encode_package(valid_package())
+    section_count = struct.unpack_from("<I", data, 40)[0]
+    directory_end = 64 + section_count * 32
+
+    padded = bytearray(data[:directory_end] + b"\x00\x00\x00\x00" + data[directory_end:])
+    struct.pack_into("<Q", padded, 32, len(padded))
+    checksum_offset = len(padded) - 32
+    struct.pack_into("<Q", padded, 48, checksum_offset)
+    for index in range(section_count):
+        entry = 64 + index * 32
+        offset = struct.unpack_from("<Q", padded, entry + 12)[0]
+        struct.pack_into("<Q", padded, entry + 12, offset + 4)
+    padded[checksum_offset:] = hashlib.sha256(
+        bytes(padded[:checksum_offset])
+    ).digest()
+    valid, diagnostics = nwp.validate_package_bytes(bytes(padded))
+    assert not valid
+    assert any(item["code"] == "package_section_gap" for item in diagnostics)
+
+    reordered = bytearray(data)
+    first = bytes(reordered[64 + 0 : 64 + 32])
+    second = bytes(reordered[64 + 32 : 64 + 64])
+    reordered[64 + 0 : 64 + 32] = second
+    reordered[64 + 32 : 64 + 64] = first
+    checksum_offset = struct.unpack_from("<Q", reordered, 48)[0]
+    reordered[checksum_offset:] = hashlib.sha256(
+        bytes(reordered[:checksum_offset])
+    ).digest()
+    valid, diagnostics = nwp.validate_package_bytes(bytes(reordered))
+    assert not valid
+    assert any(item["code"] == "package_section_order" for item in diagnostics)
+
+
+def test_deduplicated_blob_reference_budget_is_enforced() -> None:
+    base = make_dxil_container()
+    padding = nwp.MAX_BLOB_BYTES - len(base) - 12
+    large_blob = _with_extra_dxil_chunk(
+        base, b"JUNK", b"\x00" * padding
+    )
+    assert len(large_blob) == nwp.MAX_BLOB_BYTES
+    within_budget = nwp.make_test_package(
+        shader_blob=large_blob, specialization_count=30
+    )
+    assert nwp.validate_package_model(within_budget) == []
+
+    # 31 references of the 8 MiB blob reach the 256 MiB shader budget; the
+    # required root-signature blob pushes the combined budget over the limit.
+    package = nwp.make_test_package(
+        shader_blob=large_blob, specialization_count=31
+    )
+    diagnostics = nwp.validate_package_model(package)
+    assert any(
+        item["code"] == "package_decode_limit"
+        and "aggregate decoded payload" in item["message"]
+        for item in diagnostics
+    )
+    with pytest.raises(nwp.PackageValidationError):
+        nwp.encode_package(package)
+
+
+def test_cross_section_duplicate_blob_uses_per_section_dedup() -> None:
+    package = valid_package()
+    root_blob = package.root_signatures[0].blob
+    rts0_size = struct.unpack_from("<I", root_blob, 40)[0]
+    rts0_payload = root_blob[44 : 44 + rts0_size]
+    combined = _with_extra_dxil_chunk(
+        make_dxil_container(), b"RTS0", rts0_payload
+    )
+    padding = nwp.MAX_BLOB_BYTES - len(combined) - 12
+    large_blob = _with_extra_dxil_chunk(
+        combined, b"JUNK", b"\x00" * padding
+    )
+    assert len(large_blob) == nwp.MAX_BLOB_BYTES
+
+    within_budget = nwp.make_test_package(
+        shader_blob=large_blob,
+        specialization_count=29,
+        root_signature_blob=large_blob,
+    )
+    assert nwp.validate_package_model(within_budget) == []
+
+    package = nwp.make_test_package(
+        shader_blob=large_blob,
+        specialization_count=30,
+        root_signature_blob=large_blob,
+    )
+    diagnostics = nwp.validate_package_model(package)
+    assert any(
+        item["code"] == "package_decode_limit"
+        and "aggregate decoded payload" in item["message"]
+        for item in diagnostics
+    )
