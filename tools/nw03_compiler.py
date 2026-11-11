@@ -77,6 +77,14 @@ _NW02_DIGEST_BINARY: Path | None | bool = None
 _NW02_DIGEST_CACHE: dict[str, str] = {}
 
 
+def uses_test_semantic_digest() -> bool:
+    """True only when the explicit non-production test identity is active."""
+    return (
+        os.environ.get("NODEWERK_NW03_TEST_DIGEST") == "1"
+        and _ensure_nw02_digest_binary() is None
+    )
+
+
 class CompilerError(RuntimeError):
     """Raised when lowering/compilation/package validation fails."""
 
@@ -2239,6 +2247,7 @@ def _build_sidecar(
             "dxc_identity": dxc_identity,
             "dxc_version": dxc_version,
             "optimization": optimization,
+            "semantic_digest_test_identity": uses_test_semantic_digest(),
         },
         "source_graph": {
             "name": document.source_name,
@@ -2326,7 +2335,8 @@ def compile_package(
                 )
             ],
         )
-    release = pinned_version in dxc_version
+    test_semantic_digest = uses_test_semantic_digest()
+    release = (pinned_version in dxc_version) and not test_semantic_digest
     dxc_identity = f"dxc:{dxc_version}"
     cache = ShaderCache(cache_dir)
     bindings_identity = sha256_hex(
@@ -2543,6 +2553,7 @@ def _build_report(
             "dxc_version": dxc_version,
             "optimization": optimization,
             "pinned": release,
+            "semantic_digest_test_identity": uses_test_semantic_digest(),
             "test_payload": any(
                 bool(item.get("is_test_container"))
                 for item in compiled.values()

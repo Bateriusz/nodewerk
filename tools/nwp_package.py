@@ -662,9 +662,9 @@ def _check_decoded_blob_budget(
     diagnostics: list[dict[str, Any]],
 ) -> None:
     """Match the native reader's combined deduplicated-table/reference budget."""
-    unique_sizes: dict[str, int] = {}
     total = 0
     for records, section in groups:
+        unique_sizes: dict[str, int] = {}
         for record in records:
             blob = getattr(record, "blob", b"")
             digest = sha256_hex(blob)

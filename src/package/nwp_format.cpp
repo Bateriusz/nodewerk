@@ -2601,11 +2601,11 @@ bool ValidatePackage(const Package& package,
                            diagnostics);
     ValidateShaders(package.shaders, package.root_signatures, diagnostics);
     {
-        std::set<std::string> unique_blobs;
         std::uint64_t decoded_total = 0u;
         bool budget_ok = true;
+        std::set<std::string> unique_root_blobs;
         for (const auto& root : package.root_signatures) {
-            if (!ChargeDecodedBlobBudget(root.blob, unique_blobs,
+            if (!ChargeDecodedBlobBudget(root.blob, unique_root_blobs,
                                          decoded_total,
                                          kSectionRootSignatures, diagnostics)) {
                 budget_ok = false;
@@ -2613,9 +2613,10 @@ bool ValidatePackage(const Package& package,
             }
         }
         if (budget_ok) {
+            std::set<std::string> unique_shader_blobs;
             for (const auto& shader : package.shaders) {
                 if (!ChargeDecodedBlobBudget(
-                        shader.blob, unique_blobs, decoded_total,
+                        shader.blob, unique_shader_blobs, decoded_total,
                         kSectionShaders, diagnostics)) {
                     break;
                 }

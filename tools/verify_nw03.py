@@ -346,6 +346,18 @@ def check_clean_directory_reproducibility(
                         False,
                         "Full verification rejected synthetic DXIL payloads",
                     )
+                if (
+                    report.get("toolchain", {}).get(
+                        "semantic_digest_test_identity"
+                    )
+                    is True
+                ):
+                    return CheckResult(
+                        "clean_directory_reproducibility",
+                        True,
+                        False,
+                        "Full verification rejected the test semantic identity",
+                    )
         return CheckResult(
             "clean_directory_reproducibility",
             True,
@@ -512,6 +524,18 @@ def check_expression_operations_dxc(
                 True,
                 False,
                 "real DXC compilation unexpectedly produced a synthetic payload",
+            )
+        if (
+            report.get("toolchain", {}).get(
+                "semantic_digest_test_identity"
+            )
+            is True
+        ):
+            return CheckResult(
+                "expression_operations_offline_dxc",
+                True,
+                False,
+                "test semantic identity used in Full verification",
             )
         return CheckResult(
             "expression_operations_offline_dxc",

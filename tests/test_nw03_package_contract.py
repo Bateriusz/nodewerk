@@ -1121,3 +1121,37 @@ def test_deduplicated_blob_reference_budget_is_enforced() -> None:
     )
     with pytest.raises(nwp.PackageValidationError):
         nwp.encode_package(package)
+
+
+def test_cross_section_duplicate_blob_uses_per_section_dedup() -> None:
+    package = valid_package()
+    root_blob = package.root_signatures[0].blob
+    rts0_size = struct.unpack_from("<I", root_blob, 40)[0]
+    rts0_payload = root_blob[44 : 44 + rts0_size]
+    combined = _with_extra_dxil_chunk(
+        make_dxil_container(), b"RTS0", rts0_payload
+    )
+    padding = nwp.MAX_BLOB_BYTES - len(combined) - 12
+    large_blob = _with_extra_dxil_chunk(
+        combined, b"JUNK", b"\x00" * padding
+    )
+    assert len(large_blob) == nwp.MAX_BLOB_BYTES
+
+    within_budget = nwp.make_test_package(
+        shader_blob=large_blob,
+        specialization_count=29,
+        root_signature_blob=large_blob,
+    )
+    assert nwp.validate_package_model(within_budget) == []
+
+    package = nwp.make_test_package(
+        shader_blob=large_blob,
+        specialization_count=30,
+        root_signature_blob=large_blob,
+    )
+    diagnostics = nwp.validate_package_model(package)
+    assert any(
+        item["code"] == "package_decode_limit"
+        and "aggregate decoded payload" in item["message"]
+        for item in diagnostics
+    )

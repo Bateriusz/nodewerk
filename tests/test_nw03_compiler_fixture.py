@@ -199,7 +199,12 @@ def test_compile_package_with_offline_dxc_and_dev_sidecar(tmp_path: Path) -> Non
     )
     assert report["fixture"]["shader_specialization_count"] == 2
     assert report["fixture"]["unique_shader_blob_count"] == 1
-    assert report["package"]["release"] is True
+    expected_release = not compiler.uses_test_semantic_digest()
+    assert report["package"]["release"] is expected_release
+    assert (
+        report["toolchain"]["semantic_digest_test_identity"]
+        is (not expected_release)
+    )
     assert report["release"]["source_maps_in_package"] is False
     assert report["compiler"]["fingerprint"].startswith("sha256:v1:")
     assert report["profile"]["profile_fingerprint"].startswith("sha256:v1:")
@@ -224,7 +229,12 @@ def test_compile_package_with_offline_dxc_and_dev_sidecar(tmp_path: Path) -> Non
     ]
     assert pipeline_shaders == [1, 2]
     assert dispatched_shaders == [1, 2]
-    assert nwp.check_release_leakage(data) == []
+    if expected_release:
+        assert nwp.check_release_leakage(data) == []
+    else:
+        assert "package is not marked as a release package" in (
+            nwp.check_release_leakage(data)
+        )
     assert b"math_noise.nwgraph" not in data
     assert b"nw.shader.expr" not in data
 
@@ -435,9 +445,13 @@ def test_nodewerkc_cli_validate_compile_and_inspect(tmp_path: Path) -> None:
         check=False,
         env=_cli_env(),
     )
-    assert inspect_run.returncode == 0, inspect_run.stderr
     inspection = json.loads(inspect_run.stdout)
-    assert inspection["valid"] is True
+    if compiler.uses_test_semantic_digest():
+        assert inspect_run.returncode != 0
+        assert inspection["valid"] is False
+    else:
+        assert inspect_run.returncode == 0, inspect_run.stderr
+        assert inspection["valid"] is True
     assert inspection["capability"]["profile_id"] == nwp.COMMON_PROFILE_ID
     assert inspection["release"]["contains_authoring_metadata"] is False
 

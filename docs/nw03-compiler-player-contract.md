@@ -22,7 +22,9 @@ metadata enters the release package.
    authoritative helper is unavailable, compilation fails explicitly rather
    than substituting a JSON or otherwise incompatible digest. Tests may opt
    into an explicit non-production test identity with
-   `NODEWERK_NW03_TEST_DIGEST=1`.
+   `NODEWERK_NW03_TEST_DIGEST=1`; such artifacts are forced non-release, the
+   build report/sidecar records `semantic_digest_test_identity = true`, and
+   Full verification rejects them.
 2. Find reachable `ShaderExpr` entry points from GPU pass `shader` inputs (or
    terminal standalone expressions when there is no GPU pass).
 3. Evaluate the immutable snapshot and fuse the reachable expression DAG.
