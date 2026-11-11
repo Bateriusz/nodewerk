@@ -86,6 +86,17 @@ resource barriers only; enhanced barriers are not used.
 | 11 | `PRESENT` |
 | 12 | `GENERIC_READ` |
 
+Unknown state codes are rejected during frame planning; they never silently
+degrade to `COMMON`. A requested state is also checked against the target
+resource's heap and usage (for example, a readback resource may only remain
+`COPY_DEST`, and `UNORDERED_ACCESS` requires UAV usage). Descriptor-table
+targets must resolve to a descriptor that actually exists in the named heap.
+
+`frame.set_timeline` selects a package parameter by id and advances it from the
+emitted tick base by the tick supplied to `renderAtTick`. The bounded constant
+block is updated in place from the pre-built frame plan; no allocation,
+reflection, or re-planning occurs per frame.
+
 ## Failure Behavior
 
 - Missing, unknown, malformed, or contradictory capability fields:

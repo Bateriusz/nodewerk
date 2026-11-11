@@ -39,6 +39,7 @@ def test_nw04_fixture_is_a_valid_nw03_package_with_present() -> None:
         "init.create_root_signature",
         "init.create_pipeline",
         "init.upload_resource",
+        "init.upload_resource",
     ]
     assert [i.opcode for i in package.frame] == [
         "frame.set_timeline",
@@ -191,6 +192,149 @@ def test_capability_failure_matrix_check_passes() -> None:
     assert len(result.evidence["cases"]) >= 14
 
 
+@pytest.mark.parametrize(
+    "queried_key",
+    (
+        "feature_level_queried",
+        "shader_model_queried",
+        "binding_tier_queried",
+        "heap_tier_queried",
+        "windows_build_queried",
+        "limits_queried",
+    ),
+)
+def test_contract_mirrors_per_field_queried_flags(queried_key: str) -> None:
+    package = nw04_fixture.build_compute_display_package()
+    adapter = contract.baseline_adapter(**{queried_key: False})
+    failures = contract.evaluate_package_against_adapter(package, adapter)
+    assert any(
+        failure.code == "package_capability_query_unavailable"
+        for failure in failures
+    )
+
+
+def test_static_and_adapter_categories_match_native_diagnostics() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    capability = nwp.replace(package.capability, feature_level=0xB000)
+    capability = nwp.replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
+    static_failures = contract.validate_package_requirements(
+        nwp.replace(package, capability=capability)
+    )
+    static = [
+        failure
+        for failure in static_failures
+        if failure.code == "package_capability_feature_level"
+    ]
+    assert static and static[0].category == "package_validation"
+
+    adapter_failures = contract.evaluate_package_against_adapter(
+        package, contract.baseline_adapter(max_feature_level=0xB000)
+    )
+    adapter = [
+        failure
+        for failure in adapter_failures
+        if failure.code == "package_capability_feature_level"
+    ]
+    assert adapter and adapter[0].category == "device_and_capability"
+
+
+def test_duplicate_requirements_and_toolchain_identity_are_rejected() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    capability = package.capability
+    formats = tuple(capability.required_dxgi_formats)
+    duplicate_formats = nwp.replace(
+        capability,
+        required_dxgi_formats=(formats[0], formats[0]),
+    )
+    duplicate_formats = nwp.replace(
+        duplicate_formats,
+        profile_fingerprint=duplicate_formats.computed_profile_fingerprint(),
+    )
+    rules = contract.validate_package_requirements(
+        nwp.replace(package, capability=duplicate_formats)
+    )
+    assert any(
+        failure.code == "package_capability_contradictory"
+        and failure.requirement == "required_dxgi_formats"
+        for failure in rules
+    )
+
+    init_ops = tuple(capability.required_init_instructions)
+    duplicate_instructions = nwp.replace(
+        capability,
+        required_init_instructions=(init_ops[0], init_ops[0]),
+    )
+    duplicate_instructions = nwp.replace(
+        duplicate_instructions,
+        profile_fingerprint=duplicate_instructions.computed_profile_fingerprint(),
+    )
+    rules = contract.validate_package_requirements(
+        nwp.replace(package, capability=duplicate_instructions)
+    )
+    assert any(
+        failure.code == "package_capability_contradictory"
+        and failure.requirement == "required_init_instructions"
+        for failure in rules
+    )
+
+    duplicate_targets = nwp.replace(
+        capability,
+        emitted_shader_targets=("cs_6_0", "cs_6_0"),
+    )
+    duplicate_targets = nwp.replace(
+        duplicate_targets,
+        profile_fingerprint=duplicate_targets.computed_profile_fingerprint(),
+    )
+    rules = contract.validate_package_requirements(
+        nwp.replace(package, capability=duplicate_targets)
+    )
+    assert any(
+        failure.code == "package_capability_contradictory"
+        and failure.requirement == "emitted_shader_targets"
+        for failure in rules
+    )
+
+    toolchain = nwp.replace(
+        capability,
+        toolchain_dxc_version="9.9.9999",
+        toolchain_identity="dxc:9.9.9999",
+        compiler_fingerprint="",
+    )
+    toolchain = nwp.replace(
+        toolchain, profile_fingerprint=toolchain.computed_profile_fingerprint()
+    )
+    rules = contract.validate_package_requirements(
+        nwp.replace(package, capability=toolchain)
+    )
+    codes = {failure.code for failure in rules}
+    assert "package_toolchain_identity" in codes
+    assert "package_capability_contradictory" in codes
+
+
+def test_optional_digest_without_profile_is_rejected() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    capability = nwp.replace(
+        package.capability,
+        optional_profile_id="",
+        optional_requirements_digest=nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST,
+    )
+    capability = nwp.replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
+    failures = contract.validate_package_requirements(
+        nwp.replace(package, capability=capability)
+    )
+    assert any(
+        failure.code == "package_optional_profile_contradiction"
+        and failure.requirement == "optional_requirements_digest"
+        for failure in failures
+    )
+
+
 def test_malformed_packages_are_rejected_before_bulk_allocation() -> None:
     result = verify_nw04.check_package_rejection_before_allocation()
     assert result.passed, result.detail
@@ -217,8 +361,19 @@ def test_player_interfaces_and_validation_order_are_present() -> None:
         "--simulate-device-removal",
         "--simulate-allocation-failure",
         "--simulate-capability-failure",
+        "--simulate-pipeline-failure",
+        "--simulate-root-signature-failure",
+        "--simulate-frame-allocation",
     ):
         assert flag in fixture_source
+    source = (REPO_ROOT / "src" / "player" / "package_player.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "SetForcePipelineCreationFailureForTesting" in source
+    assert "simulated_pipeline_failure" in source
+    assert "frame.upload" in source
+    assert "TryBarrierStateFromCode" in source
+    assert "allocation_calls_before_frame" in source
 
 
 def test_release_closure_excludes_authoring_and_diagnostic_tooling() -> None:
@@ -257,6 +412,15 @@ def test_verify_reports_hardware_qualification_as_pending() -> None:
         "hardware_qualification": {"ada": "pending_unverified", "blackwell": "pending_unverified"}
     }
     assert summary["hardware_qualification"]["ada"] == "pending_unverified"
+
+
+def test_verify_summary_is_scoped_to_the_selected_mode() -> None:
+    passed = verify_nw04.CheckResult("demo", True, True)
+    summary = verify_nw04.build_summary("ContractsOnly", [passed])
+    assert summary["verification_status"] == "contracts_only_verified"
+    assert summary["overall_status"] == "pending_unverified"
+    assert summary["hardware_qualification"]["ada"] == "pending_unverified"
+    assert summary["hardware_qualification"]["blackwell"] == "pending_unverified"
 
 
 def test_nw04_fixture_is_deterministic() -> None:

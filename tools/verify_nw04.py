@@ -421,6 +421,13 @@ def check_player_source_contract() -> CheckResult:
         "package::kSwapChainBufferCount",
         "frame.set_descriptor_table",
         "upload_reuse_waits",
+        "frame.upload",
+        "TryBarrierStateFromCode",
+        "package_instruction_barrier_state",
+        "package_instruction_descriptor_target",
+        "simulate_post_initialization_allocation_",
+        "SetSimulatePostInitializationAllocationForTesting",
+        "SetForcePipelineCreationFailureForTesting",
         "UsesOnlyNonAliasedPlacements",
         "SetResourceAllocationQueryForTesting",
         "SetForceDeviceRemovedForTesting",
@@ -628,6 +635,7 @@ def run_native_fixture(
         "NW_PLAYER_NON_ALIASED_PLACEMENTS=1",
         "NW_PLAYER_POST_INIT_ALLOCATION_VIOLATION=0",
         "NW_PLAYER_READBACK=not_performed",
+        "NW_PLAYER_LAST_TIMELINE_VALUE=7",
     )
     for line in required_lines:
         if line not in output:
@@ -638,6 +646,15 @@ def run_native_fixture(
                 f"native fixture did not report {line}",
                 evidence={"stdout": output, "stderr": proc.stderr},
             )
+    upload_reuse = re.search(r"NW_PLAYER_UPLOAD_REUSE_WAITS=(\d+)", output)
+    if upload_reuse is None or int(upload_reuse.group(1)) < 1:
+        return CheckResult(
+            "nw04_native_fixture",
+            True,
+            False,
+            "native fixture did not exercise upload-ring fence reuse",
+            evidence={"stdout": output, "stderr": proc.stderr},
+        )
     return CheckResult(
         "nw04_native_fixture",
         True,
@@ -772,6 +789,124 @@ def run_capability_failure_check(fixture: Path, package_path: Path) -> CheckResu
     )
 
 
+def run_pipeline_failure_check(fixture: Path, package_path: Path) -> CheckResult:
+    if not fixture.exists():
+        return CheckResult(
+            "nw04_pipeline_failure_cleanup",
+            True,
+            False,
+            f"fixture binary is unavailable: {fixture}",
+            unavailable=True,
+        )
+    command = [
+        str(fixture),
+        "--package",
+        str(package_path),
+        "--frames",
+        "1",
+        "--simulate-pipeline-failure",
+    ]
+    proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    if proc.returncode != 42:
+        return CheckResult(
+            "nw04_pipeline_failure_cleanup",
+            True,
+            False,
+            f"expected PipelineStateCreationFailed (42), observed {proc.returncode}",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    for line in (
+        "NW_PLAYER_PIPELINE_FAILURE_REJECTED=1",
+        "NW_PLAYER_PARTIAL_INITIALIZATION_CLEANUP=1",
+    ):
+        if line not in proc.stdout:
+            return CheckResult(
+                "nw04_pipeline_failure_cleanup",
+                True,
+                False,
+                f"pipeline-failure evidence line is missing: {line}",
+                evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+            )
+    return CheckResult(
+        "nw04_pipeline_failure_cleanup",
+        True,
+        True,
+        evidence={"stdout": proc.stdout, "stderr": proc.stderr, "command": command},
+    )
+
+
+def run_frame_allocation_detection_check(
+    fixture: Path, package_path: Path
+) -> CheckResult:
+    if not fixture.exists():
+        return CheckResult(
+            "nw04_post_init_allocation_detection",
+            True,
+            False,
+            f"fixture binary is unavailable: {fixture}",
+            unavailable=True,
+        )
+    command = [
+        str(fixture),
+        "--package",
+        str(package_path),
+        "--frames",
+        "2",
+        "--simulate-frame-allocation",
+    ]
+    proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return CheckResult(
+            "nw04_post_init_allocation_detection",
+            True,
+            False,
+            f"fixture exited {proc.returncode}",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if "NW_PLAYER_POST_INIT_ALLOCATION_VIOLATION=1" not in proc.stdout:
+        return CheckResult(
+            "nw04_post_init_allocation_detection",
+            True,
+            False,
+            "tracked render-path allocation was not reported as a violation",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    return CheckResult(
+        "nw04_post_init_allocation_detection",
+        True,
+        True,
+        evidence={"stdout": proc.stdout, "stderr": proc.stderr, "command": command},
+    )
+
+
+def build_summary(mode: str, results: list[CheckResult]) -> dict[str, Any]:
+    passed = all(result.passed for result in results if result.required)
+    mode_status = {
+        "ContractsOnly": "contracts_only_verified",
+        "Full": "full_execution_verified",
+        "Hardware": "hardware_execution_verified",
+    }[mode]
+    return {
+        "task": "NW-04",
+        "mode": mode,
+        # Scope the status to what this mode actually executed.
+        "verification_status": mode_status if passed else "failed",
+        # Representative Ada/Blackwell qualification remains mandatory and is
+        # not implied by any GPU-less or single-machine check.
+        "overall_status": "pending_unverified",
+        "checks": [result.to_dict() for result in results],
+        "hardware_qualification": {
+            "ada": "pending_unverified",
+            "blackwell": "pending_unverified",
+            "note": (
+                "Representative Ada/Blackwell qualification is recorded through "
+                "the NW-01B hardware evidence harness; missing coverage is "
+                "never reported as passing."
+            ),
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -829,23 +964,17 @@ def main() -> int:
                     results.append(
                         run_capability_failure_check(args.fixture, args.package)
                     )
+                    results.append(
+                        run_pipeline_failure_check(args.fixture, args.package)
+                    )
+                    results.append(
+                        run_frame_allocation_detection_check(
+                            args.fixture, args.package
+                        )
+                    )
 
     passed = all(result.passed for result in results if result.required)
-    summary = {
-        "task": "NW-04",
-        "mode": args.mode,
-        "verification_status": "verified" if passed else "failed",
-        "checks": [result.to_dict() for result in results],
-        "hardware_qualification": {
-            "ada": "pending_unverified",
-            "blackwell": "pending_unverified",
-            "note": (
-                "Representative Ada/Blackwell qualification is recorded through "
-                "the NW-01B hardware evidence harness; missing coverage is "
-                "never reported as passing."
-            ),
-        },
-    }
+    summary = build_summary(args.mode, results)
     if args.summary_json is not None:
         args.summary_json.parent.mkdir(parents=True, exist_ok=True)
         args.summary_json.write_text(

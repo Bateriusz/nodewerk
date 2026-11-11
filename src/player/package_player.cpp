@@ -134,6 +134,61 @@ std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
 }
 #endif
 
+const package::ResourceDescriptor* FindPackageResource(
+    const package::Package& pkg, std::uint32_t resource_id) noexcept {
+    for (const auto& resource : pkg.resources) {
+        if (resource.resource_id == resource_id) return &resource;
+    }
+    return nullptr;
+}
+
+// Platform-neutral validation of the stable `frame.barrier` state codes.  The
+// numeric convention is shared with the NW-03 instruction contract; unknown
+// codes are rejected instead of silently degenerating to COMMON.
+bool IsKnownBarrierStateCode(std::uint32_t code) noexcept {
+    return code <= 12u;
+}
+
+bool BarrierStateCodeCompatibleWithUsage(std::uint32_t code,
+                                         const std::string& usage,
+                                         std::string* reason) {
+    const auto incompatible = [reason](const char* detail) {
+        if (reason != nullptr) *reason = detail;
+        return false;
+    };
+    if (usage == "readback") {
+        return code == 9u
+                   ? true
+                   : incompatible(
+                         "readback-heap resources may only remain COPY_DEST");
+    }
+    if (code == 11u) {
+        return incompatible(
+            "PRESENT is reserved for swap-chain back buffers, not package "
+            "resources");
+    }
+    if (code == 4u && usage != "uav") {
+        return incompatible(
+            "UNORDERED_ACCESS requires a UAV-capable package resource");
+    }
+    if (code == 3u && usage != "rtv") {
+        return incompatible(
+            "RENDER_TARGET requires an RTV-capable package resource");
+    }
+    if ((code == 5u || code == 6u) && usage != "dsv") {
+        return incompatible(
+            "DEPTH_WRITE/DEPTH_READ require a DSV-capable package resource");
+    }
+    return true;
+}
+
+std::uint8_t TickKindForParameter(const package::ParameterRecord& parameter) {
+    if (parameter.type == "uint") return 1u;
+    if (parameter.type == "int") return 2u;
+    if (parameter.type.rfind("float", 0u) == 0u) return 0u;
+    return 3u;
+}
+
 } // namespace
 
 struct PlatformState {
@@ -401,24 +456,50 @@ D3D12_RESOURCE_STATES WorkingStateForUsage(
     return D3D12_RESOURCE_STATE_COMMON;
 }
 
-D3D12_RESOURCE_STATES BarrierStateFromCode(std::uint32_t code) {
+bool TryBarrierStateFromCode(std::uint32_t code,
+                             D3D12_RESOURCE_STATES* state) noexcept {
     // Stable player convention for `frame.barrier` operand 0.  The NW-03
     // instruction contract records a u32; this mapping keeps it platform-neutral.
+    if (state == nullptr) return false;
     switch (code) {
-        case 0u: return D3D12_RESOURCE_STATE_COMMON;
-        case 1u: return D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
-        case 2u: return D3D12_RESOURCE_STATE_INDEX_BUFFER;
-        case 3u: return D3D12_RESOURCE_STATE_RENDER_TARGET;
-        case 4u: return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        case 5u: return D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        case 6u: return D3D12_RESOURCE_STATE_DEPTH_READ;
-        case 7u: return D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        case 8u: return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        case 9u: return D3D12_RESOURCE_STATE_COPY_DEST;
-        case 10u: return D3D12_RESOURCE_STATE_COPY_SOURCE;
-        case 11u: return D3D12_RESOURCE_STATE_PRESENT;
-        case 12u: return D3D12_RESOURCE_STATE_GENERIC_READ;
-        default: return D3D12_RESOURCE_STATE_COMMON;
+        case 0u: *state = D3D12_RESOURCE_STATE_COMMON; return true;
+        case 1u:
+            *state = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+            return true;
+        case 2u: *state = D3D12_RESOURCE_STATE_INDEX_BUFFER; return true;
+        case 3u: *state = D3D12_RESOURCE_STATE_RENDER_TARGET; return true;
+        case 4u: *state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS; return true;
+        case 5u: *state = D3D12_RESOURCE_STATE_DEPTH_WRITE; return true;
+        case 6u: *state = D3D12_RESOURCE_STATE_DEPTH_READ; return true;
+        case 7u:
+            *state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            return true;
+        case 8u:
+            *state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            return true;
+        case 9u: *state = D3D12_RESOURCE_STATE_COPY_DEST; return true;
+        case 10u: *state = D3D12_RESOURCE_STATE_COPY_SOURCE; return true;
+        case 11u: *state = D3D12_RESOURCE_STATE_PRESENT; return true;
+        case 12u: *state = D3D12_RESOURCE_STATE_GENERIC_READ; return true;
+        default: return false;
+    }
+}
+
+void WriteTimelineTick(std::uint32_t* words,
+                       std::uint32_t byte_offset,
+                       std::uint8_t tick_kind,
+                       std::uint64_t tick) {
+    auto* destination =
+        reinterpret_cast<std::uint8_t*>(words) + byte_offset;
+    if (tick_kind == 0u) {
+        const float value = static_cast<float>(tick);
+        std::memcpy(destination, &value, sizeof(value));
+    } else if (tick_kind == 1u) {
+        const std::uint32_t value = static_cast<std::uint32_t>(tick);
+        std::memcpy(destination, &value, sizeof(value));
+    } else if (tick_kind == 2u) {
+        const std::int32_t value = static_cast<std::int32_t>(tick);
+        std::memcpy(destination, &value, sizeof(value));
     }
 }
 
@@ -627,6 +708,16 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                     op.time_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
                 }
+                if (parameter_bytes >= 4u &&
+                    op.parameter_count <
+                        package::kMaxRootSignatureDwordCost) {
+                    const std::uint32_t entry = op.parameter_count++;
+                    op.parameter_ids[entry] = parameter.parameter_id;
+                    op.parameter_offsets[entry] =
+                        static_cast<std::int32_t>(byte_offset);
+                    op.parameter_tick_kinds[entry] =
+                        TickKindForParameter(parameter);
+                }
                 std::memcpy(
                     reinterpret_cast<std::uint8_t*>(op.constants.data()) +
                         byte_offset,
@@ -648,6 +739,39 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.root_parameter = instruction.operands[0].u32;
             op.heap_name = instruction.operands[1].string_value;
             op.resource_a = instruction.operands[2].u32;
+            const package::ResourceDescriptor* resource =
+                FindPackageResource(package_, op.resource_a);
+            if (resource == nullptr) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_reference",
+                     "descriptor_table_resource",
+                     std::to_string(op.resource_a), "missing", "frame_plan",
+                     "frame.set_descriptor_table references a missing resource");
+                return false;
+            }
+            const bool sampler_table = op.heap_name == "sampler";
+            if (!sampler_table && op.heap_name != "cbv_srv_uav") {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_descriptor_heap", "heap_name",
+                     "cbv_srv_uav|sampler",
+                     op.heap_name.empty() ? "unavailable" : op.heap_name,
+                     "frame_plan",
+                     "frame.set_descriptor_table names an unsupported heap");
+                return false;
+            }
+            const bool descriptor_available =
+                sampler_table
+                    ? resource->usage == "sampler"
+                    : ResourceNeedsCbvSrvUavDescriptor(package_, *resource);
+            if (!descriptor_available) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_descriptor_target",
+                     "descriptor_table_resource", resource->name,
+                     "no descriptor in " + op.heap_name, "frame_plan",
+                     "frame.set_descriptor_table targets a resource without a "
+                     "compatible descriptor");
+                return false;
+            }
         } else if (type == FrameOp::Type::Barrier) {
             if (instruction.operands.size() != 2u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -658,6 +782,33 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             op.barrier_state = instruction.operands[0].u32;
             op.resource_a = instruction.operands[1].u32;
+            if (!IsKnownBarrierStateCode(op.barrier_state)) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_barrier_state", "barrier_state",
+                     "0..12", std::to_string(op.barrier_state), "frame_plan",
+                     "frame.barrier uses an unknown resource-state code");
+                return false;
+            }
+            const package::ResourceDescriptor* resource =
+                FindPackageResource(package_, op.resource_a);
+            if (resource == nullptr) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_reference", "barrier_resource",
+                     std::to_string(op.resource_a), "missing", "frame_plan",
+                     "frame.barrier references a missing resource");
+                return false;
+            }
+            std::string compatibility_detail;
+            if (!BarrierStateCodeCompatibleWithUsage(
+                    op.barrier_state, resource->usage,
+                    &compatibility_detail)) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_barrier_usage", "resource_usage",
+                     resource->usage, compatibility_detail, "frame_plan",
+                     "frame.barrier state is incompatible with the target "
+                     "resource heap/usage");
+                return false;
+            }
         } else if (type == FrameOp::Type::Dispatch) {
             if (instruction.operands.size() != 4u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -698,6 +849,20 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             op.parameter_id = instruction.operands[0].u32;
             op.tick_value = instruction.operands[1].u64;
+            bool parameter_known = false;
+            for (const auto& parameter : package_.parameters) {
+                if (parameter.parameter_id == op.parameter_id) {
+                    parameter_known = true;
+                    break;
+                }
+            }
+            if (!parameter_known) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_reference", "parameter_id",
+                     std::to_string(op.parameter_id), "missing", "frame_plan",
+                     "frame.set_timeline references a missing parameter");
+                return false;
+            }
         } else if (type == FrameOp::Type::Present) {
             if (instruction.operands.size() != 1u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -1036,7 +1201,10 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
 #if defined(_WIN32)
     PlatformState* state = platform_.get();
     if (state == nullptr || state->device == nullptr) {
-        return ExitCode::D3D12DeviceCreationFailed;
+        return Fail(ExitCode::D3D12DeviceCreationFailed, "device",
+                    "device_unavailable", "device", "created", "unavailable",
+                    "frame_ring",
+                    "swap-chain creation requires an initialized D3D12 device");
     }
     D3D12_COMMAND_QUEUE_DESC queue_desc{};
     queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -1391,7 +1559,12 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
     // A bounded frame upload buffer is only needed for init.upload_resource.
 #if defined(_WIN32)
     PlatformState* state = platform_.get();
-    if (state == nullptr) return ExitCode::PackageValidationFailed;
+    if (state == nullptr) {
+        return Fail(ExitCode::PackageValidationFailed, "package_validation",
+                    "platform_state_unavailable", "platform", "initialized",
+                    "unavailable", "init.execute",
+                    "initialization requires an initialized platform/device");
+    }
     for (const auto& instruction : package_.initialization) {
         if (instruction.opcode == "init.create_resource") {
             const std::uint32_t resource_id = instruction.operands[0].u32;
@@ -1410,7 +1583,14 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                     break;
                 }
             }
-            if (slot == nullptr) return ExitCode::ResourceAllocationFailed;
+            if (slot == nullptr) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "resource_slot_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "init.create_resource",
+                            "resource slot was not registered during swap-chain "
+                            "and frame creation");
+            }
             if (slot->resource != nullptr) {
                 continue;
             }
@@ -1517,7 +1697,21 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                     break;
                 }
             }
-            if (record == nullptr) return ExitCode::RootSignatureCreationFailed;
+            if (record == nullptr) {
+                return Fail(ExitCode::RootSignatureCreationFailed, "pipeline",
+                            "root_signature_record_missing", "root_signature",
+                            std::to_string(root_id), "missing",
+                            "init.create_root_signature",
+                            "package carries no root-signature record");
+            }
+            if (force_root_signature_creation_failure_) {
+                return Fail(ExitCode::RootSignatureCreationFailed, "pipeline",
+                            "simulated_root_signature_failure",
+                            "root_signature", std::to_string(root_id),
+                            "simulated failure",
+                            "init.create_root_signature",
+                            "deterministic root-signature failure seam");
+            }
             PlatformState::RootSlot root_slot{};
             root_slot.root_signature_id = root_id;
             if (record->blob.empty() ||
@@ -1550,7 +1744,20 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 }
             }
             if (shader == nullptr || root == nullptr) {
-                return ExitCode::PipelineStateCreationFailed;
+                return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
+                            "pipeline_dependency_missing", "pipeline",
+                            std::to_string(shader_id),
+                            shader == nullptr ? "shader missing"
+                                              : "root signature missing",
+                            "init.create_pipeline",
+                            "compute pipeline dependencies are unavailable");
+            }
+            if (force_pipeline_creation_failure_) {
+                return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
+                            "simulated_pipeline_failure", "pipeline",
+                            std::to_string(shader_id), "simulated failure",
+                            "init.create_pipeline",
+                            "deterministic pipeline creation failure seam");
             }
             if (shader->target != "cs_6_0") {
                 return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
@@ -1584,35 +1791,66 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 }
             }
             if (slot == nullptr || slot->resource == nullptr) {
-                return ExitCode::ResourceAllocationFailed;
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "upload_resource_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "init.upload_resource",
+                            "upload target resource was not created");
             }
             const ResourcePlacement* placement = plan_.Find(resource_id);
-            if (placement == nullptr) return ExitCode::ResourceAllocationFailed;
-            D3D12_HEAP_PROPERTIES upload_heap{};
-            upload_heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-            D3D12_RESOURCE_DESC upload_desc = MakeResourceDesc(
-                placement->descriptor);
-            upload_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-            ID3D12Resource* upload = nullptr;
-            if (FAILED(state->device->CreateCommittedResource(
-                    &upload_heap, D3D12_HEAP_FLAG_NONE, &upload_desc,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                    IID_PPV_ARGS(&upload))) ||
-                upload == nullptr) {
+            if (placement == nullptr) {
                 return Fail(ExitCode::ResourceAllocationFailed, "resource",
-                            "upload_resource_failed", "upload", "created",
-                            "failed", "init.upload_resource",
-                            "upload heap allocation failed");
+                            "upload_placement_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "init.upload_resource",
+                            "upload target has no validated placement");
+            }
+            if (placement->descriptor.kind != "buffer") {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "upload_kind_unsupported", "resource_kind",
+                            "buffer", placement->descriptor.kind,
+                            "init.upload_resource",
+                            "the minimal player uploads buffer resources only");
+            }
+            if (state->frames.empty() || state->frames[0].upload == nullptr ||
+                state->frames[0].upload_size <
+                    placement->descriptor.size_bytes) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "frame_upload_ring_unavailable", "upload_bytes",
+                            std::to_string(placement->descriptor.size_bytes),
+                            state->frames.empty() || state->frames[0].upload ==
+                                    nullptr
+                                ? "unavailable"
+                                : std::to_string(
+                                      state->frames[0].upload_size),
+                            "init.upload_resource",
+                            "per-frame upload ring is missing or too small");
+            }
+            // The ring is owned by frame slot 0 during initialization.  If a
+            // previous initialization upload is still in flight, wait on that
+            // slot's fence before rewriting the mapped region.
+            auto& frame = state->frames[0];
+            if (frame.fence_value != 0u) {
+                const ExitCode wait = WaitForFenceValue(
+                    state->fence, frame.fence_value, state->fence_event,
+                    kFenceTimeoutMs);
+                if (wait != ExitCode::Success) {
+                    return Fail(wait, "gpu_execution", "fence_wait_failed",
+                                "fence", "completed", "timeout_or_failure",
+                                "init.upload_resource",
+                                "waiting for upload-ring ownership failed");
+                }
+                frame.fence_value = 0u;
+                ++stats_.upload_reuse_waits;
             }
             void* mapped = nullptr;
             D3D12_RANGE read_range{0u, 0u};
-            if (FAILED(upload->Map(0u, &read_range, &mapped)) ||
+            if (FAILED(frame.upload->Map(0u, &read_range, &mapped)) ||
                 mapped == nullptr) {
-                upload->Release();
                 return Fail(ExitCode::ResourceAllocationFailed, "resource",
                             "upload_map_failed", "mapped", "available",
                             "unavailable", "init.upload_resource",
-                            "upload resource Map failed");
+                            "per-frame upload ring Map failed");
             }
             std::memset(mapped, 0, static_cast<std::size_t>(
                                       placement->descriptor.size_bytes));
@@ -1628,16 +1866,17 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
             D3D12_RANGE write_range{0u, static_cast<SIZE_T>(
                                            placement->descriptor.size_bytes)};
-            upload->Unmap(0u, &write_range);
+            frame.upload->Unmap(0u, &write_range);
 
-            auto& frame = state->frames[0];
             if (frame.command_list == nullptr || frame.allocator == nullptr) {
-                upload->Release();
-                return ExitCode::CommandListRecordingFailed;
+                return Fail(ExitCode::CommandListRecordingFailed,
+                            "command_list", "upload_command_list_unavailable",
+                            "command_list", "created", "unavailable",
+                            "init.upload_resource",
+                            "frame command list/allocator is unavailable");
             }
             if (FAILED(frame.allocator->Reset()) ||
                 FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
-                upload->Release();
                 return Fail(ExitCode::CommandListRecordingFailed,
                             "command_list", "command_list_reset_failed",
                             "reset", "succeeded", "failed",
@@ -1653,7 +1892,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             frame.command_list->ResourceBarrier(1u, &to_copy);
             frame.command_list->CopyBufferRegion(
-                slot->resource, 0u, upload, 0u,
+                slot->resource, 0u, frame.upload, 0u,
                 placement->descriptor.size_bytes);
             const D3D12_RESOURCE_STATES final_state =
                 WorkingStateForUsage(placement->descriptor);
@@ -1663,7 +1902,6 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             frame.command_list->ResourceBarrier(1u, &to_work);
             slot->state = final_state;
             if (FAILED(frame.command_list->Close())) {
-                upload->Release();
                 return Fail(ExitCode::CommandListRecordingFailed,
                             "command_list", "command_list_close_failed",
                             "closed", "closed", "failed",
@@ -1674,26 +1912,24 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             state->queue->ExecuteCommandLists(1u, lists);
             const std::uint64_t fence_value = next_fence_value_++;
             if (FAILED(state->queue->Signal(state->fence, fence_value))) {
-                upload->Release();
                 return Fail(ExitCode::GpuSubmissionFailed,
                             "gpu_execution", "queue_signal_failed", "signal",
                             "succeeded", "failed", "init.upload_resource",
                             "queue Signal failed");
             }
-            const ExitCode wait = WaitForFenceValue(
-                state->fence, fence_value, state->fence_event,
-                kFenceTimeoutMs);
-            upload->Release();
-            if (wait != ExitCode::Success) {
-                return Fail(wait, "gpu_execution", "fence_wait_failed",
-                            "fence", "completed", "timeout_or_failure",
-                            "init.upload_resource",
-                            "initialization upload fence wait failed");
-            }
+            frame.fence_value = fence_value;
         }
+    }
+    // Initialization is complete only when the ordered upload/copy submissions
+    // have retired.  This also releases upload-ring ownership to the frame
+    // ring before the first render tick.
+    {
+        const ExitCode wait = WaitForAllFrames("initialization_complete");
+        if (wait != ExitCode::Success) return wait;
     }
 #else
     // Host simulation still executes the same ordered initialization contract.
+    std::array<bool, kMaxFramesInFlight> upload_slots_used{};
     for (const auto& instruction : package_.initialization) {
         if (instruction.opcode == "init.create_resource") {
             const ResourcePlacement* placement =
@@ -1713,6 +1949,28 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                            package_, placement->descriptor)) {
                 NoteEngineAllocation(0u, 0u, true, false, false);
             }
+        } else if (instruction.opcode == "init.create_root_signature" &&
+                   force_root_signature_creation_failure_) {
+            return Fail(ExitCode::RootSignatureCreationFailed, "pipeline",
+                        "simulated_root_signature_failure", "root_signature",
+                        std::to_string(instruction.operands[0].u32),
+                        "simulated failure", "init.create_root_signature",
+                        "deterministic root-signature failure seam");
+        } else if (instruction.opcode == "init.create_pipeline" &&
+                   force_pipeline_creation_failure_) {
+            return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
+                        "simulated_pipeline_failure", "pipeline",
+                        std::to_string(instruction.operands[0].u32),
+                        "simulated failure", "init.create_pipeline",
+                        "deterministic pipeline creation failure seam");
+        } else if (instruction.opcode == "init.upload_resource") {
+            // Initialization owns frame slot 0's upload ring, matching the
+            // native path.
+            const std::size_t slot = 0u;
+            if (upload_slots_used[slot]) {
+                ++stats_.upload_reuse_waits;
+            }
+            upload_slots_used[slot] = true;
         }
     }
     NoteEngineAllocation(0u, 0u, false, true, false);
@@ -1727,7 +1985,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 #if defined(_WIN32)
     PlatformState* state = platform_.get();
     if (state == nullptr || state->queue == nullptr) {
-        return ExitCode::CommandListRecordingFailed;
+        return Fail(ExitCode::CommandListRecordingFailed, "command_list",
+                    "command_queue_unavailable", "command_queue", "created",
+                    "unavailable", "renderAtTick",
+                    "frame execution requires an initialized direct queue");
     }
     const std::size_t slot_index =
         static_cast<std::size_t>(frames_rendered_ % frames_in_flight_);
@@ -1743,9 +2004,6 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         "waiting for frame-slot ownership failed");
         }
         frame.fence_value = 0u;
-        if (frame.upload != nullptr) {
-            ++stats_.upload_reuse_waits;
-        }
     }
     if (FAILED(frame.allocator->Reset()) ||
         FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
@@ -1776,6 +2034,12 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     }
 #endif
     bool present_requested = false;
+    // frame.set_timeline updates this bounded state in emitted instruction
+    // order.  The supplied render tick advances the selected parameter without
+    // allocating, reflecting, or re-planning anything.
+    bool timeline_override = timeline_override_active_;
+    std::uint32_t timeline_parameter = timeline_parameter_id_;
+    std::uint64_t timeline_value = timeline_tick_;
     for (const auto& op : frame_ops_) {
         switch (op.type) {
             case FrameOp::Type::SetRootSignature: {
@@ -1803,7 +2067,25 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     std::array<std::uint32_t,
                                package::kMaxRootSignatureDwordCost>
                         values = op.constants;
-                    if (op.time_byte_offset >= 0 &&
+                    bool timeline_applied = false;
+                    if (timeline_override) {
+                        for (std::uint32_t entry = 0u;
+                             entry < op.parameter_count; ++entry) {
+                            if (op.parameter_ids[entry] !=
+                                timeline_parameter) {
+                                continue;
+                            }
+                            WriteTimelineTick(
+                                values.data(),
+                                static_cast<std::uint32_t>(
+                                    op.parameter_offsets[entry]),
+                                op.parameter_tick_kinds[entry],
+                                timeline_value);
+                            timeline_applied = true;
+                            break;
+                        }
+                    }
+                    if (!timeline_applied && op.time_byte_offset >= 0 &&
                         static_cast<std::uint32_t>(op.time_byte_offset) + 4u <=
                             op.constant_count * 4u) {
                         const float time_value = static_cast<float>(tick);
@@ -1827,6 +2109,16 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     handle = candidate.gpu_handle;
                     break;
                 }
+                if (handle.ptr == 0u) {
+                    return Fail(ExitCode::CommandListRecordingFailed,
+                                "command_list",
+                                "descriptor_table_target_missing",
+                                "descriptor_table_resource",
+                                std::to_string(op.resource_a),
+                                "no GPU descriptor", "renderAtTick",
+                                "frame.set_descriptor_table has no descriptor "
+                                "for the referenced resource");
+                }
                 list->SetComputeRootDescriptorTable(op.root_parameter, handle);
                 break;
             }
@@ -1845,8 +2137,18 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "missing", "renderAtTick",
                                 "frame.barrier references an uncreated resource");
                 }
-                const D3D12_RESOURCE_STATES after =
-                    BarrierStateFromCode(op.barrier_state);
+                D3D12_RESOURCE_STATES after =
+                    D3D12_RESOURCE_STATE_COMMON;
+                if (!TryBarrierStateFromCode(op.barrier_state, &after)) {
+                    return Fail(ExitCode::PackageValidationFailed,
+                                "package_validation",
+                                "package_instruction_barrier_state",
+                                "barrier_state", "0..12",
+                                std::to_string(op.barrier_state),
+                                "renderAtTick",
+                                "frame.barrier uses an unknown resource-state "
+                                "code");
+                }
                 if (after != slot->state) {
                     D3D12_RESOURCE_BARRIER barrier{};
                     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1960,9 +2262,19 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 break;
             }
             case FrameOp::Type::SetTimeline:
-                // Timeline values are package data; no runtime graph or
-                // reflection is consulted.  The recorded tick is applied to the
-                // bounded constant block on the next frame plan revision.
+                // Package data selects the parameter; the externally supplied
+                // render tick advances it from the emitted tick base.  No
+                // runtime graph, reflection, or allocation is involved.
+                timeline_override = true;
+                timeline_parameter = op.parameter_id;
+                timeline_value =
+                    op.tick_value >
+                            std::numeric_limits<std::uint64_t>::max() - tick
+                        ? std::numeric_limits<std::uint64_t>::max()
+                        : op.tick_value + tick;
+                timeline_parameter_id_ = timeline_parameter;
+                timeline_tick_ = timeline_value;
+                timeline_override_active_ = true;
                 break;
             case FrameOp::Type::Draw:
                 return Fail(ExitCode::PipelineStateCreationFailed,
@@ -1978,7 +2290,13 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 const UINT backbuffer_index =
                     state->swapchain->GetCurrentBackBufferIndex();
                 if (backbuffer_index >= state->backbuffers.size()) {
-                    return ExitCode::PresentationFailed;
+                    return Fail(ExitCode::PresentationFailed, "presentation",
+                                "backbuffer_index_invalid",
+                                "backbuffer_index", "< buffer_count",
+                                std::to_string(backbuffer_index),
+                                "renderAtTick",
+                                "swap-chain reported an out-of-range back-buffer "
+                                "index");
                 }
                 D3D12_RESOURCE_BARRIER to_render{};
                 to_render.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -2031,6 +2349,12 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     }
 #endif
 
+    if (simulate_post_initialization_allocation_) {
+        // Diagnostic seam: this follows exactly the same engine allocation
+        // tracking path as a real post-init heap/descriptor allocation, so the
+        // violation counter is exercised rather than assumed.
+        NoteEngineAllocation(64u, 0u, true, true, false);
+    }
     if (FAILED(list->Close())) {
         return Fail(ExitCode::CommandListRecordingFailed, "command_list",
                     "command_list_close_failed", "closed", "closed", "failed",
@@ -2103,16 +2427,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     }
 #else
     // Host simulation executes the same ordered frame contract without a GPU.
-    bool has_upload_work = false;
-    for (const auto& instruction : package_.initialization) {
-        if (instruction.opcode == "init.upload_resource") {
-            has_upload_work = true;
-            break;
-        }
-    }
-    if (has_upload_work && frames_rendered_ >= frames_in_flight_) {
-        ++stats_.upload_reuse_waits;
-    }
+    bool timeline_override = timeline_override_active_;
+    std::uint32_t timeline_parameter = timeline_parameter_id_;
+    std::uint64_t timeline_value = timeline_tick_;
     for (const auto& op : frame_ops_) {
         if (op.type == FrameOp::Type::Draw) {
             return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
@@ -2121,6 +2438,22 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         "renderAtTick",
                         "frame.draw is outside the minimal NW-04 player");
         }
+        if (op.type == FrameOp::Type::SetTimeline) {
+            timeline_override = true;
+            timeline_parameter = op.parameter_id;
+            timeline_value =
+                op.tick_value >
+                        std::numeric_limits<std::uint64_t>::max() - tick
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : op.tick_value + tick;
+            timeline_parameter_id_ = timeline_parameter;
+            timeline_tick_ = timeline_value;
+            timeline_override_active_ = true;
+        }
+    }
+    (void)timeline_override;
+    if (simulate_post_initialization_allocation_) {
+        NoteEngineAllocation(64u, 0u, true, true, false);
     }
     if (force_device_removed_) {
         return Fail(ExitCode::DeviceRemoved, "device", "device_removed",
@@ -2154,6 +2487,9 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     frames_rendered_ = 0u;
     last_tick_ = 0u;
     next_fence_value_ = 1u;
+    timeline_parameter_id_ = 0u;
+    timeline_tick_ = 0u;
+    timeline_override_active_ = false;
     width_ = config_.width;
     height_ = config_.height;
     minimized_ = false;
@@ -2321,8 +2657,20 @@ ExitCode PackagePlayer::renderAtTick(std::uint64_t tick) {
 #if NW_PLAYER_DIAGNOSTICS
     instrumentation_.BeginFrame(tick);
 #endif
+    const std::uint64_t allocation_calls_before_frame = stats_.allocation_calls;
     const ExitCode code = ExecuteFrameInstructions(tick);
+    if (stats_.allocation_calls != allocation_calls_before_frame) {
+        // Any engine allocation tracked while rendering is a violation; the
+        // render path must not grow heap or descriptor state.
+        stats_.post_initialization_allocation_violation = true;
+    }
     if (code != ExitCode::Success) {
+        if (last_exit_ != code) {
+            (void)Fail(code, ExitCodeCategory(code),
+                       "frame_execution_failure_without_diagnostic", "stage",
+                       "success", ExitCodeName(code), "renderAtTick",
+                       "frame execution failed without a structured diagnostic");
+        }
         last_exit_ = code;
         return code;
     }
@@ -2581,6 +2929,21 @@ void PackagePlayer::SetResourceAllocationQueryForTesting(
 
 void PackagePlayer::SetForceDeviceRemovedForTesting(bool removed) noexcept {
     force_device_removed_ = removed;
+}
+
+void PackagePlayer::SetForceRootSignatureCreationFailureForTesting(
+    bool fail) noexcept {
+    force_root_signature_creation_failure_ = fail;
+}
+
+void PackagePlayer::SetForcePipelineCreationFailureForTesting(
+    bool fail) noexcept {
+    force_pipeline_creation_failure_ = fail;
+}
+
+void PackagePlayer::SetSimulatePostInitializationAllocationForTesting(
+    bool allocate) noexcept {
+    simulate_post_initialization_allocation_ = allocate;
 }
 
 #if NW_PLAYER_DIAGNOSTICS

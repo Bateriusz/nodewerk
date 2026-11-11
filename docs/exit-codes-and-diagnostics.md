@@ -106,12 +106,18 @@ value or `unavailable` state, the package profile ID and requirements digest, an
 failure stage:
 
 ```text
-[NW-DIAG][category=package_capability][code=package_capability_feature_level]
+[NW-DIAG][category=device_and_capability][code=package_capability_feature_level]
 [stage=capability_validation][profile_id=nw.common.d3d12.fl12_0.sm6_0.v1]
 [requirements_digest=sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a]
 [requirement=feature_level][required=0xC000][observed=0xB000]
 detail="adapter feature level is below the exact package requirement"
 ```
+
+Static capability-record defects (profile/digest mismatches, contradictory
+records, or requirements that do not exactly match the emitted package) retain
+the `package_validation` category and `PackageValidationFailed` (`70`). Adapter
+query mismatches use `device_and_capability` and `CapabilityBaselineUnmet`
+(`23`). The Python contract checker mirrors that distinction.
 
 The player validates package structure and exact emitted requirements before creating the
 swap chain or any package resource. Adapter names, marketing generations, evidence-tier

@@ -105,6 +105,12 @@ public:
     std::uint64_t shutdown_count() const noexcept { return shutdown_count_; }
     std::uint64_t frames_rendered() const noexcept { return frames_rendered_; }
     std::uint64_t last_tick() const noexcept { return last_tick_; }
+    std::uint32_t last_timeline_parameter_id() const noexcept {
+        return timeline_parameter_id_;
+    }
+    std::uint64_t last_timeline_value() const noexcept {
+        return timeline_tick_;
+    }
     std::uint32_t width() const noexcept { return width_; }
     std::uint32_t height() const noexcept { return height_; }
     bool minimized() const noexcept { return minimized_; }
@@ -139,6 +145,11 @@ public:
     void SetResourceAllocationQueryForTesting(
         ResourceAllocationQueryFn query, void* user_data);
     void SetForceDeviceRemovedForTesting(bool removed) noexcept;
+    void SetForceRootSignatureCreationFailureForTesting(bool fail) noexcept;
+    void SetForcePipelineCreationFailureForTesting(bool fail) noexcept;
+    // Diagnostic-only seam that injects one tracked engine allocation into the
+    // render path so the post-initialization allocation guard is exercised.
+    void SetSimulatePostInitializationAllocationForTesting(bool allocate) noexcept;
 
     std::uint64_t upload_reuse_waits() const noexcept {
         return stats_.upload_reuse_waits;
@@ -207,6 +218,12 @@ private:
     bool resize_in_progress_ = false;
     bool shutting_down_ = false;
     bool force_device_removed_ = false;
+    bool force_root_signature_creation_failure_ = false;
+    bool force_pipeline_creation_failure_ = false;
+    bool simulate_post_initialization_allocation_ = false;
+    std::uint32_t timeline_parameter_id_ = 0u;
+    std::uint64_t timeline_tick_ = 0u;
+    bool timeline_override_active_ = false;
 
     ResourceAllocationQueryFn allocation_query_ = nullptr;
     void* allocation_user_data_ = nullptr;
@@ -242,6 +259,16 @@ private:
         std::string heap_name;
         std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
             constants{};
+        // Per-parameter placement inside this root-constant block.  Populated
+        // once while the frame plan is built so frame.set_timeline can update
+        // the selected parameter without allocating or re-planning.
+        std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+            parameter_ids{};
+        std::array<std::int32_t, package::kMaxRootSignatureDwordCost>
+            parameter_offsets{};
+        std::array<std::uint8_t, package::kMaxRootSignatureDwordCost>
+            parameter_tick_kinds{};
+        std::uint32_t parameter_count = 0u;
     };
     std::vector<FrameOp> frame_ops_;
     std::vector<std::string> last_frame_order_;

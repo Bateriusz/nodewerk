@@ -28,14 +28,11 @@ class CapabilityMismatch:
     profile_id: str
     requirements_digest: str
     message: str
+    category: str = "package_validation"
 
     def to_dict(self) -> dict[str, str]:
         return {
-            "category": (
-                "device_and_capability"
-                if self.code.startswith("package_capability_")
-                else "package_validation"
-            ),
+            "category": self.category,
             "code": self.code,
             "requirement": self.requirement,
             "required": self.required,
@@ -49,6 +46,13 @@ class CapabilityMismatch:
 def baseline_adapter(**overrides: Any) -> dict[str, Any]:
     adapter: dict[str, Any] = {
         "queried": True,
+        "feature_level_queried": True,
+        "shader_model_queried": True,
+        "binding_tier_queried": True,
+        "heap_tier_queried": True,
+        "windows_build_queried": True,
+        "limits_queried": True,
+        "optional_features_queried": True,
         "windows_build_number": nwp.MIN_WINDOWS_BUILD,
         "max_feature_level": nwp.FEATURE_LEVEL_12_0,
         "max_shader_model": nwp.SHADER_MODEL_6_0,
@@ -121,6 +125,7 @@ def _failure(
     required: str,
     observed: str,
     message: str,
+    category: str = "package_validation",
 ) -> CapabilityMismatch:
     return CapabilityMismatch(
         code=code,
@@ -130,6 +135,7 @@ def _failure(
         profile_id=package.capability.profile_id,
         requirements_digest=package.capability.requirements_digest,
         message=message,
+        category=category,
     )
 
 
@@ -178,54 +184,143 @@ def validate_package_requirements(package: nwp.NwpPackage) -> list[CapabilityMis
                     "capability record does not match the common profile",
                 )
             )
+    if capability.shader_model_text != nwp.SHADER_MODEL_TEXT_6_0:
+        failures.append(
+            _failure(
+                package,
+                "package_capability_contradictory",
+                "shader_model_text",
+                nwp.SHADER_MODEL_TEXT_6_0,
+                capability.shader_model_text or "unavailable",
+                "shader_model_text does not match shader model 6.0",
+            )
+        )
     emitted_formats = tuple(sorted({resource.format for resource in package.resources}))
-    if tuple(capability.required_dxgi_formats) != emitted_formats:
+    declared_formats = tuple(capability.required_dxgi_formats)
+    if len(set(declared_formats)) != len(declared_formats):
+        failures.append(
+            _failure(
+                package,
+                "package_capability_contradictory",
+                "required_dxgi_formats",
+                "unique format set",
+                "duplicate format entries",
+                "required format list contains duplicates",
+            )
+        )
+    if tuple(sorted(set(declared_formats))) != emitted_formats:
         failures.append(
             _failure(
                 package,
                 "package_capability_format_set",
                 "required_dxgi_formats",
                 ",".join(emitted_formats),
-                ",".join(capability.required_dxgi_formats) or "unavailable",
+                ",".join(declared_formats) or "unavailable",
                 "declared formats must exactly match emitted resources",
             )
         )
+    known_formats = {
+        "DXGI_FORMAT_R8G8B8A8_UNORM",
+        "DXGI_FORMAT_R32G32B32A32_FLOAT",
+        "DXGI_FORMAT_R32_UINT",
+        "DXGI_FORMAT_D32_FLOAT",
+    }
+    for format_name in declared_formats:
+        if format_name not in known_formats:
+            failures.append(
+                _failure(
+                    package,
+                    "package_capability_format_set",
+                    "required_dxgi_formats",
+                    "baseline DXGI formats",
+                    format_name,
+                    "unknown DXGI format requirement",
+                )
+            )
     actual_init = tuple(sorted({i.opcode for i in package.initialization}))
     actual_frame = tuple(sorted({i.opcode for i in package.frame}))
-    if tuple(capability.required_init_instructions) != actual_init:
+    declared_init = tuple(capability.required_init_instructions)
+    declared_frame = tuple(capability.required_frame_instructions)
+    if len(set(declared_init)) != len(declared_init):
+        failures.append(
+            _failure(
+                package,
+                "package_capability_contradictory",
+                "required_init_instructions",
+                "unique opcode set",
+                "duplicate opcode entries",
+                "initialization requirement contains duplicates",
+            )
+        )
+    if tuple(sorted(set(declared_init))) != actual_init:
         failures.append(
             _failure(
                 package,
                 "package_capability_instruction_mismatch",
                 "required_init_instructions",
                 ",".join(actual_init),
-                ",".join(capability.required_init_instructions),
+                ",".join(declared_init),
                 "initialization requirement is not exact",
             )
         )
-    if tuple(capability.required_frame_instructions) != actual_frame:
+    if len(set(declared_frame)) != len(declared_frame):
+        failures.append(
+            _failure(
+                package,
+                "package_capability_contradictory",
+                "required_frame_instructions",
+                "unique opcode set",
+                "duplicate opcode entries",
+                "frame requirement contains duplicates",
+            )
+        )
+    if tuple(sorted(set(declared_frame))) != actual_frame:
         failures.append(
             _failure(
                 package,
                 "package_capability_instruction_mismatch",
                 "required_frame_instructions",
                 ",".join(actual_frame),
-                ",".join(capability.required_frame_instructions),
+                ",".join(declared_frame),
                 "frame requirement is not exact",
             )
         )
     actual_targets = tuple(sorted({shader.target for shader in package.shaders}))
-    if tuple(capability.emitted_shader_targets) != actual_targets:
+    declared_targets = tuple(capability.emitted_shader_targets)
+    if len(set(declared_targets)) != len(declared_targets):
+        failures.append(
+            _failure(
+                package,
+                "package_capability_contradictory",
+                "emitted_shader_targets",
+                "unique target set",
+                "duplicate target entries",
+                "shader target requirement contains duplicates",
+            )
+        )
+    if tuple(sorted(set(declared_targets))) != actual_targets:
         failures.append(
             _failure(
                 package,
                 "package_capability_shader_target_mismatch",
                 "emitted_shader_targets",
                 ",".join(actual_targets),
-                ",".join(capability.emitted_shader_targets),
+                ",".join(declared_targets),
                 "shader target requirement is not exact",
             )
         )
+    for target in declared_targets:
+        if target not in {"cs_6_0", "vs_6_0", "ps_6_0"}:
+            failures.append(
+                _failure(
+                    package,
+                    "package_shader_target_unknown",
+                    "emitted_shader_targets",
+                    "cs_6_0/vs_6_0/ps_6_0",
+                    target,
+                    "unknown shader target requirement",
+                )
+            )
     derived = nwp.derive_capability_requirements(
         package.resources,
         package.initialization,
@@ -246,6 +341,30 @@ def validate_package_requirements(package: nwp.NwpPackage) -> list[CapabilityMis
                     "capability record does not match the emitted package",
                 )
             )
+    if (
+        capability.max_cbv_srv_uav_descriptors_per_frame
+        > nwp.MAX_CBV_SRV_UAV_DESCRIPTORS_PER_FRAME
+        or capability.max_sampler_descriptors_per_frame
+        > nwp.MAX_SAMPLER_DESCRIPTORS_PER_FRAME
+        or capability.max_root_signature_dword_cost
+        > nwp.MAX_ROOT_SIGNATURE_DWORD_COST
+        or capability.limit_max_texture_2d_dimension
+        > nwp.MAX_TEXTURE_2D_DIMENSION
+        or capability.limit_max_compute_threads_per_group
+        > nwp.MAX_COMPUTE_THREADS_PER_GROUP
+        or capability.limit_max_buffer_bytes > nwp.MAX_BUFFER_BYTES
+        or capability.limit_swap_chain_buffer_count > nwp.SWAP_CHAIN_BUFFER_COUNT
+    ):
+        failures.append(
+            _failure(
+                package,
+                "package_capability_contradictory",
+                "emitted_limits",
+                "baseline maxima",
+                "requirement exceeds the common profile maximum",
+                "emitted requirement exceeds the immutable baseline",
+            )
+        )
     if capability.runtime_dxc_dependency:
         failures.append(
             _failure(
@@ -277,6 +396,40 @@ def validate_package_requirements(package: nwp.NwpPackage) -> list[CapabilityMis
                 "false",
                 "true",
                 "Agility SDK redistribution is not permitted",
+            )
+        )
+    if nwp.PINNED_DXC_VERSION not in capability.toolchain_dxc_version:
+        failures.append(
+            _failure(
+                package,
+                "package_toolchain_identity",
+                "toolchain_dxc_version",
+                nwp.PINNED_DXC_VERSION,
+                capability.toolchain_dxc_version or "unavailable",
+                "release packages require the pinned offline DXC identity",
+            )
+        )
+    expected_toolchain_identity = f"dxc:{capability.toolchain_dxc_version}"
+    if capability.toolchain_identity != expected_toolchain_identity:
+        failures.append(
+            _failure(
+                package,
+                "package_toolchain_identity",
+                "toolchain_identity",
+                expected_toolchain_identity,
+                capability.toolchain_identity or "unavailable",
+                "toolchain identity must match the declared DXC version",
+            )
+        )
+    if not capability.compiler_fingerprint:
+        failures.append(
+            _failure(
+                package,
+                "package_capability_contradictory",
+                "compiler_fingerprint",
+                "non-empty",
+                "unavailable",
+                "compiler fingerprint is missing",
             )
         )
     if not capability.profile_fingerprint:
@@ -338,6 +491,17 @@ def validate_package_requirements(package: nwp.NwpPackage) -> list[CapabilityMis
                     "unsupported optional profiles must remain separate artifacts",
                 )
             )
+    elif capability.optional_requirements_digest:
+        failures.append(
+            _failure(
+                package,
+                "package_optional_profile_contradiction",
+                "optional_requirements_digest",
+                "empty",
+                capability.optional_requirements_digest,
+                "optional digest without optional profile identity",
+            )
+        )
     return failures
 
 
@@ -345,7 +509,10 @@ def evaluate_package_against_adapter(
     package: nwp.NwpPackage, adapter: dict[str, Any]
 ) -> list[CapabilityMismatch]:
     failures = validate_package_requirements(package)
-    if not failures and not adapter.get("queried", False):
+    adapter_category = (
+        "package_validation" if failures else "device_and_capability"
+    )
+    if not adapter.get("queried", False):
         failures.append(
             _failure(
                 package,
@@ -354,25 +521,53 @@ def evaluate_package_against_adapter(
                 "queried",
                 "unavailable",
                 "adapter capability query did not complete",
+                category=adapter_category,
             )
         )
     capability = package.capability
+    queried_fields = (
+        ("feature_level_queried", "feature_level", "12_0"),
+        ("shader_model_queried", "shader_model", "6_0"),
+        ("binding_tier_queried", "resource_binding_tier", "2"),
+        ("heap_tier_queried", "resource_heap_tier", "2"),
+        (
+            "windows_build_queried",
+            "min_windows_build",
+            str(capability.min_windows_build),
+        ),
+        ("limits_queried", "limits", "queried"),
+    )
+    for queried_key, requirement, required in queried_fields:
+        if not adapter.get(queried_key, False):
+            failures.append(
+                _failure(
+                    package,
+                    "package_capability_query_unavailable",
+                    requirement,
+                    required,
+                    "unavailable",
+                    f"adapter query '{queried_key}' is unavailable",
+                    category=adapter_category,
+                )
+            )
     checks = [
-        ("package_capability_feature_level", "feature_level", "max_feature_level", capability.feature_level, "0x{:X}"),
-        ("package_capability_shader_model", "shader_model", "max_shader_model", capability.shader_model, "0x{:X}"),
-        ("package_capability_binding_tier", "resource_binding_tier", "resource_binding_tier", capability.resource_binding_tier, "{}"),
-        ("package_capability_heap_tier", "resource_heap_tier", "resource_heap_tier", capability.resource_heap_tier, "{}"),
-        ("package_capability_windows_build", "min_windows_build", "windows_build_number", capability.min_windows_build, "{}"),
-        ("package_capability_direct_queue", "direct_queue_count", "direct_queue_count", capability.direct_queue_count, "{}"),
-        ("package_capability_descriptor_limit", "max_cbv_srv_uav_descriptors_per_frame", "max_cbv_srv_uav_descriptors_per_heap", capability.max_cbv_srv_uav_descriptors_per_frame, "{}"),
-        ("package_capability_descriptor_limit", "max_sampler_descriptors_per_frame", "max_sampler_descriptors_per_heap", capability.max_sampler_descriptors_per_frame, "{}"),
-        ("package_capability_root_signature_limit", "max_root_signature_dword_cost", "max_root_signature_dword_cost", capability.max_root_signature_dword_cost, "{}"),
-        ("package_capability_texture_limit", "limit_max_texture_2d_dimension", "max_texture_2d_dimension", capability.limit_max_texture_2d_dimension, "{}"),
-        ("package_capability_compute_limit", "limit_max_compute_threads_per_group", "max_compute_threads_per_group", capability.limit_max_compute_threads_per_group, "{}"),
-        ("package_capability_buffer_limit", "limit_max_buffer_bytes", "max_buffer_bytes", capability.limit_max_buffer_bytes, "{}"),
-        ("package_capability_swap_chain_limit", "limit_swap_chain_buffer_count", "max_swap_chain_buffer_count", capability.limit_swap_chain_buffer_count, "{}"),
+        ("package_capability_feature_level", "feature_level", "max_feature_level", capability.feature_level, "0x{:X}", "feature_level_queried"),
+        ("package_capability_shader_model", "shader_model", "max_shader_model", capability.shader_model, "0x{:X}", "shader_model_queried"),
+        ("package_capability_binding_tier", "resource_binding_tier", "resource_binding_tier", capability.resource_binding_tier, "{}", "binding_tier_queried"),
+        ("package_capability_heap_tier", "resource_heap_tier", "resource_heap_tier", capability.resource_heap_tier, "{}", "heap_tier_queried"),
+        ("package_capability_windows_build", "min_windows_build", "windows_build_number", capability.min_windows_build, "{}", "windows_build_queried"),
+        ("package_capability_direct_queue", "direct_queue_count", "direct_queue_count", capability.direct_queue_count, "{}", None),
+        ("package_capability_descriptor_limit", "max_cbv_srv_uav_descriptors_per_frame", "max_cbv_srv_uav_descriptors_per_heap", capability.max_cbv_srv_uav_descriptors_per_frame, "{}", "limits_queried"),
+        ("package_capability_descriptor_limit", "max_sampler_descriptors_per_frame", "max_sampler_descriptors_per_heap", capability.max_sampler_descriptors_per_frame, "{}", "limits_queried"),
+        ("package_capability_root_signature_limit", "max_root_signature_dword_cost", "max_root_signature_dword_cost", capability.max_root_signature_dword_cost, "{}", "limits_queried"),
+        ("package_capability_texture_limit", "limit_max_texture_2d_dimension", "max_texture_2d_dimension", capability.limit_max_texture_2d_dimension, "{}", "limits_queried"),
+        ("package_capability_compute_limit", "limit_max_compute_threads_per_group", "max_compute_threads_per_group", capability.limit_max_compute_threads_per_group, "{}", "limits_queried"),
+        ("package_capability_buffer_limit", "limit_max_buffer_bytes", "max_buffer_bytes", capability.limit_max_buffer_bytes, "{}", "limits_queried"),
+        ("package_capability_swap_chain_limit", "limit_swap_chain_buffer_count", "max_swap_chain_buffer_count", capability.limit_swap_chain_buffer_count, "{}", "limits_queried"),
     ]
-    for code, requirement, observed_key, required_value, fmt in checks:
+    for code, requirement, observed_key, required_value, fmt, queried_key in checks:
+        if queried_key is not None and not adapter.get(queried_key, False):
+            continue
         observed_value = adapter.get(observed_key)
         if observed_value is None:
             failures.append(
@@ -383,6 +578,7 @@ def evaluate_package_against_adapter(
                     fmt.format(required_value),
                     "unavailable",
                     f"adapter query '{observed_key}' is unavailable",
+                    category=adapter_category,
                 )
             )
         elif observed_value < required_value:
@@ -394,6 +590,7 @@ def evaluate_package_against_adapter(
                     fmt.format(required_value),
                     fmt.format(observed_value),
                     "adapter capability is below the exact package requirement",
+                    category=adapter_category,
                 )
             )
     formats = adapter.get("formats", {})
@@ -408,6 +605,7 @@ def evaluate_package_against_adapter(
                     format_name,
                     "unavailable",
                     "format support query did not return this format",
+                    category=adapter_category,
                 )
             )
             continue
@@ -435,6 +633,7 @@ def evaluate_package_against_adapter(
                         f"{format_name}:{resource.usage}",
                         "unsupported",
                         "adapter format does not support the emitted usage",
+                        category=adapter_category,
                     )
                 )
                 break
@@ -453,8 +652,23 @@ def evaluate_package_against_adapter(
                     target,
                     "unsupported",
                     "adapter did not confirm the emitted shader target",
+                    category=adapter_category,
                 )
             )
+    if capability.optional_profile_id and not adapter.get(
+        "optional_features_queried", False
+    ):
+        failures.append(
+            _failure(
+                package,
+                "package_capability_query_unavailable",
+                "optional_features",
+                "queried",
+                "unavailable",
+                "optional feature query unavailable for declared optional profile",
+                category=adapter_category,
+            )
+        )
     return failures
 
 

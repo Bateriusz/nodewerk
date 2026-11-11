@@ -80,6 +80,14 @@ def build_compute_display_package(*, specialization_count: int = 1) -> nwp.NwpPa
             (nwp.InstructionOperand("resource_ref", 1),),
         )
     )
+    # A second upload exercises the bounded per-frame upload ring: the ring's
+    # owning frame fence must be observed before the mapped bytes are reused.
+    initialization.append(
+        nwp.Instruction(
+            "init.upload_resource",
+            (nwp.InstructionOperand("resource_ref", 2),),
+        )
+    )
     frame = list(package.frame)
     frame.insert(
         0,

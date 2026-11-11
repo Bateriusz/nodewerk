@@ -32,6 +32,9 @@ struct FixtureArgs {
     bool simulate_device_removal = false;
     bool simulate_allocation_failure = false;
     bool simulate_capability_failure = false;
+    bool simulate_pipeline_failure = false;
+    bool simulate_root_signature_failure = false;
+    bool simulate_frame_allocation = false;
 };
 
 bool ParseU32(const char* text, std::uint32_t* value) {
@@ -98,6 +101,13 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             args->simulate_allocation_failure = true;
         } else if (std::strcmp(arg, "--simulate-capability-failure") == 0) {
             args->simulate_capability_failure = true;
+        } else if (std::strcmp(arg, "--simulate-pipeline-failure") == 0) {
+            args->simulate_pipeline_failure = true;
+        } else if (std::strcmp(arg, "--simulate-root-signature-failure") ==
+                   0) {
+            args->simulate_root_signature_failure = true;
+        } else if (std::strcmp(arg, "--simulate-frame-allocation") == 0) {
+            args->simulate_frame_allocation = true;
         } else {
             return false;
         }
@@ -128,6 +138,9 @@ int main(int argc, char** argv) {
             "[--emit-benchmark-metrics] [--resize-sequence] "
             "[--simulate-minimize] [--simulate-device-removal] "
             "[--simulate-allocation-failure] [--simulate-capability-failure] "
+            "[--simulate-pipeline-failure] "
+            "[--simulate-root-signature-failure] "
+            "[--simulate-frame-allocation] "
             "[--validation]\n");
         return static_cast<int>(nw::player::ExitCode::InvalidArguments);
     }
@@ -159,15 +172,33 @@ int main(int argc, char** argv) {
             },
             nullptr);
     }
+    if (args.simulate_pipeline_failure) {
+        player.SetForcePipelineCreationFailureForTesting(true);
+    }
+    if (args.simulate_root_signature_failure) {
+        player.SetForceRootSignatureCreationFailureForTesting(true);
+    }
+    if (args.simulate_frame_allocation) {
+        player.SetSimulatePostInitializationAllocationForTesting(true);
+    }
     nw::player::ExitCode code = player.initializeFromFile(args.package_path);
     if (code != nw::player::ExitCode::Success) {
+        std::printf("NW_PLAYER_PARTIAL_INITIALIZATION_CLEANUP=1\n");
         if (args.simulate_allocation_failure &&
             code == nw::player::ExitCode::ResourceAllocationFailed) {
-            std::printf("NW_PLAYER_PARTIAL_INITIALIZATION_CLEANUP=1\n");
+            std::printf("NW_PLAYER_ALLOCATION_FAILURE_REJECTED=1\n");
         }
         if (args.simulate_capability_failure &&
             code == nw::player::ExitCode::CapabilityBaselineUnmet) {
             std::printf("NW_PLAYER_CAPABILITY_FAILURE_REJECTED=1\n");
+        }
+        if (args.simulate_pipeline_failure &&
+            code == nw::player::ExitCode::PipelineStateCreationFailed) {
+            std::printf("NW_PLAYER_PIPELINE_FAILURE_REJECTED=1\n");
+        }
+        if (args.simulate_root_signature_failure &&
+            code == nw::player::ExitCode::RootSignatureCreationFailed) {
+            std::printf("NW_PLAYER_ROOT_SIGNATURE_FAILURE_REJECTED=1\n");
         }
         return player.Report(true);
     }
@@ -242,6 +273,10 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(stats.resize_count));
     std::printf("NW_PLAYER_UPLOAD_REUSE_WAITS=%llu\n",
                 static_cast<unsigned long long>(stats.upload_reuse_waits));
+    std::printf("NW_PLAYER_LAST_TIMELINE_PARAMETER_ID=%u\n",
+                player.last_timeline_parameter_id());
+    std::printf("NW_PLAYER_LAST_TIMELINE_VALUE=%llu\n",
+                static_cast<unsigned long long>(player.last_timeline_value()));
     std::printf("NW_PLAYER_NON_ALIASED_PLACEMENTS=%d\n",
                 player.resource_plan().UsesOnlyNonAliasedPlacements() ? 1 : 0);
     std::printf("NW_PLAYER_ENGINE_RESOURCE_BYTES=%llu\n",
