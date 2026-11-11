@@ -39,6 +39,65 @@ def _parse_kv(stdout: str) -> dict[str, str]:
     return values
 
 
+def _windows_driver_metadata(adapter_description: str) -> dict[str, str]:
+    """Best-effort metadata-only driver/WDDM lookup on the evidence host."""
+    if sys.platform != "win32":
+        return {}
+    try:
+        import winreg  # type: ignore[import-not-found]
+    except Exception:
+        return {}
+    result: dict[str, str] = {}
+    class_path = (
+        r"SYSTEM\CurrentControlSet\Control\Class"
+        r"\{4d36e968-e325-11ce-bfc1-08002be10318}"
+    )
+    wanted = adapter_description.strip().lower()
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, class_path) as class_key:
+            index = 0
+            while True:
+                try:
+                    sub_name = winreg.EnumKey(class_key, index)
+                    index += 1
+                except OSError:
+                    break
+                if not (len(sub_name) == 4 and sub_name.isdigit()):
+                    continue
+                try:
+                    with winreg.OpenKey(class_key, sub_name) as device_key:
+                        try:
+                            desc, _ = winreg.QueryValueEx(device_key, "DriverDesc")
+                        except OSError:
+                            desc = ""
+                        actual = str(desc).strip().lower()
+                        if wanted and actual and wanted not in actual and actual not in wanted:
+                            continue
+                        try:
+                            driver, _ = winreg.QueryValueEx(
+                                device_key, "DriverVersion"
+                            )
+                            if driver:
+                                result["driver_version"] = str(driver)
+                        except OSError:
+                            pass
+                        try:
+                            wddm, _ = winreg.QueryValueEx(device_key, "WddmVersion")
+                            if isinstance(wddm, int):
+                                result["wddm_version"] = f"0x{wddm:08X}"
+                            elif wddm:
+                                result["wddm_version"] = str(wddm)
+                        except OSError:
+                            pass
+                        if result:
+                            return result
+                except OSError:
+                    continue
+    except Exception:
+        return {}
+    return result
+
+
 def _pending_record() -> dict[str, Any]:
     return {
         "schema_version": "1.0.0",
@@ -91,6 +150,9 @@ def record_execution(
     if not fixture.exists():
         print(f"player fixture is unavailable: {fixture}", file=sys.stderr)
         return 1
+    if tier not in ("ada", "blackwell", "auto"):
+        print(f"unsupported evidence tier: {tier}", file=sys.stderr)
+        return 1
     command = [
         str(fixture),
         "--package",
@@ -108,6 +170,40 @@ def record_execution(
     ]
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
     metrics = _parse_kv(proc.stdout)
+    observed_tier = metrics.get("NW_PLAYER_ADAPTER_GENERATION", "").strip()
+    if proc.returncode == 0:
+        if tier == "auto":
+            if observed_tier not in ("ada", "blackwell"):
+                print(
+                    "observed adapter generation is not classifiable as "
+                    f"Ada or Blackwell (reported '{observed_tier or 'unavailable'}')",
+                    file=sys.stderr,
+                )
+                return 1
+            tier = observed_tier
+        elif observed_tier not in ("ada", "blackwell"):
+            print(
+                f"requested tier '{tier}' but observed adapter generation is "
+                f"'{observed_tier or 'unavailable'}'",
+                file=sys.stderr,
+            )
+            return 1
+        elif observed_tier != tier:
+            print(
+                f"requested tier '{tier}' does not match observed adapter "
+                f"generation '{observed_tier}'",
+                file=sys.stderr,
+            )
+            return 1
+    host_metadata = _windows_driver_metadata(
+        metrics.get("NW_PLAYER_ADAPTER_DESCRIPTION", "")
+    )
+    driver_version = metrics.get("NW_PLAYER_DRIVER_VERSION", "unavailable")
+    if driver_version == "unavailable":
+        driver_version = host_metadata.get("driver_version", "unavailable")
+    wddm_version = metrics.get("NW_PLAYER_WDDM_VERSION", "unavailable")
+    if wddm_version == "unavailable":
+        wddm_version = host_metadata.get("wddm_version", "unavailable")
     package = nwp.decode_package(package_path.read_bytes())
     toolchain_manifest = REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json"
     record = _load_record(output_path)
@@ -147,8 +243,8 @@ def record_execution(
         },
         "environment": {
             "windows_build": metrics.get("NW_PLAYER_WINDOWS_BUILD", "unavailable"),
-            "driver_version": metrics.get("NW_PLAYER_DRIVER_VERSION", "unavailable"),
-            "wddm_version": metrics.get("NW_PLAYER_WDDM_VERSION", "unavailable"),
+            "driver_version": driver_version,
+            "wddm_version": wddm_version,
         },
         "queried_capabilities": {
             "max_feature_level": metrics.get("NW_PLAYER_MAX_FEATURE_LEVEL"),
@@ -202,6 +298,7 @@ def record_execution(
         "stderr": proc.stderr,
         "command": command,
     }
+    execution["tier_verified"] = observed_tier == tier
     record.setdefault("executions", []).append(execution)
     record["toolchain_manifest_sha256"] = (
         _sha256(toolchain_manifest) if toolchain_manifest.exists() else "unavailable"
@@ -244,7 +341,7 @@ def record_execution(
         for execution in record.get("executions", [])
     ):
         record["verification_status"] = "executed_failure"
-    if statuses == {"execution_recorded"}:
+    if statuses and statuses <= {"execution_recorded", "verified"}:
         successful = [
             execution
             for execution in record.get("executions", [])
@@ -268,6 +365,10 @@ def record_execution(
                 execution.get("d3d12_validation_clean") is True
                 for execution in successful
             )
+            and all(
+                execution.get("tier_verified") is True
+                for execution in successful
+            )
         ):
             record["verification_status"] = "verified"
             for entry in record["qualifications"].values():
@@ -286,7 +387,7 @@ def main() -> int:
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--package", type=Path)
     parser.add_argument(
-        "--tier", choices=("ada", "blackwell"), default="ada"
+        "--tier", choices=("ada", "blackwell", "auto"), default="ada"
     )
     parser.add_argument(
         "--output",

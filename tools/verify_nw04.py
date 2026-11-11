@@ -344,6 +344,62 @@ def check_capability_failure_matrix() -> CheckResult:
     )
 
 
+def check_optional_capability_matrix() -> CheckResult:
+    package = nw04_fixture.build_compute_display_package()
+    capability = nwp.replace(
+        package.capability,
+        optional_profile_id=nwp.OPTIONAL_PROFILE_WAVE_OPS,
+        optional_requirements_digest=nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST,
+        optional_profile_separate_artifact=True,
+    )
+    capability = nwp.replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
+    package = nwp.replace(package, capability=capability)
+    static_failures = contract.validate_package_requirements(package)
+    cases = [
+        (
+            "wave_ops_unsupported",
+            contract.baseline_adapter(wave_ops_supported=False),
+            "package_optional_feature_unsupported",
+        ),
+        (
+            "wave_ops_query_unavailable",
+            contract.baseline_adapter(wave_ops_queried=False),
+            "package_capability_query_unavailable",
+        ),
+    ]
+    if static_failures:
+        return CheckResult(
+            "nw04_optional_capability_matrix",
+            True,
+            False,
+            contract.format_failures(static_failures),
+        )
+    observed = []
+    for name, adapter, expected_code in cases:
+        failures = contract.evaluate_package_against_adapter(package, adapter)
+        matching = [
+            failure for failure in failures if failure.code == expected_code
+        ]
+        if not matching:
+            return CheckResult(
+                "nw04_optional_capability_matrix",
+                True,
+                False,
+                f"{name}: expected {expected_code}, observed "
+                f"{[failure.code for failure in failures]}",
+            )
+        observed.append({"case": name, "diagnostic": matching[0].to_dict()})
+    return CheckResult(
+        "nw04_optional_capability_matrix",
+        True,
+        True,
+        evidence={"cases": observed},
+    )
+
+
 def check_package_rejection_before_allocation() -> CheckResult:
     data = nw04_fixture.package_bytes()
     mutations: list[tuple[str, bytes, str]] = [
@@ -476,6 +532,8 @@ def check_player_source_contract() -> CheckResult:
         "SetForcePipelineCreationFailureForTesting",
         "TryParameterTickLayout",
         "frame_timeline_parameter_not_bound",
+        "package::ValidatePackage",
+        "package_release_flag_required",
         "UsesOnlyNonAliasedPlacements",
         "SetResourceAllocationQueryForTesting",
         "SetForceDeviceRemovedForTesting",
@@ -587,6 +645,7 @@ def run_contracts_only() -> list[CheckResult]:
         check_exact_capability_contract(),
         check_fixture_planner_contract(),
         check_capability_failure_matrix(),
+        check_optional_capability_matrix(),
         check_package_rejection_before_allocation(),
         check_player_source_contract(),
         check_release_closure(),
@@ -1155,6 +1214,49 @@ def build_summary(mode: str, results: list[CheckResult]) -> dict[str, Any]:
     }
 
 
+def build_evidence_record(
+    summary: dict[str, Any], passed: bool
+) -> dict[str, Any]:
+    """Schema-valid NW-04 evidence envelope for --record output.
+
+    ``--summary-json`` carries the mode-scoped verification summary.  The
+    hardware evidence record itself stays explicit about missing representative
+    qualification and never upgrades it based on GPU-less or single-host tests.
+    """
+    return {
+        "schema_version": "1.0.0",
+        "task": "NW-04",
+        "verification_status": (
+            "pending_unverified" if passed else "executed_failure"
+        ),
+        "qualifications": {
+            "ada": {
+                "hardware_tier": "desktop_ada_representative",
+                "status": "pending_unverified",
+                "reason": "No representative desktop Ada execution is recorded for the NW-04 player/package artifacts.",
+            },
+            "blackwell": {
+                "hardware_tier": "desktop_blackwell_representative",
+                "status": "pending_unverified",
+                "reason": "No representative desktop Blackwell execution is recorded for the NW-04 player/package artifacts.",
+            },
+        },
+        "executions": [],
+        "unavailable_telemetry": [
+            "driver_version",
+            "wddm_version",
+            "cpu_submit_ms",
+            "gpu_ms",
+        ],
+        "toolchain_manifest_sha256": "unavailable",
+        "policy": (
+            "Historical NW-01 measurements cannot certify NW-04 artifacts. "
+            "Missing coverage stays pending/unverified; executed failures remain failures."
+        ),
+        "verification_summary": summary,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1247,7 +1349,12 @@ def main() -> int:
     if args.record is not None:
         args.record.parent.mkdir(parents=True, exist_ok=True)
         args.record.write_text(
-            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            json.dumps(
+                build_evidence_record(summary, passed),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
             encoding="utf-8",
         )
     return 0 if passed else 1

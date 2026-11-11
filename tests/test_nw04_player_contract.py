@@ -361,6 +361,37 @@ def test_optional_profile_must_remain_a_separate_artifact() -> None:
     )
 
 
+def test_declared_optional_wave_ops_require_queried_support() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    capability = nwp.replace(
+        package.capability,
+        optional_profile_id=nwp.OPTIONAL_PROFILE_WAVE_OPS,
+        optional_requirements_digest=nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST,
+        optional_profile_separate_artifact=True,
+    )
+    capability = nwp.replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
+    package = nwp.replace(package, capability=capability)
+    assert contract.validate_package_requirements(package) == []
+    failures = contract.evaluate_package_against_adapter(
+        package, contract.baseline_adapter(wave_ops_supported=False)
+    )
+    assert any(
+        failure.code == "package_optional_feature_unsupported"
+        for failure in failures
+    )
+    failures = contract.evaluate_package_against_adapter(
+        package, contract.baseline_adapter(wave_ops_queried=False)
+    )
+    assert any(
+        failure.code == "package_capability_query_unavailable"
+        and failure.requirement == "optional_features"
+        for failure in failures
+    )
+
+
 def test_capability_failure_matrix_check_passes() -> None:
     result = verify_nw04.check_capability_failure_matrix()
     assert result.passed, result.detail
@@ -598,6 +629,22 @@ def test_verify_summary_is_scoped_to_the_selected_mode() -> None:
     assert summary["overall_status"] == "pending_unverified"
     assert summary["hardware_qualification"]["ada"] == "pending_unverified"
     assert summary["hardware_qualification"]["blackwell"] == "pending_unverified"
+
+
+def test_verify_record_output_is_schema_valid(tmp_path: Path) -> None:
+    from schema_validator import validate_file_against_schema
+
+    passed = verify_nw04.CheckResult("demo", True, True)
+    summary = verify_nw04.build_summary("ContractsOnly", [passed])
+    record = verify_nw04.build_evidence_record(summary, True)
+    record_path = tmp_path / "nw04-record.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    validate_file_against_schema(
+        record_path,
+        REPO_ROOT / "schemas" / "nw04-player-evidence.schema.json",
+    )
+    assert record["verification_status"] == "pending_unverified"
+    assert record["qualifications"]["ada"]["status"] == "pending_unverified"
 
 
 def test_native_host_simulation_planner_when_fixture_available() -> None:

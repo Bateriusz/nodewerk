@@ -195,23 +195,32 @@ const QueriedFormatCapability* FindFormat(
 }
 
 bool FormatSatisfiesUsage(const QueriedFormatCapability& format,
-                          const std::string& usage) {
-    if (usage == "cbv" || usage == "srv" || usage == "uav") {
-        return format.supported &&
-               (format.buffer || format.texture2d) &&
-               (usage == "cbv" || format.shader_resource ||
-                    (usage == "uav" && format.unordered_access));
-    }
-    if (usage == "rtv") {
-        return format.supported && format.render_target;
-    }
-    if (usage == "dsv") {
-        return format.supported && format.depth_stencil;
-    }
+                          const ResourceDescriptor& resource) {
+    const std::string& usage = resource.usage;
     if (usage == "sampler") {
         return true;
     }
-    return format.supported;
+    if (!format.supported) {
+        return false;
+    }
+    const bool dimension_supported =
+        resource.kind == "buffer" ? format.buffer : format.texture2d;
+    if (usage == "cbv") {
+        return resource.kind == "buffer" && dimension_supported;
+    }
+    if (usage == "srv") {
+        return dimension_supported && format.shader_resource;
+    }
+    if (usage == "uav") {
+        return dimension_supported && format.unordered_access;
+    }
+    if (usage == "rtv") {
+        return dimension_supported && format.render_target;
+    }
+    if (usage == "dsv") {
+        return dimension_supported && format.depth_stencil;
+    }
+    return dimension_supported;
 }
 
 std::string FormatSupportSummary(const QueriedFormatCapability* format) {
@@ -685,7 +694,7 @@ PackageCapabilityEvaluation EvaluatePackageCapabilities(
             if (resource.format != format_name) {
                 continue;
             }
-            if (!FormatSatisfiesUsage(*format, resource.usage)) {
+            if (!FormatSatisfiesUsage(*format, resource)) {
                 AddFailure(&result, "package_capability_format_usage",
                            "required_dxgi_formats",
                            format_name + ":" + resource.usage,
@@ -741,12 +750,17 @@ PackageCapabilityEvaluation EvaluatePackageCapabilities(
                        "optional profile is not a separate artifact", requirement);
         } else if (requirement.optional_profile_id ==
                    package::kOptionalWaveOpsProfileId) {
-            // The common artifact does not require wave ops; record availability
-            // for evidence only.  A separate artifact may gate on it itself.
-            if (!capabilities.optional_features_queried) {
+            if (!capabilities.optional_features_queried ||
+                !capabilities.wave_ops_queried) {
                 AddFailure(&result, "package_capability_query_unavailable",
                            "optional_features", "queried", kUnavailable,
                            "optional feature query unavailable for declared optional profile",
+                           requirement);
+            } else if (!capabilities.wave_ops_supported) {
+                AddFailure(&result, "package_optional_feature_unsupported",
+                           "wave_ops", "true", "false",
+                           "declared optional profile requires wave operations "
+                           "the adapter did not report",
                            requirement);
             }
         } else {
@@ -776,6 +790,9 @@ QueriedAdapterCapabilities MakeBaselineQueriedCapabilities(
     capabilities.windows_build_queried = true;
     capabilities.limits_queried = true;
     capabilities.optional_features_queried = true;
+    capabilities.wave_ops_queried = true;
+    capabilities.int64_shader_ops_queried = true;
+    capabilities.fp16_shader_ops_queried = true;
     capabilities.windows_build_number = windows_build_number;
     capabilities.max_feature_level = package::kFeatureLevel12_0;
     capabilities.max_shader_model = package::kShaderModel6_0;
@@ -796,6 +813,10 @@ QueriedAdapterCapabilities MakeBaselineQueriedCapabilities(
     capabilities.supports_cs_6_0 = true;
     capabilities.supports_vs_6_0 = true;
     capabilities.supports_ps_6_0 = true;
+    capabilities.wave_ops_supported = true;
+    capabilities.int64_shader_ops_supported = true;
+    capabilities.fp16_shader_ops_supported = true;
+    capabilities.typed_uav_additional_formats_supported = true;
     capabilities.formats = {
         QueriedFormatCapability{"DXGI_FORMAT_R8G8B8A8_UNORM", true, true, true,
                                 true, true, true, false, 8192u},

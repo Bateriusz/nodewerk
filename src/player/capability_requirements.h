@@ -52,6 +52,9 @@ struct QueriedAdapterCapabilities {
     bool windows_build_queried = false;
     bool limits_queried = false;
     bool optional_features_queried = false;
+    bool wave_ops_queried = false;
+    bool int64_shader_ops_queried = false;
+    bool fp16_shader_ops_queried = false;
 
     std::uint32_t max_feature_level = 0u;
     std::uint32_t max_shader_model = 0u;

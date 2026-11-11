@@ -82,6 +82,11 @@ PackageLoadResult LoadPackageFromBytes(const std::uint8_t* data,
 
     result.package_size_bytes = static_cast<std::uint64_t>(size_bytes);
     result.package_sha256 = package::Sha256Hex(data, size_bytes);
+    if ((result.package.flags & 1u) == 0u) {
+        return LoadFailure(ExitCode::PackageValidationFailed,
+                           "package_release_flag_required",
+                           "the player executes release .nwp v1 packages only");
+    }
     const PackageCapabilityEvaluation exact =
         ValidateEmittedRequirementsAgainstPackage(result.package);
     if (!exact.ok()) {

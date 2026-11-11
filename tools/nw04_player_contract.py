@@ -54,6 +54,9 @@ def baseline_adapter(**overrides: Any) -> dict[str, Any]:
         "windows_build_queried": True,
         "limits_queried": True,
         "optional_features_queried": True,
+        "wave_ops_queried": True,
+        "int64_shader_ops_queried": True,
+        "fp16_shader_ops_queried": True,
         "windows_build_number": nwp.MIN_WINDOWS_BUILD,
         "max_feature_level": nwp.FEATURE_LEVEL_12_0,
         "max_shader_model": nwp.SHADER_MODEL_6_0,
@@ -613,17 +616,25 @@ def evaluate_package_against_adapter(
         for resource in package.resources:
             if resource.format != format_name:
                 continue
+            dimension_key = (
+                "buffer" if resource.kind == "buffer" else "texture2d"
+            )
+            usage_support = {
+                "cbv": (
+                    support.get("buffer", False)
+                    if resource.kind == "buffer"
+                    else False
+                ),
+                "srv": support.get("shader_resource", False),
+                "uav": support.get("unordered_access", False),
+                "rtv": support.get("render_target", False),
+                "dsv": support.get("depth_stencil", False),
+                "sampler": True,
+            }.get(resource.usage, False)
             supported = (
                 support.get("supported", False)
-                and (
-                    {
-                        "cbv": support.get("buffer", False),
-                        "srv": support.get("shader_resource", False),
-                        "uav": support.get("unordered_access", False),
-                        "rtv": support.get("render_target", False),
-                        "dsv": support.get("depth_stencil", False),
-                    }.get(resource.usage, True)
-                )
+                and support.get(dimension_key, False)
+                and usage_support
             )
             if not supported:
                 failures.append(
@@ -667,6 +678,37 @@ def evaluate_package_against_adapter(
                 "queried",
                 "unavailable",
                 "optional feature query unavailable for declared optional profile",
+                category=adapter_category,
+            )
+        )
+    elif (
+        capability.optional_profile_id == nwp.OPTIONAL_PROFILE_WAVE_OPS
+        and not adapter.get("wave_ops_queried", False)
+    ):
+        failures.append(
+            _failure(
+                package,
+                "package_capability_query_unavailable",
+                "optional_features",
+                "queried",
+                "unavailable",
+                "wave-ops capability query unavailable for declared optional profile",
+                category=adapter_category,
+            )
+        )
+    elif (
+        capability.optional_profile_id == nwp.OPTIONAL_PROFILE_WAVE_OPS
+        and not adapter.get("wave_ops_supported", False)
+    ):
+        failures.append(
+            _failure(
+                package,
+                "package_optional_feature_unsupported",
+                "wave_ops",
+                "true",
+                "false",
+                "declared optional profile requires wave operations the "
+                "adapter did not report",
                 category=adapter_category,
             )
         )

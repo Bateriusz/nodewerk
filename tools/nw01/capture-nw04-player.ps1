@@ -3,7 +3,7 @@
 param(
     [Parameter(Mandatory)][string]$Fixture,
     [Parameter(Mandatory)][string]$Package,
-    [ValidateSet("ada", "blackwell")]
+    [ValidateSet("ada", "blackwell", "auto")]
     [string]$Tier = "ada",
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
     [string]$Output = ""

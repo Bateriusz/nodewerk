@@ -170,7 +170,7 @@ jobs:
             Write-Host "[NW04-EVIDENCE] player/package artifacts unavailable; Ada/Blackwell evidence remains pending_unverified."
             exit 0
           }
-          pwsh ./tools/nw01/capture-nw04-player.ps1 -Fixture $fixture.FullName -Package $package.FullName -Tier ada
+          pwsh ./tools/nw01/capture-nw04-player.ps1 -Fixture $fixture.FullName -Package $package.FullName -Tier auto
 
       - name: Package verified CleanSystem deployment
         if: always() && env.NW_FULL_SUMMARY != ''

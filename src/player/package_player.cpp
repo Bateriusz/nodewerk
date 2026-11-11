@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -243,6 +244,28 @@ void WriteTimelineTick(std::uint32_t* words,
         }
     }
 }
+
+#if defined(_WIN32)
+// Metadata-only classification for evidence.  This value is never consulted
+// by capability eligibility or package selection.
+std::string ClassifyAdapterGenerationMetadata(
+    const std::string& adapter_description) {
+    std::string lower = adapter_description;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    if (lower.find("rtx 50") != std::string::npos ||
+        lower.find("blackwell") != std::string::npos) {
+        return "blackwell";
+    }
+    if (lower.find("rtx 40") != std::string::npos ||
+        lower.find("ada") != std::string::npos) {
+        return "ada";
+    }
+    return "metadata_only";
+}
+#endif
 
 } // namespace
 
@@ -563,6 +586,110 @@ std::uint32_t QueryWindowsBuild() noexcept {
         }
     }
     return 0u;
+}
+
+std::string QueryAdapterDriverVersion(IDXGIAdapter1* adapter) {
+    if (adapter == nullptr) return {};
+    LARGE_INTEGER umd_version{};
+    if (FAILED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice),
+                                               &umd_version))) {
+        return {};
+    }
+    const std::uint64_t value =
+        static_cast<std::uint64_t>(umd_version.QuadPart);
+    const unsigned int major =
+        static_cast<unsigned int>((value >> 48u) & 0xFFFFu);
+    const unsigned int minor =
+        static_cast<unsigned int>((value >> 32u) & 0xFFFFu);
+    const unsigned int build =
+        static_cast<unsigned int>((value >> 16u) & 0xFFFFu);
+    const unsigned int revision = static_cast<unsigned int>(value & 0xFFFFu);
+    char text[64]{};
+    std::snprintf(text, sizeof(text), "%u.%u.%u.%u", major, minor, build,
+                  revision);
+    return text;
+}
+
+std::string LowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    return value;
+}
+
+std::string QueryDisplayRegistryText(const std::string& adapter_description,
+                                     const char* value_name) {
+    static constexpr const char* kDisplayClass =
+        "SYSTEM\\CurrentControlSet\\Control\\Class\\"
+        "{4d36e968-e325-11ce-bfc1-08002be10318}";
+    HKEY class_key = nullptr;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, kDisplayClass, 0u, KEY_READ,
+                      &class_key) != ERROR_SUCCESS) {
+        return {};
+    }
+    const std::string wanted = LowerAscii(adapter_description);
+    std::string result;
+    for (DWORD index = 0u;; ++index) {
+        char sub_name[256]{};
+        DWORD sub_name_size = static_cast<DWORD>(sizeof(sub_name));
+        const LONG enum_result =
+            RegEnumKeyExA(class_key, index, sub_name, &sub_name_size, nullptr,
+                          nullptr, nullptr, nullptr);
+        if (enum_result == ERROR_NO_MORE_ITEMS) break;
+        if (enum_result != ERROR_SUCCESS) continue;
+        bool numeric = sub_name[0] != '\0';
+        for (const char* ch = sub_name; *ch != '\0'; ++ch) {
+            if (std::isdigit(static_cast<unsigned char>(*ch)) == 0) {
+                numeric = false;
+                break;
+            }
+        }
+        if (!numeric) continue;
+        HKEY device_key = nullptr;
+        if (RegOpenKeyExA(class_key, sub_name, 0u, KEY_READ, &device_key) !=
+            ERROR_SUCCESS) {
+            continue;
+        }
+        char driver_desc[512]{};
+        DWORD driver_desc_size = static_cast<DWORD>(sizeof(driver_desc));
+        DWORD driver_desc_type = 0u;
+        const bool has_desc =
+            RegQueryValueExA(device_key, "DriverDesc", nullptr,
+                             &driver_desc_type,
+                             reinterpret_cast<LPBYTE>(driver_desc),
+                             &driver_desc_size) == ERROR_SUCCESS;
+        const std::string actual =
+            has_desc ? LowerAscii(driver_desc) : std::string();
+        const bool matches =
+            wanted.empty() ||
+            (!actual.empty() &&
+             (actual.find(wanted) != std::string::npos ||
+              wanted.find(actual) != std::string::npos));
+        if (matches) {
+            BYTE value[512]{};
+            DWORD value_size = static_cast<DWORD>(sizeof(value));
+            DWORD value_type = 0u;
+            if (RegQueryValueExA(device_key, value_name, nullptr, &value_type,
+                                 value, &value_size) == ERROR_SUCCESS) {
+                if (value_type == REG_SZ) {
+                    value[sizeof(value) - 1u] = '\0';
+                    result.assign(reinterpret_cast<const char*>(value));
+                } else if (value_type == REG_DWORD &&
+                           value_size >= sizeof(DWORD)) {
+                    DWORD number = 0u;
+                    std::memcpy(&number, value, sizeof(number));
+                    char text[32]{};
+                    std::snprintf(text, sizeof(text), "0x%08X", number);
+                    result = text;
+                }
+            }
+        }
+        RegCloseKey(device_key);
+        if (!result.empty()) break;
+    }
+    RegCloseKey(class_key);
+    return result;
 }
 
 } // namespace
@@ -1084,7 +1211,16 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     queried.windows_build_number = QueryWindowsBuild();
     queried.windows_build_queried = queried.windows_build_number != 0u;
     queried.adapter_description = capabilities_.adapter_description;
-    queried.adapter_generation = "metadata_only";
+    queried.adapter_generation =
+        ClassifyAdapterGenerationMetadata(queried.adapter_description);
+    queried.driver_version =
+        QueryAdapterDriverVersion(platform_->adapter);
+    if (queried.driver_version.empty()) {
+        queried.driver_version = QueryDisplayRegistryText(
+            queried.adapter_description, "DriverVersion");
+    }
+    queried.wddm_version_text = QueryDisplayRegistryText(
+        queried.adapter_description, "WddmVersion");
     queried.vendor_id = capabilities_.vendor_id;
     queried.device_id = capabilities_.device_id;
     queried.dedicated_video_memory_bytes =
@@ -1143,6 +1279,8 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     if (SUCCEEDED(device->CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
         queried.optional_features_queried = true;
+        queried.wave_ops_queried = true;
+        queried.int64_shader_ops_queried = true;
         queried.wave_ops_supported = options1.WaveOps != FALSE;
         queried.int64_shader_ops_supported = options1.Int64ShaderOps != FALSE;
     }
@@ -1150,6 +1288,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     if (SUCCEEDED(device->CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4)))) {
         queried.optional_features_queried = true;
+        queried.fp16_shader_ops_queried = true;
         queried.fp16_shader_ops_supported =
             options4.Native16BitShaderOpsSupported != FALSE;
     }
@@ -1637,8 +1776,30 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                     "unavailable", "init.execute",
                     "initialization requires an initialized platform/device");
     }
+    const auto require_operands =
+        [this](const package::Instruction& instruction,
+               std::size_t expected) -> bool {
+        if (instruction.operands.size() == expected) return true;
+        Fail(ExitCode::PackageValidationFailed, "package_validation",
+             "package_instruction_operand_count", "operand_count",
+             std::to_string(expected),
+             std::to_string(instruction.operands.size()), "init.execute",
+             "initialization instruction operand count is invalid");
+        return false;
+    };
     for (const auto& instruction : package_.initialization) {
         if (instruction.opcode == "init.create_resource") {
+            if (!require_operands(instruction, 1u)) {
+                return last_exit_;
+            }
+            if (instruction.operands[0].type !=
+                package::OperandType::ResourceRef) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation",
+                            "package_instruction_operand", "operand_type",
+                            "resource_ref", "invalid", "init.execute",
+                            "init.create_resource operand type is invalid");
+            }
             const std::uint32_t resource_id = instruction.operands[0].u32;
             const ResourcePlacement* placement = plan_.Find(resource_id);
             if (placement == nullptr) {
@@ -1761,6 +1922,17 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 }
             }
         } else if (instruction.opcode == "init.create_root_signature") {
+            if (!require_operands(instruction, 1u)) {
+                return last_exit_;
+            }
+            if (instruction.operands[0].type !=
+                package::OperandType::RootSignatureRef) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation",
+                            "package_instruction_operand", "operand_type",
+                            "root_signature_ref", "invalid", "init.execute",
+                            "init.create_root_signature operand type is invalid");
+            }
             const std::uint32_t root_id = instruction.operands[0].u32;
             const package::RootSignatureRecord* record = nullptr;
             for (const auto& candidate : package_.root_signatures) {
@@ -1799,6 +1971,20 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
             state->root_signatures.push_back(root_slot);
         } else if (instruction.opcode == "init.create_pipeline") {
+            if (!require_operands(instruction, 2u)) {
+                return last_exit_;
+            }
+            if (instruction.operands[0].type !=
+                    package::OperandType::ShaderRef ||
+                instruction.operands[1].type !=
+                    package::OperandType::RootSignatureRef) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation",
+                            "package_instruction_operand", "operand_type",
+                            "shader_ref,root_signature_ref", "invalid",
+                            "init.execute",
+                            "init.create_pipeline operand types are invalid");
+            }
             const std::uint32_t shader_id = instruction.operands[0].u32;
             const std::uint32_t root_id = instruction.operands[1].u32;
             const package::ShaderRecord* shader = nullptr;
@@ -1854,6 +2040,17 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
             state->pipelines.push_back(pipeline);
         } else if (instruction.opcode == "init.upload_resource") {
+            if (!require_operands(instruction, 1u)) {
+                return last_exit_;
+            }
+            if (instruction.operands[0].type !=
+                package::OperandType::ResourceRef) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation",
+                            "package_instruction_operand", "operand_type",
+                            "resource_ref", "invalid", "init.execute",
+                            "init.upload_resource operand type is invalid");
+            }
             const std::uint32_t resource_id = instruction.operands[0].u32;
             PlatformState::ResourceSlot* slot = nullptr;
             for (auto& candidate : state->resources) {
@@ -2077,6 +2274,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         }
         frame.fence_value = 0u;
     }
+#if NW_PLAYER_DIAGNOSTICS
+    instrumentation_.BeginFrame(tick);
+#endif
     if (FAILED(frame.allocator->Reset()) ||
         FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
         return Fail(ExitCode::CommandListRecordingFailed, "command_list",
@@ -2445,6 +2645,12 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     }
     frame.fence_value = fence_value;
 
+#if NW_PLAYER_DIAGNOSTICS
+    // CPU submission ends at queue Signal.  Record it before fence waits and
+    // Present so the metric does not include GPU execution or VSync.
+    instrumentation_.EndFrame();
+#endif
+
     if (config_.wait_for_gpu_each_frame) {
         const ExitCode wait = WaitForFenceValue(
             state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
@@ -2502,9 +2708,15 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     }
 #else
     // Host simulation executes the same ordered frame contract without a GPU.
+#if NW_PLAYER_DIAGNOSTICS
+    instrumentation_.BeginFrame(tick);
+#endif
     if (!ApplyFramePlanForTesting(tick)) {
         return last_exit_;
     }
+#if NW_PLAYER_DIAGNOSTICS
+    instrumentation_.EndFrame();
+#endif
     if (simulate_post_initialization_allocation_) {
         NoteEngineAllocation(64u, 0u, true, true, false);
     }
@@ -2552,6 +2764,55 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     shutting_down_ = false;
     frames_in_flight_ =
         std::clamp(config_.frames_in_flight, 1u, kMaxFramesInFlight);
+
+    if ((package_.flags & 1u) == 0u) {
+        return Fail(ExitCode::PackageValidationFailed, "package_validation",
+                    "package_release_flag_required", "release_flag", "1",
+                    std::to_string(package_.flags), "package_contract",
+                    "the player executes release .nwp v1 packages only");
+    }
+    std::vector<package::Diagnostic> package_diagnostics;
+    if (!package::ValidatePackage(package_, package_diagnostics,
+                                  /*allow_dev=*/false)) {
+        for (const auto& package_diagnostic : package_diagnostics) {
+            PlayerDiagnostic diagnostic{};
+            diagnostic.category = "package_validation";
+            diagnostic.code = package_diagnostic.code.empty()
+                                  ? "package_validation"
+                                  : package_diagnostic.code;
+            diagnostic.requirement = package_diagnostic.section.empty()
+                                         ? "package"
+                                         : package_diagnostic.section;
+            diagnostic.required_value = "valid release .nwp v1 package";
+            diagnostic.observed_value =
+                package_diagnostic.has_offset
+                    ? "offset=" + std::to_string(package_diagnostic.offset)
+                    : "invalid";
+            diagnostic.profile_id = package_.capability.profile_id;
+            diagnostic.requirements_digest =
+                package_.capability.requirements_digest;
+            diagnostic.stage = "package_contract";
+            diagnostic.message = package_diagnostic.message;
+            diagnostics_.push_back(std::move(diagnostic));
+        }
+        if (package_diagnostics.empty()) {
+            PlayerDiagnostic diagnostic{};
+            diagnostic.category = "package_validation";
+            diagnostic.code = "package_validation";
+            diagnostic.requirement = "package";
+            diagnostic.required_value = "valid release .nwp v1 package";
+            diagnostic.observed_value = "invalid";
+            diagnostic.profile_id = package_.capability.profile_id;
+            diagnostic.requirements_digest =
+                package_.capability.requirements_digest;
+            diagnostic.stage = "package_contract";
+            diagnostic.message =
+                "package model validation failed without diagnostics";
+            diagnostics_.push_back(std::move(diagnostic));
+        }
+        last_exit_ = ExitCode::PackageValidationFailed;
+        return ExitCode::PackageValidationFailed;
+    }
 
     const PackageCapabilityEvaluation exact =
         ValidateEmittedRequirementsAgainstPackage(package_);
@@ -2707,9 +2968,6 @@ ExitCode PackagePlayer::renderAtTick(std::uint64_t tick) {
     if (CheckDeviceRemoved("renderAtTick")) {
         return ExitCode::DeviceRemoved;
     }
-#if NW_PLAYER_DIAGNOSTICS
-    instrumentation_.BeginFrame(tick);
-#endif
     const std::uint64_t allocation_calls_before_frame = stats_.allocation_calls;
     const ExitCode code = ExecuteFrameInstructions(tick);
     if (stats_.allocation_calls != allocation_calls_before_frame) {
@@ -2731,7 +2989,6 @@ ExitCode PackagePlayer::renderAtTick(std::uint64_t tick) {
         return last_exit_;
     }
 #if NW_PLAYER_DIAGNOSTICS
-    instrumentation_.EndFrame();
     EngineMemoryAccounting accounting{};
     accounting.engine_resource_bytes = stats_.engine_resource_bytes;
     accounting.engine_upload_bytes = stats_.engine_upload_bytes;
