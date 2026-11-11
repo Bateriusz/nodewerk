@@ -42,6 +42,7 @@ inline constexpr std::string_view kCommonProfileId =
     "nw.common.d3d12.fl12_0.sm6_0.v1";
 inline constexpr std::string_view kCommonRequirementsDigest =
     "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a";
+inline constexpr std::string_view kPinnedDxcVersion = "1.8.2407";
 inline constexpr std::string_view kOptionalWaveOpsProfileId =
     "nw.optional.d3d12.wave_ops.v1";
 inline constexpr std::string_view kOptionalWaveOpsRequirementsDigest =

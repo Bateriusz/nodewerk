@@ -108,6 +108,11 @@ Required fields include:
 - `required_init_instructions` / `required_frame_instructions` exactly matching
   the emitted primitive opcodes
 
+Release packages require `toolchain_dxc_version` to contain the pinned DXC
+identity (`1.8.2407`) and `toolchain_identity` to equal
+`dxc:<toolchain_dxc_version>`. Non-release development artifacts may carry a
+different measured DXC identity.
+
 `profile_fingerprint` is SHA-256 over the canonical capability fields excluding
 the fingerprint itself. Unknown main-profile IDs and digest mismatches fail
 closed. Unsupported optional profiles remain separate artifacts; a declared

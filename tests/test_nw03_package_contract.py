@@ -249,6 +249,25 @@ def test_root_signature_requires_fixed_root_parameter_mapping() -> None:
     )
 
 
+def test_root_signature_rejects_duplicate_binding_names() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    params, output = root.bindings
+    bindings = (params, output, replace(params, root_parameter=5))
+    duplicate = replace(
+        root,
+        bindings=bindings,
+        blob=nwp.make_root_signature_blob(root.family, bindings),
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, root_signatures=[duplicate])
+    )
+    assert any(
+        item["code"] == "package_root_signature_duplicate_binding"
+        for item in diagnostics
+    )
+
+
 def test_instruction_root_parameter_uses_active_root_signature() -> None:
     package = valid_package()
     active_root = package.root_signatures[0]
@@ -321,6 +340,57 @@ def test_pipeline_root_signature_must_match_shader_record() -> None:
         and "pipeline" in item["message"]
         for item in diagnostics
     )
+
+
+def test_frame_root_signature_must_match_pipeline_and_shader_record() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    second_root = replace(root, root_signature_id=2)
+    frame = [
+        replace(
+            instruction,
+            operands=(nwp.InstructionOperand("root_signature_ref", 2),),
+        )
+        if instruction.opcode == "frame.set_root_signature"
+        else instruction
+        for instruction in package.frame
+    ]
+    diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            frame=frame,
+            root_signatures=[root, second_root],
+        )
+    )
+    assert any(
+        item["code"] == "package_shader_root_signature"
+        and "frame root signature" in item["message"]
+        for item in diagnostics
+    )
+
+
+def test_release_capability_requires_pinned_consistent_toolchain() -> None:
+    package = valid_package()
+    for version, identity in (
+        ("9.9", "dxc:9.9"),
+        ("1.8.2407.12", "dxc:1.8.9999.1"),
+    ):
+        capability = replace(
+            package.capability,
+            toolchain_dxc_version=version,
+            toolchain_identity=identity,
+        )
+        capability = replace(
+            capability,
+            profile_fingerprint=capability.computed_profile_fingerprint(),
+        )
+        diagnostics = nwp.validate_package_model(
+            replace(package, capability=capability)
+        )
+        assert any(
+            item["code"] == "package_toolchain_identity"
+            for item in diagnostics
+        ), (version, identity)
 
 
 def test_python_model_validation_enforces_blob_size_limits() -> None:

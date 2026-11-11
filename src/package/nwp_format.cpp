@@ -979,7 +979,8 @@ bool ValidateDxilContainer(const std::vector<std::uint8_t>& blob,
 // ---------------------------------------------------------------------------
 
 bool ValidateCapability(const CapabilityRecord& capability,
-                        std::vector<Diagnostic>& diagnostics) {
+                        std::vector<Diagnostic>& diagnostics,
+                        bool release = true) {
     const std::size_t before = diagnostics.size();
     auto error = [&](std::string code, std::string message) {
         AddDiagnostic(diagnostics, std::move(code), std::move(message),
@@ -1090,6 +1091,21 @@ bool ValidateCapability(const CapabilityRecord& capability,
     }
     if (capability.toolchain_identity.empty()) {
         error("package_capability_contradictory", "toolchain_identity is empty");
+    }
+    if (release) {
+        if (capability.toolchain_dxc_version.find(
+                std::string(kPinnedDxcVersion)) ==
+            std::string::npos) {
+            error("package_toolchain_identity",
+                  "release packages require pinned DXC version '" +
+                      std::string(kPinnedDxcVersion) + "'");
+        }
+        const std::string expected_identity =
+            "dxc:" + capability.toolchain_dxc_version;
+        if (capability.toolchain_identity != expected_identity) {
+            error("package_toolchain_identity",
+                  "toolchain_identity must match the declared DXC version");
+        }
     }
     if (capability.compiler_fingerprint.empty()) {
         error("package_capability_contradictory", "compiler_fingerprint is empty");
@@ -1300,6 +1316,7 @@ bool ValidateInstructions(
     for (const auto& shader : shaders) {
         shader_root_ids[shader.shader_id] = shader.root_signature_id;
     }
+    std::map<std::uint32_t, std::uint32_t> pipeline_roots;
     bool has_active_root_signature = false;
     std::uint32_t active_root_signature_id = 0u;
     for (std::size_t index = 0; index < instructions.size(); ++index) {
@@ -1336,6 +1353,7 @@ bool ValidateInstructions(
             instruction.operands[1].type == OperandType::RootSignatureRef) {
             const std::uint32_t shader_id = instruction.operands[0].u32;
             const std::uint32_t root_id = instruction.operands[1].u32;
+            pipeline_roots[shader_id] = root_id;
             auto shader_root = shader_root_ids.find(shader_id);
             if (shader_root != shader_root_ids.end() &&
                 root_ids.count(root_id) != 0u &&
@@ -1437,6 +1455,23 @@ bool ValidateInstructions(
                                   "referenced resource in the active root signature");
                         }
                     }
+                }
+            }
+        }
+        if (phase == "frame" && instruction.opcode == "frame.dispatch" &&
+            !instruction.operands.empty() &&
+            instruction.operands.back().type == OperandType::ShaderRef) {
+            const std::uint32_t shader_id = instruction.operands.back().u32;
+            auto pipeline_root = pipeline_roots.find(shader_id);
+            auto shader_root = shader_root_ids.find(shader_id);
+            if (pipeline_root != pipeline_roots.end() &&
+                shader_root != shader_root_ids.end()) {
+                if (!has_active_root_signature ||
+                    active_root_signature_id != pipeline_root->second ||
+                    pipeline_root->second != shader_root->second) {
+                    error("package_shader_root_signature",
+                          "frame root signature does not match the pipeline and "
+                          "shader record root signature");
                 }
             }
         }
@@ -1654,7 +1689,12 @@ bool ValidateRootSignatures(
                   "root signature dword cost exceeds the baseline limit");
         }
         std::set<std::uint32_t> root_parameters;
+        std::set<std::string> binding_names;
         for (const auto& binding : record.bindings) {
+            if (!binding_names.insert(binding.name).second) {
+                error("package_root_signature_duplicate_binding",
+                      "root signature contains a duplicate binding name");
+            }
             if (!root_parameters.insert(binding.root_parameter).second) {
                 error("package_root_signature_root_parameter",
                       "root signature reuses a root parameter index");
@@ -1945,7 +1985,8 @@ std::vector<std::uint8_t> MakeRootSignatureBlob(
 bool ValidatePackage(const Package& package,
                      std::vector<Diagnostic>& diagnostics,
                      bool allow_dev) {
-    ValidateCapability(package.capability, diagnostics);
+    ValidateCapability(package.capability, diagnostics,
+                       (package.flags & 1u) != 0u);
     ValidateResources(package.resources, diagnostics);
     ValidateParameters(package.parameters, diagnostics);
     ValidateRootSignatures(package.root_signatures, package.resources,

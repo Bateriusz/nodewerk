@@ -68,6 +68,7 @@ COMMON_PROFILE_ID = "nw.common.d3d12.fl12_0.sm6_0.v1"
 COMMON_REQUIREMENTS_DIGEST = (
     "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
 )
+PINNED_DXC_VERSION = "1.8.2407"
 OPTIONAL_PROFILE_WAVE_OPS = "nw.optional.d3d12.wave_ops.v1"
 OPTIONAL_PROFILE_WAVE_OPS_DIGEST = (
     "sha256:v1:4a95a94d96d66eaccc3127a0b84d57b6e28d7a5f53a80b2d1ad2030e35e9d3a7"
@@ -1700,7 +1701,10 @@ def _decode_shaders(
 
 
 def _validate_capability(
-    capability: CapabilityRecord, diagnostics: list[dict[str, Any]]
+    capability: CapabilityRecord,
+    diagnostics: list[dict[str, Any]],
+    *,
+    release: bool = True,
 ) -> None:
     def error(code: str, message: str) -> None:
         diagnostics.append(
@@ -1826,6 +1830,21 @@ def _validate_capability(
         error("package_capability_contradictory", "toolchain_dxc_version is empty")
     if not capability.toolchain_identity:
         error("package_capability_contradictory", "toolchain_identity is empty")
+    if release:
+        if PINNED_DXC_VERSION not in capability.toolchain_dxc_version:
+            error(
+                "package_toolchain_identity",
+                "release packages require pinned DXC version "
+                f"'{PINNED_DXC_VERSION}', got "
+                f"'{capability.toolchain_dxc_version}'",
+            )
+        expected_identity = f"dxc:{capability.toolchain_dxc_version}"
+        if capability.toolchain_identity != expected_identity:
+            error(
+                "package_toolchain_identity",
+                "toolchain_identity must match the declared DXC version "
+                f"('{expected_identity}')",
+            )
     if not capability.compiler_fingerprint:
         error("package_capability_contradictory", "compiler_fingerprint is empty")
     if not capability.profile_fingerprint:
@@ -2018,6 +2037,7 @@ def _validate_instructions(
     actual_init: set[str] = set()
     actual_frame: set[str] = set()
     active_root_signature_id: int | None = None
+    pipeline_roots: dict[int, int] = {}
 
     for phase_name, section, instructions, actual in (
         ("initialization", SECTION_INITIALIZATION, initialization, actual_init),
@@ -2061,6 +2081,7 @@ def _validate_instructions(
                     shader_operand.type == "shader_ref"
                     and root_operand.type == "root_signature_ref"
                 ):
+                    pipeline_roots[shader_operand.value] = root_operand.value
                     shader = shader_by_id.get(shader_operand.value)
                     if (
                         shader is not None
@@ -2183,6 +2204,23 @@ def _validate_instructions(
                                     f"parameter {root_parameter} that does not bind resource "
                                     f"'{resource.name}' in the active root signature",
                                 )
+            if phase_name == "frame" and instruction.opcode == "frame.dispatch":
+                shader_operand = instruction.operands[-1]
+                if shader_operand.type == "shader_ref":
+                    shader = shader_by_id.get(shader_operand.value)
+                    pipeline_root = pipeline_roots.get(shader_operand.value)
+                    if shader is not None and pipeline_root is not None:
+                        if (
+                            active_root_signature_id is None
+                            or active_root_signature_id != pipeline_root
+                            or pipeline_root != shader.root_signature_id
+                        ):
+                            error(
+                                "package_shader_root_signature",
+                                f"frame root signature {active_root_signature_id} does "
+                                f"not match pipeline root signature {pipeline_root} for "
+                                f"shader {shader.shader_id}",
+                            )
 
     for phase_name, actual, required in (
         ("initialization", actual_init, set(CapabilityRecord().required_init_instructions)),
@@ -2408,8 +2446,16 @@ def _validate_root_signatures(
                 f"root signature dword cost {record.dword_cost} exceeds {MAX_ROOT_SIGNATURE_DWORD_COST}",
             )
         root_parameters: set[int] = set()
+        binding_names: set[str] = set()
         contract = PASS_FAMILY_BINDINGS.get(record.family, {})
         for binding in record.bindings:
+            if binding.name in binding_names:
+                error(
+                    "package_root_signature_duplicate_binding",
+                    f"root signature {record.root_signature_id} contains duplicate "
+                    f"binding name '{binding.name}'",
+                )
+            binding_names.add(binding.name)
             if binding.root_parameter in root_parameters:
                 error(
                     "package_root_signature_root_parameter",
@@ -2665,7 +2711,9 @@ def _validate_cross_references(
 def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
     """Validate a package model and return package-validation diagnostics."""
     diagnostics: list[dict[str, Any]] = []
-    _validate_capability(package.capability, diagnostics)
+    _validate_capability(
+        package.capability, diagnostics, release=bool(package.flags & 1)
+    )
     _validate_resources(package.resources, diagnostics)
     _validate_parameters(package.parameters, diagnostics)
     _validate_root_signatures(package.root_signatures, package.resources, diagnostics)
