@@ -610,87 +610,7 @@ std::string QueryAdapterDriverVersion(IDXGIAdapter1* adapter) {
     return text;
 }
 
-std::string LowerAscii(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) {
-                       return static_cast<char>(std::tolower(ch));
-                   });
-    return value;
-}
 
-std::string QueryDisplayRegistryText(const std::string& adapter_description,
-                                     const char* value_name) {
-    static constexpr const char* kDisplayClass =
-        "SYSTEM\\CurrentControlSet\\Control\\Class\\"
-        "{4d36e968-e325-11ce-bfc1-08002be10318}";
-    HKEY class_key = nullptr;
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, kDisplayClass, 0u, KEY_READ,
-                      &class_key) != ERROR_SUCCESS) {
-        return {};
-    }
-    const std::string wanted = LowerAscii(adapter_description);
-    std::string result;
-    for (DWORD index = 0u;; ++index) {
-        char sub_name[256]{};
-        DWORD sub_name_size = static_cast<DWORD>(sizeof(sub_name));
-        const LONG enum_result =
-            RegEnumKeyExA(class_key, index, sub_name, &sub_name_size, nullptr,
-                          nullptr, nullptr, nullptr);
-        if (enum_result == ERROR_NO_MORE_ITEMS) break;
-        if (enum_result != ERROR_SUCCESS) continue;
-        bool numeric = sub_name[0] != '\0';
-        for (const char* ch = sub_name; *ch != '\0'; ++ch) {
-            if (std::isdigit(static_cast<unsigned char>(*ch)) == 0) {
-                numeric = false;
-                break;
-            }
-        }
-        if (!numeric) continue;
-        HKEY device_key = nullptr;
-        if (RegOpenKeyExA(class_key, sub_name, 0u, KEY_READ, &device_key) !=
-            ERROR_SUCCESS) {
-            continue;
-        }
-        char driver_desc[512]{};
-        DWORD driver_desc_size = static_cast<DWORD>(sizeof(driver_desc));
-        DWORD driver_desc_type = 0u;
-        const bool has_desc =
-            RegQueryValueExA(device_key, "DriverDesc", nullptr,
-                             &driver_desc_type,
-                             reinterpret_cast<LPBYTE>(driver_desc),
-                             &driver_desc_size) == ERROR_SUCCESS;
-        const std::string actual =
-            has_desc ? LowerAscii(driver_desc) : std::string();
-        const bool matches =
-            wanted.empty() ||
-            (!actual.empty() &&
-             (actual.find(wanted) != std::string::npos ||
-              wanted.find(actual) != std::string::npos));
-        if (matches) {
-            BYTE value[512]{};
-            DWORD value_size = static_cast<DWORD>(sizeof(value));
-            DWORD value_type = 0u;
-            if (RegQueryValueExA(device_key, value_name, nullptr, &value_type,
-                                 value, &value_size) == ERROR_SUCCESS) {
-                if (value_type == REG_SZ) {
-                    value[sizeof(value) - 1u] = '\0';
-                    result.assign(reinterpret_cast<const char*>(value));
-                } else if (value_type == REG_DWORD &&
-                           value_size >= sizeof(DWORD)) {
-                    DWORD number = 0u;
-                    std::memcpy(&number, value, sizeof(number));
-                    char text[32]{};
-                    std::snprintf(text, sizeof(text), "0x%08lX", number);
-                    result = text;
-                }
-            }
-        }
-        RegCloseKey(device_key);
-        if (!result.empty()) break;
-    }
-    RegCloseKey(class_key);
-    return result;
-}
 
 } // namespace
 #endif // _WIN32
@@ -1215,12 +1135,9 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
         ClassifyAdapterGenerationMetadata(queried.adapter_description);
     queried.driver_version =
         QueryAdapterDriverVersion(platform_->adapter);
-    if (queried.driver_version.empty()) {
-        queried.driver_version = QueryDisplayRegistryText(
-            queried.adapter_description, "DriverVersion");
-    }
-    queried.wddm_version_text = QueryDisplayRegistryText(
-        queried.adapter_description, "WddmVersion");
+    // WDDM metadata is evidence-host information, not a runtime capability
+    // predicate. The external evidence collector obtains it without expanding
+    // the release player's dependency closure.
     queried.vendor_id = capabilities_.vendor_id;
     queried.device_id = capabilities_.device_id;
     queried.dedicated_video_memory_bytes =
