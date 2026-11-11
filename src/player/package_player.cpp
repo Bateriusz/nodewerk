@@ -936,7 +936,9 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
         frame_ops_.push_back(std::move(op));
         last_frame_order_.push_back(instruction.opcode);
     }
-    for (std::uint32_t parameter_id : pending_timeline_parameters) {
+    if (!pending_timeline_parameters.empty()) {
+        const std::uint32_t parameter_id =
+            *pending_timeline_parameters.begin();
         Fail(ExitCode::PackageValidationFailed, "package_validation",
              "frame_timeline_parameter_not_bound", "parameter_id",
              std::to_string(parameter_id),
