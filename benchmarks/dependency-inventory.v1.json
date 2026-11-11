@@ -96,7 +96,9 @@
         "dxgi.dll",
         "ucrtbase.dll",
         "ucrtbased.dll",
-        "vcruntime140d.dll"
+        "vcruntime140d.dll",
+        "msvcp140d.dll",
+        "vcruntime140_1d.dll"
       ],
       "allowed_optional_dev_dlls": [
         "d3d12sdklayers.dll",
