@@ -361,6 +361,10 @@ def lower_to_hlsl(expression: Expression) -> str:
             f"operation '{name}' requires a bound texture and is not emitted by the "
             "initial compute math/noise pass family"
         )
+    if name == "const":
+        # NW-02's const(x) is a semantic identity on its argument; it is not an
+        # HLSL intrinsic and must be lowered away before emission.
+        return f"({lower_to_hlsl(expression.arguments[0])})"
     hlsl_name = {
         "vec2": "float2",
         "vec3": "float3",
@@ -445,19 +449,23 @@ def _broadcast(
 def _vector_map(
     value: float | tuple[float, ...],
     function: Any,
+    quantize: Any = float,
 ) -> float | tuple[float, ...]:
     if _is_scalar(value):
-        return float(function(float(value)))
-    return tuple(float(function(component)) for component in value)
+        return quantize(function(float(value)))
+    return tuple(quantize(function(component)) for component in value)
 
 
 def _componentwise_binary(
     left: float | tuple[float, ...],
     right: float | tuple[float, ...],
     function: Any,
+    quantize: Any = float,
 ) -> float | tuple[float, ...]:
     left_tuple, right_tuple = _broadcast(left, right)
-    values = tuple(float(function(a, b)) for a, b in zip(left_tuple, right_tuple))
+    values = tuple(
+        quantize(function(a, b)) for a, b in zip(left_tuple, right_tuple)
+    )
     return values[0] if len(values) == 1 else values
 
 
@@ -498,18 +506,26 @@ def evaluate(
             operand = visit(node.operand)
             if node.operator == "+":
                 return operand
-            return _vector_map(operand, lambda value: -value)
+            return _vector_map(operand, lambda value: -value, quantize)
         if isinstance(node, Binary):
             left = visit(node.left)
             right = visit(node.right)
             if node.operator == "+":
-                return _componentwise_binary(left, right, lambda a, b: a + b)
+                return _componentwise_binary(
+                    left, right, lambda a, b: a + b, quantize
+                )
             if node.operator == "-":
-                return _componentwise_binary(left, right, lambda a, b: a - b)
+                return _componentwise_binary(
+                    left, right, lambda a, b: a - b, quantize
+                )
             if node.operator == "*":
-                return _componentwise_binary(left, right, lambda a, b: a * b)
+                return _componentwise_binary(
+                    left, right, lambda a, b: a * b, quantize
+                )
             if node.operator == "/":
-                return _componentwise_binary(left, right, lambda a, b: a / b)
+                return _componentwise_binary(
+                    left, right, lambda a, b: a / b, quantize
+                )
             raise ExpressionError(f"unsupported binary operator '{node.operator}'")
         assert isinstance(node, Call)
         arguments = [visit(argument) for argument in node.arguments]
@@ -532,7 +548,7 @@ def evaluate(
                 f"operation '{name}' has no CPU reference without a texture binding"
             )
         if name in _UNARY_FUNCTIONS:
-            return _vector_map(arguments[0], _UNARY_FUNCTIONS[name])
+            return _vector_map(arguments[0], _UNARY_FUNCTIONS[name], quantize)
         if name == "normalize":
             value = arguments[0]
             if _is_scalar(value):
@@ -540,23 +556,28 @@ def evaluate(
             length = math.sqrt(sum(component * component for component in value))
             if length == 0.0:
                 return tuple(0.0 for _ in value)
-            return tuple(component / length for component in value)
+            return tuple(quantize(component / length) for component in value)
         if name == "length":
             value = arguments[0]
             if _is_scalar(value):
                 return abs(float(value))
-            return math.sqrt(sum(component * component for component in value))
+            return quantize(
+                math.sqrt(sum(component * component for component in value))
+            )
         if name == "const":
             return arguments[0]
         if name in {"mix", "lerp"}:
             a, b, factor = arguments
-            return _mix(a, b, factor)
+            return _mix(a, b, factor, quantize)
         if name == "clamp":
             value, low, high = arguments
             return _componentwise_binary(
-                _componentwise_binary(value, low, lambda x, lo: max(x, lo)),
+                _componentwise_binary(
+                    value, low, lambda x, lo: max(x, lo), quantize
+                ),
                 high,
                 lambda x, hi: min(x, hi),
+                quantize,
             )
         if name == "smoothstep":
             edge0, edge1, value = arguments
@@ -568,37 +589,79 @@ def evaluate(
             elif len(x_values) == 1 and len(e0_values) > 1:
                 x_values = x_values * len(e0_values)
             t = tuple(
-                0.0 if e1 == e0 else min(max((x - e0) / (e1 - e0), 0.0), 1.0)
+                0.0
+                if e1 == e0
+                else quantize(
+                    min(
+                        max(
+                            quantize(
+                                quantize(x - e0)
+                                / quantize(e1 - e0)
+                            ),
+                            0.0,
+                        ),
+                        1.0,
+                    )
+                )
                 for e0, e1, x in zip(e0_values, e1_values, x_values)
             )
-            values = tuple(item * item * (3.0 - 2.0 * item) for item in t)
+            values = tuple(
+                quantize(
+                    quantize(item * item) * quantize(3.0 - quantize(2.0 * item))
+                )
+                for item in t
+            )
             return values[0] if len(values) == 1 else values
         if name in {"pow", "min", "max", "step", "dot", "cross", "add", "mul"}:
             if name == "pow":
-                return _componentwise_binary(arguments[0], arguments[1], math.pow)
+                return _componentwise_binary(
+                    arguments[0], arguments[1], math.pow, quantize
+                )
             if name == "min":
-                return _componentwise_binary(arguments[0], arguments[1], min)
+                return _componentwise_binary(
+                    arguments[0], arguments[1], min, quantize
+                )
             if name == "max":
-                return _componentwise_binary(arguments[0], arguments[1], max)
+                return _componentwise_binary(
+                    arguments[0], arguments[1], max, quantize
+                )
             if name == "step":
                 edge, value = arguments
-                return _componentwise_binary(edge, value, lambda e, x: 1.0 if x >= e else 0.0)
+                return _componentwise_binary(
+                    edge,
+                    value,
+                    lambda e, x: 1.0 if x >= e else 0.0,
+                    quantize,
+                )
             if name == "add":
-                return _componentwise_binary(arguments[0], arguments[1], lambda a, b: a + b)
+                return _componentwise_binary(
+                    arguments[0], arguments[1], lambda a, b: a + b, quantize
+                )
             if name == "mul":
-                return _componentwise_binary(arguments[0], arguments[1], lambda a, b: a * b)
+                return _componentwise_binary(
+                    arguments[0], arguments[1], lambda a, b: a * b, quantize
+                )
             a, b = arguments
             if _is_scalar(a) or _is_scalar(b):
                 raise ExpressionError(f"{name} requires vector operands")
             if len(a) != len(b):
                 raise ExpressionError(f"{name} operands have different widths")
             if name == "dot":
-                return sum(x * y for x, y in zip(a, b))
+                total = 0.0
+                for x, y in zip(a, b):
+                    total = quantize(total + quantize(x * y))
+                return total
             if len(a) == 3:
                 return (
-                    a[1] * b[2] - a[2] * b[1],
-                    a[2] * b[0] - a[0] * b[2],
-                    a[0] * b[1] - a[1] * b[0],
+                    quantize(
+                        quantize(a[1] * b[2]) - quantize(a[2] * b[1])
+                    ),
+                    quantize(
+                        quantize(a[2] * b[0]) - quantize(a[0] * b[2])
+                    ),
+                    quantize(
+                        quantize(a[0] * b[1]) - quantize(a[1] * b[0])
+                    ),
                 )
             raise ExpressionError("cross requires 3-component operands")
         if name == "select":
@@ -606,7 +669,7 @@ def evaluate(
             _left, right = _broadcast(when_true, when_false)
             cond, _cond_right = _broadcast(condition, when_true)
             values = tuple(
-                truth if truth else false
+                quantize(truth if truth else false)
                 for truth, false in zip(cond, right)
             )
             return values[0] if len(values) == 1 else values
@@ -619,11 +682,15 @@ def _mix(
     a: float | tuple[float, ...],
     b: float | tuple[float, ...],
     factor: float | tuple[float, ...],
+    quantize: Any = float,
 ) -> float | tuple[float, ...]:
     a_broadcast, b_broadcast = _broadcast(a, b)
     f_broadcast, _ = _broadcast(factor, a_broadcast)
     values = tuple(
-        av + (bv - av) * fv
+        quantize(
+            quantize(av)
+            + quantize(quantize(quantize(bv - av)) * quantize(fv))
+        )
         for av, bv, fv in zip(a_broadcast, b_broadcast, f_broadcast)
     )
     return values[0] if len(values) == 1 else values

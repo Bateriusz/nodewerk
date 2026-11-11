@@ -182,6 +182,7 @@ def test_compile_package_with_offline_dxc_and_dev_sidecar(tmp_path: Path) -> Non
         report_path=report_path,
         dev_sidecar_path=sidecar_path,
         dxc_executable=str(dxc),
+        allow_test_payloads=True,
     )
     assert report["fixture"]["shader_specialization_count"] == 2
     assert report["fixture"]["unique_shader_blob_count"] == 1
@@ -230,6 +231,7 @@ def test_compile_package_reuses_and_invalidates_shader_cache(tmp_path: Path) -> 
         cache_dir=cache,
         dxc_executable=str(dxc),
         optimization="O2",
+        allow_test_payloads=True,
     )
     second = compiler.compile_package(
         FIXTURE,
@@ -237,6 +239,7 @@ def test_compile_package_reuses_and_invalidates_shader_cache(tmp_path: Path) -> 
         cache_dir=cache,
         dxc_executable=str(dxc),
         optimization="O2",
+        allow_test_payloads=True,
     )
     third = compiler.compile_package(
         FIXTURE,
@@ -244,6 +247,7 @@ def test_compile_package_reuses_and_invalidates_shader_cache(tmp_path: Path) -> 
         cache_dir=cache,
         dxc_executable=str(dxc),
         optimization="O1",
+        allow_test_payloads=True,
     )
     assert first["shader_cache"]["misses"] > 0
     assert second["shader_cache"]["hits"] > 0
@@ -265,6 +269,7 @@ def test_unpinned_dxc_override_produces_truthful_non_release_artifact(
         dev_sidecar_path=sidecar_path,
         dxc_executable=str(dxc),
         allow_unpinned_dxc=True,
+        allow_test_payloads=True,
     )
     assert report["package"]["release"] is False
     assert report["toolchain"]["dxc_version"] == "1.8.9999.1"
@@ -313,7 +318,12 @@ def test_failed_compilation_preserves_previous_package_and_no_partial_output(
 ) -> None:
     good_dxc = make_mock_dxc(tmp_path)
     package_path = tmp_path / "preserved.nwp"
-    compiler.compile_package(FIXTURE, package_path, dxc_executable=str(good_dxc))
+    compiler.compile_package(
+        FIXTURE,
+        package_path,
+        dxc_executable=str(good_dxc),
+        allow_test_payloads=True,
+    )
     previous = package_path.read_bytes()
     failing_dxc = make_mock_dxc(tmp_path / "failure", fail=True) if False else None
     # Put the failing mock in a separate directory to avoid replacing good_dxc.
@@ -322,7 +332,10 @@ def test_failed_compilation_preserves_previous_package_and_no_partial_output(
     failing_dxc = make_mock_dxc(failure_dir, fail=True)
     with pytest.raises(compiler.CompilerError) as exc_info:
         compiler.compile_package(
-            FIXTURE, package_path, dxc_executable=str(failing_dxc)
+            FIXTURE,
+            package_path,
+            dxc_executable=str(failing_dxc),
+            allow_test_payloads=True,
         )
     assert exc_info.value.diagnostics
     assert exc_info.value.diagnostics[0]["category"] == "package_validation"
@@ -337,13 +350,14 @@ def test_compile_package_fails_without_dxc_instead_of_runtime_compilation(
             FIXTURE,
             tmp_path / "out.nwp",
             dxc_executable=str(tmp_path / "missing_dxc"),
+            allow_test_payloads=True,
         )
 
 
 def test_two_clean_directories_are_byte_identical_with_offline_dxc(tmp_path: Path) -> None:
     dxc = make_mock_dxc(tmp_path)
     result = verify_nw03.check_clean_directory_reproducibility(
-        str(dxc), tmp_path / "clean-work"
+        str(dxc), tmp_path / "clean-work", allow_test_payloads=True
     )
     assert result.passed, result.detail
     assert result.evidence["shader_specializations"] == 2
@@ -392,6 +406,7 @@ def test_nodewerkc_cli_validate_compile_and_inspect(tmp_path: Path) -> None:
             str(package_path),
             "--dxc",
             str(dxc),
+            "--allow-test-payloads",
         ],
         capture_output=True,
         text=True,
@@ -466,3 +481,90 @@ def test_nodewerkc_validate_accepts_valid_graph_fixtures() -> None:
             check=False,
         )
         assert proc.returncode == 0, (path.name, proc.stdout, proc.stderr)
+
+
+def _graph_text(nodes: str) -> str:
+    return (
+        "nwgraph 1\n"
+        "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+        "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a\n"
+        "setting optimization O2\n"
+        "setting deterministic true\n"
+        "setting api d3d12\n"
+        "setting feature_level 12_0\n"
+        "setting shader_model 6_0\n"
+        "setting frequency_policy strict\n"
+        "setting shader_blob_policy stable\n"
+        "setting quantization_policy none\n"
+        "setting quantization_bits 0\n"
+        "setting quantization_step 0\n"
+        + nodes
+    )
+
+
+def test_clamp01_parameters_use_nw02_normalization_before_lowering() -> None:
+    text = _graph_text(
+        "node a nw.shader.vec4_const@1.0.0 frequency=frame\n"
+        "  param value 0 0 0 1\n"
+        "node b nw.shader.vec4_const@1.0.0 frequency=frame\n"
+        "  param value 1 1 1 1\n"
+        "node mixed nw.shader.mix@1.0.0 frequency=frame\n"
+        "  input a a.out\n"
+        "  input b b.out\n"
+        "  param factor 2.0\n"
+    )
+    document, diagnostics = compiler.parse_graph_text(text)
+    assert diagnostics == []
+    assert document is not None
+    assert compiler._param_tokens(document.nodes["mixed"], "factor") == ["1.0"]
+    generated, lowering_diagnostics = compiler.lower_to_fused_hlsl(document)
+    assert lowering_diagnostics == []
+    assert any("lerp(" in shader.hlsl and ", 1.0)" in shader.hlsl for shader in generated)
+    assert all("1.5" not in shader.hlsl for shader in generated)
+
+
+def test_semantic_digest_preserves_vector_component_order() -> None:
+    first, diagnostics = compiler.parse_graph_text(
+        _graph_text(
+            "node value nw.math.vec4_const@1.0.0 frequency=frame\n"
+            "  param value 1 2 3 4\n"
+        )
+    )
+    second, second_diagnostics = compiler.parse_graph_text(
+        _graph_text(
+            "node value nw.math.vec4_const@1.0.0 frequency=frame\n"
+            "  param value 4 3 2 1\n"
+        )
+    )
+    assert diagnostics == [] and second_diagnostics == []
+    assert first is not None and second is not None
+    assert first.semantic_digest() != second.semantic_digest()
+
+
+def test_const_operation_is_lowered_away() -> None:
+    expression = "vec4(const(1), 0, 0, 1)"
+    lowered = oracle.lower_expression_text_to_hlsl(expression)
+    assert "const(" not in lowered
+    assert "float4((1.0)" in lowered
+    assert oracle.evaluate_text(expression) == (1.0, 0.0, 0.0, 1.0)
+
+
+def test_float32_oracle_rounds_every_intermediate_operation() -> None:
+    expression = "(16777216 + 1) - 16777216"
+    assert oracle.evaluate_text(expression, float32=False) == 1.0
+    assert oracle.evaluate_text(expression, float32=True) == 0.0
+
+
+def test_mock_dxc_requires_explicit_test_payload_opt_in(tmp_path: Path) -> None:
+    dxc = make_mock_dxc(tmp_path)
+    with pytest.raises(compiler.CompilerError):
+        compiler.compile_package(
+            FIXTURE,
+            tmp_path / "release.nwp",
+            dxc_executable=str(dxc),
+        )
+    result = verify_nw03.check_clean_directory_reproducibility(
+        str(dxc), tmp_path / "clean-work"
+    )
+    assert not result.passed
+    assert "mock" in result.detail.lower()

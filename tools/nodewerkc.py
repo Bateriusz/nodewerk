@@ -95,6 +95,7 @@ def command_compile_package(args: argparse.Namespace) -> int:
             dxc_executable=args.dxc,
             optimization=args.optimization,
             allow_unpinned_dxc=args.allow_unpinned_dxc,
+            allow_test_payloads=args.allow_test_payloads,
         )
     except nw03_compiler.CompilerError as exc:
         _emit(_error_payload(str(exc), exc.diagnostics), stream=sys.stderr)
@@ -183,6 +184,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-unpinned-dxc",
         action="store_true",
         help="developer-only override; release validation requires the pinned DXC identity",
+    )
+    compile_package.add_argument(
+        "--allow-test-payloads",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     compile_package.set_defaults(handler=command_compile_package)
 

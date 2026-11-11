@@ -59,11 +59,17 @@ inline constexpr std::uint32_t kMaxSamplerDescriptorsPerFrame = 64u;
 inline constexpr std::uint32_t kMaxRootSignatureDwordCost = 16u;
 inline constexpr std::uint32_t kMaxComputeThreadsPerGroup = 1024u;
 inline constexpr std::uint32_t kMaxTexture2dDimension = 8192u;
+inline constexpr std::uint32_t kMaxTextureArraySize = 2048u;
+inline constexpr std::uint32_t kMaxMipLevels = 15u;
 inline constexpr std::uint64_t kMaxBufferBytes = 64ull * 1024ull * 1024ull;
 inline constexpr std::uint32_t kSwapChainBufferCount = 2u;
 
 inline constexpr std::size_t kMaxPackageBytes = 64u * 1024u * 1024u;
 inline constexpr std::size_t kMaxSectionBytes = 16u * 1024u * 1024u;
+// Aggregate cap for decoded payload copies.  Blob tables are deduplicated, so
+// a valid package normally stays far below this; the cap prevents a malicious
+// table from multiplying one large blob by thousands of references.
+inline constexpr std::size_t kMaxDecodedBytes = 4u * kMaxPackageBytes;
 inline constexpr std::uint32_t kMaxSectionCount = 64u;
 inline constexpr std::uint32_t kMaxRecordCount = 4096u;
 inline constexpr std::uint32_t kMaxFieldCount = 64u;

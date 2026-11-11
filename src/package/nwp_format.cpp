@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
@@ -852,7 +853,12 @@ bool ValidateDxilContainer(const std::vector<std::uint8_t>& blob,
     std::string shader_model;
     for (std::uint32_t index = 0; index < chunk_count; ++index) {
         const std::uint32_t offset = ReadU32(blob.data() + 32u + index * 4u);
-        if (offset < 32u + chunk_count * 4u || offset + 8u > blob.size()) {
+        // Widen before adding.  `offset + 8u` in 32-bit arithmetic wraps for
+        // offset == 0xfffffff8, which would bypass the bounds check and then
+        // dereference outside the allocation.
+        const std::uint64_t offset64 = offset;
+        if (offset < 32u + chunk_count * 4u ||
+            offset64 + 8u > blob.size()) {
             reason = "DXBC chunk offset out of bounds";
             return false;
         }
@@ -974,13 +980,50 @@ bool ValidateDxilContainer(const std::vector<std::uint8_t>& blob,
     return true;
 }
 
+// Release packages must not carry shader debug/reflection chunks even when
+// their payload does not contain any of the ASCII strings the leak scan looks
+// for.  ILDB/ILDN carry debug metadata, STAT carries shader statistics, and
+// RDEF/RDAT/SPDB/SPDN carry reflection or symbol data.  The execution-required
+// chunks (DXIL, PSV0, SFI0, HASH, input/output signatures) remain untouched.
+bool HasForbiddenDxilMetadataChunks(const std::vector<std::uint8_t>& blob,
+                                    std::string& reason) {
+    if (blob.size() < 44u || std::memcmp(blob.data(), "DXBC", 4) != 0) {
+        return false;
+    }
+    const std::uint32_t chunk_count = ReadU32(blob.data() + 28);
+    if (chunk_count == 0u || chunk_count > 64u ||
+        32u + static_cast<std::uint64_t>(chunk_count) * 4u > blob.size()) {
+        return false;
+    }
+    static constexpr std::string_view kForbidden[] = {
+        "ILDB", "ILDN", "STAT", "RDEF", "RDAT", "SPDB", "SPDN"};
+    for (std::uint32_t index = 0; index < chunk_count; ++index) {
+        const std::uint32_t offset =
+            ReadU32(blob.data() + 32u + index * 4u);
+        const std::uint64_t offset64 = offset;
+        if (offset < 32u + static_cast<std::uint64_t>(chunk_count) * 4u ||
+            offset64 + 8u > blob.size()) {
+            continue;
+        }
+        const std::uint8_t* fourcc = blob.data() + offset;
+        for (const auto candidate : kForbidden) {
+            if (std::memcmp(fourcc, candidate.data(), 4u) == 0) {
+                reason = "shader payload contains forbidden " +
+                         std::string(candidate) +
+                         " debug/reflection chunk";
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
-bool ValidateCapability(const CapabilityRecord& capability,
-                        std::vector<Diagnostic>& diagnostics,
-                        bool release = true) {
+bool ValidateCapabilityIdentity(const CapabilityRecord& capability,
+                                std::vector<Diagnostic>& diagnostics) {
     const std::size_t before = diagnostics.size();
     auto error = [&](std::string code, std::string message) {
         AddDiagnostic(diagnostics, std::move(code), std::move(message),
@@ -1014,6 +1057,23 @@ bool ValidateCapability(const CapabilityRecord& capability,
         error("package_optional_profile_contradiction",
               "optional requirements digest is present without an optional profile id");
     }
+    return diagnostics.size() == before;
+}
+
+bool ValidateCapability(const CapabilityRecord& capability,
+                        const std::vector<ResourceDescriptor>& resources,
+                        const std::vector<Instruction>& initialization,
+                        const std::vector<Instruction>& frame,
+                        const std::vector<ShaderRecord>& shaders,
+                        const std::vector<RootSignatureRecord>& root_signatures,
+                        std::vector<Diagnostic>& diagnostics,
+                        bool release = true) {
+    const std::size_t before = diagnostics.size();
+    auto error = [&](std::string code, std::string message) {
+        AddDiagnostic(diagnostics, std::move(code), std::move(message),
+                      std::string(kSectionCapability));
+    };
+    ValidateCapabilityIdentity(capability, diagnostics);
     const auto expect = [&](std::string_view name, auto actual, auto expected) {
         if (actual != expected) {
             error("package_capability_contradictory",
@@ -1027,42 +1087,106 @@ bool ValidateCapability(const CapabilityRecord& capability,
     expect("resource_heap_tier", capability.resource_heap_tier,
            kResourceHeapTier2);
     expect("direct_queue_count", capability.direct_queue_count, 1u);
-    expect("max_cbv_srv_uav_descriptors_per_frame",
-           capability.max_cbv_srv_uav_descriptors_per_frame,
-           kMaxCbvSrvUavDescriptorsPerFrame);
-    expect("max_sampler_descriptors_per_frame",
-           capability.max_sampler_descriptors_per_frame,
-           kMaxSamplerDescriptorsPerFrame);
-    expect("max_root_signature_dword_cost",
-           capability.max_root_signature_dword_cost,
-           kMaxRootSignatureDwordCost);
     expect("min_windows_build", capability.min_windows_build, kMinWindowsBuild);
-    expect("limit_max_texture_2d_dimension",
-           capability.limit_max_texture_2d_dimension, kMaxTexture2dDimension);
-    expect("limit_max_compute_threads_per_group",
-           capability.limit_max_compute_threads_per_group,
-           kMaxComputeThreadsPerGroup);
-    expect("limit_max_buffer_bytes", capability.limit_max_buffer_bytes,
-           kMaxBufferBytes);
-    expect("limit_swap_chain_buffer_count",
-           capability.limit_swap_chain_buffer_count, kSwapChainBufferCount);
     if (capability.shader_model_text != kShaderModelText6_0) {
         error("package_capability_contradictory",
               "shader_model_text does not match shader model 6.0");
     }
-    const std::vector<std::string> required_formats = {
-        "DXGI_FORMAT_R8G8B8A8_UNORM", "DXGI_FORMAT_R32G32B32A32_FLOAT",
-        "DXGI_FORMAT_R32_UINT", "DXGI_FORMAT_D32_FLOAT"};
-    std::set<std::string> formats(capability.required_dxgi_formats.begin(),
-                                  capability.required_dxgi_formats.end());
-    if (formats.size() != capability.required_dxgi_formats.size()) {
+
+    // Capability requirements describe what this package actually emits.  The
+    // profile identity/digest is validated separately above; the concrete
+    // requirement fields below must not advertise unused formats, heaps,
+    // samplers, texture limits, or swap-chain capacity.
+    std::set<std::string> emitted_formats;
+    for (const auto& resource : resources) {
+        emitted_formats.insert(resource.format);
+    }
+    const std::vector<std::string> expected_formats(emitted_formats.begin(),
+                                                    emitted_formats.end());
+    if (capability.required_dxgi_formats != expected_formats) {
+        error("package_capability_format_set",
+              "required DXGI formats must exactly match emitted resources");
+    }
+    std::set<std::string> unique_formats(capability.required_dxgi_formats.begin(),
+                                         capability.required_dxgi_formats.end());
+    if (unique_formats.size() != capability.required_dxgi_formats.size()) {
         error("package_capability_contradictory",
               "required DXGI formats contain duplicates");
     }
-    if (formats != std::set<std::string>(required_formats.begin(),
-                                         required_formats.end())) {
-        error("package_capability_format_set",
-              "required DXGI formats must be exactly the baseline set");
+
+    std::set<std::uint32_t> root_constant_resources;
+    bool has_present = false;
+    for (const auto& instruction : frame) {
+        if (instruction.opcode == "frame.set_root_constants" &&
+            instruction.operands.size() == 3u &&
+            instruction.operands[1].type == OperandType::ResourceRef) {
+            root_constant_resources.insert(instruction.operands[1].u32);
+        }
+        if (instruction.opcode == "frame.present") has_present = true;
+    }
+    std::uint32_t descriptor_count = 0u;
+    std::uint32_t sampler_count = 0u;
+    std::uint64_t max_buffer_bytes = 0u;
+    std::uint32_t max_texture2d_dimension = 0u;
+    for (const auto& resource : resources) {
+        if (resource.usage == "sampler") {
+            ++sampler_count;
+        } else if (resource.usage == "srv" || resource.usage == "uav" ||
+                   (resource.usage == "cbv" &&
+                    root_constant_resources.count(resource.resource_id) == 0u)) {
+            ++descriptor_count;
+        }
+        if (resource.kind == "buffer" &&
+            resource.size_bytes > max_buffer_bytes) {
+            max_buffer_bytes = resource.size_bytes;
+        }
+        if (resource.kind == "texture2d") {
+            max_texture2d_dimension =
+                std::max(max_texture2d_dimension,
+                         std::max(resource.width, resource.height));
+        }
+    }
+    std::uint32_t max_root_dwords = 0u;
+    for (const auto& root : root_signatures) {
+        max_root_dwords = std::max(max_root_dwords, root.dword_cost);
+    }
+    std::uint32_t max_threads = 0u;
+    for (const auto& shader : shaders) {
+        const std::uint64_t total =
+            static_cast<std::uint64_t>(shader.thread_group_x) *
+            shader.thread_group_y * shader.thread_group_z;
+        if (total > max_threads &&
+            total <= std::numeric_limits<std::uint32_t>::max()) {
+            max_threads = static_cast<std::uint32_t>(total);
+        }
+    }
+    expect("max_cbv_srv_uav_descriptors_per_frame",
+           capability.max_cbv_srv_uav_descriptors_per_frame, descriptor_count);
+    expect("max_sampler_descriptors_per_frame",
+           capability.max_sampler_descriptors_per_frame, sampler_count);
+    expect("max_root_signature_dword_cost",
+           capability.max_root_signature_dword_cost, max_root_dwords);
+    expect("limit_max_texture_2d_dimension",
+           capability.limit_max_texture_2d_dimension, max_texture2d_dimension);
+    expect("limit_max_compute_threads_per_group",
+           capability.limit_max_compute_threads_per_group, max_threads);
+    expect("limit_max_buffer_bytes", capability.limit_max_buffer_bytes,
+           max_buffer_bytes);
+    expect("limit_swap_chain_buffer_count",
+           capability.limit_swap_chain_buffer_count,
+           has_present ? kSwapChainBufferCount : 0u);
+    if (capability.max_cbv_srv_uav_descriptors_per_frame >
+            kMaxCbvSrvUavDescriptorsPerFrame ||
+        capability.max_sampler_descriptors_per_frame >
+            kMaxSamplerDescriptorsPerFrame ||
+        capability.max_root_signature_dword_cost > kMaxRootSignatureDwordCost ||
+        capability.limit_max_texture_2d_dimension > kMaxTexture2dDimension ||
+        capability.limit_max_compute_threads_per_group >
+            kMaxComputeThreadsPerGroup ||
+        capability.limit_max_buffer_bytes > kMaxBufferBytes ||
+        capability.limit_swap_chain_buffer_count > kSwapChainBufferCount) {
+        error("package_capability_contradictory",
+              "emitted requirement exceeds the baseline profile limit");
     }
     if (capability.emitted_shader_targets.empty()) {
         error("package_capability_contradictory",
@@ -1168,7 +1292,21 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
             resource.usage != "readback") {
             error("package_resource_usage", "unknown resource usage");
         }
+        const bool has_format =
+            resource.format == "DXGI_FORMAT_R8G8B8A8_UNORM" ||
+            resource.format == "DXGI_FORMAT_R32G32B32A32_FLOAT" ||
+            resource.format == "DXGI_FORMAT_R32_UINT" ||
+            resource.format == "DXGI_FORMAT_D32_FLOAT";
+        if (resource.kind == "buffer" && !has_format) {
+            error("package_resource_format", "buffer resource has no valid format");
+        }
         if (resource.kind == "buffer") {
+            if (resource.usage != "cbv" && resource.usage != "srv" &&
+                resource.usage != "uav" && resource.usage != "readback" &&
+                resource.usage != "sampler") {
+                error("package_resource_usage",
+                      "buffer resource has an incompatible usage");
+            }
             if (resource.width != 0u || resource.height != 0u ||
                 resource.depth != 0u) {
                 error("package_resource_dimensions",
@@ -1184,6 +1322,11 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
                       "buffer must be a single array slice/mip");
             }
         } else if (resource.kind == "texture2d") {
+            if (resource.usage != "srv" && resource.usage != "uav" &&
+                resource.usage != "rtv" && resource.usage != "dsv") {
+                error("package_resource_usage",
+                      "texture2d resource has an incompatible usage");
+            }
             if (resource.width == 0u ||
                 resource.width > kMaxTexture2dDimension ||
                 resource.height == 0u ||
@@ -1195,17 +1338,106 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
                 error("package_resource_dimensions",
                       "texture2d depth must be 0 or 1");
             }
-            if (resource.size_bytes == 0u ||
-                resource.size_bytes > kMaxBufferBytes) {
+            if (resource.array_size == 0u ||
+                resource.array_size > kMaxTextureArraySize) {
                 error("package_resource_dimensions",
-                      "texture2d size is outside the baseline limits");
+                      "texture2d array_size exceeds the baseline limit");
+            }
+            if (resource.mip_levels == 0u ||
+                resource.mip_levels > kMaxMipLevels) {
+                error("package_resource_dimensions",
+                      "texture2d mip_levels exceeds the baseline limit");
+            }
+            const std::uint64_t bytes_per_element =
+                resource.format == "DXGI_FORMAT_R32G32B32A32_FLOAT" ? 16u :
+                resource.format == "DXGI_FORMAT_R8G8B8A8_UNORM" ? 4u :
+                resource.format == "DXGI_FORMAT_D32_FLOAT" ? 4u : 4u;
+            std::uint64_t computed = 0u;
+            bool overflow = false;
+            for (std::uint32_t mip = 0u;
+                 mip < resource.mip_levels && !overflow; ++mip) {
+                const std::uint64_t level_width =
+                    std::max(1u, resource.width >> mip);
+                const std::uint64_t level_height =
+                    std::max(1u, resource.height >> mip);
+                const std::uint64_t level = level_width * level_height;
+                if (level_width != 0u && level > UINT64_MAX / level_width) {
+                    overflow = true;
+                    break;
+                }
+                if (level > UINT64_MAX / bytes_per_element ||
+                    level * bytes_per_element >
+                        UINT64_MAX / std::max(1u, resource.array_size)) {
+                    overflow = true;
+                    break;
+                }
+                computed += level * bytes_per_element *
+                            std::max(1u, resource.array_size);
+            }
+            if (overflow || computed == 0u ||
+                computed > kMaxBufferBytes ||
+                resource.size_bytes != computed) {
+                error("package_resource_dimensions",
+                      "texture2d size does not match its checked allocation");
             }
         } else {
+            if (resource.usage != "srv" && resource.usage != "uav") {
+                error("package_resource_usage",
+                      "texture3d resource has an incompatible usage");
+            }
             if (resource.width == 0u || resource.width > 2048u ||
                 resource.height == 0u || resource.height > 2048u ||
                 resource.depth == 0u || resource.depth > 2048u) {
                 error("package_resource_dimensions",
                       "texture3d dimensions exceed 2048");
+            }
+            if (resource.array_size != 1u) {
+                error("package_resource_dimensions",
+                      "texture3d must be a single array slice");
+            }
+            if (resource.mip_levels == 0u ||
+                resource.mip_levels > kMaxMipLevels) {
+                error("package_resource_dimensions",
+                      "texture3d mip_levels exceeds the baseline limit");
+            }
+            const std::uint64_t bytes_per_element =
+                resource.format == "DXGI_FORMAT_R32G32B32A32_FLOAT" ? 16u :
+                resource.format == "DXGI_FORMAT_R8G8B8A8_UNORM" ? 4u :
+                resource.format == "DXGI_FORMAT_D32_FLOAT" ? 4u : 4u;
+            std::uint64_t computed = 0u;
+            bool overflow = false;
+            for (std::uint32_t mip = 0u;
+                 mip < resource.mip_levels && !overflow; ++mip) {
+                const std::uint64_t level_width =
+                    std::max(1u, resource.width >> mip);
+                const std::uint64_t level_height =
+                    std::max(1u, resource.height >> mip);
+                const std::uint64_t level_depth =
+                    std::max(1u, resource.depth >> mip);
+                if (level_width != 0u &&
+                    level_height > UINT64_MAX / level_width) {
+                    overflow = true;
+                    break;
+                }
+                const std::uint64_t level =
+                    level_width * level_height;
+                if (level_depth != 0u &&
+                    level > UINT64_MAX / level_depth) {
+                    overflow = true;
+                    break;
+                }
+                const std::uint64_t volume = level * level_depth;
+                if (volume > UINT64_MAX / bytes_per_element) {
+                    overflow = true;
+                    break;
+                }
+                computed += volume * bytes_per_element;
+            }
+            if (overflow || computed == 0u ||
+                computed > kMaxBufferBytes ||
+                resource.size_bytes != computed) {
+                error("package_resource_dimensions",
+                      "texture3d size does not match its checked allocation");
             }
         }
         const std::string binding_key = resource.pass_family + "/" +
@@ -1314,8 +1546,10 @@ bool ValidateInstructions(
         root_by_id[root.root_signature_id] = &root;
     }
     std::map<std::uint32_t, std::uint32_t> shader_root_ids;
+    std::map<std::uint32_t, std::string> shader_targets;
     for (const auto& shader : shaders) {
         shader_root_ids[shader.shader_id] = shader.root_signature_id;
+        shader_targets[shader.shader_id] = shader.target;
     }
     bool has_active_root_signature = false;
     std::uint32_t active_root_signature_id = 0u;
@@ -1389,7 +1623,7 @@ bool ValidateInstructions(
                 error("package_instruction_reference",
                       "instruction references a missing root signature");
             } else if (operand.type == OperandType::U32 &&
-                       operand_index == 0u &&
+                       operand_index < 3u &&
                        instruction.opcode == "frame.dispatch" &&
                        (operand.u32 == 0u || operand.u32 > 65535u)) {
                 error("package_instruction_operand",
@@ -1406,6 +1640,15 @@ bool ValidateInstructions(
                        operand.u32 > kMaxRootSignatureDwordCost) {
                 error("package_instruction_operand",
                       "root constants dword count exceeds the baseline limit");
+            }
+        }
+        if (instruction.opcode == "frame.dispatch" &&
+            instruction.operands.size() == contract->operands.size() &&
+            instruction.operands[3].type == OperandType::ShaderRef) {
+            auto found = shader_targets.find(instruction.operands[3].u32);
+            if (found != shader_targets.end() && found->second != "cs_6_0") {
+                error("package_dispatch_shader_target",
+                      "frame.dispatch requires a compute shader target");
             }
         }
         if ((instruction.opcode == "frame.set_root_constants" ||
@@ -1573,51 +1816,195 @@ bool MatchesFixedFamilyBinding(std::string_view family,
     return false;
 }
 
-bool ParseRootSignatureBlob(const std::vector<std::uint8_t>& blob,
-                            std::string& family,
-                            std::vector<RootBinding>& bindings,
-                            std::vector<Diagnostic>& diagnostics) {
-    Reader reader{blob.data(), blob.size(), 0, &diagnostics,
-                  std::string(kSectionRootSignatures)};
-    const std::uint8_t* magic = nullptr;
-    if (!reader.Take(4u, magic)) return false;
-    if (std::memcmp(magic, "NWRS", 4u) != 0) {
+struct SerializedRootParameter {
+    std::uint32_t type = 0;
+    std::uint32_t visibility = 0;
+    std::uint32_t value0 = 0;
+    std::uint32_t value1 = 0;
+    std::uint32_t value2 = 0;
+};
+
+struct SerializedDescriptorRange {
+    std::uint32_t type = 0;
+    std::uint32_t count = 0;
+    std::uint32_t base_register = 0;
+    std::uint32_t space = 0;
+    std::uint32_t offset = 0;
+};
+
+bool ParseRootSignatureBlob(
+    const std::vector<std::uint8_t>& blob,
+    std::vector<SerializedRootParameter>& parameters,
+    std::vector<SerializedDescriptorRange>& ranges,
+    std::vector<Diagnostic>& diagnostics) {
+    auto malformed = [&](std::string message) {
         AddDiagnostic(diagnostics, "package_root_signature_malformed",
-                      "root signature blob magic is not 'NWRS'",
+                      std::move(message),
                       std::string(kSectionRootSignatures));
         return false;
+    };
+    if (blob.size() < 44u || std::memcmp(blob.data(), "DXBC", 4u) != 0) {
+        return malformed(
+            "root signature blob is not a serialized DXBC signature");
     }
-    std::uint16_t version = 0;
-    if (!reader.U16(version)) return false;
-    if (version != 1u) {
-        AddDiagnostic(diagnostics, "package_unknown_section_version",
-                      "root signature blob version is not supported",
-                      std::string(kSectionRootSignatures));
-        return false;
+    const std::uint16_t major = ReadU16(blob.data() + 20);
+    const std::uint16_t minor = ReadU16(blob.data() + 22);
+    const std::uint32_t total_size = ReadU32(blob.data() + 24);
+    const std::uint32_t chunk_count = ReadU32(blob.data() + 28);
+    if (major != 1u || minor != 0u || total_size != blob.size()) {
+        return malformed("serialized root signature container is malformed");
     }
-    if (!reader.String(family)) return false;
-    std::uint16_t count = 0;
-    if (!reader.U16(count)) return false;
-    if (count > kMaxRecordCount) {
-        AddDiagnostic(diagnostics, "package_decode_limit",
-                      "root signature blob binding count exceeds the v1 limit",
-                      std::string(kSectionRootSignatures));
-        return false;
+    const std::uint64_t header_end =
+        32u + static_cast<std::uint64_t>(chunk_count) * 4u;
+    if (chunk_count == 0u || chunk_count > 64u ||
+        header_end > blob.size()) {
+        return malformed("serialized root signature chunk directory is invalid");
     }
-    for (std::uint16_t index = 0; index < count; ++index) {
-        RootBinding binding;
-        if (!reader.String(binding.name) || !reader.String(binding.usage) ||
-            !reader.U32(binding.slot) || !reader.U32(binding.space) ||
-            !reader.U32(binding.root_parameter)) {
+    bool found = false;
+    for (std::uint32_t index = 0u; index < chunk_count; ++index) {
+        const std::uint32_t offset =
+            ReadU32(blob.data() + 32u + index * 4u);
+        const std::uint64_t offset64 = offset;
+        if (offset < header_end || offset64 + 8u > blob.size()) {
+            return malformed(
+                "serialized root signature chunk offset is out of bounds");
+        }
+        const std::uint32_t chunk_size =
+            ReadU32(blob.data() + offset + 4u);
+        if (offset64 + 8u + chunk_size > blob.size()) {
+            return malformed(
+                "serialized root signature chunk size is out of bounds");
+        }
+        if (std::memcmp(blob.data() + offset, "RTS0", 4u) != 0) {
+            continue;
+        }
+        if (found) {
+            return malformed(
+                "serialized root signature contains duplicate RTS0 chunks");
+        }
+        found = true;
+        const std::uint8_t* payload =
+            blob.data() + static_cast<std::size_t>(offset) + 8u;
+        Reader reader{payload,
+                      static_cast<std::size_t>(chunk_size), 0, &diagnostics,
+                      std::string(kSectionRootSignatures)};
+        std::uint32_t version = 0u;
+        std::uint32_t parameter_count = 0u;
+        std::uint32_t parameter_offset = 0u;
+        std::uint32_t static_sampler_count = 0u;
+        std::uint32_t static_sampler_offset = 0u;
+        std::uint32_t flags = 0u;
+        if (!reader.U32(version) || !reader.U32(parameter_count) ||
+            !reader.U32(parameter_offset) ||
+            !reader.U32(static_sampler_count) ||
+            !reader.U32(static_sampler_offset) || !reader.U32(flags)) {
             return false;
         }
-        bindings.push_back(std::move(binding));
+        if ((version != 1u && version != 2u) || flags != 0u ||
+            static_sampler_count != 0u) {
+            return malformed(
+                "serialized root signature version/flags are unsupported");
+        }
+        (void)static_sampler_offset;
+        if (parameter_count > kMaxRecordCount) {
+            return malformed(
+                "serialized root signature count exceeds the v1 limit");
+        }
+        const std::uint64_t parameter_bytes =
+            static_cast<std::uint64_t>(parameter_count) * 12u;
+        if (parameter_offset < 24u ||
+            static_cast<std::uint64_t>(parameter_offset) +
+                    parameter_bytes >
+                chunk_size) {
+            return malformed(
+                "serialized root signature parameter range is invalid");
+        }
+        for (std::uint32_t i = 0u; i < parameter_count; ++i) {
+            const std::size_t row_offset =
+                static_cast<std::size_t>(parameter_offset) +
+                static_cast<std::size_t>(i) * 12u;
+            const std::uint32_t parameter_type =
+                ReadU32(payload + row_offset);
+            const std::uint32_t visibility =
+                ReadU32(payload + row_offset + 4u);
+            const std::uint32_t data_offset =
+                ReadU32(payload + row_offset + 8u);
+            SerializedRootParameter parameter;
+            parameter.type = parameter_type;
+            parameter.visibility = visibility;
+            if (parameter_type == 1u) {
+                const std::uint64_t end =
+                    static_cast<std::uint64_t>(data_offset) + 12u;
+                if (end > chunk_size) {
+                    return malformed(
+                        "serialized root constants data is out of bounds");
+                }
+                parameter.value0 =
+                    ReadU32(payload + static_cast<std::size_t>(data_offset));
+                parameter.value1 =
+                    ReadU32(payload + static_cast<std::size_t>(data_offset) +
+                            4u);
+                parameter.value2 =
+                    ReadU32(payload + static_cast<std::size_t>(data_offset) +
+                            8u);
+                parameters.push_back(parameter);
+            } else if (parameter_type == 0u) {
+                const std::uint64_t end =
+                    static_cast<std::uint64_t>(data_offset) + 8u;
+                if (end > chunk_size) {
+                    return malformed(
+                        "serialized descriptor table data is out of bounds");
+                }
+                const std::uint32_t range_count =
+                    ReadU32(payload + static_cast<std::size_t>(data_offset));
+                const std::uint32_t ranges_offset =
+                    ReadU32(payload + static_cast<std::size_t>(data_offset) +
+                            4u);
+                if (range_count > kMaxRecordCount || ranges_offset < 8u) {
+                    return malformed(
+                        "serialized descriptor table range header is invalid");
+                }
+                parameter.value0 = static_cast<std::uint32_t>(ranges.size());
+                parameter.value1 = range_count;
+                parameter.value2 = 0u;
+                const std::uint64_t range_base =
+                    static_cast<std::uint64_t>(data_offset) + ranges_offset;
+                const std::uint64_t range_bytes =
+                    static_cast<std::uint64_t>(range_count) * 20u;
+                if (range_base + range_bytes > chunk_size) {
+                    return malformed(
+                        "serialized descriptor ranges are out of bounds");
+                }
+                for (std::uint32_t range_index = 0u;
+                     range_index < range_count; ++range_index) {
+                    const std::size_t range_offset =
+                        static_cast<std::size_t>(range_base) +
+                        static_cast<std::size_t>(range_index) * 20u;
+                    SerializedDescriptorRange range;
+                    range.type = ReadU32(payload + range_offset);
+                    range.count = ReadU32(payload + range_offset + 4u);
+                    range.base_register =
+                        ReadU32(payload + range_offset + 8u);
+                    range.space = ReadU32(payload + range_offset + 12u);
+                    range.offset = ReadU32(payload + range_offset + 16u);
+                    if (range.type > 3u || range.count == 0u) {
+                        return malformed(
+                            "serialized root signature descriptor range is invalid");
+                    }
+                    ranges.push_back(range);
+                }
+                parameters.push_back(parameter);
+            } else {
+                return malformed(
+                    "serialized root signature uses an unsupported parameter type");
+            }
+        }
+        // The RTS0 payload contains variable data referenced by offsets; the
+        // structural checks above bound every referenced byte range.
     }
-    if (!reader.AtEnd()) {
-        AddDiagnostic(diagnostics, "package_trailing_data",
-                      "root signature blob has trailing bytes",
-                      std::string(kSectionRootSignatures));
-        return false;
+    if (!found) {
+        return malformed(
+            "serialized root signature is missing the RTS0 chunk");
     }
     return true;
 }
@@ -1654,24 +2041,50 @@ bool ValidateRootSignatures(
             error("package_decode_limit",
                   "root signature blob exceeds the v1 blob size limit");
         } else {
-            std::string blob_family;
-            std::vector<RootBinding> blob_bindings;
-            if (ParseRootSignatureBlob(record.blob, blob_family,
-                                       blob_bindings, diagnostics)) {
-                if (blob_family != record.family) {
-                    error("package_root_signature_blob_mismatch",
-                          "root signature blob family does not match the record");
-                }
-                bool same_bindings = blob_bindings.size() == record.bindings.size();
-                if (same_bindings) {
-                    for (std::size_t i = 0; i < blob_bindings.size(); ++i) {
-                        const auto& left = blob_bindings[i];
-                        const auto& right = record.bindings[i];
-                        if (left.name != right.name ||
-                            left.usage != right.usage ||
-                            left.slot != right.slot ||
-                            left.space != right.space ||
-                            left.root_parameter != right.root_parameter) {
+            std::vector<SerializedRootParameter> parameters;
+            std::vector<SerializedDescriptorRange> ranges;
+            if (ParseRootSignatureBlob(record.blob, parameters, ranges,
+                                       diagnostics)) {
+                bool same_bindings =
+                    parameters.size() == record.bindings.size();
+                for (const auto& binding : record.bindings) {
+                    if (!same_bindings ||
+                        binding.root_parameter >= parameters.size()) {
+                        same_bindings = false;
+                        break;
+                    }
+                    const auto& parameter =
+                        parameters[binding.root_parameter];
+                    if (binding.usage == "cbv") {
+                        if (parameter.type != 1u ||
+                            parameter.value0 != binding.slot ||
+                            parameter.value1 != binding.space ||
+                            parameter.value2 != record.dword_cost) {
+                            same_bindings = false;
+                            break;
+                        }
+                    } else {
+                        std::uint32_t expected_range_type = 0u;
+                        if (binding.usage == "uav") {
+                            expected_range_type = 1u;
+                        } else if (binding.usage == "sampler") {
+                            expected_range_type = 3u;
+                        } else if (binding.usage != "srv") {
+                            same_bindings = false;
+                            break;
+                        }
+                        const std::uint64_t range_offset = parameter.value0;
+                        const std::uint64_t range_count = parameter.value1;
+                        if (parameter.type != 0u || range_count == 0u ||
+                            range_offset + range_count > ranges.size()) {
+                            same_bindings = false;
+                            break;
+                        }
+                        const auto& range =
+                            ranges[static_cast<std::size_t>(range_offset)];
+                        if (range.type != expected_range_type ||
+                            range.base_register != binding.slot ||
+                            range.space != binding.space) {
                             same_bindings = false;
                             break;
                         }
@@ -1679,7 +2092,7 @@ bool ValidateRootSignatures(
                 }
                 if (!same_bindings) {
                     error("package_root_signature_blob_mismatch",
-                          "root signature blob bindings do not match the record");
+                          "serialized root signature does not match the record bindings");
                 }
             }
         }
@@ -1880,7 +2293,8 @@ bool ValidateCrossReferences(const CapabilityRecord& capability,
                           "shader has no init.create_pipeline instruction",
                           std::string(kSectionInitialization));
         }
-        if (dispatched_shaders.count(shader.shader_id) == 0u) {
+        if (shader.target == "cs_6_0" &&
+            dispatched_shaders.count(shader.shader_id) == 0u) {
             AddDiagnostic(diagnostics, "package_shader_unreferenced",
                           "shader has no frame.dispatch instruction",
                           std::string(kSectionFrame));
@@ -1963,34 +2377,115 @@ std::string ComputeProfileFingerprint(const CapabilityRecord& capability) {
 
 std::vector<std::uint8_t> MakeRootSignatureBlob(
     std::string_view family, const std::vector<RootBinding>& bindings) {
-    Writer writer;
-    writer.U8('N');
-    writer.U8('W');
-    writer.U8('R');
-    writer.U8('S');
-    writer.U16(1);
-    writer.String(family);
-    writer.U16(static_cast<std::uint16_t>(bindings.size()));
-    for (const auto& binding : bindings) {
-        writer.String(binding.name);
-        writer.String(binding.usage);
-        writer.U32(binding.slot);
-        writer.U32(binding.space);
-        writer.U32(binding.root_parameter);
+    (void)family;
+    std::vector<RootBinding> ordered = bindings;
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const RootBinding& a, const RootBinding& b) {
+                         return a.root_parameter < b.root_parameter;
+                     });
+    const std::uint32_t header_size = 24u;
+    const std::uint32_t parameter_size = 12u;
+    const std::uint32_t data_start =
+        header_size +
+        parameter_size * static_cast<std::uint32_t>(ordered.size());
+    Writer data;
+    struct ParameterRow {
+        std::uint32_t type = 0;
+        std::uint32_t visibility = 0;
+        std::uint32_t data_offset = 0;
+    };
+    std::vector<ParameterRow> parameters;
+    for (const auto& binding : ordered) {
+        const std::uint32_t data_offset =
+            data_start + static_cast<std::uint32_t>(data.bytes.size());
+        if (binding.usage == "cbv") {
+            parameters.push_back(ParameterRow{1u, 0u, data_offset});
+            data.U32(binding.slot);
+            data.U32(binding.space);
+            data.U32(4u);
+            continue;
+        }
+        std::uint32_t range_type = 0u;
+        if (binding.usage == "uav") {
+            range_type = 1u;
+        } else if (binding.usage == "sampler") {
+            range_type = 3u;
+        } else if (binding.usage != "srv") {
+            return {};
+        }
+        parameters.push_back(ParameterRow{0u, 0u, data_offset});
+        data.U32(1u); // descriptor range count
+        data.U32(8u); // descriptor ranges start after this header
+        data.U32(range_type);
+        data.U32(1u);
+        data.U32(binding.slot);
+        data.U32(binding.space);
+        data.U32(0u);
     }
+    Writer payload;
+    payload.U32(1u); // serialized signature version
+    payload.U32(static_cast<std::uint32_t>(parameters.size()));
+    payload.U32(header_size);
+    payload.U32(0u); // static sampler count
+    payload.U32(data_start + static_cast<std::uint32_t>(data.bytes.size()));
+    payload.U32(0u); // flags
+    for (const auto& parameter : parameters) {
+        payload.U32(parameter.type);
+        payload.U32(parameter.visibility);
+        payload.U32(parameter.data_offset);
+    }
+    payload.bytes.insert(payload.bytes.end(), data.bytes.begin(),
+                         data.bytes.end());
+    Sha256 sha;
+    sha.Update(payload.bytes.data(), payload.bytes.size());
+    const auto digest = sha.Final();
+    Writer writer;
+    writer.U8('D');
+    writer.U8('X');
+    writer.U8('B');
+    writer.U8('C');
+    writer.bytes.insert(writer.bytes.end(), digest.begin(),
+                        digest.begin() + 16);
+    writer.U16(1u);
+    writer.U16(0u);
+    const std::uint32_t total_size =
+        static_cast<std::uint32_t>(32u + 4u + 8u + payload.bytes.size());
+    writer.U32(total_size);
+    writer.U32(1u);
+    writer.U32(36u);
+    writer.U8('R');
+    writer.U8('T');
+    writer.U8('S');
+    writer.U8('0');
+    writer.U32(static_cast<std::uint32_t>(payload.bytes.size()));
+    writer.bytes.insert(writer.bytes.end(), payload.bytes.begin(),
+                        payload.bytes.end());
     return writer.ok ? writer.bytes : std::vector<std::uint8_t>{};
 }
 
 bool ValidatePackage(const Package& package,
                      std::vector<Diagnostic>& diagnostics,
                      bool allow_dev) {
-    ValidateCapability(package.capability, diagnostics,
+    ValidateCapability(package.capability, package.resources,
+                       package.initialization, package.frame, package.shaders,
+                       package.root_signatures, diagnostics,
                        (package.flags & 1u) != 0u);
     ValidateResources(package.resources, diagnostics);
     ValidateParameters(package.parameters, diagnostics);
     ValidateRootSignatures(package.root_signatures, package.resources,
                            diagnostics);
     ValidateShaders(package.shaders, package.root_signatures, diagnostics);
+    if ((package.flags & 1u) != 0u) {
+        for (const auto& shader : package.shaders) {
+            std::string reason;
+            if (HasForbiddenDxilMetadataChunks(shader.blob, reason)) {
+                AddDiagnostic(diagnostics, "package_shader_payload_invalid",
+                              "shader " + std::to_string(shader.shader_id) +
+                                  " " + reason,
+                              std::string(kSectionShaders));
+            }
+        }
+    }
     std::set<std::uint32_t> resource_ids;
     std::set<std::uint32_t> shader_ids;
     std::set<std::uint32_t> root_ids;
@@ -2252,6 +2747,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     };
     std::vector<Entry> entries;
     std::set<std::string> names;
+    std::string previous_section_name;
     for (std::uint32_t index = 0; index < section_count; ++index) {
         const std::uint64_t entry_offset =
             kHeaderSize + static_cast<std::uint64_t>(index) * kSectionEntrySize;
@@ -2287,6 +2783,14 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                           entry_offset, true);
             return false;
         }
+        if (!previous_section_name.empty() &&
+            name <= previous_section_name) {
+            AddDiagnostic(diagnostics, "package_section_order",
+                          "section directory is not in canonical ascending order",
+                          name, entry_offset, true);
+            return false;
+        }
+        previous_section_name = name;
         if (entry_flags != 0u || entry_reserved != 0u) {
             AddDiagnostic(diagnostics, "package_section_flags",
                           "section flags/reserved bits are unsupported", name,
@@ -2321,16 +2825,22 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             return false;
         }
     }
-    std::sort(entries.begin(), entries.end(),
-              [](const Entry& a, const Entry& b) {
-                  return a.offset < b.offset;
-              });
+    // Canonical v1 payloads are packed contiguously in directory order.  A
+    // checksum-correct package with inserted padding before a section must not
+    // be accepted and then re-written differently on round-trip.
     std::uint64_t previous_end = directory_end;
     for (const auto& entry : entries) {
         if (entry.offset < previous_end) {
             AddDiagnostic(diagnostics, "package_section_overlap",
                           "section '" + entry.name + "' overlaps another", entry.name,
                           entry.entry_offset, true);
+            return false;
+        }
+        if (entry.offset > previous_end) {
+            AddDiagnostic(diagnostics, "package_section_gap",
+                          "section '" + entry.name +
+                              "' is not contiguous with the previous payload",
+                          entry.name, entry.entry_offset, true);
             return false;
         }
         previous_end = entry.offset + entry.size;
@@ -2479,6 +2989,11 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             }
         }
     }
+    // Reject unknown profiles/digests before decoding bulk payloads.  The full
+    // capability contract is checked again after the package is decoded.
+    if (!ValidateCapabilityIdentity(package.capability, diagnostics)) {
+        return false;
+    }
     // Decode RES.
     {
         Reader reader{payloads[std::string(kSectionResources)],
@@ -2523,6 +3038,9 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                           std::string(kSectionResources));
             return false;
         }
+    }
+    if (!ValidateResources(package.resources, diagnostics)) {
+        return false;
     }
     const auto decode_instructions = [&](std::string_view section,
                                          std::vector<Instruction>& output) {
@@ -2658,6 +3176,25 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             return false;
         }
     }
+    std::uint64_t decoded_bytes = 0u;
+    const std::uint64_t decoded_limit =
+        max_total_bytes > UINT64_MAX / 4u
+            ? static_cast<std::uint64_t>(kMaxDecodedBytes)
+            : std::min<std::uint64_t>(
+                  kMaxDecodedBytes,
+                  static_cast<std::uint64_t>(max_total_bytes) * 4u);
+    auto charge_decoded = [&](std::uint64_t bytes,
+                              std::string_view section) -> bool {
+        if (decoded_bytes > decoded_limit ||
+            bytes > decoded_limit - decoded_bytes) {
+            AddDiagnostic(diagnostics, "package_decode_limit",
+                          "aggregate decoded payload exceeds the v1 memory budget",
+                          std::string(section));
+            return false;
+        }
+        decoded_bytes += bytes;
+        return true;
+    };
     const auto decode_root_signatures = [&]() {
         Reader reader{payloads[std::string(kSectionRootSignatures)],
                       payload_sizes[std::string(kSectionRootSignatures)], 0, &diagnostics,
@@ -2682,6 +3219,9 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         for (std::uint32_t i = 0; i < blob_count; ++i) {
             std::vector<std::uint8_t> blob;
             if (!reader.Blob(blob)) return false;
+            if (!charge_decoded(blob.size(), kSectionRootSignatures)) {
+                return false;
+            }
             if (!blob_digests.insert(Sha256Hex(blob)).second) {
                 AddDiagnostic(diagnostics,
                               "package_root_signature_not_deduplicated",
@@ -2714,6 +3254,10 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                 AddDiagnostic(diagnostics, "package_reference_out_of_range",
                               "RSIG record references a missing blob",
                               std::string(kSectionRootSignatures));
+                return false;
+            }
+            if (!charge_decoded(blobs[blob_index].size(),
+                                kSectionRootSignatures)) {
                 return false;
             }
             if (binding_count > kMaxRecordCount) {
@@ -2768,6 +3312,9 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         for (std::uint32_t i = 0; i < blob_count; ++i) {
             std::vector<std::uint8_t> blob;
             if (!reader.Blob(blob)) return false;
+            if (!charge_decoded(blob.size(), kSectionShaders)) {
+                return false;
+            }
             if (!blob_digests.insert(Sha256Hex(blob)).second) {
                 AddDiagnostic(diagnostics, "package_shader_blob_not_deduplicated",
                               "SHDR blob table contains duplicates",
@@ -2801,6 +3348,9 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                 AddDiagnostic(diagnostics, "package_reference_out_of_range",
                               "SHDR record references a missing blob",
                               std::string(kSectionShaders));
+                return false;
+            }
+            if (!charge_decoded(blobs[blob_index].size(), kSectionShaders)) {
                 return false;
             }
             shader.blob = blobs[blob_index];
@@ -2875,6 +3425,15 @@ std::vector<std::string> CheckReleaseLeakage(
         findings.push_back("release package contains DEVC metadata");
     } else if ((package.flags & 1u) == 0u) {
         findings.push_back("package is not marked as a release package");
+    } else {
+        for (const auto& shader : package.shaders) {
+            std::string reason;
+            if (HasForbiddenDxilMetadataChunks(shader.blob, reason)) {
+                findings.push_back(
+                    "shader " + std::to_string(shader.shader_id) + ": " +
+                    reason);
+            }
+        }
     }
     return findings;
 }

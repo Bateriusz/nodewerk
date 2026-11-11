@@ -214,7 +214,12 @@ def query_dxc_version(dxc_bin: str) -> str:
     return match.group(1) if match else (combined.splitlines()[0] if combined else "unknown")
 
 
-def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -> dict[str, Any]:
+def validate_dxil_container(
+    blob: bytes,
+    *,
+    allow_test_container: bool = True,
+    reject_debug_reflection: bool = False,
+) -> dict[str, Any]:
     """Validate that a DXIL container has a genuine signed DXBC header, PSV0, SFI0, and SM 6.0 DXIL bitcode."""
     if len(blob) < 44:
         raise ValueError(f"DXIL container too small ({len(blob)} bytes)")
@@ -245,6 +250,7 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
     feature_flags = 0
     shader_model = None
     bitcode_size = 0
+    forbidden_metadata_chunks: list[str] = []
 
     for offset in offsets:
         if offset < header_end or offset + 8 > len(blob):
@@ -255,6 +261,10 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
             raise ValueError(f"Chunk {fourcc!r} size {chunk_size} exceeds container bounds")
         raw_chunks.append(blob[offset : offset + 8 + chunk_size])
         chunk_payload = blob[offset + 8 : offset + 8 + chunk_size]
+        if fourcc in {b"ILDB", b"ILDN", b"STAT", b"RDEF", b"RDAT", b"SPDB", b"SPDN"}:
+            forbidden_metadata_chunks.append(
+                fourcc.decode("ascii", "replace")
+            )
 
         if fourcc == SFI0_CHUNK_FOURCC:
             if chunk_size != 8:
@@ -333,6 +343,11 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
         raise ValueError("DXBC container is missing required DXIL chunk")
     if not found_psv0:
         raise ValueError("DXBC container is missing required PSV0 pipeline state validation chunk")
+    if forbidden_metadata_chunks and reject_debug_reflection:
+        raise ValueError(
+            "DXBC container contains forbidden debug/reflection chunk(s): "
+            + ", ".join(sorted(set(forbidden_metadata_chunks)))
+        )
 
     return {
         "valid": True,
@@ -349,6 +364,7 @@ def validate_dxil_container(blob: bytes, *, allow_test_container: bool = True) -
         "requires_enhanced_barriers": False,
         "requires_mesh_shaders": False,
         "requires_ray_tracing": False,
+        "debug_reflection_chunks": sorted(set(forbidden_metadata_chunks)),
     }
 
 

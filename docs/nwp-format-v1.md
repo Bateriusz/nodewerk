@@ -90,16 +90,18 @@ Required fields include:
 - `shader_model = 0x0060`, `shader_model_text = 6_0`
 - `resource_binding_tier = 2`, `resource_heap_tier = 2`
 - `direct_queue_count = 1`
-- `max_cbv_srv_uav_descriptors_per_frame = 4096`
-- `max_sampler_descriptors_per_frame = 64`
-- `max_root_signature_dword_cost = 16`
 - `min_windows_build = 22631`
-- exactly `DXGI_FORMAT_R8G8B8A8_UNORM`, `DXGI_FORMAT_R32G32B32A32_FLOAT`,
-  `DXGI_FORMAT_R32_UINT`, and `DXGI_FORMAT_D32_FLOAT`
-- `limit_max_texture_2d_dimension = 8192`,
-  `limit_max_compute_threads_per_group = 1024`,
-  `limit_max_buffer_bytes = 67108864`,
-  `limit_swap_chain_buffer_count = 2`
+- `required_dxgi_formats` exactly equal to the sorted set of formats emitted by
+  the package resources. The math/noise fixture emits only
+  `DXGI_FORMAT_R32G32B32A32_FLOAT` and `DXGI_FORMAT_R32_UINT`; depth/color
+  formats are not declared unless emitted.
+- `limit_max_texture_2d_dimension`, `limit_max_buffer_bytes`,
+  `limit_max_compute_threads_per_group`, `max_cbv_srv_uav_descriptors_per_frame`,
+  `max_sampler_descriptors_per_frame`, `max_root_signature_dword_cost`, and
+  `limit_swap_chain_buffer_count` are derived from the emitted resources,
+  root signatures, shaders, and frame primitives. The profile identity retains
+  the full baseline maxima, but the package capability record advertises only
+  requirements this artifact actually uses.
 - `emitted_shader_targets` exactly matching the shader records
 - `runtime_dxc_dependency = false`, `runtime_slang_dependency = false`,
   `agility_sdk_required = false`
@@ -150,17 +152,31 @@ file and in `PASS_FAMILY_BINDINGS` sources before emission.
 
 `SHDR` stores raw complete DXIL containers, not source or intermediate
 expressions. Identical complete blobs are stored once and referenced by every
-specialization. `RSIG` stores raw canonical root-signature payloads with the same
-deduplication rule. Cross-blob function sharing is never assumed.
+specialization. `RSIG` stores complete serialized D3D12 root-signature payloads
+with the same deduplication rule. The payload is a DXBC container with one
+`RTS0` chunk. Its 24-byte header is
+`version, num_root_parameters, parameters_offset, num_static_samplers,
+static_samplers_offset, flags`; each 12-byte root parameter is
+`type, shader_visibility, data_offset`; parameter data is either the three
+`register, space, num_32bit_values` dwords for 32-bit constants or
+`num_ranges, ranges_offset` followed by 20-byte descriptor ranges. Enum values
+follow D3D12 (`descriptor table = 0`, `32-bit constants = 1`; `SRV = 0`,
+`UAV = 1`, `CBV = 2`, `sampler = 3`). `ID3D12Device::CreateRootSignature`
+therefore receives serialized signature bytes; the package never stores a
+private binding-list format. Static samplers are not part of the baseline
+family. Cross-blob function sharing is never assumed.
 
 The reader checks DXBC magic, container size, chunk count/offsets/sizes, SFI0
 feature flags, PSV0 presence, DXIL program version (`cs_6_0`, `vs_6_0`, or
 `ps_6_0`), DXIL version, and LLVM 3.7 bitcode framing. Every permitted target
 is structurally validated and must match the declared shader target; unknown
-targets are rejected. Release
-inspection and leakage tests verify that source paths, source text, editor
-names, debug data, and reflection tables are absent while execution-required
-DXIL metadata remains.
+targets are rejected. `frame.dispatch` additionally requires a `cs_6_0` shader
+and all three group dimensions in `1..65535`. Release packages reject the
+`ILDB`, `ILDN`, `STAT`, `RDEF`, `RDAT`, `SPDB`, and `SPDN` chunks explicitly,
+so debug/reflection metadata cannot hide merely because its payload lacks a
+scanned ASCII string. Release inspection and leakage tests verify that source
+paths, source text, editor names, debug data, and reflection tables are absent
+while execution-required DXIL metadata (`DXIL`, `PSV0`, `SFI0`, `HASH`) remains.
 
 ## Validation ordering
 
@@ -174,13 +190,22 @@ The reader validates, in order:
 6. required sections;
 7. bounded section record counts, string lengths, blob lengths, and checked
    arithmetic;
-8. capability fields, profile identity/digest, contradictions, exact
+8. capability identity/digest and optional-profile identity are rejected before
+   bulk payload decoding;
+9. capability fields, profile identity/digest, contradictions, exact emitted
    requirements, emitted targets and instruction opcodes;
-9. resource dimensions/formats/bindings;
-10. parameter dimensions/timeline ranges;
-11. instruction operands, opcodes, phases, and resource/shader/root-signature
+10. resource dimensions/formats/bindings;
+11. parameter dimensions/timeline ranges;
+12. instruction operands, opcodes, phases, and resource/shader/root-signature
     references;
-12. shader DXIL structure and root-signature payload constraints.
+13. shader DXIL structure, forbidden debug/reflection chunks in release mode,
+    and serialized root-signature constraints.
+
+Section payloads must be contiguous in directory order. Padding inserted
+between sections, descending section IDs, overlap, and non-contiguous payloads
+are rejected so a checksum-correct package always re-encodes to the same bytes.
+The aggregate decoded-memory budget prevents a small deduplicated blob table
+from being copied into thousands of specialization records.
 
 No parser failure reaches GPU submission. Unknown major versions, required
 sections, instructions, operand types, and shader targets are rejected.

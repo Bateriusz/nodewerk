@@ -487,7 +487,8 @@ class GraphDocument:
                     "frequency": node.frequency,
                     "residency": node.residency,
                     "params": {
-                        name: sorted(values) for name, values in sorted(node.params.items())
+                        name: list(values)
+                        for name, values in sorted(node.params.items())
                     },
                     "inputs": {
                         port: source for port, source in sorted(node.inputs.items())
@@ -749,6 +750,7 @@ def parse_graph_text(
         )
     if any(item["severity"] == "error" for item in diagnostics):
         return None, diagnostics
+    _apply_clamp01_normalisation(nodes)
     document = GraphDocument(
         schema_version=schema_version,
         profile_id=profile_id,
@@ -811,6 +813,45 @@ def _parse_numeric_token(token: str) -> float | None:
     except ValueError:
         return None
     return value
+
+
+def _normalise_zero(value: float) -> float:
+    return 0.0 if value == 0.0 else value
+
+
+def _shader_number_text(value: float) -> str:
+    """Match NW-02 ``ShaderNumberText`` for normalized parameter values."""
+    value = _normalise_zero(value)
+    text = format(value, ".17g")
+    if "." not in text and "e" not in text and "E" not in text:
+        text += ".0"
+    return text
+
+
+def _apply_clamp01_normalisation(nodes: dict[str, GraphNode]) -> None:
+    """Apply NW-02's clamp01 parameter normalization before evaluation."""
+    for node in nodes.values():
+        rules = PARAM_RULES.get(node.operator_id, {})
+        for name, rule in rules.items():
+            if not rule.get("clamp01"):
+                continue
+            tokens = _param_tokens(node, name)
+            if not tokens:
+                continue
+            normalized: list[str] = []
+            valid = True
+            for token in tokens:
+                value = _parse_numeric_token(token)
+                if value is None or not math.isfinite(value):
+                    valid = False
+                    break
+                normalized.append(
+                    _shader_number_text(
+                        _normalise_zero(min(max(value, 0.0), 1.0))
+                    )
+                )
+            if valid:
+                node.params[name] = [" ".join(normalized)]
 
 
 def _validate_node_parameters(node: GraphNode) -> list[dict[str, Any]]:
@@ -1785,8 +1826,19 @@ def compile_generated_shader(
     optimization: str = "O2",
     pinned_dxc_version: str = PINNED_DXC_VERSION,
     allow_unpinned_dxc: bool = False,
+    allow_test_payloads: bool = False,
 ) -> dict[str, Any]:
     measured_version = query_dxc_version(dxc_executable)
+    if not allow_test_payloads and str(dxc_executable).lower().endswith(".py"):
+        raise CompilerError(
+            "test/mock DXC payloads are not accepted for release compilation",
+            [
+                package_diagnostic(
+                    "toolchain_test_mock_forbidden",
+                    "release verification requires a real pinned DXC executable",
+                )
+            ],
+        )
     if not allow_unpinned_dxc and pinned_dxc_version not in measured_version:
         raise CompilerError(
             f"DXC version '{measured_version}' does not match pinned '{pinned_dxc_version}'"
@@ -1820,11 +1872,14 @@ def compile_generated_shader(
             ],
         )
     blob = output_path.read_bytes()
-    is_mock = str(dxc_executable).lower().endswith(".py")
     if validate_dxil_container is None:
         raise CompilerError("offline DXIL structural validator is unavailable")
     try:
-        validation = validate_dxil_container(blob, allow_test_container=is_mock)
+        validation = validate_dxil_container(
+            blob,
+            allow_test_container=allow_test_payloads,
+            reject_debug_reflection=not allow_test_payloads,
+        )
     except Exception as exc:
         raise CompilerError(
             f"compiled shader '{shader.specialization_id}' failed DXIL validation: {exc}",
@@ -1837,6 +1892,18 @@ def compile_generated_shader(
                 )
             ],
         ) from exc
+    if validation.get("is_test_container") and not allow_test_payloads:
+        raise CompilerError(
+            f"compiled shader '{shader.specialization_id}' is a synthetic test payload",
+            [
+                package_diagnostic(
+                    "shader_payload_synthetic_forbidden",
+                    "release packages must contain real DXC-compiled DXIL",
+                    node_id=source,
+                    expression_id=shader.specialization_id,
+                )
+            ],
+        )
     if validation.get("shader_model") != shader.target:
         raise CompilerError(
             f"compiled shader target '{validation.get('shader_model')}' does not match "
@@ -1848,6 +1915,7 @@ def compile_generated_shader(
         "measured_dxc_version": measured_version,
         "dxc_executable": dxc_executable,
         "hlsl_sha256": shader.hlsl_sha256,
+        "is_test_container": bool(validation.get("is_test_container")),
         "dxc_flags": [
             "-T",
             shader.target,
@@ -2022,7 +2090,11 @@ def _build_package(
                 ),
             )
         )
+    derived = nwp_package.derive_capability_requirements(
+        resources, initialization, frame, shaders, [root_signature]
+    )
     capability = CapabilityRecord(
+        **derived,
         emitted_shader_targets=tuple(sorted({shader.target for shader in generated})),
         required_init_instructions=tuple(sorted({item.opcode for item in initialization})),
         required_frame_instructions=tuple(sorted({item.opcode for item in frame})),
@@ -2119,6 +2191,7 @@ def compile_package(
     dxc_executable: str | None = None,
     optimization: str = "O2",
     allow_unpinned_dxc: bool = False,
+    allow_test_payloads: bool = False,
 ) -> dict[str, Any]:
     """Compile a graph to a validated `.nwp` package and publish atomically."""
     output_path = Path(output_path)
@@ -2207,14 +2280,36 @@ def compile_package(
             }
             cached = cache.lookup(cache_key, meta)
             if cached is not None:
+                try:
+                    cached_validation = (
+                        validate_dxil_container(
+                            cached,
+                            allow_test_container=allow_test_payloads,
+                            reject_debug_reflection=not allow_test_payloads,
+                        )
+                        if validate_dxil_container is not None
+                        else {}
+                    )
+                except Exception:
+                    cache.invalidate(cache_key)
+                    cached = None
+                    cached_validation = {}
+                if (
+                    cached_validation.get("is_test_container")
+                    and not allow_test_payloads
+                ):
+                    cache.invalidate(cache_key)
+                    cached = None
+            if cached is not None:
                 compiled[shader.specialization_key] = {
                     "blob": cached,
-                    "validation": validate_dxil_container(cached, allow_test_container=True)
-                    if validate_dxil_container is not None
-                    else {},
+                    "validation": cached_validation,
                     "measured_dxc_version": dxc_version,
                     "dxc_executable": dxc_bin,
                     "hlsl_sha256": shader.hlsl_sha256,
+                    "is_test_container": bool(
+                        cached_validation.get("is_test_container")
+                    ),
                     "cache_hit": True,
                 }
                 continue
@@ -2225,6 +2320,7 @@ def compile_package(
                 optimization=optimization,
                 pinned_dxc_version=pinned_version,
                 allow_unpinned_dxc=allow_unpinned_dxc,
+                allow_test_payloads=allow_test_payloads,
             )
             result["cache_hit"] = False
             cache.store(cache_key, result["blob"], meta)
@@ -2351,6 +2447,10 @@ def _build_report(
             "dxc_version": dxc_version,
             "optimization": optimization,
             "pinned": release,
+            "test_payload": any(
+                bool(item.get("is_test_container"))
+                for item in compiled.values()
+            ),
             "runtime_dxc_dependency": False,
             "runtime_slang_dependency": False,
         },

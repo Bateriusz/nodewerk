@@ -53,6 +53,10 @@ SECTION_SHADERS = "SHDR"
 SECTION_ROOT_SIGNATURES = "RSIG"
 SECTION_DEV = "DEVC"
 
+ROOT_SIGNATURE_DXBC_MAGIC = b"DXBC"
+ROOT_SIGNATURE_CHUNK = b"RTS0"
+ROOT_SIGNATURE_VERSION = 1
+
 REQUIRED_RELEASE_SECTIONS = (
     SECTION_CAPABILITY,
     SECTION_RESOURCES,
@@ -88,6 +92,8 @@ MAX_SAMPLER_DESCRIPTORS_PER_FRAME = 64
 MAX_ROOT_SIGNATURE_DWORD_COST = 16
 MAX_COMPUTE_THREADS_PER_GROUP = 1024
 MAX_TEXTURE_2D_DIMENSION = 8192
+MAX_TEXTURE_ARRAY_SIZE = 2048
+MAX_MIP_LEVELS = 15
 MAX_BUFFER_BYTES = 64 * 1024 * 1024
 SWAP_CHAIN_BUFFER_COUNT = 2
 
@@ -123,6 +129,7 @@ PASS_FAMILY_BINDINGS: dict[str, dict[str, tuple[str, int, int]]] = {
 # larger than these values.
 MAX_PACKAGE_BYTES = 64 * 1024 * 1024
 MAX_SECTION_BYTES = 16 * 1024 * 1024
+MAX_DECODED_BYTES = 4 * MAX_PACKAGE_BYTES
 MAX_SECTION_COUNT = 64
 MAX_RECORD_COUNT = 4096
 MAX_FIELD_COUNT = 64
@@ -1700,11 +1707,9 @@ def _decode_shaders(
 # ---------------------------------------------------------------------------
 
 
-def _validate_capability(
+def _validate_capability_identity(
     capability: CapabilityRecord,
     diagnostics: list[dict[str, Any]],
-    *,
-    release: bool = True,
 ) -> None:
     def error(code: str, message: str) -> None:
         diagnostics.append(
@@ -1746,48 +1751,92 @@ def _validate_capability(
             "optional requirements digest is present without an optional profile id",
         )
 
+
+def derive_capability_requirements(
+    resources: Sequence[ResourceDescriptor],
+    initialization: Sequence[Instruction],
+    frame: Sequence[Instruction],
+    shaders: Sequence[ShaderRecord],
+    root_signatures: Sequence[RootSignatureRecord],
+) -> dict[str, Any]:
+    """Return the exact capability requirements emitted by a package."""
+    root_constant_resources = {
+        instruction.operands[1].value
+        for instruction in frame
+        if instruction.opcode == "frame.set_root_constants"
+        and len(instruction.operands) == 3
+        and instruction.operands[1].type == "resource_ref"
+    }
+    descriptor_count = 0
+    sampler_count = 0
+    max_buffer_bytes = 0
+    max_texture_2d_dimension = 0
+    for resource in resources:
+        if resource.usage == "sampler":
+            sampler_count += 1
+        elif resource.usage == "srv" or resource.usage == "uav" or (
+            resource.usage == "cbv"
+            and resource.resource_id not in root_constant_resources
+        ):
+            descriptor_count += 1
+        if resource.kind == "buffer":
+            max_buffer_bytes = max(max_buffer_bytes, resource.size_bytes)
+        if resource.kind == "texture2d":
+            max_texture_2d_dimension = max(
+                max_texture_2d_dimension, resource.width, resource.height
+            )
+    has_present = any(
+        instruction.opcode == "frame.present" for instruction in frame
+    )
+    return {
+        "required_dxgi_formats": tuple(sorted({r.format for r in resources})),
+        "max_cbv_srv_uav_descriptors_per_frame": descriptor_count,
+        "max_sampler_descriptors_per_frame": sampler_count,
+        "max_root_signature_dword_cost": max(
+            (record.dword_cost for record in root_signatures), default=0
+        ),
+        "limit_max_texture_2d_dimension": max_texture_2d_dimension,
+        "limit_max_compute_threads_per_group": max(
+            (
+                shader.thread_group_x
+                * shader.thread_group_y
+                * shader.thread_group_z
+                for shader in shaders
+            ),
+            default=0,
+        ),
+        "limit_max_buffer_bytes": max_buffer_bytes,
+        "limit_swap_chain_buffer_count": SWAP_CHAIN_BUFFER_COUNT
+        if has_present
+        else 0,
+    }
+
+
+def _validate_capability(
+    capability: CapabilityRecord,
+    diagnostics: list[dict[str, Any]],
+    *,
+    release: bool = True,
+    resources: Sequence[ResourceDescriptor] | None = None,
+    initialization: Sequence[Instruction] | None = None,
+    frame: Sequence[Instruction] | None = None,
+    shaders: Sequence[ShaderRecord] | None = None,
+    root_signatures: Sequence[RootSignatureRecord] | None = None,
+) -> None:
+    def error(code: str, message: str) -> None:
+        diagnostics.append(
+            package_diagnostic(code, message, section=SECTION_CAPABILITY)
+        )
+
+    _validate_capability_identity(capability, diagnostics)
+
     checks = (
         ("feature_level", capability.feature_level, FEATURE_LEVEL_12_0),
         ("shader_model", capability.shader_model, SHADER_MODEL_6_0),
         ("resource_binding_tier", capability.resource_binding_tier, RESOURCE_BINDING_TIER_2),
         ("resource_heap_tier", capability.resource_heap_tier, RESOURCE_HEAP_TIER_2),
         ("direct_queue_count", capability.direct_queue_count, 1),
-        (
-            "max_cbv_srv_uav_descriptors_per_frame",
-            capability.max_cbv_srv_uav_descriptors_per_frame,
-            MAX_CBV_SRV_UAV_DESCRIPTORS_PER_FRAME,
-        ),
-        (
-            "max_sampler_descriptors_per_frame",
-            capability.max_sampler_descriptors_per_frame,
-            MAX_SAMPLER_DESCRIPTORS_PER_FRAME,
-        ),
-        (
-            "max_root_signature_dword_cost",
-            capability.max_root_signature_dword_cost,
-            MAX_ROOT_SIGNATURE_DWORD_COST,
-        ),
         ("min_windows_build", capability.min_windows_build, MIN_WINDOWS_BUILD),
-        (
-            "limit_max_texture_2d_dimension",
-            capability.limit_max_texture_2d_dimension,
-            MAX_TEXTURE_2D_DIMENSION,
-        ),
-        (
-            "limit_max_compute_threads_per_group",
-            capability.limit_max_compute_threads_per_group,
-            MAX_COMPUTE_THREADS_PER_GROUP,
-        ),
-        (
-            "limit_max_buffer_bytes",
-            capability.limit_max_buffer_bytes,
-            MAX_BUFFER_BYTES,
-        ),
-        (
-            "limit_swap_chain_buffer_count",
-            capability.limit_swap_chain_buffer_count,
-            SWAP_CHAIN_BUFFER_COUNT,
-        ),
     )
     for name, actual, expected in checks:
         if actual != expected:
@@ -1801,16 +1850,51 @@ def _validate_capability(
             "package_capability_contradictory",
             f"shader_model_text '{capability.shader_model_text}' does not match shader model 6.0",
         )
+    if (
+        resources is not None
+        and initialization is not None
+        and frame is not None
+        and shaders is not None
+        and root_signatures is not None
+    ):
+        derived = derive_capability_requirements(
+            resources, initialization, frame, shaders, root_signatures
+        )
+        for name, expected in derived.items():
+            actual = getattr(capability, name)
+            if actual != expected:
+                error(
+                    "package_capability_contradictory",
+                    f"CAP field '{name}' is {actual!r}, emitted requirement is {expected!r}",
+                )
+        if (
+            capability.max_cbv_srv_uav_descriptors_per_frame
+            > MAX_CBV_SRV_UAV_DESCRIPTORS_PER_FRAME
+            or capability.max_sampler_descriptors_per_frame
+            > MAX_SAMPLER_DESCRIPTORS_PER_FRAME
+            or capability.max_root_signature_dword_cost
+            > MAX_ROOT_SIGNATURE_DWORD_COST
+            or capability.limit_max_texture_2d_dimension
+            > MAX_TEXTURE_2D_DIMENSION
+            or capability.limit_max_compute_threads_per_group
+            > MAX_COMPUTE_THREADS_PER_GROUP
+            or capability.limit_max_buffer_bytes > MAX_BUFFER_BYTES
+            or capability.limit_swap_chain_buffer_count
+            > SWAP_CHAIN_BUFFER_COUNT
+        ):
+            error(
+                "package_capability_contradictory",
+                "emitted requirement exceeds the baseline profile limit",
+            )
     formats = tuple(capability.required_dxgi_formats)
     if len(set(formats)) != len(formats):
         error("package_capability_contradictory", "required DXGI formats contain duplicates")
-    if set(formats) != set(REQUIRED_DXGI_FORMATS):
-        missing = sorted(set(REQUIRED_DXGI_FORMATS) - set(formats))
-        extra = sorted(set(formats) - set(REQUIRED_DXGI_FORMATS))
+    unknown_formats = sorted(set(formats) - set(REQUIRED_DXGI_FORMATS))
+    if unknown_formats:
         error(
             "package_capability_format_set",
-            "required DXGI formats must be exactly the baseline set "
-            f"(missing={missing}, extra={extra})",
+            "required DXGI formats contain unknown formats "
+            f"{unknown_formats}",
         )
     if not capability.emitted_shader_targets:
         error("package_capability_contradictory", "emitted_shader_targets is empty")
@@ -1907,6 +1991,11 @@ def _validate_resources(
                 f"unknown resource usage '{resource.usage}'",
             )
         if resource.kind == "buffer":
+            if resource.usage not in {"cbv", "srv", "uav", "readback", "sampler"}:
+                error(
+                    "package_resource_usage",
+                    f"buffer resource '{resource.name}' has incompatible usage '{resource.usage}'",
+                )
             if (resource.width, resource.height, resource.depth) != (0, 0, 0):
                 error(
                     "package_resource_dimensions",
@@ -1923,6 +2012,11 @@ def _validate_resources(
                     f"buffer resource '{resource.name}' must be a single array slice/mip",
                 )
         elif resource.kind == "texture2d":
+            if resource.usage not in {"srv", "uav", "rtv", "dsv"}:
+                error(
+                    "package_resource_usage",
+                    f"texture2d resource '{resource.name}' has incompatible usage '{resource.usage}'",
+                )
             if not (1 <= resource.width <= MAX_TEXTURE_2D_DIMENSION):
                 error(
                     "package_resource_dimensions",
@@ -1938,12 +2032,54 @@ def _validate_resources(
                     "package_resource_dimensions",
                     f"texture2d '{resource.name}' depth must be 0 or 1",
                 )
-            if resource.size_bytes == 0 or resource.size_bytes > MAX_BUFFER_BYTES:
+            if not (1 <= resource.array_size <= MAX_TEXTURE_ARRAY_SIZE):
                 error(
                     "package_resource_dimensions",
-                    f"texture2d '{resource.name}' size is outside 1..{MAX_BUFFER_BYTES}",
+                    f"texture2d '{resource.name}' array_size {resource.array_size} is outside 1..{MAX_TEXTURE_ARRAY_SIZE}",
+                )
+            if not (1 <= resource.mip_levels <= MAX_MIP_LEVELS):
+                error(
+                    "package_resource_dimensions",
+                    f"texture2d '{resource.name}' mip_levels {resource.mip_levels} is outside 1..{MAX_MIP_LEVELS}",
+                )
+            bytes_per_element = {
+                "DXGI_FORMAT_R8G8B8A8_UNORM": 4,
+                "DXGI_FORMAT_R32G32B32A32_FLOAT": 16,
+                "DXGI_FORMAT_R32_UINT": 4,
+                "DXGI_FORMAT_D32_FLOAT": 4,
+            }.get(resource.format, 0)
+            computed = 0
+            if (
+                bytes_per_element
+                and resource.width > 0
+                and resource.height > 0
+                and resource.mip_levels >= 1
+                and resource.array_size >= 1
+            ):
+                for mip in range(resource.mip_levels):
+                    level_width = max(1, resource.width >> mip)
+                    level_height = max(1, resource.height >> mip)
+                    computed += (
+                        level_width
+                        * level_height
+                        * bytes_per_element
+                        * resource.array_size
+                    )
+            if (
+                computed == 0
+                or computed > MAX_BUFFER_BYTES
+                or resource.size_bytes != computed
+            ):
+                error(
+                    "package_resource_dimensions",
+                    f"texture2d '{resource.name}' size_bytes does not match its checked allocation",
                 )
         else:  # texture3d
+            if resource.usage not in {"srv", "uav"}:
+                error(
+                    "package_resource_usage",
+                    f"texture3d resource '{resource.name}' has incompatible usage '{resource.usage}'",
+                )
             for label, value in (
                 ("width", resource.width),
                 ("height", resource.height),
@@ -1954,6 +2090,49 @@ def _validate_resources(
                         "package_resource_dimensions",
                         f"texture3d '{resource.name}' {label} {value} is outside 1..2048",
                     )
+            if resource.array_size != 1:
+                error(
+                    "package_resource_dimensions",
+                    f"texture3d '{resource.name}' must be a single array slice",
+                )
+            if not (1 <= resource.mip_levels <= MAX_MIP_LEVELS):
+                error(
+                    "package_resource_dimensions",
+                    f"texture3d '{resource.name}' mip_levels {resource.mip_levels} is outside 1..{MAX_MIP_LEVELS}",
+                )
+            bytes_per_element = {
+                "DXGI_FORMAT_R8G8B8A8_UNORM": 4,
+                "DXGI_FORMAT_R32G32B32A32_FLOAT": 16,
+                "DXGI_FORMAT_R32_UINT": 4,
+                "DXGI_FORMAT_D32_FLOAT": 4,
+            }.get(resource.format, 0)
+            computed = 0
+            if (
+                bytes_per_element
+                and resource.width >= 1
+                and resource.height >= 1
+                and resource.depth >= 1
+                and resource.mip_levels >= 1
+            ):
+                for mip in range(resource.mip_levels):
+                    level_width = max(1, resource.width >> mip)
+                    level_height = max(1, resource.height >> mip)
+                    level_depth = max(1, resource.depth >> mip)
+                    computed += (
+                        level_width
+                        * level_height
+                        * level_depth
+                        * bytes_per_element
+                    )
+            if (
+                computed == 0
+                or computed > MAX_BUFFER_BYTES
+                or resource.size_bytes != computed
+            ):
+                error(
+                    "package_resource_dimensions",
+                    f"texture3d '{resource.name}' size_bytes does not match its checked allocation",
+                )
 
         binding_key = (
             resource.pass_family,
@@ -2125,7 +2304,11 @@ def _validate_instructions(
                         "package_instruction_reference",
                         f"instruction '{instruction.opcode}' references missing root signature {operand.value}",
                     )
-                elif operand.type == "u32" and operand_index == 0 and instruction.opcode == "frame.dispatch":
+                elif (
+                    operand.type == "u32"
+                    and operand_index in (0, 1, 2)
+                    and instruction.opcode == "frame.dispatch"
+                ):
                     if operand.value == 0 or operand.value > 65535:
                         error(
                             "package_instruction_operand",
@@ -2208,6 +2391,12 @@ def _validate_instructions(
                 shader_operand = instruction.operands[-1]
                 if shader_operand.type == "shader_ref":
                     shader = shader_by_id.get(shader_operand.value)
+                    if shader is not None and shader.target != "cs_6_0":
+                        error(
+                            "package_dispatch_shader_target",
+                            f"frame.dispatch requires a compute shader target, "
+                            f"got '{shader.target}'",
+                        )
                     pipeline_root = pipeline_roots.get(shader_operand.value)
                     if shader is not None and pipeline_root is not None:
                         if (
@@ -2312,72 +2501,140 @@ def _validate_parameters(
 def _decode_root_signature_blob(
     blob: bytes | bytearray | memoryview,
     diagnostics: list[dict[str, Any]],
-) -> tuple[str, tuple[RootBinding, ...]] | None:
-    """Decode the canonical ``NWRS`` root-signature payload.
+) -> tuple[tuple[tuple[int, int, int, int, int], ...], tuple[tuple[int, int, int, int, int], ...]] | None:
+    """Parse a serialized ``DXBC``/``RTS0`` D3D12 root signature payload.
 
-    Publication-side validation parses this payload so a record cannot carry a
-    blob with different family or binding semantics than the record itself.
+    Returns ``(parameters, ranges)``.  Each parameter is
+    ``(type, visibility, value0, value1, value2)`` and each descriptor range is
+    ``(type, count, base_register, space, offset)``.  Semantic binding names
+    live in the package record, not in the opaque serialized signature.
     """
-    reader = _Reader(blob, diagnostics, SECTION_ROOT_SIGNATURES)
-    magic = reader._take(4)
-    if magic is None:
-        return None
-    if bytes(magic) != b"NWRS":
+
+    def malformed(message: str) -> None:
         diagnostics.append(
             package_diagnostic(
                 "package_root_signature_malformed",
-                "root signature blob magic is not 'NWRS'",
+                message,
                 section=SECTION_ROOT_SIGNATURES,
             )
         )
+
+    data = bytes(blob)
+    if len(data) < 44 or data[:4] != ROOT_SIGNATURE_DXBC_MAGIC:
+        malformed("root signature blob is not a serialized DXBC signature")
         return None
-    version = reader.u16()
-    if version is None:
+    major, minor, total_size, chunk_count = struct.unpack_from(
+        "<HHII", data, 20
+    )
+    if (major, minor) != (1, 0) or total_size != len(data):
+        malformed("serialized root signature container is malformed")
         return None
-    if version != 1:
-        diagnostics.append(
-            package_diagnostic(
-                "package_unknown_section_version",
-                f"root signature blob version {version} is not supported",
-                section=SECTION_ROOT_SIGNATURES,
-            )
-        )
+    header_end = 32 + chunk_count * 4
+    if chunk_count == 0 or chunk_count > 64 or header_end > len(data):
+        malformed("serialized root signature chunk directory is invalid")
         return None
-    family = reader.string()
-    if family is None:
-        return None
-    count = reader.u16()
-    if count is None:
-        return None
-    if count > MAX_RECORD_COUNT:
-        diagnostics.append(
-            package_diagnostic(
-                "package_decode_limit",
-                f"root signature blob binding count {count} exceeds {MAX_RECORD_COUNT}",
-                section=SECTION_ROOT_SIGNATURES,
-            )
-        )
-        return None
-    bindings: list[RootBinding] = []
-    for _ in range(count):
-        name = reader.string()
-        usage = reader.string()
-        slot = reader.u32()
-        space = reader.u32()
-        root_parameter = reader.u32()
-        if None in (name, usage, slot, space, root_parameter):
+    found = False
+    parameters: tuple[tuple[int, int, int, int, int], ...] = ()
+    ranges: tuple[tuple[int, int, int, int, int], ...] = ()
+    for index in range(chunk_count):
+        offset = struct.unpack_from("<I", data, 32 + index * 4)[0]
+        if offset < header_end or offset + 8 > len(data):
+            malformed("serialized root signature chunk offset is out of bounds")
             return None
-        bindings.append(RootBinding(name, usage, slot, space, root_parameter))
-    if not reader.at_end():
-        diagnostics.append(
-            package_diagnostic(
-                "package_trailing_data",
-                f"root signature blob has {reader.remaining} trailing bytes",
-                section=SECTION_ROOT_SIGNATURES,
+        chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
+        if offset + 8 + chunk_size > len(data):
+            malformed("serialized root signature chunk size is out of bounds")
+            return None
+        if data[offset : offset + 4] != ROOT_SIGNATURE_CHUNK:
+            continue
+        if found:
+            malformed("serialized root signature contains duplicate RTS0 chunks")
+            return None
+        found = True
+        payload = data[offset + 8 : offset + 8 + chunk_size]
+        if len(payload) < 24:
+            malformed("serialized root signature RTS0 chunk is too small")
+            return None
+        (
+            version,
+            parameter_count,
+            parameter_offset,
+            static_sampler_count,
+            static_sampler_offset,
+            flags,
+        ) = struct.unpack_from("<IIIIII", payload, 0)
+        del static_sampler_offset
+        if version not in (1, 2) or flags != 0 or static_sampler_count != 0:
+            malformed("serialized root signature version/flags are unsupported")
+            return None
+        if parameter_count > MAX_RECORD_COUNT:
+            malformed("serialized root signature count exceeds the v1 limit")
+            return None
+        parameter_bytes = parameter_count * 12
+        if (
+            parameter_offset < 24
+            or parameter_offset + parameter_bytes > len(payload)
+        ):
+            malformed("serialized root signature parameter range is invalid")
+            return None
+        parameter_rows: list[tuple[int, int, int, int, int]] = []
+        range_rows: list[tuple[int, int, int, int, int]] = []
+        for index in range(parameter_count):
+            parameter_type, visibility, data_offset = struct.unpack_from(
+                "<III", payload, parameter_offset + index * 12
             )
-        )
+            if parameter_type == 1:
+                if data_offset + 12 > len(payload):
+                    malformed("root constants data is out of bounds")
+                    return None
+                slot, space, dwords = struct.unpack_from(
+                    "<III", payload, data_offset
+                )
+                parameter_rows.append((1, visibility, slot, space, dwords))
+            elif parameter_type == 0:
+                if data_offset + 8 > len(payload):
+                    malformed("descriptor table data is out of bounds")
+                    return None
+                range_count, ranges_offset = struct.unpack_from(
+                    "<II", payload, data_offset
+                )
+                if (
+                    range_count > MAX_RECORD_COUNT
+                    or ranges_offset < 8
+                ):
+                    malformed("descriptor table range header is invalid")
+                    return None
+                start = len(range_rows)
+                for range_index in range(range_count):
+                    offset = (
+                        data_offset
+                        + ranges_offset
+                        + range_index * 20
+                    )
+                    if offset + 20 > len(payload):
+                        malformed("descriptor range is out of bounds")
+                        return None
+                    row = struct.unpack_from("<IIIII", payload, offset)
+                    if row[0] > 3 or row[1] == 0:
+                        malformed(
+                            "serialized root signature descriptor range is invalid"
+                        )
+                        return None
+                    range_rows.append(row)
+                parameter_rows.append(
+                    (0, visibility, start, range_count, 0)
+                )
+            else:
+                malformed(
+                    "serialized root signature parameter type is unsupported"
+                )
+                return None
+        parameters = tuple(parameter_rows)
+        ranges = tuple(range_rows)
+    if not found:
+        malformed("serialized root signature is missing the RTS0 chunk")
         return None
-    return family, tuple(bindings)
+    return parameters, ranges
 
 
 def _validate_root_signatures(
@@ -2427,18 +2684,52 @@ def _validate_root_signatures(
         else:
             decoded = _decode_root_signature_blob(record.blob, diagnostics)
             if decoded is not None:
-                blob_family, blob_bindings = decoded
-                if blob_family != record.family:
+                parameters, ranges = decoded
+                same_bindings = len(parameters) == len(record.bindings)
+                for binding in record.bindings:
+                    if not same_bindings or binding.root_parameter >= len(parameters):
+                        same_bindings = False
+                        break
+                    parameter = parameters[binding.root_parameter]
+                    if binding.usage == "cbv":
+                        if (
+                            parameter[0] != 1
+                            or parameter[2] != binding.slot
+                            or parameter[3] != binding.space
+                            or parameter[4] != record.dword_cost
+                        ):
+                            same_bindings = False
+                            break
+                    else:
+                        expected_range_type = {
+                            "srv": 0,
+                            "uav": 1,
+                            "sampler": 3,
+                        }.get(binding.usage)
+                        if expected_range_type is None:
+                            same_bindings = False
+                            break
+                        if parameter[0] != 0 or parameter[3] == 0:
+                            same_bindings = False
+                            break
+                        range_offset = parameter[2]
+                        range_count = parameter[3]
+                        if range_offset + range_count > len(ranges):
+                            same_bindings = False
+                            break
+                        descriptor_range = ranges[range_offset]
+                        if (
+                            descriptor_range[0] != expected_range_type
+                            or descriptor_range[2] != binding.slot
+                            or descriptor_range[3] != binding.space
+                        ):
+                            same_bindings = False
+                            break
+                if not same_bindings:
                     error(
                         "package_root_signature_blob_mismatch",
-                        f"root signature {record.root_signature_id} blob family "
-                        f"'{blob_family}' does not match record family '{record.family}'",
-                    )
-                if blob_bindings != tuple(record.bindings):
-                    error(
-                        "package_root_signature_blob_mismatch",
-                        f"root signature {record.root_signature_id} blob bindings do "
-                        "not match the record bindings",
+                        f"root signature {record.root_signature_id} serialized "
+                        "signature does not match the record bindings",
                     )
         if record.dword_cost > MAX_ROOT_SIGNATURE_DWORD_COST:
             error(
@@ -2698,7 +2989,7 @@ def _validate_cross_references(
                     section=SECTION_INITIALIZATION,
                 )
             )
-        if shader.shader_id not in dispatched_shaders:
+        if shader.target == "cs_6_0" and shader.shader_id not in dispatched_shaders:
             diagnostics.append(
                 package_diagnostic(
                     "package_shader_unreferenced",
@@ -2712,7 +3003,14 @@ def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
     """Validate a package model and return package-validation diagnostics."""
     diagnostics: list[dict[str, Any]] = []
     _validate_capability(
-        package.capability, diagnostics, release=bool(package.flags & 1)
+        package.capability,
+        diagnostics,
+        release=bool(package.flags & 1),
+        resources=package.resources,
+        initialization=package.initialization,
+        frame=package.frame,
+        shaders=package.shaders,
+        root_signatures=package.root_signatures,
     )
     _validate_resources(package.resources, diagnostics)
     _validate_parameters(package.parameters, diagnostics)
@@ -2734,6 +3032,16 @@ def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
         package.shaders,
         diagnostics,
     )
+    if package.flags & 1:
+        for shader in package.shaders:
+            for finding in _dxil_metadata_findings(shader.blob):
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_shader_payload_invalid",
+                        f"shader {shader.shader_id} {finding}",
+                        section=SECTION_SHADERS,
+                    )
+                )
     if package.dev_metadata is not None and (package.flags & 1):
         diagnostics.append(
             package_diagnostic(
@@ -3019,6 +3327,7 @@ def decode_package(
 
     entries: list[tuple[str, int, int, int, int, int]] = []
     seen_names: set[str] = set()
+    previous_section_name = ""
     for index in range(section_count):
         entry_offset = HEADER_SIZE + index * SECTION_ENTRY_SIZE
         fourcc, entry_flags, record_count, offset, size, entry_reserved = struct.unpack_from(
@@ -3053,6 +3362,16 @@ def decode_package(
                 )
             )
         seen_names.add(name)
+        if previous_section_name and name <= previous_section_name:
+            raise PackageValidationError(
+                package_diagnostic(
+                    "package_section_order",
+                    "section directory is not in canonical ascending order",
+                    section=name,
+                    offset=entry_offset,
+                )
+            )
+        previous_section_name = name
         if entry_flags != 0 or entry_reserved != 0:
             raise PackageValidationError(
                 package_diagnostic(
@@ -3100,7 +3419,6 @@ def decode_package(
             )
         )
 
-    entries.sort(key=lambda item: item[3])
     previous_end = directory_end
     for name, _index, _record_count, offset, size, entry_offset in entries:
         if offset < previous_end:
@@ -3108,6 +3426,15 @@ def decode_package(
                 package_diagnostic(
                     "package_section_overlap",
                     f"section '{name}' overlaps a previous section",
+                    section=name,
+                    offset=entry_offset,
+                )
+            )
+        if offset > previous_end:
+            raise PackageValidationError(
+                package_diagnostic(
+                    "package_section_gap",
+                    f"section '{name}' is not contiguous with the previous payload",
                     section=name,
                     offset=entry_offset,
                 )
@@ -3126,7 +3453,21 @@ def decode_package(
         for name, _index, _record_count, offset, size, _entry_offset in entries
     }
     capability = _decode_capability(payloads[SECTION_CAPABILITY], diagnostics)
+    if diagnostics:
+        raise PackageValidationError(diagnostics)
+    assert capability is not None
+    identity_diagnostics: list[dict[str, Any]] = []
+    _validate_capability_identity(capability, identity_diagnostics)
+    if identity_diagnostics:
+        raise PackageValidationError(identity_diagnostics)
     resources = _decode_resources(payloads[SECTION_RESOURCES], diagnostics)
+    if diagnostics:
+        raise PackageValidationError(diagnostics)
+    assert resources is not None
+    resource_diagnostics: list[dict[str, Any]] = []
+    _validate_resources(resources, resource_diagnostics)
+    if resource_diagnostics:
+        raise PackageValidationError(resource_diagnostics)
     initialization = _decode_instructions(
         payloads[SECTION_INITIALIZATION], diagnostics, SECTION_INITIALIZATION
     )
@@ -3302,6 +3643,40 @@ RELEASE_FORBIDDEN_STRINGS = (
     b"authoring",
 )
 
+DXIL_FORBIDDEN_METADATA_CHUNKS = frozenset(
+    {b"ILDB", b"ILDN", b"STAT", b"RDEF", b"RDAT", b"SPDB", b"SPDN"}
+)
+
+
+def _dxil_metadata_findings(blob: bytes) -> list[str]:
+    """Return findings for debug/reflection chunks in a DXBC container."""
+    if len(blob) < 44 or blob[:4] != b"DXBC":
+        return []
+    try:
+        chunk_count = struct.unpack_from("<I", blob, 28)[0]
+    except struct.error:
+        return []
+    if chunk_count == 0 or chunk_count > 64:
+        return []
+    header_end = 32 + chunk_count * 4
+    if header_end > len(blob):
+        return []
+    findings: list[str] = []
+    for index in range(chunk_count):
+        offset = struct.unpack_from("<I", blob, 32 + index * 4)[0]
+        if offset < header_end or offset + 8 > len(blob):
+            continue
+        chunk_size = struct.unpack_from("<I", blob, offset + 4)[0]
+        if offset + 8 + chunk_size > len(blob):
+            continue
+        fourcc = blob[offset : offset + 4]
+        if fourcc in DXIL_FORBIDDEN_METADATA_CHUNKS:
+            findings.append(
+                f"shader payload contains forbidden {fourcc.decode('ascii', 'replace')} "
+                "debug/reflection chunk"
+            )
+    return findings
+
 
 def check_release_leakage(
     data: bytes,
@@ -3325,6 +3700,11 @@ def check_release_leakage(
         findings.append("release package contains DEVC metadata")
     if not (inspection.package.flags & 1):
         findings.append("package is not marked as a release package")
+    for shader in inspection.package.shaders:
+        findings.extend(
+            f"shader {shader.shader_id}: {finding}"
+            for finding in _dxil_metadata_findings(shader.blob)
+        )
     return findings
 
 
@@ -3337,8 +3717,22 @@ def leak_scan_report(data: bytes) -> dict[str, Any]:
             "no_editor_names": not any("nodewerk-studio" in item for item in findings),
             "no_source_paths": not any("fixtures/" in item or "src/graph" in item for item in findings),
             "no_source_text": not any("nwgraph" in item or "expression:" in item for item in findings),
-            "no_debug_data": not any("DXIL debug" in item or "#line" in item for item in findings),
-            "no_reflection_tables": not any("reflection" in item for item in findings),
+            "no_debug_data": not any(
+                "DXIL debug" in item
+                or "#line" in item
+                or "ILDB" in item
+                or "ILDN" in item
+                or "STAT" in item
+                or "SPDB" in item
+                or "SPDN" in item
+                for item in findings
+            ),
+            "no_reflection_tables": not any(
+                "reflection" in item
+                or "RDEF" in item
+                or "RDAT" in item
+                for item in findings
+            ),
             "retains_dxil_execution_metadata": True,
         },
     }
@@ -3360,19 +3754,70 @@ def make_root_signature_blob(
     family: str,
     bindings: Sequence[RootBinding],
 ) -> bytes:
-    """Return a deterministic, reflection-free root-signature payload."""
-    writer = _Writer()
-    writer.buffer += b"NWRS"
-    writer.u16(1)
-    writer.string(family)
-    writer.u16(len(bindings))
-    for binding in bindings:
-        writer.string(binding.name)
-        writer.string(binding.usage)
-        writer.u32(binding.slot)
-        writer.u32(binding.space)
-        writer.u32(binding.root_parameter)
-    return bytes(writer.buffer)
+    """Return a deterministic, reflection-free serialized D3D12 signature.
+
+    The payload is a DXBC container with one ``RTS0`` chunk.  Parameter and
+    descriptor-range records use the D3D12 enum ordering, so
+    ``ID3D12Device::CreateRootSignature`` receives serialized signature bytes
+    rather than a private binding list.  Static samplers are not part of the
+    baseline pass-family contract.
+    """
+    del family
+    ordered = sorted(bindings, key=lambda binding: binding.root_parameter)
+    range_type_for_usage = {"srv": 0, "uav": 1, "sampler": 3}
+    header_size = 24
+    parameter_size = 12
+    parameter_rows: list[tuple[int, int, int]] = []
+    data = bytearray()
+    data_start = header_size + parameter_size * len(ordered)
+    for binding in ordered:
+        data_offset = data_start + len(data)
+        if binding.usage == "cbv":
+            parameter_rows.append((1, 0, data_offset))
+            data += struct.pack("<III", binding.slot, binding.space, 4)
+            continue
+        range_type = range_type_for_usage.get(binding.usage)
+        if range_type is None:
+            raise PackageValidationError(
+                package_diagnostic(
+                    "package_root_signature_binding",
+                    f"cannot serialize root binding usage '{binding.usage}'",
+                    section=SECTION_ROOT_SIGNATURES,
+                )
+            )
+        parameter_rows.append((0, 0, data_offset))
+        # Descriptor-table data: range count, offset to ranges, then ranges.
+        data += struct.pack("<II", 1, 8)
+        data += struct.pack(
+            "<IIIII", range_type, 1, binding.slot, binding.space, 0
+        )
+    header = struct.pack(
+        "<IIIIII",
+        1,
+        len(parameter_rows),
+        header_size,
+        0,
+        data_start + len(data),
+        0,
+    )
+    payload = bytearray(header)
+    for parameter in parameter_rows:
+        payload += struct.pack("<III", *parameter)
+    payload += data
+    digest = hashlib.sha256(payload).digest()[:16]
+    total_size = 32 + 4 + 8 + len(payload)
+    header = (
+        ROOT_SIGNATURE_DXBC_MAGIC
+        + digest
+        + struct.pack("<HHII", 1, 0, total_size, 1)
+        + struct.pack("<I", 36)
+    )
+    return (
+        header
+        + ROOT_SIGNATURE_CHUNK
+        + struct.pack("<I", len(payload))
+        + bytes(payload)
+    )
 
 
 def make_test_package(
@@ -3391,11 +3836,6 @@ def make_test_package(
     capability = capability or CapabilityRecord(
         compiler_fingerprint="sha256:v1:" + "0" * 64,
     )
-    if not capability.profile_fingerprint:
-        capability = replace(
-            capability,
-            profile_fingerprint=capability.computed_profile_fingerprint(),
-        )
     bindings = (
         RootBinding("params", "cbv", 0, 0, 0),
         RootBinding("output", "uav", 0, 0, 1),
@@ -3470,6 +3910,14 @@ def make_test_package(
             (InstructionOperand("root_signature_ref", 1),),
         ),
         Instruction(
+            "frame.set_root_constants",
+            (
+                InstructionOperand("u32", 0),
+                InstructionOperand("resource_ref", 1),
+                InstructionOperand("u32", 4),
+            ),
+        ),
+        Instruction(
             "frame.set_descriptor_table",
             (
                 InstructionOperand("u32", 1),
@@ -3499,6 +3947,23 @@ def make_test_package(
                 ),
             )
         )
+    derived = derive_capability_requirements(
+        resources, initialization, frame, shaders, [root]
+    )
+    capability = replace(capability, **derived)
+    capability = replace(
+        capability,
+        required_init_instructions=tuple(
+            sorted({instruction.opcode for instruction in initialization})
+        ),
+        required_frame_instructions=tuple(
+            sorted({instruction.opcode for instruction in frame})
+        ),
+    )
+    capability = replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
     return NwpPackage(
         capability=capability,
         resources=resources,

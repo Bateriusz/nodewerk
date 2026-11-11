@@ -81,7 +81,23 @@ std::string ReplaceShaderTokens(std::string expression, std::string& error) {
             const std::string_view token(expression.data() + start,
                                          position - start);
             bool replaced_token = false;
+            if (token == "const") {
+                // NW-02 const(x) is a semantic identity; strip the operation
+                // and leave its parenthesized argument in place.
+                std::size_t lookahead = position;
+                while (lookahead < expression.size() &&
+                       std::isspace(static_cast<unsigned char>(
+                           expression[lookahead]))) {
+                    ++lookahead;
+                }
+                if (lookahead < expression.size() &&
+                    expression[lookahead] == '(') {
+                    position = lookahead;
+                    replaced_token = true;
+                }
+            }
             for (const auto& [from, to] : replacements) {
+                if (replaced_token) break;
                 if (token == from) {
                     replaced.append(to.data(), to.size());
                     replaced_token = true;
@@ -588,6 +604,43 @@ CompileResult CompileGraphPackage(const graph::GraphSnapshot& snapshot,
             {"frame.dispatch",
              {dispatch_x, dispatch_y, dispatch_z, shader_ref}});
     }
+    std::set<std::string> emitted_formats;
+    std::uint32_t descriptor_count = 0u;
+    std::uint32_t sampler_count = 0u;
+    std::uint64_t max_buffer_bytes = 0u;
+    std::uint32_t max_texture_dimension = 0u;
+    for (const auto& resource : package.resources) {
+        emitted_formats.insert(resource.format);
+        if (resource.usage == "sampler") {
+            ++sampler_count;
+        } else if (resource.usage == "srv" || resource.usage == "uav") {
+            ++descriptor_count;
+        }
+        if (resource.kind == "buffer") {
+            max_buffer_bytes =
+                std::max(max_buffer_bytes, resource.size_bytes);
+        }
+        if (resource.kind == "texture2d") {
+            max_texture_dimension =
+                std::max(max_texture_dimension,
+                         std::max(resource.width, resource.height));
+        }
+    }
+    std::uint32_t max_threads = 0u;
+    for (const auto& shader : package.shaders) {
+        max_threads = std::max<std::uint32_t>(
+            max_threads, shader.thread_group_x * shader.thread_group_y *
+                             shader.thread_group_z);
+    }
+    package.capability.required_dxgi_formats.assign(emitted_formats.begin(),
+                                                    emitted_formats.end());
+    package.capability.max_cbv_srv_uav_descriptors_per_frame = descriptor_count;
+    package.capability.max_sampler_descriptors_per_frame = sampler_count;
+    package.capability.max_root_signature_dword_cost = root_signature.dword_cost;
+    package.capability.limit_max_texture_2d_dimension = max_texture_dimension;
+    package.capability.limit_max_compute_threads_per_group = max_threads;
+    package.capability.limit_max_buffer_bytes = max_buffer_bytes;
+    package.capability.limit_swap_chain_buffer_count = 0u;
     std::set<std::string> targets;
     std::set<std::string> init_opcodes;
     std::set<std::string> frame_opcodes;

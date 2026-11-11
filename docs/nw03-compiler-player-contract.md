@@ -34,9 +34,10 @@ metadata enters the release package.
 
 The HLSL lowering uses a small expression IR with explicit literals,
 variables (`uv`, `time`), unary/binary arithmetic, vector constructors, swizzles,
-and the declared math functions. It does not emit per-node function calls,
-reflection metadata, or source paths. `texture2d`/`sample` are rejected for the
-initial compute family because that family has no texture binding.
+and the declared math functions. `const(x)` is lowered to its argument (it is a
+semantic identity, not an HLSL intrinsic). It does not emit per-node function
+calls, reflection metadata, or source paths. `texture2d`/`sample` are rejected
+for the initial compute family because that family has no texture binding.
 
 ## Source-linked diagnostics
 
@@ -55,10 +56,14 @@ player never performs runtime reflection.
 ## Numerical tolerances
 
 The CPU oracle evaluates the same expression in double precision and in a
-float32-quantized mode. The generated HLSL `float4 nw_value = ...` expression is
-also evaluated in float32 mode and compared against the double-precision
-reference for each reachable specialization, so fusion/lowering changes are
-exercised rather than re-running the source expression. Comparisons use
+float32-quantized mode that rounds every literal, variable, and intermediate
+operation result (not only the leaves) to IEEE-754 binary32. The generated HLSL
+`float4 nw_value = ...` expression is also evaluated in float32 mode and
+compared against the double-precision reference for each reachable
+specialization, so fusion/lowering changes are exercised rather than re-running
+the source expression. Cancellation-sensitive cases such as
+`(16777216 + 1) - 16777216` therefore evaluate to `0` under the documented
+float32 model. Comparisons use
 absolute tolerance `1e-5` and relative tolerance `1e-4` (documented in
 `tools/nw03_oracle.py`). The fixture
 `fixtures/nw03/math_noise.nwgraph` uses a fused math/noise-like expression;
@@ -135,9 +140,18 @@ python tools/verify_nw03.py --mode Full --summary-json build/nw03-verify.json
 `ContractsOnly` runs the fixture/oracle, package round-trip/malformed-input,
 release leakage, and bounded Python parser checks without requiring DXC.
 `Full` additionally requires real pinned-DXC compilation in two clean
-directories and a bounded sanitizer-backed native parser campaign. It exits
-nonzero if a required check fails or is unavailable. The ordinary repository
-`pytest` suite remains part of the required validation.
+directories and a bounded sanitizer-backed native parser campaign. Full refuses
+`.py` mock DXC executables, requires the measured pinned identity, and rejects
+synthetic/blake2s test containers and debug/reflection chunk payloads in the
+resulting compilation; mock-based pytest cases must opt in explicitly with
+`allow_test_payloads=True`/`--allow-test-payloads`. It exits nonzero if a
+required check fails or is unavailable. The ordinary repository `pytest` suite
+remains part of the required validation.
+
+Full also compiles a dedicated expression fixture that exercises every declared
+`ShaderExpr` operation (`const`, vector constructors, swizzles, `sin`, `cos`,
+`mix`, `uv`, and `time`) with the real pinned DXC, so an operation that survives
+lowering (such as the former unsupported `const(...)` output) fails the gate.
 
 The native parser campaign is reproducible: `tools/verify_nw03.py` builds
 `tools/nw03_parser_fuzz.cpp` with

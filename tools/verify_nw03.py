@@ -275,6 +275,8 @@ def check_release_leakage() -> CheckResult:
 def check_clean_directory_reproducibility(
     dxc_executable: str | None,
     work_root: Path,
+    *,
+    allow_test_payloads: bool = False,
 ) -> CheckResult:
     dxc = nw03_compiler.resolve_dxc(dxc_executable)
     if not dxc:
@@ -299,6 +301,7 @@ def check_clean_directory_reproducibility(
                 report_path=report_path,
                 cache_dir=directory / "cache",
                 dxc_executable=dxc,
+                allow_test_payloads=allow_test_payloads,
             )
             hashes.append(hashlib.sha256(package_path.read_bytes()).hexdigest())
             reports.append(report)
@@ -320,6 +323,29 @@ def check_clean_directory_reproducibility(
                 False,
                 "compiler fingerprints differ across clean directories",
             )
+        if not allow_test_payloads:
+            if str(dxc).lower().endswith(".py"):
+                return CheckResult(
+                    "clean_directory_reproducibility",
+                    True,
+                    False,
+                    "Full verification refuses mock DXC executables",
+                )
+            for report in reports:
+                if report.get("package", {}).get("release") is not True:
+                    return CheckResult(
+                        "clean_directory_reproducibility",
+                        True,
+                        False,
+                        "Full verification requires a release package from pinned DXC",
+                    )
+                if report.get("toolchain", {}).get("test_payload") is True:
+                    return CheckResult(
+                        "clean_directory_reproducibility",
+                        True,
+                        False,
+                        "Full verification rejected synthetic DXIL payloads",
+                    )
         return CheckResult(
             "clean_directory_reproducibility",
             True,
@@ -398,6 +424,126 @@ def _python_bounded_fuzz(seed: int = 0x4E573033, iterations: int = 512) -> Check
         )
 
 
+def check_expression_operations_dxc(
+    dxc_executable: str | None,
+    work_root: Path,
+) -> CheckResult:
+    """Compile one graph exercising every declared ShaderExpr operation."""
+    dxc = nw03_compiler.resolve_dxc(dxc_executable)
+    if not dxc:
+        return CheckResult(
+            "expression_operations_offline_dxc",
+            True,
+            False,
+            "offline DXC is unavailable",
+            unavailable=True,
+        )
+    expression = (
+        "vec4(const(1.0) + sin(uv.x) + cos(uv.y) + "
+        "mix(uv.x, uv.y, 0.5) + vec2(uv.x, uv.y).x + "
+        "vec3(uv.x, uv.y, 0.0).y + time, 0.0, 0.0, 1.0)"
+    )
+    graph_text = (
+        "nwgraph 1\n"
+        "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+        "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a\n"
+        "setting optimization O2\n"
+        "setting deterministic true\n"
+        "setting api d3d12\n"
+        "setting feature_level 12_0\n"
+        "setting shader_model 6_0\n"
+        "setting frequency_policy strict\n"
+        "setting shader_blob_policy stable\n"
+        "setting quantization_policy none\n"
+        "setting quantization_bits 0\n"
+        "setting quantization_step 0\n"
+        "node ops nw.shader.expr@1.0.0 frequency=frame\n"
+        f'  param expression "{expression}"\n'
+    )
+    try:
+        graph_path = work_root / "expression-ops.nwgraph"
+        graph_path.write_text(graph_text, encoding="utf-8")
+        document, diagnostics = nw03_compiler.parse_graph_text(
+            graph_text, source_name=str(graph_path)
+        )
+        if diagnostics or document is None:
+            return CheckResult(
+                "expression_operations_offline_dxc",
+                True,
+                False,
+                "expression fixture did not validate: " + json.dumps(diagnostics),
+            )
+        generated, lowering_diagnostics = nw03_compiler.lower_to_fused_hlsl(document)
+        if lowering_diagnostics or not generated:
+            return CheckResult(
+                "expression_operations_offline_dxc",
+                True,
+                False,
+                "expression fixture did not lower: "
+                + json.dumps(lowering_diagnostics),
+            )
+        if any("const(" in shader.hlsl for shader in generated):
+            return CheckResult(
+                "expression_operations_offline_dxc",
+                True,
+                False,
+                "const operation survived HLSL lowering",
+            )
+        package_path = work_root / "expression-ops.nwp"
+        report = nw03_compiler.compile_package(
+            graph_path,
+            package_path,
+            dxc_executable=dxc,
+        )
+        valid, package_diagnostics = nwp_package.validate_package_bytes(
+            package_path.read_bytes()
+        )
+        if not valid:
+            return CheckResult(
+                "expression_operations_offline_dxc",
+                True,
+                False,
+                "compiled package failed validation: "
+                + json.dumps(package_diagnostics),
+            )
+        if report.get("toolchain", {}).get("test_payload") is not False:
+            return CheckResult(
+                "expression_operations_offline_dxc",
+                True,
+                False,
+                "real DXC compilation unexpectedly produced a synthetic payload",
+            )
+        return CheckResult(
+            "expression_operations_offline_dxc",
+            True,
+            True,
+            "all declared ShaderExpr operations compiled with real DXC",
+            evidence={
+                "operations": [
+                    "const",
+                    "vec2",
+                    "vec3",
+                    "vec4",
+                    "sin",
+                    "cos",
+                    "mix",
+                    "uv",
+                    "time",
+                ],
+                "package_sha256": hashlib.sha256(
+                    package_path.read_bytes()
+                ).hexdigest(),
+            },
+        )
+    except Exception as exc:
+        return CheckResult(
+            "expression_operations_offline_dxc",
+            True,
+            False,
+            f"exception: {exc}",
+        )
+
+
 def _find_host_cxx() -> tuple[str, str] | None:
     for name in ("clang++", "g++", "c++"):
         found = shutil.which(name)
@@ -453,6 +599,26 @@ def check_sanitizer_fuzz(work_root: Path, budget: int = 256) -> CheckResult:
     (corpus_dir / "valid.nwp").write_bytes(base)
     rng = random.Random(0x4E573033)
     corpus_files = [corpus_dir / "valid.nwp"]
+    # Regression corpus: a DXBC chunk offset of 0xfffffff8 used to wrap the
+    # 32-bit offset+8 bounds check and read outside the blob allocation.
+    overflow = bytearray(base)
+    shdr_offset = None
+    for index in range(struct.unpack_from("<I", overflow, 40)[0]):
+        entry = 64 + index * 32
+        if bytes(overflow[entry : entry + 4]) == b"SHDR":
+            shdr_offset = struct.unpack_from("<Q", overflow, entry + 12)[0]
+            break
+    if shdr_offset is not None:
+        blob_start = shdr_offset + 2 + 4 + 4
+        if blob_start + 36 <= len(overflow):
+            struct.pack_into("<I", overflow, blob_start + 32, 0xFFFFFFF8)
+            checksum_offset = struct.unpack_from("<Q", overflow, 48)[0]
+            overflow[checksum_offset:] = hashlib.sha256(
+                bytes(overflow[:checksum_offset])
+            ).digest()
+            path = corpus_dir / "dxil-offset-overflow.nwp"
+            path.write_bytes(bytes(overflow))
+            corpus_files.append(path)
     for index in range(max(1, budget - 1)):
         candidate = bytearray(base)
         if index % 3 == 0:
@@ -571,6 +737,7 @@ def main(argv: list[str] | None = None) -> int:
         results = run_contract_checks(work_root)
         if args.mode == "Full":
             results.append(check_sanitizer_fuzz(work_root))
+            results.append(check_expression_operations_dxc(args.dxc, work_root))
             results.append(check_clean_directory_reproducibility(args.dxc, work_root))
             if not args.skip_pytest:
                 results.append(_run_pytest())
