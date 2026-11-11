@@ -1894,7 +1894,9 @@ def _build_package(
     compiled: dict[str, dict[str, Any]],
     *,
     dxc_identity: str,
+    dxc_version: str,
     optimization: str,
+    release: bool = True,
 ) -> NwpPackage:
     bindings = (
         RootBinding("params", "cbv", 0, 0, 0),
@@ -2024,7 +2026,7 @@ def _build_package(
         emitted_shader_targets=tuple(sorted({shader.target for shader in generated})),
         required_init_instructions=tuple(sorted({item.opcode for item in initialization})),
         required_frame_instructions=tuple(sorted({item.opcode for item in frame})),
-        toolchain_dxc_version=PINNED_DXC_VERSION,
+        toolchain_dxc_version=dxc_version,
         toolchain_identity=dxc_identity,
         compiler_fingerprint=_compiler_fingerprint(
             document, generated, dxc_identity=dxc_identity, optimization=optimization
@@ -2042,7 +2044,7 @@ def _build_package(
         parameters=parameters,
         shaders=shaders,
         root_signatures=[root_signature],
-        flags=1,
+        flags=1 if release else 0,
     )
 
 
@@ -2052,6 +2054,7 @@ def _build_sidecar(
     compiled: dict[str, dict[str, Any]],
     *,
     dxc_identity: str,
+    dxc_version: str,
     optimization: str,
 ) -> bytes:
     payload = {
@@ -2066,7 +2069,7 @@ def _build_sidecar(
         ),
         "toolchain": {
             "dxc_identity": dxc_identity,
-            "dxc_version": PINNED_DXC_VERSION,
+            "dxc_version": dxc_version,
             "optimization": optimization,
         },
         "source_graph": {
@@ -2154,6 +2157,7 @@ def compile_package(
                 )
             ],
         )
+    release = pinned_version in dxc_version
     dxc_identity = f"dxc:{dxc_version}"
     cache = ShaderCache(cache_dir)
     bindings_identity = sha256_hex(
@@ -2231,22 +2235,26 @@ def compile_package(
             generated,
             compiled,
             dxc_identity=dxc_identity,
+            dxc_version=dxc_version,
             optimization=optimization,
+            release=release,
         )
         package_bytes = nwp_package.encode_package(package)
         valid, package_diagnostics = nwp_package.validate_package_bytes(package_bytes)
         if not valid:
             raise PackageValidationError(package_diagnostics)
-        leakage = nwp_package.check_release_leakage(package_bytes)
-        if leakage:
-            raise CompilerError(
-                "release package leakage check failed: " + "; ".join(leakage)
-            )
+        if release:
+            leakage = nwp_package.check_release_leakage(package_bytes)
+            if leakage:
+                raise CompilerError(
+                    "release package leakage check failed: " + "; ".join(leakage)
+                )
         dev_sidecar = _build_sidecar(
             document,
             generated,
             compiled,
             dxc_identity=dxc_identity,
+            dxc_version=dxc_version,
             optimization=optimization,
         )
         report = _build_report(
@@ -2256,7 +2264,9 @@ def compile_package(
             package_bytes,
             cache.stats,
             dxc_identity=dxc_identity,
+            dxc_version=dxc_version,
             optimization=optimization,
+            release=release,
             source_path=str(graph_path),
         )
         # Publish only after every validation succeeded.
@@ -2281,7 +2291,9 @@ def _build_report(
     cache_stats: CacheStats,
     *,
     dxc_identity: str,
+    dxc_version: str,
     optimization: str,
+    release: bool,
     source_path: str = "",
 ) -> dict[str, Any]:
     shader_rows = []
@@ -2319,7 +2331,13 @@ def _build_report(
             "id": document.profile_id,
             "requirements_digest": document.requirements_digest,
             "profile_fingerprint": _build_package(
-                document, generated, compiled, dxc_identity=dxc_identity, optimization=optimization
+                document,
+                generated,
+                compiled,
+                dxc_identity=dxc_identity,
+                dxc_version=dxc_version,
+                optimization=optimization,
+                release=release,
             ).capability.profile_fingerprint,
         },
         "compiler": {
@@ -2330,8 +2348,9 @@ def _build_report(
         },
         "toolchain": {
             "identity": dxc_identity,
-            "dxc_version": PINNED_DXC_VERSION,
+            "dxc_version": dxc_version,
             "optimization": optimization,
+            "pinned": release,
             "runtime_dxc_dependency": False,
             "runtime_slang_dependency": False,
         },
@@ -2361,7 +2380,7 @@ def _build_report(
         "package": {
             "size_bytes": len(package_bytes),
             "sha256": sha256_hex(package_bytes),
-            "release": True,
+            "release": release,
             "contains_authoring_metadata": False,
         },
         "release": {

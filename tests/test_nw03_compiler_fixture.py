@@ -77,13 +77,15 @@ def make_dxil_container() -> bytes:
     return header + joined
 
 
-def make_mock_dxc(directory: Path, *, fail: bool = False) -> Path:
+def make_mock_dxc(
+    directory: Path, *, fail: bool = False, version: str = "1.8.2407.12"
+) -> Path:
     dxc = directory / "mock_dxc.py"
     dxc.write_text(
         "import sys\n"
         "from pathlib import Path\n"
         "if '--version' in sys.argv:\n"
-        "    print('dxcompiler.dll: 1.8 - 1.8.2407.12')\n"
+        f"    print('dxcompiler.dll: 1.8 - {version}')\n"
         "    sys.exit(0)\n"
         + ("sys.stderr.write('mock DXC failure\\n')\nsys.exit(1)\n" if fail else
            "fo = Path(sys.argv[sys.argv.index('-Fo') + 1])\n"
@@ -247,6 +249,33 @@ def test_compile_package_reuses_and_invalidates_shader_cache(tmp_path: Path) -> 
     assert second["shader_cache"]["hits"] > 0
     assert third["shader_cache"]["misses"] > 0
     assert first["package"]["sha256"] == second["package"]["sha256"]
+
+
+def test_unpinned_dxc_override_produces_truthful_non_release_artifact(
+    tmp_path: Path,
+) -> None:
+    dxc = make_mock_dxc(tmp_path, version="1.8.9999.1")
+    package_path = tmp_path / "unpinned.nwp"
+    report_path = tmp_path / "unpinned-report.json"
+    sidecar_path = tmp_path / "unpinned.dev.json"
+    report = compiler.compile_package(
+        FIXTURE,
+        package_path,
+        report_path=report_path,
+        dev_sidecar_path=sidecar_path,
+        dxc_executable=str(dxc),
+        allow_unpinned_dxc=True,
+    )
+    assert report["package"]["release"] is False
+    assert report["toolchain"]["dxc_version"] == "1.8.9999.1"
+    assert report["toolchain"]["pinned"] is False
+    package = nwp.decode_package(package_path.read_bytes())
+    assert package.flags & 1 == 0
+    assert package.capability.toolchain_dxc_version == "1.8.9999.1"
+    assert package.capability.toolchain_identity == "dxc:1.8.9999.1"
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert sidecar["toolchain"]["dxc_version"] == "1.8.9999.1"
+    assert sidecar["toolchain"]["dxc_identity"] == "dxc:1.8.9999.1"
 
 
 def test_shader_cache_key_covers_semantic_binding_profile_option_and_toolchain() -> None:

@@ -2011,10 +2011,13 @@ def _validate_instructions(
     resource_ids = {item.resource_id for item in resources}
     shader_ids = {item.shader_id for item in shaders}
     root_ids = {item.root_signature_id for item in root_signatures}
+    root_by_id = {item.root_signature_id: item for item in root_signatures}
+    shader_by_id = {item.shader_id: item for item in shaders}
     parameter_ids = {item.parameter_id for item in parameters}
     root_dwords = {item.root_signature_id: item.dword_cost for item in root_signatures}
     actual_init: set[str] = set()
     actual_frame: set[str] = set()
+    active_root_signature_id: int | None = None
 
     for phase_name, section, instructions, actual in (
         ("initialization", SECTION_INITIALIZATION, initialization, actual_init),
@@ -2052,6 +2055,30 @@ def _validate_instructions(
                     f"operands, expected {len(operand_types)}",
                 )
                 continue
+            if instruction.opcode == "init.create_pipeline":
+                shader_operand, root_operand = instruction.operands
+                if (
+                    shader_operand.type == "shader_ref"
+                    and root_operand.type == "root_signature_ref"
+                ):
+                    shader = shader_by_id.get(shader_operand.value)
+                    if (
+                        shader is not None
+                        and root_operand.value in root_ids
+                        and shader.root_signature_id != root_operand.value
+                    ):
+                        error(
+                            "package_shader_root_signature",
+                            f"pipeline for shader {shader.shader_id} uses root "
+                            f"signature {root_operand.value}, but the shader record "
+                            f"requires {shader.root_signature_id}",
+                        )
+            if (
+                instruction.opcode == "frame.set_root_signature"
+                and instruction.operands[0].type == "root_signature_ref"
+                and instruction.operands[0].value in root_ids
+            ):
+                active_root_signature_id = instruction.operands[0].value
             for operand_index, (operand, expected_type) in enumerate(
                 zip(instruction.operands, operand_types)
             ):
@@ -2133,22 +2160,29 @@ def _validate_instructions(
                     )
                     if resource is not None:
                         root_parameter = instruction.operands[0].value
-                        matched = any(
-                            binding.root_parameter == root_parameter
-                            and binding.name == resource.name
-                            and binding.usage == resource.usage
-                            and binding.slot == resource.binding_slot
-                            and binding.space == resource.binding_space
-                            for root in root_signatures
-                            for binding in root.bindings
-                        )
-                        if not matched:
+                        active_root = root_by_id.get(active_root_signature_id)
+                        if active_root is None:
                             error(
-                                "package_root_signature_binding",
-                                f"instruction '{instruction.opcode}' references root "
-                                f"parameter {root_parameter} that does not bind resource "
-                                f"'{resource.name}'",
+                                "package_instruction_root_signature",
+                                f"instruction '{instruction.opcode}' has no active "
+                                "frame.set_root_signature",
                             )
+                        else:
+                            matched = any(
+                                binding.root_parameter == root_parameter
+                                and binding.name == resource.name
+                                and binding.usage == resource.usage
+                                and binding.slot == resource.binding_slot
+                                and binding.space == resource.binding_space
+                                for binding in active_root.bindings
+                            )
+                            if not matched:
+                                error(
+                                    "package_root_signature_binding",
+                                    f"instruction '{instruction.opcode}' references root "
+                                    f"parameter {root_parameter} that does not bind resource "
+                                    f"'{resource.name}' in the active root signature",
+                                )
 
     for phase_name, actual, required in (
         ("initialization", actual_init, set(CapabilityRecord().required_init_instructions)),
@@ -2346,6 +2380,12 @@ def _validate_root_signatures(
             )
         if not record.blob:
             error("package_root_signature_malformed", "root signature blob is empty")
+        elif len(record.blob) > MAX_BLOB_BYTES:
+            error(
+                "package_decode_limit",
+                f"root signature {record.root_signature_id} blob is "
+                f"{len(record.blob)} bytes, exceeding {MAX_BLOB_BYTES}",
+            )
         else:
             decoded = _decode_root_signature_blob(record.blob, diagnostics)
             if decoded is not None:
@@ -2420,6 +2460,28 @@ def _validate_root_signatures(
                     f"root signature binding '{binding.name}' does not match its "
                     "resource descriptor usage/slot/space",
                 )
+        if record.family in PASS_FAMILY_BINDINGS:
+            bindings_by_name = {
+                binding.name: binding for binding in record.bindings
+            }
+            for required_name, expected_root_parameter in (
+                ("params", 0),
+                ("output", 1),
+            ):
+                binding = bindings_by_name.get(required_name)
+                if binding is None:
+                    error(
+                        "package_root_signature_binding",
+                        f"root signature {record.root_signature_id} is missing the "
+                        f"required '{required_name}' binding",
+                    )
+                elif binding.root_parameter != expected_root_parameter:
+                    error(
+                        "package_root_signature_root_parameter",
+                        f"root signature binding '{required_name}' must use root "
+                        f"parameter {expected_root_parameter}, got "
+                        f"{binding.root_parameter}",
+                    )
 
 
 def _validate_shaders(
@@ -2502,6 +2564,13 @@ def _validate_shaders(
             )
         if not shader.blob:
             error("package_shader_malformed", f"shader {shader.shader_id} blob is empty")
+            continue
+        if len(shader.blob) > MAX_BLOB_BYTES:
+            error(
+                "package_decode_limit",
+                f"shader {shader.shader_id} blob is {len(shader.blob)} bytes, "
+                f"exceeding {MAX_BLOB_BYTES}",
+            )
             continue
         if validate_dxil_container is not None:
             try:

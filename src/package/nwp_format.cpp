@@ -1280,6 +1280,7 @@ bool ValidateInstructions(
     std::string_view phase,
     const std::vector<ResourceDescriptor>& resources,
     const std::vector<RootSignatureRecord>& root_signatures,
+    const std::vector<ShaderRecord>& shaders,
     const std::set<std::uint32_t>& resource_ids,
     const std::set<std::uint32_t>& shader_ids,
     const std::set<std::uint32_t>& root_ids,
@@ -1291,6 +1292,16 @@ bool ValidateInstructions(
         phase == "initialization" ? std::string(kSectionInitialization)
                                   : std::string(kSectionFrame);
     const auto contracts = InstructionContracts();
+    std::map<std::uint32_t, const RootSignatureRecord*> root_by_id;
+    for (const auto& root : root_signatures) {
+        root_by_id[root.root_signature_id] = &root;
+    }
+    std::map<std::uint32_t, std::uint32_t> shader_root_ids;
+    for (const auto& shader : shaders) {
+        shader_root_ids[shader.shader_id] = shader.root_signature_id;
+    }
+    bool has_active_root_signature = false;
+    std::uint32_t active_root_signature_id = 0u;
     for (std::size_t index = 0; index < instructions.size(); ++index) {
         const auto& instruction = instructions[index];
         const OperandContract* contract = nullptr;
@@ -1319,6 +1330,25 @@ bool ValidateInstructions(
             error("package_instruction_operand_count",
                   "instruction '" + instruction.opcode + "' has the wrong operand count");
             continue;
+        }
+        if (instruction.opcode == "init.create_pipeline" &&
+            instruction.operands[0].type == OperandType::ShaderRef &&
+            instruction.operands[1].type == OperandType::RootSignatureRef) {
+            const std::uint32_t shader_id = instruction.operands[0].u32;
+            const std::uint32_t root_id = instruction.operands[1].u32;
+            auto shader_root = shader_root_ids.find(shader_id);
+            if (shader_root != shader_root_ids.end() &&
+                root_ids.count(root_id) != 0u &&
+                shader_root->second != root_id) {
+                error("package_shader_root_signature",
+                      "pipeline root signature does not match the shader record");
+            }
+        }
+        if (instruction.opcode == "frame.set_root_signature" &&
+            instruction.operands[0].type == OperandType::RootSignatureRef &&
+            root_ids.count(instruction.operands[0].u32) != 0u) {
+            active_root_signature_id = instruction.operands[0].u32;
+            has_active_root_signature = true;
         }
         for (std::size_t operand_index = 0;
              operand_index < instruction.operands.size(); ++operand_index) {
@@ -1379,9 +1409,19 @@ bool ValidateInstructions(
                     }
                 }
                 if (matching != nullptr) {
-                    bool bound = false;
-                    for (const auto& root : root_signatures) {
-                        for (const auto& binding : root.bindings) {
+                    const RootSignatureRecord* active_root = nullptr;
+                    if (has_active_root_signature) {
+                        auto found = root_by_id.find(active_root_signature_id);
+                        if (found != root_by_id.end()) {
+                            active_root = found->second;
+                        }
+                    }
+                    if (active_root == nullptr) {
+                        error("package_instruction_root_signature",
+                              "instruction has no active frame.set_root_signature");
+                    } else {
+                        bool bound = false;
+                        for (const auto& binding : active_root->bindings) {
                             if (binding.root_parameter == root_operand.u32 &&
                                 binding.name == matching->name &&
                                 binding.usage == matching->usage &&
@@ -1391,12 +1431,11 @@ bool ValidateInstructions(
                                 break;
                             }
                         }
-                        if (bound) break;
-                    }
-                    if (!bound) {
-                        error("package_root_signature_binding",
-                              "instruction root parameter does not bind the "
-                              "referenced resource");
+                        if (!bound) {
+                            error("package_root_signature_binding",
+                                  "instruction root parameter does not bind the "
+                                  "referenced resource in the active root signature");
+                        }
                     }
                 }
             }
@@ -1640,6 +1679,28 @@ bool ValidateRootSignatures(
                        matching->binding_space != binding.space) {
                 error("package_root_signature_binding",
                       "root signature binding does not match its resource descriptor");
+            }
+        }
+        if (IsKnownPassFamily(record.family)) {
+            const RootBinding* params = nullptr;
+            const RootBinding* output = nullptr;
+            for (const auto& binding : record.bindings) {
+                if (binding.name == "params") params = &binding;
+                if (binding.name == "output") output = &binding;
+            }
+            if (params == nullptr) {
+                error("package_root_signature_binding",
+                      "root signature is missing the required 'params' binding");
+            } else if (params->root_parameter != 0u) {
+                error("package_root_signature_root_parameter",
+                      "root signature binding 'params' must use root parameter 0");
+            }
+            if (output == nullptr) {
+                error("package_root_signature_binding",
+                      "root signature is missing the required 'output' binding");
+            } else if (output->root_parameter != 1u) {
+                error("package_root_signature_root_parameter",
+                      "root signature binding 'output' must use root parameter 1");
             }
         }
     }
@@ -1906,11 +1967,13 @@ bool ValidatePackage(const Package& package,
     std::set<std::string> frame_opcodes;
     ValidateInstructions(package.initialization, "initialization",
                          package.resources, package.root_signatures,
+                         package.shaders,
                          resource_ids, shader_ids, root_ids, parameter_ids,
                          init_opcodes, diagnostics);
     ValidateInstructions(package.frame, "frame", package.resources,
-                         package.root_signatures, resource_ids, shader_ids,
-                         root_ids, parameter_ids, frame_opcodes, diagnostics);
+                         package.root_signatures, package.shaders,
+                         resource_ids, shader_ids, root_ids, parameter_ids,
+                         frame_opcodes, diagnostics);
     ValidateCrossReferences(package.capability, package.initialization,
                             package.frame, package.shaders, diagnostics);
     if (package.dev_metadata.has_value() && (package.flags & 1u) != 0u) {

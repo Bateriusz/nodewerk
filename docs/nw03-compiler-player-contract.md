@@ -119,6 +119,12 @@ features, as is `--allow-unpinned-dxc`. Passing one of those options to the
 native binary fails with an explicit "use tools/nodewerkc.py" diagnostic
 instead of silently ignoring it.
 
+`--allow-unpinned-dxc` is a developer escape hatch. When the measured DXC
+version does not contain the pinned identity, the emitted artifact is marked as
+non-release (package flags bit 0 is clear), the capability record and build
+report/sidecar carry the measured DXC version and identity, and default
+release inspection rejects it.
+
 ## Verification
 
 ```bash

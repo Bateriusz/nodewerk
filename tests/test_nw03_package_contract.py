@@ -202,6 +202,156 @@ def test_root_signature_root_parameters_must_be_unique_and_match_blob() -> None:
     )
 
 
+def test_root_signature_requires_fixed_root_parameter_mapping() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    params, output = root.bindings
+    for required_name, bad_binding, code in (
+        (
+            "params",
+            replace(params, root_parameter=5),
+            "package_root_signature_root_parameter",
+        ),
+        (
+            "output",
+            replace(output, root_parameter=6),
+            "package_root_signature_root_parameter",
+        ),
+    ):
+        bindings = (
+            (bad_binding, output)
+            if required_name == "params"
+            else (params, bad_binding)
+        )
+        bad_root = replace(
+            root,
+            bindings=bindings,
+            blob=nwp.make_root_signature_blob(root.family, bindings),
+        )
+        diagnostics = nwp.validate_package_model(
+            replace(package, root_signatures=[bad_root])
+        )
+        assert any(item["code"] == code for item in diagnostics), required_name
+
+    missing_params = (output,)
+    missing_root = replace(
+        root,
+        bindings=missing_params,
+        blob=nwp.make_root_signature_blob(root.family, missing_params),
+    )
+    diagnostics = nwp.validate_package_model(
+        replace(package, root_signatures=[missing_root])
+    )
+    assert any(
+        item["code"] == "package_root_signature_binding"
+        and "params" in item["message"]
+        for item in diagnostics
+    )
+
+
+def test_instruction_root_parameter_uses_active_root_signature() -> None:
+    package = valid_package()
+    active_root = package.root_signatures[0]
+    input_resource = nwp.ResourceDescriptor(
+        resource_id=3,
+        name="input",
+        kind="buffer",
+        format="DXGI_FORMAT_R32G32B32A32_FLOAT",
+        usage="srv",
+        pass_family=active_root.family,
+        binding_slot=0,
+        binding_space=0,
+        size_bytes=64,
+    )
+    inactive_bindings = active_root.bindings + (
+        nwp.RootBinding("input", "srv", 0, 0, 2),
+    )
+    inactive_root = replace(
+        active_root,
+        root_signature_id=2,
+        bindings=inactive_bindings,
+        blob=nwp.make_root_signature_blob(
+            active_root.family, inactive_bindings
+        ),
+    )
+    frame = [
+        replace(
+            instruction,
+            operands=(
+                nwp.InstructionOperand("u32", 2),
+                nwp.InstructionOperand("string", "cbv_srv_uav"),
+                nwp.InstructionOperand("resource_ref", 3),
+            ),
+        )
+        if instruction.opcode == "frame.set_descriptor_table"
+        else instruction
+        for instruction in package.frame
+    ]
+    candidate = replace(
+        package,
+        resources=[*package.resources, input_resource],
+        frame=frame,
+        root_signatures=[active_root, inactive_root],
+    )
+    diagnostics = nwp.validate_package_model(candidate)
+    assert any(
+        item["code"] == "package_root_signature_binding"
+        and "active root signature" in item["message"]
+        for item in diagnostics
+    )
+
+
+def test_pipeline_root_signature_must_match_shader_record() -> None:
+    package = valid_package()
+    root = package.root_signatures[0]
+    second_root = replace(root, root_signature_id=2)
+    shaders = [
+        replace(package.shaders[0], root_signature_id=2),
+        *package.shaders[1:],
+    ]
+    diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            root_signatures=[root, second_root],
+            shaders=shaders,
+        )
+    )
+    assert any(
+        item["code"] == "package_shader_root_signature"
+        and "pipeline" in item["message"]
+        for item in diagnostics
+    )
+
+
+def test_python_model_validation_enforces_blob_size_limits() -> None:
+    package = valid_package()
+    oversized_blob = b"\x00" * (nwp.MAX_BLOB_BYTES + 1)
+    shader_diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            shaders=[replace(package.shaders[0], blob=oversized_blob)],
+        )
+    )
+    assert any(
+        item["code"] == "package_decode_limit"
+        and "shader" in item["message"]
+        for item in shader_diagnostics
+    )
+    root_diagnostics = nwp.validate_package_model(
+        replace(
+            package,
+            root_signatures=[
+                replace(package.root_signatures[0], blob=oversized_blob)
+            ],
+        )
+    )
+    assert any(
+        item["code"] == "package_decode_limit"
+        and "root signature" in item["message"]
+        for item in root_diagnostics
+    )
+
+
 def test_unknown_pass_families_are_rejected() -> None:
     package = valid_package()
     unknown_resource = replace(
