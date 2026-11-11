@@ -680,7 +680,7 @@ std::string QueryDisplayRegistryText(const std::string& adapter_description,
                     DWORD number = 0u;
                     std::memcpy(&number, value, sizeof(number));
                     char text[32]{};
-                    std::snprintf(text, sizeof(text), "0x%08X", number);
+                    std::snprintf(text, sizeof(text), "0x%08lX", number);
                     result = text;
                 }
             }
