@@ -218,6 +218,32 @@ bool TryParameterTickLayout(const package::ParameterRecord& parameter,
     return true;
 }
 
+void WriteTimelineTick(std::uint32_t* words,
+                       std::uint32_t byte_offset,
+                       std::uint32_t parameter_bytes,
+                       std::uint8_t tick_kind,
+                       std::uint64_t tick) {
+    auto* destination =
+        reinterpret_cast<std::uint8_t*>(words) + byte_offset;
+    if (parameter_bytes == 0u || parameter_bytes % 4u != 0u) return;
+    const std::uint32_t component_count = parameter_bytes / 4u;
+    for (std::uint32_t component = 0u; component < component_count;
+         ++component) {
+        std::uint8_t* component_destination =
+            destination + static_cast<std::size_t>(component) * 4u;
+        if (tick_kind == 0u) {
+            const float value = static_cast<float>(tick);
+            std::memcpy(component_destination, &value, sizeof(value));
+        } else if (tick_kind == 1u) {
+            const std::uint32_t value = static_cast<std::uint32_t>(tick);
+            std::memcpy(component_destination, &value, sizeof(value));
+        } else if (tick_kind == 2u) {
+            const std::int32_t value = static_cast<std::int32_t>(tick);
+            std::memcpy(component_destination, &value, sizeof(value));
+        }
+    }
+}
+
 } // namespace
 
 struct PlatformState {
@@ -511,32 +537,6 @@ bool TryBarrierStateFromCode(std::uint32_t code,
         case 11u: *state = D3D12_RESOURCE_STATE_PRESENT; return true;
         case 12u: *state = D3D12_RESOURCE_STATE_GENERIC_READ; return true;
         default: return false;
-    }
-}
-
-void WriteTimelineTick(std::uint32_t* words,
-                       std::uint32_t byte_offset,
-                       std::uint32_t parameter_bytes,
-                       std::uint8_t tick_kind,
-                       std::uint64_t tick) {
-    auto* destination =
-        reinterpret_cast<std::uint8_t*>(words) + byte_offset;
-    if (parameter_bytes == 0u || parameter_bytes % 4u != 0u) return;
-    const std::uint32_t component_count = parameter_bytes / 4u;
-    for (std::uint32_t component = 0u; component < component_count;
-         ++component) {
-        std::uint8_t* component_destination =
-            destination + static_cast<std::size_t>(component) * 4u;
-        if (tick_kind == 0u) {
-            const float value = static_cast<float>(tick);
-            std::memcpy(component_destination, &value, sizeof(value));
-        } else if (tick_kind == 1u) {
-            const std::uint32_t value = static_cast<std::uint32_t>(tick);
-            std::memcpy(component_destination, &value, sizeof(value));
-        } else if (tick_kind == 2u) {
-            const std::int32_t value = static_cast<std::int32_t>(tick);
-            std::memcpy(component_destination, &value, sizeof(value));
-        }
     }
 }
 

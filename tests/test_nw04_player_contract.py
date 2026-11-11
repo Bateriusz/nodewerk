@@ -87,6 +87,26 @@ def test_host_simulation_planner_accepts_fixture_and_updates_constants() -> None
     assert timeline == 7
 
 
+def test_zero_count_root_constant_block_does_not_erase_last_constants() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    zero_block = nwp.Instruction(
+        "frame.set_root_constants",
+        (
+            nwp.InstructionOperand("u32", 0),
+            nwp.InstructionOperand("resource_ref", 1),
+            nwp.InstructionOperand("u32", 0),
+        ),
+    )
+    package = nwp.replace(package, frame=package.frame + [zero_block])
+    assert contract.validate_frame_plan(package) == []
+    first, _ = contract.apply_frame_constants(package, 0)
+    last, _ = contract.apply_frame_constants(package, 7)
+    assert first
+    assert last
+    assert first[:4] != last[:4]
+    assert struct.unpack_from("<f", last, 0)[0] == 7.0
+
+
 def test_planner_rejects_bad_barrier_heap_and_descriptor_targets() -> None:
     package = nw04_fixture.build_compute_display_package()
 

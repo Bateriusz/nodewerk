@@ -954,6 +954,11 @@ def apply_frame_constants(
             last_timeline = timeline_value
         elif instruction.opcode == "frame.set_root_constants":
             constant_count = min(instruction.operands[2].value, 16)
+            # The native player ignores zero-count root-constant blocks and
+            # retains the previous emitted block.  Do not overwrite the
+            # captured bytes with an empty block.
+            if constant_count == 0:
+                continue
             values = bytearray(constant_count * 4)
             entries, _ = _root_constant_entries(package, constant_count)
             offset = 0

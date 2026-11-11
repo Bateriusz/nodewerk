@@ -740,7 +740,7 @@ def run_native_fixture(
                 f"native fixture did not report {expected_line}",
                 evidence={"stdout": output, "stderr": proc.stderr},
             )
-    if last_constants is not None:
+    if last_constants:
         expected_root0 = f"NW_PLAYER_LAST_ROOT_CONSTANT0=0x{struct.unpack_from('<I', last_constants, 0)[0]:08X}"
         if expected_root0 not in output:
             return CheckResult(
@@ -1043,7 +1043,7 @@ def run_planner_self_test(fixture: Path, package_path: Path) -> CheckResult:
                 f"planner self-test did not report {expected_line}",
                 evidence={"stdout": proc.stdout, "stderr": proc.stderr},
             )
-    if last_constants is not None:
+    if last_constants:
         expected_root0 = (
             "NW_PLAYER_LAST_ROOT_CONSTANT0=0x"
             f"{struct.unpack_from('<I', last_constants, 0)[0]:08X}"
