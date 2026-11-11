@@ -658,29 +658,29 @@ def _duplicate_reuse_bytes(records: list[dict[str, Any]]) -> int:
 
 
 def _check_decoded_blob_budget(
-    records: Sequence[Any],
+    groups: Sequence[tuple[Sequence[Any], str]],
     diagnostics: list[dict[str, Any]],
-    section: str,
 ) -> None:
-    """Match the native reader's deduplicated-table + reference accounting."""
+    """Match the native reader's combined deduplicated-table/reference budget."""
     unique_sizes: dict[str, int] = {}
     total = 0
-    for record in records:
-        blob = getattr(record, "blob", b"")
-        digest = sha256_hex(blob)
-        if digest not in unique_sizes:
-            unique_sizes[digest] = len(blob)
+    for records, section in groups:
+        for record in records:
+            blob = getattr(record, "blob", b"")
+            digest = sha256_hex(blob)
+            if digest not in unique_sizes:
+                unique_sizes[digest] = len(blob)
+                total += len(blob)
             total += len(blob)
-        total += len(blob)
-        if total > MAX_DECODED_BYTES:
-            diagnostics.append(
-                package_diagnostic(
-                    "package_decode_limit",
-                    "aggregate decoded payload exceeds the v1 memory budget",
-                    section=section,
+            if total > MAX_DECODED_BYTES:
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_decode_limit",
+                        "aggregate decoded payload exceeds the v1 memory budget",
+                        section=section,
+                    )
                 )
-            )
-            return
+                return
 
 
 # ---------------------------------------------------------------------------
@@ -3116,9 +3116,12 @@ def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
     _validate_root_signatures(package.root_signatures, package.resources, diagnostics)
     _validate_shaders(package.shaders, package.root_signatures, diagnostics)
     _check_decoded_blob_budget(
-        package.root_signatures, diagnostics, SECTION_ROOT_SIGNATURES
+        (
+            (package.root_signatures, SECTION_ROOT_SIGNATURES),
+            (package.shaders, SECTION_SHADERS),
+        ),
+        diagnostics,
     )
-    _check_decoded_blob_budget(package.shaders, diagnostics, SECTION_SHADERS)
     _validate_instructions(
         package.initialization,
         package.frame,

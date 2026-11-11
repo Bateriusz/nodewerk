@@ -479,31 +479,17 @@ class GraphDocument:
         native = _native_nw02_digest(self)
         if native is not None:
             return native
-        canonical = {
-            "schema_version": self.schema_version,
-            "profile": {
-                "id": self.profile_id,
-                "requirements_digest": self.requirements_digest,
-            },
-            "settings": self.settings,
-            "nodes": [
-                {
-                    "id": node.node_id,
-                    "operator": node.operator_key,
-                    "frequency": node.frequency,
-                    "residency": node.residency,
-                    "params": {
-                        name: _canonical_param_tokens(values)
-                        for name, values in sorted(node.params.items())
-                    },
-                    "inputs": {
-                        port: source for port, source in sorted(node.inputs.items())
-                    },
-                }
-                for node in sorted(self.nodes.values(), key=lambda item: item.node_id)
-            ],
-        }
-        return "sha256:v1:" + sha256_hex(nwp_package.canonical_json_bytes(canonical))
+        if os.environ.get("NODEWERK_NW03_TEST_DIGEST") == "1":
+            # Explicit test-only identity used by packaging/cache tests on hosts
+            # without a C++ compiler. Production never takes this path.
+            return "sha256:v1:" + sha256_hex(
+                b"nw03-test-semantic-digest:" +
+                self.source_text.encode("utf-8")
+            )
+        raise CompilerError(
+            "NW-02 canonical semantic digest helper is unavailable; refusing "
+            "to substitute an incompatible package identity"
+        )
 
 
 def _diagnostic(
@@ -962,17 +948,6 @@ def _native_nw02_digest(document: GraphDocument) -> str | None:
                 temporary.unlink()
             except OSError:
                 pass
-
-
-def _canonical_param_tokens(tokens: Sequence[str]) -> list[Any]:
-    """Typed fallback: numeric spellings canonicalize to values, not text."""
-    numeric: list[float] = []
-    for token in tokens:
-        value = _parse_numeric_token(token)
-        if value is None or not math.isfinite(value):
-            return list(tokens)
-        numeric.append(_normalise_zero(value))
-    return numeric
 
 
 def _validate_node_parameters(node: GraphNode) -> list[dict[str, Any]]:

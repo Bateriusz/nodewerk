@@ -206,8 +206,10 @@ The reader validates, in order:
 Section payloads must be contiguous in directory order. Padding inserted
 between sections, descending section IDs, overlap, and non-contiguous payloads
 are rejected so a checksum-correct package always re-encodes to the same bytes.
-The aggregate decoded-memory budget prevents a small deduplicated blob table
-from being copied into thousands of specialization records.
+The aggregate decoded-memory budget is shared across the `RSIG` and `SHDR`
+blob/table references, preventing a small deduplicated blob table from being
+copied into thousands of specialization records. Writers, the Python reader,
+and the native reader enforce the same combined limit.
 
 No parser failure reaches GPU submission. Unknown major versions, required
 sections, instructions, operand types, and shader targets are rejected.

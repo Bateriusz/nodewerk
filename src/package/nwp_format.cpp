@@ -2338,36 +2338,31 @@ bool ValidateShaders(const std::vector<ShaderRecord>& shaders,
     return diagnostics.size() == before;
 }
 
-template <typename Record>
-bool ValidateDecodedBlobBudget(
-    const std::vector<Record>& records,
+bool ChargeDecodedBlobBudget(
+    const std::vector<std::uint8_t>& blob,
+    std::set<std::string>& unique_blobs,
+    std::uint64_t& total,
     std::string_view section,
     std::vector<Diagnostic>& diagnostics) {
-    const std::size_t before = diagnostics.size();
-    std::set<std::string> unique_blobs;
-    std::uint64_t total = 0u;
-    for (const auto& record : records) {
-        const std::string digest = Sha256Hex(record.blob);
-        if (unique_blobs.insert(digest).second) {
-            if (record.blob.size() >
-                static_cast<std::uint64_t>(kMaxDecodedBytes) - total) {
-                AddDiagnostic(diagnostics, "package_decode_limit",
-                              "aggregate decoded payload exceeds the v1 memory budget",
-                              std::string(section));
-                return false;
-            }
-            total += record.blob.size();
-        }
-        if (record.blob.size() >
-            static_cast<std::uint64_t>(kMaxDecodedBytes) - total) {
+    const std::string digest = Sha256Hex(blob);
+    const std::uint64_t limit = static_cast<std::uint64_t>(kMaxDecodedBytes);
+    if (unique_blobs.insert(digest).second) {
+        if (blob.size() > limit - std::min(total, limit)) {
             AddDiagnostic(diagnostics, "package_decode_limit",
                           "aggregate decoded payload exceeds the v1 memory budget",
                           std::string(section));
             return false;
         }
-        total += record.blob.size();
+        total += blob.size();
     }
-    return diagnostics.size() == before;
+    if (blob.size() > limit - std::min(total, limit)) {
+        AddDiagnostic(diagnostics, "package_decode_limit",
+                      "aggregate decoded payload exceeds the v1 memory budget",
+                      std::string(section));
+        return false;
+    }
+    total += blob.size();
+    return true;
 }
 
 bool ValidateCrossReferences(const CapabilityRecord& capability,
@@ -2605,10 +2600,28 @@ bool ValidatePackage(const Package& package,
     ValidateRootSignatures(package.root_signatures, package.resources,
                            diagnostics);
     ValidateShaders(package.shaders, package.root_signatures, diagnostics);
-    ValidateDecodedBlobBudget(package.root_signatures,
-                              kSectionRootSignatures, diagnostics);
-    ValidateDecodedBlobBudget(package.shaders, kSectionShaders,
-                              diagnostics);
+    {
+        std::set<std::string> unique_blobs;
+        std::uint64_t decoded_total = 0u;
+        bool budget_ok = true;
+        for (const auto& root : package.root_signatures) {
+            if (!ChargeDecodedBlobBudget(root.blob, unique_blobs,
+                                         decoded_total,
+                                         kSectionRootSignatures, diagnostics)) {
+                budget_ok = false;
+                break;
+            }
+        }
+        if (budget_ok) {
+            for (const auto& shader : package.shaders) {
+                if (!ChargeDecodedBlobBudget(
+                        shader.blob, unique_blobs, decoded_total,
+                        kSectionShaders, diagnostics)) {
+                    break;
+                }
+            }
+        }
+    }
     if ((package.flags & 1u) != 0u) {
         for (const auto& shader : package.shaders) {
             std::string reason;

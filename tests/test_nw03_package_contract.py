@@ -1097,11 +1097,21 @@ def test_sections_must_be_contiguous_and_canonically_ordered() -> None:
 
 
 def test_deduplicated_blob_reference_budget_is_enforced() -> None:
+    base = make_dxil_container()
+    padding = nwp.MAX_BLOB_BYTES - len(base) - 12
     large_blob = _with_extra_dxil_chunk(
-        make_dxil_container(), b"JUNK", b"\x00" * (8 * 1024 * 1024)
+        base, b"JUNK", b"\x00" * padding
     )
+    assert len(large_blob) == nwp.MAX_BLOB_BYTES
+    within_budget = nwp.make_test_package(
+        shader_blob=large_blob, specialization_count=30
+    )
+    assert nwp.validate_package_model(within_budget) == []
+
+    # 31 references of the 8 MiB blob reach the 256 MiB shader budget; the
+    # required root-signature blob pushes the combined budget over the limit.
     package = nwp.make_test_package(
-        shader_blob=large_blob, specialization_count=40
+        shader_blob=large_blob, specialization_count=31
     )
     diagnostics = nwp.validate_package_model(package)
     assert any(

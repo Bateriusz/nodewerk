@@ -18,8 +18,11 @@ metadata enters the release package.
 
 1. Parse and validate the `.nwgraph` document and consume NW-02's canonical
    semantic digest (the Python frontend builds/uses the authoritative
-   `nw_graph_cli digest` helper when a host compiler is available and falls
-   back to the same typed-value canonical fields otherwise).
+   `nw_graph_cli digest` helper when a host compiler is available). If the
+   authoritative helper is unavailable, compilation fails explicitly rather
+   than substituting a JSON or otherwise incompatible digest. Tests may opt
+   into an explicit non-production test identity with
+   `NODEWERK_NW03_TEST_DIGEST=1`.
 2. Find reachable `ShaderExpr` entry points from GPU pass `shader` inputs (or
    terminal standalone expressions when there is no GPU pass).
 3. Evaluate the immutable snapshot and fuse the reachable expression DAG.

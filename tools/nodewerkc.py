@@ -50,12 +50,17 @@ def command_validate(args: argparse.Namespace) -> int:
         text, source_name=str(args.graph)
     )
     errors = [item for item in diagnostics if item.get("severity") == "error"]
+    try:
+        semantic_digest = document.semantic_digest() if document else ""
+    except nw03_compiler.CompilerError as exc:
+        _emit(_error_payload(str(exc), exc.diagnostics))
+        return 1
     payload = {
         "ok": not errors and document is not None,
         "valid": not errors and document is not None,
         "profile_id": document.profile_id if document else "",
         "requirements_digest": document.requirements_digest if document else "",
-        "semantic_digest": document.semantic_digest() if document else "",
+        "semantic_digest": semantic_digest,
         "node_count": len(document.nodes) if document else 0,
         "diagnostics": diagnostics,
     }

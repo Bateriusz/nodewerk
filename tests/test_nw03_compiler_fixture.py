@@ -23,6 +23,19 @@ import verify_nw03  # noqa: E402
 FIXTURE = REPO_ROOT / "fixtures" / "nw03" / "math_noise.nwgraph"
 
 
+@pytest.fixture(autouse=True)
+def _test_semantic_digest_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    if compiler._ensure_nw02_digest_binary() is None:
+        monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+
+
+def _cli_env() -> dict[str, str]:
+    environment = dict(os.environ)
+    if compiler._ensure_nw02_digest_binary() is None:
+        environment["NODEWERK_NW03_TEST_DIGEST"] = "1"
+    return environment
+
+
 def test_load_graph_preserves_raw_newlines_for_source_hash(tmp_path: Path) -> None:
     fixture_text = FIXTURE.read_text(encoding="utf-8")
     fixture_text = fixture_text.replace("\r\n", "\n").replace("\r", "\n")
@@ -390,6 +403,7 @@ def test_nodewerkc_cli_validate_compile_and_inspect(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
+        env=_cli_env(),
     )
     assert validate.returncode == 0, validate.stderr
     payload = json.loads(validate.stdout)
@@ -411,6 +425,7 @@ def test_nodewerkc_cli_validate_compile_and_inspect(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
+        env=_cli_env(),
     )
     assert compile_run.returncode == 0, compile_run.stderr
     inspect_run = subprocess.run(
@@ -418,6 +433,7 @@ def test_nodewerkc_cli_validate_compile_and_inspect(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
+        env=_cli_env(),
     )
     assert inspect_run.returncode == 0, inspect_run.stderr
     inspection = json.loads(inspect_run.stdout)
@@ -461,6 +477,7 @@ def test_nodewerkc_validate_rejects_all_invalid_graph_fixtures() -> None:
             capture_output=True,
             text=True,
             check=False,
+            env=_cli_env(),
         )
         assert proc.returncode != 0, path.name
         payload = json.loads(proc.stdout)
@@ -479,6 +496,7 @@ def test_nodewerkc_validate_accepts_valid_graph_fixtures() -> None:
             capture_output=True,
             text=True,
             check=False,
+            env=_cli_env(),
         )
         assert proc.returncode == 0, (path.name, proc.stdout, proc.stderr)
 
@@ -586,6 +604,8 @@ def test_semantic_digest_matches_nw02_canonical_cli() -> None:
 
 
 def test_semantic_digest_canonicalizes_numeric_spellings() -> None:
+    if compiler._ensure_nw02_digest_binary() is None:
+        pytest.skip("no host C++ compiler for the NW-02 digest CLI")
     first, diagnostics = compiler.parse_graph_text(
         _graph_text(
             "node value nw.math.vec4_const@1.0.0 frequency=frame\n"
@@ -601,3 +621,14 @@ def test_semantic_digest_canonicalizes_numeric_spellings() -> None:
     assert diagnostics == [] and second_diagnostics == []
     assert first is not None and second is not None
     assert first.semantic_digest() == second.semantic_digest()
+
+
+def test_semantic_digest_fails_without_native_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NODEWERK_NW03_TEST_DIGEST", raising=False)
+    monkeypatch.setattr(compiler, "_NW02_DIGEST_BINARY", False)
+    monkeypatch.setattr(compiler, "_NW02_DIGEST_CACHE", {})
+    document = compiler.load_graph(FIXTURE)
+    with pytest.raises(compiler.CompilerError, match="canonical semantic digest"):
+        document.semantic_digest()
