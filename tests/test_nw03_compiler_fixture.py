@@ -199,7 +199,9 @@ def test_compile_package_with_offline_dxc_and_dev_sidecar(tmp_path: Path) -> Non
     )
     assert report["fixture"]["shader_specialization_count"] == 2
     assert report["fixture"]["unique_shader_blob_count"] == 1
-    expected_release = not compiler.uses_test_semantic_digest()
+    expected_release = (
+        compiler.load_graph(FIXTURE).semantic_identity().provenance == "nw02"
+    )
     assert report["package"]["release"] is expected_release
     assert (
         report["toolchain"]["semantic_digest_test_identity"]
@@ -446,7 +448,7 @@ def test_nodewerkc_cli_validate_compile_and_inspect(tmp_path: Path) -> None:
         env=_cli_env(),
     )
     inspection = json.loads(inspect_run.stdout)
-    if compiler.uses_test_semantic_digest():
+    if compiler.load_graph(FIXTURE).semantic_identity().is_test:
         assert inspect_run.returncode != 0
         assert inspection["valid"] is False
     else:
@@ -646,3 +648,25 @@ def test_semantic_digest_fails_without_native_helper(
     document = compiler.load_graph(FIXTURE)
     with pytest.raises(compiler.CompilerError, match="canonical semantic digest"):
         document.semantic_digest()
+
+
+def test_failing_helper_cannot_masquerade_as_canonical_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    monkeypatch.setattr(
+        compiler, "_NW02_DIGEST_BINARY", Path(sys.executable)
+    )
+    monkeypatch.setattr(compiler, "_NW02_DIGEST_CACHE", {})
+    dxc = make_mock_dxc(tmp_path)
+    package_path = tmp_path / "failing-helper.nwp"
+    report = compiler.compile_package(
+        FIXTURE,
+        package_path,
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    assert report["package"]["release"] is False
+    assert report["toolchain"]["semantic_digest_test_identity"] is True
+    package = nwp.decode_package(package_path.read_bytes())
+    assert (package.flags & 1) == 0

@@ -77,12 +77,14 @@ _NW02_DIGEST_BINARY: Path | None | bool = None
 _NW02_DIGEST_CACHE: dict[str, str] = {}
 
 
-def uses_test_semantic_digest() -> bool:
-    """True only when the explicit non-production test identity is active."""
-    return (
-        os.environ.get("NODEWERK_NW03_TEST_DIGEST") == "1"
-        and _ensure_nw02_digest_binary() is None
-    )
+@dataclass(frozen=True)
+class SemanticIdentity:
+    digest: str
+    provenance: str  # "nw02" or "test"
+
+    @property
+    def is_test(self) -> bool:
+        return self.provenance == "test"
 
 
 class CompilerError(RuntimeError):
@@ -483,21 +485,28 @@ class GraphDocument:
     def ordered_nodes(self) -> list[GraphNode]:
         return [self.nodes[node_id] for node_id in self.nodes]
 
-    def semantic_digest(self) -> str:
+    def semantic_identity(self) -> SemanticIdentity:
         native = _native_nw02_digest(self)
         if native is not None:
-            return native
+            return SemanticIdentity(native, "nw02")
         if os.environ.get("NODEWERK_NW03_TEST_DIGEST") == "1":
             # Explicit test-only identity used by packaging/cache tests on hosts
             # without a C++ compiler. Production never takes this path.
-            return "sha256:v1:" + sha256_hex(
-                b"nw03-test-semantic-digest:" +
-                self.source_text.encode("utf-8")
+            return SemanticIdentity(
+                "sha256:v1:"
+                + sha256_hex(
+                    b"nw03-test-semantic-digest:"
+                    + self.source_text.encode("utf-8")
+                ),
+                "test",
             )
         raise CompilerError(
             "NW-02 canonical semantic digest helper is unavailable; refusing "
             "to substitute an incompatible package identity"
         )
+
+    def semantic_digest(self) -> str:
+        return self.semantic_identity().digest
 
 
 def _diagnostic(
@@ -2043,13 +2052,14 @@ def _compiler_fingerprint(
     document: GraphDocument,
     generated: Sequence[GeneratedShader],
     *,
+    semantic_digest: str,
     dxc_identity: str,
     optimization: str,
 ) -> str:
     return "sha256:v1:" + sha256_hex(
         nwp_package.canonical_json_bytes(
             {
-                "graph_semantic_digest": document.semantic_digest(),
+                "graph_semantic_digest": semantic_digest,
                 "compiler_settings": document.settings,
                 "generated": [shader.specialization_key for shader in generated],
                 "dxc_identity": dxc_identity,
@@ -2065,6 +2075,7 @@ def _build_package(
     generated: Sequence[GeneratedShader],
     compiled: dict[str, dict[str, Any]],
     *,
+    semantic_digest: str,
     dxc_identity: str,
     dxc_version: str,
     optimization: str,
@@ -2205,7 +2216,11 @@ def _build_package(
         toolchain_dxc_version=dxc_version,
         toolchain_identity=dxc_identity,
         compiler_fingerprint=_compiler_fingerprint(
-            document, generated, dxc_identity=dxc_identity, optimization=optimization
+            document,
+            generated,
+            semantic_digest=semantic_digest,
+            dxc_identity=dxc_identity,
+            optimization=optimization,
         ),
     )
     capability = replace(
@@ -2229,6 +2244,8 @@ def _build_sidecar(
     generated: Sequence[GeneratedShader],
     compiled: dict[str, dict[str, Any]],
     *,
+    semantic_digest: str,
+    semantic_digest_test_identity: bool,
     dxc_identity: str,
     dxc_version: str,
     optimization: str,
@@ -2241,13 +2258,17 @@ def _build_sidecar(
             "requirements_digest": document.requirements_digest,
         },
         "compiler_fingerprint": _compiler_fingerprint(
-            document, generated, dxc_identity=dxc_identity, optimization=optimization
+            document,
+            generated,
+            semantic_digest=semantic_digest,
+            dxc_identity=dxc_identity,
+            optimization=optimization,
         ),
         "toolchain": {
             "dxc_identity": dxc_identity,
             "dxc_version": dxc_version,
             "optimization": optimization,
-            "semantic_digest_test_identity": uses_test_semantic_digest(),
+            "semantic_digest_test_identity": semantic_digest_test_identity,
         },
         "source_graph": {
             "name": document.source_name,
@@ -2306,6 +2327,9 @@ def compile_package(
         raise CompilerError("failed to lower graph", diagnostics)
     if not generated:
         raise CompilerError("graph produced no shader specializations")
+    semantic_identity = document.semantic_identity()
+    semantic_digest = semantic_identity.digest
+    test_semantic_digest = semantic_identity.is_test
 
     dxc_bin = resolve_dxc(dxc_executable)
     if not dxc_bin:
@@ -2335,7 +2359,6 @@ def compile_package(
                 )
             ],
         )
-    test_semantic_digest = uses_test_semantic_digest()
     release = (pinned_version in dxc_version) and not test_semantic_digest
     dxc_identity = f"dxc:{dxc_version}"
     cache = ShaderCache(cache_dir)
@@ -2359,7 +2382,7 @@ def compile_package(
         for index, shader in enumerate(sorted(generated, key=lambda item: item.specialization_id)):
             cache_key = ShaderCache.make_key(
                 shader=shader,
-                semantic_digest=document.semantic_digest(),
+                semantic_digest=semantic_digest,
                 profile_id=document.profile_id,
                 requirements_digest=document.requirements_digest,
                 compiler_settings=document.settings,
@@ -2370,7 +2393,7 @@ def compile_package(
             )
             meta = {
                 "key": cache_key,
-                "semantic_digest": document.semantic_digest(),
+                "semantic_digest": semantic_digest,
                 "profile_id": document.profile_id,
                 "requirements_digest": document.requirements_digest,
                 "compiler_settings": document.settings,
@@ -2436,6 +2459,7 @@ def compile_package(
             document,
             generated,
             compiled,
+            semantic_digest=semantic_digest,
             dxc_identity=dxc_identity,
             dxc_version=dxc_version,
             optimization=optimization,
@@ -2455,6 +2479,8 @@ def compile_package(
             document,
             generated,
             compiled,
+            semantic_digest=semantic_digest,
+            semantic_digest_test_identity=test_semantic_digest,
             dxc_identity=dxc_identity,
             dxc_version=dxc_version,
             optimization=optimization,
@@ -2465,6 +2491,8 @@ def compile_package(
             compiled,
             package_bytes,
             cache.stats,
+            semantic_digest=semantic_digest,
+            semantic_digest_test_identity=test_semantic_digest,
             dxc_identity=dxc_identity,
             dxc_version=dxc_version,
             optimization=optimization,
@@ -2492,6 +2520,8 @@ def _build_report(
     package_bytes: bytes,
     cache_stats: CacheStats,
     *,
+    semantic_digest: str,
+    semantic_digest_test_identity: bool,
     dxc_identity: str,
     dxc_version: str,
     optimization: str,
@@ -2527,7 +2557,7 @@ def _build_report(
         "source_graph": {
             "path": source_path,
             "sha256": sha256_hex(document.source_text.encode("utf-8")),
-            "semantic_digest": document.semantic_digest(),
+            "semantic_digest": semantic_digest,
         },
         "profile": {
             "id": document.profile_id,
@@ -2536,6 +2566,7 @@ def _build_report(
                 document,
                 generated,
                 compiled,
+                semantic_digest=semantic_digest,
                 dxc_identity=dxc_identity,
                 dxc_version=dxc_version,
                 optimization=optimization,
@@ -2544,7 +2575,11 @@ def _build_report(
         },
         "compiler": {
             "fingerprint": _compiler_fingerprint(
-                document, generated, dxc_identity=dxc_identity, optimization=optimization
+                document,
+                generated,
+                semantic_digest=semantic_digest,
+                dxc_identity=dxc_identity,
+                optimization=optimization,
             ),
             "settings": document.settings,
         },
@@ -2553,7 +2588,7 @@ def _build_report(
             "dxc_version": dxc_version,
             "optimization": optimization,
             "pinned": release,
-            "semantic_digest_test_identity": uses_test_semantic_digest(),
+            "semantic_digest_test_identity": semantic_digest_test_identity,
             "test_payload": any(
                 bool(item.get("is_test_container"))
                 for item in compiled.values()
@@ -2614,13 +2649,14 @@ def build_report_from_graph(
     for root in roots:
         reachable_nodes.update(_shader_dependencies(document, root))
     emitted_roots = {shader.specialization_id for shader in generated}
+    semantic_identity = document.semantic_identity()
     return {
         "format": "nw03-lowering-report",
         "version": 1,
         "source_graph": {
             "path": str(graph_path),
             "sha256": sha256_hex(document.source_text.encode("utf-8")),
-            "semantic_digest": document.semantic_digest(),
+            "semantic_digest": semantic_identity.digest,
         },
         "profile": {
             "id": document.profile_id,
