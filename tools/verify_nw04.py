@@ -1057,23 +1057,34 @@ def run_planner_self_test(fixture: Path, package_path: Path) -> CheckResult:
                 f"expected update ({expected_root0})",
                 evidence={"stdout": proc.stdout, "stderr": proc.stderr},
             )
+    # The negative mutations below are deliberately tailored to the repository
+    # fixture (for example resource id 1). Do not apply those assumptions to an
+    # arbitrary valid NW-03 package supplied to Full/Hardware verification.
+    canonical_fixture = (
+        REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp"
+    ).resolve()
+    exercise_negative_mutations = package_path.resolve() == canonical_fixture
     frame_opcodes = {instruction.opcode for instruction in package.frame}
     mutations: list[tuple[str, str]] = []
-    if "frame.barrier" in frame_opcodes:
+    if exercise_negative_mutations and "frame.barrier" in frame_opcodes:
         mutations.extend(
             [
                 ("barrier-state", "package_instruction_barrier_state"),
                 ("barrier-usage", "package_instruction_barrier_usage"),
             ]
         )
-    if "frame.set_descriptor_table" in frame_opcodes:
+    if exercise_negative_mutations and "frame.set_descriptor_table" in frame_opcodes:
         mutations.extend(
             [
                 ("descriptor-heap", "package_instruction_descriptor_heap"),
                 ("descriptor-target", "package_instruction_descriptor_target"),
             ]
         )
-    if "frame.set_timeline" in frame_opcodes and package.parameters:
+    if (
+        exercise_negative_mutations
+        and "frame.set_timeline" in frame_opcodes
+        and package.parameters
+    ):
         mutations.append(
             ("timeline-type", "package_parameter_type_unsupported")
         )

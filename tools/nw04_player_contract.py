@@ -780,8 +780,7 @@ def validate_frame_plan(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
     """
     failures: list[CapabilityMismatch] = []
     resources = {resource.resource_id: resource for resource in package.resources}
-    timeline_parameters: set[int] = set()
-    recorded_parameters: set[int] = set()
+    pending_timeline_parameters: set[int] = set()
     parameter_ids = {parameter.parameter_id for parameter in package.parameters}
     for instruction in package.frame:
         if instruction.opcode == "frame.draw":
@@ -890,27 +889,29 @@ def validate_frame_plan(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
                         "frame.set_timeline references a missing parameter",
                     )
                 )
-            timeline_parameters.add(parameter_id)
+            else:
+                pending_timeline_parameters.add(parameter_id)
         elif instruction.opcode == "frame.set_root_constants":
             constant_count = min(instruction.operands[2].value, 16)
             entries, entry_failures = _root_constant_entries(
                 package, constant_count
             )
             failures.extend(entry_failures)
-            recorded_parameters.update(entry[0] for entry in entries)
-    for parameter_id in sorted(timeline_parameters):
-        if parameter_id not in recorded_parameters:
-            failures.append(
-                _failure(
-                    package,
-                    "frame_timeline_parameter_not_bound",
-                    "parameter_id",
-                    str(parameter_id),
-                    "not present in a full root-constant block",
-                    "frame.set_timeline selects a parameter that no bounded "
-                    "root-constant upload can update",
-                )
+            pending_timeline_parameters.difference_update(
+                entry[0] for entry in entries
             )
+    for parameter_id in sorted(pending_timeline_parameters):
+        failures.append(
+            _failure(
+                package,
+                "frame_timeline_parameter_not_bound",
+                "parameter_id",
+                str(parameter_id),
+                "not present in a subsequent full root-constant block",
+                "frame.set_timeline selects a parameter that no later bounded "
+                "root-constant upload can update",
+            )
+        )
     return failures
 
 
@@ -947,7 +948,9 @@ def apply_frame_constants(
         if instruction.opcode == "frame.set_timeline":
             timeline_active = True
             timeline_parameter = instruction.operands[0].value
-            timeline_value = instruction.operands[1].value + tick
+            timeline_value = min(
+                (1 << 64) - 1, instruction.operands[1].value + tick
+            )
             last_timeline = timeline_value
         elif instruction.opcode == "frame.set_root_constants":
             constant_count = min(instruction.operands[2].value, 16)

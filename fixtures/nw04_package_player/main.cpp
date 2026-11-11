@@ -244,10 +244,9 @@ int main(int argc, char** argv) {
                 }
             } else if (std::strcmp(args.planner_mutation,
                                    "timeline-type") == 0) {
-                for (auto& parameter : package.parameters) {
-                    parameter.type = "double";
+                if (!package.parameters.empty()) {
+                    package.parameters.front().type = "double";
                     mutated = true;
-                    break;
                 }
             }
             if (!mutated) {

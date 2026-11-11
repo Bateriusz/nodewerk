@@ -183,6 +183,53 @@ def test_planner_rejects_unsupported_and_unbound_timeline_parameters() -> None:
     )
 
 
+def test_planner_requires_timeline_before_a_matching_root_constant_upload() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    timeline = next(
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.set_timeline"
+    )
+    frame = [
+        instruction
+        for instruction in package.frame
+        if instruction.opcode != "frame.set_timeline"
+    ]
+    root_index = next(
+        index
+        for index, instruction in enumerate(frame)
+        if instruction.opcode == "frame.set_root_constants"
+    )
+    frame.insert(root_index + 1, timeline)
+    failures = contract.validate_frame_plan(
+        nwp.replace(package, frame=tuple(frame))
+    )
+    assert any(
+        failure.code == "frame_timeline_parameter_not_bound"
+        for failure in failures
+    )
+
+
+def test_timeline_mirror_saturates_u64_like_native_player() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    max_u64 = (1 << 64) - 1
+    frame = []
+    for instruction in package.frame:
+        if instruction.opcode == "frame.set_timeline":
+            instruction = nwp.Instruction(
+                "frame.set_timeline",
+                (
+                    instruction.operands[0],
+                    nwp.InstructionOperand("u64", max_u64 - 2),
+                ),
+            )
+        frame.append(instruction)
+    _, timeline = contract.apply_frame_constants(
+        nwp.replace(package, frame=tuple(frame)), 7
+    )
+    assert timeline == max_u64
+
+
 CAPABILITY_FAILURE_CASES = [
     ("max_feature_level", 0xB000, "package_capability_feature_level"),
     ("max_shader_model", 0x50, "package_capability_shader_model"),

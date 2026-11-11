@@ -674,8 +674,9 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     last_frame_order_.clear();
     frame_ops_.reserve(package_.frame.size());
     last_frame_order_.reserve(package_.frame.size());
-    std::set<std::uint32_t> timeline_parameters;
-    std::set<std::uint32_t> recorded_constant_parameters;
+    // A timeline selection is only effective if a later root-constant
+    // instruction can consume it. Track unresolved selections in frame order.
+    std::set<std::uint32_t> pending_timeline_parameters;
     for (const auto& instruction : package_.frame) {
         bool known = true;
         FrameOp::Type type = FrameOp::Type::Present;
@@ -773,7 +774,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                         static_cast<std::int32_t>(byte_offset);
                     op.parameter_tick_kinds[entry] = tick_kind;
                     op.parameter_sizes[entry] = declared_bytes;
-                    recorded_constant_parameters.insert(
+                    pending_timeline_parameters.erase(
                         parameter.parameter_id);
                 }
                 std::memcpy(
@@ -907,7 +908,6 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             op.parameter_id = instruction.operands[0].u32;
             op.tick_value = instruction.operands[1].u64;
-            timeline_parameters.insert(op.parameter_id);
             bool parameter_known = false;
             for (const auto& parameter : package_.parameters) {
                 if (parameter.parameter_id == op.parameter_id) {
@@ -922,6 +922,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "frame.set_timeline references a missing parameter");
                 return false;
             }
+            pending_timeline_parameters.insert(op.parameter_id);
         } else if (type == FrameOp::Type::Present) {
             if (instruction.operands.size() != 1u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -935,16 +936,15 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
         frame_ops_.push_back(std::move(op));
         last_frame_order_.push_back(instruction.opcode);
     }
-    for (std::uint32_t parameter_id : timeline_parameters) {
-        if (recorded_constant_parameters.count(parameter_id) == 0u) {
-            Fail(ExitCode::PackageValidationFailed, "package_validation",
-                 "frame_timeline_parameter_not_bound", "parameter_id",
-                 std::to_string(parameter_id),
-                 "not present in a full root-constant block", "frame_plan",
-                 "frame.set_timeline selects a parameter that no bounded "
-                 "root-constant upload can update");
-            return false;
-        }
+    for (std::uint32_t parameter_id : pending_timeline_parameters) {
+        Fail(ExitCode::PackageValidationFailed, "package_validation",
+             "frame_timeline_parameter_not_bound", "parameter_id",
+             std::to_string(parameter_id),
+             "not present in a subsequent full root-constant block",
+             "frame_plan",
+             "frame.set_timeline selects a parameter that no later bounded "
+             "root-constant upload can update");
+        return false;
     }
     return true;
 }
