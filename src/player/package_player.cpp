@@ -1827,9 +1827,6 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         stats_.engine_descriptor_count += package::kSwapChainBufferCount;
         ++stats_.descriptor_allocation_calls;
         ++stats_.engine_heap_count;
-        if (RecreateRenderTargets() != ExitCode::Success) {
-            return last_exit_;
-        }
     }
 
     const bool has_present_output = present_resource_id_ != 0u;
@@ -1873,6 +1870,14 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
                 state->cbv_srv_uav_increment;
         }
     }
+
+    // RecreateRenderTargets() creates the engine-owned fullscreen display
+    // texture when frame.present is present, so the reserved display UAV
+    // descriptor must exist before this first render-target creation.
+    if (RecreateRenderTargets() != ExitCode::Success) {
+        return last_exit_;
+    }
+
     if (sampler_count > 0u) {
         D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
         heap_desc.NumDescriptors = static_cast<UINT>(sampler_count);
