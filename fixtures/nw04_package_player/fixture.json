@@ -8,12 +8,5 @@
   "requires_offline_shaders": true,
   "requires_dxc_at_runtime": false,
   "requires_agility_sdk_redist": false,
-  "supports_d3d12_validation": true,
-  "expected_release_imports": [
-    "kernel32.dll",
-    "user32.dll",
-    "gdi32.dll",
-    "d3d12.dll",
-    "dxgi.dll"
-  ]
+  "supports_d3d12_validation": true
 }

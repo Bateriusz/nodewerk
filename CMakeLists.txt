@@ -45,7 +45,6 @@ if(WIN32)
         d3d12
         dxgi
         user32
-        gdi32
         kernel32
     )
 endif()
@@ -108,9 +107,9 @@ target_include_directories(nw_package PUBLIC
 target_compile_features(nw_package PUBLIC cxx_std_20)
 
 # The player consumes the same immutable `.nwp` v1 implementation with the
-# player runtime/flags, but without the authoring-side warning surface.  Keeping
-# this as a separate archive also prevents the compiler-facing `nw_package`
-# target from changing the player's release CRT/import closure.
+# player build profile (same CRT, exception/RTTI, NDEBUG, and reproducibility
+# flags as the bootstrap archive).  Authoring-side warning policy is disabled
+# for this archive only; NW-03's package implementation is not player code.
 add_library(nw_package_player STATIC
     src/package/nwp_format.cpp
 )
@@ -119,36 +118,11 @@ target_include_directories(nw_package_player PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
 )
 target_compile_features(nw_package_player PUBLIC cxx_std_20)
-if(NW_BUILD_PROFILE STREQUAL "dev")
-    set_property(TARGET nw_package_player PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
-else()
-    set_property(TARGET nw_package_player PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded")
-    target_compile_definitions(nw_package_player PRIVATE NDEBUG)
-endif()
+nw_apply_player_profile(nw_package_player)
 if(MSVC)
-    target_compile_options(nw_package_player PRIVATE
-        /EHs-c-
-        /GR-
-        /GS
-        /Brepro
-    )
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_compile_options(nw_package_player PRIVATE
-            /clang:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.
-        )
-    endif()
-    target_compile_definitions(nw_package_player PRIVATE
-        _HAS_EXCEPTIONS=0
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
-    )
+    target_compile_options(nw_package_player PRIVATE /W0)
 else()
-    target_compile_options(nw_package_player PRIVATE
-        -fno-exceptions
-        -fno-rtti
-    )
+    target_compile_options(nw_package_player PRIVATE -w)
 endif()
 
 # NW-04: package-driven compute + fullscreen-display player fixture.  The
@@ -161,6 +135,9 @@ target_link_libraries(nw_package_player_fixture PRIVATE
     nw_player_bootstrap
     nw_package_player
 )
+if(WIN32)
+    target_link_libraries(nw_package_player_fixture PRIVATE gdi32)
+endif()
 nw_apply_player_profile(nw_package_player_fixture)
 nw_attach_dependency_check(nw_package_player_fixture "package_player")
 
