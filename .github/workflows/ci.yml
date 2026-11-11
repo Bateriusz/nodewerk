@@ -172,7 +172,7 @@ jobs:
         run: |
           cmake --preset clang-cl-dev
           cmake --build build/clang-cl-dev --target nw_package_player_fixture nodewerkc
-          $fixture = Join-Path $PWD "build/clang-cl-dev/nw_package_player_fixture.exe"
+          $fixture = Join-Path $PWD "build/clang-cl-dev/staging/package_player/nw_package_player_fixture.exe"
           if (-not (Test-Path $fixture -PathType Leaf)) {
             Write-Error "NW-04 player fixture was not built."
             exit 1
@@ -233,7 +233,7 @@ jobs:
         run: |
           cmake --preset clang-cl-dev
           cmake --build build/clang-cl-dev --target nw_package_player_fixture nodewerkc
-          $fixture = Join-Path $PWD "build/clang-cl-dev/nw_package_player_fixture.exe"
+          $fixture = Join-Path $PWD "build/clang-cl-dev/staging/package_player/nw_package_player_fixture.exe"
           if (-not (Test-Path $fixture -PathType Leaf)) {
             Write-Error "NW-04 player fixture was not built."
             exit 1
