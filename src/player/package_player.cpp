@@ -961,7 +961,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
         QueriedFormatCapability format{};
         format.format = format_name;
         D3D12_FEATURE_DATA_FORMAT_SUPPORT support{};
-        support.InFormat = MapFormat(format_name);
+        support.Format = MapFormat(format_name);
         if (SUCCEEDED(device->CheckFeatureSupport(
                 D3D12_FEATURE_FORMAT_SUPPORT, &support,
                 sizeof(support)))) {
@@ -988,7 +988,8 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
                            D3D12_FORMAT_SUPPORT1_SHADER_LOAD |
                            D3D12_FORMAT_SUPPORT1_SHADER_GATHER)) != 0u;
             format.unordered_access =
-                (flags1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS) != 0u ||
+                (flags1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) !=
+                    0u ||
                 (flags2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE) != 0u;
             format.render_target =
                 (flags1 & D3D12_FORMAT_SUPPORT1_RENDER_TARGET) != 0u;
@@ -1402,7 +1403,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "init.create_resource",
                             "resource has no validated non-aliased placement");
             }
-            ResourceSlot* slot = nullptr;
+            PlatformState::ResourceSlot* slot = nullptr;
             for (auto& candidate : state->resources) {
                 if (candidate.resource_id == resource_id) {
                     slot = &candidate;
