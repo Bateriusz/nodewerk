@@ -61,8 +61,8 @@ bool Win32Window::Create(const WindowConfig& config) noexcept {
 #if defined(_WIN32)
     HINSTANCE instance = GetModuleHandleW(nullptr);
     WNDCLASSEXW window_class{};
-    window_class.cbSize = sizeof(window_class);
-    window_class.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
+    window_class.cbSize = static_cast<UINT>(sizeof(window_class));
+    window_class.style = static_cast<DWORD>(CS_HREDRAW | CS_VREDRAW | CS_OWNDC);
     window_class.lpfnWndProc = &Nw04WindowProc;
     window_class.hInstance = instance;
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
@@ -70,7 +70,7 @@ bool Win32Window::Create(const WindowConfig& config) noexcept {
     window_class.lpszClassName = kWindowClassName;
     if (RegisterClassExW(&window_class) == 0u) {
         const DWORD error = GetLastError();
-        if (error != ERROR_CLASS_ALREADY_EXISTS) {
+        if (error != static_cast<DWORD>(ERROR_CLASS_ALREADY_EXISTS)) {
             return false;
         }
     }
@@ -78,10 +78,12 @@ bool Win32Window::Create(const WindowConfig& config) noexcept {
               static_cast<LONG>(config.height)};
     const DWORD style = WS_OVERLAPPEDWINDOW;
     AdjustWindowRectEx(&rect, style, FALSE, 0u);
+    const int window_width = static_cast<int>(rect.right - rect.left);
+    const int window_height = static_cast<int>(rect.bottom - rect.top);
     HWND hwnd = CreateWindowExW(
         0u, kWindowClassName, L"Nodewerk NW-04 Player", style,
-        CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left,
-        rect.bottom - rect.top, nullptr, nullptr, instance, nullptr);
+        CW_USEDEFAULT, CW_USEDEFAULT, window_width, window_height, nullptr,
+        nullptr, instance, nullptr);
     if (hwnd == nullptr) {
         return false;
     }
@@ -126,14 +128,15 @@ bool Win32Window::PumpMessages() noexcept {
 #if defined(_WIN32)
     MSG message{};
     while (PeekMessageW(&message, nullptr, 0u, 0u, PM_REMOVE) != FALSE) {
-        if (message.message == WM_QUIT) {
+        if (message.message == static_cast<UINT>(WM_QUIT)) {
             closed_ = true;
             return false;
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
-        if (message.message == WM_SIZE) {
-            minimized_ = (message.wParam == SIZE_MINIMIZED);
+        if (message.message == static_cast<UINT>(WM_SIZE)) {
+            minimized_ = (message.wParam ==
+                          static_cast<WPARAM>(SIZE_MINIMIZED));
         }
     }
     if (native_handle_ != nullptr) {
@@ -189,9 +192,11 @@ void Win32Window::RequestClientSize(std::uint32_t width,
         RECT rect{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
         const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
         AdjustWindowRectEx(&rect, style, FALSE, 0u);
-        SetWindowPos(hwnd, nullptr, 0, 0, rect.right - rect.left,
-                     rect.bottom - rect.top,
-                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(hwnd, nullptr, 0, 0,
+                     static_cast<int>(rect.right - rect.left),
+                     static_cast<int>(rect.bottom - rect.top),
+                     static_cast<UINT>(SWP_NOMOVE | SWP_NOZORDER |
+                                       SWP_NOACTIVATE));
     }
 #endif
 }

@@ -17,6 +17,7 @@
 #include "player_instrumentation.h"
 #include "resource_plan.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -67,7 +68,6 @@ struct PlayerAllocationStats {
 };
 
 struct PlatformState;
-struct PlayerFrameOp;
 
 class PackagePlayer {
 public:
@@ -89,8 +89,8 @@ public:
 
     // Uppercase aliases keep the C++ surface easy to discover next to the
     // lower-case contract names above.
-    ExitCode Initialize(const package::Package& package) {
-        return initialize(package);
+    ExitCode Initialize(const package::Package& pkg) {
+        return initialize(pkg);
     }
     ExitCode RenderAtTick(std::uint64_t tick) { return renderAtTick(tick); }
     ExitCode Resize(std::uint32_t width, std::uint32_t height) {
@@ -211,7 +211,38 @@ private:
     ResourceAllocationQueryFn allocation_query_ = nullptr;
     void* allocation_user_data_ = nullptr;
 
-    using FrameOp = PlayerFrameOp;
+    struct FrameOp {
+        enum class Type : std::uint8_t {
+            SetRootSignature,
+            SetRootConstants,
+            SetDescriptorTable,
+            Barrier,
+            Dispatch,
+            Draw,
+            CopyBuffer,
+            SetTimeline,
+            Present,
+        };
+
+        Type type = Type::Present;
+        std::string opcode;
+        std::uint32_t root_parameter = 0u;
+        std::uint32_t resource_a = 0u;
+        std::uint32_t resource_b = 0u;
+        std::uint32_t shader_id = 0u;
+        std::uint32_t group_x = 1u;
+        std::uint32_t group_y = 1u;
+        std::uint32_t group_z = 1u;
+        std::uint32_t parameter_id = 0u;
+        std::uint32_t barrier_state = 0u;
+        std::uint32_t constant_count = 0u;
+        std::int32_t time_byte_offset = -1;
+        std::uint64_t byte_count = 0u;
+        std::uint64_t tick_value = 0u;
+        std::string heap_name;
+        std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+            constants{};
+    };
     std::vector<FrameOp> frame_ops_;
     std::vector<std::string> last_frame_order_;
     std::unique_ptr<PlatformState> platform_;

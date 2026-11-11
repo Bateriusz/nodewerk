@@ -48,14 +48,14 @@ void AddPlanFailure(ResourcePlanResult* result,
                     std::string required_value,
                     std::string observed_value,
                     std::string detail,
-                    const package::Package& package) {
+                    const package::Package& pkg) {
     CapabilityRequirementFailure failure{};
     failure.code = std::move(code);
     failure.requirement = std::move(requirement);
     failure.required_value = std::move(required_value);
     failure.observed_value = std::move(observed_value);
-    failure.profile_id = package.capability.profile_id;
-    failure.requirements_digest = package.capability.requirements_digest;
+    failure.profile_id = pkg.capability.profile_id;
+    failure.requirements_digest = pkg.capability.requirements_digest;
     failure.detail = std::move(detail);
     result->failures.push_back(std::move(failure));
 }
@@ -130,7 +130,7 @@ bool ResourcePlan::UsesOnlyNonAliasedPlacements() const noexcept {
 }
 
 ResourcePlanResult BuildNonAliasedResourcePlan(
-    const package::Package& package,
+    const package::Package& pkg,
     ResourceAllocationQueryFn query,
     void* user_data) {
     ResourcePlanResult result{};
@@ -139,11 +139,11 @@ ResourcePlanResult BuildNonAliasedResourcePlan(
     }
     std::set<std::uint32_t> seen_ids;
     bool arithmetic_ok = true;
-    for (const auto& resource : package.resources) {
+    for (const auto& resource : pkg.resources) {
         if (!seen_ids.insert(resource.resource_id).second) {
             AddPlanFailure(&result, "package_resource_id",
                            "resource_id", "unique", "duplicate", 
-                           "duplicate resource id in realization plan", package);
+                           "duplicate resource id in realization plan", pkg);
             continue;
         }
         const ResourceAllocationQuery allocation = query(resource, user_data);
@@ -153,7 +153,7 @@ ResourcePlanResult BuildNonAliasedResourcePlan(
                 &result, "resource_allocation_info_unavailable",
                 "GetResourceAllocationInfo", "valid size/alignment",
                 allocation.detail.empty() ? "unavailable" : allocation.detail,
-                "adapter-specific allocation query failed", package);
+                "adapter-specific allocation query failed", pkg);
             continue;
         }
 
@@ -176,15 +176,15 @@ ResourcePlanResult BuildNonAliasedResourcePlan(
         AddPlanFailure(&result, "resource_allocation_size_overflow",
                        "total_engine_bytes", "no overflow", "overflow",
                        "checked arithmetic rejected aggregate allocation size",
-                       package);
+                       pkg);
     }
-    DeriveLifetimes(package, &result.plan);
-    if (result.plan.placements.size() != package.resources.size()) {
+    DeriveLifetimes(pkg, &result.plan);
+    if (result.plan.placements.size() != pkg.resources.size()) {
         AddPlanFailure(&result, "resource_allocation_incomplete",
-                       "placements", std::to_string(package.resources.size()),
+                       "placements", std::to_string(pkg.resources.size()),
                        std::to_string(result.plan.placements.size()),
                        "not every resource received a non-aliased placement",
-                       package);
+                       pkg);
     }
     result.exit_code = result.failures.empty()
                            ? ExitCode::Success

@@ -36,6 +36,10 @@ constexpr std::uint32_t kMaxFramesInFlight = 3u;
 #if defined(_WIN32)
 constexpr DWORD kFenceTimeoutMs = 5000u;
 constexpr std::uint64_t kFrameUploadAlignment = 64u * 1024u;
+constexpr std::uint32_t kMaxShaderVisibleDescriptorHeapSize = 1000000u;
+constexpr std::uint32_t kMaxShaderVisibleSamplerHeapSize = 2048u;
+constexpr std::uint32_t kD3d12MaxRootCost = 64u;
+constexpr std::uint32_t kD3d12MaxTexture2dDimension = 16384u;
 #endif
 
 std::string JsonEscape(const std::string& value) {
@@ -91,19 +95,19 @@ std::uint64_t RoundUp(std::uint64_t value, std::uint64_t alignment) {
     return remainder == 0u ? value : value + (alignment - remainder);
 }
 
-std::size_t CountCbvSrvUavDescriptors(const package::Package& package) {
+std::size_t CountCbvSrvUavDescriptors(const package::Package& pkg) {
     std::size_t count = 0u;
-    for (const auto& resource : package.resources) {
-        if (ResourceNeedsCbvSrvUavDescriptor(package, resource)) {
+    for (const auto& resource : pkg.resources) {
+        if (ResourceNeedsCbvSrvUavDescriptor(pkg, resource)) {
             ++count;
         }
     }
     return count;
 }
 
-std::size_t CountSamplerDescriptors(const package::Package& package) {
+std::size_t CountSamplerDescriptors(const package::Package& pkg) {
     std::size_t count = 0u;
-    for (const auto& resource : package.resources) {
+    for (const auto& resource : pkg.resources) {
         if (resource.usage == "sampler") {
             ++count;
         }
@@ -131,38 +135,6 @@ std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
 #endif
 
 } // namespace
-
-struct PlayerFrameOp {
-    enum class Type : std::uint8_t {
-        SetRootSignature,
-        SetRootConstants,
-        SetDescriptorTable,
-        Barrier,
-        Dispatch,
-        Draw,
-        CopyBuffer,
-        SetTimeline,
-        Present,
-    };
-
-    Type type = Type::Present;
-    std::string opcode;
-    std::uint32_t root_parameter = 0u;
-    std::uint32_t resource_a = 0u;
-    std::uint32_t resource_b = 0u;
-    std::uint32_t shader_id = 0u;
-    std::uint32_t group_x = 1u;
-    std::uint32_t group_y = 1u;
-    std::uint32_t group_z = 1u;
-    std::uint32_t parameter_id = 0u;
-    std::uint32_t barrier_state = 0u;
-    std::uint32_t constant_count = 0u;
-    std::int32_t time_byte_offset = -1;
-    std::uint64_t byte_count = 0u;
-    std::uint64_t tick_value = 0u;
-    std::string heap_name;
-    std::array<std::uint32_t, package::kMaxRootSignatureDwordCost> constants{};
-};
 
 struct PlatformState {
     nw::platform::Win32Window window;
@@ -357,13 +329,16 @@ D3D12_RESOURCE_DESC MakeResourceDesc(
         desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     }
     if (resource.usage == "uav") {
-        desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
+            desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     }
     if (resource.usage == "rtv") {
-        desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
+            desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
     }
     if (resource.usage == "dsv") {
-        desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
+            desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
     }
     return desc;
 }
@@ -911,6 +886,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     }
 
     D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+    std::uint32_t max_gpu_va_bits = 0u;
     if (SUCCEEDED(device->CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) {
         queried.binding_tier_queried = true;
@@ -921,6 +897,8 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             static_cast<std::uint32_t>(options.ResourceHeapTier);
         queried.typed_uav_additional_formats_supported =
             options.TypedUAVLoadAdditionalFormats != FALSE;
+        max_gpu_va_bits =
+            static_cast<std::uint32_t>(options.MaxGPUVirtualAddressBitsPerResource);
     }
 
     D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
@@ -938,12 +916,8 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             options4.Native16BitShaderOpsSupported != FALSE;
     }
 
-    D3D12_FEATURE_DATA_GPU_VIRTUAL_ADDRESS_SUPPORT virtual_address{};
-    if (SUCCEEDED(device->CheckFeatureSupport(
-            D3D12_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT, &virtual_address,
-            sizeof(virtual_address)))) {
-        const std::uint32_t bits =
-            virtual_address.MaxGPUVirtualAddressBitsPerResource;
+    if (max_gpu_va_bits != 0u) {
+        const std::uint32_t bits = max_gpu_va_bits;
         if (bits >= 63u) {
             queried.max_buffer_bytes =
                 std::numeric_limits<std::uint64_t>::max();
@@ -956,14 +930,14 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     queried.direct_queue_count = 1u;
     queried.max_cbv_srv_uav_descriptors_per_heap =
         queried.resource_binding_tier >= package::kResourceBindingTier2
-            ? D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2
-            : D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
+            ? kMaxShaderVisibleDescriptorHeapSize
+            : kMaxShaderVisibleDescriptorHeapSize / 2u;
     queried.max_sampler_descriptors_per_heap =
-        D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
-    queried.max_root_signature_dword_cost = D3D12_MAX_ROOT_COST;
+        kMaxShaderVisibleSamplerHeapSize;
+    queried.max_root_signature_dword_cost = kD3d12MaxRootCost;
     queried.max_texture_2d_dimension =
         queried.max_feature_level >= package::kFeatureLevel12_0
-            ? D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION
+            ? kD3d12MaxTexture2dDimension
             : package::kMaxTexture2dDimension;
     queried.max_compute_threads_per_group =
         queried.max_feature_level >= package::kFeatureLevel12_0
@@ -990,8 +964,19 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
         if (SUCCEEDED(device->CheckFeatureSupport(
                 D3D12_FEATURE_FORMAT_SUPPORT, &support,
                 sizeof(support)))) {
-            const UINT flags1 = support.OutFormatSupport1;
-            const UINT flags2 = support.OutFormatSupport2;
+            // D3D12_FEATURE_DATA_FORMAT_SUPPORT is { DXGI_FORMAT, UINT, UINT }.
+            // Read the two support masks through their ABI-stable offsets so
+            // this remains compatible with SDK headers that name the members
+            // Support1/Support2 or OutFormatSupport1/OutFormatSupport2.
+            static_assert(sizeof(support) == 3u * sizeof(UINT),
+                          "unexpected D3D12 format-support layout");
+            UINT support_masks[2]{};
+            std::memcpy(support_masks,
+                        reinterpret_cast<const std::uint8_t*>(&support) +
+                            sizeof(DXGI_FORMAT),
+                        sizeof(support_masks));
+            const UINT flags1 = support_masks[0];
+            const UINT flags2 = support_masks[1];
             format.supported = flags1 != 0u;
             format.buffer =
                 (flags1 & D3D12_FORMAT_SUPPORT1_BUFFER) != 0u;
@@ -2145,7 +2130,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     return ExitCode::Success;
 }
 
-ExitCode PackagePlayer::initialize(const package::Package& package) {
+ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     if (initialized_ || initialization_count_ != 0u) {
         return Fail(ExitCode::InvalidArguments, "lifecycle",
                     "initialization_already_performed", "initialization",
@@ -2154,7 +2139,7 @@ ExitCode PackagePlayer::initialize(const package::Package& package) {
     }
     diagnostics_.clear();
     last_exit_ = ExitCode::Success;
-    package_ = package;
+    package_ = pkg;
     package_sha256_.clear();
     stats_ = PlayerAllocationStats{};
     plan_ = ResourcePlan{};
@@ -2324,7 +2309,7 @@ ExitCode PackagePlayer::renderAtTick(std::uint64_t tick) {
             return ExitCode::Success;
         }
     }
-    if (minimized_ || width_ == 0u || height_ == 0u) {
+    if (minimized_ || suspended_ || width_ == 0u || height_ == 0u) {
         suspended_ = true;
         return ExitCode::Success;
     }

@@ -12,7 +12,7 @@ namespace {
 
 CapabilityRequirementFailure PackageDiagnosticToFailure(
     const package::Diagnostic& diagnostic,
-    const package::Package& package) {
+    const package::Package& pkg) {
     CapabilityRequirementFailure failure{};
     failure.code = diagnostic.code.empty() ? "package_validation"
                                            : diagnostic.code;
@@ -22,8 +22,8 @@ CapabilityRequirementFailure PackageDiagnosticToFailure(
     failure.observed_value = diagnostic.has_offset
                                  ? "offset=" + std::to_string(diagnostic.offset)
                                  : "invalid";
-    failure.profile_id = package.capability.profile_id;
-    failure.requirements_digest = package.capability.requirements_digest;
+    failure.profile_id = pkg.capability.profile_id;
+    failure.requirements_digest = pkg.capability.requirements_digest;
     failure.detail = diagnostic.message;
     return failure;
 }

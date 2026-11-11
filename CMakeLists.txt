@@ -71,16 +71,6 @@ target_link_libraries(nw_compute_shader_fixture PRIVATE nw_player_bootstrap)
 nw_apply_player_profile(nw_compute_shader_fixture)
 nw_attach_dependency_check(nw_compute_shader_fixture "compute_shader")
 
-# NW-04: package-driven compute + fullscreen-display player fixture.  The
-# fixture consumes the established NW-03 `.nwp` v1 container and never links
-# compiler/editor/reflection tooling.
-add_executable(nw_package_player_fixture
-    fixtures/nw04_package_player/main.cpp
-)
-target_link_libraries(nw_package_player_fixture PRIVATE nw_player_bootstrap)
-nw_apply_player_profile(nw_package_player_fixture)
-nw_attach_dependency_check(nw_package_player_fixture "package_player")
-
 # NW-02: authoring/compiler-side typed operator graph. This target is portable
 # and deliberately has no D3D12/DXGI or player dependency.
 add_library(nw_graph STATIC
@@ -118,8 +108,9 @@ target_include_directories(nw_package PUBLIC
 target_compile_features(nw_package PUBLIC cxx_std_20)
 
 # The player consumes the same immutable `.nwp` v1 implementation with the
-# player build profile (static release CRT, exceptions/RTTI disabled), so its
-# release import closure never acquires a diagnostics/compiler runtime.
+# player runtime/flags, but without the authoring-side warning surface.  Keeping
+# this as a separate archive also prevents the compiler-facing `nw_package`
+# target from changing the player's release CRT/import closure.
 add_library(nw_package_player STATIC
     src/package/nwp_format.cpp
 )
@@ -128,15 +119,26 @@ target_include_directories(nw_package_player PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
 )
 target_compile_features(nw_package_player PUBLIC cxx_std_20)
+if(NW_BUILD_PROFILE STREQUAL "dev")
+    set_property(TARGET nw_package_player PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
+else()
+    set_property(TARGET nw_package_player PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    target_compile_definitions(nw_package_player PRIVATE NDEBUG)
+endif()
 if(MSVC)
-    if(NW_BUILD_PROFILE STREQUAL "dev")
-        set_property(TARGET nw_package_player PROPERTY
-            MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
-    else()
-        set_property(TARGET nw_package_player PROPERTY
-            MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    target_compile_options(nw_package_player PRIVATE
+        /EHs-c-
+        /GR-
+        /GS
+        /Brepro
+    )
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(nw_package_player PRIVATE
+            /clang:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.
+        )
     endif()
-    target_compile_options(nw_package_player PRIVATE /EHs-c- /GR- /GS)
     target_compile_definitions(nw_package_player PRIVATE
         _HAS_EXCEPTIONS=0
         WIN32_LEAN_AND_MEAN
@@ -148,7 +150,19 @@ else()
         -fno-rtti
     )
 endif()
-target_link_libraries(nw_player_bootstrap PUBLIC nw_package_player)
+
+# NW-04: package-driven compute + fullscreen-display player fixture.  The
+# fixture consumes the established NW-03 `.nwp` v1 container and never links
+# compiler/editor/reflection tooling.
+add_executable(nw_package_player_fixture
+    fixtures/nw04_package_player/main.cpp
+)
+target_link_libraries(nw_package_player_fixture PRIVATE
+    nw_player_bootstrap
+    nw_package_player
+)
+nw_apply_player_profile(nw_package_player_fixture)
+nw_attach_dependency_check(nw_package_player_fixture "package_player")
 
 add_library(nw_compiler STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
     src/compiler/nw_compiler.cpp

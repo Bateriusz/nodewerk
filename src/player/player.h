@@ -10,5 +10,6 @@
 namespace nw::player {
 
 using Player = PackagePlayer;
+const char* PlayerRuntimeName() noexcept;
 
 } // namespace nw::player
