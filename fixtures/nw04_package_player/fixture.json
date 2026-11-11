@@ -1,0 +1,19 @@
+{
+  "fixture_id": "package_player",
+  "target_name": "nw_package_player_fixture",
+  "executable_name": "nw_package_player_fixture.exe",
+  "description": "Package-only NW-03 .nwp v1 compute and fullscreen-display player fixture with exact capability validation, bounded frames in flight, and ordered package instruction execution.",
+  "entry_point": "fixtures/nw04_package_player/main.cpp",
+  "package_fixture": "fixtures/nw04/compute_display.nwp",
+  "requires_offline_shaders": true,
+  "requires_dxc_at_runtime": false,
+  "requires_agility_sdk_redist": false,
+  "supports_d3d12_validation": true,
+  "expected_release_imports": [
+    "kernel32.dll",
+    "user32.dll",
+    "gdi32.dll",
+    "d3d12.dll",
+    "dxgi.dll"
+  ]
+}

@@ -35,6 +35,7 @@ Because player and measurement fixture builds disable C++ exceptions (`/EHs-c-`,
 | `52` | `GpuSubmissionFailed` | `gpu_execution_and_validation` | `ID3D12CommandQueue::Signal`, `ID3D12Fence::SetEventOnCompletion`, or a non-timeout event wait failed. |
 | `60` | `ComputeVerificationFailed` | `gpu_execution_and_validation` | GPU compute readback buffer did not match expected deterministic `LCG ^ SeedMask` output. |
 | `61` | `D3D12ValidationError` | `gpu_execution_and_validation` | The D3D12 debug layer stored an error or corruption message in `ID3D12InfoQueue`; the run fails even when the process otherwise returned zero. |
+| `70` | `PackageValidationFailed` | `package_validation` | The bounded `.nwp` v1 reader rejected a malformed, contradictory, unknown, or unsupported package requirement before bulk GPU resource allocation. |
 
 ## 2. Development Diagnostics Format
 
@@ -89,3 +90,29 @@ records the measured DXC version, DXIL byte size, and DXIL SHA-256 in
 manifest evidence is verified and the deployed compute executable embeds a valid DXIL
 container whose size and SHA-256 match the recorded manifest. Missing DXC or missing build output remains
 `verification_status: "unverified"` rather than being reported as a passing result.
+
+## 6. NW-04 Package-Player Diagnostics
+
+`PackagePlayer` reports failures through the same stable exit-code categories and a
+machine-readable diagnostic record. Package decoding and exact emitted-requirement
+defects use `PackageValidationFailed` (`70`, category `package_validation`). Adapter
+capability mismatches keep the established `CapabilityBaselineUnmet` (`23`, category
+`device_and_capability`). Resource realization, pipeline, submission, and device-removal
+failures use `ResourceAllocationFailed` (`33`), `PipelineStateCreationFailed` (`42`),
+`GpuSubmissionFailed` (`52`), and `DeviceRemoved` (`51`) respectively.
+
+Each diagnostic identifies the unmet requirement, the required value, the observed
+value or `unavailable` state, the package profile ID and requirements digest, and the
+failure stage:
+
+```text
+[NW-DIAG][category=package_capability][code=package_capability_feature_level]
+[stage=capability_validation][profile_id=nw.common.d3d12.fl12_0.sm6_0.v1]
+[requirements_digest=sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a]
+[requirement=feature_level][required=0xC000][observed=0xB000]
+detail="adapter feature level is below the exact package requirement"
+```
+
+The player validates package structure and exact emitted requirements before creating the
+swap chain or any package resource. Adapter names, marketing generations, evidence-tier
+labels, and PCI identifiers are recorded metadata only and never affect eligibility.

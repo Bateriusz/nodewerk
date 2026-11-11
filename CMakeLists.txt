@@ -23,10 +23,19 @@ add_library(nw_player_bootstrap STATIC
     src/player/diagnostics.cpp
     src/player/capability_check.cpp
     src/player/d3d12_bootstrap.cpp
+    src/player/capability_requirements.cpp
+    src/player/package_loader.cpp
+    src/player/resource_plan.cpp
+    src/player/player_instrumentation.cpp
+    src/player/package_player.cpp
+    src/player/player.cpp
+    src/platform/win32_window.cpp
 )
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
 )
 nw_apply_player_profile(nw_player_bootstrap)
 add_dependencies(nw_player_bootstrap nw_offline_shaders)
@@ -36,6 +45,7 @@ if(WIN32)
         d3d12
         dxgi
         user32
+        gdi32
         kernel32
     )
 endif()
@@ -60,6 +70,16 @@ add_executable(nw_compute_shader_fixture
 target_link_libraries(nw_compute_shader_fixture PRIVATE nw_player_bootstrap)
 nw_apply_player_profile(nw_compute_shader_fixture)
 nw_attach_dependency_check(nw_compute_shader_fixture "compute_shader")
+
+# NW-04: package-driven compute + fullscreen-display player fixture.  The
+# fixture consumes the established NW-03 `.nwp` v1 container and never links
+# compiler/editor/reflection tooling.
+add_executable(nw_package_player_fixture
+    fixtures/nw04_package_player/main.cpp
+)
+target_link_libraries(nw_package_player_fixture PRIVATE nw_player_bootstrap)
+nw_apply_player_profile(nw_package_player_fixture)
+nw_attach_dependency_check(nw_package_player_fixture "package_player")
 
 # NW-02: authoring/compiler-side typed operator graph. This target is portable
 # and deliberately has no D3D12/DXGI or player dependency.
@@ -96,6 +116,39 @@ target_include_directories(nw_package PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
 )
 target_compile_features(nw_package PUBLIC cxx_std_20)
+
+# The player consumes the same immutable `.nwp` v1 implementation with the
+# player build profile (static release CRT, exceptions/RTTI disabled), so its
+# release import closure never acquires a diagnostics/compiler runtime.
+add_library(nw_package_player STATIC
+    src/package/nwp_format.cpp
+)
+target_include_directories(nw_package_player PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+)
+target_compile_features(nw_package_player PUBLIC cxx_std_20)
+if(MSVC)
+    if(NW_BUILD_PROFILE STREQUAL "dev")
+        set_property(TARGET nw_package_player PROPERTY
+            MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
+    else()
+        set_property(TARGET nw_package_player PROPERTY
+            MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    endif()
+    target_compile_options(nw_package_player PRIVATE /EHs-c- /GR- /GS)
+    target_compile_definitions(nw_package_player PRIVATE
+        _HAS_EXCEPTIONS=0
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+else()
+    target_compile_options(nw_package_player PRIVATE
+        -fno-exceptions
+        -fno-rtti
+    )
+endif()
+target_link_libraries(nw_player_bootstrap PUBLIC nw_package_player)
 
 add_library(nw_compiler STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
     src/compiler/nw_compiler.cpp

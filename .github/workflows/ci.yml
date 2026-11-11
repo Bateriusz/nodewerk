@@ -33,6 +33,9 @@ jobs:
       - name: Run NW-03 package/oracle/lowering contract checks
         run: python tools/verify_nw03.py --mode ContractsOnly --summary-json "$RUNNER_TEMP/nw03-contracts.json"
 
+      - name: Run NW-04 package-player contract checks
+        run: python tools/verify_nw04.py --mode ContractsOnly --summary-json "$RUNNER_TEMP/nw04-contracts.json"
+
       - name: Run NW-01 ContractsOnly verification
         run: python tools/verify_nw01.py --mode ContractsOnly
 
@@ -90,6 +93,9 @@ jobs:
 
       - name: Run NW-01 contract test suite on Windows
         run: pytest -v
+
+      - name: Run NW-04 package-player contract checks on Windows
+        run: python tools/verify_nw04.py --mode ContractsOnly --summary-json "$env:RUNNER_TEMP\nw04-contracts.json"
 
       - name: Run NW-01 Windows harness behaviour tests (required)
         env:
@@ -150,6 +156,22 @@ jobs:
           -SummaryPath "$env:RUNNER_TEMP\nw01-full-mode.json"
           -ExportGitHubEnv
 
+      - name: Capture NW-04 player evidence when artifacts are available
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $fixture = Get-ChildItem -Path . -Recurse -Filter nw_package_player_fixture.exe -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          $package = Get-ChildItem -Path . -Recurse -Filter '*.nwp' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notlike '*fixtures\nw04*' } |
+            Select-Object -First 1
+          if ($null -eq $fixture -or $null -eq $package) {
+            Write-Host "[NW04-EVIDENCE] player/package artifacts unavailable; Ada/Blackwell evidence remains pending_unverified."
+            exit 0
+          }
+          pwsh ./tools/nw01/capture-nw04-player.ps1 -Fixture $fixture.FullName -Package $package.FullName -Tier ada
+
       - name: Package verified CleanSystem deployment
         if: always() && env.NW_FULL_SUMMARY != ''
         shell: pwsh
@@ -188,6 +210,7 @@ jobs:
             benchmarks/ledgers/*.json
             benchmarks/toolchain-manifest.v1.json
             benchmarks/hardware/*.json
+            benchmarks/nw04-hardware-evidence.json
             benchmarks/clean-system/*.json
           if-no-files-found: warn
           retention-days: 14

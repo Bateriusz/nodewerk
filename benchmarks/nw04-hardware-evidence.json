@@ -1,0 +1,26 @@
+{
+  "executions": [],
+  "policy": "Historical NW-01 measurements cannot certify NW-04 artifacts. Missing coverage stays pending/unverified; executed failures remain failures. Adapter names, marketing generations, evidence tiers, and PCI identifiers are metadata only.",
+  "qualifications": {
+    "ada": {
+      "hardware_tier": "desktop_ada_representative",
+      "reason": "No representative desktop Ada execution is recorded for the NW-04 player/package artifacts.",
+      "status": "pending_unverified"
+    },
+    "blackwell": {
+      "hardware_tier": "desktop_blackwell_representative",
+      "reason": "No representative desktop Blackwell execution is recorded for the NW-04 player/package artifacts.",
+      "status": "pending_unverified"
+    }
+  },
+  "schema_version": "1.0.0",
+  "task": "NW-04",
+  "toolchain_manifest_sha256": "db69fcc46d6c2ac4003cfff52c37e7c9b6fdbbe7762c0615d2b69dcfa4e449e3",
+  "unavailable_telemetry": [
+    "driver_version",
+    "wddm_version",
+    "cpu_submit_ms",
+    "gpu_ms"
+  ],
+  "verification_status": "pending_unverified"
+}

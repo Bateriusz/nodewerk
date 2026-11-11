@@ -43,6 +43,14 @@ enum class ExitCode : int {
     GpuSubmissionFailed = 52,
     ComputeVerificationFailed = 60,
     D3D12ValidationError = 61,
+
+    // Package contract (70-79)
+    //
+    // The bounded `.nwp` v1 reader rejects malformed, contradictory, unknown,
+    // or unsupported package requirements before bulk GPU resource allocation.
+    // Capability mismatches against the queried adapter keep using the
+    // established CapabilityBaselineUnmet (23) category.
+    PackageValidationFailed = 70,
 };
 
 constexpr const char* ExitCodeName(ExitCode code) noexcept {
@@ -73,6 +81,7 @@ constexpr const char* ExitCodeName(ExitCode code) noexcept {
         case ExitCode::GpuSubmissionFailed: return "GpuSubmissionFailed";
         case ExitCode::ComputeVerificationFailed: return "ComputeVerificationFailed";
         case ExitCode::D3D12ValidationError: return "D3D12ValidationError";
+        case ExitCode::PackageValidationFailed: return "PackageValidationFailed";
     }
     return "UnknownExitCode";
 }
@@ -85,6 +94,7 @@ constexpr const char* ExitCodeCategory(ExitCode code) noexcept {
     if (value >= 30 && value <= 39) return "resource_and_queue_init";
     if (value >= 40 && value <= 49) return "offline_shader_and_pipeline";
     if (value >= 50 && value <= 69) return "gpu_execution_and_validation";
+    if (value >= 70 && value <= 79) return "package_validation";
     return "unclassified";
 }
 
@@ -106,6 +116,8 @@ constexpr const char* ExitCodeRecoverySemantics(ExitCode code) noexcept {
             return "Treat the run as unmeasured: ensure the fixture window is visible and unoccluded, then rerun. DXGI_STATUS_OCCLUDED must never be accepted as a successful visible-present measurement.";
         case ExitCode::OfflineShaderPayloadInvalid:
             return "Abort pipeline creation; do NOT fall back to runtime shader compilation (dxcompiler.dll / D3DCompile).";
+        case ExitCode::PackageValidationFailed:
+            return "Reject the package before GPU submission; inspect the structured package_validation diagnostics and rebuild it with the NW-03 compiler.";
         default:
             return "Abort execution cleanly, release allocated COM interfaces, emit dev diagnostic, and return distinct exit code.";
     }

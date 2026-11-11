@@ -33,6 +33,18 @@ The historical tier identifiers remain verifier/API compatibility names. GPU eli
 capability/hardware-class based; CPU model is recorded evidence and generic host strings are not
 accepted as a substitute for a measured CPU model.
 
+## NW-04 Player Qualification
+
+NW-04 reuses the same evidence harness without reusing historical NW-01 measurements as
+certification. A physical host records the executed NW-04 player/package artifacts through
+`pwsh tools/nw01/capture-nw04-player.ps1 -Fixture <player.exe> -Package <real.nwp> -Tier ada`
+(or `blackwell`). The record includes adapter identity metadata, Windows build, queried
+capabilities, profile ID/digest, player/package hashes and sizes, toolchain provenance, CPU
+submission timing, and explicitly unavailable telemetry. Missing Ada or Blackwell coverage stays
+`pending_unverified`; an executed failure stays a failure. Adapter names, marketing generations,
+evidence tiers, and PCI identifiers remain metadata only and never select a package or player
+path.
+
 ## 1. Bootstrap the Full host
 
 From an ordinary PowerShell terminal in the repository:
