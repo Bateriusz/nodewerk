@@ -402,9 +402,12 @@ def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
     assert decisions["roughness"]["requested_mode"] == "bake"
     assert decisions["roughness"]["automatic_cost_oracle"] is False
     assert "no runtime consumer" in decisions["roughness"]["reason"]
-    assert decisions["roughness"]["incremental_compressed_content_bytes"] > 0
-    assert decisions["roughness"]["startup_cost_bytes"] > 0
-    assert decisions["roughness"]["peak_memory_bytes"] > 0
+    assert decisions["roughness"]["incremental_compressed_content_bytes"] == 0
+    assert decisions["roughness"]["startup_cost_bytes"] == 0
+    assert decisions["roughness"]["introduced_code_bytes"] > 0
+    assert decisions["roughness"]["requested_bake_compressed_bytes"] > 0
+    assert decisions["roughness"]["requested_bake_startup_bytes"] > 0
+    assert decisions["roughness"]["requested_bake_peak_memory_bytes"] > 0
     assert decisions["roughness"]["baked_content_emitted_bytes"] == 0
     assert decisions["shade"]["mode"] == "generate"
     assert "unsupported" in decisions["shade"]["reason"]

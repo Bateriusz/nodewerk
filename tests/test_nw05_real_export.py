@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import struct
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw05_export  # noqa: E402
 import nw03_compiler  # noqa: E402
+import nw03_oracle  # noqa: E402
 import nw05_optimizer  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 
@@ -79,6 +81,7 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
         optimized.materialize_document()
     )
     assert not diagnostics
+    assert len(generated) == 1
     expected_hlsl = {shader.hlsl_sha256 for shader in generated}
     manifest_hlsl = {
         item["hlsl_sha256"]
@@ -110,7 +113,13 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
         for resource in decoded.resources
     )
     completed = subprocess.run(
-        [str(executable), "--frames", "1", "--allow-software-adapter"],
+        [
+            str(executable),
+            "--frames",
+            "1",
+            "--allow-software-adapter",
+            "--emit-image-hash",
+        ],
         capture_output=True,
         text=True,
         timeout=180,
@@ -121,3 +130,41 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     )
     assert "NW05_FRAMES=1" in completed.stdout
     assert "NW05_PRESENTS=1" in completed.stdout
+    expression = nw03_oracle.parse_expression(
+        generated[0].root_expression
+    )
+    expected_bytes = bytearray()
+    for x in range(256):
+        value = nw03_oracle.evaluate(
+            expression,
+            variables={"uv": ((x + 0.5) / 256.0, 0.5), "time": 0.0, "seed": 0.0},
+            float32=True,
+        )
+        components = value if isinstance(value, tuple) else (value,)
+        expected_bytes.extend(
+            struct.pack("<" + "f" * len(components), *components)
+        )
+    expected_hash = 1469598103934665603
+    for byte in expected_bytes:
+        expected_hash ^= byte
+        expected_hash = (expected_hash * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    assert f"NW05_IMAGE_BYTES={len(expected_bytes)}" in completed.stdout
+    assert f"NW05_IMAGE_FNV64={expected_hash:016x}" in completed.stdout
+    non_aliased = subprocess.run(
+        [
+            str(executable),
+            "--frames",
+            "1",
+            "--allow-software-adapter",
+            "--force-non-aliased-plan",
+            "--emit-image-hash",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert non_aliased.returncode == 0, (
+        non_aliased.stdout + "\n" + non_aliased.stderr
+    )
+    assert f"NW05_IMAGE_FNV64={expected_hash:016x}" in non_aliased.stdout

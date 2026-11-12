@@ -150,10 +150,12 @@ baked payloads. An explicit bake request therefore retains the correct
 generated path and records `"bake has no runtime consumer..."`; it never emits
 unused parameter blobs that merely increase package size. The decision still
 records `requested_mode: "bake"`, `mode: "generate"`,
-`incremental_compressed_content_bytes`, `startup_cost_bytes`, and
-`peak_memory_bytes` so the explicit override can be compared honestly without
-an automatic oracle. Reducing generation for a node requires adding an actual
-consumer in a future runtime extension. Generation remains the default.
+`incremental_compressed_content_bytes`, `startup_cost_bytes`,
+`peak_memory_bytes`, and the hypothetical `requested_bake_*` fields, while the
+actual generated path records its own introduced code/shader bytes. The two
+sides are therefore compared honestly without mixing metrics. Reducing
+generation for a node requires adding an actual consumer in a future runtime
+extension. Generation remains the default.
 
 ## Capability-profile artifacts and budgets
 

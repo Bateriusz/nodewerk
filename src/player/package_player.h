@@ -45,6 +45,9 @@ struct PlayerConfig {
     bool simulate_presentation_failure = false;
     bool emit_benchmark_metrics = false;
     bool emit_readback_values = false;
+    // Diagnostic/qualification seam: force the established non-aliased
+    // committed realization even when the package has a proven alias plan.
+    bool force_non_aliased_plan = false;
     bool wait_for_gpu_each_frame = false;
 };
 
@@ -98,6 +101,9 @@ public:
                         std::size_t size_bytes);
     ExitCode initializeFromFile(const char* package_path);
     ExitCode renderAtTick(std::uint64_t tick);
+    // Reads back the exact resource target of frame.present.  Diagnostic/
+    // qualification only; returns the bytes written by the package shader.
+    ExitCode readbackPresentedOutput(std::vector<std::uint8_t>* bytes);
     ExitCode resize(std::uint32_t width, std::uint32_t height);
     ExitCode shutdown();
 

@@ -3676,6 +3676,152 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     return ExitCode::Success;
 }
 
+ExitCode PackagePlayer::readbackPresentedOutput(
+    std::vector<std::uint8_t>* bytes) {
+    if (bytes == nullptr) {
+        return Fail(ExitCode::InvalidArguments, "readback",
+                    "readback_buffer_missing", "destination", "available",
+                    "null", "readback", "readback destination is null");
+    }
+    bytes->clear();
+    if (!initialized_ || present_resource_id_ == 0u) {
+        return Fail(ExitCode::InvalidArguments, "readback",
+                    "readback_before_initialize", "initialized", "true",
+                    "false", "readback",
+                    "image readback requires an initialized presented output");
+    }
+#if defined(_WIN32)
+    PlatformState* state = platform_.get();
+    if (state == nullptr || state->device == nullptr ||
+        state->queue == nullptr || state->frames.empty()) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "readback_platform_unavailable", "device/queue",
+                    "available", "unavailable", "readback",
+                    "image readback requires the native D3D12 device");
+    }
+    const ExitCode drained = WaitForAllFrames("readback_image");
+    if (drained != ExitCode::Success) return drained;
+    PlatformState::ResourceSlot* source = nullptr;
+    for (auto& candidate : state->resources) {
+        if (candidate.resource_id == present_resource_id_) {
+            source = &candidate;
+            break;
+        }
+    }
+    const ResourcePlacement* placement = plan_.Find(present_resource_id_);
+    if (source == nullptr || source->resource == nullptr ||
+        placement == nullptr || placement->descriptor.kind != "buffer" ||
+        placement->descriptor.size_bytes == 0u) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "readback_source_missing", "present_resource",
+                    std::to_string(present_resource_id_), "unavailable",
+                    "readback",
+                    "presented output is not a readable buffer resource");
+    }
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = placement->descriptor.size_bytes;
+    desc.Height = 1u;
+    desc.DepthOrArraySize = 1u;
+    desc.MipLevels = 1u;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1u;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    ID3D12Resource* readback = nullptr;
+    if (FAILED(state->device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&readback))) ||
+        readback == nullptr) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "readback_allocation_failed", "readback", "created",
+                    "failed", "readback",
+                    "readback buffer allocation failed");
+    }
+    NoteEngineAllocation(placement->allocation_size_bytes, 0u, false, false,
+                         true);
+    auto& frame = state->frames[0];
+    const D3D12_RESOURCE_STATES previous_state = source->state;
+    auto cleanup = [&]() {
+        if (readback != nullptr) readback->Release();
+        RemoveEngineResourceAllocation(placement->allocation_size_bytes);
+    };
+    if (frame.allocator == nullptr || frame.command_list == nullptr) {
+        cleanup();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "readback_command_list_unavailable", "command_list",
+                    "available", "unavailable", "readback",
+                    "readback command list is unavailable");
+    }
+    if (FAILED(frame.allocator->Reset()) ||
+        FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
+        cleanup();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "readback_reset_failed", "reset", "succeeded", "failed",
+                    "readback", "readback command list reset failed");
+    }
+    D3D12_RESOURCE_BARRIER to_copy{};
+    to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    to_copy.Transition.pResource = source->resource;
+    to_copy.Transition.StateBefore = previous_state;
+    to_copy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    to_copy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    frame.command_list->ResourceBarrier(1u, &to_copy);
+    frame.command_list->CopyBufferRegion(
+        readback, 0u, source->resource, 0u,
+        placement->descriptor.size_bytes);
+    D3D12_RESOURCE_BARRIER restore = to_copy;
+    restore.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    restore.Transition.StateAfter = previous_state;
+    frame.command_list->ResourceBarrier(1u, &restore);
+    if (FAILED(frame.command_list->Close())) {
+        cleanup();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "readback_close_failed", "closed", "closed", "failed",
+                    "readback", "readback command list close failed");
+    }
+    ID3D12CommandList* lists[] = {frame.command_list};
+    state->queue->ExecuteCommandLists(1u, lists);
+    const std::uint64_t fence_value = next_fence_value_++;
+    if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+        cleanup();
+        return Fail(ExitCode::GpuSubmissionFailed, "readback",
+                    "readback_signal_failed", "signal", "succeeded", "failed",
+                    "readback", "readback queue signal failed");
+    }
+    const ExitCode wait = WaitForFenceValue(
+        state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
+    if (wait != ExitCode::Success) {
+        cleanup();
+        return wait;
+    }
+    void* mapped = nullptr;
+    D3D12_RANGE range{0u, static_cast<SIZE_T>(
+                               placement->descriptor.size_bytes)};
+    if (FAILED(readback->Map(0u, &range, &mapped)) || mapped == nullptr) {
+        cleanup();
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "readback_map_failed", "mapped", "available", "failed",
+                    "readback", "readback buffer Map failed");
+    }
+    bytes->assign(
+        static_cast<const std::uint8_t*>(mapped),
+        static_cast<const std::uint8_t*>(mapped) +
+            placement->descriptor.size_bytes);
+    D3D12_RANGE empty{0u, 0u};
+    readback->Unmap(0u, &empty);
+    cleanup();
+    return ExitCode::Success;
+#else
+    return Fail(ExitCode::InvalidArguments, "readback",
+                "readback_requires_native_device", "device", "D3D12",
+                "unavailable", "readback",
+                "image readback is a native Windows qualification path");
+#endif
+}
+
 ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     if (initialized_ || initialization_count_ != 0u) {
         return Fail(ExitCode::InvalidArguments, "lifecycle",
@@ -3812,7 +3958,11 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     // alias group: use ordinary committed resources and the non-aliased plan.
     // The placed heap path is only entered when the adapter-query proof
     // actually found a fence-safe transient reuse.
-    if (plan_result.exit_code == ExitCode::Success &&
+    if (config_.force_non_aliased_plan) {
+        plan_result =
+            BuildNonAliasedResourcePlan(package_, query, query_user_data);
+        using_aliased_plan_ = false;
+    } else if (plan_result.exit_code == ExitCode::Success &&
         (std::none_of(plan_result.plan.placements.begin(),
                       plan_result.plan.placements.end(),
                       [](const ResourcePlacement& placement) {

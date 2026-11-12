@@ -540,9 +540,9 @@ def plan_generation_vs_bake(
         payload = nwp.canonical_json_bytes(node.to_dict())
         compressed = zlib.compress(payload, level=9)
         bake_requested = requested_mode == "bake"
-        baked_bytes = (
+        bake_bytes = (
             ((len(compressed) + 15) // 16) * 16
-            if bake_requested and mode == "bake"
+            if mode == "bake"
             else 0
         )
         decisions.append(
@@ -554,22 +554,31 @@ def plan_generation_vs_bake(
                 "replaces_generation": mode == "bake",
                 "reason": reason,
                 "incremental_compressed_content_bytes": (
-                    len(compressed) if bake_requested else 0
+                    len(compressed) if mode == "bake" else 0
                 ),
                 "introduced_code_bytes": (
-                    0 if bake_requested else len(payload)
+                    0 if mode == "bake" else len(payload)
                 ),
                 "introduced_shader_bytes": (
                     0
-                    if bake_requested
+                    if mode == "bake"
                     or node.operator_id not in nw03.SHADER_OPERATORS
                     else shader_blob_bytes
                 ),
-                "startup_cost_bytes": len(compressed) if bake_requested else 0,
+                "startup_cost_bytes": len(compressed) if mode == "bake" else 0,
                 "peak_memory_bytes": (
-                    len(compressed) if bake_requested else len(payload)
+                    len(compressed) if mode == "bake" else len(payload)
                 ),
-                "baked_content_emitted_bytes": baked_bytes,
+                "baked_content_emitted_bytes": bake_bytes,
+                "requested_bake_compressed_bytes": (
+                    len(compressed) if bake_requested else 0
+                ),
+                "requested_bake_startup_bytes": (
+                    len(compressed) if bake_requested else 0
+                ),
+                "requested_bake_peak_memory_bytes": (
+                    len(compressed) if bake_requested else 0
+                ),
                 "measured_expression_bytes": len(payload),
                 "automatic_cost_oracle": False,
             }
@@ -632,7 +641,8 @@ def generate_player_source(
         "#include \"player/exit_codes.h\"\n"
         "#include <cstdio>\n"
         "#include <cstdlib>\n"
-        "#include <string>\n\n"
+        "#include <string>\n"
+        "#include <vector>\n\n"
         "int main(int argc, char** argv) {\n"
         "    nw::player::EmbeddedPackage embedded;\n"
         "    if (!nw::player::LoadEmbeddedPackage(&embedded)) {\n"
@@ -642,11 +652,16 @@ def generate_player_source(
         "    nw::player::PlayerConfig config;\n"
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
         "    unsigned long long max_frames = 0;\n"
+        "    bool emit_image_hash = false;\n"
         "    for (int index = 1; index < argc; ++index) {\n"
         "        if (std::string(argv[index]) == \"--frames\" && index + 1 < argc) {\n"
         "            max_frames = std::strtoull(argv[++index], nullptr, 10);\n"
         "        } else if (std::string(argv[index]) == \"--allow-software-adapter\") {\n"
         "            config.allow_software_adapter = true;\n"
+        "        } else if (std::string(argv[index]) == \"--force-non-aliased-plan\") {\n"
+        "            config.force_non_aliased_plan = true;\n"
+        "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
+        "            emit_image_hash = true;\n"
         "        }\n"
         "    }\n"
         "    nw::player::PackagePlayer player(config);\n"
@@ -655,6 +670,21 @@ def generate_player_source(
         "    for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick) {\n"
         "        const auto frame = player.renderAtTick(tick);\n"
         "        if (frame != nw::player::ExitCode::Success) return static_cast<int>(frame);\n"
+        "    }\n"
+        "    if (emit_image_hash) {\n"
+        "        std::vector<std::uint8_t> image;\n"
+        "        const auto readback = player.readbackPresentedOutput(&image);\n"
+        "        if (readback != nw::player::ExitCode::Success) {\n"
+        "            std::fprintf(stderr, \"NW05_IMAGE_READBACK_FAILED=%d\\n\", static_cast<int>(readback));\n"
+        "            return static_cast<int>(readback);\n"
+        "        }\n"
+        "        std::uint64_t hash = 1469598103934665603ULL;\n"
+        "        for (const std::uint8_t byte : image) {\n"
+        "            hash ^= static_cast<std::uint64_t>(byte);\n"
+        "            hash *= 1099511628211ULL;\n"
+        "        }\n"
+        "        std::printf(\"NW05_IMAGE_BYTES=%llu\\n\", static_cast<unsigned long long>(image.size()));\n"
+        "        std::printf(\"NW05_IMAGE_FNV64=%016llx\\n\", static_cast<unsigned long long>(hash));\n"
         "    }\n"
         "    const auto shutdown = player.shutdown();\n"
         "    std::printf(\"NW05_FRAMES=%llu\\n\", static_cast<unsigned long long>(player.frames_rendered()));\n"
