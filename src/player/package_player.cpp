@@ -3606,19 +3606,27 @@ ExitCode PackagePlayer::renderAtTick(std::uint64_t tick) {
             window_closed_ = true;
             return ExitCode::Success;
         }
-        std::uint32_t client_width = 0u;
-        std::uint32_t client_height = 0u;
-        platform_->window.GetClientSize(&client_width, &client_height);
-        if (!platform_->window.IsMinimized() &&
-            (client_width != width_ || client_height != height_) &&
-            client_width > 0u && client_height > 0u) {
-            const ExitCode resize_code = resize(client_width, client_height);
-            if (resize_code != ExitCode::Success) return resize_code;
-        }
         if (platform_->window.IsMinimized()) {
             minimized_ = true;
             suspended_ = true;
             return ExitCode::Success;
+        }
+        // An explicit zero-sized resize represents a suspended presentation
+        // state even though Win32 may clamp the real client rect to its minimum
+        // tracking size.  Do not let that clamped rect auto-resume rendering;
+        // only a later non-zero resize or a real restore may do so.
+        if (width_ == 0u || height_ == 0u) {
+            minimized_ = true;
+            suspended_ = true;
+            return ExitCode::Success;
+        }
+        std::uint32_t client_width = 0u;
+        std::uint32_t client_height = 0u;
+        platform_->window.GetClientSize(&client_width, &client_height);
+        if ((client_width != width_ || client_height != height_) &&
+            client_width > 0u && client_height > 0u) {
+            const ExitCode resize_code = resize(client_width, client_height);
+            if (resize_code != ExitCode::Success) return resize_code;
         }
         // An ordinary minimize/restore can return to the exact same client
         // size, so resize() is not called.  Clear suspension on the restore
