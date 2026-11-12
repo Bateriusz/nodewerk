@@ -174,3 +174,98 @@ def test_adapter_query_is_required_for_realization() -> None:
     assert realization.adapter_identity == "query:test"
     assert realization.total_bytes > 0
 
+
+def test_alias_reuse_requires_candidate_allocation_capacity() -> None:
+    package = _transient_pair()
+    logical = schedule.build_logical_schedule(package, frames_in_flight=1)
+    realization = schedule.realize_physical_aliases(
+        logical,
+        package,
+        frames_in_flight=1,
+        allocation_query={
+            1: {"size_bytes": 65536, "alignment": 65536},
+            2: {"size_bytes": 131072, "alignment": 65536},
+        },
+        adapter_identity="query:test",
+    )
+    placements = {item.resource_id: item for item in realization.placements}
+    assert not placements[1].aliased
+    assert not placements[2].aliased
+    assert (
+        placements[1].byte_offset + placements[1].size_bytes
+        <= placements[2].byte_offset
+    )
+    assert realization.total_bytes >= (
+        placements[2].byte_offset + placements[2].size_bytes
+    )
+
+
+def test_alias_reuse_checks_every_occupant_of_a_range() -> None:
+    resource = nwp.ResourceDescriptor
+    instruction = nwp.Instruction
+    operand = nwp.InstructionOperand
+    package = nwp.NwpPackage(
+        resources=[
+            resource(
+                resource_id,
+                f"scratch_{resource_id}",
+                "buffer",
+                "DXGI_FORMAT_R32_UINT",
+                "uav",
+                "compute.math_noise",
+                size_bytes=4096,
+            )
+            for resource_id in (1, 2, 3)
+        ],
+        initialization=[
+            instruction("init.create_resource", (operand("resource_ref", resource_id),))
+            for resource_id in (1, 2, 3)
+        ],
+        frame=[
+            instruction(
+                "frame.copy_buffer",
+                (
+                    operand("resource_ref", 1),
+                    operand("resource_ref", 1),
+                    operand("u64", 64),
+                ),
+            ),
+            instruction(
+                "frame.copy_buffer",
+                (
+                    operand("resource_ref", 3),
+                    operand("resource_ref", 3),
+                    operand("u64", 64),
+                ),
+            ),
+            instruction(
+                "frame.copy_buffer",
+                (
+                    operand("resource_ref", 3),
+                    operand("resource_ref", 2),
+                    operand("u64", 64),
+                ),
+            ),
+        ],
+    )
+    logical = schedule.build_logical_schedule(package, frames_in_flight=1)
+    realization = schedule.realize_physical_aliases(
+        logical, package, frames_in_flight=1
+    )
+    placements = {item.resource_id: item for item in realization.placements}
+    # Resource 3 aliases resource 1, so resource 2 (live with resource 3) must
+    # not reuse the same range merely because resource 1 is already dead.
+    assert placements[3].byte_offset == placements[1].byte_offset
+    assert placements[2].byte_offset != placements[1].byte_offset
+    for left in realization.placements:
+        for right in realization.placements:
+            if left.resource_id >= right.resource_id:
+                continue
+            left_end = left.byte_offset + left.size_bytes
+            right_end = right.byte_offset + right.size_bytes
+            if left_end <= right.byte_offset or right_end <= left.byte_offset:
+                continue
+            left_logical = logical.resource(left.resource_id)
+            right_logical = logical.resource(right.resource_id)
+            assert not schedule.lifetimes_overlap(left_logical, right_logical)
+

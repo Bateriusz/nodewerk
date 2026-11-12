@@ -149,12 +149,29 @@ bool ParseEmbeddedPackage(const std::uint8_t* executable,
 }
 
 bool LoadEmbeddedPackage(EmbeddedPackage* package) {
-    std::vector<std::uint8_t> image;
-    if (!ReadCurrentImage(&image)) {
-        if (package != nullptr) *package = EmbeddedPackage{};
+    if (package == nullptr) return false;
+    *package = EmbeddedPackage{};
+    if (!ReadCurrentImage(&package->image)) {
+        *package = EmbeddedPackage{};
         return false;
     }
-    return ParseEmbeddedPackage(image.data(), image.size(), package);
+    EmbeddedPackage parsed{};
+    if (!ParseEmbeddedPackage(package->image.data(), package->image.size(),
+                              &parsed)) {
+        *package = EmbeddedPackage{};
+        return false;
+    }
+    const std::uint8_t* base = package->image.data();
+    const std::size_t package_offset =
+        static_cast<std::size_t>(parsed.bytes - base);
+    const std::size_t manifest_offset =
+        static_cast<std::size_t>(parsed.manifest - base);
+    package->bytes = base + package_offset;
+    package->size = parsed.size;
+    package->manifest = base + manifest_offset;
+    package->manifest_size = parsed.manifest_size;
+    package->valid = true;
+    return true;
 }
 
 bool BuildEmbeddedImage(const std::uint8_t* template_bytes,

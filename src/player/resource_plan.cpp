@@ -265,8 +265,40 @@ ResourcePlanResult BuildAliasedResourcePlan(
                     candidate.descriptor.kind != resource.kind) {
                     continue;
                 }
-                if (candidate.allocation_size_bytes + candidate.heap_offset_bytes >
-                    cursor) {
+                // A candidate's storage must be large enough for the incoming
+                // allocation; otherwise aliasing would spill beyond the
+                // proven region and under-size the aggregate heap.
+                if (candidate.allocation_size_bytes <
+                    allocation_it->second.size_bytes) {
+                    continue;
+                }
+                if (candidate.heap_offset_bytes %
+                        allocation_it->second.alignment != 0u) {
+                    continue;
+                }
+                if (candidate.heap_offset_bytes > cursor ||
+                    candidate.allocation_size_bytes >
+                        cursor - candidate.heap_offset_bytes) {
+                    continue;
+                }
+                // Every placement already sharing this region must also be
+                // dead for the incoming lifetime.  Checking only the first
+                // candidate would miss another transient aliased into the same
+                // bytes.
+                bool region_busy = false;
+                for (const auto& occupant : result.plan.placements) {
+                    if (occupant.frame_slot_instance != instance) continue;
+                    if (occupant.heap_offset_bytes !=
+                        candidate.heap_offset_bytes) {
+                        continue;
+                    }
+                    if (LifetimesOverlap(occupant.lifetime,
+                                         placement.lifetime)) {
+                        region_busy = true;
+                        break;
+                    }
+                }
+                if (region_busy) {
                     continue;
                 }
                 placement.heap_offset_bytes = candidate.heap_offset_bytes;
@@ -286,6 +318,12 @@ ResourcePlanResult BuildAliasedResourcePlan(
             if (!placement.aliased) {
                 cursor = CheckedAdd(cursor, allocation_it->second.size_bytes,
                                     &arithmetic_ok);
+            } else {
+                const std::uint64_t alias_end =
+                    CheckedAdd(placement.heap_offset_bytes,
+                               allocation_it->second.size_bytes,
+                               &arithmetic_ok);
+                cursor = std::max(cursor, alias_end);
             }
             if (placement.aliased) {
                 placement.kind = ResourcePlacementKind::AliasedTransient;

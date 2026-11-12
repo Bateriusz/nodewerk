@@ -832,24 +832,41 @@ def realize_physical_aliases(
             compatible, _reason = compatible_alias_group(
                 other, resource, frames_in_flight=1
             )
+            if not compatible or lifetimes_overlap(other, resource):
+                continue
+            # The candidate's queried allocation must be large enough for the
+            # incoming resource; otherwise the alias would spill into the next
+            # committed range and under-size the aggregate heap.
+            if candidate.size_bytes < requirement.size_bytes:
+                continue
             if (
-                compatible
-                and _round_up(candidate.byte_offset + candidate.size_bytes, requirement.alignment)
-                <= max(candidate.byte_offset + candidate.size_bytes, requirement.size_bytes)
-                and not lifetimes_overlap(other, resource)
+                requirement.alignment > 1
+                and candidate.byte_offset % requirement.alignment != 0
             ):
-                offset = candidate.byte_offset
-                reused = True
-                barriers.append(
-                    AliasBarrier(
-                        resource_id=resource.resource_id,
-                        before_resource_id=other.resource_id,
-                        group=group,
-                        reason="fence-safe alias reuse after prior lifetime",
-                        uav_barrier=other.usage == "uav" or resource.usage == "uav",
-                    )
+                continue
+            # Other transients may already alias this exact range.  Every
+            # occupant must be dead for the incoming lifetime, not just the
+            # first candidate visited.
+            if any(
+                item.group == group
+                and item.instance == instance
+                and item.byte_offset == candidate.byte_offset
+                and lifetimes_overlap(resource_by_id[item.resource_id], resource)
+                for item in placements
+            ):
+                continue
+            offset = candidate.byte_offset
+            reused = True
+            barriers.append(
+                AliasBarrier(
+                    resource_id=resource.resource_id,
+                    before_resource_id=other.resource_id,
+                    group=group,
+                    reason="fence-safe alias reuse after prior lifetime",
+                    uav_barrier=other.usage == "uav" or resource.usage == "uav",
                 )
-                break
+            )
+            break
         if not reused:
             offset = _round_up(
                 max((item.byte_offset + item.size_bytes for item in placements), default=0),

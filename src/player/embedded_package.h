@@ -20,11 +20,23 @@ inline constexpr std::uint32_t kEmbeddedVersion = 1u;
 inline constexpr std::size_t kEmbeddedFooterSize = 92u;
 
 struct EmbeddedPackage {
+    // Owns the executable image read by LoadEmbeddedPackage.  The `bytes` and
+    // `manifest` slices point into this buffer (or into caller-owned memory
+    // passed to ParseEmbeddedPackage), so copies are intentionally disabled to
+    // keep those pointers from outliving their backing storage.  A move
+    // transfers the buffer and leaves the slices valid.
+    std::vector<std::uint8_t> image;
     const std::uint8_t* bytes = nullptr;
     std::size_t size = 0u;
     const std::uint8_t* manifest = nullptr;
     std::size_t manifest_size = 0u;
     bool valid = false;
+
+    EmbeddedPackage() = default;
+    EmbeddedPackage(const EmbeddedPackage&) = delete;
+    EmbeddedPackage& operator=(const EmbeddedPackage&) = delete;
+    EmbeddedPackage(EmbeddedPackage&&) noexcept = default;
+    EmbeddedPackage& operator=(EmbeddedPackage&&) noexcept = default;
 };
 
 // Reads the currently executing image and returns the embedded package.  On
