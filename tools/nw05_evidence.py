@@ -199,9 +199,15 @@ def _run_player(
     timeout: int = 180,
 ) -> dict[str, Any]:
     started = time.monotonic()
+    command = [str(executable), *arguments]
+    # Evidence fixtures may be batch wrappers on Windows (a real specialized
+    # player is a PE executable and is invoked directly).  CreateProcess does
+    # not execute .cmd/.bat files itself.
+    if os.name == "nt" and executable.suffix.lower() in {".cmd", ".bat"}:
+        command = ["cmd", "/c", str(executable), *arguments]
     try:
         completed = subprocess.run(
-            [str(executable), *arguments],
+            command,
             capture_output=True,
             text=True,
             timeout=timeout,
