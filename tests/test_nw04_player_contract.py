@@ -815,7 +815,7 @@ def test_redundant_signature_selection_package_is_valid() -> None:
     ]
 
 
-def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
+def test_nw04_hardware_evidence_is_verified_and_schema_valid() -> None:
     from schema_validator import validate_file_against_schema
 
     evidence_path = REPO_ROOT / "benchmarks" / "nw04-hardware-evidence.json"
@@ -823,9 +823,38 @@ def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
     validate_file_against_schema(evidence_path, schema_path)
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["task"] == "NW-04"
-    assert evidence["verification_status"] == "pending_unverified"
+    assert evidence["verification_status"] == "verified"
+
+    executions = {
+        execution["hardware_tier"]: execution
+        for execution in evidence["executions"]
+    }
+    assert set(executions) == {"ada", "blackwell"}
+
+    player_hashes = set()
+    package_hashes = set()
     for tier in ("ada", "blackwell"):
-        assert evidence["qualifications"][tier]["status"] == "pending_unverified"
+        execution = executions[tier]
+        qualification = evidence["qualifications"][tier]
+
+        assert execution["execution_status"] == "passed"
+        assert execution["d3d12_validation_clean"] is True
+        assert execution["tier_verified"] is True
+        assert qualification["status"] == "verified"
+        assert qualification["generation_metadata"] == tier
+        assert qualification["player_sha256"] == execution["player"]["sha256"]
+        assert qualification["package_sha256"] == execution["package"]["sha256"]
+        assert qualification["profile_id"] == execution["package"]["profile_id"]
+        assert (
+            qualification["requirements_digest"]
+            == execution["package"]["requirements_digest"]
+        )
+
+        player_hashes.add(execution["player"]["sha256"])
+        package_hashes.add(execution["package"]["sha256"])
+
+    assert len(player_hashes) == 1
+    assert len(package_hashes) == 1
 
     completion = verify_nw04.check_hardware_evidence_complete(
         evidence_path,
