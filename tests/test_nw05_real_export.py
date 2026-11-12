@@ -76,8 +76,20 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     optimized = nw05_optimizer.optimize_graph(
         nw03_compiler.load_graph(PROCEDURAL)
     )
+    materialized = optimized.materialize_document()
+    graph_width, graph_height = nw05_export._graph_render_dimensions(
+        materialized, optimized
+    )
+    thread_group = (max(1, min(1024, graph_width)), 1, 1)
+    dispatch_groups = (
+        (graph_width + thread_group[0] - 1) // thread_group[0],
+        max(1, graph_height),
+        1,
+    )
     generated, diagnostics = nw03_compiler.lower_to_fused_hlsl(
-        optimized.materialize_document()
+        materialized,
+        thread_group=thread_group,
+        dispatch_groups=dispatch_groups,
     )
     assert not diagnostics
     assert len(generated) == 1
@@ -137,7 +149,7 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     assert image_bytes is not None
     assert nonzero is not None
     assert image_hash is not None
-    assert int(image_bytes.group(1)) == 256 * 16
+    assert int(image_bytes.group(1)) == graph_width * graph_height * 16
     assert int(nonzero.group(1)) > 0
     non_aliased = subprocess.run(
         [

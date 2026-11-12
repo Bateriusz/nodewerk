@@ -1929,7 +1929,18 @@ def _run_dxc(
     target: str,
     entry_point: str,
     optimization: str,
+    working_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    # DXC can retain the source filename in the DXIL module even after
+    # -Qstrip_debug.  Compile with a stable relative source/output name from a
+    # private working directory so two clean export directories do not produce
+    # path-dependent shader blobs.
+    source_argument = (
+        hlsl_path.name if working_directory is not None else str(hlsl_path)
+    )
+    output_argument = (
+        output_path.name if working_directory is not None else str(output_path)
+    )
     command = [
         *_dxc_command_prefix(dxc_bin),
         "-T",
@@ -1942,10 +1953,16 @@ def _run_dxc(
         "-Qstrip_reflect",
         "-Qstrip_debug",
         "-Fo",
-        str(output_path),
-        str(hlsl_path),
+        output_argument,
+        source_argument,
     ]
-    return subprocess.run(command, capture_output=True, text=True, check=False)
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(working_directory) if working_directory is not None else None,
+    )
 
 
 def compile_generated_shader(
@@ -1984,6 +2001,7 @@ def compile_generated_shader(
         target=shader.target,
         entry_point=shader.entry_point,
         optimization=optimization,
+        working_directory=hlsl_path.parent,
     )
     source = shader.specialization_id or (
         shader.source_map[0]["node_id"] if shader.source_map else ""
