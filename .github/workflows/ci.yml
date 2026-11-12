@@ -115,6 +115,18 @@ jobs:
           pwsh ./tools/nw01/run-build-checks.ps1
           -SummaryPath "$env:RUNNER_TEMP\nw01-build-checks.json"
 
+      - name: Verify real-PE NW-05 export reproducibility
+        shell: pwsh
+        run: |
+          $template = "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template -PathType Leaf)) {
+            cmake --build build/clang-cl-release --target nw_procedural_image_player
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $env:NW05_REAL_PLAYER_TEMPLATE = (Resolve-Path $template).Path
+          python -m pytest tests/test_nw05_real_export.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload NW-01 build-check evidence
         if: always()
         uses: actions/upload-artifact@v4

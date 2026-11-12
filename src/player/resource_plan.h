@@ -122,12 +122,16 @@ ResourceAllocationQuery SimulateResourceAllocation(
 // returned offsets remain runtime evidence, never portable package content.
 void* CreateAliasedResourceHeap(void* device,
                                 std::uint64_t heap_size_bytes,
+                                std::uint32_t heap_type,
                                 std::string* detail);
 bool CreateAliasedPlacedResource(void* heap,
                                  const ResourcePlacement& placement,
                                  void** resource,
                                  std::string* detail);
 void ReleaseAliasedResourceHeap(void* heap);
+// True when the resource either needs no placed allocation (sampler/readback)
+// or can be placed in the default heap with a supported format.
+bool IsPlaceableAliasResource(const package::ResourceDescriptor& resource);
 void EmitAliasingBarrier(void* command_list,
                          const ResourceAliasBarrier& barrier,
                          void* before_resource,

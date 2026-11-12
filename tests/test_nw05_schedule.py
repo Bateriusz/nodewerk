@@ -187,6 +187,20 @@ def test_adapter_query_is_required_for_realization() -> None:
     assert realization.total_bytes > 0
 
 
+def test_pending_realization_never_invents_physical_offsets() -> None:
+    package = _transient_pair()
+    logical = schedule.build_logical_schedule(package, frames_in_flight=2)
+    pending = schedule.pending_physical_realization(logical)
+    payload = pending.to_dict()
+    assert payload["pending_adapter_query"] is True
+    assert payload["status"] == "pending_adapter_query"
+    assert payload["physical_offsets_are_adapter_specific"] is False
+    assert payload["placements"] == []
+    assert payload["barriers"] == []
+    assert payload["total_bytes"] == 0
+    assert pending.peak_bytes == sum(item.size_bytes for item in package.resources)
+
+
 def test_alias_reuse_requires_candidate_allocation_capacity() -> None:
     package = _transient_pair()
     logical = schedule.build_logical_schedule(package, frames_in_flight=1)

@@ -657,6 +657,9 @@ D3D12_HEAP_TYPE HeapTypeForUsage(const package::ResourceDescriptor& resource) {
     if (resource.usage == "readback") {
         return D3D12_HEAP_TYPE_READBACK;
     }
+    if (resource.usage == "upload") {
+        return D3D12_HEAP_TYPE_UPLOAD;
+    }
     if (resource.usage == "sampler") {
         return D3D12_HEAP_TYPE_DEFAULT;
     }
@@ -1829,7 +1832,8 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
     if (using_aliased_plan_ && plan_.total_engine_bytes > 0u) {
         std::string detail;
         state->package_heap = CreateAliasedResourceHeap(
-            state->device, plan_.total_engine_bytes, &detail);
+            state->device, plan_.total_engine_bytes,
+            static_cast<std::uint32_t>(D3D12_HEAP_TYPE_DEFAULT), &detail);
         if (state->package_heap == nullptr) {
             return Fail(ExitCode::ResourceAllocationFailed, "resource",
                         "alias_heap_creation_failed", "alias_heap",
@@ -2377,8 +2381,13 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 heap.Type = HeapTypeForUsage(placement->descriptor);
                 const D3D12_RESOURCE_STATES initial =
                     InitialStateForUsage(placement->descriptor);
-                if (state->package_heap != nullptr &&
-                    placement->descriptor.usage != "readback") {
+                const bool heap_resident =
+                    state->package_heap != nullptr &&
+                    placement->descriptor.usage != "readback" &&
+                    placement->descriptor.usage != "sampler" &&
+                    HeapTypeForUsage(placement->descriptor) ==
+                        D3D12_HEAP_TYPE_DEFAULT;
+                if (heap_resident) {
                     void* placed = nullptr;
                     std::string detail;
                     if (!CreateAliasedPlacedResource(
@@ -2395,6 +2404,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "offset");
                     }
                     slot->resource = static_cast<ID3D12Resource*>(placed);
+                    slot->state = D3D12_RESOURCE_STATE_COMMON;
                 } else {
                     if (FAILED(state->device->CreateCommittedResource(
                             &heap, D3D12_HEAP_FLAG_NONE, &desc, initial,
@@ -2409,8 +2419,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                     }
                     NoteEngineAllocation(placement->allocation_size_bytes, 0u,
                                          false, false, false);
+                    slot->state = initial;
                 }
-                slot->state = initial;
             }
             if (slot->has_descriptor) {
                 if (placement->descriptor.usage == "sampler") {
@@ -3803,11 +3813,17 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     // The placed heap path is only entered when the adapter-query proof
     // actually found a fence-safe transient reuse.
     if (plan_result.exit_code == ExitCode::Success &&
-        std::none_of(plan_result.plan.placements.begin(),
+        (std::none_of(plan_result.plan.placements.begin(),
+                      plan_result.plan.placements.end(),
+                      [](const ResourcePlacement& placement) {
+                          return placement.aliased;
+                      }) ||
+         std::any_of(plan_result.plan.placements.begin(),
                      plan_result.plan.placements.end(),
                      [](const ResourcePlacement& placement) {
-                         return placement.aliased;
-                     })) {
+                         return !IsPlaceableAliasResource(
+                             placement.descriptor);
+                     }))) {
         plan_result =
             BuildNonAliasedResourcePlan(package_, query, query_user_data);
         using_aliased_plan_ = false;

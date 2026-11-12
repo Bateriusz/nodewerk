@@ -408,10 +408,30 @@ class OptimizedGraph:
                 del nodes[member]
 
         settings = dict(self.settings)
+        baked_nodes = {
+            node_id
+            for node_id, mode in (generation_modes or {}).items()
+            if mode == "bake"
+            and node_id in nodes
+            and nodes[node_id].operator_id not in nw03.SHADER_OPERATORS
+        }
+        for node_id in sorted(baked_nodes):
+            # A supported bake replaces generation for this node.  Its payload
+            # is emitted as package parameter content by the exporter; keeping
+            # the node here would still generate the code bake was meant to
+            # replace.
+            del nodes[node_id]
         for decision in self.quantization:
             settings[
                 f"nw05.quantization.{decision.node_id}.{decision.parameter}"
             ] = " ".join(_float_text(value) for value in decision.quantized)
+        for ir_node in self.nodes:
+            full_ports = set(_output_specs(ir_node.operator_id))
+            retained_ports = set(ir_node.outputs)
+            if retained_ports != full_ports:
+                settings[f"nw05.outputs.{ir_node.node_id}"] = ",".join(
+                    sorted(retained_ports)
+                )
         for node_id, mode in sorted((generation_modes or {}).items()):
             settings[f"nw05.generation.{node_id}.mode"] = mode
         return nw03.GraphDocument(
@@ -427,6 +447,33 @@ class OptimizedGraph:
     def ir_sha256(self) -> str:
         return "sha256:v1:" + _sha256(
             nwp.canonical_json_bytes(self._semantic_payload())
+        )
+
+    def materialized_semantic_digest(
+        self, generation_modes: dict[str, str] | None = None
+    ) -> str:
+        """Identity of the *emitted* semantics, including lowering choices.
+
+        The base IR digest intentionally excludes diagnostic fusion records and
+        export-only generation choices.  The package semantic identity must not:
+        accepted fusion changes emitted HLSL, and bake/generate overrides change
+        emitted package content.  Both are folded into this digest.
+        """
+        payload = self._semantic_payload()
+        payload["accepted_fusions"] = [
+            {
+                "root": record.root_node,
+                "members": list(record.member_nodes),
+                "expression": record.fused_expression,
+            }
+            for record in self.fusions
+            if record.accepted
+        ]
+        payload["generation_modes"] = dict(
+            sorted((generation_modes or {}).items())
+        )
+        return "sha256:v1:" + _sha256(
+            nwp.canonical_json_bytes(payload)
         )
 
     def _semantic_payload(self) -> dict[str, Any]:

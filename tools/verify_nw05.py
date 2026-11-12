@@ -937,7 +937,24 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
     )
     evidence_path = Path(args.evidence) if getattr(args, "evidence", None) else None
     if evidence_path is not None and evidence_path.is_file():
-        record = json.loads(evidence_path.read_text(encoding="utf-8"))
+        try:
+            record = json.loads(evidence_path.read_text(encoding="utf-8"))
+            embedded_manifest_payload = json.loads(
+                embedded_manifest.decode("utf-8")
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            gpu = CheckResult(
+                "nw05_ada_blackwell_gpu_validation",
+                True,
+                False,
+                f"evidence/manifest is not valid JSON: {exc}",
+                status="failed",
+            )
+            return [native, gpu]
+        embedded_artifact_key = str(
+            embedded_manifest_payload.get("artifact_identity", "")
+        )
+        embedded_package_sha = _sha256(package_bytes)
         statuses = {
             tier: record.get("qualifications", {}).get(tier, {}).get("status")
             for tier in ("ada", "blackwell")
@@ -946,22 +963,40 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
             record.get("qualifications", {}).get(tier, {}).get("artifact_key")
             for tier in ("ada", "blackwell")
         }
-        artifact_keys = {
-            json.loads(embedded_manifest.decode("utf-8")).get("artifact_identity", "")
+        package_hashes = {
+            record.get("qualifications", {})
+            .get(tier, {})
+            .get("package_sha256")
+            for tier in ("ada", "blackwell")
         }
-        if all(status == "verified" for status in statuses.values()) and keys == artifact_keys:
-            gpu = CheckResult(
-                "nw05_ada_blackwell_gpu_validation",
-                True,
-                True,
-                "Ada and Blackwell evidence reference the identical common artifact",
-                status="passed",
-                evidence={
-                    "artifact_key": next(iter(artifact_keys)),
-                    "evidence": str(evidence_path),
-                },
-            )
-        elif any(status == "failed" for status in statuses.values()):
+        adapter_descriptions = {
+            record.get("qualifications", {})
+            .get(tier, {})
+            .get("adapter_description")
+            for tier in ("ada", "blackwell")
+        }
+        executions_by_tier = {
+            str(execution.get("hardware_tier")): execution
+            for execution in record.get("executions", [])
+            if isinstance(execution, dict)
+        }
+        telemetry_ok = True
+        for tier in ("ada", "blackwell"):
+            execution = executions_by_tier.get(tier, {})
+            details = execution.get("details", {})
+            if (
+                execution.get("execution_status") != "passed"
+                or not details.get("device")
+                or not details.get("adapter_description")
+                or not details.get("driver_version")
+                or not details.get("capabilities")
+            ):
+                telemetry_ok = False
+        identity_mismatch = (
+            keys != {embedded_artifact_key}
+            or package_hashes != {embedded_package_sha}
+        )
+        if any(status == "failed" for status in statuses.values()):
             gpu = CheckResult(
                 "nw05_ada_blackwell_gpu_validation",
                 True,
@@ -969,6 +1004,42 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
                 "Ada/Blackwell evidence contains an executed failure",
                 status="failed",
                 evidence={"statuses": statuses, "artifact_keys": sorted(keys)},
+            )
+        elif all(status == "verified" for status in statuses.values()) and (
+            identity_mismatch or not telemetry_ok
+        ):
+            gpu = CheckResult(
+                "nw05_ada_blackwell_gpu_validation",
+                True,
+                False,
+                (
+                    "verified evidence does not match the executed artifact or "
+                    "is missing device/capability telemetry"
+                ),
+                status="failed",
+                evidence={
+                    "statuses": statuses,
+                    "artifact_keys": sorted(str(value) for value in keys),
+                    "expected_artifact_key": embedded_artifact_key,
+                    "package_hashes": sorted(str(value) for value in package_hashes),
+                    "expected_package_sha256": embedded_package_sha,
+                    "adapter_descriptions": sorted(
+                        str(value) for value in adapter_descriptions
+                    ),
+                    "telemetry_ok": telemetry_ok,
+                },
+            )
+        elif all(status == "verified" for status in statuses.values()):
+            gpu = CheckResult(
+                "nw05_ada_blackwell_gpu_validation",
+                True,
+                True,
+                "Ada and Blackwell evidence reference the identical common artifact",
+                status="passed",
+                evidence={
+                    "artifact_key": embedded_artifact_key,
+                    "evidence": str(evidence_path),
+                },
             )
         else:
             gpu = _pending(

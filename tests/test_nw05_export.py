@@ -382,18 +382,19 @@ def test_cli_export_and_inspect_size(tmp_path: Path) -> None:
 def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
     settings = _settings(
         tmp_path,
-        bake_overrides=(("image", "bake"),),
+        bake_overrides=(("texture_recipe", "bake"), ("image", "bake")),
     )
     result = _export(tmp_path, settings=settings)
     decisions = {
         item["node_id"]: item
         for item in result.report["generation_vs_bake"]["decisions"]
     }
-    assert decisions["image"]["mode"] == "bake"
-    assert decisions["image"]["automatic_cost_oracle"] is False
-    assert decisions["image"]["incremental_compressed_content_bytes"] > 0
-    assert decisions["image"]["baked_content_emitted_bytes"] > 0
-    assert decisions["texture_recipe"]["mode"] == "generate"
+    assert decisions["texture_recipe"]["mode"] == "bake"
+    assert decisions["texture_recipe"]["automatic_cost_oracle"] is False
+    assert decisions["texture_recipe"]["incremental_compressed_content_bytes"] > 0
+    assert decisions["texture_recipe"]["baked_content_emitted_bytes"] > 0
+    assert decisions["image"]["mode"] == "generate"
+    assert "unsupported" in decisions["image"]["reason"]
     assert result.report["generation_vs_bake"]["automatic_oracle"] is False
 
 
@@ -429,6 +430,10 @@ def test_optimizer_and_fusion_settings_change_published_bytes(tmp_path: Path) ->
         != unfused.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
     )
     assert (
+        fused.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
+        != unfused.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
+    )
+    assert (
         fused.artifacts[nwp.COMMON_PROFILE_ID].package.capability.compiler_fingerprint
         != unfused.artifacts[nwp.COMMON_PROFILE_ID].package.capability.compiler_fingerprint
     )
@@ -462,6 +467,10 @@ def test_quantization_changes_published_package_bytes(tmp_path: Path) -> None:
     assert (
         quantized.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
         != plain.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+    )
+    assert (
+        quantized.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
+        != plain.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
     )
 
 
@@ -560,6 +569,31 @@ def test_inspect_size_reads_embedded_manifest_without_sibling(
     size = nw05_export.inspect_size(isolated_executable)
     assert size["distribution"]["manifest_bytes"] > 0
     assert size["distribution"]["executable_bytes"] > 0
+    assert (
+        size["distribution"]["total_distributed_bytes"]
+        == isolated_executable.stat().st_size
+    )
+
+
+def test_compose_display_rejects_ambiguous_uav_outputs(tmp_path: Path) -> None:
+    package = nw04_fixture.build_compute_display_package()
+    extra = nwp.replace(
+        package.resources[1],
+        resource_id=3,
+        name="second_output",
+    )
+    duplicate = package.__class__(
+        capability=package.capability,
+        resources=list(package.resources) + [extra],
+        initialization=list(package.initialization),
+        frame=list(package.frame),
+        parameters=list(package.parameters),
+        shaders=list(package.shaders),
+        root_signatures=list(package.root_signatures),
+        flags=package.flags,
+    )
+    with pytest.raises(ValueError, match="multiple UAV buffer outputs"):
+        nw05_export._compose_display_stream(duplicate)
 
 
 def test_failed_export_never_overwrites_report_inside_prior_artifact(

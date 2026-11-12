@@ -23,11 +23,38 @@ DXGI_FORMAT PlacedFormat(const std::string& format) {
     if (format == "DXGI_FORMAT_R8G8B8A8_UNORM") {
         return DXGI_FORMAT_R8G8B8A8_UNORM;
     }
+    if (format == "DXGI_FORMAT_B8G8R8A8_UNORM") {
+        return DXGI_FORMAT_B8G8R8A8_UNORM;
+    }
+    if (format == "DXGI_FORMAT_R8_UNORM") return DXGI_FORMAT_R8_UNORM;
+    if (format == "DXGI_FORMAT_R16_FLOAT") return DXGI_FORMAT_R16_FLOAT;
+    if (format == "DXGI_FORMAT_R16G16_FLOAT") {
+        return DXGI_FORMAT_R16G16_FLOAT;
+    }
+    if (format == "DXGI_FORMAT_R16G16B16A16_FLOAT") {
+        return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    }
+    if (format == "DXGI_FORMAT_R32_FLOAT") return DXGI_FORMAT_R32_FLOAT;
+    if (format == "DXGI_FORMAT_R32G32_FLOAT") {
+        return DXGI_FORMAT_R32G32_FLOAT;
+    }
+    if (format == "DXGI_FORMAT_R32G32B32_FLOAT") {
+        return DXGI_FORMAT_R32G32B32_FLOAT;
+    }
     if (format == "DXGI_FORMAT_R32G32B32A32_FLOAT") {
         return DXGI_FORMAT_R32G32B32A32_FLOAT;
     }
     if (format == "DXGI_FORMAT_R32_UINT") return DXGI_FORMAT_R32_UINT;
+    if (format == "DXGI_FORMAT_R10G10B10A2_UNORM") {
+        return DXGI_FORMAT_R10G10B10A2_UNORM;
+    }
+    if (format == "DXGI_FORMAT_R11G11B10_FLOAT") {
+        return DXGI_FORMAT_R11G11B10_FLOAT;
+    }
     if (format == "DXGI_FORMAT_D32_FLOAT") return DXGI_FORMAT_D32_FLOAT;
+    if (format == "DXGI_FORMAT_D24_UNORM_S8_UINT") {
+        return DXGI_FORMAT_D24_UNORM_S8_UINT;
+    }
     return DXGI_FORMAT_UNKNOWN;
 }
 
@@ -567,6 +594,7 @@ ResourceAllocationQuery SimulateResourceAllocation(
 
 void* CreateAliasedResourceHeap(void* device,
                                 std::uint64_t heap_size_bytes,
+                                std::uint32_t heap_type,
                                 std::string* detail) {
 #if defined(_WIN32)
     if (device == nullptr || heap_size_bytes == 0u) {
@@ -577,7 +605,7 @@ void* CreateAliasedResourceHeap(void* device,
     D3D12_HEAP_DESC desc{};
     desc.SizeInBytes = RoundUp(
         heap_size_bytes, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
-    desc.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    desc.Properties.Type = static_cast<D3D12_HEAP_TYPE>(heap_type);
     desc.Properties.CreationNodeMask = 1u;
     desc.Properties.VisibleNodeMask = 1u;
     desc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
@@ -597,6 +625,7 @@ void* CreateAliasedResourceHeap(void* device,
 #else
     (void)device;
     (void)heap_size_bytes;
+    (void)heap_type;
     if (detail != nullptr) *detail = "D3D12 unavailable on this host";
     return nullptr;
 #endif
@@ -656,6 +685,24 @@ void ReleaseAliasedResourceHeap(void* heap) {
     }
 #else
     (void)heap;
+#endif
+}
+
+bool IsPlaceableAliasResource(
+    const package::ResourceDescriptor& resource) {
+#if defined(_WIN32)
+    if (resource.usage == "sampler" || resource.usage == "readback") {
+        return true;
+    }
+    if (resource.usage == "upload") return false;
+    if (resource.kind == "buffer") return true;
+    if (resource.kind != "texture2d" && resource.kind != "texture3d") {
+        return false;
+    }
+    return PlacedFormat(resource.format) != DXGI_FORMAT_UNKNOWN;
+#else
+    (void)resource;
+    return true;
 #endif
 }
 

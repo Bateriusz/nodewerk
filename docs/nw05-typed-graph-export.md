@@ -145,10 +145,12 @@ Each explicit `--generation-override <node>=generate|bake` or
 
 This lets a human compare generation against baked content for a specific
 graph. The report always states `"automatic_oracle": false`.
-An explicit bake of a numeric node emits its constant payload in the existing
-parameter section (`baked_content_emitted_bytes`); a bake request that cannot
-produce package content is reported as such rather than silently claiming a
-size or performance win. Generation remains the default for every other node.
+An explicit bake of a non-shader node emits its incremental compressed payload
+in the existing parameter section (`baked_content_emitted_bytes`) and removes
+that node from the generated document; the baked content, not generated code,
+is what the artifact carries. Shader-generation nodes cannot be baked without
+removing the rendered output, so such requests retain the correct generated
+path and say so in the decision reason. Generation remains the default.
 
 ## Capability-profile artifacts and budgets
 
@@ -213,6 +215,12 @@ inserts the recorded aliasing/UAV barriers. When no alias opportunity exists,
 the player preserves the established NW-04 committed non-aliased plan. The
 64 KiB simulation is never selected silently; host tests must request it
 explicitly.
+
+An export that does not supply an adapter allocation query publishes the
+logical schedule with an explicit `pending_adapter_query` realization: no
+offsets, aliases, or barriers are invented, and startup performs the real
+`GetResourceAllocationInfo` proof before reuse. Memory budgeting uses the
+logical resident-byte upper bound until adapter evidence is available.
 
 ## Link manifest
 

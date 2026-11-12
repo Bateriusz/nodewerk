@@ -232,6 +232,9 @@ def emitted_requirements(package: nwp.NwpPackage) -> dict[str, Any]:
         "runtime_dxc_dependency": capability.runtime_dxc_dependency,
         "runtime_slang_dependency": capability.runtime_slang_dependency,
         "agility_sdk_required": capability.agility_sdk_required,
+        "compiler_fingerprint": capability.compiler_fingerprint,
+        "toolchain_identity": capability.toolchain_identity,
+        "toolchain_dxc_version": capability.toolchain_dxc_version,
     }
 
 
@@ -408,15 +411,20 @@ def _generation_mode_map(
 ) -> dict[str, str]:
     overrides = _override_map(settings)
     modes: dict[str, str] = {}
-    reachable = {node.node_id for node in optimized.nodes}
+    node_by_id = {node.node_id: node for node in optimized.nodes}
     for node_id, mode in overrides.items():
-        if node_id not in reachable:
+        node = node_by_id.get(node_id)
+        if node is None:
             continue
         if mode not in {"bake", "generate"}:
             raise ExportError(
                 f"unsupported generation override '{mode}' for node '{node_id}'",
                 dependency_path=["generation_override", node_id],
             )
+        if mode == "bake" and node.operator_id in nw03.SHADER_OPERATORS:
+            # A shader-generation node cannot be removed without removing the
+            # rendered output.  Retain the correct generated path.
+            mode = "generate"
         modes[node_id] = mode
     return modes
 
@@ -469,6 +477,12 @@ def plan_generation_vs_bake(
                 )
             mode = requested
             reason = "explicit export override"
+            if mode == "bake" and node.operator_id in nw03.SHADER_OPERATORS:
+                mode = "generate"
+                reason = (
+                    "bake of a shader-generation node is unsupported; retained "
+                    "the correct generated path"
+                )
         else:
             mode = "generate"
             reason = "default explicit generate; no automatic bake oracle is applied"
@@ -611,7 +625,7 @@ def _compose_display_stream(package: nwp.NwpPackage) -> nwp.NwpPackage:
         and instruction.operands[0].type == "resource_ref"
     }
     for resource in package.resources:
-        if resource.usage not in {"cbv", "uav"}:
+        if resource.usage not in {"cbv", "uav"} or resource.kind != "buffer":
             continue
         if resource.resource_id in uploaded:
             continue
@@ -637,16 +651,19 @@ def _compose_display_stream(package: nwp.NwpPackage) -> nwp.NwpPackage:
                 ),
             ),
         )
-    output = next(
-        (
-            resource
-            for resource in package.resources
-            if resource.usage == "uav" and resource.kind == "buffer"
-        ),
-        None,
-    )
-    if output is None:
+    outputs = [
+        resource
+        for resource in package.resources
+        if resource.usage == "uav" and resource.kind == "buffer"
+    ]
+    if not outputs:
         raise ValueError("package has no UAV buffer output for display")
+    if len(outputs) > 1:
+        raise ValueError(
+            "graph package is ambiguous: multiple UAV buffer outputs could be "
+            "displayed, so no output is selected implicitly"
+        )
+    output = outputs[0]
     if not any(instruction.opcode == "frame.barrier" for instruction in frame):
         barrier_index = next(
             (
@@ -724,7 +741,9 @@ def _compile_profile_package(
         optimized.source_name,
         destination,
         document=document,
-        semantic_digest_override=optimized.ir_sha256(),
+        semantic_digest_override=optimized.materialized_semantic_digest(
+            generation_modes
+        ),
         semantic_digest_test_identity=allow_test_payloads,
         cache_dir=cache_dir,
         dxc_executable=dxc_executable,
@@ -1152,14 +1171,20 @@ def export_graph(
             logical_schedule = schedule.build_logical_schedule(
                 package, frames_in_flight=settings.frames_in_flight
             )
-            physical = schedule.realize_physical_aliases(
-                logical_schedule,
-                package,
-                allocation_query=allocation_query,
-                adapter_identity=adapter_identity,
-                frames_in_flight=settings.frames_in_flight,
-                allow_simulated_allocation=allow_test_payloads,
-            )
+            if allocation_query is None and not allow_test_payloads:
+                physical = schedule.pending_physical_realization(
+                    logical_schedule,
+                    adapter_identity="pending-native-adapter",
+                )
+            else:
+                physical = schedule.realize_physical_aliases(
+                    logical_schedule,
+                    package,
+                    allocation_query=allocation_query,
+                    adapter_identity=adapter_identity,
+                    frames_in_flight=settings.frames_in_flight,
+                    allow_simulated_allocation=allow_test_payloads,
+                )
             shader_rows = [
                 (
                     f"{shader.entry_point}:{shader.shader_id}",
@@ -1184,7 +1209,12 @@ def export_graph(
                 package, template_bytes
             )
             requires_aliasing = any(
-                bool(group.get("aliased")) for group in physical.alias_groups
+                bool(group.get("aliased"))
+                or (
+                    bool(group.get("pending"))
+                    and len(group.get("resource_ids", ())) > 1
+                )
+                for group in physical.alias_groups
             )
             manifest = optimizer.build_link_manifest(
                 optimized,
@@ -1200,6 +1230,9 @@ def export_graph(
             manifest["dependencies_source"] = dependency_source
             manifest["artifact_profile_id"] = profile_id
             manifest["artifact_requirements_digest"] = requirements_digest
+            manifest["materialized_semantic_digest"] = (
+                optimized.materialized_semantic_digest(generation_modes)
+            )
             manifest["artifact_identity"] = artifact_key(
                 profile_id, requirements_digest, emitted_requirements(package)
             )
@@ -1393,6 +1426,14 @@ def export_graph(
                 "executable_sha256": (
                     hashlib.sha256(common.executable_bytes).hexdigest()
                     if common.executable_bytes is not None
+                    else "unavailable"
+                ),
+                "player_template_sha256": (
+                    hashlib.sha256(
+                        Path(settings.player_template).read_bytes()
+                    ).hexdigest()
+                    if settings.player_template
+                    and Path(settings.player_template).is_file()
                     else "unavailable"
                 ),
             },
@@ -1671,6 +1712,18 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
         dependency_source=manifest.get("dependencies_source", "manifest-unavailable"),
         artifact_files=artifact_files,
     )
+    if target.suffix.lower() == ".exe":
+        distribution = result["distribution"]
+        distribution["embedded_package_bytes"] = len(data)
+        distribution["embedded_manifest_bytes"] = manifest_bytes
+        distribution["embedded_content_counted_in_executable"] = True
+        distribution["total_distributed_bytes"] = (
+            executable_bytes + distribution["artifact_file_bytes"]
+        )
+        distribution["within_byte_ceiling"] = (
+            distribution["total_distributed_bytes"]
+            <= distribution["byte_ceiling"]
+        )
     result["distribution_discovered"] = {
         "manifest_path": str(manifest_path) if manifest_path.is_file() else "",
         "executable_path": str(executable_path) if executable_path.is_file() else "",

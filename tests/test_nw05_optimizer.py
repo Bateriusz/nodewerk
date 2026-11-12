@@ -226,16 +226,20 @@ def test_dead_output_elimination_prunes_unused_multi_output_ports() -> None:
     assert ("split_probe", "w") in optimized.dead_outputs
     materialized = optimized.materialize_document()
     assert materialized.nodes["split_probe"].inputs["v"] == ("shade", "out")
+    assert materialized.settings["nw05.outputs.split_probe"] == "x"
 
 
 def test_optimized_document_is_what_nw03_compiles() -> None:
     document = compiler.load_graph(SEMANTICS)
     optimized = optimizer.optimize_graph(document)
     materialized = optimized.materialize_document(
-        generation_modes={"shade": "bake"}
+        generation_modes={"texture_recipe": "bake", "shade": "bake"}
     )
     assert "unused_curve" not in materialized.nodes
     assert "shade_b" not in materialized.nodes
+    assert "texture_recipe" not in materialized.nodes
+    assert "shade" in materialized.nodes
+    assert materialized.settings["nw05.generation.texture_recipe.mode"] == "bake"
     assert materialized.settings["nw05.generation.shade.mode"] == "bake"
     assert any(
         key.startswith("nw05.quantization.gain.value")

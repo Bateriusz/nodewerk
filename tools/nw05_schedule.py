@@ -287,6 +287,7 @@ class PhysicalRealization:
     allocation_source: str = "adapter_query"
     serialization: tuple[int, ...] = ()
     not_portable: bool = True
+    pending_adapter_query: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -294,7 +295,13 @@ class PhysicalRealization:
             "version": 1,
             "adapter_identity": self.adapter_identity,
             "portable": False,
-            "physical_offsets_are_adapter_specific": True,
+            "physical_offsets_are_adapter_specific": not self.pending_adapter_query,
+            "pending_adapter_query": self.pending_adapter_query,
+            "status": (
+                "pending_adapter_query"
+                if self.pending_adapter_query
+                else "realized"
+            ),
             "frames_in_flight": self.frames_in_flight,
             "allocation_source": self.allocation_source,
             "adapter_queried": self.allocation_source == "adapter_query",
@@ -305,6 +312,49 @@ class PhysicalRealization:
             "peak_bytes": self.peak_bytes,
             "serialization": list(self.serialization),
         }
+
+
+def pending_physical_realization(
+    schedule: LogicalSchedule,
+    *,
+    adapter_identity: str = "pending-native-adapter",
+) -> PhysicalRealization:
+    """Return a non-fabricated realization waiting for the native adapter query.
+
+    No offsets, aliases, or barriers are invented.  The logical schedule remains
+    fully specified; startup performs the adapter query before any physical
+    alias reuse.  ``peak_bytes`` is a conservative logical upper bound used only
+    for preflight budgets, not an adapter measurement.
+    """
+    groups: list[dict[str, Any]] = []
+    grouped: dict[str, list[int]] = {}
+    for resource in schedule.resources:
+        if resource.alias_eligible:
+            grouped.setdefault(resource.alias_group, []).append(resource.resource_id)
+    for group, resource_ids in sorted(grouped.items()):
+        groups.append(
+            {
+                "group": group,
+                "resource_ids": sorted(resource_ids),
+                "instances": schedule.frames_in_flight,
+                "aliased": False,
+                "pending": True,
+                "frames_in_flight": schedule.frames_in_flight,
+                "serialized": False,
+            }
+        )
+    return PhysicalRealization(
+        adapter_identity=adapter_identity,
+        placements=(),
+        alias_groups=tuple(groups),
+        barriers=(),
+        total_bytes=0,
+        peak_bytes=sum(resource.size_bytes for resource in schedule.resources),
+        frames_in_flight=schedule.frames_in_flight,
+        allocation_source="pending_adapter_query",
+        not_portable=True,
+        pending_adapter_query=True,
+    )
 
 
 # ---------------------------------------------------------------------------
