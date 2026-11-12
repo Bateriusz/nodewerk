@@ -19,17 +19,40 @@ nw_add_offline_compute_shader(
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/compute_fixture_dxil.h"
 )
 
+# NW-04 player-owned fullscreen display pass.  It is compiled offline by the
+# same pinned DXC as the compute fixture and embedded into the player, so the
+# release binary never needs a runtime shader compiler.
+nw_add_offline_compute_shader(
+    nw_offline_display_shader
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/display_fixture.hlsl"
+    "DisplayCS"
+    "cs_6_0"
+    "${CMAKE_CURRENT_BINARY_DIR}/shaders/display_fixture.dxil"
+    "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/display_fixture_dxil.h"
+    "kDisplayFixtureDxil"
+)
+
 add_library(nw_player_bootstrap STATIC
     src/player/diagnostics.cpp
     src/player/capability_check.cpp
     src/player/d3d12_bootstrap.cpp
+    src/player/capability_requirements.cpp
+    src/player/package_loader.cpp
+    src/player/resource_plan.cpp
+    src/player/player_instrumentation.cpp
+    src/player/package_player.cpp
+    src/player/player.cpp
+    src/platform/win32_window.cpp
 )
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
 )
 nw_apply_player_profile(nw_player_bootstrap)
 add_dependencies(nw_player_bootstrap nw_offline_shaders)
+add_dependencies(nw_player_bootstrap nw_offline_display_shader)
 
 if(WIN32)
     target_link_libraries(nw_player_bootstrap PUBLIC
@@ -96,6 +119,41 @@ target_include_directories(nw_package PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
 )
 target_compile_features(nw_package PUBLIC cxx_std_20)
+
+# The player consumes the same immutable `.nwp` v1 implementation with the
+# player build profile (same CRT, exception/RTTI, NDEBUG, and reproducibility
+# flags as the bootstrap archive).  Authoring-side warning policy is disabled
+# for this archive only; NW-03's package implementation is not player code.
+add_library(nw_package_player STATIC
+    src/package/nwp_format.cpp
+)
+target_include_directories(nw_package_player PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+)
+target_compile_features(nw_package_player PUBLIC cxx_std_20)
+nw_apply_player_profile(nw_package_player)
+if(MSVC)
+    target_compile_options(nw_package_player PRIVATE /W0)
+else()
+    target_compile_options(nw_package_player PRIVATE -w)
+endif()
+
+# NW-04: package-driven compute + fullscreen-display player fixture.  The
+# fixture consumes the established NW-03 `.nwp` v1 container and never links
+# compiler/editor/reflection tooling.
+add_executable(nw_package_player_fixture
+    fixtures/nw04_package_player/main.cpp
+)
+target_link_libraries(nw_package_player_fixture PRIVATE
+    nw_player_bootstrap
+    nw_package_player
+)
+if(WIN32)
+    target_link_libraries(nw_package_player_fixture PRIVATE gdi32)
+endif()
+nw_apply_player_profile(nw_package_player_fixture)
+nw_attach_dependency_check(nw_package_player_fixture "package_player")
 
 add_library(nw_compiler STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
     src/compiler/nw_compiler.cpp

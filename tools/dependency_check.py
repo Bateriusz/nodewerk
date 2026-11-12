@@ -66,6 +66,7 @@ KNOWN_FIXTURE_EXECUTABLES = {
     "nw_empty_player.exe",
     "nw_clear_present_fixture.exe",
     "nw_compute_shader_fixture.exe",
+    "nw_package_player_fixture.exe",
 }
 
 # Build-system metadata found next to binaries in developer build trees. It is not part of the

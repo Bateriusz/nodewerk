@@ -32,6 +32,7 @@ from typing import Any, Callable
 
 from dependency_check import (
     DependencyClosureError,
+    KNOWN_FIXTURE_EXECUTABLES,
     collect_deployment_files,
     parse_pe64_sections_and_imports,
     verify_all_recorded_ledgers,
@@ -3113,6 +3114,7 @@ def run_clean_system_mode(
     sidecars = collect_deployment_files(
         search_dir,
         exclude_paths=set(expected_exe_paths.values()),
+        exclude_names=KNOWN_FIXTURE_EXECUTABLES,
     )
 
     fixture_specs: dict[str, dict[str, Any]] = {}

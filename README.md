@@ -62,3 +62,22 @@ checks without claiming physical coverage; it exits non-zero if any required bui
 skipped.
 Measured benchmark capture (timing, committed memory, capabilities) is available through
 `python tools/verify_nw01.py --record-benchmark <tier> --binary-dir <deployment-dir>`.
+
+## NW-04 Package Player
+
+`src/player/package_player.*` consumes the finalized NW-03 `.nwp` v1 package without
+redefining its capability identity. It validates exact emitted requirements against
+live D3D12 queries before bulk allocation, queries adapter-specific resource sizes
+and alignments, executes package initialization instructions once, and executes
+ordered frame instructions at supplied ticks. The package-only compute and
+fullscreen-display fixture is `nw_package_player_fixture`.
+
+```bash
+python tools/verify_nw04.py --mode ContractsOnly
+python tools/nw04_fixture.py --output fixtures/nw04/compute_display.nwp
+```
+
+`Full` and `Hardware` qualification require a real offline-compiled NW-03 package
+and the native Windows player. Missing Ada or Blackwell execution coverage remains
+`pending_unverified`; the synthetic contract fixture is never accepted as hardware
+evidence. See [`docs/nw04-player-runtime.md`](docs/nw04-player-runtime.md).

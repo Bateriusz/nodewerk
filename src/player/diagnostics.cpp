@@ -98,6 +98,7 @@ bool TryParseSimulatedFailure(const char* name, ExitCode* out_code) noexcept {
         ExitCode::GpuSubmissionFailed,
         ExitCode::ComputeVerificationFailed,
         ExitCode::D3D12ValidationError,
+        ExitCode::PackageValidationFailed,
     };
     for (ExitCode candidate : kAllCodes) {
         if (StringsEqual(name, ExitCodeName(candidate))) {

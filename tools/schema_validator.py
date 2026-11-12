@@ -573,6 +573,7 @@ ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
     ("benchmarks/experiments/msvc-ltcg-comparison.json", "schemas/experiment-record.schema.json"),
     ("benchmarks/experiments/compact-profile-experiment.json", "schemas/experiment-record.schema.json"),
     ("benchmarks/experiments/crt-elimination-experiment.json", "schemas/experiment-record.schema.json"),
+    ("benchmarks/nw04-hardware-evidence.json", "schemas/nw04-player-evidence.schema.json"),
 ]
 
 

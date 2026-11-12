@@ -21,7 +21,7 @@ from schema_validator import (  # noqa: E402
 
 def test_all_repository_json_artifacts_validate_against_schemas() -> None:
     summary = validate_all_repository_artifacts(REPO_ROOT)
-    assert summary["validated_count"] == 17
+    assert summary["validated_count"] == 18
     assert all(item["valid"] for item in summary["results"])
 
 

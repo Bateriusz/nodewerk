@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw04-player-evidence.schema.json",
+  "title": "Nodewerk NW-04 player hardware evidence",
+  "type": "object",
+  "required": ["schema_version", "task", "verification_status", "qualifications", "policy"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "task": { "const": "NW-04" },
+    "verification_status": {
+      "enum": [
+        "pending_unverified",
+        "execution_recorded",
+        "executed_failure",
+        "verified"
+      ]
+    },
+    "qualifications": {
+      "type": "object",
+      "required": ["ada", "blackwell"],
+      "properties": {
+        "ada": { "$ref": "#/$defs/qualification" },
+        "blackwell": { "$ref": "#/$defs/qualification" }
+      },
+      "additionalProperties": false
+    },
+    "executions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "hardware_tier",
+          "execution_status",
+          "exit_code",
+          "package",
+          "player",
+          "adapter",
+          "environment",
+          "queried_capabilities",
+          "d3d12_validation_clean"
+        ],
+        "properties": {
+          "hardware_tier": { "type": "string" },
+          "execution_status": { "enum": ["passed", "failed"] },
+          "exit_code": { "type": "integer" },
+          "package": {
+            "type": "object",
+            "required": ["sha256", "profile_id", "requirements_digest"],
+            "properties": {
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "profile_id": { "type": "string" },
+              "requirements_digest": { "type": "string" }
+            },
+            "additionalProperties": true
+          },
+          "player": {
+            "type": "object",
+            "required": ["sha256"],
+            "properties": {
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            },
+            "additionalProperties": true
+          },
+          "adapter": { "type": "object" },
+          "environment": { "type": "object" },
+          "queried_capabilities": { "type": "object" },
+          "d3d12_validation_clean": { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "unavailable_telemetry": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "toolchain_manifest_sha256": { "type": "string" },
+    "policy": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "qualification": {
+      "type": "object",
+      "required": ["hardware_tier", "status"],
+      "properties": {
+        "hardware_tier": { "type": "string" },
+        "status": {
+          "enum": ["pending_unverified", "execution_recorded", "failed", "verified"]
+        },
+        "reason": { "type": "string" },
+        "adapter_description": { "type": "string" },
+        "generation_metadata": { "type": "string" },
+        "player_sha256": { "type": "string" },
+        "package_sha256": { "type": "string" },
+        "profile_id": { "type": "string" },
+        "requirements_digest": { "type": "string" },
+        "exit_code": { "type": "integer" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
