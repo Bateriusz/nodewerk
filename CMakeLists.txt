@@ -38,6 +38,7 @@ add_library(nw_player_bootstrap STATIC
     src/player/d3d12_bootstrap.cpp
     src/player/capability_requirements.cpp
     src/player/package_loader.cpp
+    src/player/embedded_package.cpp
     src/player/resource_plan.cpp
     src/player/player_instrumentation.cpp
     src/player/package_player.cpp
@@ -154,6 +155,28 @@ if(WIN32)
 endif()
 nw_apply_player_profile(nw_package_player_fixture)
 nw_attach_dependency_check(nw_package_player_fixture "package_player")
+
+# NW-05: content-free specialized-player template.  `nodewerkc export` appends
+# the graph-derived .nwp package and generated link manifest to this executable
+# (or an equivalent player build) using the deterministic embedded footer.
+set(NW_NW05_PLAYER_EXCLUDE_FROM_ALL "")
+if(WIN32)
+    # Keep the NW-01 concrete-build/reproducibility fixture set unchanged; the
+    # specialized NW-05 template remains available via an explicit target.
+    set(NW_NW05_PLAYER_EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
+endif()
+add_executable(nw_procedural_image_player ${NW_NW05_PLAYER_EXCLUDE_FROM_ALL}
+    fixtures/nw05_procedural_image/main.cpp
+)
+target_link_libraries(nw_procedural_image_player PRIVATE
+    nw_player_bootstrap
+    nw_package_player
+)
+if(WIN32)
+    target_link_libraries(nw_procedural_image_player PRIVATE gdi32)
+endif()
+nw_apply_player_profile(nw_procedural_image_player)
+nw_attach_dependency_check(nw_procedural_image_player "package_player")
 
 add_library(nw_compiler STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
     src/compiler/nw_compiler.cpp

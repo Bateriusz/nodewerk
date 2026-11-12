@@ -122,3 +122,18 @@ query mismatches use `device_and_capability` and `CapabilityBaselineUnmet`
 The player validates package structure and exact emitted requirements before creating the
 swap chain or any package resource. Adapter names, marketing generations, evidence-tier
 labels, and PCI identifiers are recorded metadata only and never affect eligibility.
+
+## 7. NW-05 Generated Standalone Image Diagnostics
+
+The generated `nw_procedural_image_player` (and the standalone executable
+produced by `nodewerkc export`) validates the deterministic embedded package
+footer before entering the package decoder. A missing, truncated, or
+checksum-mismatched embedded package prints `NW05_EMBEDDED_PACKAGE_INVALID` and
+exits `70` (`PackageValidationFailed`). Subsequent decode, capability,
+allocation, pipeline, submission, and device-removal failures return the
+existing stable NW-03/NW-04 exit codes.
+
+The generated main never falls back to lower image quality, never changes the
+selected capability profile, and never loads a trusted build-time authoring or
+compiler extension at runtime. Package bounds checks remain active regardless
+of the integrity checksum or a successful export.

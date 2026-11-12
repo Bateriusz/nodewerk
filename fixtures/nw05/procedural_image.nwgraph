@@ -1,0 +1,38 @@
+nwgraph 1
+profile nw.common.d3d12.fl12_0.sm6_0.v1 sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a
+setting optimization O2
+setting deterministic true
+setting api d3d12
+setting feature_level 12_0
+setting shader_model 6_0
+setting frequency_policy strict
+setting shader_blob_policy stable
+setting quantization_policy none
+setting quantization_bits 0
+setting quantization_step 0
+
+# The graph is the sole source of the procedural demo image.  No hand-authored
+# package content or per-demo player code is involved.
+node image nw.shader.expr@1.0.0 frequency=frame
+  param expression "vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), mix(uv.y, cos(uv.x * 13.0 - time), 0.25), sin(uv.x * 31.0 + time) * 0.5 + 0.5, 1.0)"
+
+node texture_recipe nw.texture.procedural@1.0.0 frequency=initialization
+  param width 256
+  param height 256
+  param format r8g8b8a8_unorm
+  param seed 7
+node texture_gpu nw.residency.upload_texture@1.0.0 frequency=initialization residency=gpu
+  input texture texture_recipe.out
+
+node screen nw.render.present@1.0.0 frequency=frame residency=gpu
+  input image output.image
+
+node output nw.render.fullscreen@1.0.0 frequency=frame residency=gpu
+  input shader image.out
+  input texture texture_gpu.out
+
+layout image 0 0
+layout texture_recipe 220 0
+layout texture_gpu 440 0
+layout output 0 180
+layout screen 220 180

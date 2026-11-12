@@ -52,7 +52,11 @@ treats an offline lifetime or alias group as a portable physical offset. Every
 resource receives an independent non-aliased committed allocation sized and
 aligned by the current adapter's `GetResourceAllocationInfo`. `ResourcePlan`
 records the queried size/alignment, the non-aliased placement kind, and the
-logical lifetime as evidence. Physical alias reuse is deferred to NW-05.
+logical lifetime as evidence. Physical alias reuse is implemented by NW-05's
+`BuildAliasedResourcePlan`/`tools/nw05_schedule.py`, which proves compatibility
+against those queried sizes/alignments, duplicates transients across overlapping
+frames, and records required aliasing/UAV barriers. NW-04's non-aliased path
+remains available.
 
 There are two frames in flight by default (clamped to 1..3). Each slot owns one
 command allocator, command list, upload buffer, and fence value. Reusing a slot's

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -106,6 +107,32 @@ void DeriveLifetimes(const package::Package& pkg, ResourcePlan* plan) {
     }
 }
 
+bool IsPersistentResource(const package::Package& pkg,
+                          const package::ResourceDescriptor& resource) {
+    if (resource.usage == "cbv" || resource.usage == "sampler" ||
+        resource.usage == "readback") {
+        return true;
+    }
+    for (const auto& instruction : pkg.frame) {
+        if (instruction.opcode == "frame.present" ||
+            instruction.opcode == "frame.set_root_constants") {
+            for (const auto& operand : instruction.operands) {
+                if (operand.type == package::OperandType::ResourceRef &&
+                    operand.u32 == resource.resource_id) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool LifetimesOverlap(const ResourceLogicalLifetime& left,
+                      const ResourceLogicalLifetime& right) {
+    return !(left.last_use_frame < right.first_use_frame ||
+             right.last_use_frame < left.first_use_frame);
+}
+
 } // namespace
 
 const ResourcePlacement* ResourcePlan::Find(
@@ -127,6 +154,194 @@ bool ResourcePlan::UsesOnlyNonAliasedPlacements() const noexcept {
         }
     }
     return true;
+}
+
+ResourcePlanResult BuildAliasedResourcePlan(
+    const package::Package& pkg,
+    ResourceAllocationQueryFn query,
+    void* user_data,
+    std::uint32_t frames_in_flight) {
+    ResourcePlanResult result{};
+    if (query == nullptr) {
+        query = SimulateResourceAllocation;
+    }
+    frames_in_flight = std::max<std::uint32_t>(1u, std::min<std::uint32_t>(3u, frames_in_flight));
+    std::set<std::uint32_t> seen_ids;
+    bool arithmetic_ok = true;
+    std::map<std::uint32_t, ResourceAllocationQuery> allocations;
+    std::map<std::uint32_t, bool> persistent;
+    std::map<std::uint32_t, ResourceLogicalLifetime> lifetimes;
+    std::map<std::string, std::vector<std::uint32_t>> groups;
+
+    for (const auto& resource : pkg.resources) {
+        if (!seen_ids.insert(resource.resource_id).second) {
+            AddPlanFailure(&result, "package_resource_id", "resource_id",
+                           "unique", "duplicate",
+                           "duplicate resource id in aliased realization plan",
+                           pkg);
+            continue;
+        }
+        const ResourceAllocationQuery allocation = query(resource, user_data);
+        if (!allocation.valid || allocation.size_bytes == 0u ||
+            allocation.alignment == 0u) {
+            AddPlanFailure(
+                &result, "resource_allocation_info_unavailable",
+                "GetResourceAllocationInfo", "valid size/alignment",
+                allocation.detail.empty() ? "unavailable" : allocation.detail,
+                "adapter-specific allocation query failed", pkg);
+            continue;
+        }
+        allocations[resource.resource_id] = allocation;
+        persistent[resource.resource_id] = IsPersistentResource(pkg, resource);
+        if (!persistent[resource.resource_id]) {
+            groups[AliasCandidateGroup(resource)].push_back(resource.resource_id);
+        }
+    }
+
+    // Derive a conservative per-resource lifetime from the ordered frame
+    // instruction stream.  Resources absent from the frame stream are
+    // persistent for aliasing purposes.
+    for (const auto& resource : pkg.resources) {
+        ResourceLogicalLifetime lifetime{};
+        lifetime.resource_id = resource.resource_id;
+        lifetime.first_use_frame = std::numeric_limits<std::uint64_t>::max();
+        lifetime.last_use_frame = 0u;
+        lifetime.permitted_alias_group = AliasCandidateGroup(resource);
+        std::uint64_t frame_index = 0u;
+        for (const auto& instruction : pkg.frame) {
+            for (const auto& operand : instruction.operands) {
+                if (operand.type == package::OperandType::ResourceRef &&
+                    operand.u32 == resource.resource_id) {
+                    lifetime.referenced_by_frame = true;
+                    lifetime.first_use_frame =
+                        std::min(lifetime.first_use_frame, frame_index);
+                    lifetime.last_use_frame =
+                        std::max(lifetime.last_use_frame, frame_index);
+                }
+            }
+            ++frame_index;
+        }
+        if (!lifetime.referenced_by_frame) {
+            lifetime.first_use_frame = 0u;
+            lifetime.last_use_frame = 0u;
+        }
+        lifetimes[resource.resource_id] = lifetime;
+    }
+
+    std::uint64_t cursor = 0u;
+    for (const auto& resource : pkg.resources) {
+        const auto allocation_it = allocations.find(resource.resource_id);
+        if (allocation_it == allocations.end()) continue;
+        const bool is_persistent = persistent[resource.resource_id];
+        const std::uint32_t instances = is_persistent ? 1u : frames_in_flight;
+        std::uint32_t aliased_count = 0u;
+        for (std::uint32_t instance = 0u; instance < instances; ++instance) {
+            cursor = RoundUp(cursor, allocation_it->second.alignment);
+            ResourcePlacement placement{};
+            placement.descriptor = resource;
+            placement.kind = ResourcePlacementKind::NonAliasedCommitted;
+            placement.allocation_size_bytes = allocation_it->second.size_bytes;
+            placement.allocation_alignment = allocation_it->second.alignment;
+            placement.heap_offset_bytes = cursor;
+            placement.aliased = false;
+            placement.frame_slot_instance = instance;
+            placement.lifetime = lifetimes[resource.resource_id];
+
+            // Reuse an earlier placement in the same compatible group when the
+            // logical lifetimes do not intersect.  Resources that are persistent
+            // or that overlap in time always receive independent storage.
+            for (const auto& candidate : result.plan.placements) {
+                if (candidate.frame_slot_instance != instance) continue;
+                if (persistent[candidate.descriptor.resource_id]) continue;
+                if (candidate.lifetime.permitted_alias_group !=
+                    placement.lifetime.permitted_alias_group) {
+                    continue;
+                }
+                if (LifetimesOverlap(candidate.lifetime, placement.lifetime)) {
+                    continue;
+                }
+                if (candidate.descriptor.format != resource.format ||
+                    candidate.descriptor.usage != resource.usage ||
+                    candidate.descriptor.kind != resource.kind) {
+                    continue;
+                }
+                if (candidate.allocation_size_bytes + candidate.heap_offset_bytes >
+                    cursor) {
+                    continue;
+                }
+                placement.heap_offset_bytes = candidate.heap_offset_bytes;
+                placement.aliased = true;
+                ++aliased_count;
+                ResourceAliasBarrier barrier{};
+                barrier.resource_id = resource.resource_id;
+                barrier.before_resource_id = candidate.descriptor.resource_id;
+                barrier.group = placement.lifetime.permitted_alias_group;
+                barrier.uav_barrier = resource.usage == "uav" ||
+                                      candidate.descriptor.usage == "uav";
+                barrier.reason =
+                    "fence-safe transient alias reuse after prior lifetime";
+                result.plan.alias_barriers.push_back(std::move(barrier));
+                break;
+            }
+            if (!placement.aliased) {
+                cursor = CheckedAdd(cursor, allocation_it->second.size_bytes,
+                                    &arithmetic_ok);
+            }
+            if (placement.aliased) {
+                placement.kind = ResourcePlacementKind::AliasedTransient;
+            }
+            result.plan.max_alignment =
+                std::max(result.plan.max_alignment, allocation_it->second.alignment);
+            result.plan.placements.push_back(std::move(placement));
+        }
+        const std::string group_name = is_persistent
+            ? "committed:" + std::to_string(resource.resource_id)
+            : AliasCandidateGroup(resource);
+        auto existing = std::find_if(
+            result.plan.alias_groups.begin(), result.plan.alias_groups.end(),
+            [&group_name](const ResourceAliasGroup& group) {
+                return group.group == group_name;
+            });
+        if (existing == result.plan.alias_groups.end()) {
+            ResourceAliasGroup group{};
+            group.group = group_name;
+            group.resource_ids.push_back(resource.resource_id);
+            group.frame_slot_instances = instances;
+            group.aliased = aliased_count > 0u;
+            result.plan.alias_groups.push_back(std::move(group));
+        } else {
+            existing->resource_ids.push_back(resource.resource_id);
+            existing->aliased = existing->aliased || aliased_count > 0u;
+        }
+    }
+
+    if (!arithmetic_ok) {
+        AddPlanFailure(&result, "resource_allocation_size_overflow",
+                       "total_engine_bytes", "no overflow", "overflow",
+                       "checked arithmetic rejected aggregate allocation size",
+                       pkg);
+    }
+    result.plan.total_engine_bytes = cursor;
+    if (result.plan.placements.size() !=
+        static_cast<std::size_t>(pkg.resources.size()) * frames_in_flight) {
+        // Persistent resources intentionally have one instance, so the exact
+        // count depends on the package; only report missing placements.
+        std::set<std::uint32_t> placed;
+        for (const auto& placement : result.plan.placements) {
+            placed.insert(placement.descriptor.resource_id);
+        }
+        if (placed.size() != pkg.resources.size()) {
+            AddPlanFailure(&result, "resource_allocation_incomplete",
+                           "placements", std::to_string(pkg.resources.size()),
+                           std::to_string(placed.size()),
+                           "not every resource received an aliased/committed placement",
+                           pkg);
+        }
+    }
+    result.exit_code = result.failures.empty()
+                           ? ExitCode::Success
+                           : ExitCode::ResourceAllocationFailed;
+    return result;
 }
 
 ResourcePlanResult BuildNonAliasedResourcePlan(

@@ -21,6 +21,7 @@ graph semantics and `.nwgraph` schema.
 12. [NW-03 Compiler-to-Player Contract](nw03-compiler-player-contract.md)
 13. [`.nwp` Version 1 Container Contract](nwp-format-v1.md)
 14. [NW-04 Package Player Runtime](nw04-player-runtime.md)
+15. [NW-05 Typed-Graph Export and Procedural-Image Path](nw05-typed-graph-export.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -36,4 +37,6 @@ graph semantics and `.nwgraph` schema.
 - Clean-Directory Reproducibility Reports: [`benchmarks/reproducibility/release-build-reproducibility.json`](../benchmarks/reproducibility/release-build-reproducibility.json) (clang-cl/lld-link) and [`benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json`](../benchmarks/reproducibility/msvc-ltcg-release-reproducibility.json) (MSVC/LTCG)
 - Clean Physical System Validation Report: [`benchmarks/clean-system/clean-system-validation.json`](../benchmarks/clean-system/clean-system-validation.json)
 - NW-04 Player Hardware Evidence: [`benchmarks/nw04-hardware-evidence.json`](../benchmarks/nw04-hardware-evidence.json) (validated by [`schemas/nw04-player-evidence.schema.json`](../schemas/nw04-player-evidence.schema.json))
+- NW-05 Alias/GPU Evidence: [`benchmarks/nw05-hardware-evidence.json`](../benchmarks/nw05-hardware-evidence.json) (validated by [`schemas/nw05-hardware-evidence.schema.json`](../schemas/nw05-hardware-evidence.schema.json)); remains pending until identical-artifact Ada/Blackwell execution is recorded.
+- NW-05 Link Manifest, Export Report & Size Attribution Schemas: [`schemas/nw05-link-manifest.schema.json`](../schemas/nw05-link-manifest.schema.json), [`schemas/nw05-export-report.schema.json`](../schemas/nw05-export-report.schema.json), [`schemas/nw05-size-report.schema.json`](../schemas/nw05-size-report.schema.json)
 - Upstream Measured-Evidence Status: [`benchmarks/evidence-status.json`](../benchmarks/evidence-status.json) (complete for recorded Windows/RTX captures)

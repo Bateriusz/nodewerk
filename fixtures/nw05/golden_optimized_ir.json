@@ -1,0 +1,37 @@
+{
+  "constants_folded": [],
+  "cse": [],
+  "dead_nodes": [],
+  "dead_outputs": [],
+  "ir_sha256": "sha256:v1:2cd42f8e800f2095a6c835be8081933f22bb7ae08e5972b0be79844f7b081f23",
+  "outputs": [
+    {
+      "kind": "present",
+      "node": "screen",
+      "port": "out"
+    }
+  ],
+  "partitions": {
+    "compile-time": [],
+    "frame": [
+      "image",
+      "output",
+      "screen"
+    ],
+    "initialization": [
+      "texture_recipe",
+      "texture_gpu"
+    ]
+  },
+  "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+  "quantization": [],
+  "reachable_node_ids": [
+    "image",
+    "output",
+    "screen",
+    "texture_gpu",
+    "texture_recipe"
+  ],
+  "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+  "schema_version": 1
+}

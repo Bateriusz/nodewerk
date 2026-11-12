@@ -81,3 +81,30 @@ python tools/nw04_fixture.py --output fixtures/nw04/compute_display.nwp
 and the native Windows player. Missing Ada or Blackwell execution coverage remains
 `pending_unverified`; the synthetic contract fixture is never accepted as hardware
 evidence. See [`docs/nw04-player-runtime.md`](docs/nw04-player-runtime.md).
+
+## NW-05 Typed-Graph Export
+
+`tools/nw05_optimizer.py` performs whole-graph typed lowering with constant
+propagation, dead-node/dead-output elimination, common-subexpression
+elimination, bounded correctness-checked fusion, initialization/frame
+partitioning, and field-specific reversible quantization.
+`tools/nw05_schedule.py` emits explicit single-queue logical schedules and proves
+adapter-specific alias groups at startup without serializing portable physical
+offsets. `tools/nw05_export.py` publishes one artifact per capability profile,
+with the common profile kept free of optional code, shaders, dependencies, and
+budget accounting.
+
+```bash
+python tools/nodewerkc.py export fixtures/nw05/procedural_image.nwgraph build/demo \
+    --dxc <pinned-dxc> --player-template <specialized-player.exe> \
+    --report build/demo-report.json
+python tools/nodewerkc.py inspect-size build/demo
+python tools/verify_nw05.py --mode ContractsOnly --summary-json build/nw05.json
+```
+
+The exported graph is the sole source of the procedural demo content. The
+generated executable embeds the unchanged `.nwp` v1 package and drives the
+existing `PackagePlayer`; there is no hand-edited package or per-demo player
+logic. Windows native and Ada/Blackwell alias/output-equality checks remain
+`pending` until executed through the NW-01B evidence harness. See
+[`docs/nw05-typed-graph-export.md`](docs/nw05-typed-graph-export.md).

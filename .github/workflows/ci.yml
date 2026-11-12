@@ -36,6 +36,9 @@ jobs:
       - name: Run NW-04 package-player contract checks
         run: python tools/verify_nw04.py --mode ContractsOnly --summary-json "$RUNNER_TEMP/nw04-contracts.json"
 
+      - name: Run NW-05 typed-graph optimisation, scheduling and export closure checks
+        run: python tools/verify_nw05.py --mode ContractsOnly --summary-json "$RUNNER_TEMP/nw05-contracts.json"
+
       - name: Run NW-01 ContractsOnly verification
         run: python tools/verify_nw01.py --mode ContractsOnly
 
@@ -96,6 +99,9 @@ jobs:
 
       - name: Run NW-04 package-player contract checks on Windows
         run: python tools/verify_nw04.py --mode ContractsOnly --summary-json "$env:RUNNER_TEMP\nw04-contracts.json"
+
+      - name: Run NW-05 export reproducibility and recovery checks on Windows
+        run: python tools/verify_nw05.py --mode ContractsOnly --summary-json "$env:RUNNER_TEMP\nw05-contracts.json"
 
       - name: Run NW-01 Windows harness behaviour tests (required)
         env:
