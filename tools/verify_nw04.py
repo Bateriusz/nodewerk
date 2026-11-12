@@ -1061,18 +1061,23 @@ def run_native_fixture(
             )
     frames_match = re.search(r"NW_PLAYER_FRAMES=(\d+)", output)
     presents_match = re.search(r"NW_PLAYER_PRESENTS=(\d+)", output)
+    observed_frames = (
+        int(frames_match.group(1)) if frames_match is not None else None
+    )
+    observed_presents = (
+        int(presents_match.group(1)) if presents_match is not None else None
+    )
     if (
-        frames_match is None
-        or presents_match is None
-        or int(frames_match.group(1)) != expected_frames
-        or int(presents_match.group(1)) != expected_frames
+        observed_frames != expected_frames
+        or observed_presents != expected_frames
     ):
         return CheckResult(
             "nw04_native_fixture",
             True,
             False,
             "native fixture did not complete the requested visible renders "
-            f"(expected {expected_frames} frames/presents)",
+            f"(expected frames={expected_frames}, presents={expected_frames}; "
+            f"observed frames={observed_frames}, presents={observed_presents})",
             evidence={"stdout": output, "stderr": proc.stderr},
         )
     present_resource = next(
