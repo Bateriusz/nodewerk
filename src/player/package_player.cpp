@@ -3378,57 +3378,13 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.queue.execute.after");
 #endif
-    const std::uint64_t fence_value = next_fence_value_++;
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
-    TraceD3D12ValidationStage(config_.enable_validation,
-                              "frame.queue.signal.before");
-#endif
-    if (FAILED(state->queue->Signal(state->fence, fence_value))) {
-        return Fail(ExitCode::GpuSubmissionFailed, "gpu_execution",
-                    "queue_signal_failed", "signal", "succeeded", "failed",
-                    "renderAtTick", "ID3D12CommandQueue::Signal failed");
-    }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
-    TraceD3D12ValidationStage(config_.enable_validation,
-                              "frame.queue.signal.after");
-#endif
-    frame.fence_value = fence_value;
-
 #if NW_PLAYER_DIAGNOSTICS
-    // CPU submission ends at queue Signal.  Record it before fence waits and
-    // Present so the metric does not include GPU execution or VSync.
+    // CPU submission timing intentionally stops before Present/VSync. The
+    // lifetime fence below is separate: it retires the complete frame,
+    // including presentation when a swap chain is active.
     instrumentation_.EndFrame();
 #endif
 
-    if (config_.wait_for_gpu_each_frame) {
-        const ExitCode wait = WaitForFenceValue(
-            state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
-        if (wait != ExitCode::Success) {
-            return Fail(wait, "gpu_execution", "fence_wait_failed", "fence",
-                        "completed", "timeout_or_failure", "renderAtTick",
-                        "frame fence wait failed");
-        }
-        frame.fence_value = 0u;
-#if NW_PLAYER_DIAGNOSTICS
-        if (timestamping) {
-            void* timestamps = nullptr;
-            D3D12_RANGE range{0u, 2u * sizeof(UINT64)};
-            if (SUCCEEDED(state->timestamp_readback->Map(0u, &range,
-                                                         &timestamps)) &&
-                timestamps != nullptr) {
-                const auto* values =
-                    static_cast<const UINT64*>(timestamps);
-                if (values[1] > values[0]) {
-                    instrumentation_.SetGpuTiming(
-                        (1000.0 * static_cast<double>(values[1] - values[0])) /
-                        static_cast<double>(state->timestamp_frequency));
-                }
-                D3D12_RANGE empty{0u, 0u};
-                state->timestamp_readback->Unmap(0u, &empty);
-            }
-        }
-#endif
-    }
     if (CheckDeviceRemoved("renderAtTick")) {
         return ExitCode::DeviceRemoved;
     }
@@ -3461,9 +3417,60 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         }
         ++frames_presented_;
         stats_.frames_presented = frames_presented_;
-        if (CheckD3D12Validation("renderAtTick_present")) {
-            return last_exit_;
+    }
+
+    // Present operations are ordered on the D3D12 queue used to create the
+    // swap chain. Signal only after Present so frame retirement also covers
+    // presentation's use of the back buffer. A pre-Present signal can complete
+    // while DXGI still owns the resource, making resize/shutdown final-release
+    // it while presentation is in flight (D3D12 debug-layer message ID 921).
+    const std::uint64_t fence_value = next_fence_value_++;
+#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+    TraceD3D12ValidationStage(config_.enable_validation,
+                              "frame.queue.retire_signal.before");
+#endif
+    if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+        return Fail(ExitCode::GpuSubmissionFailed, "gpu_execution",
+                    "queue_signal_failed", "signal", "succeeded", "failed",
+                    "renderAtTick", "ID3D12CommandQueue::Signal failed");
+    }
+#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+    TraceD3D12ValidationStage(config_.enable_validation,
+                              "frame.queue.retire_signal.after");
+#endif
+    frame.fence_value = fence_value;
+
+    if (config_.wait_for_gpu_each_frame) {
+        const ExitCode wait = WaitForFenceValue(
+            state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
+        if (wait != ExitCode::Success) {
+            return Fail(wait, "gpu_execution", "fence_wait_failed", "fence",
+                        "completed", "timeout_or_failure", "renderAtTick",
+                        "frame fence wait failed");
         }
+        frame.fence_value = 0u;
+#if NW_PLAYER_DIAGNOSTICS
+        if (timestamping) {
+            void* timestamps = nullptr;
+            D3D12_RANGE range{0u, 2u * sizeof(UINT64)};
+            if (SUCCEEDED(state->timestamp_readback->Map(0u, &range,
+                                                         &timestamps)) &&
+                timestamps != nullptr) {
+                const auto* values =
+                    static_cast<const UINT64*>(timestamps);
+                if (values[1] > values[0]) {
+                    instrumentation_.SetGpuTiming(
+                        (1000.0 * static_cast<double>(values[1] - values[0])) /
+                        static_cast<double>(state->timestamp_frequency));
+                }
+                D3D12_RANGE empty{0u, 0u};
+                state->timestamp_readback->Unmap(0u, &empty);
+            }
+        }
+#endif
+    }
+    if (CheckD3D12Validation("renderAtTick_present")) {
+        return last_exit_;
     }
 #else
     // Host simulation executes the same ordered frame contract without a GPU.
