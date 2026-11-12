@@ -40,6 +40,9 @@ struct PlayerConfig {
     // adapter for native lifecycle and D3D12-validation execution.  Hardware
     // qualification never sets this flag.
     bool allow_software_adapter = false;
+    // Diagnostic seam: force IDXGISwapChain3::Present to fail after the frame
+    // command list has been submitted, exercising retirement-fence handling.
+    bool simulate_presentation_failure = false;
     bool emit_benchmark_metrics = false;
     bool emit_readback_values = false;
     bool wait_for_gpu_each_frame = false;
@@ -59,6 +62,10 @@ struct PlayerDiagnostic {
 
 struct PlayerAllocationStats {
     std::uint64_t engine_resource_bytes = 0u;
+    // Cumulative bytes ever allocated for engine resources.  This intentionally
+    // differs from engine_resource_bytes, which tracks live allocations and is
+    // reduced when a resize/recreation path releases the old display texture.
+    std::uint64_t engine_cumulative_resource_bytes = 0u;
     std::uint64_t engine_upload_bytes = 0u;
     std::uint64_t engine_descriptor_count = 0u;
     std::uint64_t engine_heap_count = 0u;
@@ -70,6 +77,7 @@ struct PlayerAllocationStats {
     std::uint64_t frames_rendered = 0u;
     std::uint64_t frames_presented = 0u;
     std::uint64_t uav_barrier_count = 0u;
+    std::uint64_t present_failure_retirements = 0u;
     bool post_initialization_allocation_violation = false;
 };
 
@@ -210,6 +218,7 @@ private:
                               bool descriptor,
                               bool heap,
                               bool explicit_path);
+    void RemoveEngineResourceAllocation(std::uint64_t bytes) noexcept;
     bool BuildFrameInstructionPlan();
     ExitCode RunInitializationInstructions();
     ExitCode ExecuteFrameInstructions(std::uint64_t tick);

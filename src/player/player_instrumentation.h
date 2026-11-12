@@ -18,6 +18,7 @@ struct EngineMemoryAccounting {
     // Engine-owned accounting.  These are deliberately separate from the
     // driver/process totals below.
     std::uint64_t engine_resource_bytes = 0u;
+    std::uint64_t engine_cumulative_resource_bytes = 0u;
     std::uint64_t engine_upload_bytes = 0u;
     std::uint64_t engine_descriptor_count = 0u;
     std::uint64_t engine_heap_count = 0u;

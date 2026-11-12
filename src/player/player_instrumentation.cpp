@@ -79,6 +79,8 @@ void PlayerInstrumentation::EndFrame() noexcept {
 void PlayerInstrumentation::SetEngineAccounting(
     const EngineMemoryAccounting& accounting) noexcept {
     memory_.engine_resource_bytes = accounting.engine_resource_bytes;
+    memory_.engine_cumulative_resource_bytes =
+        accounting.engine_cumulative_resource_bytes;
     memory_.engine_upload_bytes = accounting.engine_upload_bytes;
     memory_.engine_descriptor_count = accounting.engine_descriptor_count;
     memory_.engine_heap_count = accounting.engine_heap_count;

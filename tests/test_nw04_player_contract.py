@@ -627,6 +627,8 @@ def test_player_interfaces_and_validation_order_are_present() -> None:
         "--simulate-pipeline-failure",
         "--simulate-root-signature-failure",
         "--simulate-frame-allocation",
+        "--simulate-present-failure",
+        "--present-before-last-dispatch",
         "--planner-self-test",
         "--planner-mutation",
     ):
@@ -767,7 +769,7 @@ def test_compose_display_stream_onto_compute_only_package() -> None:
     assert contract.validate_frame_plan(composed) == []
 
 
-def test_nw04_hardware_evidence_is_verified_and_schema_valid() -> None:
+def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
     from schema_validator import validate_file_against_schema
 
     evidence_path = REPO_ROOT / "benchmarks" / "nw04-hardware-evidence.json"
@@ -775,25 +777,91 @@ def test_nw04_hardware_evidence_is_verified_and_schema_valid() -> None:
     validate_file_against_schema(evidence_path, schema_path)
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["task"] == "NW-04"
-    assert evidence["verification_status"] == "verified"
+    assert evidence["verification_status"] == "pending_unverified"
     for tier in ("ada", "blackwell"):
-        assert evidence["qualifications"][tier]["status"] == "verified"
+        assert evidence["qualifications"][tier]["status"] == "pending_unverified"
 
-    successful = [
-        execution
-        for execution in evidence["executions"]
-        if execution["execution_status"] == "passed"
+    completion = verify_nw04.check_hardware_evidence_complete(
+        evidence_path,
+        fixture=REPO_ROOT / "fixtures" / "nw04_package_player" / "main.cpp",
+        package_path=REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp",
+    )
+    assert not completion.passed
+    assert "artifact hashes" in completion.detail
+
+
+def test_hardware_evidence_must_match_supplied_artifacts(tmp_path: Path) -> None:
+    fixture = tmp_path / "player.exe"
+    package_path = tmp_path / "package.nwp"
+    fixture.write_bytes(b"current player")
+    package_path.write_bytes(b"current package")
+    player_sha = hashlib.sha256(fixture.read_bytes()).hexdigest()
+    package_sha = hashlib.sha256(package_path.read_bytes()).hexdigest()
+
+    def execution(tier: str, player: str, package: str) -> dict[str, object]:
+        return {
+            "hardware_tier": tier,
+            "execution_status": "passed",
+            "exit_code": 0,
+            "player": {"sha256": player},
+            "package": {"sha256": package, "profile_id": nwp.COMMON_PROFILE_ID,
+                        "requirements_digest": nwp.COMMON_REQUIREMENTS_DIGEST},
+            "adapter": {},
+            "environment": {},
+            "queried_capabilities": {},
+            "d3d12_validation_clean": True,
+            "post_initialization_allocation_violation": "0",
+            "non_aliased_placements": "1",
+            "memory": {
+                "engine_live_resource_bytes": "4096",
+                "engine_cumulative_resource_bytes": "8192",
+            },
+            "render": {
+                "frames": "10",
+                "presents": "10",
+                "resize_count": "2",
+                "uav_barriers": "1",
+            },
+        }
+
+    record_path = tmp_path / "evidence.json"
+    record_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "task": "NW-04",
+                "verification_status": "verified",
+                "qualifications": {
+                    "ada": {"hardware_tier": "desktop_ada_representative",
+                            "status": "verified"},
+                    "blackwell": {"hardware_tier": "desktop_blackwell_representative",
+                                  "status": "verified"},
+                },
+                "executions": [
+                    execution("ada", "a" * 64, "b" * 64),
+                    execution("blackwell", "a" * 64, "b" * 64),
+                ],
+                "policy": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    stale = verify_nw04.check_hardware_evidence_complete(
+        record_path, fixture=fixture, package_path=package_path
+    )
+    assert not stale.passed
+    assert "supplied player hash" in stale.detail
+
+    matching = json.loads(record_path.read_text(encoding="utf-8"))
+    matching["executions"] = [
+        execution("ada", player_sha, package_sha),
+        execution("blackwell", player_sha, package_sha),
     ]
-    assert {execution["hardware_tier"] for execution in successful} == {
-        "ada",
-        "blackwell",
-    }
-    assert all(execution["d3d12_validation_clean"] for execution in successful)
-    assert len({execution["player"]["sha256"] for execution in successful}) == 1
-    assert len({execution["package"]["sha256"] for execution in successful}) == 1
-
-    completion = verify_nw04.check_hardware_evidence_complete(evidence_path)
-    assert completion.passed
+    record_path.write_text(json.dumps(matching), encoding="utf-8")
+    accepted = verify_nw04.check_hardware_evidence_complete(
+        record_path, fixture=fixture, package_path=package_path
+    )
+    assert accepted.passed, accepted.detail
 
 
 def test_synthetic_contract_fixture_cannot_certify_hardware() -> None:
@@ -977,6 +1045,8 @@ def test_evidence_preserves_failure_after_later_successes(
                 "NW_PLAYER_MINIMIZE_RESTORE_RENDERED=1",
                 "NW_PLAYER_RESIZE_COUNT=4",
                 "NW_PLAYER_UAV_BARRIERS=3",
+                "NW_PLAYER_ENGINE_RESOURCE_BYTES=4096",
+                "NW_PLAYER_ENGINE_CUMULATIVE_RESOURCE_BYTES=8192",
                 f"NW_PLAYER_ADAPTER_GENERATION={tier}",
                 "NW_PLAYER_ADAPTER_DESCRIPTION=representative",
             )

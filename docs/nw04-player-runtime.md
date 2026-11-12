@@ -73,6 +73,12 @@ direct queue. Changing the compute output or the supplied tick therefore
 changes the displayed image. Ordinary resource barriers only; enhanced barriers
 are not used, and no frame instruction performs a CPU readback.
 
+The display pass temporarily rebinds the compute root signature, root
+constants, and descriptor tables. After the display dispatch it restores the
+latest package binding state, so a package stream such as
+`dispatch, present, dispatch` cannot accidentally execute the second dispatch
+with the display signature.
+
 `frame.barrier` operand 0 uses this stable player mapping:
 
 | Value | State |
@@ -134,6 +140,11 @@ tick update writes the parameter's complete declared width.
 - `shutdown()` drains the final asynchronous frame and returns any fence,
   device-removal, or D3D12-validation failure it observed while still
   completing cleanup.
+- If `Present` reports occlusion or a non-device-removal failure after the
+  command list was submitted, the player still signals and records a
+  retirement fence before returning the presentation diagnostic. Cleanup and
+  `shutdown()` therefore wait for the submitted work instead of releasing
+  resources still in GPU use.
 
 ## Instrumentation
 
@@ -144,6 +155,12 @@ private bytes and driver-local GPU usage. The release profile defines
 `NW_ENABLE_D3D12_VALIDATION=0` and excludes the diagnostic surface. No runtime
 DXC/Slang, graph parser, source schema, reflection table, or authoring metadata
 is linked into the player.
+
+`engine_resource_bytes` is live engine-resource accounting. Resize/recreation
+removes the released display texture's adapter-queried allocation size before
+adding its replacement. `engine_cumulative_resource_bytes` separately records
+every resource allocation ever made, so repeated resize cycles cannot inflate
+the live figure while allocation history remains inspectable.
 
 ## Fixtures and Verification
 
@@ -163,6 +180,9 @@ is linked into the player.
   for hardware evidence.
 - `python tools/nw04_evidence.py` records executions and leaves missing Ada or
   Blackwell coverage explicitly `pending_unverified`.
+- Hardware qualification is bound to the exact supplied player/package SHA-256
+  values. Historical executions for different artifacts remain historical and
+  cannot satisfy the current qualification check.
 - `pwsh tools/nw01/capture-nw04-player.ps1 -Fixture <player.exe> -Package
   <real.nwp> -Tier ada|blackwell` is the NW-01B evidence-harness entry point
   for a physical host.

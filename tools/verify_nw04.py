@@ -561,6 +561,14 @@ def check_player_source_contract() -> CheckResult:
         "SetWindowMinimizedForTesting",
         "An ordinary minimize/restore",
         "CheckD3D12Validation(\"shutdown\")",
+        # Post-submission retirement, post-present binding restoration, and
+        # live-versus-cumulative engine allocation accounting.
+        "present_failure_retirements",
+        "retire_submitted_work",
+        "package_root_signature",
+        "display_texture_allocation_bytes",
+        "RemoveEngineResourceAllocation",
+        "engine_cumulative_resource_bytes",
     ]
     for token in required_source:
         if token not in source + plan + header:
@@ -776,6 +784,9 @@ def _validate_hardware_package(package_path: Path) -> CheckResult:
 
 def check_hardware_evidence_complete(
     record_path: Path | None = None,
+    *,
+    fixture: Path | None = None,
+    package_path: Path | None = None,
 ) -> CheckResult:
     """Require executed Ada and Blackwell qualification for identical artifacts."""
     path = record_path or (REPO_ROOT / "benchmarks" / "nw04-hardware-evidence.json")
@@ -804,12 +815,38 @@ def check_hardware_evidence_complete(
         for execution in record.get("executions", [])
         if execution.get("execution_status") == "passed"
     ]
-    package_hashes = {entry["package"]["sha256"] for entry in successful}
-    player_hashes = {entry["player"]["sha256"] for entry in successful}
-    verified_tiers = {
-        entry.get("hardware_tier") for entry in successful
-    }
     failures: list[str] = []
+    if fixture is not None and package_path is not None:
+        try:
+            current_player_sha256 = hashlib.sha256(
+                fixture.read_bytes()
+            ).hexdigest()
+            current_package_sha256 = hashlib.sha256(
+                package_path.read_bytes()
+            ).hexdigest()
+        except OSError as exc:
+            return CheckResult(
+                "nw04_hardware_qualification", True, False, str(exc)
+            )
+    else:
+        current_player_sha256 = None
+        current_package_sha256 = None
+    matching = [
+        execution
+        for execution in successful
+        if current_player_sha256 is None
+        or (
+            execution.get("player", {}).get("sha256")
+            == current_player_sha256
+            and execution.get("package", {}).get("sha256")
+            == current_package_sha256
+        )
+    ]
+    package_hashes = {
+        entry["package"]["sha256"] for entry in matching
+    }
+    player_hashes = {entry["player"]["sha256"] for entry in matching}
+    verified_tiers = {entry.get("hardware_tier") for entry in matching}
     if record.get("verification_status") != "verified":
         failures.append(
             f"verification_status={record.get('verification_status', 'unavailable')}"
@@ -820,12 +857,22 @@ def check_hardware_evidence_complete(
         failures.append("no passed execution for both Ada and Blackwell")
     if len(package_hashes) != 1 or len(player_hashes) != 1:
         failures.append("qualification did not use identical player/package hashes")
+    if current_player_sha256 is not None:
+        if not matching:
+            failures.append(
+                "no retained execution matches the supplied player/package "
+                "artifact hashes"
+            )
+        if current_player_sha256 not in player_hashes:
+            failures.append("supplied player hash is not qualified")
+        if current_package_sha256 not in package_hashes:
+            failures.append("supplied package hash is not qualified")
     if any(
         execution.get("d3d12_validation_clean") is not True
-        for execution in successful
+        for execution in matching
     ):
         failures.append("a retained execution was not D3D12-validation-clean")
-    for execution in successful:
+    for execution in matching:
         render = execution.get("render", {})
         try:
             frames = int(render.get("frames", "-1"))
@@ -847,6 +894,21 @@ def check_hardware_evidence_complete(
             failures.append("execution reported a post-initialization allocation")
         if execution.get("non_aliased_placements") != "1":
             failures.append("execution did not use non-aliased placements")
+        memory = execution.get("memory", {})
+        try:
+            live_bytes = int(
+                memory.get("engine_live_resource_bytes", "-1")
+            )
+            cumulative_bytes = int(
+                memory.get("engine_cumulative_resource_bytes", "-1")
+            )
+        except (TypeError, ValueError):
+            live_bytes = cumulative_bytes = -1
+        if live_bytes < 0 or cumulative_bytes <= live_bytes:
+            failures.append(
+                "execution did not distinguish live and cumulative engine "
+                "resource accounting"
+            )
     if failures:
         return CheckResult(
             "nw04_hardware_qualification",
@@ -1109,6 +1171,26 @@ def run_native_fixture(
             "native fixture did not execute the resize sequence",
             evidence={"stdout": output, "stderr": proc.stderr},
         )
+    live_resource = re.search(
+        r"NW_PLAYER_ENGINE_RESOURCE_BYTES=(\d+)", output
+    )
+    cumulative_resource = re.search(
+        r"NW_PLAYER_ENGINE_CUMULATIVE_RESOURCE_BYTES=(\d+)", output
+    )
+    if (
+        live_resource is None
+        or cumulative_resource is None
+        or int(live_resource.group(1)) <= 0
+        or int(cumulative_resource.group(1)) <= int(live_resource.group(1))
+    ):
+        return CheckResult(
+            "nw04_native_fixture",
+            True,
+            False,
+            "engine resource accounting does not distinguish live from "
+            "cumulative allocations across resize",
+            evidence={"stdout": output, "stderr": proc.stderr},
+        )
     if "NW_D3D12_VALIDATION_ERROR=" in (output + proc.stderr):
         return CheckResult(
             "nw04_native_fixture",
@@ -1172,6 +1254,112 @@ def run_device_removal_check(fixture: Path, package_path: Path) -> CheckResult:
         )
     return CheckResult(
         "nw04_device_removal_termination",
+        True,
+        True,
+        evidence={"stdout": proc.stdout, "stderr": proc.stderr, "command": command},
+    )
+
+
+def run_presentation_failure_retirement_check(
+    fixture: Path, package_path: Path, *, validation: bool = True
+) -> CheckResult:
+    """Present failure after submission must retire the frame before cleanup."""
+    if not fixture.exists():
+        return CheckResult(
+            "nw04_presentation_failure_retirement",
+            True,
+            False,
+            f"fixture binary is unavailable: {fixture}",
+            unavailable=True,
+        )
+    command = [
+        str(fixture),
+        "--package",
+        str(package_path),
+        "--frames",
+        "1",
+        "--simulate-present-failure",
+    ]
+    if validation:
+        command.append("--validation")
+    proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    if proc.returncode != 35:
+        return CheckResult(
+            "nw04_presentation_failure_retirement",
+            True,
+            False,
+            f"expected PresentationFailed (35), observed {proc.returncode}",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    for line in (
+        "NW_PLAYER_PRESENT_FAILURE_RETIRED=1",
+        "NW_PLAYER_PRESENT_FAILURE_SHUTDOWN_CLEAN=1",
+    ):
+        if line not in proc.stdout:
+            return CheckResult(
+                "nw04_presentation_failure_retirement",
+                True,
+                False,
+                f"presentation-failure retirement evidence is missing: {line}",
+                evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+            )
+    return CheckResult(
+        "nw04_presentation_failure_retirement",
+        True,
+        True,
+        evidence={"stdout": proc.stdout, "stderr": proc.stderr, "command": command},
+    )
+
+
+def run_present_then_dispatch_check(
+    fixture: Path, package_path: Path, *, validation: bool = True
+) -> CheckResult:
+    """A dispatch after frame.present must restore package bindings."""
+    if not fixture.exists():
+        return CheckResult(
+            "nw04_present_then_dispatch",
+            True,
+            False,
+            f"fixture binary is unavailable: {fixture}",
+            unavailable=True,
+        )
+    command = [
+        str(fixture),
+        "--package",
+        str(package_path),
+        "--frames",
+        "1",
+        "--present-before-last-dispatch",
+    ]
+    if validation:
+        command.append("--validation")
+    proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return CheckResult(
+            "nw04_present_then_dispatch",
+            True,
+            False,
+            f"fixture exited {proc.returncode}",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if "frame.present,frame.dispatch" not in proc.stdout:
+        return CheckResult(
+            "nw04_present_then_dispatch",
+            True,
+            False,
+            "fixture did not execute a dispatch after frame.present",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if "NW_PLAYER_FRAMES=1" not in proc.stdout or "NW_PLAYER_PRESENTS=1" not in proc.stdout:
+        return CheckResult(
+            "nw04_present_then_dispatch",
+            True,
+            False,
+            "post-present dispatch frame did not render and present",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    return CheckResult(
+        "nw04_present_then_dispatch",
         True,
         True,
         evidence={"stdout": proc.stdout, "stderr": proc.stderr, "command": command},
@@ -1670,6 +1858,20 @@ def main() -> int:
                         run_device_removal_check(args.fixture, args.package)
                     )
                     results.append(
+                        run_presentation_failure_retirement_check(
+                            args.fixture,
+                            args.package,
+                            validation=args.mode != "NativeLifecycle",
+                        )
+                    )
+                    results.append(
+                        run_present_then_dispatch_check(
+                            args.fixture,
+                            args.package,
+                            validation=args.mode != "NativeLifecycle",
+                        )
+                    )
+                    results.append(
                         run_allocation_failure_check(args.fixture, args.package)
                     )
                     results.append(
@@ -1687,7 +1889,11 @@ def main() -> int:
                         run_planner_self_test(args.fixture, args.package)
                     )
     if args.mode == "Hardware":
-        results.append(check_hardware_evidence_complete())
+        results.append(
+            check_hardware_evidence_complete(
+                fixture=args.fixture, package_path=args.package
+            )
+        )
 
     passed = all(result.passed for result in results if result.required)
     summary = build_summary(args.mode, results)

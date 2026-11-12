@@ -201,6 +201,23 @@ def record_execution(
         completion_failures.append(
             f"NW_PLAYER_UAV_BARRIERS={uav_barriers} (expected > 0)"
         )
+    try:
+        live_resource_bytes = int(
+            metrics.get("NW_PLAYER_ENGINE_RESOURCE_BYTES", "-1")
+        )
+        cumulative_resource_bytes = int(
+            metrics.get("NW_PLAYER_ENGINE_CUMULATIVE_RESOURCE_BYTES", "-1")
+        )
+    except ValueError:
+        live_resource_bytes = cumulative_resource_bytes = -1
+    if (
+        live_resource_bytes <= 0
+        or cumulative_resource_bytes <= live_resource_bytes
+    ):
+        completion_failures.append(
+            "engine resource accounting does not distinguish live from "
+            "cumulative allocations"
+        )
     if "NW_D3D12_VALIDATION_ERROR=" in (proc.stdout + proc.stderr):
         completion_failures.append("D3D12 validation error was emitted")
     execution_passed = proc.returncode == 0 and not completion_failures
@@ -308,6 +325,12 @@ def record_execution(
         "memory": {
             "engine_accounted_bytes": metrics.get(
                 "NW_PLAYER_ENGINE_ACCOUNTED_BYTES", "unavailable"
+            ),
+            "engine_live_resource_bytes": metrics.get(
+                "NW_PLAYER_ENGINE_RESOURCE_BYTES", "unavailable"
+            ),
+            "engine_cumulative_resource_bytes": metrics.get(
+                "NW_PLAYER_ENGINE_CUMULATIVE_RESOURCE_BYTES", "unavailable"
             ),
             "driver_process_private_bytes": metrics.get(
                 "NW_PLAYER_DRIVER_PROCESS_PRIVATE_BYTES", "unavailable"

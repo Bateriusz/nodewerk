@@ -38,6 +38,8 @@ struct FixtureArgs {
     bool simulate_pipeline_failure = false;
     bool simulate_root_signature_failure = false;
     bool simulate_frame_allocation = false;
+    bool simulate_present_failure = false;
+    bool present_before_last_dispatch = false;
     bool planner_self_test = false;
     const char* planner_mutation = nullptr;
 };
@@ -130,6 +132,10 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             args->simulate_root_signature_failure = true;
         } else if (std::strcmp(arg, "--simulate-frame-allocation") == 0) {
             args->simulate_frame_allocation = true;
+        } else if (std::strcmp(arg, "--simulate-present-failure") == 0) {
+            args->simulate_present_failure = true;
+        } else if (std::strcmp(arg, "--present-before-last-dispatch") == 0) {
+            args->present_before_last_dispatch = true;
         } else if (std::strcmp(arg, "--planner-self-test") == 0) {
             args->planner_self_test = true;
         } else if (std::strcmp(arg, "--planner-mutation") == 0) {
@@ -170,6 +176,8 @@ int main(int argc, char** argv) {
             "[--simulate-pipeline-failure] "
             "[--simulate-root-signature-failure] "
             "[--simulate-frame-allocation] "
+            "[--simulate-present-failure] "
+            "[--present-before-last-dispatch] "
             "[--planner-self-test] "
             "[--planner-mutation name] "
             "[--validation]\n");
@@ -183,6 +191,7 @@ int main(int argc, char** argv) {
     config.allow_software_adapter =
         args.allow_software_adapter ||
         HasEnvironmentVariable("NW04_ALLOW_SOFTWARE_ADAPTER");
+    config.simulate_presentation_failure = args.simulate_present_failure;
     config.enable_validation = args.validation;
     config.emit_benchmark_metrics = args.emit_benchmark_metrics;
     config.wait_for_gpu_each_frame = args.emit_benchmark_metrics;
@@ -413,7 +422,41 @@ int main(int argc, char** argv) {
                         player.last_timeline_value()));
         return 0;
     }
-    nw::player::ExitCode code = player.initializeFromFile(args.package_path);
+    nw::player::ExitCode code = nw::player::ExitCode::Success;
+    if (args.present_before_last_dispatch) {
+        // Native regression: a package dispatch must still observe its own
+        // root signature/constants/descriptors after an intervening present.
+        const nw::player::PackageLoadResult loaded =
+            nw::player::LoadPackageFromFile(args.package_path);
+        if (loaded.exit_code != nw::player::ExitCode::Success) {
+            return static_cast<int>(loaded.exit_code);
+        }
+        nw::package::Package package = loaded.package;
+        int present_index = -1;
+        int last_dispatch_index = -1;
+        for (std::size_t index = 0u; index < package.frame.size(); ++index) {
+            if (package.frame[index].opcode == "frame.present") {
+                present_index = static_cast<int>(index);
+            } else if (package.frame[index].opcode == "frame.dispatch") {
+                last_dispatch_index = static_cast<int>(index);
+            }
+        }
+        if (present_index < 0 || last_dispatch_index < 0 ||
+            last_dispatch_index < present_index) {
+            std::fprintf(stderr,
+                         "package cannot exercise present-before-dispatch\n");
+            return static_cast<int>(
+                nw::player::ExitCode::PackageValidationFailed);
+        }
+        const nw::package::Instruction present =
+            package.frame[static_cast<std::size_t>(present_index)];
+        package.frame.erase(package.frame.begin() + present_index);
+        package.frame.insert(
+            package.frame.begin() + last_dispatch_index, present);
+        code = player.initialize(package);
+    } else {
+        code = player.initializeFromFile(args.package_path);
+    }
     if (code != nw::player::ExitCode::Success) {
         std::printf("NW_PLAYER_PARTIAL_INITIALIZATION_CLEANUP=1\n");
         if (args.simulate_allocation_failure &&
@@ -433,6 +476,28 @@ int main(int argc, char** argv) {
             std::printf("NW_PLAYER_ROOT_SIGNATURE_FAILURE_REJECTED=1\n");
         }
         return player.Report(true);
+    }
+
+    if (args.simulate_present_failure) {
+        code = player.renderAtTick(args.tick_start);
+        const auto& stats = player.allocation_stats();
+        std::printf("NW_PLAYER_PRESENT_FAILURE_RETIRED=%d\n",
+                    stats.present_failure_retirements > 0u ? 1 : 0);
+        if (code != nw::player::ExitCode::PresentationFailed ||
+            stats.present_failure_retirements == 0u) {
+            std::fprintf(stderr,
+                         "presentation failure did not preserve submitted-work "
+                         "retirement\n");
+            (void)player.shutdown();
+            return player.Report(true);
+        }
+        const nw::player::ExitCode shutdown_code = player.shutdown();
+        std::printf("NW_PLAYER_PRESENT_FAILURE_SHUTDOWN_CLEAN=%d\n",
+                    shutdown_code == nw::player::ExitCode::Success ? 1 : 0);
+        if (shutdown_code != nw::player::ExitCode::Success) {
+            return player.Report(true);
+        }
+        return static_cast<int>(nw::player::ExitCode::PresentationFailed);
     }
 
     if (args.resize_sequence) {
@@ -559,6 +624,9 @@ int main(int argc, char** argv) {
                 player.resource_plan().UsesOnlyNonAliasedPlacements() ? 1 : 0);
     std::printf("NW_PLAYER_ENGINE_RESOURCE_BYTES=%llu\n",
                 static_cast<unsigned long long>(stats.engine_resource_bytes));
+    std::printf("NW_PLAYER_ENGINE_CUMULATIVE_RESOURCE_BYTES=%llu\n",
+                static_cast<unsigned long long>(
+                    stats.engine_cumulative_resource_bytes));
     std::printf("NW_PLAYER_ENGINE_UPLOAD_BYTES=%llu\n",
                 static_cast<unsigned long long>(stats.engine_upload_bytes));
     std::printf("NW_PLAYER_ENGINE_DESCRIPTOR_COUNT=%llu\n",
@@ -633,6 +701,10 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(
                         memory.engine_resource_bytes +
                         memory.engine_upload_bytes));
+        std::printf("NW_PLAYER_ENGINE_CUMULATIVE_ACCOUNTED_BYTES=%llu\n",
+                    static_cast<unsigned long long>(
+                        memory.engine_cumulative_resource_bytes +
+                        memory.engine_upload_bytes));
         std::printf("NW_PLAYER_DRIVER_PROCESS_PRIVATE_BYTES=%llu\n",
                     static_cast<unsigned long long>(
                         memory.process_private_bytes));
@@ -646,6 +718,10 @@ int main(int argc, char** argv) {
         std::printf("NW_PLAYER_ENGINE_COMMITTED_BYTES=%llu\n",
                     static_cast<unsigned long long>(
                         stats.engine_resource_bytes + stats.engine_upload_bytes));
+        std::printf("NW_PLAYER_ENGINE_CUMULATIVE_COMMITTED_BYTES=%llu\n",
+                    static_cast<unsigned long long>(
+                        stats.engine_cumulative_resource_bytes +
+                        stats.engine_upload_bytes));
         std::printf("NW_PLAYER_PROCESS_PRIVATE_BYTES=%llu\n",
                     static_cast<unsigned long long>(
                         nw::player::QueryProcessPrivateBytes()));

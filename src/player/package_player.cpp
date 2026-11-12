@@ -430,6 +430,7 @@ struct PlatformState {
     ID3D12RootSignature* display_root_signature = nullptr;
     ID3D12PipelineState* display_pipeline = nullptr;
     ID3D12Resource* display_texture = nullptr;
+    std::uint64_t display_texture_allocation_bytes = 0u;
     D3D12_RESOURCE_STATES display_texture_state =
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_CPU_DESCRIPTOR_HANDLE display_uav_cpu{};
@@ -861,9 +862,18 @@ void PackagePlayer::NoteEngineAllocation(std::uint64_t bytes,
         stats_.post_initialization_allocation_violation = true;
     }
     stats_.engine_resource_bytes += bytes;
+    stats_.engine_cumulative_resource_bytes += bytes;
     stats_.engine_upload_bytes += bytes_upload;
     if (descriptor) ++stats_.engine_descriptor_count;
     if (heap) ++stats_.engine_heap_count;
+}
+
+void PackagePlayer::RemoveEngineResourceAllocation(
+    std::uint64_t bytes) noexcept {
+    stats_.engine_resource_bytes =
+        bytes > stats_.engine_resource_bytes
+            ? 0u
+            : stats_.engine_resource_bytes - bytes;
 }
 
 bool PackagePlayer::BuildFrameInstructionPlan() {
@@ -2151,6 +2161,9 @@ ExitCode PackagePlayer::RecreateRenderTargets() {
     state->swapchain_valid = true;
 
     if (state->display_texture != nullptr) {
+        RemoveEngineResourceAllocation(
+            state->display_texture_allocation_bytes);
+        state->display_texture_allocation_bytes = 0u;
         state->display_texture->Release();
         state->display_texture = nullptr;
     }
@@ -2173,6 +2186,18 @@ ExitCode PackagePlayer::RecreateRenderTargets() {
         desc.SampleDesc.Count = 1u;
         desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        const D3D12_RESOURCE_ALLOCATION_INFO allocation =
+            state->device->GetResourceAllocationInfo(0u, 1u, &desc);
+        if (allocation.SizeInBytes == 0u ||
+            allocation.SizeInBytes == UINT64_MAX ||
+            allocation.Alignment == 0u) {
+            return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                        "display_texture_allocation_info",
+                        "display_texture_allocation_info",
+                        "valid size/alignment", "unavailable", "swapchain",
+                        "GetResourceAllocationInfo rejected the display "
+                        "texture");
+        }
         if (FAILED(state->device->CreateCommittedResource(
                 &heap, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_COMMON, nullptr,
@@ -2184,11 +2209,11 @@ ExitCode PackagePlayer::RecreateRenderTargets() {
                         "allocated", "allocation failed", "swapchain",
                         "could not allocate the fullscreen display texture");
         }
+        state->display_texture_allocation_bytes =
+            allocation.SizeInBytes;
         state->display_texture_state = D3D12_RESOURCE_STATE_COMMON;
-        NoteEngineAllocation(
-            static_cast<std::uint64_t>(width_) *
-                static_cast<std::uint64_t>(height_) * 4u,
-            0u, false, false, resize_in_progress_);
+        NoteEngineAllocation(allocation.SizeInBytes, 0u, false, false,
+                             resize_in_progress_);
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -2886,6 +2911,20 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     bool timeline_override = timeline_override_active_;
     std::uint32_t timeline_parameter = timeline_parameter_id_;
     std::uint64_t timeline_value = timeline_tick_;
+    // Latest package binding state.  frame.present temporarily switches to the
+    // player display root signature/pipeline and must restore this state for a
+    // following package dispatch.
+    ID3D12RootSignature* package_root_signature = nullptr;
+    bool package_has_constants = false;
+    std::uint32_t package_constant_root = 0u;
+    std::uint32_t package_constant_count = 0u;
+    std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+        package_constant_values{};
+    std::array<D3D12_GPU_DESCRIPTOR_HANDLE,
+               package::kMaxRootSignatureDwordCost>
+        package_tables{};
+    std::array<bool, package::kMaxRootSignatureDwordCost>
+        package_table_valid{};
     for (const auto& op : frame_ops_) {
         switch (op.type) {
             case FrameOp::Type::SetRootSignature: {
@@ -2904,6 +2943,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "frame root signature was not created");
                 }
                 list->SetComputeRootSignature(root);
+                package_root_signature = root;
                 break;
             }
             case FrameOp::Type::SetRootConstants:
@@ -2944,6 +2984,12 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     list->SetComputeRoot32BitConstants(
                         op.root_parameter, op.constant_count,
                         values.data(), 0u);
+                    if (op.root_parameter < package_constant_values.size()) {
+                        package_has_constants = true;
+                        package_constant_root = op.root_parameter;
+                        package_constant_count = op.constant_count;
+                        package_constant_values = values;
+                    }
                     last_root_constants_ = values;
                     last_root_constant_count_ = op.constant_count;
                 }
@@ -2969,6 +3015,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "for the referenced resource");
                 }
                 list->SetComputeRootDescriptorTable(op.root_parameter, handle);
+                if (op.root_parameter < package_tables.size()) {
+                    package_tables[op.root_parameter] = handle;
+                    package_table_valid[op.root_parameter] = true;
+                }
                 break;
             }
             case FrameOp::Type::Barrier: {
@@ -3319,6 +3369,24 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.copy.after");
 #endif
+                if (package_root_signature != nullptr) {
+                    list->SetComputeRootSignature(package_root_signature);
+                    if (package_has_constants &&
+                        package_constant_count > 0u) {
+                        list->SetComputeRoot32BitConstants(
+                            package_constant_root, package_constant_count,
+                            package_constant_values.data(), 0u);
+                    }
+                    for (std::size_t root_parameter = 0u;
+                         root_parameter < package_tables.size();
+                         ++root_parameter) {
+                        if (package_table_valid[root_parameter]) {
+                            list->SetComputeRootDescriptorTable(
+                                static_cast<UINT>(root_parameter),
+                                package_tables[root_parameter]);
+                        }
+                    }
+                }
                 break;
             }
         }
@@ -3385,7 +3453,35 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     instrumentation_.EndFrame();
 #endif
 
+    const auto retire_submitted_work = [&]() -> ExitCode {
+        const std::uint64_t fence_value = next_fence_value_++;
+#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+        TraceD3D12ValidationStage(config_.enable_validation,
+                                  "frame.queue.retire_signal.before");
+#endif
+        if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+            return Fail(ExitCode::GpuSubmissionFailed, "gpu_execution",
+                        "queue_signal_failed", "signal", "succeeded", "failed",
+                        "renderAtTick",
+                        "ID3D12CommandQueue::Signal failed");
+        }
+#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+        TraceD3D12ValidationStage(config_.enable_validation,
+                                  "frame.queue.retire_signal.after");
+#endif
+        frame.fence_value = fence_value;
+        return ExitCode::Success;
+    };
+
     if (CheckDeviceRemoved("renderAtTick")) {
+        // The deterministic test seam can report removal while the real device
+        // is still operational; retire submitted work in that case so cleanup
+        // never releases in-flight resources. A genuinely removed device
+        // cannot signal a usable fence and is skipped.
+        if (state->device != nullptr &&
+            SUCCEEDED(state->device->GetDeviceRemovedReason())) {
+            (void)retire_submitted_work();
+        }
         return ExitCode::DeviceRemoved;
     }
     if (present_requested && state->swapchain != nullptr) {
@@ -3393,12 +3489,18 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.swapchain.present.before");
 #endif
-        const HRESULT present_hr = state->swapchain->Present(1u, 0u);
+        const HRESULT present_hr =
+            config_.simulate_presentation_failure
+                ? static_cast<HRESULT>(E_FAIL)
+                : state->swapchain->Present(1u, 0u);
 #if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.swapchain.present.after");
 #endif
         if (present_hr == DXGI_STATUS_OCCLUDED) {
+            const ExitCode retirement = retire_submitted_work();
+            if (retirement != ExitCode::Success) return retirement;
+            ++stats_.present_failure_retirements;
             return Fail(ExitCode::PresentationOccluded, "presentation",
                         "present_occluded", "visible_present", "available",
                         "occluded", "renderAtTick",
@@ -3411,6 +3513,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             "renderAtTick",
                             "Present failed after device removal");
             }
+            const ExitCode retirement = retire_submitted_work();
+            if (retirement != ExitCode::Success) return retirement;
+            ++stats_.present_failure_retirements;
             return Fail(ExitCode::PresentationFailed, "presentation",
                         "present_failed", "present", "succeeded", "failed",
                         "renderAtTick", "IDXGISwapChain3::Present failed");
@@ -3424,21 +3529,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     // presentation's use of the back buffer. A pre-Present signal can complete
     // while DXGI still owns the resource, making resize/shutdown final-release
     // it while presentation is in flight (D3D12 debug-layer message ID 921).
-    const std::uint64_t fence_value = next_fence_value_++;
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
-    TraceD3D12ValidationStage(config_.enable_validation,
-                              "frame.queue.retire_signal.before");
-#endif
-    if (FAILED(state->queue->Signal(state->fence, fence_value))) {
-        return Fail(ExitCode::GpuSubmissionFailed, "gpu_execution",
-                    "queue_signal_failed", "signal", "succeeded", "failed",
-                    "renderAtTick", "ID3D12CommandQueue::Signal failed");
-    }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
-    TraceD3D12ValidationStage(config_.enable_validation,
-                              "frame.queue.retire_signal.after");
-#endif
-    frame.fence_value = fence_value;
+    const ExitCode retirement = retire_submitted_work();
+    if (retirement != ExitCode::Success) return retirement;
+    const std::uint64_t fence_value = frame.fence_value;
 
     if (config_.wait_for_gpu_each_frame) {
         const ExitCode wait = WaitForFenceValue(
@@ -3776,6 +3869,8 @@ ExitCode PackagePlayer::renderAtTick(std::uint64_t tick) {
 #if NW_PLAYER_DIAGNOSTICS
     EngineMemoryAccounting accounting{};
     accounting.engine_resource_bytes = stats_.engine_resource_bytes;
+    accounting.engine_cumulative_resource_bytes =
+        stats_.engine_cumulative_resource_bytes;
     accounting.engine_upload_bytes = stats_.engine_upload_bytes;
     accounting.engine_descriptor_count = stats_.engine_descriptor_count;
     accounting.engine_heap_count = stats_.engine_heap_count;
@@ -3939,6 +4034,9 @@ void PackagePlayer::ReleasePlatform() noexcept {
     }
     state->backbuffers.clear();
     if (state->display_texture != nullptr) {
+        RemoveEngineResourceAllocation(
+            state->display_texture_allocation_bytes);
+        state->display_texture_allocation_bytes = 0u;
         state->display_texture->Release();
         state->display_texture = nullptr;
     }
