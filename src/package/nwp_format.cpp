@@ -1029,15 +1029,30 @@ bool ValidateCapabilityIdentity(const CapabilityRecord& capability,
         AddDiagnostic(diagnostics, std::move(code), std::move(message),
                       std::string(kSectionCapability));
     };
-    if (capability.profile_id != kCommonProfileId) {
-        error("package_profile_unknown",
-              "unknown capability-profile identity '" + capability.profile_id + "'");
-    }
-    if (capability.requirements_digest != kCommonRequirementsDigest) {
-        error("package_profile_digest_mismatch",
-              "capability profile requires requirements digest '" +
-                  std::string(kCommonRequirementsDigest) + "', got '" +
-                  capability.requirements_digest + "'");
+    const bool common_primary =
+        capability.profile_id == kCommonProfileId &&
+        capability.requirements_digest == kCommonRequirementsDigest;
+    const bool optional_primary =
+        capability.profile_id == kOptionalWaveOpsProfileId &&
+        capability.requirements_digest ==
+            kOptionalWaveOpsRequirementsDigest;
+    if (!common_primary && !optional_primary) {
+        if (capability.profile_id != kCommonProfileId &&
+            capability.profile_id != kOptionalWaveOpsProfileId) {
+            error("package_profile_unknown",
+                  "unknown capability-profile identity '" +
+                      capability.profile_id + "'");
+        } else if (capability.profile_id == kCommonProfileId) {
+            error("package_profile_digest_mismatch",
+                  "capability profile requires requirements digest '" +
+                      std::string(kCommonRequirementsDigest) + "', got '" +
+                      capability.requirements_digest + "'");
+        } else {
+            error("package_profile_digest_mismatch",
+                  "optional capability profile requires requirements digest '" +
+                      std::string(kOptionalWaveOpsRequirementsDigest) +
+                      "', got '" + capability.requirements_digest + "'");
+        }
     }
     if (!capability.optional_profile_id.empty()) {
         if (capability.optional_profile_id != kOptionalWaveOpsProfileId) {

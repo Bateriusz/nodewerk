@@ -25,6 +25,7 @@ import hashlib
 import json
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Sequence
 
@@ -236,6 +237,11 @@ class FusionRecord:
     reason: str
     fused_expression: str = ""
     unfused_fallback: str = "nw03-root-lowering"
+    measured_hlsl_bytes_before: int = 0
+    measured_hlsl_bytes_after: int = 0
+    measured_runtime_ns_before: int = 0
+    measured_runtime_ns_after: int = 0
+    measurement_source: str = "unavailable"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -253,6 +259,11 @@ class FusionRecord:
             "reason": self.reason,
             "fused_expression": self.fused_expression,
             "unfused_fallback": self.unfused_fallback,
+            "measured_hlsl_bytes_before": self.measured_hlsl_bytes_before,
+            "measured_hlsl_bytes_after": self.measured_hlsl_bytes_after,
+            "measured_runtime_ns_before": self.measured_runtime_ns_before,
+            "measured_runtime_ns_after": self.measured_runtime_ns_after,
+            "measurement_source": self.measurement_source,
         }
 
 
@@ -301,6 +312,47 @@ class QuantizedGraph:
         }
 
 
+def _folded_constant_node(
+    source_node: str,
+    source_port: str,
+    values: tuple[float, ...],
+) -> nw03.GraphNode:
+    width = len(values)
+    operator_id = {
+        1: "nw.math.scalar_const",
+        2: "nw.math.vec2_const",
+        3: "nw.math.vec3_const",
+        4: "nw.math.vec4_const",
+        16: "nw.math.mat4_const",
+    }.get(width)
+    if operator_id is None:
+        raise OptimizationError(
+            "folded constant has an unsupported width",
+            [
+                nw03._diagnostic(
+                    "materialize_folded_width",
+                    f"folded '{source_node}.{source_port}' has width {width}",
+                    node_id=source_node,
+                    port_id=source_port,
+                )
+            ],
+        )
+    safe = "".join(
+        character if character.isalnum() else "_"
+        for character in f"{source_node}_{source_port}"
+    )
+    return nw03.GraphNode(
+        node_id=f"__nw05_folded_{safe}",
+        operator_id=operator_id,
+        version="1.0.0",
+        frequency="compile-time",
+        residency="cpu",
+        params={"value": [_float_text(value) for value in values]},
+        inputs={},
+        selected_outputs=("out",),
+    )
+
+
 @dataclass
 class OptimizedGraph:
     profile_id: str
@@ -319,6 +371,12 @@ class OptimizedGraph:
     source_sha256: str
     source_name: str
     source_text: str = ""
+    # Values of nodes eliminated by constant propagation.  Materialising the
+    # optimised graph must not leave consumers pointing at those absent nodes,
+    # so the values are carried here and emitted as literal constant nodes.
+    folded_constants: dict[str, dict[str, tuple[float, ...]]] = field(
+        default_factory=dict
+    )
 
     @property
     def reachable_node_ids(self) -> tuple[str, ...]:
@@ -395,6 +453,39 @@ class OptimizedGraph:
                     if member != ir_node.node_id
                 )
             nodes[ir_node.node_id] = node
+
+        # Constant propagation removes folded producer nodes from the
+        # optimised IR.  Re-materialise every still-referenced folded value as
+        # an explicit literal constant node so the NW-03 document never
+        # contains a dangling input reference.
+        folded_nodes: dict[str, nw03.GraphNode] = {}
+        for node in list(nodes.values()):
+            rewritten_inputs: dict[str, tuple[str, str]] = {}
+            for port, (source_node, source_port) in sorted(node.inputs.items()):
+                if source_node in nodes:
+                    rewritten_inputs[port] = (source_node, source_port)
+                    continue
+                values = self.folded_constants.get(source_node, {}).get(
+                    source_port
+                )
+                if values is None:
+                    raise OptimizationError(
+                        "materialised graph references an eliminated node",
+                        [
+                            nw03._diagnostic(
+                                "materialize_dangling_input",
+                                f"node '{node.node_id}' input '{port}' "
+                                f"references eliminated '{source_node}.{source_port}'",
+                                node_id=node.node_id,
+                                port_id=port,
+                            )
+                        ],
+                    )
+                folded_node = _folded_constant_node(source_node, source_port, values)
+                folded_nodes[folded_node.node_id] = folded_node
+                rewritten_inputs[port] = (folded_node.node_id, "out")
+            node.inputs = rewritten_inputs
+        nodes.update(folded_nodes)
 
         # Remove fused member shader nodes only when nothing else still
         # consumes them (a conservative unfused fallback is preserved
@@ -1522,12 +1613,65 @@ def _fusion_records(
         )
         after_instructions = len(oracle.expression_nodes(folded))
         fusion_cse = _expression_cse_count(folded)
+        # Measure the emitted HLSL and CPU-oracle evaluation cost.  These are
+        # real measurements of the candidate, not instruction-count estimates.
+        measured_hlsl_before = 0
+        measured_hlsl_after = 0
+        measured_runtime_before = 0
+        measured_runtime_after = 0
+        measurement_source = "unavailable"
+        try:
+            before_hlsl = nw03._emit_compute_hlsl(
+                oracle.lower_to_hlsl(source_expression),
+                members,
+                thread_group=nw03.THREAD_GROUP,
+                dispatch_groups=nw03.DISPATCH_GROUPS,
+                entry_point=nw03.ENTRY_POINT,
+            )[0]
+            after_hlsl = nw03._emit_compute_hlsl(
+                oracle.lower_to_hlsl(folded),
+                members,
+                thread_group=nw03.THREAD_GROUP,
+                dispatch_groups=nw03.DISPATCH_GROUPS,
+                entry_point=nw03.ENTRY_POINT,
+            )[0]
+            measured_hlsl_before = len(before_hlsl.encode("utf-8"))
+            measured_hlsl_after = len(after_hlsl.encode("utf-8"))
+            samples = _expression_samples()
+
+            def measure(expression: oracle.Expression) -> int:
+                best = None
+                for _ in range(3):
+                    start = time.perf_counter_ns()
+                    for _repeat in range(200):
+                        for uv, time_value, seed_value in samples:
+                            oracle.evaluate(
+                                expression,
+                                variables={
+                                    "uv": uv,
+                                    "time": time_value,
+                                    "seed": seed_value,
+                                },
+                                float32=True,
+                            )
+                    elapsed = time.perf_counter_ns() - start
+                    best = elapsed if best is None else min(best, elapsed)
+                return int(best or 0)
+
+            measured_runtime_before = measure(source_expression)
+            measured_runtime_after = measure(folded)
+            measurement_source = "emitted-hlsl-and-cpu-oracle-samples"
+        except (nw03.CompilerError, oracle.ExpressionError, TypeError, ValueError):
+            measurement_source = "unavailable"
         accepted = (
             enable
             and len(members) <= max_nodes
             and len(folded_text.encode("utf-8")) <= max_expression_bytes
             and equivalent
             and len(folded_text.encode("utf-8")) <= before_bytes
+            and measured_hlsl_before > 0
+            and measured_hlsl_after <= measured_hlsl_before
+            and measured_runtime_before > 0
         )
         if not enable:
             reason = "fusion disabled by explicit setting"
@@ -1539,8 +1683,15 @@ def _fusion_records(
             reason = "correctness oracle rejected fused expression"
         elif len(folded_text.encode("utf-8")) > before_bytes:
             reason = "fused expression is not smaller than the unfused path"
+        elif measured_hlsl_before == 0:
+            reason = "compiled/emitted size measurement unavailable"
+        elif measured_hlsl_after > measured_hlsl_before:
+            reason = "measured emitted HLSL is larger than the unfused path"
         else:
-            reason = "correctness preserved; measured expression size accepted"
+            reason = (
+                "correctness preserved; measured emitted size and recorded "
+                "sample-evaluation tradeoff accepted"
+            )
         records.append(
             FusionRecord(
                 fusion_id=root.node_id,
@@ -1552,13 +1703,19 @@ def _fusion_records(
                 estimated_instructions_after=after_instructions,
                 correctness_preserved=equivalent,
                 measured=(
-                    bool(members)
-                    and before_bytes > 0
-                    and len(folded_text.encode("utf-8")) > 0
+                    measurement_source
+                    == "emitted-hlsl-and-cpu-oracle-samples"
+                    and measured_hlsl_before > 0
+                    and measured_runtime_before > 0
                 ),
                 accepted=accepted,
                 reason=reason + (f"; {fusion_cse} duplicate AST nodes analysed" if fusion_cse else ""),
                 fused_expression=folded_text,
+                measured_hlsl_bytes_before=measured_hlsl_before,
+                measured_hlsl_bytes_after=measured_hlsl_after,
+                measured_runtime_ns_before=measured_runtime_before,
+                measured_runtime_ns_after=measured_runtime_after,
+                measurement_source=measurement_source,
             )
         )
     return tuple(records)
@@ -1604,6 +1761,24 @@ def lower_typed_graph(
             ],
         )
     reachable, needed_ports = reachable_node_ports(document, outputs)
+    unsupported = sorted(
+        node_id
+        for node_id in reachable
+        if node_id not in document.nodes
+        or document.nodes[node_id].operator_id not in nw03.KNOWN_OPERATORS
+    )
+    if unsupported:
+        raise OptimizationError(
+            "reachable graph uses an unsupported operator",
+            [
+                nw03._diagnostic(
+                    "missing_implementation",
+                    "reachable graph uses an unsupported operator",
+                    node_id=node_id,
+                )
+                for node_id in unsupported
+            ],
+        )
     quantized_reachable = set(reachable)
     constants, folded = constant_propagation(document, reachable)
     reachable = _prune_reachable_after_folding(document, outputs, constants)
@@ -1684,6 +1859,11 @@ def lower_typed_graph(
         ).hexdigest(),
         source_name=document.source_name,
         source_text=document.source_text,
+        folded_constants={
+            node_id: dict(constants[node_id])
+            for node_id in sorted(folded)
+            if node_id in constants
+        },
     )
 
 
@@ -1825,9 +2005,12 @@ def parse_quantization_policy(
         override_mode = parts.get("mode", parts.get("policy", mode))
         if override_mode in {"full", "off", "disabled"}:
             override_mode = "none"
-        try:
-            override_bits = int(parts.get("bits", bits), 0)
-        except ValueError:
+        if "bits" in parts:
+            try:
+                override_bits = int(parts["bits"], 0)
+            except ValueError:
+                override_bits = bits
+        else:
             override_bits = bits
         try:
             override_step = float(parts.get("step", step))
@@ -2121,7 +2304,6 @@ def build_link_manifest(
         "profile_id": profile_id or optimized.profile_id,
         "requirements_digest": requirements_digest or optimized.requirements_digest,
         "optional_profile_id": optional_profile_id,
-        "semantic_source_sha256": optimized.source_sha256,
         "ir_sha256": optimized.ir_sha256(),
         "reachable_content": {
             "node_ids": list(optimized.reachable_node_ids),
@@ -2140,6 +2322,8 @@ def build_link_manifest(
             "resource_heap_tier": 2,
             "direct_queue_count": 1,
             "wave_ops": wave_ops,
+            "fp16_shader_ops": False,
+            "int64_shader_ops": False,
             "sm_6_6_direct_heap_indexing": False,
             "mesh_shaders": False,
             "ray_tracing": False,

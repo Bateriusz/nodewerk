@@ -51,6 +51,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "NW05_FRAME_FAILED=%d\n", static_cast<int>(status));
             return static_cast<int>(status);
         }
+        if (player.window_closed()) break;
     }
     if (emit_image_hash) {
         std::vector<std::uint8_t> image;
@@ -82,6 +83,24 @@ int main(int argc, char** argv) {
     std::printf(
         "NW05_PRESENTS=%llu\n",
         static_cast<unsigned long long>(player.frames_presented()));
+    std::printf("NW05_ADAPTER=%s\n",
+                player.queried_capabilities().adapter_description.c_str());
+    std::printf("NW05_DRIVER=%s\n",
+                player.queried_capabilities().driver_version.c_str());
+    std::printf("NW05_VENDOR_ID=%u\n",
+                player.queried_capabilities().vendor_id);
+    std::printf("NW05_DEVICE_ID=%u\n",
+                player.queried_capabilities().device_id);
+    std::printf("NW05_ALIASED_PLAN=%d\n",
+                player.using_aliased_plan() ? 1 : 0);
+    std::printf(
+        "NW05_ALIAS_BARRIERS=%llu\n",
+        static_cast<unsigned long long>(
+            player.resource_plan().alias_barriers.size()));
+    std::printf(
+        "NW05_UAV_BARRIERS=%llu\n",
+        static_cast<unsigned long long>(
+            player.allocation_stats().uav_barrier_count));
     return status == nw::player::ExitCode::Success ? 0 : static_cast<int>(status);
 }
 

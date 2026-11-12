@@ -66,6 +66,11 @@ struct ResourceAliasBarrier {
     std::string group;
     bool uav_barrier = false;
     std::string reason;
+    // Activation point in the emitted frame instruction stream.  Alias
+    // barriers are emitted in execution order, including the frame-boundary
+    // transition that reactivates the first user of a reused region.
+    std::uint32_t activation_instruction = 0u;
+    bool frame_boundary = false;
 };
 
 struct ResourceAliasGroup {

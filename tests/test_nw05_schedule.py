@@ -103,6 +103,17 @@ def test_compatible_alias_group_realises_same_offset_and_barrier() -> None:
         barrier.before_resource_id in {1, 2} and barrier.uav_barrier
         for barrier in realization.barriers
     )
+    transitions = {
+        (barrier.before_resource_id, barrier.resource_id)
+        for barrier in realization.barriers
+    }
+    # A reused region needs activation in both execution directions so the
+    # next frame can safely reactivate the earlier user.
+    assert (1, 2) in transitions
+    assert (2, 1) in transitions
+    assert any(
+        barrier.frame_boundary for barrier in realization.barriers
+    )
     payload = realization.to_dict()
     assert payload["portable"] is False
     assert payload["physical_offsets_are_adapter_specific"] is True
@@ -185,6 +196,10 @@ def test_adapter_query_is_required_for_realization() -> None:
     )
     assert realization.adapter_identity == "query:test"
     assert realization.total_bytes > 0
+    accounting = realization.to_dict()["memory_accounting"]
+    assert accounting["includes_adapter_padding"] is True
+    assert accounting["includes_player_owned_allocations"] is True
+    assert realization.peak_bytes >= realization.total_bytes
 
 
 def test_pending_realization_never_invents_physical_offsets() -> None:
@@ -198,7 +213,14 @@ def test_pending_realization_never_invents_physical_offsets() -> None:
     assert payload["placements"] == []
     assert payload["barriers"] == []
     assert payload["total_bytes"] == 0
-    assert pending.peak_bytes == sum(item.size_bytes for item in package.resources)
+    logical_payload = sum(item.size_bytes for item in package.resources)
+    assert pending.peak_bytes > logical_payload
+    accounting = payload["memory_accounting"]
+    assert accounting["includes_transient_duplication"] is True
+    assert accounting["includes_player_owned_allocations"] is True
+    assert pending.player_owned_bytes > 0
+    assert pending.transient_duplication_bytes > 0
+    assert pending.accounted_peak_bytes == pending.peak_bytes
 
 
 def test_alias_reuse_requires_candidate_allocation_capacity() -> None:

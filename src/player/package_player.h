@@ -49,6 +49,16 @@ struct PlayerConfig {
     // committed realization even when the package has a proven alias plan.
     bool force_non_aliased_plan = false;
     bool wait_for_gpu_each_frame = false;
+    // Generated manifests enable only the optional feature queries the linked
+    // artifact actually requires.  The common artifact leaves these false so
+    // unused OPTIONS1/OPTIONS4 queries are not part of its linked closure.
+    bool query_optional_wave_ops = false;
+    bool query_optional_int64_shader_ops = false;
+    bool query_optional_fp16_shader_ops = false;
+    // Zero means no explicit preflight memory budget.  A non-zero value is
+    // checked after native allocation requirements are queried and before any
+    // bulk resource creation.
+    std::uint64_t memory_budget_bytes = 0u;
 };
 
 struct PlayerDiagnostic {
@@ -148,6 +158,8 @@ public:
     std::uint32_t width() const noexcept { return width_; }
     std::uint32_t height() const noexcept { return height_; }
     bool minimized() const noexcept { return minimized_; }
+    bool window_closed() const noexcept { return window_closed_; }
+    bool using_aliased_plan() const noexcept { return using_aliased_plan_; }
 
     const package::Package& package() const noexcept { return package_; }
     const ResourcePlan& resource_plan() const noexcept { return plan_; }
@@ -297,6 +309,10 @@ private:
         std::uint32_t root_parameter = 0u;
         std::uint32_t resource_a = 0u;
         std::uint32_t resource_b = 0u;
+        // Resource currently bound through the active descriptor table.  Used
+        // to place alias-activation barriers immediately before the dispatch
+        // that first uses the incoming resource.
+        std::uint32_t descriptor_resource = 0u;
         std::uint32_t shader_id = 0u;
         std::uint32_t group_x = 1u;
         std::uint32_t group_y = 1u;
@@ -322,6 +338,7 @@ private:
         std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
             parameter_sizes{};
         std::uint32_t parameter_count = 0u;
+        std::uint32_t instruction_index = 0u;
     };
     std::vector<FrameOp> frame_ops_;
     std::vector<std::string> last_frame_order_;

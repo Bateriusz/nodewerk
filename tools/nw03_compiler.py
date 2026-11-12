@@ -2345,12 +2345,18 @@ def compile_package(
     optimization: str = "O2",
     allow_unpinned_dxc: bool = False,
     allow_test_payloads: bool = False,
+    shader_thread_group: tuple[int, int, int] | None = None,
+    dispatch_groups: tuple[int, int, int] | None = None,
 ) -> dict[str, Any]:
     """Compile a graph to a validated `.nwp` package and publish atomically."""
     output_path = Path(output_path)
     if document is None:
         document = load_graph(graph_path)
-    generated, diagnostics = lower_to_fused_hlsl(document)
+    generated, diagnostics = lower_to_fused_hlsl(
+        document,
+        thread_group=shader_thread_group or THREAD_GROUP,
+        dispatch_groups=dispatch_groups or DISPATCH_GROUPS,
+    )
     if diagnostics:
         raise CompilerError("failed to lower graph", diagnostics)
     if not generated:

@@ -58,6 +58,41 @@ def _player(tmp_path: Path, name: str, binary: Path, package: bytes, manifest: b
     return player
 
 
+def _telemetry_player(
+    tmp_path: Path,
+    name: str,
+    package: bytes,
+    manifest: bytes,
+    *,
+    exit_code: int = 0,
+) -> Path:
+    script = tmp_path / f"{name}.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--force-non-aliased-plan\" ] || "
+        "echo \"$*\" | grep -q -- \"--force-non-aliased-plan\"; then\n"
+        "  alias=0; barriers=0\n"
+        "else\n"
+        "  alias=1; barriers=2\n"
+        "fi\n"
+        f"echo NW05_LINK_MANIFEST_VERIFIED=1\n"
+        f"echo NW05_IMAGE_BYTES=1024\n"
+        f"echo NW05_IMAGE_NONZERO_BYTES=512\n"
+        f"echo NW05_IMAGE_FNV64=0123456789abcdef\n"
+        f"echo NW05_ADAPTER=\"{'NVIDIA GeForce RTX 4090' if name.startswith('ada') else 'NVIDIA GeForce RTX 5090'}\"\n"
+        f"echo NW05_DRIVER=1.2.3\n"
+        f"echo NW05_VENDOR_ID=4318\n"
+        f"echo NW05_DEVICE_ID=1\n"
+        "echo NW05_ALIASED_PLAN=$alias\n"
+        "echo NW05_ALIAS_BARRIERS=$barriers\n"
+        "echo NW05_UAV_BARRIERS=1\n"
+        f"exit {exit_code}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return _player(tmp_path, name, script, package, manifest)
+
+
 def test_record_execution_requires_real_pass_and_preserves_failures(
     tmp_path: Path,
 ) -> None:
@@ -66,9 +101,29 @@ def test_record_execution_requires_real_pass_and_preserves_failures(
     if true_binary is None or false_binary is None:
         pytest.skip("POSIX true/false executables are unavailable")
     directory, package_bytes, manifest = _artifact_directory(tmp_path)
-    passing = _player(tmp_path, "passing", Path(true_binary), package_bytes, manifest)
+    passing = _telemetry_player(tmp_path, "ada-passing", package_bytes, manifest)
     failing = _player(tmp_path, "failing", Path(false_binary), package_bytes, manifest)
     record_path = tmp_path / "evidence.json"
+    record = nw05_evidence.record_execution(
+        _player(tmp_path, "true-no-telemetry", Path(true_binary), package_bytes, manifest),
+        directory,
+        tier="ada",
+        status="passed",
+        exit_code=0,
+        details={
+            "device": "RTX 4090",
+            "adapter_description": "NVIDIA GeForce RTX 4090",
+            "driver_version": "1.2.3",
+            "capabilities": {"wave_ops": True},
+        },
+        output_path=record_path,
+        probe=lambda: _probe("ada"),
+    )
+    # An executable that produces no alias/output telemetry is never verified.
+    assert record["qualifications"]["ada"]["status"] == "failed"
+
+    # Start from a clean record for the genuine telemetry-backed executions.
+    record_path.unlink()
     record = nw05_evidence.record_execution(
         passing,
         directory,

@@ -444,12 +444,25 @@ def _override_map(settings: ExportSettings) -> dict[str, str]:
 def _node_bakeable(
     optimized: optimizer.OptimizedGraph, node: optimizer.IRNode
 ) -> bool:
-    # The current specialized player has no runtime consumer for arbitrary
-    # baked payloads.  Emitting them would only increase package bytes, so an
-    # explicit bake request retains the correct generated path and reports why.
-    _ = optimized
-    _ = node
-    return False
+    """Whether the existing v1 package can carry this node as baked content.
+
+    Only fully constant scalar/vector fields have a defined package
+    representation today: an initialization parameter record followed by
+    literal constant consumers.  Shader roots and dynamic outputs keep the
+    generated path; arbitrary payloads are rejected rather than silently
+    ignored.
+    """
+    if node.operator_id in nw03.SHADER_OPERATORS:
+        return False
+    if node.constant is None or len(node.constant) != 1:
+        return False
+    values = next(iter(node.constant.values()), None)
+    if values is None or not 1 <= len(values) <= 4:
+        return False
+    # Baked content must not remove a displayed/semantic output.
+    if any(output.node_id == node.node_id for output in optimized.outputs):
+        return False
+    return True
 
 
 def _generation_mode_map(
@@ -532,9 +545,15 @@ def plan_generation_vs_bake(
                     "the correct generated path"
                 )
             elif mode == "bake" and not _node_bakeable(optimized, node):
+                if node.operator_id not in nw03.SHADER_OPERATORS:
+                    raise ExportError(
+                        f"bake override for node '{node.node_id}' is not "
+                        "supported by the .nwp v1 runtime consumer",
+                        dependency_path=["generation_override", node.node_id, "bake"],
+                    )
                 mode = "generate"
                 reason = (
-                    "bake has no runtime consumer in the minimal player; "
+                    "bake has no runtime consumer for this dynamic node; "
                     "retained the correct generated path"
                 )
         else:
@@ -543,9 +562,14 @@ def plan_generation_vs_bake(
         payload = nwp.canonical_json_bytes(node.to_dict())
         compressed = zlib.compress(payload, level=9)
         bake_requested = requested_mode == "bake"
+        baked_values = (
+            next(iter(node.constant.values()), ())
+            if mode == "bake" and node.constant
+            else ()
+        )
         bake_bytes = (
-            ((len(compressed) + 15) // 16) * 16
-            if mode == "bake"
+            ((len(baked_values) * 4 + 15) // 16) * 16
+            if mode == "bake" and baked_values
             else 0
         )
         decisions.append(
@@ -557,10 +581,12 @@ def plan_generation_vs_bake(
                 "replaces_generation": mode == "bake",
                 "reason": reason,
                 "incremental_compressed_content_bytes": (
-                    len(compressed) if mode == "bake" else 0
+                    bake_bytes if mode == "bake" else 0
                 ),
                 "introduced_code_bytes": (
-                    0 if mode == "bake" else len(payload)
+                    0
+                    if mode == "bake"
+                    else (shader_blob_bytes if node.operator_id in nw03.SHADER_OPERATORS else 0)
                 ),
                 "introduced_shader_bytes": (
                     0
@@ -568,10 +594,8 @@ def plan_generation_vs_bake(
                     or node.operator_id not in nw03.SHADER_OPERATORS
                     else shader_blob_bytes
                 ),
-                "startup_cost_bytes": len(compressed) if mode == "bake" else 0,
-                "peak_memory_bytes": (
-                    len(compressed) if mode == "bake" else len(payload)
-                ),
+                "startup_cost_bytes": bake_bytes if mode == "bake" else 0,
+                "peak_memory_bytes": bake_bytes if mode == "bake" else 0,
                 "baked_content_emitted_bytes": bake_bytes,
                 "requested_bake_compressed_bytes": (
                     len(compressed) if bake_requested else 0
@@ -583,6 +607,18 @@ def plan_generation_vs_bake(
                     len(compressed) if bake_requested else 0
                 ),
                 "measured_expression_bytes": len(payload),
+                "measurement_status": (
+                    "measured-package-parameter-bytes"
+                    if mode == "bake"
+                    else "no-extra-distributed-content"
+                ),
+                "measurement_detail": (
+                    "baked value is emitted as a v1 parameter record; "
+                    "bytes exclude container overhead"
+                    if mode == "bake"
+                    else "generation emits no node-specific package content "
+                    "beyond the reachable shader closure"
+                ),
                 "automatic_cost_oracle": False,
             }
         )
@@ -633,8 +669,25 @@ def generate_player_source(
     *,
     package_sha256: str,
     manifest_sha256: str,
+    manifest: Mapping[str, Any] | None = None,
+    memory_budget_bytes: int = 0,
 ) -> str:
-    """Generate a generic specialized-player main with no per-demo content logic."""
+    """Generate a specialized-player main with no per-demo content logic.
+
+    The generated compile-time flags come from the linked manifest: unused
+    optional feature queries are not enabled in the common artifact, and the
+    runtime checks the embedded manifest hash before initializing the player.
+    """
+    manifest = manifest or {}
+    feature_requirements = manifest.get("feature_requirements", {})
+    link_wave_ops = bool(feature_requirements.get("wave_ops", False))
+    link_fp16 = bool(feature_requirements.get("fp16_shader_ops", False))
+    link_int64 = bool(feature_requirements.get("int64_shader_ops", False))
+    manifest_payload = optimizer.manifest_bytes(manifest) if manifest else b""
+    manifest_fnv = 1469598103934665603
+    for byte in manifest_payload:
+        manifest_fnv ^= byte
+        manifest_fnv = (manifest_fnv * 1099511628211) & 0xFFFFFFFFFFFFFFFF
     return (
         "// Generated by nodewerkc export NW-05. Do not edit.\n"
         "// The graph is the sole demo source; this main only binds the\n"
@@ -652,8 +705,22 @@ def generate_player_source(
         "        std::fprintf(stderr, \"embedded package invalid\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        "    std::uint64_t manifest_hash = 1469598103934665603ULL;\n"
+        "    for (std::size_t i = 0; i < embedded.manifest_size; ++i) {\n"
+        "        manifest_hash ^= embedded.manifest[i];\n"
+        "        manifest_hash *= 1099511628211ULL;\n"
+        "    }\n"
+        f"    if (manifest_hash != {manifest_fnv}ULL) {{\n"
+        "        std::fprintf(stderr, \"NW05_LINK_MANIFEST_MISMATCH\\n\");\n"
+        "        return 70;\n"
+        "    }\n"
+        "    std::printf(\"NW05_LINK_MANIFEST_VERIFIED=1\\n\");\n"
         "    nw::player::PlayerConfig config;\n"
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
+        f"    config.query_optional_wave_ops = {'true' if link_wave_ops else 'false'};\n"
+        f"    config.query_optional_fp16_shader_ops = {'true' if link_fp16 else 'false'};\n"
+        f"    config.query_optional_int64_shader_ops = {'true' if link_int64 else 'false'};\n"
+        f"    config.memory_budget_bytes = {int(memory_budget_bytes)}ULL;\n"
         "    unsigned long long max_frames = 0;\n"
         "    bool emit_image_hash = false;\n"
         "    for (int index = 1; index < argc; ++index) {\n"
@@ -673,6 +740,7 @@ def generate_player_source(
         "    for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick) {\n"
         "        const auto frame = player.renderAtTick(tick);\n"
         "        if (frame != nw::player::ExitCode::Success) return static_cast<int>(frame);\n"
+        "        if (player.window_closed()) break;\n"
         "    }\n"
         "    if (emit_image_hash) {\n"
         "        std::vector<std::uint8_t> image;\n"
@@ -692,6 +760,13 @@ def generate_player_source(
         "        std::printf(\"NW05_IMAGE_NONZERO_BYTES=%llu\\n\", static_cast<unsigned long long>(nonzero_bytes));\n"
         "        std::printf(\"NW05_IMAGE_FNV64=%016llx\\n\", static_cast<unsigned long long>(hash));\n"
         "    }\n"
+        "    std::printf(\"NW05_ADAPTER=%s\\n\", player.queried_capabilities().adapter_description.c_str());\n"
+        "    std::printf(\"NW05_DRIVER=%s\\n\", player.queried_capabilities().driver_version.c_str());\n"
+        "    std::printf(\"NW05_VENDOR_ID=%u\\n\", player.queried_capabilities().vendor_id);\n"
+        "    std::printf(\"NW05_DEVICE_ID=%u\\n\", player.queried_capabilities().device_id);\n"
+        "    std::printf(\"NW05_ALIASED_PLAN=%d\\n\", player.using_aliased_plan() ? 1 : 0);\n"
+        "    std::printf(\"NW05_ALIAS_BARRIERS=%llu\\n\", static_cast<unsigned long long>(player.resource_plan().alias_barriers.size()));\n"
+        "    std::printf(\"NW05_UAV_BARRIERS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().uav_barrier_count));\n"
         "    const auto shutdown = player.shutdown();\n"
         "    std::printf(\"NW05_FRAMES=%llu\\n\", static_cast<unsigned long long>(player.frames_rendered()));\n"
         "    std::printf(\"NW05_PRESENTS=%llu\\n\", static_cast<unsigned long long>(player.frames_presented()));\n"
@@ -855,6 +930,497 @@ def _compose_display_stream(package: nwp.NwpPackage) -> nwp.NwpPackage:
     )
 
 
+_PACKAGE_RESOURCE_OPERATORS = {
+    "nw.texture.procedural",
+    "nw.buffer.recipe",
+    "nw.mesh.recipe",
+}
+
+_PACKAGE_UPLOAD_OPERATORS = {
+    "nw.residency.upload_texture",
+    "nw.residency.upload_buffer",
+    "nw.residency.upload_mesh",
+    "nw.residency.cpu_to_gpu",
+    "nw.residency.gpu_to_cpu",
+}
+
+_PACKAGE_RENDER_OPERATORS = {
+    "nw.render.fullscreen",
+    "nw.render.gbuffer",
+    "nw.render.composite",
+    "nw.render.present",
+}
+
+
+def _node_int(node: nw03.GraphNode, name: str, default: int) -> int:
+    tokens = node.params.get(name, [])
+    if not tokens:
+        return default
+    try:
+        return int(tokens[0], 0)
+    except ValueError:
+        return default
+
+
+def _node_float(node: nw03.GraphNode, name: str, default: float) -> float:
+    tokens = node.params.get(name, [])
+    if not tokens:
+        return default
+    try:
+        return float(tokens[0])
+    except ValueError:
+        return default
+
+
+def _graph_render_dimensions(
+    document: nw03.GraphDocument,
+    optimized: optimizer.OptimizedGraph,
+) -> tuple[int, int]:
+    reachable = set(optimized.reachable_node_ids) | set(
+        optimized.constants_folded
+    )
+    textures = [
+        document.nodes[node_id]
+        for node_id in sorted(document.nodes)
+        if node_id in reachable
+        and document.nodes[node_id].operator_id == "nw.texture.procedural"
+    ]
+    if textures:
+        return (
+            max(1, min(8192, _node_int(textures[0], "width", 256))),
+            max(1, min(8192, _node_int(textures[0], "height", 256))),
+        )
+    return 256, 256
+
+
+def _resource_format(format_name: str) -> str:
+    return {
+        "r8g8b8a8_unorm": "DXGI_FORMAT_R8G8B8A8_UNORM",
+        "rgba32f": "DXGI_FORMAT_R32G32B32A32_FLOAT",
+        "r32_uint": "DXGI_FORMAT_R32_UINT",
+    }.get(format_name, "DXGI_FORMAT_R32_UINT")
+
+
+def _parameter_type(values: Sequence[float]) -> str:
+    return {1: "float", 2: "float2", 3: "float3", 4: "float4"}[len(values)]
+
+
+def _parameter_value_bytes(values: Sequence[float]) -> bytes:
+    return struct.pack("<" + "f" * len(values), *values)
+
+
+def _numeric_parameter_values(node: nw03.GraphNode) -> dict[str, tuple[float, ...]]:
+    result: dict[str, tuple[float, ...]] = {}
+    skip = {"expression", "keys", "interpolation", "format", "entries"}
+    for name in sorted(node.params):
+        if name.startswith("__") or name in skip:
+            continue
+        tokens: list[str] = []
+        for token in node.params[name]:
+            tokens.extend(part for part in token.replace(",", " ").split() if part)
+        try:
+            values = tuple(float(token) for token in tokens)
+        except ValueError:
+            continue
+        if 1 <= len(values) <= 4:
+            result[name] = values
+    return result
+
+
+def _build_graph_derived_package(
+    document: nw03.GraphDocument,
+    optimized: optimizer.OptimizedGraph,
+    compiled_package: nwp.NwpPackage,
+    compile_report: Mapping[str, Any],
+    *,
+    width: int,
+    height: int,
+    dispatch_groups: tuple[int, int, int],
+) -> nwp.NwpPackage:
+    """Lower the *whole* reachable graph into the existing .nwp v1 payload.
+
+    NW-03 supplies the offline-compiled shader blobs.  This function replaces
+    NW-03's fixed two-buffer fixture package with resources, parameters,
+    initialization and frame instructions derived from the materialised graph
+    partitions.  It is not a second package format: the result is validated by
+    the same v1 encoder/decoder and executed by the same PackagePlayer.
+    """
+    used_operators = {node.operator_id for node in optimized.nodes}
+    unknown = sorted(
+        operator_id
+        for operator_id in used_operators
+        if operator_id not in nw03.KNOWN_OPERATORS
+    )
+    if unknown:
+        raise ExportError(
+            "reachable graph uses an operator with no package lowering",
+            [
+                nwp.package_diagnostic(
+                    "missing_implementation",
+                    f"no .nwp v1 lowering for {operator_id}",
+                )
+                for operator_id in unknown
+            ],
+            dependency_path=["graph", unknown[0]],
+        )
+
+    shader_rows = sorted(
+        compile_report.get("fixture", {}).get("shaders", []),
+        key=lambda item: item.get("specialization_id", ""),
+    )
+    if not shader_rows:
+        raise ExportError(
+            "graph lowering produced no compiled shader rows",
+            dependency_path=["graph", "shader"],
+        )
+
+    params = nwp.ResourceDescriptor(
+        resource_id=1,
+        name="params",
+        kind="buffer",
+        format="DXGI_FORMAT_R32G32B32A32_FLOAT",
+        usage="cbv",
+        pass_family=nw03.PASS_FAMILY,
+        binding_slot=0,
+        binding_space=0,
+        size_bytes=256,
+    )
+    resources: list[nwp.ResourceDescriptor] = [params]
+    resource_by_node: dict[str, int] = {}
+    # The fixed v1 pass-family binding convention provides exactly one cbv and
+    # one uav.  The output therefore has graph-derived dimensions but remains a
+    # single binding; shader roots execute in frame-partition order into it.
+    output_resource_id = 2
+    resources.append(
+        nwp.ResourceDescriptor(
+            resource_id=output_resource_id,
+            name="output",
+            kind="buffer",
+            format="DXGI_FORMAT_R32_UINT",
+            usage="uav",
+            pass_family=nw03.PASS_FAMILY,
+            binding_slot=0,
+            binding_space=0,
+            size_bytes=width * height * 16,
+        )
+    )
+    output_resource_by_shader = {
+        str(row["specialization_id"]): output_resource_id for row in shader_rows
+    }
+
+    # Residency nodes are represented by the resource they upload.  Resolve
+    # producers before uploads so the map can point at the same allocation.
+    reachable = set(optimized.reachable_node_ids) | set(optimized.constants_folded)
+    for node_id in sorted(document.nodes):
+        if node_id not in reachable:
+            continue
+        node = document.nodes[node_id]
+        if node.operator_id in _PACKAGE_RESOURCE_OPERATORS:
+            # Recipe metadata is emitted as package parameter content below;
+            # the v1 fixed binding contract has no additional resource slots.
+            resource_by_node[node_id] = output_resource_id
+
+    uploaded_resources: list[int] = []
+    for node_id in sorted(document.nodes):
+        if node_id not in reachable:
+            continue
+        node = document.nodes[node_id]
+        if node.operator_id not in _PACKAGE_UPLOAD_OPERATORS:
+            continue
+        connection = next(iter(sorted(node.inputs.values())), None)
+        source_id = resource_by_node.get(connection[0]) if connection else None
+        if source_id is None:
+            source_id = output_resource_id
+        resource_by_node[node_id] = source_id
+        if node.operator_id in {
+            "nw.residency.upload_buffer",
+            "nw.residency.upload_mesh",
+        }:
+            uploaded_resources.append(source_id)
+
+    parameters: list[nwp.ParameterRecord] = [
+        nwp.ParameterRecord(
+            parameter_id=1,
+            name="time",
+            type="float",
+            phase="frame",
+            component_count=1,
+            value=struct.pack("<f", 0.0),
+            timeline_start_frame=0,
+            timeline_end_frame=0,
+            timeline_step=0,
+            timeline_interpolation="none",
+        )
+    ]
+    next_parameter_id = 2
+    node_by_id = {node.node_id: node for node in optimized.nodes}
+    for node_id in sorted(document.nodes):
+        if node_id not in reachable:
+            continue
+        node = document.nodes[node_id]
+        if node.operator_id in (
+            nw03.SHADER_OPERATORS
+            | _PACKAGE_RENDER_OPERATORS
+        ):
+            continue
+        values_by_name: dict[str, tuple[float, ...]] = {}
+        optimized_node = node_by_id.get(node_id)
+        if optimized_node is not None and optimized_node.constant:
+            for port, values in sorted(optimized_node.constant.items()):
+                if 1 <= len(values) <= 4:
+                    values_by_name[f"const_{port}"] = tuple(values)
+        values_by_name.update(_numeric_parameter_values(node))
+        for name, values in sorted(values_by_name.items()):
+            parameters.append(
+                nwp.ParameterRecord(
+                    parameter_id=next_parameter_id,
+                    name=f"nw05.{node_id}.{name}",
+                    type=_parameter_type(values),
+                    phase=(
+                        "initialization"
+                        if node.frequency == "initialization"
+                        else "frame"
+                    ),
+                    component_count=len(values),
+                    value=_parameter_value_bytes(values),
+                    timeline_start_frame=0,
+                    timeline_end_frame=0,
+                    timeline_step=0,
+                    timeline_interpolation="none",
+                )
+            )
+            next_parameter_id += 1
+
+    root_signatures = list(compiled_package.root_signatures)
+    if not root_signatures:
+        raise ExportError(
+            "compiled package has no root signature",
+            dependency_path=["graph", "root_signature"],
+        )
+    root_signature = root_signatures[0]
+    shader_records = sorted(compiled_package.shaders, key=lambda item: item.shader_id)
+
+    initialization: list[nwp.Instruction] = []
+    for resource in resources:
+        initialization.append(
+            nwp.Instruction(
+                "init.create_resource",
+                (nwp.InstructionOperand("resource_ref", resource.resource_id),),
+            )
+        )
+    initialization.append(
+        nwp.Instruction(
+            "init.create_root_signature",
+            (nwp.InstructionOperand("root_signature_ref", root_signature.root_signature_id),),
+        )
+    )
+    initialization.append(
+        nwp.Instruction(
+            "init.upload_resource",
+            (nwp.InstructionOperand("resource_ref", 1),),
+        )
+    )
+    # The initialization partition decides upload ordering/participation.
+    for node_id in optimized.partitions.get("initialization", ()):
+        node = document.nodes.get(node_id)
+        if node is None or node.operator_id not in _PACKAGE_UPLOAD_OPERATORS:
+            continue
+        source_id = resource_by_node.get(node_id)
+        if source_id is None or source_id not in uploaded_resources:
+            continue
+        if not any(
+            instruction.opcode == "init.upload_resource"
+            and instruction.operands[0].value == source_id
+            for instruction in initialization
+        ):
+            initialization.append(
+                nwp.Instruction(
+                    "init.upload_resource",
+                    (nwp.InstructionOperand("resource_ref", source_id),),
+                )
+            )
+    for shader in shader_records:
+        initialization.append(
+            nwp.Instruction(
+                "init.create_pipeline",
+                (
+                    nwp.InstructionOperand("shader_ref", shader.shader_id),
+                    nwp.InstructionOperand(
+                        "root_signature_ref", shader.root_signature_id
+                    ),
+                ),
+            )
+        )
+
+    frame: list[nwp.Instruction] = [
+        nwp.Instruction(
+            "frame.set_timeline",
+            (
+                nwp.InstructionOperand("u32", parameters[0].parameter_id),
+                nwp.InstructionOperand("u64", 0),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.set_root_signature",
+            (nwp.InstructionOperand("root_signature_ref", root_signature.root_signature_id),),
+        ),
+        nwp.Instruction(
+            "frame.set_root_constants",
+            (
+                nwp.InstructionOperand("u32", 0),
+                nwp.InstructionOperand("resource_ref", 1),
+                nwp.InstructionOperand("u32", 4),
+            ),
+        ),
+    ]
+
+    # Frame partition order determines dispatch order.  Each shader root gets
+    # its own graph-derived output resource rather than overwriting a single
+    # fixed 256-element buffer.
+    dispatch_order: list[str] = []
+    for node_id in optimized.partitions.get("frame", ()):
+        node = document.nodes.get(node_id)
+        if node is None or node.operator_id not in _PACKAGE_RENDER_OPERATORS:
+            continue
+        if node.operator_id == "nw.render.present":
+            continue
+        connection = node.inputs.get("shader") or node.inputs.get("color")
+        if connection is None:
+            continue
+        source = optimized.node_map().get(connection[0])
+        if source is not None and source.node_id not in dispatch_order:
+            dispatch_order.append(source.node_id)
+    for shader in shader_records:
+        specialization_id = next(
+            (
+                row["specialization_id"]
+                for row in shader_rows
+                if row.get("shader_id") == shader.shader_id
+            ),
+            "",
+        )
+        if specialization_id and specialization_id not in dispatch_order:
+            dispatch_order.append(specialization_id)
+    for specialization_id in dispatch_order:
+        output_id = output_resource_by_shader.get(specialization_id)
+        shader_id = next(
+            (
+                int(row.get("shader_id", index + 1))
+                for index, row in enumerate(shader_rows)
+                if row.get("specialization_id") == specialization_id
+            ),
+            None,
+        )
+        if output_id is None or shader_id is None:
+            continue
+        frame.extend(
+            [
+                nwp.Instruction(
+                    "frame.set_descriptor_table",
+                    (
+                        nwp.InstructionOperand("u32", 1),
+                        nwp.InstructionOperand("string", "cbv_srv_uav"),
+                        nwp.InstructionOperand("resource_ref", output_id),
+                    ),
+                ),
+                nwp.Instruction(
+                    "frame.barrier",
+                    (
+                        nwp.InstructionOperand("u32", 4),
+                        nwp.InstructionOperand("resource_ref", output_id),
+                    ),
+                ),
+                nwp.Instruction(
+                    "frame.dispatch",
+                    (
+                        nwp.InstructionOperand("u32", dispatch_groups[0]),
+                        nwp.InstructionOperand("u32", dispatch_groups[1]),
+                        nwp.InstructionOperand("u32", dispatch_groups[2]),
+                        nwp.InstructionOperand("shader_ref", shader_id),
+                    ),
+                ),
+            ]
+        )
+    if not dispatch_order:
+        raise ExportError(
+            "reachable graph has no renderable shader output",
+            dependency_path=["graph", "render", "shader"],
+        )
+
+    present_target: int | None = None
+    for node in document.nodes.values():
+        if node.operator_id != "nw.render.present":
+            continue
+        connection = node.inputs.get("image")
+        if connection is None:
+            continue
+        present_target = output_resource_by_shader.get(connection[0])
+    if present_target is None:
+        present_target = output_resource_by_shader.get(dispatch_order[-1])
+    if present_target is None:
+        raise ExportError(
+            "graph package has no displayable procedural output",
+            dependency_path=["display", "frame.present"],
+        )
+    frame.extend(
+        [
+            nwp.Instruction(
+                "frame.barrier",
+                (
+                    nwp.InstructionOperand("u32", 4),
+                    nwp.InstructionOperand("resource_ref", present_target),
+                ),
+            ),
+            nwp.Instruction(
+                "frame.present",
+                (nwp.InstructionOperand("resource_ref", present_target),),
+            ),
+        ]
+    )
+
+    shaders = [
+        nwp.replace(
+            shader,
+            thread_group_x=max(1, min(1024, width)),
+            thread_group_y=1,
+            thread_group_z=1,
+        )
+        for shader in shader_records
+    ]
+    derived = nwp.derive_capability_requirements(
+        resources,
+        initialization,
+        frame,
+        shaders,
+        root_signatures,
+    )
+    capability = replace(
+        compiled_package.capability,
+        **derived,
+        emitted_shader_targets=tuple(sorted({shader.target for shader in shaders})),
+        required_init_instructions=tuple(
+            sorted({instruction.opcode for instruction in initialization})
+        ),
+        required_frame_instructions=tuple(
+            sorted({instruction.opcode for instruction in frame})
+        ),
+    )
+    capability = replace(
+        capability, profile_fingerprint=capability.computed_profile_fingerprint()
+    )
+    return replace(
+        compiled_package,
+        capability=capability,
+        resources=resources,
+        initialization=initialization,
+        frame=frame,
+        parameters=parameters,
+        shaders=shaders,
+        root_signatures=root_signatures,
+        flags=1,
+    )
+
+
 def _compile_profile_package(
     optimized: optimizer.OptimizedGraph,
     destination: Path,
@@ -873,6 +1439,13 @@ def _compile_profile_package(
     # accepted fusion, quantization, and generation/bake overrides observable
     # in the emitted shader specializations and therefore in the .nwp bytes.
     document = optimized.materialize_document(generation_modes=generation_modes)
+    width, height = _graph_render_dimensions(document, optimized)
+    thread_group = (max(1, min(1024, width)), 1, 1)
+    dispatch_groups = (
+        (width + thread_group[0] - 1) // thread_group[0],
+        max(1, height),
+        1,
+    )
     report = nw03.compile_package(
         optimized.source_name,
         destination,
@@ -886,6 +1459,8 @@ def _compile_profile_package(
         optimization=optimization,
         allow_unpinned_dxc=allow_unpinned_dxc,
         allow_test_payloads=allow_test_payloads,
+        shader_thread_group=thread_group,
+        dispatch_groups=dispatch_groups,
     )
     package_bytes = destination.read_bytes()
     package = nwp.decode_package(
@@ -896,19 +1471,15 @@ def _compile_profile_package(
             "graph lowering produced no executable procedural shader",
             dependency_path=["graph", "shader"],
         )
-    # Append the established NW-04 compute/display instruction stream to the
-    # *graph-derived* package.  No hand-authored package content contributes
-    # the visible image: the display pass presents the UAV output produced by
-    # the shader specializations compiled from this graph.
-    try:
-        original_flags = package.flags
-        package = _compose_display_stream(package)
-        package = replace(package, flags=original_flags)
-    except ValueError as exc:
-        raise ExportError(
-            f"graph package has no displayable procedural output: {exc}",
-            dependency_path=["display", "frame.present"],
-        ) from exc
+    package = _build_graph_derived_package(
+        document,
+        optimized,
+        package,
+        report,
+        width=width,
+        height=height,
+        dispatch_groups=dispatch_groups,
+    )
     package_bytes = nwp.encode_package(package)
     is_common = profile_id == nwp.COMMON_PROFILE_ID
 
@@ -942,6 +1513,32 @@ def _compile_profile_package(
                     "<" + "f" * len(decision.quantized),
                     *decision.quantized,
                 ),
+                timeline_start_frame=0,
+                timeline_end_frame=0,
+                timeline_step=0,
+                timeline_interpolation="none",
+            )
+        )
+        next_parameter_id += 1
+    # Supported explicit bake overrides are materialised as real package
+    # parameter content (not just a report claim).  The generated consumer path
+    # was already replaced by the literal constant in materialize_document().
+    for node in sorted(optimized.nodes, key=lambda item: item.node_id):
+        if generation_modes.get(node.node_id) != "bake":
+            continue
+        if not _node_bakeable(optimized, node):
+            continue
+        values = next(iter((node.constant or {}).values()), ())
+        if not 1 <= len(values) <= 4:
+            continue
+        baked_parameters.append(
+            nwp.ParameterRecord(
+                parameter_id=next_parameter_id,
+                name=f"nw05.baked.{node.node_id}",
+                type=_parameter_type(values),
+                phase="initialization",
+                component_count=len(values),
+                value=_parameter_value_bytes(values),
                 timeline_start_frame=0,
                 timeline_end_frame=0,
                 timeline_step=0,
@@ -1022,10 +1619,15 @@ def _failure_report_path(
     )
 
 
-def _publish_directory(staging: Path, destination: Path) -> None:
+def _publish_directory(
+    staging: Path,
+    destination: Path,
+    after_publish: Callable[[], None] | None = None,
+) -> None:
     """Publish a complete directory with rollback of any previous artifact."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     backup: Path | None = None
+    published = False
     try:
         if destination.exists():
             backup = destination.parent / (
@@ -1033,7 +1635,12 @@ def _publish_directory(staging: Path, destination: Path) -> None:
             )
             os.replace(destination, backup)
         os.replace(staging, destination)
+        published = True
+        if after_publish is not None:
+            after_publish()
     except Exception:
+        if published and destination.exists():
+            shutil.rmtree(destination, ignore_errors=True)
         if backup is not None and not destination.exists():
             os.replace(backup, destination)
         raise
@@ -1058,6 +1665,8 @@ def _finalize_size_accounting(
     staging: Path,
     artifacts: Mapping[str, "ProfileArtifact"],
     settings: ExportSettings,
+    *,
+    common_extra_files: Sequence[str] = (),
 ) -> None:
     """Attribute every emitted artifact file, including reports themselves.
 
@@ -1076,6 +1685,11 @@ def _finalize_size_accounting(
                 path = staging / name
                 if path.is_file():
                     files[name] = path.stat().st_size
+            if common:
+                for name in common_extra_files:
+                    path = staging / name
+                    if path.is_file():
+                        files[name] = path.stat().st_size
             manifest_path = staging / f"{stem}.manifest.json"
             executable_path = (
                 staging / artifact.executable_name
@@ -1358,7 +1972,6 @@ def export_graph(
                         "blob_bytes": row["blob_size"],
                         "blob_sha256": row["blob_sha256"],
                         "hlsl_sha256": row["hlsl_sha256"],
-                        "cache_hit": row.get("cache_hit", False),
                         "root_node_ids": row.get("root_node_ids", []),
                     }
                     for row in compile_report["fixture"]["shaders"]
@@ -1410,6 +2023,8 @@ def export_graph(
             player_source = generate_player_source(
                 package_sha256=hashlib.sha256(package_bytes).hexdigest(),
                 manifest_sha256=manifest["manifest_sha256"],
+                manifest=manifest,
+                memory_budget_bytes=settings.memory_budget,
             ).encode("utf-8")
             aux_files = {
                 f"{_profile_file_stem(profile_id)}.schedule.json": len(schedule_data),
@@ -1531,24 +2146,30 @@ def export_graph(
                 source = generate_player_source(
                     package_sha256=hashlib.sha256(artifact.package_bytes).hexdigest(),
                     manifest_sha256=artifact.manifest["manifest_sha256"],
+                    manifest=artifact.manifest,
+                    memory_budget_bytes=settings.memory_budget,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
             else:
                 source = generate_player_source(
                     package_sha256=hashlib.sha256(artifact.package_bytes).hexdigest(),
                     manifest_sha256=artifact.manifest["manifest_sha256"],
+                    manifest=artifact.manifest,
+                    memory_budget_bytes=settings.memory_budget,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
 
-        _finalize_size_accounting(staging, artifacts, settings)
-        common = artifacts[nwp.COMMON_PROFILE_ID]
-        common_total = common.size_report["distribution"]["total_distributed_bytes"]
-        optional_total = sum(
-            artifact.size_report["distribution"]["total_distributed_bytes"]
-            for profile_id, artifact in artifacts.items()
-            if profile_id != nwp.COMMON_PROFILE_ID
-        )
-        report = {
+        def _report_payload() -> dict[str, Any]:
+            common_artifact = artifacts[nwp.COMMON_PROFILE_ID]
+            common_bytes = common_artifact.size_report["distribution"][
+                "total_distributed_bytes"
+            ]
+            optional_bytes = sum(
+                artifact.size_report["distribution"]["total_distributed_bytes"]
+                for profile_id, artifact in artifacts.items()
+                if profile_id != nwp.COMMON_PROFILE_ID
+            )
+            return {
             "format": EXPORT_FORMAT,
             "version": EXPORT_VERSION,
             "settings": settings.to_dict(),
@@ -1563,11 +2184,13 @@ def export_graph(
                 "compiler": compile_reports.get(nwp.COMMON_PROFILE_ID, {}).get(
                     "compiler", {}
                 ),
-                "package_sha256": hashlib.sha256(common.package_bytes).hexdigest(),
-                "manifest_sha256": common.manifest["manifest_sha256"],
+                "package_sha256": hashlib.sha256(
+                    common_artifact.package_bytes
+                ).hexdigest(),
+                "manifest_sha256": common_artifact.manifest["manifest_sha256"],
                 "executable_sha256": (
-                    hashlib.sha256(common.executable_bytes).hexdigest()
-                    if common.executable_bytes is not None
+                    hashlib.sha256(common_artifact.executable_bytes).hexdigest()
+                    if common_artifact.executable_bytes is not None
                     else "unavailable"
                 ),
                 "player_template_sha256": (
@@ -1587,8 +2210,8 @@ def export_graph(
                 "common": {
                     "profile_id": nwp.COMMON_PROFILE_ID,
                     "requirements_digest": nwp.COMMON_REQUIREMENTS_DIGEST,
-                    "artifact_key": common.artifact_key,
-                    "distributed_bytes": common_total,
+                    "artifact_key": common_artifact.artifact_key,
+                    "distributed_bytes": common_bytes,
                 },
                 "optional": [
                     {
@@ -1607,9 +2230,9 @@ def export_graph(
             "budgets": {
                 "byte_ceiling": settings.byte_ceiling,
                 "memory_budget": settings.memory_budget,
-                "common_distributed_bytes": common_total,
-                "optional_distributed_bytes": optional_total,
-                "common_within_byte_ceiling": common_total <= settings.byte_ceiling,
+                "common_distributed_bytes": common_bytes,
+                "optional_distributed_bytes": optional_bytes,
+                "common_within_byte_ceiling": common_bytes <= settings.byte_ceiling,
                 "optional_independent": True,
                 "common_baseline_raised_by_optional": False,
             },
@@ -1626,29 +2249,37 @@ def export_graph(
                         "target": shader.target,
                         "bytes": len(shader.blob),
                     }
-                    for shader in package.shaders
+                    for shader in common_artifact.package.shaders
                 ],
-                "retained_dependencies": common.manifest["retained"]["dependencies"],
-                "excluded_optional_implementations": common.manifest["excluded"][
-                    "optional_implementations"
+                "retained_dependencies": common_artifact.manifest["retained"][
+                    "dependencies"
                 ],
-                "excluded_authoring_infrastructure": common.manifest["excluded"][
+                "excluded_optional_implementations": common_artifact.manifest[
+                    "excluded"
+                ]["optional_implementations"],
+                "excluded_authoring_infrastructure": common_artifact.manifest[
+                    "excluded"
+                ][
                     "authoring_infrastructure"
                 ],
             },
             "generation_vs_bake": {
                 "automatic_oracle": False,
                 "default": "generate",
-                "decisions": list(common.generation_decisions),
+                "decisions": list(common_artifact.generation_decisions),
                 "documentation": (
                     "Bake is never selected automatically. Explicit bake overrides "
-                    "record incremental compressed content, introduced code/shaders, "
-                    "startup cost, and peak memory for human comparison."
+                    "record the measured package-parameter content that is actually "
+                    "emitted, introduced code/shaders, startup cost, and peak memory. "
+                    "Unsupported requests fail closed; unavailable measurements are "
+                    "labelled rather than estimated."
                 ),
             },
             "evidence": {
                 "windows_native_executable": (
-                    "generated" if common.executable_bytes is not None else "pending_unavailable"
+                    "generated"
+                    if common_artifact.executable_bytes is not None
+                    else "pending_unavailable"
                 ),
                 "gpu_alias_validation": "pending_unverified",
                 "note": (
@@ -1657,13 +2288,9 @@ def export_graph(
                 ),
             },
             "success": True,
-        }
+            }
 
-        # Final publication is all-or-nothing for the directory.
-        _publish_directory(staging, output_directory)
-        staging = output_directory
-
-        if report_path is not None:
+        def _report_with_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
             artifact_payloads = {}
             for key, artifact in sorted(artifacts.items()):
                 stem = _profile_file_stem(key)
@@ -1678,20 +2305,90 @@ def export_graph(
                     "executable": artifact.executable_name,
                 }
                 artifact_payloads[key] = artifact_payload
-            _write_bytes(
-                Path(report_path),
-                json.dumps(
-                    {**report, "artifacts": artifact_payloads},
-                    indent=2,
-                    sort_keys=True,
-                ).encode("utf-8"),
+            return {**payload, "artifacts": artifact_payloads}
+
+        # An in-directory report is part of the distributed artifact, so stage
+        # and account for it before publication.  The report embeds the size
+        # totals that include itself, so iterate to a deterministic fixed point.
+        in_directory_report: Path | None = None
+        if report_path is not None:
+            try:
+                candidate = Path(report_path).resolve().relative_to(
+                    output_directory.resolve()
+                )
+            except ValueError:
+                candidate = None
+            if candidate is not None and candidate.parts:
+                in_directory_report = candidate
+        if in_directory_report is not None:
+            previous: bytes | None = None
+            for _iteration in range(64):
+                report = _report_payload()
+                payload = json.dumps(
+                    _report_with_artifacts(report), indent=2, sort_keys=True
+                ).encode("utf-8")
+                _write_bytes(staging / in_directory_report, payload)
+                _finalize_size_accounting(
+                    staging,
+                    artifacts,
+                    settings,
+                    common_extra_files=(str(in_directory_report),),
+                )
+                if previous == payload:
+                    break
+                previous = payload
+            else:
+                raise ExportError(
+                    "in-directory report size accounting did not converge",
+                    dependency_path=["size_report", "report"],
+                )
+            report = _report_payload()
+        else:
+            _finalize_size_accounting(staging, artifacts, settings)
+            report = _report_payload()
+
+        # Final publication is all-or-nothing for the directory.
+        external_report_temp: Path | None = None
+        if report_path is not None and in_directory_report is None:
+            destination_report = Path(report_path)
+            destination_report.parent.mkdir(parents=True, exist_ok=True)
+            fd, raw_tmp = tempfile.mkstemp(
+                prefix=".nw05-report-", suffix=".tmp",
+                dir=str(destination_report.parent),
             )
+            external_report_temp = Path(raw_tmp)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(
+                    json.dumps(
+                        _report_with_artifacts(report),
+                        indent=2,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+
+        def _publish_external_report() -> None:
+            if external_report_temp is not None:
+                os.replace(external_report_temp, Path(report_path))
+
+        try:
+            _publish_directory(
+                staging, output_directory, after_publish=_publish_external_report
+            )
+        finally:
+            if external_report_temp is not None:
+                try:
+                    external_report_temp.unlink()
+                except FileNotFoundError:
+                    pass
+        staging = output_directory
         return ExportResult(
             output_directory=str(output_directory),
             settings=settings,
             artifacts=artifacts,
             report=report,
-            common_artifact_key=common.artifact_key,
+            common_artifact_key=artifacts[nwp.COMMON_PROFILE_ID].artifact_key,
         )
     except Exception as exc:
         if staging.exists() and staging != output_directory:

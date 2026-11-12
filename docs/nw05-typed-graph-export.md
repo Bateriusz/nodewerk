@@ -145,17 +145,17 @@ Each explicit `--generation-override <node>=generate|bake` or
 
 This lets a human compare generation against baked content for a specific
 graph. The report always states `"automatic_oracle": false`.
-The current minimal specialized player has no runtime consumer for arbitrary
-baked payloads. An explicit bake request therefore retains the correct
-generated path and records `"bake has no runtime consumer..."`; it never emits
-unused parameter blobs that merely increase package size. The decision still
-records `requested_mode: "bake"`, `mode: "generate"`,
-`incremental_compressed_content_bytes`, `startup_cost_bytes`,
-`peak_memory_bytes`, and the hypothetical `requested_bake_*` fields, while the
-actual generated path records its own introduced code/shader bytes. The two
-sides are therefore compared honestly without mixing metrics. Reducing
-generation for a node requires adding an actual consumer in a future runtime
-extension. Generation remains the default.
+
+Fully constant scalar/vector nodes are bakeable: the exported `.nwp` v1
+package carries their values as initialization parameter content and the
+materialised graph replaces the generating operator with the literal constant.
+The decision record labels this `measurement_status:
+"measured-package-parameter-bytes"` and reports the actual parameter bytes,
+not a hypothetical compressed-IR estimate. Dynamic/shader nodes remain on the
+generated path because the current specialized player has no runtime consumer
+for arbitrary baked payloads; their decision record states that explicitly.
+Unsupported bake requests fail closed instead of silently becoming generation.
+There is no automatic cost oracle and generation remains the default.
 
 ## Capability-profile artifacts and budgets
 
@@ -186,6 +186,13 @@ generation/bake overrides, frame-slot count, and the player template. The
 existing `compile-package` command accepts the same target-profile, digest,
 byte-ceiling, and memory-budget options for compatibility.
 
+The memory budget uses complete peak accounting: adapter allocation padding,
+transient frame-slot duplication, and PackagePlayer-owned swap-chain, display,
+upload-ring, descriptor, and readback storage are all included. Without an
+adapter query a placement-aligned upper bound is used; the generated player
+re-checks the same limit after native allocation requirements are queried and
+before any bulk GPU allocation.
+
 ## Resource schedules and physical aliases
 
 `tools/nw05_schedule.py` emits an explicit single direct-queue logical
@@ -203,8 +210,10 @@ Physical alias realisation is a separate adapter-specific step:
    serialize frames when the runtime uses one frame slot;
 5. reuse an offset only within the same frame-slot instance and compatible
    alias group;
-6. emit an aliasing barrier and a UAV barrier where a previous write is
-   followed by a read.
+6. emit aliasing and UAV barriers in execution order, including the
+   frame-boundary activation that lets the next frame reuse a region first
+   touched by a different resource. Fence completion does not replace these
+   barriers.
 
 The realisation record is marked `"portable": false` and separates
 adapter-specific offsets from the logical plan. Missing adapter allocation

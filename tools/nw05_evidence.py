@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -191,6 +192,75 @@ def _common_artifact(artifact_directory: Path) -> tuple[Path, bytes]:
     return package_path, package_path.read_bytes()
 
 
+def _run_player(
+    executable: Path,
+    arguments: list[str],
+    *,
+    timeout: int = 180,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            [str(executable), *arguments],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "exit_code": -1,
+            "timed_out": True,
+            "stdout": (
+                exc.stdout.decode("utf-8", errors="replace")
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or "")
+            ),
+            "stderr": (
+                exc.stderr.decode("utf-8", errors="replace")
+                if isinstance(exc.stderr, bytes)
+                else (exc.stderr or "")
+            ),
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "error": "execution timed out",
+        }
+    except OSError as exc:
+        return {
+            "exit_code": -1,
+            "timed_out": False,
+            "stdout": "",
+            "stderr": str(exc),
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "error": str(exc),
+        }
+    return {
+        "exit_code": int(completed.returncode),
+        "timed_out": False,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+        "error": "",
+    }
+
+
+def _telemetry(stdout: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.startswith("NW05_"):
+            values[key] = value.strip()
+    return values
+
+
+def _int_telemetry(values: dict[str, str], name: str) -> int | None:
+    try:
+        return int(values.get(name, ""))
+    except (TypeError, ValueError):
+        return None
+
+
 def record_execution(
     executable: Path,
     artifact_directory: Path,
@@ -238,26 +308,33 @@ def record_execution(
     if not artifact_key:
         raise SystemExit("embedded link manifest has no artifact identity")
 
-    # Execute the supplied specialized player.  Operator-supplied --status is
-    # an expectation, never proof: a passed claim is accepted only when the
-    # observed process exit code matches it.
-    try:
-        completed = subprocess.run(
-            [str(executable), "--frames", "1"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SystemExit(f"executed evidence could not run the player: {exc}") from exc
-    observed_exit = int(completed.returncode)
+    # Execute the supplied specialized player in both realizations.  A passed
+    # claim requires observed output/alias telemetry from the executing
+    # adapter, a matching non-aliased output image, and the actual alias plan
+    # to have been realized.  Operator-supplied --status is only an expectation.
+    aliased_run = _run_player(
+        executable, ["--frames", "2", "--emit-image-hash"]
+    )
+    non_aliased_run = _run_player(
+        executable,
+        ["--frames", "2", "--emit-image-hash", "--force-non-aliased-plan"],
+    )
+    observed_exit = int(aliased_run["exit_code"])
     expected_exit = int(exit_code)
+    aliased_telemetry = _telemetry(str(aliased_run["stdout"]))
+    non_aliased_telemetry = _telemetry(str(non_aliased_run["stdout"]))
     status_matches = (
         (status == "passed" and observed_exit == 0 and expected_exit == 0)
         or (status == "failed" and observed_exit != 0)
     )
     details_payload = dict(details or {})
+    executed_adapter = aliased_telemetry.get("NW05_ADAPTER", "")
+    executed_driver = aliased_telemetry.get("NW05_DRIVER", "")
+    if executed_adapter:
+        details_payload["device"] = executed_adapter
+        details_payload["adapter_description"] = executed_adapter
+    if executed_driver:
+        details_payload["driver_version"] = executed_driver
     required_telemetry = (
         "device",
         "adapter_description",
@@ -296,11 +373,49 @@ def record_execution(
     missing_telemetry = [
         name for name in required_telemetry if not details_payload.get(name)
     ]
+    alias_barrier_count = _int_telemetry(aliased_telemetry, "NW05_ALIAS_BARRIERS")
+    non_aliased_barrier_count = _int_telemetry(
+        non_aliased_telemetry, "NW05_ALIAS_BARRIERS"
+    )
+    alias_telemetry_ok = bool(
+        aliased_telemetry.get("NW05_LINK_MANIFEST_VERIFIED") == "1"
+        and aliased_telemetry.get("NW05_ALIASED_PLAN") == "1"
+        and alias_barrier_count is not None
+        and alias_barrier_count > 0
+        and (_int_telemetry(aliased_telemetry, "NW05_IMAGE_NONZERO_BYTES") or 0)
+        > 0
+        and executed_adapter
+        and executed_driver
+    )
+    non_aliased_telemetry_ok = bool(
+        non_aliased_telemetry.get("NW05_LINK_MANIFEST_VERIFIED") == "1"
+        and non_aliased_telemetry.get("NW05_ALIASED_PLAN") == "0"
+        and (_int_telemetry(non_aliased_telemetry, "NW05_IMAGE_NONZERO_BYTES") or 0)
+        > 0
+    )
+    output_match = bool(
+        aliased_telemetry.get("NW05_IMAGE_FNV64")
+        and aliased_telemetry.get("NW05_IMAGE_FNV64")
+        == non_aliased_telemetry.get("NW05_IMAGE_FNV64")
+        and aliased_telemetry.get("NW05_IMAGE_BYTES")
+        == non_aliased_telemetry.get("NW05_IMAGE_BYTES")
+    )
+    if (
+        non_aliased_barrier_count is not None
+        and non_aliased_barrier_count != 0
+    ):
+        non_aliased_telemetry_ok = False
     passed = (
         status == "passed"
         and status_matches
         and not missing_telemetry
         and hardware_identity_verified
+        and not aliased_run["timed_out"]
+        and not non_aliased_run["timed_out"]
+        and non_aliased_run["exit_code"] == 0
+        and alias_telemetry_ok
+        and non_aliased_telemetry_ok
+        and output_match
     )
     failure_reason = ""
     if not status_matches:
@@ -308,6 +423,8 @@ def record_execution(
             f"operator status '{status}' does not match observed exit "
             f"{observed_exit} (declared {expected_exit})"
         )
+    elif status == "failed":
+        failure_reason = "declared failed execution"
     elif status == "passed" and missing_telemetry:
         failure_reason = (
             "passed evidence is missing required telemetry: "
@@ -317,6 +434,29 @@ def record_execution(
         failure_reason = (
             "passed evidence could not independently verify adapter identity, "
             "driver, capabilities, and requested hardware tier"
+        )
+    elif status == "passed" and aliased_run["timed_out"]:
+        failure_reason = "aliased execution timed out"
+    elif status == "passed" and non_aliased_run["timed_out"]:
+        failure_reason = "non-aliased comparison execution timed out"
+    elif status == "passed" and non_aliased_run["exit_code"] != 0:
+        failure_reason = (
+            "non-aliased comparison execution exited "
+            f"{non_aliased_run['exit_code']}"
+        )
+    elif status == "passed" and not alias_telemetry_ok:
+        failure_reason = (
+            "passed evidence lacks executed aliased-plan/image telemetry tied "
+            "to the running adapter"
+        )
+    elif status == "passed" and not non_aliased_telemetry_ok:
+        failure_reason = (
+            "non-aliased comparison did not run the ordinary committed plan "
+            "and produce image telemetry"
+        )
+    elif status == "passed" and not output_match:
+        failure_reason = (
+            "aliased and non-aliased fixture outputs do not match"
         )
     if status == "passed" and hardware_identity_verified and probed_adapter:
         supplied_adapter = str(details_payload.get("adapter_description", ""))
@@ -352,12 +492,21 @@ def record_execution(
         "execution_status": "passed" if passed else "failed",
         "exit_code": observed_exit,
         "declared_exit_code": expected_exit,
+        "timed_out": bool(aliased_run["timed_out"]),
+        "non_aliased_timed_out": bool(non_aliased_run["timed_out"]),
+        "non_aliased_exit_code": int(non_aliased_run["exit_code"]),
+        "elapsed_ms": int(aliased_run["elapsed_ms"]),
         "stdout_sha256": hashlib.sha256(
-            completed.stdout.encode("utf-8", errors="replace")
+            str(aliased_run["stdout"]).encode("utf-8", errors="replace")
         ).hexdigest(),
         "stderr_sha256": hashlib.sha256(
-            completed.stderr.encode("utf-8", errors="replace")
+            str(aliased_run["stderr"]).encode("utf-8", errors="replace")
         ).hexdigest(),
+        "telemetry": aliased_telemetry,
+        "non_aliased_telemetry": non_aliased_telemetry,
+        "aliased_plan_realized": aliased_telemetry.get("NW05_ALIASED_PLAN") == "1",
+        "alias_barrier_count": alias_barrier_count or 0,
+        "output_matches_non_aliased": output_match,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "artifact_key": artifact_key,
         "package": {
@@ -376,37 +525,73 @@ def record_execution(
         "hardware_identity_verified": hardware_identity_verified,
         "failure_reason": failure_reason,
     }
-    # A later passed run must never erase an executed failure from the other
-    # tier, and both verified tiers must refer to the identical artifact.
+    # A later passed run must never erase an executed failure, and both
+    # verified tiers must refer to the identical package and executable.
     other_tier = "blackwell" if tier == "ada" else "ada"
     other = record.setdefault("qualifications", {}).get(other_tier, {})
-    if passed and other:
-        if other.get("status") == "failed":
+    if passed and other and other.get("status") == "verified":
+        if (
+            other.get("artifact_key") != artifact_key
+            or other.get("package_sha256") != execution["package"]["sha256"]
+            or (
+                other.get("executable_sha256")
+                and other.get("executable_sha256")
+                != execution["executable"]["sha256"]
+            )
+        ):
             passed = False
             failure_reason = (
-                f"other hardware tier '{other_tier}' remains an executed failure"
+                "other verified hardware tier used a different artifact or "
+                "executable"
             )
             execution["execution_status"] = "failed"
             execution["failure_reason"] = failure_reason
-        elif other.get("status") == "verified":
-            if (
-                other.get("artifact_key") != artifact_key
-                or other.get("package_sha256") != execution["package"]["sha256"]
-            ):
-                passed = False
-                failure_reason = (
-                    "other verified hardware tier used a different artifact"
-                )
-                execution["execution_status"] = "failed"
-                execution["failure_reason"] = failure_reason
     record.setdefault("executions", []).append(execution)
     if details_payload.get("toolchain_manifest_sha256"):
         record["toolchain_manifest_sha256"] = str(
             details_payload["toolchain_manifest_sha256"]
         )
     qualification = record.setdefault("qualifications", {}).setdefault(tier, {})
-    qualification["status"] = "verified" if passed else "failed"
-    qualification["reason"] = failure_reason
+    tier_executions = [
+        item
+        for item in record["executions"]
+        if item.get("hardware_tier") == tier
+    ]
+    failed_executions = [
+        item
+        for item in tier_executions
+        if item.get("execution_status") == "passed"
+        and item.get("output_matches_non_aliased") is False
+    ] + [
+        item
+        for item in tier_executions
+        if item.get("execution_status") != "passed"
+    ]
+    prior_failed = qualification.get("status") == "failed"
+    verified_execution = next(
+        (
+            item
+            for item in reversed(tier_executions)
+            if item.get("execution_status") == "passed"
+        ),
+        None,
+    )
+    qualification["status"] = (
+        "failed"
+        if prior_failed or failed_executions
+        else "verified"
+        if verified_execution is not None
+        else "pending_unverified"
+    )
+    qualification["reason"] = (
+        failure_reason
+        if failure_reason
+        else "tier retains an earlier executed failure"
+        if prior_failed or failed_executions
+        else ""
+    )
+    qualification["failed_executions"] = len(failed_executions)
+    qualification["execution_count"] = len(tier_executions)
     qualification["package_sha256"] = execution["package"]["sha256"]
     qualification["executable_sha256"] = execution["executable"]["sha256"]
     qualification["artifact_key"] = artifact_key
@@ -422,6 +607,9 @@ def record_execution(
     if any(
         record["qualifications"].get(name, {}).get("status") == "failed"
         for name in ("ada", "blackwell")
+    ) or any(
+        item.get("execution_status") != "passed"
+        for item in record.get("executions", [])
     ):
         record["verification_status"] = "executed_failure"
     elif all(

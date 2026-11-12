@@ -23,7 +23,6 @@
       "type": "string",
       "pattern": "^sha256:v1:[0-9a-f]{64}$"
     },
-    "semantic_source_sha256": { "type": "string" },
     "ir_sha256": { "type": "string" },
     "artifact_identity": { "type": "string" },
     "reachable_content": {

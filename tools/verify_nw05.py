@@ -502,7 +502,7 @@ def _export_once(
 ) -> tuple[nw05_export.ExportResult, dict[str, str]]:
     settings = nw05_export.ExportSettings(
         byte_ceiling=byte_ceiling,
-        memory_budget=1024 * 1024,
+        memory_budget=256 * 1024 * 1024,
         player_template=str(template),
         frames_in_flight=2,
     )
@@ -725,7 +725,7 @@ def check_optional_profiles_independent() -> CheckResult:
             template.write_bytes(b"MZ" + b"\x00" * 128)
             settings = nw05_export.ExportSettings(
                 byte_ceiling=1024 * 1024,
-                memory_budget=1024 * 1024,
+                memory_budget=256 * 1024 * 1024,
                 optional_profiles=(nwp.OPTIONAL_PROFILE_WAVE_OPS,),
                 allow_optional_profiles=True,
                 player_template=str(template),
@@ -969,6 +969,12 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
             .get("package_sha256")
             for tier in ("ada", "blackwell")
         }
+        executable_hashes = {
+            record.get("qualifications", {})
+            .get(tier, {})
+            .get("executable_sha256")
+            for tier in ("ada", "blackwell")
+        }
         adapter_descriptions = {
             record.get("qualifications", {})
             .get(tier, {})
@@ -994,11 +1000,16 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
                 or not record.get("qualifications", {})
                 .get(tier, {})
                 .get("hardware_identity_verified")
+                or not execution.get("aliased_plan_realized")
+                or int(execution.get("alias_barrier_count", 0) or 0) <= 0
+                or not execution.get("output_matches_non_aliased")
             ):
                 telemetry_ok = False
         identity_mismatch = (
             keys != {embedded_artifact_key}
             or package_hashes != {embedded_package_sha}
+            or executable_hashes
+            != {_sha256(fixture.read_bytes())}
         )
         if any(status == "failed" for status in statuses.values()):
             gpu = CheckResult(
@@ -1027,6 +1038,10 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
                     "expected_artifact_key": embedded_artifact_key,
                     "package_hashes": sorted(str(value) for value in package_hashes),
                     "expected_package_sha256": embedded_package_sha,
+                    "executable_hashes": sorted(
+                        str(value) for value in executable_hashes
+                    ),
+                    "expected_executable_sha256": _sha256(fixture.read_bytes()),
                     "adapter_descriptions": sorted(
                         str(value) for value in adapter_descriptions
                     ),

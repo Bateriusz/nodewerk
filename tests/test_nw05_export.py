@@ -58,7 +58,7 @@ def _settings(tmp_path: Path, **overrides: object) -> nw05_export.ExportSettings
         template.write_bytes(b"MZ" + b"\x00" * 256)
     values = {
         "byte_ceiling": 1024 * 1024,
-        "memory_budget": 1024 * 1024,
+        "memory_budget": 256 * 1024 * 1024,
         "player_template": str(template),
     }
     values.update(overrides)
@@ -186,6 +186,17 @@ def test_optional_profile_is_a_separate_budgeted_artifact(tmp_path: Path) -> Non
     assert optional.manifest["requirements_digest"] == nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST
     assert optional.manifest["feature_requirements"]["wave_ops"] is True
     assert common.manifest["feature_requirements"]["wave_ops"] is False
+    common_source = (
+        tmp_path / "out" / f"{nw05_export._profile_file_stem(nwp.COMMON_PROFILE_ID)}.player.cpp"
+    ).read_text(encoding="utf-8")
+    optional_source = (
+        tmp_path / "out" / f"{nw05_export._profile_file_stem(nwp.OPTIONAL_PROFILE_WAVE_OPS)}.player.cpp"
+    ).read_text(encoding="utf-8")
+    # The generated link closure, not an unchanged generic template, determines
+    # whether optional feature queries are compiled into each artifact.
+    assert "config.query_optional_wave_ops = false;" in common_source
+    assert "config.query_optional_wave_ops = true;" in optional_source
+    assert "NW05_LINK_MANIFEST_VERIFIED=1" in common_source
     assert result.report["budgets"]["optional_independent"] is True
     assert result.report["budgets"]["common_baseline_raised_by_optional"] is False
     for directory in (tmp_path / "out",):
@@ -399,17 +410,19 @@ def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
         item["node_id"]: item
         for item in result.report["generation_vs_bake"]["decisions"]
     }
-    assert decisions["roughness"]["mode"] == "generate"
+    assert decisions["roughness"]["mode"] == "bake"
     assert decisions["roughness"]["requested_mode"] == "bake"
     assert decisions["roughness"]["automatic_cost_oracle"] is False
-    assert "no runtime consumer" in decisions["roughness"]["reason"]
-    assert decisions["roughness"]["incremental_compressed_content_bytes"] == 0
-    assert decisions["roughness"]["startup_cost_bytes"] == 0
-    assert decisions["roughness"]["introduced_code_bytes"] > 0
+    assert decisions["roughness"]["incremental_compressed_content_bytes"] > 0
+    assert decisions["roughness"]["startup_cost_bytes"] > 0
+    assert decisions["roughness"]["introduced_code_bytes"] == 0
     assert decisions["roughness"]["requested_bake_compressed_bytes"] > 0
     assert decisions["roughness"]["requested_bake_startup_bytes"] > 0
     assert decisions["roughness"]["requested_bake_peak_memory_bytes"] > 0
-    assert decisions["roughness"]["baked_content_emitted_bytes"] == 0
+    assert decisions["roughness"]["baked_content_emitted_bytes"] > 0
+    assert decisions["roughness"]["measurement_status"] == (
+        "measured-package-parameter-bytes"
+    )
     assert decisions["shade"]["mode"] == "generate"
     assert "unsupported" in decisions["shade"]["reason"]
     assert result.report["generation_vs_bake"]["automatic_oracle"] is False
@@ -582,6 +595,48 @@ def test_unreachable_graph_additions_do_not_change_published_bytes(
     assert (
         baseline.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
         == extended.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+    )
+    assert (
+        baseline.artifacts[nwp.COMMON_PROFILE_ID].executable_bytes
+        == extended.artifacts[nwp.COMMON_PROFILE_ID].executable_bytes
+    )
+    manifest = baseline.artifacts[nwp.COMMON_PROFILE_ID].manifest
+    assert "semantic_source_sha256" not in manifest
+    assert all("cache_hit" not in shader for shader in manifest["shaders"])
+
+
+def test_cold_and_warm_shader_cache_produce_identical_executables(
+    tmp_path: Path,
+) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    cache = tmp_path / "cache"
+    cold = nw05_export.export_graph(
+        PROCEDURAL,
+        tmp_path / "cold",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        cache_dir=cache,
+        allow_test_payloads=True,
+    )
+    warm = nw05_export.export_graph(
+        PROCEDURAL,
+        tmp_path / "warm",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        cache_dir=cache,
+        allow_test_payloads=True,
+    )
+    assert (
+        cold.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+        == warm.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+    )
+    assert (
+        cold.artifacts[nwp.COMMON_PROFILE_ID].executable_bytes
+        == warm.artifacts[nwp.COMMON_PROFILE_ID].executable_bytes
+    )
+    assert (
+        cold.artifacts[nwp.COMMON_PROFILE_ID].manifest
+        == warm.artifacts[nwp.COMMON_PROFILE_ID].manifest
     )
 
 
@@ -783,4 +838,25 @@ def test_failed_export_never_overwrites_report_inside_prior_artifact(
         (tmp_path / "out-failed-report.json").read_text(encoding="utf-8")
     )
     assert diagnostic["success"] is False
+
+
+def test_in_directory_report_is_staged_and_accounted(tmp_path: Path) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    output = tmp_path / "out"
+    result = nw05_export.export_graph(
+        PROCEDURAL,
+        output,
+        settings=_settings(tmp_path),
+        report_path=output / "report.json",
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    assert (output / "report.json").is_file()
+    actual = sum(path.stat().st_size for path in output.iterdir() if path.is_file())
+    assert result.report["budgets"]["common_distributed_bytes"] == actual
+    size = nw05_export.inspect_size(output)
+    assert size["total_distributed_bytes"] == actual
+    # The report is part of the common artifact accounting, not free metadata.
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    assert "report.json" in common.size_report["distribution"]["artifact_files"]
 

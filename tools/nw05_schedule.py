@@ -27,6 +27,17 @@ QUEUE_COUNT = 1
 COMMON_PROFILE_ID = nwp.COMMON_PROFILE_ID
 COMMON_REQUIREMENTS_DIGEST = nwp.COMMON_REQUIREMENTS_DIGEST
 
+# Preflight upper bound for allocations owned directly by PackagePlayer rather
+# than by the package alias plan: two swap-chain buffers, one display texture,
+# per-frame upload rings, descriptor heaps, and readback/timestamp storage.
+PLAYER_OWNED_SWAPCHAIN_BUFFERS = 2
+PLAYER_OWNED_DEFAULT_WIDTH = 1280
+PLAYER_OWNED_DEFAULT_HEIGHT = 720
+PLAYER_OWNED_FRAME_UPLOAD_BYTES = 64 * 1024
+PLAYER_OWNED_DESCRIPTOR_HEAP_BYTES = 256 * 1024
+PLAYER_OWNED_MISC_BYTES = 64 * 1024
+MAX_PLACEMENT_ALIGNMENT = 64 * 1024
+
 # Stable player mapping documented by NW-04.
 BARRIER_STATE_NAMES = {
     0: "COMMON",
@@ -240,6 +251,9 @@ class AliasBarrier:
     group: str
     reason: str
     uav_barrier: bool
+    activation_phase: str = "frame"
+    activation_instruction: int = 0
+    frame_boundary: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -248,6 +262,9 @@ class AliasBarrier:
             "group": self.group,
             "reason": self.reason,
             "uav_barrier": self.uav_barrier,
+            "activation_phase": self.activation_phase,
+            "activation_instruction": self.activation_instruction,
+            "frame_boundary": self.frame_boundary,
         }
 
 
@@ -288,6 +305,10 @@ class PhysicalRealization:
     serialization: tuple[int, ...] = ()
     not_portable: bool = True
     pending_adapter_query: bool = False
+    allocation_padding_bytes: int = 0
+    transient_duplication_bytes: int = 0
+    player_owned_bytes: int = 0
+    accounted_peak_bytes: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -310,14 +331,48 @@ class PhysicalRealization:
             "barriers": [item.to_dict() for item in self.barriers],
             "total_bytes": self.total_bytes,
             "peak_bytes": self.peak_bytes,
+            "memory_accounting": {
+                "allocation_padding_bytes": self.allocation_padding_bytes,
+                "transient_duplication_bytes": self.transient_duplication_bytes,
+                "player_owned_bytes": self.player_owned_bytes,
+                "accounted_peak_bytes": self.accounted_peak_bytes,
+                "includes_adapter_padding": not self.pending_adapter_query,
+                "includes_transient_duplication": True,
+                "includes_player_owned_allocations": True,
+            },
             "serialization": list(self.serialization),
         }
+
+
+def _player_owned_bytes(
+    frames_in_flight: int,
+    width: int = PLAYER_OWNED_DEFAULT_WIDTH,
+    height: int = PLAYER_OWNED_DEFAULT_HEIGHT,
+    upload_ring_bytes: int = PLAYER_OWNED_FRAME_UPLOAD_BYTES,
+) -> int:
+    """Conservative preflight bytes allocated by PackagePlayer itself."""
+    width = max(1, int(width))
+    height = max(1, int(height))
+    frames = max(1, int(frames_in_flight))
+    swap_chain = PLAYER_OWNED_SWAPCHAIN_BUFFERS * width * height * 4
+    display_texture = width * height * 4
+    upload_rings = frames * max(1, int(upload_ring_bytes))
+    descriptor_heaps = 2 * PLAYER_OWNED_DESCRIPTOR_HEAP_BYTES
+    return (
+        swap_chain
+        + display_texture
+        + upload_rings
+        + descriptor_heaps
+        + PLAYER_OWNED_MISC_BYTES
+    )
 
 
 def pending_physical_realization(
     schedule: LogicalSchedule,
     *,
     adapter_identity: str = "pending-native-adapter",
+    player_width: int = PLAYER_OWNED_DEFAULT_WIDTH,
+    player_height: int = PLAYER_OWNED_DEFAULT_HEIGHT,
 ) -> PhysicalRealization:
     """Return a non-fabricated realization waiting for the native adapter query.
 
@@ -343,17 +398,63 @@ def pending_physical_realization(
                 "serialized": False,
             }
         )
+    # Without an adapter query every allocation must be assumed to occupy a
+    # full placement-aligned range.  Transient resources are duplicated per
+    # frame slot, and the player's own swap-chain/upload/descriptor storage is
+    # included so a budget check cannot pass with an incomplete logical sum.
+    aligned_payload = sum(
+        _round_up(max(resource.size_bytes, 1), MAX_PLACEMENT_ALIGNMENT)
+        * (
+            schedule.frames_in_flight
+            if resource.alias_eligible and schedule.frames_in_flight > 1
+            else 1
+        )
+        for resource in schedule.resources
+    )
+    duplication = sum(
+        _round_up(max(resource.size_bytes, 1), MAX_PLACEMENT_ALIGNMENT)
+        * (schedule.frames_in_flight - 1)
+        for resource in schedule.resources
+        if resource.alias_eligible and schedule.frames_in_flight > 1
+    )
+    padding = aligned_payload - sum(
+        max(resource.size_bytes, 1)
+        * (
+            schedule.frames_in_flight
+            if resource.alias_eligible and schedule.frames_in_flight > 1
+            else 1
+        )
+        for resource in schedule.resources
+    )
+    upload_ring = max(
+        [
+            _round_up(max(resource.size_bytes, 1), MAX_PLACEMENT_ALIGNMENT)
+            for resource in schedule.resources
+        ]
+        or [PLAYER_OWNED_FRAME_UPLOAD_BYTES]
+    )
+    player_owned = _player_owned_bytes(
+        schedule.frames_in_flight,
+        player_width,
+        player_height,
+        upload_ring_bytes=upload_ring,
+    )
+    peak = aligned_payload + player_owned
     return PhysicalRealization(
         adapter_identity=adapter_identity,
         placements=(),
         alias_groups=tuple(groups),
         barriers=(),
         total_bytes=0,
-        peak_bytes=sum(resource.size_bytes for resource in schedule.resources),
+        peak_bytes=peak,
         frames_in_flight=schedule.frames_in_flight,
         allocation_source="pending_adapter_query",
         not_portable=True,
         pending_adapter_query=True,
+        allocation_padding_bytes=padding,
+        transient_duplication_bytes=duplication,
+        player_owned_bytes=player_owned,
+        accounted_peak_bytes=peak,
     )
 
 
@@ -407,6 +508,12 @@ def _looks_transient(resource: nwp.ResourceDescriptor, accesses: Sequence[Resour
         return False, "presented output is read by the player each frame"
     if any(access.opcode == "frame.set_root_constants" for access in accesses):
         return False, "root-constant resource is retained across frames"
+    if any(
+        access.phase == "initialization"
+        and access.opcode == "init.upload_resource"
+        for access in accesses
+    ):
+        return False, "initialization-produced contents are retained across frames"
     if not accesses:
         return False, "resource has no frame access"
     return True, ""
@@ -679,6 +786,29 @@ def lifetimes_overlap(
     )
 
 
+def _activation_frame(resource: LogicalResource, phase: str = "frame") -> int:
+    """First instruction that actually executes against the resource.
+
+    Descriptor-table bindings precede the dispatch that consumes the binding;
+    barriers must be placed at the consuming dispatch, not at binding time.
+    """
+    if phase == "initialization":
+        for access in resource.access:
+            if access.phase == "initialization":
+                return access.index
+        return 0
+    for access in resource.access:
+        if access.phase != "frame":
+            continue
+        if access.opcode in {
+            "frame.dispatch",
+            "frame.copy_buffer",
+            "frame.present",
+        }:
+            return access.index
+    return max(0, resource.lifetime.first_frame)
+
+
 def compatible_alias_group(
     left: LogicalResource,
     right: LogicalResource,
@@ -832,6 +962,8 @@ def realize_physical_aliases(
     adapter_identity: str = "host-simulation",
     frames_in_flight: int | None = None,
     allow_simulated_allocation: bool = False,
+    player_width: int = PLAYER_OWNED_DEFAULT_WIDTH,
+    player_height: int = PLAYER_OWNED_DEFAULT_HEIGHT,
 ) -> PhysicalRealization:
     """Prove alias compatibility against queried sizes/alignments and emit barriers.
 
@@ -871,11 +1003,10 @@ def realize_physical_aliases(
     barriers: list[AliasBarrier] = []
     seen_ids: set[tuple[int, int]] = set()
     total_bytes = 0
-    peak_bytes = 0
     aliased_group_count = 0
 
     def place_instance(resource: LogicalResource, instance: int, group: str) -> None:
-        nonlocal total_bytes, peak_bytes
+        nonlocal total_bytes
         key = (resource.resource_id, instance)
         if key in seen_ids:
             return
@@ -925,6 +1056,8 @@ def realize_physical_aliases(
                     group=group,
                     reason="fence-safe alias reuse after prior lifetime",
                     uav_barrier=other.usage == "uav" or resource.usage == "uav",
+                    activation_phase="frame",
+                    activation_instruction=_activation_frame(resource),
                 )
             )
             break
@@ -946,7 +1079,6 @@ def realize_physical_aliases(
             )
         )
         total_bytes = max(total_bytes, offset + requirement.size_bytes)
-        peak_bytes += requirement.size_bytes
 
     aliased_resources: set[int] = set()
     for group, members in sorted(groups.items()):
@@ -1006,7 +1138,6 @@ def realize_physical_aliases(
             )
         )
         total_bytes = max(total_bytes, offset + requirement.size_bytes)
-        peak_bytes += requirement.size_bytes
         group_payload.append(
             {
                 "group": f"committed:{resource.resource_id}",
@@ -1018,18 +1149,101 @@ def realize_physical_aliases(
             }
         )
 
+    # Alias activation barriers must be emitted in execution order.  A region
+    # reused by A then B needs A->B before B and B->A at the next frame boundary
+    # before A is used again.  Waiting on a fence does not replace either.
+    regions: dict[tuple[int, int], set[int]] = {}
+    for placement in placements:
+        if placement.group.startswith("committed:"):
+            continue
+        regions.setdefault(
+            (placement.instance, placement.byte_offset), set()
+        ).add(placement.resource_id)
+    existing_barriers = {
+        (barrier.before_resource_id, barrier.resource_id)
+        for barrier in barriers
+    }
+    for (instance, _offset), resource_ids in sorted(regions.items()):
+        if len(resource_ids) < 2:
+            continue
+        ordered = sorted(
+            resource_ids,
+            key=lambda resource_id: (
+                resource_by_id[resource_id].lifetime.first_frame,
+                resource_by_id[resource_id].lifetime.last_frame,
+                resource_id,
+            ),
+        )
+        group = resource_by_id[ordered[0]].alias_group
+        for index, resource_id in enumerate(ordered):
+            previous = ordered[index - 1]
+            target = resource_by_id[resource_id]
+            source = resource_by_id[previous]
+            key = (previous, resource_id)
+            if key in existing_barriers:
+                continue
+            barriers.append(
+                AliasBarrier(
+                    resource_id=resource_id,
+                    before_resource_id=previous,
+                    group=group,
+                    reason=(
+                        "frame-boundary alias activation before reuse"
+                        if index == 0
+                        else "execution-order alias activation"
+                    ),
+                    uav_barrier=source.usage == "uav" or target.usage == "uav",
+                    activation_phase="frame",
+                    activation_instruction=_activation_frame(target),
+                    frame_boundary=index == 0,
+                )
+            )
+            existing_barriers.add(key)
+        # Keep the single-queue execution deterministic even when multiple
+        # frame-slot instances exist.
+        _ = instance
+
+    occupied_ranges: dict[tuple[int, int], int] = {}
+    for placement in placements:
+        key = (placement.instance, placement.byte_offset)
+        occupied_ranges[key] = max(
+            occupied_ranges.get(key, 0), placement.size_bytes
+        )
+    occupied_bytes = sum(occupied_ranges.values())
+    allocation_padding = max(0, total_bytes - occupied_bytes)
+    duplicated = sum(
+        placement.size_bytes
+        for placement in placements
+        if placement.instance > 0
+    )
+    upload_ring = max(
+        [
+            _round_up(max(resource.size_bytes, 1), MAX_PLACEMENT_ALIGNMENT)
+            for resource in schedule.resources
+        ]
+        or [PLAYER_OWNED_FRAME_UPLOAD_BYTES]
+    )
+    player_owned = _player_owned_bytes(
+        frames, player_width, player_height, upload_ring_bytes=upload_ring
+    )
+    accounted_peak = total_bytes + player_owned
+
     return PhysicalRealization(
         adapter_identity=adapter_identity,
         placements=tuple(placements),
         alias_groups=tuple(group_payload),
         barriers=tuple(barriers),
         total_bytes=total_bytes,
-        peak_bytes=peak_bytes,
+        peak_bytes=accounted_peak,
         frames_in_flight=frames,
         allocation_source=(
             "simulated_fallback" if allocation_query is None else "adapter_query"
         ),
         serialization=schedule.serialized_transients,
+        allocation_padding_bytes=allocation_padding,
+        transient_duplication_bytes=duplicated,
+        player_owned_bytes=player_owned,
+        accounted_peak_bytes=accounted_peak,
     )
 
 

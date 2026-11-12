@@ -895,6 +895,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     std::set<std::uint32_t> pending_timeline_parameters;
     bool has_active_root_signature = false;
     std::uint32_t active_root_signature_id = 0u;
+    std::uint32_t active_descriptor_resource = 0u;
     present_resource_id_ = 0u;
     present_source_width_ = 0u;
     present_source_height_ = 0u;
@@ -1111,6 +1112,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.root_parameter = instruction.operands[0].u32;
             op.heap_name = instruction.operands[1].string_value;
             op.resource_a = instruction.operands[2].u32;
+            active_descriptor_resource = op.resource_a;
             const package::ResourceDescriptor* resource =
                 FindPackageResource(package_, op.resource_a);
             if (resource == nullptr) {
@@ -1222,6 +1224,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.group_y = instruction.operands[1].u32;
             op.group_z = instruction.operands[2].u32;
             op.shader_id = instruction.operands[3].u32;
+            op.descriptor_resource = active_descriptor_resource;
             if (instruction.operands[0].type != package::OperandType::U32 ||
                 instruction.operands[1].type != package::OperandType::U32 ||
                 instruction.operands[2].type != package::OperandType::U32 ||
@@ -1451,6 +1454,8 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             present_resource_id_ = op.resource_a;
         }
+        op.instruction_index =
+            static_cast<std::uint32_t>(frame_ops_.size());
         frame_ops_.push_back(std::move(op));
         last_frame_order_.push_back(instruction.opcode);
     }
@@ -1690,22 +1695,31 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             static_cast<std::uint32_t>(options.MaxGPUVirtualAddressBitsPerResource);
     }
 
-    D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
-    if (SUCCEEDED(device->CheckFeatureSupport(
-            D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
-        queried.optional_features_queried = true;
-        queried.wave_ops_queried = true;
-        queried.int64_shader_ops_queried = true;
-        queried.wave_ops_supported = options1.WaveOps != FALSE;
-        queried.int64_shader_ops_supported = options1.Int64ShaderOps != FALSE;
+    if (config_.query_optional_wave_ops ||
+        config_.query_optional_int64_shader_ops) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
+        if (SUCCEEDED(device->CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
+            queried.optional_features_queried = true;
+            queried.wave_ops_queried = config_.query_optional_wave_ops;
+            queried.int64_shader_ops_queried =
+                config_.query_optional_int64_shader_ops;
+            queried.wave_ops_supported =
+                config_.query_optional_wave_ops && options1.WaveOps != FALSE;
+            queried.int64_shader_ops_supported =
+                config_.query_optional_int64_shader_ops &&
+                options1.Int64ShaderOps != FALSE;
+        }
     }
-    D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
-    if (SUCCEEDED(device->CheckFeatureSupport(
-            D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4)))) {
-        queried.optional_features_queried = true;
-        queried.fp16_shader_ops_queried = true;
-        queried.fp16_shader_ops_supported =
-            options4.Native16BitShaderOpsSupported != FALSE;
+    if (config_.query_optional_fp16_shader_ops) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
+        if (SUCCEEDED(device->CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4)))) {
+            queried.optional_features_queried = true;
+            queried.fp16_shader_ops_queried = true;
+            queried.fp16_shader_ops_supported =
+                options4.Native16BitShaderOpsSupported != FALSE;
+        }
     }
 
     if (max_gpu_va_bits != 0u) {
@@ -2982,8 +2996,12 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                  alias_index < plan_.alias_barriers.size(); ++alias_index) {
                 if (alias_barrier_emitted[alias_index]) continue;
                 const auto& alias = plan_.alias_barriers[alias_index];
+                if (alias.activation_instruction != op.instruction_index) {
+                    continue;
+                }
                 if (op.resource_a != alias.resource_id &&
-                    op.resource_b != alias.resource_id) {
+                    op.resource_b != alias.resource_id &&
+                    op.descriptor_resource != alias.resource_id) {
                     continue;
                 }
                 PlatformState::ResourceSlot* before = nullptr;
@@ -4001,6 +4019,43 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     }
     plan_ = plan_result.plan;
     stats_.package_plan_bytes = plan_.total_engine_bytes;
+
+    // Budget is enforced after adapter allocation requirements were queried and
+    // before any bulk GPU allocation.  It includes the alias/committed engine
+    // range plus PackagePlayer-owned swap-chain, display, upload, descriptor,
+    // and readback storage.
+    if (config_.memory_budget_bytes != 0u) {
+        const std::uint64_t pixels =
+            static_cast<std::uint64_t>(width_) * height_;
+        std::uint64_t upload_ring = 64u * 1024u;
+        for (const auto& instruction : package_.initialization) {
+            if (instruction.opcode != "init.upload_resource" ||
+                instruction.operands.empty() ||
+                instruction.operands[0].type !=
+                    package::OperandType::ResourceRef) {
+                continue;
+            }
+            for (const auto& resource : package_.resources) {
+                if (resource.resource_id == instruction.operands[0].u32) {
+                    upload_ring = std::max(upload_ring, resource.size_bytes);
+                }
+            }
+        }
+        const std::uint64_t player_owned =
+            3u * pixels * 4u +
+            static_cast<std::uint64_t>(frames_in_flight_) * upload_ring +
+            512u * 1024u + 64u * 1024u;
+        const std::uint64_t accounted =
+            plan_.total_engine_bytes + player_owned;
+        if (accounted > config_.memory_budget_bytes) {
+            return Fail(
+                ExitCode::ResourceAllocationFailed, "memory",
+                "memory_budget_exceeded", "peak_bytes",
+                std::to_string(config_.memory_budget_bytes),
+                std::to_string(accounted), "initialize",
+                "accounted peak memory exceeds the generated artifact budget");
+        }
+    }
 
     if (!BuildFrameInstructionPlan()) {
         code = last_exit_;

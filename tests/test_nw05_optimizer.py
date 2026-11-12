@@ -284,3 +284,36 @@ def test_optimized_document_is_what_nw03_compiles() -> None:
         for key in materialized.settings
     )
 
+
+def test_materialized_folded_constants_have_no_dangling_inputs() -> None:
+    optimized = _ir(SEMANTICS)
+    materialized = optimized.materialize_document()
+    for node in materialized.nodes.values():
+        for _port, (source_node, _source_port) in node.inputs.items():
+            assert source_node in materialized.nodes
+    # The folded value is present as an explicit literal constant.
+    assert any(
+        node.operator_id == "nw.math.vec4_const"
+        and node.node_id.startswith("__nw05_folded_")
+        for node in materialized.nodes.values()
+    )
+    lowered, diagnostics = compiler.lower_to_fused_hlsl(materialized)
+    assert lowered
+    assert not diagnostics
+
+
+def test_quantization_field_override_without_bits_uses_default_bits() -> None:
+    document = compiler.load_graph(SEMANTICS)
+    tolerance_settings = dict(document.settings)
+    tolerance_settings["quantization_field.gain.value"] = "tolerance=0.01"
+    tolerance_only = optimizer.quantize_document(document, tolerance_settings)
+    assert not tolerance_only.errors
+    assert tolerance_only.decisions
+
+    step_settings = dict(document.settings)
+    step_settings["quantization_tolerance"] = "0.05"
+    step_settings["quantization_field.gain.value"] = "step=0.05"
+    step_only = optimizer.quantize_document(document, step_settings)
+    assert not step_only.errors
+    assert step_only.decisions
+
