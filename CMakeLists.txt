@@ -172,7 +172,7 @@ if(WIN32)
     target_link_libraries(nw_procedural_image_player PRIVATE gdi32)
 endif()
 nw_apply_player_profile(nw_procedural_image_player)
-nw_attach_dependency_check(nw_procedural_image_player "package_player")
+nw_attach_dependency_check(nw_procedural_image_player "procedural_image_player")
 
 add_library(nw_compiler STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
     src/compiler/nw_compiler.cpp

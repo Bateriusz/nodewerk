@@ -59,6 +59,19 @@ def test_architecture_records_complete_and_indexed() -> None:
     assert "Rendering Hardware Interface (RHI)" in adr1
     assert "NW-10" in adr1
 
+
+def test_player_fixtures_use_distinct_dependency_staging_ids() -> None:
+    cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert (
+        'nw_attach_dependency_check(nw_package_player_fixture "package_player")'
+        in cmake
+    )
+    assert (
+        'nw_attach_dependency_check(nw_procedural_image_player '
+        '"procedural_image_player")'
+        in cmake
+    )
+
     adr2 = (REPO_ROOT / "docs/architecture/0002-platform-and-d3d12-baseline.md").read_text(encoding="utf-8")
     assert "D3D_FEATURE_LEVEL_12_0" in adr2
     assert "6.0" in adr2
