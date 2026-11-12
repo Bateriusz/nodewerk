@@ -148,9 +148,12 @@ graph. The report always states `"automatic_oracle": false`.
 The current minimal specialized player has no runtime consumer for arbitrary
 baked payloads. An explicit bake request therefore retains the correct
 generated path and records `"bake has no runtime consumer..."`; it never emits
-unused parameter blobs that merely increase package size. Reducing generation
-for a node requires adding an actual consumer in a future runtime extension.
-Generation remains the default.
+unused parameter blobs that merely increase package size. The decision still
+records `requested_mode: "bake"`, `mode: "generate"`,
+`incremental_compressed_content_bytes`, `startup_cost_bytes`, and
+`peak_memory_bytes` so the explicit override can be compared honestly without
+an automatic oracle. Reducing generation for a node requires adding an actual
+consumer in a future runtime extension. Generation remains the default.
 
 ## Capability-profile artifacts and budgets
 

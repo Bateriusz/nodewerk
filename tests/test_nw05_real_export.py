@@ -85,6 +85,11 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
         for item in common.manifest.get("shaders", [])
     }
     assert manifest_hlsl == expected_hlsl
+    assert common.manifest["image_oracle_sha256"] == (
+        nw05_export._graph_image_oracle_sha256(
+            nw03_compiler.load_graph(PROCEDURAL)
+        )
+    )
     decoded = nwp.decode_package(common.package_bytes)
     manifest_blobs = {
         item["blob_sha256"] for item in common.manifest.get("shaders", [])
@@ -115,3 +120,4 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
         completed.stdout + "\n" + completed.stderr
     )
     assert "NW05_FRAMES=1" in completed.stdout
+    assert "NW05_PRESENTS=1" in completed.stdout

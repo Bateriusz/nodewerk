@@ -399,8 +399,12 @@ def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
         for item in result.report["generation_vs_bake"]["decisions"]
     }
     assert decisions["roughness"]["mode"] == "generate"
+    assert decisions["roughness"]["requested_mode"] == "bake"
     assert decisions["roughness"]["automatic_cost_oracle"] is False
     assert "no runtime consumer" in decisions["roughness"]["reason"]
+    assert decisions["roughness"]["incremental_compressed_content_bytes"] > 0
+    assert decisions["roughness"]["startup_cost_bytes"] > 0
+    assert decisions["roughness"]["peak_memory_bytes"] > 0
     assert decisions["roughness"]["baked_content_emitted_bytes"] == 0
     assert decisions["shade"]["mode"] == "generate"
     assert "unsupported" in decisions["shade"]["reason"]
@@ -446,6 +450,30 @@ def test_optimizer_and_fusion_settings_change_published_bytes(tmp_path: Path) ->
         fused.artifacts[nwp.COMMON_PROFILE_ID].package.capability.compiler_fingerprint
         != unfused.artifacts[nwp.COMMON_PROFILE_ID].package.capability.compiler_fingerprint
     )
+
+
+def test_physical_realization_evidence_does_not_change_published_bytes(
+    tmp_path: Path,
+) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    simulated = _export(tmp_path, name="simulated", dxc=dxc)
+    queried = nw05_export.export_graph(
+        PROCEDURAL,
+        tmp_path / "queried",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+        allocation_query={
+            1: {"size_bytes": 65536, "alignment": 65536},
+            2: {"size_bytes": 131072, "alignment": 65536},
+        },
+        adapter_identity="query:test-adapter",
+    )
+    left = simulated.artifacts[nwp.COMMON_PROFILE_ID]
+    right = queried.artifacts[nwp.COMMON_PROFILE_ID]
+    assert left.package_bytes == right.package_bytes
+    assert left.executable_bytes == right.executable_bytes
+    assert left.artifact_key == right.artifact_key
 
 
 def test_quantization_changes_published_package_bytes(tmp_path: Path) -> None:
@@ -682,6 +710,38 @@ def test_compose_display_honours_existing_present_target_identity() -> None:
         if instruction.opcode == "frame.present"
     ]
     assert presents[-1].operands[0].value == 3
+
+
+def test_compose_display_rewrites_non_uav_present_target() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    frame = [
+        instruction
+        for instruction in package.frame
+        if instruction.opcode != "frame.present"
+    ] + [
+        nwp.Instruction(
+            "frame.present",
+            (nwp.InstructionOperand("resource_ref", 1),),
+        ),
+    ]
+    composed_package = package.__class__(
+        capability=package.capability,
+        resources=list(package.resources),
+        initialization=list(package.initialization),
+        frame=frame,
+        parameters=list(package.parameters),
+        shaders=list(package.shaders),
+        root_signatures=list(package.root_signatures),
+        flags=package.flags,
+    )
+    composed = nw05_export._compose_display_stream(composed_package)
+    presents = [
+        instruction
+        for instruction in composed.frame
+        if instruction.opcode == "frame.present"
+    ]
+    assert presents
+    assert presents[-1].operands[0].value == 2
 
 
 def test_failed_export_never_overwrites_report_inside_prior_artifact(

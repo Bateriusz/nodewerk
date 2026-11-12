@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import nw03_compiler as nw03
+import nw03_oracle as oracle
 import nwp_package as nwp
 import nw05_optimizer as optimizer
 import nw05_schedule as schedule
@@ -42,6 +43,37 @@ EMBED_FOOTER_SIZE = EMBED_FOOTER.size
 
 DEFAULT_BYTE_CEILING = 48 * 1024 * 1024
 DEFAULT_MEMORY_BUDGET = 256 * 1024 * 1024
+
+
+def _graph_image_oracle_sha256(document: nw03.GraphDocument) -> str:
+    """CPU oracle digest of the graph-derived procedural image expression."""
+    generated, diagnostics = nw03.lower_to_fused_hlsl(document)
+    if diagnostics or not generated:
+        raise ExportError(
+            "graph image oracle could not lower a shader expression",
+            diagnostics,
+            dependency_path=["display", "shader"],
+        )
+    digest = hashlib.sha256()
+    for shader in sorted(generated, key=lambda item: item.specialization_id):
+        expression = oracle.parse_expression(shader.root_expression)
+        digest.update(shader.specialization_id.encode("utf-8"))
+        for y in range(16):
+            for x in range(16):
+                value = oracle.evaluate(
+                    expression,
+                    variables={
+                        "uv": (x / 16.0, y / 16.0),
+                        "time": 0.0,
+                        "seed": 0.0,
+                    },
+                    float32=True,
+                )
+                components = value if isinstance(value, tuple) else (value,)
+                digest.update(
+                    struct.pack("<" + "f" * len(components), *components)
+                )
+    return "sha256:v1:" + digest.hexdigest()
 
 KNOWN_PROFILES: dict[str, str] = {
     nwp.COMMON_PROFILE_ID: nwp.COMMON_REQUIREMENTS_DIGEST,
@@ -481,6 +513,7 @@ def plan_generation_vs_bake(
     decisions: list[dict[str, Any]] = []
     for node in sorted(optimized.nodes, key=lambda item: item.node_id):
         requested = overrides.get(node.node_id)
+        requested_mode = requested or "generate"
         if requested is not None:
             if requested not in {"bake", "generate"}:
                 raise ExportError(
@@ -506,28 +539,36 @@ def plan_generation_vs_bake(
             reason = "default explicit generate; no automatic bake oracle is applied"
         payload = nwp.canonical_json_bytes(node.to_dict())
         compressed = zlib.compress(payload, level=9)
+        bake_requested = requested_mode == "bake"
         baked_bytes = (
-            ((len(compressed) + 15) // 16) * 16 if mode == "bake" else 0
+            ((len(compressed) + 15) // 16) * 16
+            if bake_requested and mode == "bake"
+            else 0
         )
         decisions.append(
             {
                 "node_id": node.node_id,
                 "operator_id": node.operator_id,
                 "mode": mode,
+                "requested_mode": requested_mode,
+                "replaces_generation": mode == "bake",
                 "reason": reason,
                 "incremental_compressed_content_bytes": (
-                    len(compressed) if mode == "bake" else 0
+                    len(compressed) if bake_requested else 0
                 ),
                 "introduced_code_bytes": (
-                    0 if mode == "bake" else len(payload)
+                    0 if bake_requested else len(payload)
                 ),
                 "introduced_shader_bytes": (
                     0
-                    if mode == "bake" or node.operator_id not in nw03.SHADER_OPERATORS
+                    if bake_requested
+                    or node.operator_id not in nw03.SHADER_OPERATORS
                     else shader_blob_bytes
                 ),
-                "startup_cost_bytes": len(compressed) if mode == "bake" else 0,
-                "peak_memory_bytes": len(compressed) if mode == "bake" else len(payload),
+                "startup_cost_bytes": len(compressed) if bake_requested else 0,
+                "peak_memory_bytes": (
+                    len(compressed) if bake_requested else len(payload)
+                ),
                 "baked_content_emitted_bytes": baked_bytes,
                 "measured_expression_bytes": len(payload),
                 "automatic_cost_oracle": False,
@@ -617,6 +658,7 @@ def generate_player_source(
         "    }\n"
         "    const auto shutdown = player.shutdown();\n"
         "    std::printf(\"NW05_FRAMES=%llu\\n\", static_cast<unsigned long long>(player.frames_rendered()));\n"
+        "    std::printf(\"NW05_PRESENTS=%llu\\n\", static_cast<unsigned long long>(player.frames_presented()));\n"
         "    return shutdown == nw::player::ExitCode::Success ? 0 : static_cast<int>(shutdown);\n"
         "}\n"
         f"// package_sha256={package_sha256}\n"
@@ -703,6 +745,25 @@ def _compose_display_stream(package: nwp.NwpPackage) -> nwp.NwpPackage:
             "graph package is ambiguous: multiple UAV buffer outputs exist and "
             "none is the compiler's explicit 'output' display target"
         )
+    # If an authoring/compute package already carried a present instruction for
+    # a non-UAV (or otherwise unusable) target, rewrite it to the package's
+    # verified display output instead of leaving the old target in place.
+    normalized_frame: list[nwp.Instruction] = []
+    for instruction in frame:
+        if instruction.opcode == "frame.present":
+            normalized_frame.append(
+                nwp.Instruction(
+                    "frame.present",
+                    (
+                        nwp.InstructionOperand(
+                            "resource_ref", output.resource_id
+                        ),
+                    ),
+                )
+            )
+        else:
+            normalized_frame.append(instruction)
+    frame = normalized_frame
     if not any(instruction.opcode == "frame.barrier" for instruction in frame):
         barrier_index = next(
             (
@@ -883,6 +944,7 @@ def _compile_profile_package(
             f"profile '{profile_id}' digest mismatch",
             dependency_path=["capability_profile", profile_id, "requirements_digest"],
         )
+    report["image_oracle_sha256"] = _graph_image_oracle_sha256(document)
     return package_bytes, package, report
 
 
@@ -1267,6 +1329,9 @@ def export_graph(
             manifest["artifact_requirements_digest"] = requirements_digest
             manifest["materialized_semantic_digest"] = (
                 optimized.materialized_semantic_digest(generation_modes)
+            )
+            manifest["image_oracle_sha256"] = compile_report.get(
+                "image_oracle_sha256", ""
             )
             manifest["artifact_identity"] = artifact_key(
                 profile_id, requirements_digest, emitted_requirements(package)

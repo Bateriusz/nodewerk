@@ -50,6 +50,9 @@ int main(int argc, char** argv) {
     std::printf(
         "NW05_FRAMES=%llu\n",
         static_cast<unsigned long long>(player.frames_rendered()));
+    std::printf(
+        "NW05_PRESENTS=%llu\n",
+        static_cast<unsigned long long>(player.frames_presented()));
     return status == nw::player::ExitCode::Success ? 0 : static_cast<int>(status);
 }
 
