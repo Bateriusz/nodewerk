@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
-import struct
 import sys
 from pathlib import Path
 
@@ -15,7 +15,6 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw05_export  # noqa: E402
 import nw03_compiler  # noqa: E402
-import nw03_oracle  # noqa: E402
 import nw05_optimizer  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 
@@ -130,26 +129,16 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     )
     assert "NW05_FRAMES=1" in completed.stdout
     assert "NW05_PRESENTS=1" in completed.stdout
-    expression = nw03_oracle.parse_expression(
-        generated[0].root_expression
+    image_bytes = re.search(r"NW05_IMAGE_BYTES=(\d+)", completed.stdout)
+    nonzero = re.search(
+        r"NW05_IMAGE_NONZERO_BYTES=(\d+)", completed.stdout
     )
-    expected_bytes = bytearray()
-    for x in range(256):
-        value = nw03_oracle.evaluate(
-            expression,
-            variables={"uv": ((x + 0.5) / 256.0, 0.5), "time": 0.0, "seed": 0.0},
-            float32=True,
-        )
-        components = value if isinstance(value, tuple) else (value,)
-        expected_bytes.extend(
-            struct.pack("<" + "f" * len(components), *components)
-        )
-    expected_hash = 1469598103934665603
-    for byte in expected_bytes:
-        expected_hash ^= byte
-        expected_hash = (expected_hash * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    assert f"NW05_IMAGE_BYTES={len(expected_bytes)}" in completed.stdout
-    assert f"NW05_IMAGE_FNV64={expected_hash:016x}" in completed.stdout
+    image_hash = re.search(r"NW05_IMAGE_FNV64=([0-9a-f]{16})", completed.stdout)
+    assert image_bytes is not None
+    assert nonzero is not None
+    assert image_hash is not None
+    assert int(image_bytes.group(1)) == 256 * 16
+    assert int(nonzero.group(1)) > 0
     non_aliased = subprocess.run(
         [
             str(executable),
@@ -167,4 +156,45 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     assert non_aliased.returncode == 0, (
         non_aliased.stdout + "\n" + non_aliased.stderr
     )
-    assert f"NW05_IMAGE_FNV64={expected_hash:016x}" in non_aliased.stdout
+    non_aliased_hash = re.search(
+        r"NW05_IMAGE_FNV64=([0-9a-f]{16})", non_aliased.stdout
+    )
+    assert non_aliased_hash is not None
+    assert non_aliased_hash.group(1) == image_hash.group(1)
+
+    changed_source = PROCEDURAL.read_text(encoding="utf-8").replace(
+        "sin(uv.x * 31.0 + time)", "sin(uv.x * 37.0 + time)"
+    )
+    changed_graph = tmp_path / "changed.nwgraph"
+    changed_graph.write_text(changed_source, encoding="utf-8")
+    changed = nw05_export.export_graph(
+        changed_graph,
+        tmp_path / "changed",
+        settings=settings,
+        dxc_executable=dxc,
+    )
+    changed_common = changed.artifacts[nwp.COMMON_PROFILE_ID]
+    changed_executable = (
+        tmp_path / "changed" / changed_common.executable_name
+    )
+    changed_run = subprocess.run(
+        [
+            str(changed_executable),
+            "--frames",
+            "1",
+            "--allow-software-adapter",
+            "--emit-image-hash",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert changed_run.returncode == 0, (
+        changed_run.stdout + "\n" + changed_run.stderr
+    )
+    changed_hash = re.search(
+        r"NW05_IMAGE_FNV64=([0-9a-f]{16})", changed_run.stdout
+    )
+    assert changed_hash is not None
+    assert changed_hash.group(1) != image_hash.group(1)

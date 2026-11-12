@@ -62,12 +62,16 @@ int main(int argc, char** argv) {
             return static_cast<int>(readback);
         }
         std::uint64_t hash = 1469598103934665603ULL;
+        std::uint64_t nonzero_bytes = 0u;
         for (const std::uint8_t byte : image) {
+            if (byte != 0u) ++nonzero_bytes;
             hash ^= static_cast<std::uint64_t>(byte);
             hash *= 1099511628211ULL;
         }
         std::printf("NW05_IMAGE_BYTES=%llu\n",
                     static_cast<unsigned long long>(image.size()));
+        std::printf("NW05_IMAGE_NONZERO_BYTES=%llu\n",
+                    static_cast<unsigned long long>(nonzero_bytes));
         std::printf("NW05_IMAGE_FNV64=%016llx\n",
                     static_cast<unsigned long long>(hash));
     }
