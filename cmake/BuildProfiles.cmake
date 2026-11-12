@@ -26,7 +26,16 @@ option(NW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT
     "Explicit opt-in compact experiment testing /MERGE:.rdata=.text and /ALIGN:16 with /guard:cf and /CETCOMPAT retained"
     OFF)
 
+option(NW_FORCE_D3D12_VALIDATION
+    "Compile D3D12 debug-layer validation support into release/compact player code"
+    OFF)
+
 function(nw_apply_player_profile target_name)
+    set(_nw_d3d12_validation 0)
+    if(NW_FORCE_D3D12_VALIDATION)
+        set(_nw_d3d12_validation 1)
+    endif()
+
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     target_compile_definitions(${target_name} PRIVATE
         _HAS_EXCEPTIONS=0
@@ -43,14 +52,14 @@ function(nw_apply_player_profile target_name)
     elseif(NW_BUILD_PROFILE STREQUAL "release")
         target_compile_definitions(${target_name} PRIVATE
             NW_PROFILE_RELEASE=1
-            NW_ENABLE_D3D12_VALIDATION=0
+            NW_ENABLE_D3D12_VALIDATION=${_nw_d3d12_validation}
             NW_DEPENDENCY_CLOSURE="release"
             NDEBUG
         )
     elseif(NW_BUILD_PROFILE STREQUAL "compact_experiment")
         target_compile_definitions(${target_name} PRIVATE
             NW_PROFILE_COMPACT_EXPERIMENT=1
-            NW_ENABLE_D3D12_VALIDATION=0
+            NW_ENABLE_D3D12_VALIDATION=${_nw_d3d12_validation}
             NW_DEPENDENCY_CLOSURE="compact_experiment"
             NDEBUG
         )

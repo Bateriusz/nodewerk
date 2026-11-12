@@ -55,9 +55,6 @@ struct PlayerConfig {
     bool query_optional_wave_ops = false;
     bool query_optional_int64_shader_ops = false;
     bool query_optional_fp16_shader_ops = false;
-    // Diagnostic/qualification mode that exercises the always-active runtime
-    // bounds/schema checks without requiring the optional D3D12 debug layer.
-    bool runtime_validation = false;
     // Zero means no explicit preflight memory budget.  A non-zero value is
     // checked after native allocation requirements are queried and before any
     // bulk resource creation.
@@ -165,7 +162,7 @@ public:
     bool window_closed() const noexcept { return window_closed_; }
     bool using_aliased_plan() const noexcept { return using_aliased_plan_; }
     bool validation_enabled() const noexcept {
-        return config_.enable_validation || config_.runtime_validation;
+        return config_.enable_validation;
     }
 
     const package::Package& package() const noexcept { return package_; }

@@ -16,6 +16,16 @@
 #include <utility>
 #include <vector>
 
+#ifndef NW05_COMPILE_WAVE_OPS_QUERY
+#define NW05_COMPILE_WAVE_OPS_QUERY 1
+#endif
+#ifndef NW05_COMPILE_INT64_SHADER_OPS_QUERY
+#define NW05_COMPILE_INT64_SHADER_OPS_QUERY 1
+#endif
+#ifndef NW05_COMPILE_FP16_SHADER_OPS_QUERY
+#define NW05_COMPILE_FP16_SHADER_OPS_QUERY 1
+#endif
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -1745,22 +1755,35 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             static_cast<std::uint32_t>(options.MaxGPUVirtualAddressBitsPerResource);
     }
 
-    if (config_.query_optional_wave_ops ||
-        config_.query_optional_int64_shader_ops) {
+#if NW05_COMPILE_WAVE_OPS_QUERY || NW05_COMPILE_INT64_SHADER_OPS_QUERY
+    if (
+#if NW05_COMPILE_WAVE_OPS_QUERY
+        config_.query_optional_wave_ops ||
+#endif
+#if NW05_COMPILE_INT64_SHADER_OPS_QUERY
+        config_.query_optional_int64_shader_ops ||
+#endif
+        false) {
         D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
         if (SUCCEEDED(device->CheckFeatureSupport(
                 D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
             queried.optional_features_queried = true;
+#if NW05_COMPILE_WAVE_OPS_QUERY
             queried.wave_ops_queried = config_.query_optional_wave_ops;
-            queried.int64_shader_ops_queried =
-                config_.query_optional_int64_shader_ops;
             queried.wave_ops_supported =
                 config_.query_optional_wave_ops && options1.WaveOps != FALSE;
+#endif
+#if NW05_COMPILE_INT64_SHADER_OPS_QUERY
+            queried.int64_shader_ops_queried =
+                config_.query_optional_int64_shader_ops;
             queried.int64_shader_ops_supported =
                 config_.query_optional_int64_shader_ops &&
                 options1.Int64ShaderOps != FALSE;
+#endif
         }
     }
+#endif
+#if NW05_COMPILE_FP16_SHADER_OPS_QUERY
     if (config_.query_optional_fp16_shader_ops) {
         D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
         if (SUCCEEDED(device->CheckFeatureSupport(
@@ -1771,6 +1794,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
                 options4.Native16BitShaderOpsSupported != FALSE;
         }
     }
+#endif
 
     if (max_gpu_va_bits != 0u) {
         const std::uint32_t bits = max_gpu_va_bits;

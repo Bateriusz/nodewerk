@@ -45,8 +45,6 @@ int main(int argc, char** argv) {
             config.force_non_aliased_plan = true;
         } else if (std::string(argv[index]) == "--validation") {
             config.enable_validation = true;
-        } else if (std::string(argv[index]) == "--runtime-validation") {
-            config.runtime_validation = true;
         } else if (std::string(argv[index]) == "--emit-image-hash") {
             emit_image_hash = true;
         }

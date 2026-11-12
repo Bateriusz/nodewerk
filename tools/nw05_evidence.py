@@ -320,14 +320,14 @@ def record_execution(
     # to have been realized.  Operator-supplied --status is only an expectation.
     aliased_run = _run_player(
         executable,
-        ["--frames", "2", "--runtime-validation", "--emit-image-hash"],
+        ["--frames", "2", "--validation", "--emit-image-hash"],
     )
     non_aliased_run = _run_player(
         executable,
         [
             "--frames",
             "2",
-            "--runtime-validation",
+            "--validation",
             "--emit-image-hash",
             "--force-non-aliased-plan",
         ],
@@ -677,6 +677,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.artifact_directory or args.status is None:
         parser.error("--artifact-directory and --status are required with --executable")
+    toolchain_manifest_sha256 = args.toolchain_manifest_sha256
+    if not toolchain_manifest_sha256:
+        pinned_manifest = REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json"
+        if pinned_manifest.is_file():
+            toolchain_manifest_sha256 = _sha256(pinned_manifest)
     record = record_execution(
         Path(args.executable),
         Path(args.artifact_directory),
@@ -686,7 +691,7 @@ def main(argv: list[str] | None = None) -> int:
         details={
             key: value
             for key, value in (
-                ("toolchain_manifest_sha256", args.toolchain_manifest_sha256),
+                ("toolchain_manifest_sha256", toolchain_manifest_sha256),
                 ("generation_metadata", args.generation_metadata),
             )
             if value

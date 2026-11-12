@@ -10,6 +10,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildProfiles.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompileShaders.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DependencyCheck.cmake")
 
+set(NW05_GENERATED_PLAYER_SOURCE "" CACHE FILEPATH
+    "Generated NW-05 player main to compile into the specialized executable")
+option(NW05_COMPILE_WAVE_OPS_QUERY "Compile D3D12_OPTIONS1 wave-ops query support" ON)
+option(NW05_COMPILE_INT64_SHADER_OPS_QUERY "Compile D3D12_OPTIONS1 int64 query support" ON)
+option(NW05_COMPILE_FP16_SHADER_OPS_QUERY "Compile D3D12_OPTIONS4 fp16 query support" ON)
+
 nw_add_offline_compute_shader(
     nw_offline_shaders
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/compute_fixture.hlsl"
@@ -52,6 +58,11 @@ target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
 )
 nw_apply_player_profile(nw_player_bootstrap)
+target_compile_definitions(nw_player_bootstrap PRIVATE
+    NW05_COMPILE_WAVE_OPS_QUERY=$<BOOL:${NW05_COMPILE_WAVE_OPS_QUERY}>
+    NW05_COMPILE_INT64_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_INT64_SHADER_OPS_QUERY}>
+    NW05_COMPILE_FP16_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_FP16_SHADER_OPS_QUERY}>
+)
 add_dependencies(nw_player_bootstrap nw_offline_shaders)
 add_dependencies(nw_player_bootstrap nw_offline_display_shader)
 
@@ -173,6 +184,25 @@ if(WIN32)
 endif()
 nw_apply_player_profile(nw_procedural_image_player)
 nw_attach_dependency_check(nw_procedural_image_player "procedural_image_player")
+
+if(NW05_GENERATED_PLAYER_SOURCE)
+    if(NOT EXISTS "${NW05_GENERATED_PLAYER_SOURCE}")
+        message(FATAL_ERROR "NW05_GENERATED_PLAYER_SOURCE does not exist: ${NW05_GENERATED_PLAYER_SOURCE}")
+    endif()
+    add_executable(nw05_generated_player "${NW05_GENERATED_PLAYER_SOURCE}")
+    target_link_libraries(nw05_generated_player PRIVATE
+        nw_player_bootstrap
+        nw_package_player
+    )
+    if(WIN32)
+        target_link_libraries(nw05_generated_player PRIVATE gdi32)
+    endif()
+    nw_apply_player_profile(nw05_generated_player)
+    set_target_properties(nw05_generated_player PROPERTIES
+        OUTPUT_NAME "nw05_generated_player"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/nw05-generated"
+    )
+endif()
 
 add_library(nw_compiler STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
     src/compiler/nw_compiler.cpp

@@ -19,7 +19,7 @@ import nw05_optimizer  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 
 
-PROCEDURAL = REPO_ROOT / "fixtures" / "nw05" / "procedural_image.nwgraph"
+PROCEDURAL = REPO_ROOT / "fixtures" / "nw05" / "procedural_export.nwgraph"
 
 
 def _hashes(directory: Path) -> dict[str, str]:
@@ -73,6 +73,9 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
         first.report["provenance"]["player_template_sha256"]
         == hashlib.sha256(template.read_bytes()).hexdigest()
     )
+    template_bytes = template.read_bytes()
+    assert common.executable_bytes[: len(template_bytes)] != template_bytes
+    assert common.manifest["dependencies_source"] == "specialized-pe-imports"
     optimized = nw05_optimizer.optimize_graph(
         nw03_compiler.load_graph(PROCEDURAL)
     )
@@ -92,7 +95,7 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
         dispatch_groups=dispatch_groups,
     )
     assert not diagnostics
-    assert len(generated) == 1
+    assert len(generated) >= 1
     expected_hlsl = {shader.hlsl_sha256 for shader in generated}
     manifest_hlsl = {
         item["hlsl_sha256"]

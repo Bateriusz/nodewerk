@@ -38,8 +38,10 @@ The published directory contains, per profile:
 - `<profile>.schedule.json` — logical single-queue resource schedule;
 - `<profile>.aliases.json` — adapter-specific alias realisation evidence;
 - `<profile>.size.json` — complete byte/dependency attribution;
-- `<profile>.exe` — self-contained specialized player when a template is
-  supplied, with the package and manifest embedded by a deterministic footer;
+- `<profile>.exe` — self-contained specialized player: the generated main is
+  compiled and linked in the pinned Windows build, its actual PE import closure
+  is verified against the manifest, then package+manifest are embedded by the
+  deterministic footer;
 - `<profile>.player.cpp` — generated generic main that binds the embedded
   package and calls the existing `PackagePlayer`; it contains no demo content
   or per-demo logic.
@@ -266,3 +268,25 @@ are never hidden.
 identical common artifact is exercised through the established NW-01B evidence
 harness on representative desktop Ada and Blackwell hardware.
 
+
+
+## Executable semantic boundary
+
+NW-05 v1 is fail-closed at the executable boundary. The exporter currently
+publishes only reachable ShaderExpr-family roots whose semantics are emitted by
+the established NW-03 compute compiler. Texture/material/mesh/camera/light and
+richer render operators remain valid NW-02 authoring vocabulary and optimizer
+inputs, but export rejects them until an actual package/runtime consumer exists.
+They are never emitted as inert parameters and called implemented.
+
+The checked-in rich `procedural_image.nwgraph` remains the optimizer/golden
+fixture. `procedural_export.nwgraph` is the bounded executable acceptance
+fixture: two terminal shader roots give a real disjoint UAV lifetime for alias
+qualification, with the canonical final root presented as the procedural image.
+
+Production Windows export compiles the generated specialized main. Optional
+D3D12 OPTIONS1/OPTIONS4 query code is selected at compile time from the link
+manifest; the generated executable is inspected for its actual imports and
+rebuilt against that exact dependency list before embedding. Hardware evidence
+uses the real D3D12 debug-layer path via `--validation`; no metadata-only
+validation flag is accepted.

@@ -19,6 +19,7 @@ import math
 import os
 import shutil
 import struct
+import subprocess
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -43,6 +44,7 @@ EMBED_FOOTER_SIZE = EMBED_FOOTER.size
 
 DEFAULT_BYTE_CEILING = 48 * 1024 * 1024
 DEFAULT_MEMORY_BUDGET = 256 * 1024 * 1024
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _graph_image_oracle_sha256(document: nw03.GraphDocument) -> str:
@@ -680,6 +682,13 @@ def generate_player_source(
         "        std::fprintf(stderr, \"NW05_LINK_METADATA_INVALID\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        f"    if (link_metadata.wave_ops != {'true' if link_wave_ops else 'false'} ||\n"
+        f"        link_metadata.fp16_shader_ops != {'true' if link_fp16 else 'false'} ||\n"
+        f"        link_metadata.int64_shader_ops != {'true' if link_int64 else 'false'} ||\n"
+        f"        link_metadata.memory_budget_bytes != {int(memory_budget_bytes)}ULL) {{\n"
+        "        std::fprintf(stderr, \"NW05_LINK_METADATA_MISMATCH\\n\");\n"
+        "        return 70;\n"
+        "    }\n"
         "    std::printf(\"NW05_LINK_MANIFEST_VERIFIED=1\\n\");\n"
         "    nw::player::PlayerConfig config;\n"
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
@@ -687,10 +696,6 @@ def generate_player_source(
         f"    config.query_optional_fp16_shader_ops = {'true' if link_fp16 else 'false'};\n"
         f"    config.query_optional_int64_shader_ops = {'true' if link_int64 else 'false'};\n"
         f"    config.memory_budget_bytes = {int(memory_budget_bytes)}ULL;\n"
-        "    config.query_optional_wave_ops = link_metadata.wave_ops;\n"
-        "    config.query_optional_fp16_shader_ops = link_metadata.fp16_shader_ops;\n"
-        "    config.query_optional_int64_shader_ops = link_metadata.int64_shader_ops;\n"
-        "    config.memory_budget_bytes = link_metadata.memory_budget_bytes;\n"
         "    unsigned long long max_frames = 0;\n"
         "    bool emit_image_hash = false;\n"
         "    for (int index = 1; index < argc; ++index) {\n"
@@ -702,8 +707,6 @@ def generate_player_source(
         "            config.force_non_aliased_plan = true;\n"
         "        } else if (std::string(argv[index]) == \"--validation\") {\n"
         "            config.enable_validation = true;\n"
-        "        } else if (std::string(argv[index]) == \"--runtime-validation\") {\n"
-        "            config.runtime_validation = true;\n"
         "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
         "            emit_image_hash = true;\n"
         "        }\n"
@@ -906,6 +909,116 @@ def _compose_display_stream(package: nwp.NwpPackage) -> nwp.NwpPackage:
     )
 
 
+def _refresh_manifest_sha256(manifest: dict[str, Any]) -> None:
+    manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
+        nwp.canonical_json_bytes(
+            {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+        )
+    ).hexdigest()
+
+
+def _cmake_build_root_from_template(template_path: Path) -> Path:
+    for candidate in (template_path.parent, *template_path.parents):
+        if (candidate / "CMakeCache.txt").is_file():
+            return candidate
+    raise ExportError(
+        "player template is not inside a configured CMake build tree",
+        dependency_path=["specialized_player", "cmake_build_tree"],
+    )
+
+
+def _pe_runtime_dependencies(executable: bytes) -> list[str]:
+    try:
+        imports = dependency_check.parse_pe64_sections_and_imports(executable).get(
+            "imports", []
+        )
+    except (ValueError, KeyError, struct.error) as exc:
+        raise ExportError(
+            f"specialized player PE dependency inspection failed: {exc}",
+            dependency_path=["specialized_player", "imports"],
+        ) from exc
+    dependencies = sorted(
+        {
+            str(name).lower().removesuffix(".dll")
+            for name in imports
+            if str(name)
+        }
+    )
+    if not dependencies:
+        raise ExportError(
+            "specialized player exposes no inspectable PE import closure",
+            dependency_path=["specialized_player", "imports"],
+        )
+    return dependencies
+
+
+def _build_specialized_player(
+    template_path: Path,
+    source_text: str,
+    manifest: Mapping[str, Any],
+    profile_id: str,
+) -> bytes:
+    if os.name != "nt":
+        raise ExportError(
+            "production specialized-player linking requires the pinned Windows build",
+            dependency_path=["specialized_player", "platform"],
+        )
+    build_root = _cmake_build_root_from_template(template_path)
+    generated_dir = build_root / "nw05-generated-src"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    source_path = generated_dir / f"{_profile_file_stem(profile_id)}.cpp"
+    source_path.write_text(source_text, encoding="utf-8", newline="\n")
+
+    requirements = manifest.get("feature_requirements", {})
+    flags = {
+        "NW05_COMPILE_WAVE_OPS_QUERY": bool(requirements.get("wave_ops", False)),
+        "NW05_COMPILE_FP16_SHADER_OPS_QUERY": bool(
+            requirements.get("fp16_shader_ops", False)
+        ),
+        "NW05_COMPILE_INT64_SHADER_OPS_QUERY": bool(
+            requirements.get("int64_shader_ops", False)
+        ),
+    }
+    configure = [
+        "cmake",
+        "-S",
+        str(REPO_ROOT),
+        "-B",
+        str(build_root),
+        f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
+        "-DNW_FORCE_D3D12_VALIDATION:BOOL=ON",
+    ]
+    configure.extend(
+        f"-D{name}:BOOL={'ON' if enabled else 'OFF'}"
+        for name, enabled in sorted(flags.items())
+    )
+    for command in (
+        configure,
+        ["cmake", "--build", str(build_root), "--target", "nw05_generated_player"],
+    ):
+        completed = subprocess.run(
+            command,
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise ExportError(
+                "specialized player configure/build failed: "
+                + (completed.stderr.strip() or completed.stdout.strip()),
+                dependency_path=["specialized_player", "build"],
+            )
+
+    executable = build_root / "nw05-generated" / "nw05_generated_player.exe"
+    if not executable.is_file():
+        raise ExportError(
+            f"specialized player build did not produce '{executable}'",
+            dependency_path=["specialized_player", "output"],
+        )
+    return executable.read_bytes()
+
+
 _PACKAGE_RESOURCE_OPERATORS = {
     "nw.texture.procedural",
     "nw.buffer.recipe",
@@ -993,7 +1106,21 @@ def _graph_render_dimensions(
             _node_int(textures[0], "width", 256),
             _node_int(textures[0], "height", 256),
         )
-    return 256, 256
+
+    def setting_dimension(name: str, default: int) -> int:
+        raw = str(document.settings.get(name, default)).strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return default
+        if not math.isfinite(value) or not value.is_integer():
+            return default
+        return max(1, min(8192, int(value)))
+
+    return (
+        setting_dimension("nw05_output_width", 256),
+        setting_dimension("nw05_output_height", 256),
+    )
 
 
 def _resource_format(format_name: str) -> str:
@@ -1116,23 +1243,11 @@ def _build_graph_derived_package(
             "no genuine unfused execution path is available",
             dependency_path=["graph", composed_shader_operators[0], "fusion"],
         )
-    supported = (
-        set(nw03.SHADER_OPERATORS)
-        | _PACKAGE_RESOURCE_OPERATORS
-        | _PACKAGE_UPLOAD_OPERATORS
-        | _PACKAGE_RENDER_OPERATORS
-        | {
-            operator_id
-            for operator_id in nw03.KNOWN_OPERATORS
-            if operator_id
-            not in (
-                set(nw03.SHADER_OPERATORS)
-                | _PACKAGE_RESOURCE_OPERATORS
-                | _PACKAGE_UPLOAD_OPERATORS
-                | _PACKAGE_RENDER_OPERATORS
-            )
-        }
-    ) - _PACKAGE_SUPPORTED_UNSUPPORTED
+    # Export only semantics the current package/player actually executes.
+    # Rich resource/material/mesh/camera/render operators are valid NW-02
+    # authoring vocabulary, but until their consumers exist NW-05 must reject
+    # them instead of publishing metadata-only semantics.
+    supported = set(nw03.SHADER_OPERATORS)
     unsupported = sorted(used_operators - supported)
     if unsupported:
         raise ExportError(
@@ -2194,6 +2309,12 @@ def export_graph(
                 if template_path is not None and template_path.is_file()
                 else b""
             )
+            if not allow_test_payloads and not template_bytes:
+                raise ExportError(
+                    "production NW-05 export requires a configured Windows player template "
+                    "so the generated specialized main can be compiled and linked",
+                    dependency_path=["specialized_player", "template"],
+                )
             runtime_dependencies, dependency_source = _runtime_dependencies(
                 package, template_bytes
             )
@@ -2255,6 +2376,39 @@ def export_graph(
                 )
             ).hexdigest()
             manifest_data = optimizer.manifest_bytes(manifest)
+            specialized_player_bytes: bytes | None = None
+            if template_bytes and not allow_test_payloads:
+                preliminary_source = generate_player_source(
+                    package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+                    manifest_sha256=manifest["manifest_sha256"],
+                    manifest=manifest,
+                    memory_budget_bytes=settings.memory_budget,
+                )
+                preliminary_player = _build_specialized_player(
+                    template_path, preliminary_source, manifest, profile_id
+                )
+                actual_dependencies = _pe_runtime_dependencies(preliminary_player)
+                manifest["retained"]["dependencies"] = actual_dependencies
+                manifest["dependencies_source"] = "specialized-pe-imports"
+                _refresh_manifest_sha256(manifest)
+                manifest_data = optimizer.manifest_bytes(manifest)
+
+                final_source = generate_player_source(
+                    package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+                    manifest_sha256=manifest["manifest_sha256"],
+                    manifest=manifest,
+                    memory_budget_bytes=settings.memory_budget,
+                )
+                specialized_player_bytes = _build_specialized_player(
+                    template_path, final_source, manifest, profile_id
+                )
+                final_dependencies = _pe_runtime_dependencies(specialized_player_bytes)
+                if final_dependencies != actual_dependencies:
+                    raise ExportError(
+                        "specialized executable dependency closure changed after "
+                        "final manifest linkage",
+                        dependency_path=["specialized_player", "imports"],
+                    )
             decisions = plan_generation_vs_bake(
                 optimized,
                 settings,
@@ -2264,7 +2418,19 @@ def export_graph(
             executable_bytes: bytes | None = None
             executable_name = ""
             if template_bytes:
-                executable_bytes = embed_package(template_bytes, package_bytes, manifest_data)
+                player_image = (
+                    template_bytes
+                    if allow_test_payloads
+                    else specialized_player_bytes
+                )
+                if player_image is None:
+                    raise ExportError(
+                        "specialized player image is unavailable",
+                        dependency_path=["specialized_player", "output"],
+                    )
+                executable_bytes = embed_package(
+                    player_image, package_bytes, manifest_data
+                )
                 executable_name = f"{_profile_file_stem(profile_id)}.exe"
 
             schedule_data = json.dumps(

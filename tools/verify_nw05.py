@@ -44,6 +44,7 @@ from schema_validator import validate_file_against_schema  # noqa: E402
 
 
 PROCEDURAL_FIXTURE = REPO_ROOT / "fixtures" / "nw05" / "procedural_image.nwgraph"
+EXPORT_FIXTURE = REPO_ROOT / "fixtures" / "nw05" / "procedural_export.nwgraph"
 OPTIMIZATION_FIXTURE = REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph"
 GOLDEN_IR = REPO_ROOT / "fixtures" / "nw05" / "golden_optimized_ir.json"
 
@@ -507,7 +508,7 @@ def _export_once(
         frames_in_flight=2,
     )
     result = nw05_export.export_graph(
-        PROCEDURAL_FIXTURE,
+        EXPORT_FIXTURE,
         directory,
         settings=settings,
         report_path=directory.parent / f"{directory.name}-report.json",
@@ -731,7 +732,7 @@ def check_optional_profiles_independent() -> CheckResult:
                 player_template=str(template),
             )
             result = nw05_export.export_graph(
-                PROCEDURAL_FIXTURE,
+                EXPORT_FIXTURE,
                 root / "artifacts",
                 settings=settings,
                 dxc_executable=str(dxc),

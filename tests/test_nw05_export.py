@@ -19,7 +19,7 @@ import nwp_package as nwp  # noqa: E402
 import nw05_export  # noqa: E402
 
 
-PROCEDURAL = REPO_ROOT / "fixtures" / "nw05" / "procedural_image.nwgraph"
+PROCEDURAL = REPO_ROOT / "fixtures" / "nw05" / "procedural_export.nwgraph"
 
 
 def _make_dxc(directory: Path, *, fail: bool = False) -> Path:
@@ -395,13 +395,10 @@ def test_cli_export_and_inspect_size(tmp_path: Path) -> None:
 
 
 def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
-    settings = _settings(
-        tmp_path,
-        bake_overrides=(("roughness", "bake"), ("shade", "bake")),
-    )
+    settings = _settings(tmp_path, bake_overrides=(("image", "bake"),))
     with pytest.raises(nw05_export.ExportError) as excinfo:
         nw05_export.export_graph(
-            REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph",
+            PROCEDURAL,
             tmp_path / "out",
             settings=settings,
             dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
@@ -409,7 +406,6 @@ def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
         )
     assert excinfo.value.dependency_path
     assert excinfo.value.dependency_path[0] == "generation_override"
-
 
 def test_unmeasured_fusion_retains_identical_unfused_export(tmp_path: Path) -> None:
     dxc = _make_dxc(tmp_path / "toolchain")
@@ -480,24 +476,46 @@ def test_physical_realization_evidence_does_not_change_published_bytes(
 
 def test_quantization_changes_published_package_bytes(tmp_path: Path) -> None:
     dxc = _make_dxc(tmp_path / "toolchain")
-    semantics = (
-        REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph"
+    header = (
+        "nwgraph 1\n"
+        "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+        f"{nwp.COMMON_REQUIREMENTS_DIGEST}\n"
+        "setting optimization O2\n"
+        "setting deterministic true\n"
+        "setting api d3d12\n"
+        "setting feature_level 12_0\n"
+        "setting shader_model 6_0\n"
+        "setting frequency_policy strict\n"
+        "setting shader_blob_policy stable\n"
+    )
+    quantized_graph = tmp_path / "quantized.nwgraph"
+    quantized_graph.write_text(
+        header
+        + "setting quantization_policy bits\n"
+        + "setting quantization_bits 8\n"
+        + "setting quantization_tolerance 0.01\n"
+        + "setting quantization_fields tone.value\n"
+        + "node tone nw.shader.vec4_const@1.0.0 frequency=frame\n"
+        + "  param value 0.123456789 0.2 0.3 1.0\n",
+        encoding="utf-8",
+    )
+    plain_graph = tmp_path / "plain.nwgraph"
+    plain_graph.write_text(
+        header
+        + "setting quantization_policy none\n"
+        + "node tone nw.shader.vec4_const@1.0.0 frequency=frame\n"
+        + "  param value 0.123456789 0.2 0.3 1.0\n",
+        encoding="utf-8",
     )
     quantized = nw05_export.export_graph(
-        semantics,
+        quantized_graph,
         tmp_path / "quantized",
         settings=_settings(tmp_path),
         dxc_executable=str(dxc),
         allow_test_payloads=True,
     )
-    text = semantics.read_text(encoding="utf-8").replace(
-        "setting quantization_policy bits",
-        "setting quantization_policy none",
-    )
-    unquantized_graph = tmp_path / "unquantized.nwgraph"
-    unquantized_graph.write_text(text, encoding="utf-8")
     plain = nw05_export.export_graph(
-        unquantized_graph,
+        plain_graph,
         tmp_path / "plain",
         settings=_settings(tmp_path),
         dxc_executable=str(dxc),
@@ -511,7 +529,6 @@ def test_quantization_changes_published_package_bytes(tmp_path: Path) -> None:
         quantized.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
         != plain.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
     )
-
 
 def test_unavailable_image_oracle_does_not_abort_export(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -846,12 +863,12 @@ def test_in_directory_report_is_staged_and_accounted(tmp_path: Path) -> None:
     assert "report.json" in common.size_report["distribution"]["artifact_files"]
 
 
-def test_graph_texture_dimensions_control_exported_output(tmp_path: Path) -> None:
+def test_graph_output_dimensions_control_exported_output(tmp_path: Path) -> None:
     dxc = _make_dxc(tmp_path / "toolchain")
     source = PROCEDURAL.read_text(encoding="utf-8").replace(
-        "param width 256", "param width 128"
+        "setting nw05_output_width 256", "param width 128"
     ).replace(
-        "param height 256", "param height 64"
+        "setting nw05_output_height 256", "param height 64"
     )
     graph = tmp_path / "dims.nwgraph"
     graph.write_text(source, encoding="utf-8")
@@ -879,6 +896,18 @@ def test_graph_texture_dimensions_control_exported_output(tmp_path: Path) -> Non
     )
     assert dispatch.operands[0].value == 1
     assert dispatch.operands[1].value == 64
+
+
+def test_unsupported_rich_graph_semantics_fail_closed(tmp_path: Path) -> None:
+    with pytest.raises(nw05_export.ExportError) as excinfo:
+        nw05_export.export_graph(
+            REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph",
+            tmp_path / "unsupported-rich-graph",
+            settings=_settings(tmp_path),
+            dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+            allow_test_payloads=True,
+        )
+    assert excinfo.value.dependency_path[:1] == ["graph"]
 
 
 def test_shader_only_graph_exports_with_dispatch(tmp_path: Path) -> None:
@@ -918,7 +947,7 @@ def test_multiple_shader_roots_get_independent_aliasable_outputs(
     tmp_path: Path,
 ) -> None:
     result = nw05_export.export_graph(
-        REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph",
+        PROCEDURAL,
         tmp_path / "multi-root",
         settings=_settings(tmp_path),
         dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
