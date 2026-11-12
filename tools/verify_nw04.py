@@ -25,6 +25,7 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -566,6 +567,7 @@ def check_player_source_contract() -> CheckResult:
         "present_failure_retirements",
         "retire_submitted_work",
         "package_root_signature",
+        "package_table_valid.fill(false)",
         "display_texture_allocation_bytes",
         "RemoveEngineResourceAllocation",
         "engine_cumulative_resource_bytes",
@@ -1366,6 +1368,80 @@ def run_present_then_dispatch_check(
     )
 
 
+def run_root_signature_switch_check(
+    fixture: Path, package_path: Path, *, validation: bool = True
+) -> CheckResult:
+    """Present while a different root-signature layout is active."""
+    if not fixture.exists():
+        return CheckResult(
+            "nw04_root_signature_switch",
+            True,
+            False,
+            f"fixture binary is unavailable: {fixture}",
+            unavailable=True,
+        )
+    try:
+        base = nwp.decode_package(package_path.read_bytes())
+        switch_package = nw04_fixture.build_signature_switch_package(base)
+        with tempfile.NamedTemporaryFile(
+            prefix="nw04-signature-switch-", suffix=".nwp", delete=False
+        ) as handle:
+            switch_path = Path(handle.name)
+            handle.write(nwp.encode_package(switch_package))
+    except Exception as exc:
+        return CheckResult(
+            "nw04_root_signature_switch",
+            True,
+            False,
+            f"could not compose root-signature switch package: {exc}",
+        )
+    command = [
+        str(fixture),
+        "--package",
+        str(switch_path),
+        "--frames",
+        "1",
+    ]
+    if validation:
+        command.append("--validation")
+    try:
+        proc = subprocess.run(
+            command, capture_output=True, text=True, check=False
+        )
+    finally:
+        switch_path.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        return CheckResult(
+            "nw04_root_signature_switch",
+            True,
+            False,
+            f"root-signature switch fixture exited {proc.returncode}",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if "NW_PLAYER_FRAMES=1" not in proc.stdout or "NW_PLAYER_PRESENTS=1" not in proc.stdout:
+        return CheckResult(
+            "nw04_root_signature_switch",
+            True,
+            False,
+            "root-signature switch fixture did not render/present",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if "NW_D3D12_VALIDATION_ERROR=" in (proc.stdout + proc.stderr):
+        return CheckResult(
+            "nw04_root_signature_switch",
+            True,
+            False,
+            "root-signature switch emitted a D3D12 validation error",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    return CheckResult(
+        "nw04_root_signature_switch",
+        True,
+        True,
+        evidence={"stdout": proc.stdout, "stderr": proc.stderr, "command": command},
+    )
+
+
 def run_allocation_failure_check(fixture: Path, package_path: Path) -> CheckResult:
     if not fixture.exists():
         return CheckResult(
@@ -1866,6 +1942,13 @@ def main() -> int:
                     )
                     results.append(
                         run_present_then_dispatch_check(
+                            args.fixture,
+                            args.package,
+                            validation=args.mode != "NativeLifecycle",
+                        )
+                    )
+                    results.append(
+                        run_root_signature_switch_check(
                             args.fixture,
                             args.package,
                             validation=args.mode != "NativeLifecycle",

@@ -441,18 +441,22 @@ int main(int argc, char** argv) {
                 last_dispatch_index = static_cast<int>(index);
             }
         }
-        if (present_index < 0 || last_dispatch_index < 0 ||
-            last_dispatch_index < present_index) {
+        if (present_index < 0 || last_dispatch_index < 0) {
             std::fprintf(stderr,
                          "package cannot exercise present-before-dispatch\n");
             return static_cast<int>(
                 nw::player::ExitCode::PackageValidationFailed);
         }
-        const nw::package::Instruction present =
-            package.frame[static_cast<std::size_t>(present_index)];
-        package.frame.erase(package.frame.begin() + present_index);
-        package.frame.insert(
-            package.frame.begin() + last_dispatch_index, present);
+        if (present_index > last_dispatch_index) {
+            // The standard stream ends with ..., dispatch, dispatch, present.
+            // Erasing present (after the last dispatch) does not shift the
+            // last-dispatch index, so insert present immediately before it.
+            const nw::package::Instruction present =
+                package.frame[static_cast<std::size_t>(present_index)];
+            package.frame.erase(package.frame.begin() + present_index);
+            package.frame.insert(
+                package.frame.begin() + last_dispatch_index, present);
+        }
         code = player.initialize(package);
     } else {
         code = player.initializeFromFile(args.package_path);

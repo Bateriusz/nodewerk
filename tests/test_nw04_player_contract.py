@@ -769,6 +769,33 @@ def test_compose_display_stream_onto_compute_only_package() -> None:
     assert contract.validate_frame_plan(composed) == []
 
 
+def test_signature_switch_regression_fixture_is_valid() -> None:
+    path = REPO_ROOT / "fixtures" / "nw04" / "signature_switch.nwp"
+    data = path.read_bytes()
+    assert data == nwp.encode_package(
+        nw04_fixture.build_signature_switch_package()
+    )
+    package = nwp.decode_package(data)
+    assert nwp.inspect_package_bytes(data).valid
+    assert contract.validate_package_requirements(package) == []
+    assert contract.validate_frame_plan(package) == []
+    assert [record.root_signature_id for record in package.root_signatures] == [
+        1,
+        2,
+    ]
+    assert [binding.root_parameter for binding in package.root_signatures[0].bindings] == [
+        0,
+        1,
+        2,
+    ]
+    assert [binding.root_parameter for binding in package.root_signatures[1].bindings] == [
+        0,
+        1,
+    ]
+    assert package.frame[-2].opcode == "frame.dispatch"
+    assert package.frame[-1].opcode == "frame.present"
+
+
 def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
     from schema_validator import validate_file_against_schema
 

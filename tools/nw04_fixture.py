@@ -224,6 +224,195 @@ def package_bytes() -> bytes:
     return nwp.encode_package(build_compute_display_package())
 
 
+def build_signature_switch_package(
+    base: nwp.NwpPackage | None = None,
+) -> nwp.NwpPackage:
+    """Package whose present happens after switching root-signature layouts.
+
+    Signature 1 has a third descriptor-table parameter (optional input).
+    Signature 2 has only parameters 0 and 1.  Presenting while signature 2 is
+    active must not replay signature 1's cached parameter 2 binding.
+    """
+    base = base or build_compute_display_package()
+    family = "compute.math_noise"
+    params = next(
+        resource
+        for resource in base.resources
+        if resource.usage == "cbv" and resource.name == "params"
+    )
+    output = next(
+        resource
+        for resource in base.resources
+        if resource.usage == "uav" and resource.kind == "buffer"
+    )
+    shader_blob = base.shaders[0].blob
+    input_id = max(resource.resource_id for resource in base.resources) + 1
+    bindings_a = (
+        nwp.RootBinding("params", "cbv", 0, 0, 0),
+        nwp.RootBinding("output", "uav", 0, 0, 1),
+        nwp.RootBinding("input", "srv", 0, 0, 2),
+    )
+    bindings_b = (
+        nwp.RootBinding("params", "cbv", 0, 0, 0),
+        nwp.RootBinding("output", "uav", 0, 0, 1),
+    )
+    root_a = nwp.RootSignatureRecord(
+        1,
+        family,
+        family + ".v1",
+        6,
+        nwp.make_root_signature_blob(family, bindings_a),
+        bindings_a,
+    )
+    root_b = nwp.RootSignatureRecord(
+        2,
+        family,
+        family + ".v1",
+        5,
+        nwp.make_root_signature_blob(family, bindings_b),
+        bindings_b,
+    )
+    resources = [
+        params,
+        output,
+        nwp.ResourceDescriptor(
+            input_id, "input", "buffer", "DXGI_FORMAT_R32_UINT", "srv", family,
+            0, 0, 0, 0, 0, 1, 1, 256, 0,
+        ),
+    ]
+    parameters = list(base.parameters)
+    if not parameters:
+        parameters = [
+            nwp.ParameterRecord(
+                1, "time", "float", "frame", 1, struct.pack("<f", 0.0)
+            )
+        ]
+    shader = nwp.ShaderRecord(
+        1, "CSMain", "cs_6_0", shader_blob, 2, family, 64, 1, 1, 0
+    )
+    operand = nwp.InstructionOperand
+    init = [
+        nwp.Instruction(
+            "init.create_resource", (operand("resource_ref", params.resource_id),)
+        ),
+        nwp.Instruction(
+            "init.create_resource", (operand("resource_ref", output.resource_id),)
+        ),
+        nwp.Instruction(
+            "init.create_resource", (operand("resource_ref", input_id),)
+        ),
+        nwp.Instruction(
+            "init.create_root_signature", (operand("root_signature_ref", 1),)
+        ),
+        nwp.Instruction(
+            "init.create_root_signature", (operand("root_signature_ref", 2),)
+        ),
+        nwp.Instruction(
+            "init.upload_resource", (operand("resource_ref", params.resource_id),)
+        ),
+        nwp.Instruction(
+            "init.upload_resource", (operand("resource_ref", output.resource_id),)
+        ),
+        nwp.Instruction(
+            "init.create_pipeline",
+            (operand("shader_ref", 1), operand("root_signature_ref", 2)),
+        ),
+    ]
+    timeline_parameter_id = parameters[0].parameter_id
+    frame = [
+        nwp.Instruction(
+            "frame.set_timeline",
+            (operand("u32", timeline_parameter_id), operand("u64", 0)),
+        ),
+        nwp.Instruction(
+            "frame.set_root_signature", (operand("root_signature_ref", 1),)
+        ),
+        nwp.Instruction(
+            "frame.set_root_constants",
+            (
+                operand("u32", 0),
+                operand("resource_ref", params.resource_id),
+                operand("u32", 4),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.set_descriptor_table",
+            (
+                operand("u32", 1),
+                operand("string", "cbv_srv_uav"),
+                operand("resource_ref", output.resource_id),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.set_descriptor_table",
+            (
+                operand("u32", 2),
+                operand("string", "cbv_srv_uav"),
+                operand("resource_ref", input_id),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.set_root_signature", (operand("root_signature_ref", 2),)
+        ),
+        nwp.Instruction(
+            "frame.set_root_constants",
+            (
+                operand("u32", 0),
+                operand("resource_ref", params.resource_id),
+                operand("u32", 4),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.set_descriptor_table",
+            (
+                operand("u32", 1),
+                operand("string", "cbv_srv_uav"),
+                operand("resource_ref", output.resource_id),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.dispatch",
+            (
+                operand("u32", 4),
+                operand("u32", 1),
+                operand("u32", 1),
+                operand("shader_ref", 1),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.present", (operand("resource_ref", output.resource_id),)
+        ),
+    ]
+    derived = nwp.derive_capability_requirements(
+        resources, init, frame, [shader], [root_a, root_b]
+    )
+    capability = replace(
+        base.capability,
+        **derived,
+        emitted_shader_targets=("cs_6_0",),
+        required_init_instructions=tuple(
+            sorted({instruction.opcode for instruction in init})
+        ),
+        required_frame_instructions=tuple(
+            sorted({instruction.opcode for instruction in frame})
+        ),
+    )
+    capability = replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
+    return replace(
+        base,
+        capability=capability,
+        resources=list(resources),
+        initialization=list(init),
+        frame=list(frame),
+        parameters=list(parameters),
+        shaders=[shader],
+        root_signatures=[root_a, root_b],
+    )
+
+
 def write_fixture(path: Path) -> str:
     data = package_bytes()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -248,7 +437,20 @@ def main() -> int:
             "NW-03 package instead of the synthetic contract fixture."
         ),
     )
+    parser.add_argument(
+        "--signature-switch-output",
+        type=Path,
+        default=None,
+        help="Write the root-signature-layout switch regression package.",
+    )
     args = parser.parse_args()
+    if args.signature_switch_output is not None:
+        data = nwp.encode_package(build_signature_switch_package())
+        args.signature_switch_output.parent.mkdir(parents=True, exist_ok=True)
+        args.signature_switch_output.write_bytes(data)
+        if args.print_sha256:
+            print(hashlib.sha256(data).hexdigest())
+        return 0
     if args.from_package is not None:
         package = nwp.decode_package(args.from_package.read_bytes())
         data = nwp.encode_package(compose_compute_display_package(package))
