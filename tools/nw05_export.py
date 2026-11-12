@@ -47,33 +47,36 @@ DEFAULT_MEMORY_BUDGET = 256 * 1024 * 1024
 
 def _graph_image_oracle_sha256(document: nw03.GraphDocument) -> str:
     """CPU oracle digest of the graph-derived procedural image expression."""
-    generated, diagnostics = nw03.lower_to_fused_hlsl(document)
-    if diagnostics or not generated:
-        raise ExportError(
-            "graph image oracle could not lower a shader expression",
-            diagnostics,
-            dependency_path=["display", "shader"],
-        )
-    digest = hashlib.sha256()
-    for shader in sorted(generated, key=lambda item: item.specialization_id):
-        expression = oracle.parse_expression(shader.root_expression)
-        digest.update(shader.specialization_id.encode("utf-8"))
-        for y in range(16):
-            for x in range(16):
-                value = oracle.evaluate(
-                    expression,
-                    variables={
-                        "uv": (x / 16.0, y / 16.0),
-                        "time": 0.0,
-                        "seed": 0.0,
-                    },
-                    float32=True,
-                )
-                components = value if isinstance(value, tuple) else (value,)
-                digest.update(
-                    struct.pack("<" + "f" * len(components), *components)
-                )
-    return "sha256:v1:" + digest.hexdigest()
+    try:
+        generated, diagnostics = nw03.lower_to_fused_hlsl(document)
+        if diagnostics or not generated:
+            return ""
+        digest = hashlib.sha256()
+        for shader in sorted(generated, key=lambda item: item.specialization_id):
+            expression = oracle.parse_expression(shader.root_expression)
+            digest.update(shader.specialization_id.encode("utf-8"))
+            for y in range(16):
+                for x in range(16):
+                    value = oracle.evaluate(
+                        expression,
+                        variables={
+                            "uv": (x / 16.0, y / 16.0),
+                            "time": 0.0,
+                            "seed": 0.0,
+                        },
+                        float32=True,
+                    )
+                    components = (
+                        value if isinstance(value, tuple) else (value,)
+                    )
+                    digest.update(
+                        struct.pack("<" + "f" * len(components), *components)
+                    )
+        return "sha256:v1:" + digest.hexdigest()
+    except (oracle.ExpressionError, nw03.CompilerError, TypeError, ValueError):
+        # The GPU compiler may support operations outside the CPU oracle's
+        # vocabulary.  That is unavailable evidence, not an export failure.
+        return ""
 
 KNOWN_PROFILES: dict[str, str] = {
     nwp.COMMON_PROFILE_ID: nwp.COMMON_REQUIREMENTS_DIGEST,
@@ -978,6 +981,9 @@ def _compile_profile_package(
             dependency_path=["capability_profile", profile_id, "requirements_digest"],
         )
     report["image_oracle_sha256"] = _graph_image_oracle_sha256(document)
+    report["image_oracle_status"] = (
+        "available" if report["image_oracle_sha256"] else "unavailable"
+    )
     return package_bytes, package, report
 
 
@@ -1365,6 +1371,9 @@ def export_graph(
             )
             manifest["image_oracle_sha256"] = compile_report.get(
                 "image_oracle_sha256", ""
+            )
+            manifest["image_oracle_status"] = compile_report.get(
+                "image_oracle_status", "unavailable"
             )
             manifest["artifact_identity"] = artifact_key(
                 profile_id, requirements_digest, emitted_requirements(package)

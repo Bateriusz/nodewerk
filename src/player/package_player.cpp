@@ -448,6 +448,9 @@ struct PlatformState {
     std::uint32_t rtv_increment = 0u;
 
     std::vector<ResourceSlot> resources;
+    // Readback destinations whose fence completion could not be proven are
+    // released only after shutdown's best-effort GPU drain.
+    std::vector<std::pair<ID3D12Resource*, std::uint64_t>> deferred_readbacks;
     // Adapter-specific placed heap proving the alias plan.  Null when the
     // player falls back to committed resources (non-Windows simulation).
     void* package_heap = nullptr;
@@ -3744,12 +3747,20 @@ ExitCode PackagePlayer::readbackPresentedOutput(
                          true);
     auto& frame = state->frames[0];
     const D3D12_RESOURCE_STATES previous_state = source->state;
-    auto cleanup = [&]() {
+    auto release_now = [&]() {
         if (readback != nullptr) readback->Release();
         RemoveEngineResourceAllocation(placement->allocation_size_bytes);
     };
+    auto defer_release = [&]() {
+        if (readback != nullptr) {
+            state->deferred_readbacks.emplace_back(
+                readback, placement->allocation_size_bytes);
+            readback = nullptr;
+        }
+        // Keep accounting live until the deferred release actually happens.
+    };
     if (frame.allocator == nullptr || frame.command_list == nullptr) {
-        cleanup();
+        release_now();
         return Fail(ExitCode::CommandListRecordingFailed, "readback",
                     "readback_command_list_unavailable", "command_list",
                     "available", "unavailable", "readback",
@@ -3757,7 +3768,7 @@ ExitCode PackagePlayer::readbackPresentedOutput(
     }
     if (FAILED(frame.allocator->Reset()) ||
         FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
-        cleanup();
+        release_now();
         return Fail(ExitCode::CommandListRecordingFailed, "readback",
                     "readback_reset_failed", "reset", "succeeded", "failed",
                     "readback", "readback command list reset failed");
@@ -3777,7 +3788,7 @@ ExitCode PackagePlayer::readbackPresentedOutput(
     restore.Transition.StateAfter = previous_state;
     frame.command_list->ResourceBarrier(1u, &restore);
     if (FAILED(frame.command_list->Close())) {
-        cleanup();
+        release_now();
         return Fail(ExitCode::CommandListRecordingFailed, "readback",
                     "readback_close_failed", "closed", "closed", "failed",
                     "readback", "readback command list close failed");
@@ -3786,22 +3797,23 @@ ExitCode PackagePlayer::readbackPresentedOutput(
     state->queue->ExecuteCommandLists(1u, lists);
     const std::uint64_t fence_value = next_fence_value_++;
     if (FAILED(state->queue->Signal(state->fence, fence_value))) {
-        cleanup();
+        defer_release();
         return Fail(ExitCode::GpuSubmissionFailed, "readback",
                     "readback_signal_failed", "signal", "succeeded", "failed",
                     "readback", "readback queue signal failed");
     }
+    frame.fence_value = fence_value;
     const ExitCode wait = WaitForFenceValue(
         state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
     if (wait != ExitCode::Success) {
-        cleanup();
+        defer_release();
         return wait;
     }
     void* mapped = nullptr;
     D3D12_RANGE range{0u, static_cast<SIZE_T>(
                                placement->descriptor.size_bytes)};
     if (FAILED(readback->Map(0u, &range, &mapped)) || mapped == nullptr) {
-        cleanup();
+        release_now();
         return Fail(ExitCode::ResourceAllocationFailed, "readback",
                     "readback_map_failed", "mapped", "available", "failed",
                     "readback", "readback buffer Map failed");
@@ -3812,7 +3824,7 @@ ExitCode PackagePlayer::readbackPresentedOutput(
             placement->descriptor.size_bytes);
     D3D12_RANGE empty{0u, 0u};
     readback->Unmap(0u, &empty);
-    cleanup();
+    release_now();
     return ExitCode::Success;
 #else
     return Fail(ExitCode::InvalidArguments, "readback",
@@ -4279,6 +4291,11 @@ void PackagePlayer::ReleasePlatform() noexcept {
             }
         }
     }
+    for (auto& deferred : state->deferred_readbacks) {
+        if (deferred.first != nullptr) deferred.first->Release();
+        RemoveEngineResourceAllocation(deferred.second);
+    }
+    state->deferred_readbacks.clear();
     for (auto& frame : state->frames) {
         if (frame.upload != nullptr) frame.upload->Release();
         if (frame.command_list != nullptr) frame.command_list->Release();

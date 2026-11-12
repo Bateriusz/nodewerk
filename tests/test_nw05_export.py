@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw04_fixture  # noqa: E402
+import nw03_oracle  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 import nw05_export  # noqa: E402
 
@@ -512,6 +513,19 @@ def test_quantization_changes_published_package_bytes(tmp_path: Path) -> None:
         quantized.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
         != plain.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
     )
+
+
+def test_unavailable_image_oracle_does_not_abort_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unsupported(*_args, **_kwargs):
+        raise nw03_oracle.ExpressionError("unsupported CPU oracle operation")
+
+    monkeypatch.setattr(nw05_export.oracle, "evaluate", unsupported)
+    result = _export(tmp_path)
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    assert common.manifest["image_oracle_status"] == "unavailable"
+    assert common.manifest["image_oracle_sha256"] == ""
 
 
 def test_graph_is_the_sole_source_of_published_procedural_content(
