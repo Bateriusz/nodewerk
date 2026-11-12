@@ -1481,7 +1481,14 @@ def lower_typed_graph(
         constants_folded=tuple(sorted(folded)),
         fusions=fusions,
         quantization=decisions,
-        source_sha256=hashlib.sha256(document.source_text.encode("utf-8")).hexdigest(),
+        # Authoring text may be checked out with CRLF on Windows.  Semantic
+        # source identity is platform-independent, so hash the canonical LF
+        # spelling rather than the checkout's newline convention.
+        source_sha256=hashlib.sha256(
+            document.source_text.replace("\r\n", "\n").replace("\r", "\n").encode(
+                "utf-8"
+            )
+        ).hexdigest(),
         source_name=document.source_name,
     )
 

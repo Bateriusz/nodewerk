@@ -32,7 +32,9 @@ def test_typed_lowering_matches_golden_optimized_ir() -> None:
     assert optimized.outputs[0].kind == "present"
     assert "image" in optimized.reachable_node_ids
     assert "texture_recipe" in optimized.partitions["initialization"]
-    assert optimized.to_text() == GOLDEN_TEXT.read_text(encoding="utf-8")
+    assert optimized.to_text().replace("\r\n", "\n") == GOLDEN_TEXT.read_text(
+        encoding="utf-8"
+    ).replace("\r\n", "\n")
 
 
 def test_constant_propagation_and_partition_ordering() -> None:
