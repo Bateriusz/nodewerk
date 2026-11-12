@@ -16,7 +16,7 @@ A textual typed graph is now the sole source of a standalone procedural-image
 demo:
 
 ```bash
-python tools/nodewerkc.py export fixtures/nw05/procedural_image.nwgraph build/demo \
+python tools/nodewerkc.py export fixtures/nw05/procedural_export.nwgraph build/demo \
     --dxc <pinned-dxc> --player-template <specialized-player.exe> \
     --report build/demo-report.json
 python tools/nodewerkc.py inspect-size build/demo

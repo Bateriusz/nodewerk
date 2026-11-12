@@ -866,9 +866,9 @@ def test_in_directory_report_is_staged_and_accounted(tmp_path: Path) -> None:
 def test_graph_output_dimensions_control_exported_output(tmp_path: Path) -> None:
     dxc = _make_dxc(tmp_path / "toolchain")
     source = PROCEDURAL.read_text(encoding="utf-8").replace(
-        "setting nw05_output_width 256", "param width 128"
+        "setting nw05_output_width 256", "setting nw05_output_width 128"
     ).replace(
-        "setting nw05_output_height 256", "param height 64"
+        "setting nw05_output_height 256", "setting nw05_output_height 64"
     )
     graph = tmp_path / "dims.nwgraph"
     graph.write_text(source, encoding="utf-8")
