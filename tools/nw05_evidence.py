@@ -319,14 +319,15 @@ def record_execution(
     # adapter, a matching non-aliased output image, and the actual alias plan
     # to have been realized.  Operator-supplied --status is only an expectation.
     aliased_run = _run_player(
-        executable, ["--frames", "2", "--validation", "--emit-image-hash"]
+        executable,
+        ["--frames", "2", "--runtime-validation", "--emit-image-hash"],
     )
     non_aliased_run = _run_player(
         executable,
         [
             "--frames",
             "2",
-            "--validation",
+            "--runtime-validation",
             "--emit-image-hash",
             "--force-non-aliased-plan",
         ],
@@ -663,6 +664,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--status", choices=["passed", "failed"])
     parser.add_argument("--exit-code", type=int, default=0)
     parser.add_argument("--record")
+    parser.add_argument(
+        "--toolchain-manifest-sha256",
+        default="",
+        help="pinned toolchain manifest digest recorded with the execution",
+    )
+    parser.add_argument("--generation-metadata", default="")
     parser.add_argument("--print-pending", action="store_true")
     args = parser.parse_args(argv)
     if args.print_pending or not args.executable:
@@ -676,6 +683,14 @@ def main(argv: list[str] | None = None) -> int:
         tier=args.tier,
         status=args.status,
         exit_code=args.exit_code,
+        details={
+            key: value
+            for key, value in (
+                ("toolchain_manifest_sha256", args.toolchain_manifest_sha256),
+                ("generation_metadata", args.generation_metadata),
+            )
+            if value
+        },
         output_path=Path(args.record) if args.record else None,
     )
     print(json.dumps(record, indent=2, sort_keys=True))

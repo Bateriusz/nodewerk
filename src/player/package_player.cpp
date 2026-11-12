@@ -898,9 +898,12 @@ ExitCode PackagePlayer::CheckMemoryBudget(const char* stage) {
         std::max<std::uint64_t>(stats_.engine_descriptor_count,
                                 package_descriptors) *
         64u;
+    const std::uint64_t backbuffer_bytes =
+        static_cast<std::uint64_t>(package::kSwapChainBufferCount) *
+        static_cast<std::uint64_t>(width_) * height_ * 4u;
     const std::uint64_t accounted =
         stats_.engine_resource_bytes + stats_.engine_upload_bytes +
-        descriptor_bytes;
+        descriptor_bytes + backbuffer_bytes;
     if (accounted <= config_.memory_budget_bytes) return ExitCode::Success;
     return Fail(
         ExitCode::ResourceAllocationFailed, "memory",
@@ -1457,9 +1460,31 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             const std::uint64_t pixel_count =
                 present_resource->size_bytes / 16u;
+            bool explicit_geometry = false;
+            std::uint32_t explicit_width = 0u;
+            std::uint32_t explicit_height = 0u;
+            for (const auto& parameter : package_.parameters) {
+                if (parameter.value.size() < 4u) continue;
+                std::uint32_t value = 0u;
+                std::memcpy(&value, parameter.value.data(), sizeof(value));
+                if (parameter.name == "nw05.present.width") {
+                    explicit_width = value;
+                } else if (parameter.name == "nw05.present.height") {
+                    explicit_height = value;
+                }
+            }
+            if (explicit_width != 0u && explicit_height != 0u &&
+                static_cast<std::uint64_t>(explicit_width) * explicit_height ==
+                    pixel_count) {
+                present_source_width_ = explicit_width;
+                present_source_height_ = explicit_height;
+                explicit_geometry = true;
+            }
             const std::uint32_t side = static_cast<std::uint32_t>(
                 std::sqrt(static_cast<double>(pixel_count)));
-            if (static_cast<std::uint64_t>(side) * side == pixel_count) {
+            if (explicit_geometry) {
+                // Explicit package geometry takes precedence over inference.
+            } else if (static_cast<std::uint64_t>(side) * side == pixel_count) {
                 present_source_width_ = side;
                 present_source_height_ = side;
             } else {
@@ -3766,10 +3791,13 @@ ExitCode PackagePlayer::readbackPresentedOutput(
                     "presented output is not a readable buffer resource");
     }
     if (config_.memory_budget_bytes != 0u) {
+        const std::uint64_t backbuffer_bytes =
+            static_cast<std::uint64_t>(package::kSwapChainBufferCount) *
+            static_cast<std::uint64_t>(width_) * height_ * 4u;
         const std::uint64_t projected =
             stats_.engine_resource_bytes + stats_.engine_upload_bytes +
             stats_.engine_descriptor_count * 64u +
-            placement->allocation_size_bytes;
+            placement->allocation_size_bytes + backbuffer_bytes;
         if (projected > config_.memory_budget_bytes) {
             return Fail(
                 ExitCode::ResourceAllocationFailed, "memory",
@@ -4301,6 +4329,26 @@ ExitCode PackagePlayer::resize(std::uint32_t width, std::uint32_t height) {
 #if defined(_WIN32)
     PlatformState* state = platform_.get();
     if (state != nullptr && state->swapchain != nullptr && !config_.headless) {
+        if (config_.memory_budget_bytes != 0u) {
+            const std::uint64_t backbuffers =
+                static_cast<std::uint64_t>(
+                    package::kSwapChainBufferCount) *
+                width * height * 4u;
+            const std::uint64_t display =
+                static_cast<std::uint64_t>(width) * height * 4u;
+            const std::uint64_t projected =
+                stats_.engine_resource_bytes + stats_.engine_upload_bytes +
+                stats_.engine_descriptor_count * 64u + backbuffers + display;
+            if (projected > config_.memory_budget_bytes) {
+                resize_in_progress_ = false;
+                return Fail(
+                    ExitCode::ResourceAllocationFailed, "memory",
+                    "memory_budget_exceeded", "peak_bytes",
+                    std::to_string(config_.memory_budget_bytes),
+                    std::to_string(projected), "resize",
+                    "resize would exceed the generated artifact budget");
+            }
+        }
         for (ID3D12Resource* backbuffer : state->backbuffers) {
             if (backbuffer != nullptr) backbuffer->Release();
         }

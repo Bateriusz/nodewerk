@@ -467,6 +467,7 @@ def test_physical_realization_evidence_does_not_change_published_bytes(
             1: {"size_bytes": 65536, "alignment": 65536},
             2: {"size_bytes": 131072, "alignment": 65536},
             3: {"size_bytes": 262144, "alignment": 65536},
+            4: {"size_bytes": 262144, "alignment": 65536},
         },
         adapter_identity="query:test-adapter",
     )
@@ -864,6 +865,13 @@ def test_graph_texture_dimensions_control_exported_output(tmp_path: Path) -> Non
     package = result.artifacts[nwp.COMMON_PROFILE_ID].package
     output = next(resource for resource in package.resources if resource.usage == "uav")
     assert output.size_bytes == 128 * 64 * 16
+    present_parameters = {
+        parameter.name: parameter.value
+        for parameter in package.parameters
+        if parameter.name.startswith("nw05.present.")
+    }
+    assert present_parameters["nw05.present.width"] == struct.pack("<I", 128)
+    assert present_parameters["nw05.present.height"] == struct.pack("<I", 64)
     dispatch = next(
         instruction
         for instruction in package.frame

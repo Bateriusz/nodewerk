@@ -702,6 +702,8 @@ def generate_player_source(
         "            config.force_non_aliased_plan = true;\n"
         "        } else if (std::string(argv[index]) == \"--validation\") {\n"
         "            config.enable_validation = true;\n"
+        "        } else if (std::string(argv[index]) == \"--runtime-validation\") {\n"
+        "            config.runtime_validation = true;\n"
         "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
         "            emit_image_hash = true;\n"
         "        }\n"
@@ -1103,6 +1105,17 @@ def _build_graph_derived_package(
     metadata parameters.
     """
     used_operators = {node.operator_id for node in optimized.nodes}
+    composed_shader_operators = sorted(
+        used_operators & {"nw.shader.add", "nw.shader.mul", "nw.shader.mix"}
+    )
+    if composed_shader_operators and not any(
+        record.accepted for record in optimized.fusions
+    ):
+        raise ExportError(
+            "shader composition nodes require a measured fused implementation; "
+            "no genuine unfused execution path is available",
+            dependency_path=["graph", composed_shader_operators[0], "fusion"],
+        )
     supported = (
         set(nw03.SHADER_OPERATORS)
         | _PACKAGE_RESOURCE_OPERATORS
@@ -1158,10 +1171,20 @@ def _build_graph_derived_package(
     )
     resources: list[nwp.ResourceDescriptor] = [params]
     resource_by_node: dict[str, int] = {}
+    upload_resource_by_texture: dict[str, int] = {}
     resource_by_output: dict[tuple[str, str], int] = {}
     resource_by_shader: dict[str, int] = {}
     next_resource_id = 2
     specs, shader_id_by_spec = _shader_resource_specs(shader_rows, shader_records)
+    for spec in specs:
+        root = document.nodes.get(spec)
+        if root is not None and root.frequency == "initialization":
+            raise ExportError(
+                f"initialization-frequency shader root '{spec}' has no "
+                "initialization-phase dispatch instruction in the .nwp v1 "
+                "player",
+                dependency_path=["graph", spec, "frequency"],
+            )
 
     # Independent UAV destinations for every compiled shader root.  Multiple
     # resources may share the fixed u0 range because each dispatch binds one.
@@ -1215,6 +1238,21 @@ def _build_graph_derived_package(
                 )
             )
             next_resource_id += 1
+            upload_resource_by_texture[node_id] = next_resource_id
+            resources.append(
+                nwp.ResourceDescriptor(
+                    resource_id=next_resource_id,
+                    name=f"texture_upload_{node_id}",
+                    kind="buffer",
+                    format="DXGI_FORMAT_R32_UINT",
+                    usage="srv",
+                    pass_family=nw03.PASS_FAMILY,
+                    binding_slot=0,
+                    binding_space=0,
+                    size_bytes=max(1, texture_width * texture_height * 4),
+                )
+            )
+            next_resource_id += 1
         elif node.operator_id == "nw.buffer.recipe":
             resource_format = _resource_format(
                 node.params.get("format", ["r32_uint"])[0]
@@ -1262,6 +1300,12 @@ def _build_graph_derived_package(
         node = document.nodes[node_id]
         if node.operator_id not in _PACKAGE_UPLOAD_OPERATORS:
             continue
+        if node.frequency != "initialization":
+            raise ExportError(
+                f"upload node '{node_id}' is frequency '{node.frequency}'; "
+                "the .nwp v1 player supports initialization uploads only",
+                dependency_path=["graph", node_id, "frequency"],
+            )
         connection = next(iter(sorted(node.inputs.values())), None)
         source_id = resource_by_node.get(connection[0]) if connection else None
         if source_id is None:
@@ -1270,6 +1314,12 @@ def _build_graph_derived_package(
                 dependency_path=["graph", node_id, "input"],
             )
         resource_by_node[node_id] = source_id
+        if node.operator_id == "nw.residency.upload_texture":
+            upload_resource = upload_resource_by_texture.get(connection[0])
+            if upload_resource is not None:
+                resource_by_node[node_id] = upload_resource
+                uploaded_resources.append(upload_resource)
+                continue
         source_resource = next(
             resource for resource in resources if resource.resource_id == source_id
         )
@@ -1286,6 +1336,12 @@ def _build_graph_derived_package(
     for node in sorted(document.nodes.values(), key=lambda item: item.node_id):
         if node.operator_id not in _PACKAGE_RENDER_OPERATORS:
             continue
+        if node.frequency == "initialization":
+            raise ExportError(
+                f"render node '{node.node_id}' is initialization-frequency; "
+                "the .nwp v1 player has no initialization-phase dispatch",
+                dependency_path=["graph", node.node_id, "frequency"],
+            )
         if node.operator_id == "nw.render.composite":
             continue
         shader_connection = node.inputs.get("shader")
@@ -1303,7 +1359,21 @@ def _build_graph_derived_package(
             resource_by_output[(node.node_id, "image")] = output_id
             if node.operator_id == "nw.render.gbuffer":
                 resource_by_output[(node.node_id, "color")] = output_id
-                resource_by_output[(node.node_id, "normals")] = output_id
+                resources.append(
+                    nwp.ResourceDescriptor(
+                        resource_id=next_resource_id,
+                        name="output",
+                        kind="buffer",
+                        format="DXGI_FORMAT_R32_UINT",
+                        usage="uav",
+                        pass_family=nw03.PASS_FAMILY,
+                        binding_slot=0,
+                        binding_space=0,
+                        size_bytes=width * height * 16,
+                    )
+                )
+                resource_by_output[(node.node_id, "normals")] = next_resource_id
+                next_resource_id += 1
         elif node.operator_id == "nw.render.fullscreen":
             texture_connection = node.inputs.get("texture")
             if texture_connection is None:
@@ -1358,6 +1428,25 @@ def _build_graph_derived_package(
         )
     ]
     next_parameter_id = 2
+    for name, value in (
+        ("nw05.present.width", width),
+        ("nw05.present.height", height),
+    ):
+        parameters.append(
+            nwp.ParameterRecord(
+                parameter_id=next_parameter_id,
+                name=name,
+                type="uint",
+                phase="initialization",
+                component_count=1,
+                value=struct.pack("<I", int(value)),
+                timeline_start_frame=0,
+                timeline_end_frame=0,
+                timeline_step=0,
+                timeline_interpolation="none",
+            )
+        )
+        next_parameter_id += 1
     node_by_id = {node.node_id: node for node in optimized.nodes}
     for node_id in sorted(document.nodes):
         if node_id not in reachable:
@@ -1649,6 +1738,8 @@ def _compile_profile_package(
         allow_test_payloads=allow_test_payloads,
         shader_thread_group=thread_group,
         dispatch_groups=dispatch_groups,
+        image_width=width,
+        image_height=height,
     )
     package_bytes = destination.read_bytes()
     package = nwp.decode_package(

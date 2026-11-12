@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -239,47 +240,96 @@ bool ParseEmbeddedLinkMetadata(const EmbeddedPackage& package,
     const std::string text(begin, begin + size);
     const std::size_t metadata_offset = text.find("\"link_metadata\"");
     if (metadata_offset == std::string::npos) return false;
-
-    auto find_bool = [&text, metadata_offset](const char* key) -> bool {
-        const std::size_t key_offset = text.find(
-            std::string("\"") + key + "\"", metadata_offset);
-        if (key_offset == std::string::npos) return false;
-        std::size_t cursor = text.find(':', key_offset);
-        if (cursor == std::string::npos) return false;
-        ++cursor;
-        while (cursor < text.size() &&
-               (text[cursor] == ' ' || text[cursor] == '\t' ||
-                text[cursor] == '\r' || text[cursor] == '\n')) {
-            ++cursor;
+    const std::size_t object_begin = text.find('{', metadata_offset);
+    if (object_begin == std::string::npos) return false;
+    int depth = 0;
+    std::size_t object_end = std::string::npos;
+    for (std::size_t index = object_begin; index < text.size(); ++index) {
+        if (text[index] == '{') ++depth;
+        if (text[index] == '}') {
+            --depth;
+            if (depth == 0) {
+                object_end = index;
+                break;
+            }
         }
-        return text.compare(cursor, 4u, "true") == 0;
-    };
-    const std::size_t budget_key =
-        text.find("\"memory_budget_bytes\"", metadata_offset);
-    if (budget_key == std::string::npos) return false;
-    std::size_t cursor = text.find(':', budget_key);
-    if (cursor == std::string::npos) return false;
-    ++cursor;
-    while (cursor < text.size() &&
-           (text[cursor] == ' ' || text[cursor] == '\t' ||
-            text[cursor] == '\r' || text[cursor] == '\n')) {
-        ++cursor;
     }
+    if (object_end == std::string::npos) return false;
+    const std::string object =
+        text.substr(object_begin, object_end - object_begin + 1u);
+
+    auto skip_space = [](const std::string& value,
+                         std::size_t* cursor) -> bool {
+        while (*cursor < value.size()) {
+            const char ch = value[*cursor];
+            if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') break;
+            ++*cursor;
+        }
+        return *cursor < value.size();
+    };
+    auto delimiter = [](const std::string& value, std::size_t cursor) {
+        return cursor >= value.size() || value[cursor] == ',' ||
+               value[cursor] == '}' || value[cursor] == ' ' ||
+               value[cursor] == '\t' || value[cursor] == '\r' ||
+               value[cursor] == '\n';
+    };
+    auto find_value = [&object, &skip_space](const char* key) {
+        const std::size_t key_offset = object.find(
+            std::string("\"") + key + "\"");
+        if (key_offset == std::string::npos) {
+            return std::pair<bool, std::size_t>{false, 0u};
+        }
+        std::size_t cursor = object.find(':', key_offset);
+        if (cursor == std::string::npos) {
+            return std::pair<bool, std::size_t>{false, 0u};
+        }
+        ++cursor;
+        if (!skip_space(object, &cursor)) {
+            return std::pair<bool, std::size_t>{false, 0u};
+        }
+        return std::pair<bool, std::size_t>{true, cursor};
+    };
+    auto read_bool = [&object, &find_value, &delimiter](
+                         const char* key, bool* output) -> bool {
+        const auto located = find_value(key);
+        if (!located.first) return false;
+        if (object.compare(located.second, 4u, "true") == 0 &&
+            delimiter(object, located.second + 4u)) {
+            *output = true;
+            return true;
+        }
+        if (object.compare(located.second, 5u, "false") == 0 &&
+            delimiter(object, located.second + 5u)) {
+            *output = false;
+            return true;
+        }
+        return false;
+    };
+    const auto budget_location = find_value("memory_budget_bytes");
+    if (!budget_location.first) return false;
+    std::size_t cursor = budget_location.second;
     std::uint64_t budget = 0u;
     bool saw_digit = false;
-    while (cursor < text.size() && text[cursor] >= '0' &&
-           text[cursor] <= '9') {
+    while (cursor < object.size() && object[cursor] >= '0' &&
+           object[cursor] <= '9') {
         saw_digit = true;
-        budget = budget * 10u +
-                 static_cast<std::uint64_t>(text[cursor] - '0');
+        const std::uint64_t digit =
+            static_cast<std::uint64_t>(object[cursor] - '0');
+        if (budget > (std::numeric_limits<std::uint64_t>::max() - digit) /
+                         10u) {
+            return false;
+        }
+        budget = budget * 10u + digit;
         ++cursor;
     }
-    if (!saw_digit) return false;
-    metadata->valid = true;
-    metadata->wave_ops = find_bool("wave_ops");
-    metadata->fp16_shader_ops = find_bool("fp16_shader_ops");
-    metadata->int64_shader_ops = find_bool("int64_shader_ops");
+    if (!saw_digit || !delimiter(object, cursor)) return false;
+    if (!read_bool("wave_ops", &metadata->wave_ops) ||
+        !read_bool("fp16_shader_ops", &metadata->fp16_shader_ops) ||
+        !read_bool("int64_shader_ops", &metadata->int64_shader_ops)) {
+        return false;
+    }
     metadata->memory_budget_bytes = budget;
+    metadata->valid = true;
     return true;
 }
 

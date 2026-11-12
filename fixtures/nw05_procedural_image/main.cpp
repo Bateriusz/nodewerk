@@ -26,6 +26,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "NW05_LINK_METADATA_INVALID\n");
         return static_cast<int>(nw::player::ExitCode::PackageValidationFailed);
     }
+    std::printf("NW05_LINK_MANIFEST_VERIFIED=1\n");
 
     nw::player::PlayerConfig config;
     config.window_title = "Nodewerk NW-05 Procedural Image";
@@ -44,6 +45,8 @@ int main(int argc, char** argv) {
             config.force_non_aliased_plan = true;
         } else if (std::string(argv[index]) == "--validation") {
             config.enable_validation = true;
+        } else if (std::string(argv[index]) == "--runtime-validation") {
+            config.runtime_validation = true;
         } else if (std::string(argv[index]) == "--emit-image-hash") {
             emit_image_hash = true;
         }
