@@ -127,6 +127,8 @@ class LogicalResource:
     width: int
     height: int
     depth: int
+    mip_levels: int
+    array_size: int
     access: tuple[ResourceAccess, ...]
     lifetime: ResourceLifetime
     alias_eligible: bool
@@ -142,6 +144,8 @@ class LogicalResource:
             "usage": self.usage,
             "size_bytes": self.size_bytes,
             "dimensions": [self.width, self.height, self.depth],
+            "mip_levels": self.mip_levels,
+            "array_size": self.array_size,
             "access": [item.to_dict() for item in self.access],
             "lifetime": self.lifetime.to_dict(),
             "alias_eligible": self.alias_eligible,
@@ -403,7 +407,7 @@ def pending_physical_realization(
     # frame slot, and the player's own swap-chain/upload/descriptor storage is
     # included so a budget check cannot pass with an incomplete logical sum.
     aligned_payload = sum(
-        _round_up(max(resource.size_bytes, 1), MAX_PLACEMENT_ALIGNMENT)
+        _logical_allocation_upper_bound(resource)
         * (
             schedule.frames_in_flight
             if resource.alias_eligible and schedule.frames_in_flight > 1
@@ -412,13 +416,13 @@ def pending_physical_realization(
         for resource in schedule.resources
     )
     duplication = sum(
-        _round_up(max(resource.size_bytes, 1), MAX_PLACEMENT_ALIGNMENT)
+        _logical_allocation_upper_bound(resource)
         * (schedule.frames_in_flight - 1)
         for resource in schedule.resources
         if resource.alias_eligible and schedule.frames_in_flight > 1
     )
     padding = aligned_payload - sum(
-        max(resource.size_bytes, 1)
+        _logical_requested_bytes(resource)
         * (
             schedule.frames_in_flight
             if resource.alias_eligible and schedule.frames_in_flight > 1
@@ -428,7 +432,7 @@ def pending_physical_realization(
     )
     upload_ring = max(
         [
-            _round_up(max(resource.size_bytes, 1), MAX_PLACEMENT_ALIGNMENT)
+            _logical_allocation_upper_bound(resource)
             for resource in schedule.resources
         ]
         or [PLAYER_OWNED_FRAME_UPLOAD_BYTES]
@@ -504,8 +508,6 @@ def _looks_transient(resource: nwp.ResourceDescriptor, accesses: Sequence[Resour
         return False, f"{resource.usage} resources are retained across frames"
     if resource.kind not in {"buffer", "texture2d", "texture3d"}:
         return False, "unsupported resource kind for alias eligibility"
-    if any(access.opcode == "frame.present" for access in accesses):
-        return False, "presented output is read by the player each frame"
     if any(access.opcode == "frame.set_root_constants" for access in accesses):
         return False, "root-constant resource is retained across frames"
     if any(
@@ -559,12 +561,25 @@ def build_logical_schedule(
 
     # Descriptor tables and root constants bind resources for subsequent
     # dispatches in the same frame stream.  Track the current binding set.
+    bound_by_root: dict[int, set[int]] = {}
     bound: dict[int, str] = {}
     for index, instruction in enumerate(package.frame):
         frame_order.append(instruction.opcode)
         opcode = instruction.opcode
         if opcode == "frame.set_descriptor_table":
             refs = _resource_refs(instruction)
+            root_parameter = (
+                int(instruction.operands[0].value)
+                if instruction.operands
+                else -1
+            )
+            bound_by_root[root_parameter] = set(refs)
+            bound = {
+                resource_id: resources_by_id[resource_id].usage
+                for resource_ids in bound_by_root.values()
+                for resource_id in resource_ids
+                if resource_id in resources_by_id
+            }
             for resource_id in refs:
                 resource = resources_by_id.get(resource_id)
                 if resource is None:
@@ -581,6 +596,18 @@ def build_logical_schedule(
                 )
         elif opcode == "frame.set_root_constants":
             refs = _resource_refs(instruction)
+            root_parameter = (
+                int(instruction.operands[0].value)
+                if instruction.operands
+                else -1
+            )
+            bound_by_root[root_parameter] = set(refs)
+            bound = {
+                resource_id: resources_by_id[resource_id].usage
+                for resource_ids in bound_by_root.values()
+                for resource_id in resource_ids
+                if resource_id in resources_by_id
+            }
             for resource_id in refs:
                 resource = resources_by_id.get(resource_id)
                 if resource is None:
@@ -713,6 +740,8 @@ def build_logical_schedule(
                 width=resource.width,
                 height=resource.height,
                 depth=resource.depth,
+                mip_levels=max(1, resource.mip_levels),
+                array_size=max(1, resource.array_size),
                 access=accesses,
                 lifetime=lifetime,
                 alias_eligible=eligible,
@@ -846,6 +875,50 @@ def _round_up(value: int, alignment: int) -> int:
         return value
     remainder = value % alignment
     return value if remainder == 0 else value + alignment - remainder
+
+
+def _logical_requested_bytes(resource: nwp.ResourceDescriptor) -> int:
+    """Raw preflight payload from resource dimensions, not only size_bytes."""
+    if resource.kind == "buffer":
+        requested = resource.size_bytes
+    else:
+        bytes_per_element = {
+            "DXGI_FORMAT_R8G8B8A8_UNORM": 4,
+            "DXGI_FORMAT_R32G32B32A32_FLOAT": 16,
+            "DXGI_FORMAT_R32_UINT": 4,
+            "DXGI_FORMAT_D32_FLOAT": 4,
+        }.get(resource.format, 0)
+        if bytes_per_element == 0:
+            raise ScheduleError(
+                f"cannot preflight texture format '{resource.format}' for "
+                f"resource {resource.resource_id}"
+            )
+        requested = 0
+        for mip in range(max(1, resource.mip_levels)):
+            width = max(1, resource.width >> mip)
+            height = max(1, resource.height >> mip)
+            depth = (
+                max(1, resource.depth >> mip)
+                if resource.kind == "texture3d"
+                else 1
+            )
+            array_size = (
+                resource.array_size if resource.kind == "texture2d" else 1
+            )
+            requested += (
+                width * height * depth * max(1, array_size) * bytes_per_element
+            )
+    return max(1, requested)
+
+
+def _logical_allocation_upper_bound(resource: nwp.ResourceDescriptor) -> int:
+    """Preflight adapter allocation bound (payload + placement padding)."""
+    requested = _logical_requested_bytes(resource)
+    if resource.kind != "buffer":
+        # Texture placement may include row-pitch and mip-tail padding; reserve
+        # one placement alignment per mip on top of the checked payload.
+        requested += max(1, resource.mip_levels) * MAX_PLACEMENT_ALIGNMENT
+    return _round_up(requested, MAX_PLACEMENT_ALIGNMENT)
 
 
 def simulate_allocation(
@@ -1203,6 +1276,21 @@ def realize_physical_aliases(
         # frame-slot instances exist.
         _ = instance
 
+    unique_barriers: list[AliasBarrier] = []
+    seen_barriers: set[tuple[int, int, int, bool]] = set()
+    for barrier in barriers:
+        key = (
+            barrier.before_resource_id,
+            barrier.resource_id,
+            barrier.activation_instruction,
+            barrier.frame_boundary,
+        )
+        if key in seen_barriers:
+            continue
+        seen_barriers.add(key)
+        unique_barriers.append(barrier)
+    barriers = unique_barriers
+
     occupied_ranges: dict[tuple[int, int], int] = {}
     for placement in placements:
         key = (placement.instance, placement.byte_offset)
@@ -1218,7 +1306,7 @@ def realize_physical_aliases(
     )
     upload_ring = max(
         [
-            _round_up(max(resource.size_bytes, 1), MAX_PLACEMENT_ALIGNMENT)
+            _logical_allocation_upper_bound(resource)
             for resource in schedule.resources
         ]
         or [PLAYER_OWNED_FRAME_UPLOAD_BYTES]

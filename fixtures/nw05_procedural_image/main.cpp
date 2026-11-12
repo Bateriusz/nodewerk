@@ -21,9 +21,18 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "NW05_EMBEDDED_PACKAGE_INVALID\n");
         return static_cast<int>(nw::player::ExitCode::PackageValidationFailed);
     }
+    nw::player::EmbeddedLinkMetadata link_metadata;
+    if (!nw::player::ParseEmbeddedLinkMetadata(embedded, &link_metadata)) {
+        std::fprintf(stderr, "NW05_LINK_METADATA_INVALID\n");
+        return static_cast<int>(nw::player::ExitCode::PackageValidationFailed);
+    }
 
     nw::player::PlayerConfig config;
     config.window_title = "Nodewerk NW-05 Procedural Image";
+    config.query_optional_wave_ops = link_metadata.wave_ops;
+    config.query_optional_fp16_shader_ops = link_metadata.fp16_shader_ops;
+    config.query_optional_int64_shader_ops = link_metadata.int64_shader_ops;
+    config.memory_budget_bytes = link_metadata.memory_budget_bytes;
     std::uint64_t max_frames = 0;
     bool emit_image_hash = false;
     for (int index = 1; index < argc; ++index) {
@@ -33,6 +42,8 @@ int main(int argc, char** argv) {
             config.allow_software_adapter = true;
         } else if (std::string(argv[index]) == "--force-non-aliased-plan") {
             config.force_non_aliased_plan = true;
+        } else if (std::string(argv[index]) == "--validation") {
+            config.enable_validation = true;
         } else if (std::string(argv[index]) == "--emit-image-hash") {
             emit_image_hash = true;
         }
@@ -98,9 +109,15 @@ int main(int argc, char** argv) {
         static_cast<unsigned long long>(
             player.resource_plan().alias_barriers.size()));
     std::printf(
+        "NW05_ALIAS_ACTIVATIONS=%llu\n",
+        static_cast<unsigned long long>(
+            player.allocation_stats().alias_barrier_count));
+    std::printf(
         "NW05_UAV_BARRIERS=%llu\n",
         static_cast<unsigned long long>(
             player.allocation_stats().uav_barrier_count));
+    std::printf("NW05_VALIDATION_ENABLED=%d\n",
+                player.validation_enabled() ? 1 : 0);
     return status == nw::player::ExitCode::Success ? 0 : static_cast<int>(status);
 }
 

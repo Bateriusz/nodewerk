@@ -1913,7 +1913,7 @@ def resolve_dxc(explicit: str | None = None) -> str | None:
     if explicit:
         candidate = Path(explicit)
         if candidate.is_file():
-            return str(candidate)
+            return str(candidate.resolve())
         resolved = shutil.which(explicit)
         if resolved:
             return resolved

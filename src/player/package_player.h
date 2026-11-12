@@ -90,6 +90,7 @@ struct PlayerAllocationStats {
     std::uint64_t frames_rendered = 0u;
     std::uint64_t frames_presented = 0u;
     std::uint64_t uav_barrier_count = 0u;
+    std::uint64_t alias_barrier_count = 0u;
     std::uint64_t present_failure_retirements = 0u;
     bool post_initialization_allocation_violation = false;
 };
@@ -160,6 +161,9 @@ public:
     bool minimized() const noexcept { return minimized_; }
     bool window_closed() const noexcept { return window_closed_; }
     bool using_aliased_plan() const noexcept { return using_aliased_plan_; }
+    bool validation_enabled() const noexcept {
+        return config_.enable_validation;
+    }
 
     const package::Package& package() const noexcept { return package_; }
     const ResourcePlan& resource_plan() const noexcept { return plan_; }
@@ -247,6 +251,7 @@ private:
     ExitCode WaitForAllFrames(const char* stage);
     bool CheckDeviceRemoved(const char* stage);
     bool CheckD3D12Validation(const char* stage);
+    ExitCode CheckMemoryBudget(const char* stage);
 
     PlayerConfig config_{};
     ExitCode last_exit_ = ExitCode::Success;

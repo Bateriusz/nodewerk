@@ -80,6 +80,8 @@ def _record(
         "hardware_identity_verified": True,
         "aliased_plan_realized": True,
         "alias_barrier_count": 2,
+        "alias_activations": 2,
+        "validation_enabled": True,
         "output_matches_non_aliased": True,
         "details": {
             "device": "RTX",
@@ -91,6 +93,7 @@ def _record(
     blackwell_execution = dict(execution, hardware_tier="blackwell")
     return {
         "verification_status": "verified",
+        "toolchain_manifest_sha256": "sha256:v1:test-toolchain",
         "qualifications": {
             "ada": dict(qualification),
             "blackwell": dict(qualification),

@@ -226,5 +226,62 @@ bool BuildEmbeddedImage(const std::uint8_t* template_bytes,
            template_size + package_size + manifest_size + kEmbeddedFooterSize;
 }
 
+bool ParseEmbeddedLinkMetadata(const EmbeddedPackage& package,
+                              EmbeddedLinkMetadata* metadata) {
+    if (metadata == nullptr) return false;
+    *metadata = EmbeddedLinkMetadata{};
+    if (!package.valid || package.manifest == nullptr ||
+        package.manifest_size == 0u) {
+        return false;
+    }
+    const char* begin = reinterpret_cast<const char*>(package.manifest);
+    const std::size_t size = package.manifest_size;
+    const std::string text(begin, begin + size);
+    const std::size_t metadata_offset = text.find("\"link_metadata\"");
+    if (metadata_offset == std::string::npos) return false;
+
+    auto find_bool = [&text, metadata_offset](const char* key) -> bool {
+        const std::size_t key_offset = text.find(
+            std::string("\"") + key + "\"", metadata_offset);
+        if (key_offset == std::string::npos) return false;
+        std::size_t cursor = text.find(':', key_offset);
+        if (cursor == std::string::npos) return false;
+        ++cursor;
+        while (cursor < text.size() &&
+               (text[cursor] == ' ' || text[cursor] == '\t' ||
+                text[cursor] == '\r' || text[cursor] == '\n')) {
+            ++cursor;
+        }
+        return text.compare(cursor, 4u, "true") == 0;
+    };
+    const std::size_t budget_key =
+        text.find("\"memory_budget_bytes\"", metadata_offset);
+    if (budget_key == std::string::npos) return false;
+    std::size_t cursor = text.find(':', budget_key);
+    if (cursor == std::string::npos) return false;
+    ++cursor;
+    while (cursor < text.size() &&
+           (text[cursor] == ' ' || text[cursor] == '\t' ||
+            text[cursor] == '\r' || text[cursor] == '\n')) {
+        ++cursor;
+    }
+    std::uint64_t budget = 0u;
+    bool saw_digit = false;
+    while (cursor < text.size() && text[cursor] >= '0' &&
+           text[cursor] <= '9') {
+        saw_digit = true;
+        budget = budget * 10u +
+                 static_cast<std::uint64_t>(text[cursor] - '0');
+        ++cursor;
+    }
+    if (!saw_digit) return false;
+    metadata->valid = true;
+    metadata->wave_ops = find_bool("wave_ops");
+    metadata->fp16_shader_ops = find_bool("fp16_shader_ops");
+    metadata->int64_shader_ops = find_bool("int64_shader_ops");
+    metadata->memory_budget_bytes = budget;
+    return true;
+}
+
 } // namespace nw::player
 

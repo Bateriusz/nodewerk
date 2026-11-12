@@ -25,9 +25,8 @@ import hashlib
 import json
 import math
 import re
-import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import nw03_compiler as nw03
 import nw03_oracle as oracle
@@ -1545,6 +1544,7 @@ def _fusion_records(
     max_nodes: int,
     max_expression_bytes: int,
     enable: bool,
+    measurements: Mapping[str, Any] | None = None,
 ) -> tuple[FusionRecord, ...]:
     node_ids = {node.node_id for node in nodes}
     consumers: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
@@ -1613,65 +1613,41 @@ def _fusion_records(
         )
         after_instructions = len(oracle.expression_nodes(folded))
         fusion_cse = _expression_cse_count(folded)
-        # Measure the emitted HLSL and CPU-oracle evaluation cost.  These are
-        # real measurements of the candidate, not instruction-count estimates.
+        # Fusion is accepted only with externally recorded measurements of the
+        # actual exported implementations.  HLSL source length and Python
+        # oracle timing are not exported size/performance measurements.
         measured_hlsl_before = 0
         measured_hlsl_after = 0
         measured_runtime_before = 0
         measured_runtime_after = 0
         measurement_source = "unavailable"
-        try:
-            before_hlsl = nw03._emit_compute_hlsl(
-                oracle.lower_to_hlsl(source_expression),
-                members,
-                thread_group=nw03.THREAD_GROUP,
-                dispatch_groups=nw03.DISPATCH_GROUPS,
-                entry_point=nw03.ENTRY_POINT,
-            )[0]
-            after_hlsl = nw03._emit_compute_hlsl(
-                oracle.lower_to_hlsl(folded),
-                members,
-                thread_group=nw03.THREAD_GROUP,
-                dispatch_groups=nw03.DISPATCH_GROUPS,
-                entry_point=nw03.ENTRY_POINT,
-            )[0]
-            measured_hlsl_before = len(before_hlsl.encode("utf-8"))
-            measured_hlsl_after = len(after_hlsl.encode("utf-8"))
-            samples = _expression_samples()
-
-            def measure(expression: oracle.Expression) -> int:
-                best = None
-                for _ in range(3):
-                    start = time.perf_counter_ns()
-                    for _repeat in range(200):
-                        for uv, time_value, seed_value in samples:
-                            oracle.evaluate(
-                                expression,
-                                variables={
-                                    "uv": uv,
-                                    "time": time_value,
-                                    "seed": seed_value,
-                                },
-                                float32=True,
-                            )
-                    elapsed = time.perf_counter_ns() - start
-                    best = elapsed if best is None else min(best, elapsed)
-                return int(best or 0)
-
-            measured_runtime_before = measure(source_expression)
-            measured_runtime_after = measure(folded)
-            measurement_source = "emitted-hlsl-and-cpu-oracle-samples"
-        except (nw03.CompilerError, oracle.ExpressionError, TypeError, ValueError):
-            measurement_source = "unavailable"
+        measurement = (measurements or {}).get(root.node_id)
+        measurement_ok = False
+        if isinstance(measurement, Mapping):
+            try:
+                measured_hlsl_before = int(measurement["compiled_bytes_before"])
+                measured_hlsl_after = int(measurement["compiled_bytes_after"])
+                measured_runtime_before = int(measurement["runtime_ns_before"])
+                measured_runtime_after = int(measurement["runtime_ns_after"])
+                measurement_ok = bool(
+                    measurement.get("correctness_preserved", False)
+                    and measured_hlsl_before > 0
+                    and measured_runtime_before > 0
+                )
+                measurement_source = str(
+                    measurement.get("source", "exported-implementation-measurement")
+                )
+            except (KeyError, TypeError, ValueError):
+                measurement_ok = False
         accepted = (
             enable
+            and measurement_ok
             and len(members) <= max_nodes
             and len(folded_text.encode("utf-8")) <= max_expression_bytes
             and equivalent
             and len(folded_text.encode("utf-8")) <= before_bytes
-            and measured_hlsl_before > 0
             and measured_hlsl_after <= measured_hlsl_before
-            and measured_runtime_before > 0
+            and measured_runtime_after <= measured_runtime_before
         )
         if not enable:
             reason = "fusion disabled by explicit setting"
@@ -1683,8 +1659,11 @@ def _fusion_records(
             reason = "correctness oracle rejected fused expression"
         elif len(folded_text.encode("utf-8")) > before_bytes:
             reason = "fused expression is not smaller than the unfused path"
-        elif measured_hlsl_before == 0:
-            reason = "compiled/emitted size measurement unavailable"
+        elif not measurement_ok:
+            reason = (
+                "exported fused/unfused implementation measurements unavailable; "
+                "retained the correct unfused NW-03 lowering"
+            )
         elif measured_hlsl_after > measured_hlsl_before:
             reason = "measured emitted HLSL is larger than the unfused path"
         else:
@@ -1703,10 +1682,7 @@ def _fusion_records(
                 estimated_instructions_after=after_instructions,
                 correctness_preserved=equivalent,
                 measured=(
-                    measurement_source
-                    == "emitted-hlsl-and-cpu-oracle-samples"
-                    and measured_hlsl_before > 0
-                    and measured_runtime_before > 0
+                    measurement_ok
                 ),
                 accepted=accepted,
                 reason=reason + (f"; {fusion_cse} duplicate AST nodes analysed" if fusion_cse else ""),
@@ -1729,6 +1705,7 @@ def lower_typed_graph(
     fusion_enabled: bool = True,
     fusion_max_nodes: int = DEFAULT_FUSION_MAX_NODES,
     fusion_max_expression_bytes: int = DEFAULT_FUSION_MAX_EXPRESSION_BYTES,
+    fusion_measurements: Mapping[str, Any] | None = None,
 ) -> OptimizedGraph:
     """Lower a validated NW-02 document into the deterministic NW-05 IR."""
     active = dict(settings if settings is not None else document.settings)
@@ -1826,6 +1803,7 @@ def lower_typed_graph(
         max_nodes=fusion_max_nodes,
         max_expression_bytes=fusion_max_expression_bytes,
         enable=fusion_enabled,
+        measurements=fusion_measurements,
     )
     canonical_outputs = tuple(
         GraphOutput(
@@ -1882,6 +1860,7 @@ def optimize_graph(
     fusion_enabled: bool = True,
     fusion_max_nodes: int = DEFAULT_FUSION_MAX_NODES,
     fusion_max_expression_bytes: int = DEFAULT_FUSION_MAX_EXPRESSION_BYTES,
+    fusion_measurements: Mapping[str, Any] | None = None,
 ) -> OptimizedGraph:
     """Convenience entry point: quantize (if configured) then lower the graph."""
     active = dict(settings if settings is not None else document.settings)
@@ -1905,6 +1884,7 @@ def optimize_graph(
         fusion_enabled=fusion_enabled,
         fusion_max_nodes=fusion_max_nodes,
         fusion_max_expression_bytes=fusion_max_expression_bytes,
+        fusion_measurements=fusion_measurements,
     )
 
 
@@ -2244,6 +2224,7 @@ def build_link_manifest(
     optional_profile_id: str = "",
     requires_aliasing: bool = True,
     runtime_dependencies: Sequence[str] | None = None,
+    memory_budget_bytes: int = 0,
 ) -> dict[str, Any]:
     """Build the generated player link manifest for one profile artifact."""
     used_operators = sorted({node.operator_id for node in optimized.nodes})
@@ -2334,6 +2315,12 @@ def build_link_manifest(
         "shader_targets": shader_targets,
         "shaders": shaders,
         "runtime_requirements": runtime_requirements,
+        "link_metadata": {
+            "wave_ops": wave_ops,
+            "fp16_shader_ops": False,
+            "int64_shader_ops": False,
+            "memory_budget_bytes": int(memory_budget_bytes),
+        },
         "required_init_instructions": required_init,
         "required_frame_instructions": required_frame,
         "retained": {

@@ -320,3 +320,58 @@ def test_alias_reuse_checks_every_occupant_of_a_range() -> None:
             right_logical = logical.resource(right.resource_id)
             assert not schedule.lifetimes_overlap(left_logical, right_logical)
 
+
+def test_initialization_upload_is_never_aliased_by_later_transient() -> None:
+    resource = nwp.ResourceDescriptor
+    instruction = nwp.Instruction
+    operand = nwp.InstructionOperand
+    package = nwp.NwpPackage(
+        resources=[
+            resource(
+                1,
+                "initialized",
+                "buffer",
+                "DXGI_FORMAT_R32_UINT",
+                "uav",
+                "compute.math_noise",
+                size_bytes=4096,
+            ),
+            resource(
+                2,
+                "hidden",
+                "buffer",
+                "DXGI_FORMAT_R32_UINT",
+                "uav",
+                "compute.math_noise",
+                size_bytes=4096,
+            ),
+        ],
+        initialization=[
+            instruction("init.create_resource", (operand("resource_ref", 1),)),
+            instruction("init.upload_resource", (operand("resource_ref", 1),)),
+            instruction("init.create_resource", (operand("resource_ref", 2),)),
+        ],
+        frame=[
+            instruction("frame.present", (operand("resource_ref", 1),)),
+            instruction(
+                "frame.copy_buffer",
+                (
+                    operand("resource_ref", 2),
+                    operand("resource_ref", 2),
+                    operand("u64", 64),
+                ),
+            ),
+        ],
+    )
+    logical = schedule.build_logical_schedule(package, frames_in_flight=1)
+    initialized = logical.resource(1)
+    assert initialized is not None and not initialized.alias_eligible
+    realization = schedule.realize_physical_aliases(
+        logical,
+        package,
+        frames_in_flight=1,
+        allocation_query=schedule.simulate_allocation,
+    )
+    placements = {item.resource_id: item for item in realization.placements}
+    assert placements[1].byte_offset != placements[2].byte_offset
+

@@ -134,28 +134,13 @@ not quantized implicitly; they must be selected explicitly.
 ## Generation versus bake
 
 Generation is the default. Bake is never selected by an automatic cost oracle.
-Each explicit `--generation-override <node>=generate|bake` or
-`--bake-override <node>=...` produces a record containing:
-
-- incremental compressed content bytes;
-- introduced code bytes;
-- introduced shader bytes;
-- startup cost bytes;
-- peak memory bytes.
-
-This lets a human compare generation against baked content for a specific
-graph. The report always states `"automatic_oracle": false`.
-
-Fully constant scalar/vector nodes are bakeable: the exported `.nwp` v1
-package carries their values as initialization parameter content and the
-materialised graph replaces the generating operator with the literal constant.
-The decision record labels this `measurement_status:
-"measured-package-parameter-bytes"` and reports the actual parameter bytes,
-not a hypothetical compressed-IR estimate. Dynamic/shader nodes remain on the
-generated path because the current specialized player has no runtime consumer
-for arbitrary baked payloads; their decision record states that explicitly.
-Unsupported bake requests fail closed instead of silently becoming generation.
-There is no automatic cost oracle and generation remains the default.
+The existing `.nwp` v1 player has no runtime consumer for arbitrary baked node
+records. Explicit `bake` overrides therefore fail closed with a dependency
+path; they are never silently rewritten to generation and never emit
+unconsumed parameter blobs. Generation decisions report that shared shader and
+resource closure costs are attributed by the package/link-manifest reports, not
+per node, and mark per-node measurements as unavailable. There is no automatic
+cost oracle and generation remains the default.
 
 ## Capability-profile artifacts and budgets
 

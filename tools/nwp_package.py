@@ -2212,11 +2212,17 @@ def _validate_resources(
                 f"resource '{resource.name}' binding space {resource.binding_space} is out of range",
             )
         if binding_key in seen_bindings:
-            error(
-                "package_resource_binding_collision",
-                f"duplicate binding {resource.pass_family}/{resource.usage}/"
-                f"{resource.binding_space}:{resource.binding_slot}",
-            )
+            # Multiple transient UAV/SRV resources may share the single fixed
+            # descriptor range as long as each dispatch binds exactly one of
+            # them.  This is how graph-derived render targets reuse the
+            # established compute.math_noise signature without a second pass
+            # family.
+            if resource.usage not in {"uav", "srv"}:
+                error(
+                    "package_resource_binding_collision",
+                    f"duplicate binding {resource.pass_family}/{resource.usage}/"
+                    f"{resource.binding_space}:{resource.binding_slot}",
+                )
         seen_bindings.add(binding_key)
 
         family_contract = PASS_FAMILY_BINDINGS.get(resource.pass_family)

@@ -399,36 +399,19 @@ def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
         tmp_path,
         bake_overrides=(("roughness", "bake"), ("shade", "bake")),
     )
-    result = nw05_export.export_graph(
-        REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph",
-        tmp_path / "out",
-        settings=settings,
-        dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
-        allow_test_payloads=True,
-    )
-    decisions = {
-        item["node_id"]: item
-        for item in result.report["generation_vs_bake"]["decisions"]
-    }
-    assert decisions["roughness"]["mode"] == "bake"
-    assert decisions["roughness"]["requested_mode"] == "bake"
-    assert decisions["roughness"]["automatic_cost_oracle"] is False
-    assert decisions["roughness"]["incremental_compressed_content_bytes"] > 0
-    assert decisions["roughness"]["startup_cost_bytes"] > 0
-    assert decisions["roughness"]["introduced_code_bytes"] == 0
-    assert decisions["roughness"]["requested_bake_compressed_bytes"] > 0
-    assert decisions["roughness"]["requested_bake_startup_bytes"] > 0
-    assert decisions["roughness"]["requested_bake_peak_memory_bytes"] > 0
-    assert decisions["roughness"]["baked_content_emitted_bytes"] > 0
-    assert decisions["roughness"]["measurement_status"] == (
-        "measured-package-parameter-bytes"
-    )
-    assert decisions["shade"]["mode"] == "generate"
-    assert "unsupported" in decisions["shade"]["reason"]
-    assert result.report["generation_vs_bake"]["automatic_oracle"] is False
+    with pytest.raises(nw05_export.ExportError) as excinfo:
+        nw05_export.export_graph(
+            REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph",
+            tmp_path / "out",
+            settings=settings,
+            dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+            allow_test_payloads=True,
+        )
+    assert excinfo.value.dependency_path
+    assert excinfo.value.dependency_path[0] == "generation_override"
 
 
-def test_optimizer_and_fusion_settings_change_published_bytes(tmp_path: Path) -> None:
+def test_unmeasured_fusion_retains_identical_unfused_export(tmp_path: Path) -> None:
     dxc = _make_dxc(tmp_path / "toolchain")
     source = PROCEDURAL.read_text(encoding="utf-8")
     foldable = source.replace(
@@ -457,15 +440,15 @@ def test_optimizer_and_fusion_settings_change_published_bytes(tmp_path: Path) ->
     )
     assert (
         fused.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
-        != unfused.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+        == unfused.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
     )
     assert (
         fused.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
-        != unfused.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
+        == unfused.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
     )
-    assert (
-        fused.artifacts[nwp.COMMON_PROFILE_ID].package.capability.compiler_fingerprint
-        != unfused.artifacts[nwp.COMMON_PROFILE_ID].package.capability.compiler_fingerprint
+    assert all(
+        not record["accepted"]
+        for record in fused.report["optimized_ir"]["fusions"]
     )
 
 
@@ -483,6 +466,7 @@ def test_physical_realization_evidence_does_not_change_published_bytes(
         allocation_query={
             1: {"size_bytes": 65536, "alignment": 65536},
             2: {"size_bytes": 131072, "alignment": 65536},
+            3: {"size_bytes": 262144, "alignment": 65536},
         },
         adapter_identity="query:test-adapter",
     )
@@ -859,4 +843,116 @@ def test_in_directory_report_is_staged_and_accounted(tmp_path: Path) -> None:
     # The report is part of the common artifact accounting, not free metadata.
     common = result.artifacts[nwp.COMMON_PROFILE_ID]
     assert "report.json" in common.size_report["distribution"]["artifact_files"]
+
+
+def test_graph_texture_dimensions_control_exported_output(tmp_path: Path) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    source = PROCEDURAL.read_text(encoding="utf-8").replace(
+        "param width 256", "param width 128"
+    ).replace(
+        "param height 256", "param height 64"
+    )
+    graph = tmp_path / "dims.nwgraph"
+    graph.write_text(source, encoding="utf-8")
+    result = nw05_export.export_graph(
+        graph,
+        tmp_path / "dims-out",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    output = next(resource for resource in package.resources if resource.usage == "uav")
+    assert output.size_bytes == 128 * 64 * 16
+    dispatch = next(
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.dispatch"
+    )
+    assert dispatch.operands[0].value == 1
+    assert dispatch.operands[1].value == 64
+
+
+def test_shader_only_graph_exports_with_dispatch(tmp_path: Path) -> None:
+    graph = tmp_path / "shader_only.nwgraph"
+    graph.write_text(
+        "nwgraph 1\n"
+        "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+        f"{nwp.COMMON_REQUIREMENTS_DIGEST}\n"
+        "setting optimization O2\n"
+        "setting deterministic true\n"
+        "setting api d3d12\n"
+        "setting feature_level 12_0\n"
+        "setting shader_model 6_0\n"
+        "setting frequency_policy strict\n"
+        "setting shader_blob_policy stable\n"
+        "node image nw.shader.expr@1.0.0 frequency=frame\n"
+        '  param expression "vec4(uv.x, uv.y, 0.25, 1.0)"\n',
+        encoding="utf-8",
+    )
+    result = nw05_export.export_graph(
+        graph,
+        tmp_path / "shader-only-out",
+        settings=_settings(tmp_path),
+        dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+        allow_test_payloads=True,
+    )
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    assert any(
+        instruction.opcode == "frame.dispatch" for instruction in package.frame
+    )
+    assert any(
+        instruction.opcode == "frame.present" for instruction in package.frame
+    )
+
+
+def test_multiple_shader_roots_get_independent_aliasable_outputs(
+    tmp_path: Path,
+) -> None:
+    result = nw05_export.export_graph(
+        REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph",
+        tmp_path / "multi-root",
+        settings=_settings(tmp_path),
+        dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+        allow_test_payloads=True,
+    )
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    outputs = [
+        resource
+        for resource in artifact.package.resources
+        if resource.usage == "uav"
+    ]
+    assert len(outputs) >= 2
+    assert len({resource.resource_id for resource in outputs}) == len(outputs)
+    dispatches = [
+        instruction
+        for instruction in artifact.package.frame
+        if instruction.opcode == "frame.dispatch"
+    ]
+    assert len(dispatches) >= 2
+    transitions = {
+        (barrier.before_resource_id, barrier.resource_id)
+        for barrier in artifact.physical_realization.barriers
+    }
+    assert transitions
+    assert any(
+        (right, left) in transitions
+        for left, right in transitions
+        if left != right
+    )
+
+
+def test_relative_dxc_path_survives_working_directory_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _make_dxc(tmp_path)
+    result = nw05_export.export_graph(
+        PROCEDURAL,
+        tmp_path / "relative-out",
+        settings=_settings(tmp_path),
+        dxc_executable="mock_dxc.py",
+        allow_test_payloads=True,
+    )
+    assert result.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
 

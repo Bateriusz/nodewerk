@@ -94,7 +94,9 @@ def _telemetry_player(
                 "echo NW05_DEVICE_ID=1\r\n"
                 "echo NW05_ALIASED_PLAN=%ALIAS%\r\n"
                 "echo NW05_ALIAS_BARRIERS=%BARRIERS%\r\n"
+                "echo NW05_ALIAS_ACTIVATIONS=%BARRIERS%\r\n"
                 "echo NW05_UAV_BARRIERS=1\r\n"
+                "echo NW05_VALIDATION_ENABLED=1\r\n"
             )
         body += f"exit /b {exit_code}\r\n"
     else:
@@ -119,7 +121,9 @@ def _telemetry_player(
                 "echo NW05_DEVICE_ID=1\n"
                 "echo NW05_ALIASED_PLAN=$alias\n"
                 "echo NW05_ALIAS_BARRIERS=$barriers\n"
+                "echo NW05_ALIAS_ACTIVATIONS=$barriers\n"
                 "echo NW05_UAV_BARRIERS=1\n"
+                "echo NW05_VALIDATION_ENABLED=1\n"
             )
         body += f"exit {exit_code}\n"
     script.write_text(body, encoding="utf-8")
@@ -154,6 +158,7 @@ def test_record_execution_requires_real_pass_and_preserves_failures(
             "adapter_description": "NVIDIA GeForce RTX 4090",
             "driver_version": "1.2.3",
             "capabilities": {"wave_ops": True},
+            "toolchain_manifest_sha256": "sha256:v1:test-toolchain",
         },
         output_path=record_path,
         probe=lambda: _probe("ada"),
@@ -174,6 +179,7 @@ def test_record_execution_requires_real_pass_and_preserves_failures(
             "adapter_description": "NVIDIA GeForce RTX 4090",
             "driver_version": "1.2.3",
             "capabilities": {"wave_ops": True},
+            "toolchain_manifest_sha256": "sha256:v1:test-toolchain",
         },
         output_path=record_path,
         probe=lambda: _probe("ada"),
@@ -218,6 +224,7 @@ def test_record_execution_requires_real_pass_and_preserves_failures(
             "adapter_description": "NVIDIA GeForce RTX 4090",
             "driver_version": "1.2.3",
             "capabilities": {"wave_ops": True},
+            "toolchain_manifest_sha256": "sha256:v1:test-toolchain",
         },
         output_path=record_path,
         probe=lambda: _probe("ada"),

@@ -31,6 +31,6 @@ partition frame image output screen
 dead-nodes 
 dead-outputs 
 folded 
-fusion image accepted=true nodes=1 bytes=145->145
+fusion image accepted=false nodes=1 bytes=145->145
 source-sha256 03748848a41aa2d8b7ad7226589bcd37bed004237d17183989114bb04bbff72d
 ir-sha256 sha256:v1:2cd42f8e800f2095a6c835be8081933f22bb7ae08e5972b0be79844f7b081f23

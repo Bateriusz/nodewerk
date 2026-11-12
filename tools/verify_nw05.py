@@ -997,12 +997,15 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
                 or not details.get("driver_version")
                 or not details.get("capabilities")
                 or not execution.get("hardware_identity_verified")
+                or not execution.get("validation_enabled")
                 or not record.get("qualifications", {})
                 .get(tier, {})
                 .get("hardware_identity_verified")
                 or not execution.get("aliased_plan_realized")
                 or int(execution.get("alias_barrier_count", 0) or 0) <= 0
+                or int(execution.get("alias_activations", 0) or 0) <= 0
                 or not execution.get("output_matches_non_aliased")
+                or not record.get("toolchain_manifest_sha256")
             ):
                 telemetry_ok = False
         identity_mismatch = (

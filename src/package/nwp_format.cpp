@@ -1516,7 +1516,10 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
             error("package_resource_binding",
                   "resource binding slot/space is out of range");
         }
-        if (!bindings.insert(binding_key).second) {
+        const bool transient_shared_range =
+            resource.usage == "uav" || resource.usage == "srv";
+        if (!bindings.insert(binding_key).second &&
+            !transient_shared_range) {
             error("package_resource_binding_collision",
                   "duplicate resource binding");
         }

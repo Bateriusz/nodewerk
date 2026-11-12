@@ -39,6 +39,21 @@ struct EmbeddedPackage {
     EmbeddedPackage& operator=(EmbeddedPackage&&) noexcept = default;
 };
 
+// Small bounded subset of the embedded link manifest that changes player
+// configuration.  It is parsed from the manifest bytes themselves so the
+// actual executable follows its generated link closure rather than a generic
+// template default.
+struct EmbeddedLinkMetadata {
+    bool valid = false;
+    bool wave_ops = false;
+    bool fp16_shader_ops = false;
+    bool int64_shader_ops = false;
+    std::uint64_t memory_budget_bytes = 0u;
+};
+
+bool ParseEmbeddedLinkMetadata(const EmbeddedPackage& package,
+                              EmbeddedLinkMetadata* metadata);
+
 // Reads the currently executing image and returns the embedded package.  On
 // Windows this uses GetModuleFileNameW; host simulations can call
 // ParseEmbeddedPackage with explicit bytes.

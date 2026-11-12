@@ -134,7 +134,27 @@ def test_unreachable_quantized_operator_does_not_change_release_identity() -> No
 def test_fusion_is_bounded_and_falls_back_when_unmeasured_or_unsupported() -> None:
     optimized = _ir(PROCEDURAL)
     assert optimized.fusions
-    accepted = [record for record in optimized.fusions if record.accepted]
+    # Without measurements of the actual exported implementations the correct
+    # unfused NW-03 lowering is retained.
+    assert all(not record.accepted for record in optimized.fusions)
+    assert all(
+        record.unfused_fallback == "nw03-root-lowering"
+        for record in optimized.fusions
+    )
+    measured = optimizer.optimize_graph(
+        compiler.load_graph(PROCEDURAL),
+        fusion_measurements={
+            "image": {
+                "correctness_preserved": True,
+                "compiled_bytes_before": 2048,
+                "compiled_bytes_after": 2040,
+                "runtime_ns_before": 1000,
+                "runtime_ns_after": 990,
+                "source": "test-measurement",
+            }
+        },
+    )
+    accepted = [record for record in measured.fusions if record.accepted]
     assert accepted
     for record in accepted:
         assert record.correctness_preserved

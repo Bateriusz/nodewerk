@@ -885,6 +885,31 @@ void PackagePlayer::RemoveEngineResourceAllocation(
             : stats_.engine_resource_bytes - bytes;
 }
 
+ExitCode PackagePlayer::CheckMemoryBudget(const char* stage) {
+    if (config_.memory_budget_bytes == 0u) return ExitCode::Success;
+    std::uint64_t package_descriptors = 0u;
+    for (const auto& resource : package_.resources) {
+        if (resource.usage == "sampler" ||
+            ResourceNeedsCbvSrvUavDescriptor(package_, resource)) {
+            ++package_descriptors;
+        }
+    }
+    const std::uint64_t descriptor_bytes =
+        std::max<std::uint64_t>(stats_.engine_descriptor_count,
+                                package_descriptors) *
+        64u;
+    const std::uint64_t accounted =
+        stats_.engine_resource_bytes + stats_.engine_upload_bytes +
+        descriptor_bytes;
+    if (accounted <= config_.memory_budget_bytes) return ExitCode::Success;
+    return Fail(
+        ExitCode::ResourceAllocationFailed, "memory",
+        "memory_budget_exceeded", "peak_bytes",
+        std::to_string(config_.memory_budget_bytes),
+        std::to_string(accounted), stage,
+        "accounted peak memory exceeds the generated artifact budget");
+}
+
 bool PackagePlayer::BuildFrameInstructionPlan() {
     frame_ops_.clear();
     last_frame_order_.clear();
@@ -3017,6 +3042,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 EmitAliasingBarrier(
                     list, alias, before == nullptr ? nullptr : before->resource,
                     after == nullptr ? nullptr : after->resource);
+                ++stats_.alias_barrier_count;
                 if (after != nullptr &&
                     after->resource != nullptr) {
                     after->state = D3D12_RESOURCE_STATE_COMMON;
@@ -3739,6 +3765,21 @@ ExitCode PackagePlayer::readbackPresentedOutput(
                     "readback",
                     "presented output is not a readable buffer resource");
     }
+    if (config_.memory_budget_bytes != 0u) {
+        const std::uint64_t projected =
+            stats_.engine_resource_bytes + stats_.engine_upload_bytes +
+            stats_.engine_descriptor_count * 64u +
+            placement->allocation_size_bytes;
+        if (projected > config_.memory_budget_bytes) {
+            return Fail(
+                ExitCode::ResourceAllocationFailed, "memory",
+                "memory_budget_exceeded", "peak_bytes",
+                std::to_string(config_.memory_budget_bytes),
+                std::to_string(projected), "readback",
+                "readback allocation would exceed the generated artifact "
+                "budget");
+        }
+    }
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_READBACK;
     D3D12_RESOURCE_DESC desc{};
@@ -4078,6 +4119,11 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
         ReleasePlatform();
         return validation_code;
     }
+    const ExitCode budget_code = CheckMemoryBudget("initialize_complete");
+    if (budget_code != ExitCode::Success) {
+        ReleasePlatform();
+        return budget_code;
+    }
     initialized_ = true;
     initialization_count_ = 1u;
     last_exit_ = ExitCode::Success;
@@ -4286,6 +4332,11 @@ ExitCode PackagePlayer::resize(std::uint32_t width, std::uint32_t height) {
         if (CheckD3D12Validation("resize")) {
             resize_in_progress_ = false;
             return last_exit_;
+        }
+        const ExitCode budget = CheckMemoryBudget("resize_complete");
+        if (budget != ExitCode::Success) {
+            resize_in_progress_ = false;
+            return budget;
         }
     }
 #endif

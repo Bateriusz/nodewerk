@@ -319,11 +319,17 @@ def record_execution(
     # adapter, a matching non-aliased output image, and the actual alias plan
     # to have been realized.  Operator-supplied --status is only an expectation.
     aliased_run = _run_player(
-        executable, ["--frames", "2", "--emit-image-hash"]
+        executable, ["--frames", "2", "--validation", "--emit-image-hash"]
     )
     non_aliased_run = _run_player(
         executable,
-        ["--frames", "2", "--emit-image-hash", "--force-non-aliased-plan"],
+        [
+            "--frames",
+            "2",
+            "--validation",
+            "--emit-image-hash",
+            "--force-non-aliased-plan",
+        ],
     )
     observed_exit = int(aliased_run["exit_code"])
     expected_exit = int(exit_code)
@@ -346,6 +352,7 @@ def record_execution(
         "adapter_description",
         "driver_version",
         "capabilities",
+        "toolchain_manifest_sha256",
     )
     probe_fn = probe or probe_hardware_identity
     try:
@@ -380,14 +387,23 @@ def record_execution(
         name for name in required_telemetry if not details_payload.get(name)
     ]
     alias_barrier_count = _int_telemetry(aliased_telemetry, "NW05_ALIAS_BARRIERS")
+    alias_activations = _int_telemetry(
+        aliased_telemetry, "NW05_ALIAS_ACTIVATIONS"
+    )
     non_aliased_barrier_count = _int_telemetry(
         non_aliased_telemetry, "NW05_ALIAS_BARRIERS"
+    )
+    non_aliased_activations = _int_telemetry(
+        non_aliased_telemetry, "NW05_ALIAS_ACTIVATIONS"
     )
     alias_telemetry_ok = bool(
         aliased_telemetry.get("NW05_LINK_MANIFEST_VERIFIED") == "1"
         and aliased_telemetry.get("NW05_ALIASED_PLAN") == "1"
+        and aliased_telemetry.get("NW05_VALIDATION_ENABLED") == "1"
         and alias_barrier_count is not None
         and alias_barrier_count > 0
+        and alias_activations is not None
+        and alias_activations > 0
         and (_int_telemetry(aliased_telemetry, "NW05_IMAGE_NONZERO_BYTES") or 0)
         > 0
         and executed_adapter
@@ -396,8 +412,10 @@ def record_execution(
     non_aliased_telemetry_ok = bool(
         non_aliased_telemetry.get("NW05_LINK_MANIFEST_VERIFIED") == "1"
         and non_aliased_telemetry.get("NW05_ALIASED_PLAN") == "0"
+        and non_aliased_telemetry.get("NW05_VALIDATION_ENABLED") == "1"
         and (_int_telemetry(non_aliased_telemetry, "NW05_IMAGE_NONZERO_BYTES") or 0)
         > 0
+        and non_aliased_activations == 0
     )
     output_match = bool(
         aliased_telemetry.get("NW05_IMAGE_FNV64")
@@ -409,6 +427,8 @@ def record_execution(
     if (
         non_aliased_barrier_count is not None
         and non_aliased_barrier_count != 0
+    ) or (
+        non_aliased_activations is not None and non_aliased_activations != 0
     ):
         non_aliased_telemetry_ok = False
     passed = (
@@ -512,6 +532,8 @@ def record_execution(
         "non_aliased_telemetry": non_aliased_telemetry,
         "aliased_plan_realized": aliased_telemetry.get("NW05_ALIASED_PLAN") == "1",
         "alias_barrier_count": alias_barrier_count or 0,
+        "alias_activations": alias_activations or 0,
+        "validation_enabled": aliased_telemetry.get("NW05_VALIDATION_ENABLED") == "1",
         "output_matches_non_aliased": output_match,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "artifact_key": artifact_key,

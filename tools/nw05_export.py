@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import struct
 import tempfile
-import zlib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -452,17 +452,13 @@ def _node_bakeable(
     generated path; arbitrary payloads are rejected rather than silently
     ignored.
     """
-    if node.operator_id in nw03.SHADER_OPERATORS:
-        return False
-    if node.constant is None or len(node.constant) != 1:
-        return False
-    values = next(iter(node.constant.values()), None)
-    if values is None or not 1 <= len(values) <= 4:
-        return False
-    # Baked content must not remove a displayed/semantic output.
-    if any(output.node_id == node.node_id for output in optimized.outputs):
-        return False
-    return True
+    # The existing v1 player has no runtime consumer that can read a baked node
+    # record independently of the generated shader closure.  Bake requests are
+    # therefore rejected explicitly instead of being silently rewritten to
+    # generation or emitting unconsumed parameter bytes.
+    _ = optimized
+    _ = node
+    return False
 
 
 def _generation_mode_map(
@@ -475,16 +471,22 @@ def _generation_mode_map(
     for node_id, mode in overrides.items():
         node = node_by_id.get(node_id)
         if node is None:
-            continue
+            raise ExportError(
+                f"generation override references node '{node_id}' that is not "
+                "present in the reachable optimised graph",
+                dependency_path=["generation_override", node_id],
+            )
         if mode not in {"bake", "generate"}:
             raise ExportError(
                 f"unsupported generation override '{mode}' for node '{node_id}'",
                 dependency_path=["generation_override", node_id],
             )
         if mode == "bake" and not _node_bakeable(optimized, node):
-            # Replacing a consumed/rendered node would leave dangling inputs or
-            # remove the displayed output.  Retain the correct generated path.
-            mode = "generate"
+            raise ExportError(
+                f"bake override for node '{node_id}' is unsupported: no "
+                "runtime consumer exists in the .nwp v1 player",
+                dependency_path=["generation_override", node_id, "bake"],
+            )
         modes[node_id] = mode
     return modes
 
@@ -536,42 +538,24 @@ def plan_generation_vs_bake(
                     f"unsupported generation override '{requested}' for node '{node.node_id}'",
                     dependency_path=["generation_override", node.node_id],
                 )
-            mode = requested
-            reason = "explicit export override"
-            if mode == "bake" and node.operator_id in nw03.SHADER_OPERATORS:
-                mode = "generate"
-                reason = (
-                    "bake of a shader-generation node is unsupported; retained "
-                    "the correct generated path"
+            if requested == "bake":
+                raise ExportError(
+                    f"bake override for node '{node.node_id}' is unsupported: "
+                    "the .nwp v1 player has no runtime consumer for baked "
+                    "node records",
+                    dependency_path=[
+                        "generation_override",
+                        node.node_id,
+                        "bake",
+                    ],
                 )
-            elif mode == "bake" and not _node_bakeable(optimized, node):
-                if node.operator_id not in nw03.SHADER_OPERATORS:
-                    raise ExportError(
-                        f"bake override for node '{node.node_id}' is not "
-                        "supported by the .nwp v1 runtime consumer",
-                        dependency_path=["generation_override", node.node_id, "bake"],
-                    )
-                mode = "generate"
-                reason = (
-                    "bake has no runtime consumer for this dynamic node; "
-                    "retained the correct generated path"
-                )
+            mode = "generate"
+            reason = "explicit generate override"
         else:
             mode = "generate"
             reason = "default explicit generate; no automatic bake oracle is applied"
         payload = nwp.canonical_json_bytes(node.to_dict())
-        compressed = zlib.compress(payload, level=9)
         bake_requested = requested_mode == "bake"
-        baked_values = (
-            next(iter(node.constant.values()), ())
-            if mode == "bake" and node.constant
-            else ()
-        )
-        bake_bytes = (
-            ((len(baked_values) * 4 + 15) // 16) * 16
-            if mode == "bake" and baked_values
-            else 0
-        )
         decisions.append(
             {
                 "node_id": node.node_id,
@@ -580,44 +564,21 @@ def plan_generation_vs_bake(
                 "requested_mode": requested_mode,
                 "replaces_generation": mode == "bake",
                 "reason": reason,
-                "incremental_compressed_content_bytes": (
-                    bake_bytes if mode == "bake" else 0
-                ),
-                "introduced_code_bytes": (
-                    0
-                    if mode == "bake"
-                    else (shader_blob_bytes if node.operator_id in nw03.SHADER_OPERATORS else 0)
-                ),
-                "introduced_shader_bytes": (
-                    0
-                    if mode == "bake"
-                    or node.operator_id not in nw03.SHADER_OPERATORS
-                    else shader_blob_bytes
-                ),
-                "startup_cost_bytes": bake_bytes if mode == "bake" else 0,
-                "peak_memory_bytes": bake_bytes if mode == "bake" else 0,
-                "baked_content_emitted_bytes": bake_bytes,
-                "requested_bake_compressed_bytes": (
-                    len(compressed) if bake_requested else 0
-                ),
-                "requested_bake_startup_bytes": (
-                    len(compressed) if bake_requested else 0
-                ),
-                "requested_bake_peak_memory_bytes": (
-                    len(compressed) if bake_requested else 0
-                ),
+                "incremental_compressed_content_bytes": 0,
+                "introduced_code_bytes": 0,
+                "introduced_shader_bytes": 0,
+                "startup_cost_bytes": 0,
+                "peak_memory_bytes": 0,
+                "baked_content_emitted_bytes": 0,
+                "requested_bake_compressed_bytes": 0,
+                "requested_bake_startup_bytes": 0,
+                "requested_bake_peak_memory_bytes": 0,
                 "measured_expression_bytes": len(payload),
-                "measurement_status": (
-                    "measured-package-parameter-bytes"
-                    if mode == "bake"
-                    else "no-extra-distributed-content"
-                ),
+                "measurement_status": "unavailable",
                 "measurement_detail": (
-                    "baked value is emitted as a v1 parameter record; "
-                    "bytes exclude container overhead"
-                    if mode == "bake"
-                    else "generation emits no node-specific package content "
-                    "beyond the reachable shader closure"
+                    "shader/resource closure costs are attributed by the "
+                    "package and link-manifest reports, not per node; bake "
+                    "content has no runtime consumer"
                 ),
                 "automatic_cost_oracle": False,
             }
@@ -714,6 +675,11 @@ def generate_player_source(
         "        std::fprintf(stderr, \"NW05_LINK_MANIFEST_MISMATCH\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        "    nw::player::EmbeddedLinkMetadata link_metadata;\n"
+        "    if (!nw::player::ParseEmbeddedLinkMetadata(embedded, &link_metadata)) {\n"
+        "        std::fprintf(stderr, \"NW05_LINK_METADATA_INVALID\\n\");\n"
+        "        return 70;\n"
+        "    }\n"
         "    std::printf(\"NW05_LINK_MANIFEST_VERIFIED=1\\n\");\n"
         "    nw::player::PlayerConfig config;\n"
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
@@ -721,6 +687,10 @@ def generate_player_source(
         f"    config.query_optional_fp16_shader_ops = {'true' if link_fp16 else 'false'};\n"
         f"    config.query_optional_int64_shader_ops = {'true' if link_int64 else 'false'};\n"
         f"    config.memory_budget_bytes = {int(memory_budget_bytes)}ULL;\n"
+        "    config.query_optional_wave_ops = link_metadata.wave_ops;\n"
+        "    config.query_optional_fp16_shader_ops = link_metadata.fp16_shader_ops;\n"
+        "    config.query_optional_int64_shader_ops = link_metadata.int64_shader_ops;\n"
+        "    config.memory_budget_bytes = link_metadata.memory_budget_bytes;\n"
         "    unsigned long long max_frames = 0;\n"
         "    bool emit_image_hash = false;\n"
         "    for (int index = 1; index < argc; ++index) {\n"
@@ -730,6 +700,8 @@ def generate_player_source(
         "            config.allow_software_adapter = true;\n"
         "        } else if (std::string(argv[index]) == \"--force-non-aliased-plan\") {\n"
         "            config.force_non_aliased_plan = true;\n"
+        "        } else if (std::string(argv[index]) == \"--validation\") {\n"
+        "            config.enable_validation = true;\n"
         "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
         "            emit_image_hash = true;\n"
         "        }\n"
@@ -766,7 +738,9 @@ def generate_player_source(
         "    std::printf(\"NW05_DEVICE_ID=%u\\n\", player.queried_capabilities().device_id);\n"
         "    std::printf(\"NW05_ALIASED_PLAN=%d\\n\", player.using_aliased_plan() ? 1 : 0);\n"
         "    std::printf(\"NW05_ALIAS_BARRIERS=%llu\\n\", static_cast<unsigned long long>(player.resource_plan().alias_barriers.size()));\n"
+        "    std::printf(\"NW05_ALIAS_ACTIVATIONS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().alias_barrier_count));\n"
         "    std::printf(\"NW05_UAV_BARRIERS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().uav_barrier_count));\n"
+        "    std::printf(\"NW05_VALIDATION_ENABLED=%d\\n\", player.validation_enabled() ? 1 : 0);\n"
         "    const auto shutdown = player.shutdown();\n"
         "    std::printf(\"NW05_FRAMES=%llu\\n\", static_cast<unsigned long long>(player.frames_rendered()));\n"
         "    std::printf(\"NW05_PRESENTS=%llu\\n\", static_cast<unsigned long long>(player.frames_presented()));\n"
@@ -952,14 +926,41 @@ _PACKAGE_RENDER_OPERATORS = {
 }
 
 
-def _node_int(node: nw03.GraphNode, name: str, default: int) -> int:
+def _node_int(
+    node: nw03.GraphNode,
+    name: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int = 8192,
+) -> int:
     tokens = node.params.get(name, [])
     if not tokens:
         return default
+    text = tokens[0].strip()
     try:
-        return int(tokens[0], 0)
+        value = int(text, 0)
     except ValueError:
-        return default
+        try:
+            numeric = float(text)
+        except ValueError as exc:
+            raise ExportError(
+                f"node '{node.node_id}' parameter '{name}' is not numeric",
+                dependency_path=["graph", node.node_id, name],
+            ) from exc
+        if not math.isfinite(numeric) or not numeric.is_integer():
+            raise ExportError(
+                f"node '{node.node_id}' parameter '{name}' is not an integer",
+                dependency_path=["graph", node.node_id, name],
+            )
+        value = int(numeric)
+    if not minimum <= value <= maximum:
+        raise ExportError(
+            f"node '{node.node_id}' parameter '{name}' {value} is outside "
+            f"{minimum}..{maximum}",
+            dependency_path=["graph", node.node_id, name],
+        )
+    return value
 
 
 def _node_float(node: nw03.GraphNode, name: str, default: float) -> float:
@@ -987,8 +988,8 @@ def _graph_render_dimensions(
     ]
     if textures:
         return (
-            max(1, min(8192, _node_int(textures[0], "width", 256))),
-            max(1, min(8192, _node_int(textures[0], "height", 256))),
+            _node_int(textures[0], "width", 256),
+            _node_int(textures[0], "height", 256),
         )
     return 256, 256
 
@@ -1027,6 +1028,62 @@ def _numeric_parameter_values(node: nw03.GraphNode) -> dict[str, tuple[float, ..
     return result
 
 
+_PACKAGE_SUPPORTED_UNSUPPORTED = {
+    "nw.readback.scalar",
+    "nw.render.composite",
+}
+
+_FORMAT_BYTES_PER_ELEMENT = {
+    "DXGI_FORMAT_R8G8B8A8_UNORM": 4,
+    "DXGI_FORMAT_R32G32B32A32_FLOAT": 16,
+    "DXGI_FORMAT_R32_UINT": 4,
+    "DXGI_FORMAT_D32_FLOAT": 4,
+}
+
+
+def _texture_storage_bytes(
+    width: int,
+    height: int,
+    *,
+    depth: int = 1,
+    array_size: int = 1,
+    mip_levels: int = 1,
+    bytes_per_element: int = 4,
+) -> int:
+    total = 0
+    for mip in range(max(1, mip_levels)):
+        level_width = max(1, width >> mip)
+        level_height = max(1, height >> mip)
+        level_depth = max(1, depth >> mip) if depth > 1 else 1
+        total += (
+            level_width
+            * level_height
+            * level_depth
+            * max(1, array_size)
+            * max(1, bytes_per_element)
+        )
+    return max(1, total)
+
+
+def _shader_resource_specs(
+    shader_rows: Sequence[Mapping[str, Any]],
+    shader_records: Sequence[nwp.ShaderRecord],
+) -> tuple[list[str], dict[str, int]]:
+    specs = [str(row["specialization_id"]) for row in shader_rows]
+    if len(specs) != len(shader_records):
+        raise ExportError(
+            "compile report and package disagree about compiled shader count",
+            dependency_path=["graph", "shader", "compile_report"],
+        )
+    # nw03_compiler._build_report does not carry shader_id.  Package shader IDs
+    # follow the same sorted specialization order, so establish the map here.
+    ordered_records = sorted(shader_records, key=lambda item: item.shader_id)
+    return specs, {
+        spec: ordered_records[index].shader_id
+        for index, spec in enumerate(specs)
+    }
+
+
 def _build_graph_derived_package(
     document: nw03.GraphDocument,
     optimized: optimizer.OptimizedGraph,
@@ -1037,38 +1094,52 @@ def _build_graph_derived_package(
     height: int,
     dispatch_groups: tuple[int, int, int],
 ) -> nwp.NwpPackage:
-    """Lower the *whole* reachable graph into the existing .nwp v1 payload.
+    """Lower reachable graph semantics into the existing .nwp v1 payload.
 
-    NW-03 supplies the offline-compiled shader blobs.  This function replaces
-    NW-03's fixed two-buffer fixture package with resources, parameters,
-    initialization and frame instructions derived from the materialised graph
-    partitions.  It is not a second package format: the result is validated by
-    the same v1 encoder/decoder and executed by the same PackagePlayer.
+    Shader roots get independent UAV destinations.  Resource recipes become
+    actual SRV allocations, upload nodes bind to their producer resource, and
+    render nodes resolve their declared input dependencies.  Operations with no
+    implemented package lowering fail closed rather than silently becoming
+    metadata parameters.
     """
     used_operators = {node.operator_id for node in optimized.nodes}
-    unknown = sorted(
-        operator_id
-        for operator_id in used_operators
-        if operator_id not in nw03.KNOWN_OPERATORS
-    )
-    if unknown:
+    supported = (
+        set(nw03.SHADER_OPERATORS)
+        | _PACKAGE_RESOURCE_OPERATORS
+        | _PACKAGE_UPLOAD_OPERATORS
+        | _PACKAGE_RENDER_OPERATORS
+        | {
+            operator_id
+            for operator_id in nw03.KNOWN_OPERATORS
+            if operator_id
+            not in (
+                set(nw03.SHADER_OPERATORS)
+                | _PACKAGE_RESOURCE_OPERATORS
+                | _PACKAGE_UPLOAD_OPERATORS
+                | _PACKAGE_RENDER_OPERATORS
+            )
+        }
+    ) - _PACKAGE_SUPPORTED_UNSUPPORTED
+    unsupported = sorted(used_operators - supported)
+    if unsupported:
         raise ExportError(
             "reachable graph uses an operator with no package lowering",
             [
                 nwp.package_diagnostic(
                     "missing_implementation",
-                    f"no .nwp v1 lowering for {operator_id}",
+                    f"no executable .nwp v1 lowering for {operator_id}",
                 )
-                for operator_id in unknown
+                for operator_id in unsupported
             ],
-            dependency_path=["graph", unknown[0]],
+            dependency_path=["graph", unsupported[0]],
         )
 
     shader_rows = sorted(
         compile_report.get("fixture", {}).get("shaders", []),
         key=lambda item: item.get("specialization_id", ""),
     )
-    if not shader_rows:
+    shader_records = sorted(compiled_package.shaders, key=lambda item: item.shader_id)
+    if not shader_rows or not shader_records:
         raise ExportError(
             "graph lowering produced no compiled shader rows",
             dependency_path=["graph", "shader"],
@@ -1087,38 +1158,102 @@ def _build_graph_derived_package(
     )
     resources: list[nwp.ResourceDescriptor] = [params]
     resource_by_node: dict[str, int] = {}
-    # The fixed v1 pass-family binding convention provides exactly one cbv and
-    # one uav.  The output therefore has graph-derived dimensions but remains a
-    # single binding; shader roots execute in frame-partition order into it.
-    output_resource_id = 2
-    resources.append(
-        nwp.ResourceDescriptor(
-            resource_id=output_resource_id,
-            name="output",
-            kind="buffer",
-            format="DXGI_FORMAT_R32_UINT",
-            usage="uav",
-            pass_family=nw03.PASS_FAMILY,
-            binding_slot=0,
-            binding_space=0,
-            size_bytes=width * height * 16,
-        )
-    )
-    output_resource_by_shader = {
-        str(row["specialization_id"]): output_resource_id for row in shader_rows
-    }
+    resource_by_output: dict[tuple[str, str], int] = {}
+    resource_by_shader: dict[str, int] = {}
+    next_resource_id = 2
+    specs, shader_id_by_spec = _shader_resource_specs(shader_rows, shader_records)
 
-    # Residency nodes are represented by the resource they upload.  Resolve
-    # producers before uploads so the map can point at the same allocation.
+    # Independent UAV destinations for every compiled shader root.  Multiple
+    # resources may share the fixed u0 range because each dispatch binds one.
+    for spec in specs:
+        resource_by_shader[spec] = next_resource_id
+        resources.append(
+            nwp.ResourceDescriptor(
+                resource_id=next_resource_id,
+                # All shader outputs share the single fixed u0 root binding;
+                # the frame stream selects exactly one per dispatch.
+                name="output",
+                kind="buffer",
+                format="DXGI_FORMAT_R32_UINT",
+                usage="uav",
+                pass_family=nw03.PASS_FAMILY,
+                binding_slot=0,
+                binding_space=0,
+                size_bytes=width * height * 16,
+            )
+        )
+        next_resource_id += 1
+
     reachable = set(optimized.reachable_node_ids) | set(optimized.constants_folded)
     for node_id in sorted(document.nodes):
         if node_id not in reachable:
             continue
         node = document.nodes[node_id]
-        if node.operator_id in _PACKAGE_RESOURCE_OPERATORS:
-            # Recipe metadata is emitted as package parameter content below;
-            # the v1 fixed binding contract has no additional resource slots.
-            resource_by_node[node_id] = output_resource_id
+        if node.operator_id == "nw.texture.procedural":
+            format_name = node.params.get("format", ["r8g8b8a8_unorm"])[0]
+            resource_format = _resource_format(format_name)
+            texture_width = _node_int(node, "width", 256)
+            texture_height = _node_int(node, "height", 256)
+            resource_by_node[node_id] = next_resource_id
+            resources.append(
+                nwp.ResourceDescriptor(
+                    resource_id=next_resource_id,
+                    name=f"texture_{node_id}",
+                    kind="texture2d",
+                    format=resource_format,
+                    usage="srv",
+                    pass_family=nw03.PASS_FAMILY,
+                    binding_slot=0,
+                    binding_space=0,
+                    size_bytes=_texture_storage_bytes(
+                        texture_width,
+                        texture_height,
+                        bytes_per_element=_FORMAT_BYTES_PER_ELEMENT[resource_format],
+                    ),
+                    width=texture_width,
+                    height=texture_height,
+                )
+            )
+            next_resource_id += 1
+        elif node.operator_id == "nw.buffer.recipe":
+            resource_format = _resource_format(
+                node.params.get("format", ["r32_uint"])[0]
+            )
+            resource_by_node[node_id] = next_resource_id
+            resources.append(
+                nwp.ResourceDescriptor(
+                    resource_id=next_resource_id,
+                    name=f"buffer_{node_id}",
+                    kind="buffer",
+                    format=resource_format,
+                    usage="srv",
+                    pass_family=nw03.PASS_FAMILY,
+                    binding_slot=0,
+                    binding_space=0,
+                    size_bytes=_node_int(
+                        node, "bytes", 256, minimum=1, maximum=nwp.MAX_BUFFER_BYTES
+                    ),
+                )
+            )
+            next_resource_id += 1
+        elif node.operator_id == "nw.mesh.recipe":
+            vertices = _node_int(node, "vertices", 3, maximum=1048576)
+            indices = _node_int(node, "indices", 3, maximum=3145728)
+            resource_by_node[node_id] = next_resource_id
+            resources.append(
+                nwp.ResourceDescriptor(
+                    resource_id=next_resource_id,
+                    name=f"mesh_{node_id}",
+                    kind="buffer",
+                    format="DXGI_FORMAT_R32_UINT",
+                    usage="srv",
+                    pass_family=nw03.PASS_FAMILY,
+                    binding_slot=0,
+                    binding_space=0,
+                    size_bytes=vertices * 32 + indices * 4,
+                )
+            )
+            next_resource_id += 1
 
     uploaded_resources: list[int] = []
     for node_id in sorted(document.nodes):
@@ -1130,13 +1265,83 @@ def _build_graph_derived_package(
         connection = next(iter(sorted(node.inputs.values())), None)
         source_id = resource_by_node.get(connection[0]) if connection else None
         if source_id is None:
-            source_id = output_resource_id
+            raise ExportError(
+                f"upload node '{node_id}' has no lowered producer resource",
+                dependency_path=["graph", node_id, "input"],
+            )
         resource_by_node[node_id] = source_id
-        if node.operator_id in {
-            "nw.residency.upload_buffer",
-            "nw.residency.upload_mesh",
-        }:
+        source_resource = next(
+            resource for resource in resources if resource.resource_id == source_id
+        )
+        if (
+            node.operator_id
+            in {"nw.residency.upload_buffer", "nw.residency.upload_mesh"}
+            and source_resource.kind == "buffer"
+        ):
             uploaded_resources.append(source_id)
+
+    # Render dependencies resolve to the resource produced by their declared
+    # input nodes.  Present follows its image input rather than "last dispatch".
+    node_lookup = optimized.node_map()
+    for node in sorted(document.nodes.values(), key=lambda item: item.node_id):
+        if node.operator_id not in _PACKAGE_RENDER_OPERATORS:
+            continue
+        if node.operator_id == "nw.render.composite":
+            continue
+        shader_connection = node.inputs.get("shader")
+        if shader_connection is not None:
+            source = node_lookup.get(shader_connection[0])
+            spec = source.node_id if source is not None else shader_connection[0]
+            output_id = resource_by_shader.get(spec)
+            if output_id is None:
+                output_id = resource_by_output.get((shader_connection[0], "image"))
+            if output_id is None:
+                raise ExportError(
+                    f"render node '{node.node_id}' has no lowered shader output",
+                    dependency_path=["graph", node.node_id, "shader"],
+                )
+            resource_by_output[(node.node_id, "image")] = output_id
+            if node.operator_id == "nw.render.gbuffer":
+                resource_by_output[(node.node_id, "color")] = output_id
+                resource_by_output[(node.node_id, "normals")] = output_id
+        elif node.operator_id == "nw.render.fullscreen":
+            texture_connection = node.inputs.get("texture")
+            if texture_connection is None:
+                raise ExportError(
+                    f"fullscreen render node '{node.node_id}' has no texture input",
+                    dependency_path=["graph", node.node_id, "texture"],
+                )
+            if texture_connection[0] not in resource_by_node:
+                raise ExportError(
+                    f"fullscreen render node '{node.node_id}' references an "
+                    "unlowered texture",
+                    dependency_path=["graph", node.node_id, "texture"],
+                )
+
+    def shader_for_render_node(node_id: str) -> str | None:
+        node = document.nodes.get(node_id)
+        if node is None:
+            return None
+        connection = node.inputs.get("shader")
+        if connection is not None:
+            source = node_lookup.get(connection[0])
+            return source.node_id if source is not None else connection[0]
+        image = node.inputs.get("image")
+        if image is not None:
+            source = node_lookup.get(image[0])
+            if source is not None and source.node_id in resource_by_shader:
+                return source.node_id
+            for (producer, _port), _resource_id in resource_by_output.items():
+                if producer == image[0]:
+                    producer_node = document.nodes.get(producer)
+                    if producer_node is not None:
+                        shader = producer_node.inputs.get("shader")
+                        if shader is not None:
+                            source = node_lookup.get(shader[0])
+                            return (
+                                source.node_id if source is not None else shader[0]
+                            )
+        return None
 
     parameters: list[nwp.ParameterRecord] = [
         nwp.ParameterRecord(
@@ -1158,10 +1363,7 @@ def _build_graph_derived_package(
         if node_id not in reachable:
             continue
         node = document.nodes[node_id]
-        if node.operator_id in (
-            nw03.SHADER_OPERATORS
-            | _PACKAGE_RENDER_OPERATORS
-        ):
+        if node.operator_id in (set(nw03.SHADER_OPERATORS) | _PACKAGE_RENDER_OPERATORS):
             continue
         values_by_name: dict[str, tuple[float, ...]] = {}
         optimized_node = node_by_id.get(node_id)
@@ -1198,20 +1400,22 @@ def _build_graph_derived_package(
             dependency_path=["graph", "root_signature"],
         )
     root_signature = root_signatures[0]
-    shader_records = sorted(compiled_package.shaders, key=lambda item: item.shader_id)
 
-    initialization: list[nwp.Instruction] = []
-    for resource in resources:
-        initialization.append(
-            nwp.Instruction(
-                "init.create_resource",
-                (nwp.InstructionOperand("resource_ref", resource.resource_id),),
-            )
+    initialization: list[nwp.Instruction] = [
+        nwp.Instruction(
+            "init.create_resource",
+            (nwp.InstructionOperand("resource_ref", resource.resource_id),),
         )
+        for resource in resources
+    ]
     initialization.append(
         nwp.Instruction(
             "init.create_root_signature",
-            (nwp.InstructionOperand("root_signature_ref", root_signature.root_signature_id),),
+            (
+                nwp.InstructionOperand(
+                    "root_signature_ref", root_signature.root_signature_id
+                ),
+            ),
         )
     )
     initialization.append(
@@ -1220,25 +1424,13 @@ def _build_graph_derived_package(
             (nwp.InstructionOperand("resource_ref", 1),),
         )
     )
-    # The initialization partition decides upload ordering/participation.
-    for node_id in optimized.partitions.get("initialization", ()):
-        node = document.nodes.get(node_id)
-        if node is None or node.operator_id not in _PACKAGE_UPLOAD_OPERATORS:
-            continue
-        source_id = resource_by_node.get(node_id)
-        if source_id is None or source_id not in uploaded_resources:
-            continue
-        if not any(
-            instruction.opcode == "init.upload_resource"
-            and instruction.operands[0].value == source_id
-            for instruction in initialization
-        ):
-            initialization.append(
-                nwp.Instruction(
-                    "init.upload_resource",
-                    (nwp.InstructionOperand("resource_ref", source_id),),
-                )
+    for resource_id in sorted(set(uploaded_resources)):
+        initialization.append(
+            nwp.Instruction(
+                "init.upload_resource",
+                (nwp.InstructionOperand("resource_ref", resource_id),),
             )
+        )
     for shader in shader_records:
         initialization.append(
             nwp.Instruction(
@@ -1262,7 +1454,11 @@ def _build_graph_derived_package(
         ),
         nwp.Instruction(
             "frame.set_root_signature",
-            (nwp.InstructionOperand("root_signature_ref", root_signature.root_signature_id),),
+            (
+                nwp.InstructionOperand(
+                    "root_signature_ref", root_signature.root_signature_id
+                ),
+            ),
         ),
         nwp.Instruction(
             "frame.set_root_constants",
@@ -1274,45 +1470,33 @@ def _build_graph_derived_package(
         ),
     ]
 
-    # Frame partition order determines dispatch order.  Each shader root gets
-    # its own graph-derived output resource rather than overwriting a single
-    # fixed 256-element buffer.
     dispatch_order: list[str] = []
-    for node_id in optimized.partitions.get("frame", ()):
+    ordered_partitions = (
+        list(optimized.partitions.get("initialization", ()))
+        + list(optimized.partitions.get("frame", ()))
+    )
+    for node_id in ordered_partitions:
         node = document.nodes.get(node_id)
         if node is None or node.operator_id not in _PACKAGE_RENDER_OPERATORS:
             continue
         if node.operator_id == "nw.render.present":
             continue
-        connection = node.inputs.get("shader") or node.inputs.get("color")
-        if connection is None:
-            continue
-        source = optimized.node_map().get(connection[0])
-        if source is not None and source.node_id not in dispatch_order:
-            dispatch_order.append(source.node_id)
-    for shader in shader_records:
-        specialization_id = next(
-            (
-                row["specialization_id"]
-                for row in shader_rows
-                if row.get("shader_id") == shader.shader_id
-            ),
-            "",
+        spec = shader_for_render_node(node_id)
+        if spec in resource_by_shader and spec not in dispatch_order:
+            dispatch_order.append(spec)
+    # Shader-only graphs (no render node) still execute every compiled root.
+    for spec in specs:
+        if spec not in dispatch_order:
+            dispatch_order.append(spec)
+    if not dispatch_order:
+        raise ExportError(
+            "reachable graph has no executable shader root",
+            dependency_path=["graph", "shader"],
         )
-        if specialization_id and specialization_id not in dispatch_order:
-            dispatch_order.append(specialization_id)
-    for specialization_id in dispatch_order:
-        output_id = output_resource_by_shader.get(specialization_id)
-        shader_id = next(
-            (
-                int(row.get("shader_id", index + 1))
-                for index, row in enumerate(shader_rows)
-                if row.get("specialization_id") == specialization_id
-            ),
-            None,
-        )
-        if output_id is None or shader_id is None:
-            continue
+
+    for spec in dispatch_order:
+        output_id = resource_by_shader[spec]
+        shader_id = shader_id_by_spec[spec]
         frame.extend(
             [
                 nwp.Instruction(
@@ -1341,11 +1525,6 @@ def _build_graph_derived_package(
                 ),
             ]
         )
-    if not dispatch_order:
-        raise ExportError(
-            "reachable graph has no renderable shader output",
-            dependency_path=["graph", "render", "shader"],
-        )
 
     present_target: int | None = None
     for node in document.nodes.values():
@@ -1354,9 +1533,18 @@ def _build_graph_derived_package(
         connection = node.inputs.get("image")
         if connection is None:
             continue
-        present_target = output_resource_by_shader.get(connection[0])
+        source = node_lookup.get(connection[0])
+        spec = source.node_id if source is not None else connection[0]
+        present_target = resource_by_shader.get(spec)
+        if present_target is None:
+            present_target = resource_by_output.get((connection[0], "image"))
+            if present_target is None:
+                for (producer, _port), resource_id in resource_by_output.items():
+                    if producer == connection[0]:
+                        present_target = resource_id
+                        break
     if present_target is None:
-        present_target = output_resource_by_shader.get(dispatch_order[-1])
+        present_target = resource_by_shader.get(dispatch_order[-1])
     if present_target is None:
         raise ExportError(
             "graph package has no displayable procedural output",
@@ -1483,10 +1671,10 @@ def _compile_profile_package(
     package_bytes = nwp.encode_package(package)
     is_common = profile_id == nwp.COMMON_PROFILE_ID
 
-    baked_parameters: list[nwp.ParameterRecord] = []
     next_parameter_id = max(
         (parameter.parameter_id for parameter in package.parameters), default=0
     ) + 1
+    quantized_parameters: list[nwp.ParameterRecord] = []
     # Field-specific quantization is also emitted as parameter content, so the
     # published artifact carries the quantized values rather than only a report
     # claim.  Full-precision source values remain recoverable from the IR.
@@ -1499,7 +1687,7 @@ def _compile_profile_package(
             3: "float3",
             4: "float4",
         }[len(decision.quantized)]
-        baked_parameters.append(
+        quantized_parameters.append(
             nwp.ParameterRecord(
                 parameter_id=next_parameter_id,
                 name=(
@@ -1520,38 +1708,11 @@ def _compile_profile_package(
             )
         )
         next_parameter_id += 1
-    # Supported explicit bake overrides are materialised as real package
-    # parameter content (not just a report claim).  The generated consumer path
-    # was already replaced by the literal constant in materialize_document().
-    for node in sorted(optimized.nodes, key=lambda item: item.node_id):
-        if generation_modes.get(node.node_id) != "bake":
-            continue
-        if not _node_bakeable(optimized, node):
-            continue
-        values = next(iter((node.constant or {}).values()), ())
-        if not 1 <= len(values) <= 4:
-            continue
-        baked_parameters.append(
-            nwp.ParameterRecord(
-                parameter_id=next_parameter_id,
-                name=f"nw05.baked.{node.node_id}",
-                type=_parameter_type(values),
-                phase="initialization",
-                component_count=len(values),
-                value=_parameter_value_bytes(values),
-                timeline_start_frame=0,
-                timeline_end_frame=0,
-                timeline_step=0,
-                timeline_interpolation="none",
-            )
-        )
-        next_parameter_id += 1
-    if baked_parameters:
+    if quantized_parameters:
         package = replace(
-            package, parameters=list(package.parameters) + baked_parameters
+            package, parameters=list(package.parameters) + quantized_parameters
         )
         package_bytes = nwp.encode_package(package)
-
     capability = replace(
         package.capability,
         profile_id=profile_id,
@@ -1963,6 +2124,7 @@ def export_graph(
                 optional_profile_id="" if is_common else profile_id,
                 requires_aliasing=requires_aliasing,
                 runtime_dependencies=runtime_dependencies,
+                memory_budget_bytes=settings.memory_budget,
             )
             if compile_report.get("fixture", {}).get("shaders"):
                 manifest["shaders"] = [

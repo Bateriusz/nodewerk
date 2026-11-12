@@ -216,7 +216,7 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
     // Descriptor bindings remain live for every subsequent frame.dispatch even
     // though those dispatches carry no ResourceRef operand.  Track the active
     // binding set, and derive read/write access from each resource's usage.
-    std::set<std::uint32_t> bound;
+    std::map<std::uint32_t, std::set<std::uint32_t>> bound_by_root;
     std::uint64_t frame_index = 0u;
     auto mark = [&](std::uint32_t resource_id, bool read, bool write) {
         auto it = uses.find(resource_id);
@@ -243,21 +243,28 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
         };
         if (instruction.opcode == "frame.set_descriptor_table" ||
             instruction.opcode == "frame.set_root_constants") {
+            const std::uint32_t root_parameter =
+                instruction.operands.empty()
+                    ? 0u
+                    : instruction.operands[0].u32;
+            bound_by_root[root_parameter] = std::set<std::uint32_t>{};
             for (const auto resource_id : refs()) {
-                bound.insert(resource_id);
+                bound_by_root[root_parameter].insert(resource_id);
                 if (instruction.opcode == "frame.set_root_constants") {
                     mark(resource_id, true, false);
                 }
             }
         } else if (instruction.opcode == "frame.dispatch") {
-            for (const auto resource_id : bound) {
-                const auto resource_it = by_id.find(resource_id);
-                if (resource_it == by_id.end()) continue;
-                const std::string& usage = resource_it->second->usage;
-                if (usage == "uav") {
-                    mark(resource_id, true, true);
-                } else if (usage == "srv" || usage == "cbv") {
-                    mark(resource_id, true, false);
+            for (const auto& binding : bound_by_root) {
+                for (const auto resource_id : binding.second) {
+                    const auto resource_it = by_id.find(resource_id);
+                    if (resource_it == by_id.end()) continue;
+                    const std::string& usage = resource_it->second->usage;
+                    if (usage == "uav") {
+                        mark(resource_id, true, true);
+                    } else if (usage == "srv" || usage == "cbv") {
+                        mark(resource_id, true, false);
+                    }
                 }
             }
         } else if (instruction.opcode == "frame.copy_buffer") {
@@ -445,6 +452,7 @@ ResourcePlanResult BuildAliasedResourcePlan(
             // logical lifetimes do not intersect.  Resources that are persistent
             // or that overlap in time always receive independent storage.
             for (const auto& candidate : result.plan.placements) {
+                if (is_persistent) continue;
                 if (candidate.frame_slot_instance != instance) continue;
                 if (persistent[candidate.descriptor.resource_id]) continue;
                 if (candidate.lifetime.permitted_alias_group !=
@@ -564,7 +572,6 @@ ResourcePlanResult BuildAliasedResourcePlan(
     std::map<std::pair<std::uint32_t, std::uint64_t>, std::set<std::uint32_t>>
         regions;
     for (const auto& placement : result.plan.placements) {
-        if (!placement.aliased) continue;
         regions[{placement.frame_slot_instance,
                  placement.heap_offset_bytes}]
             .insert(placement.descriptor.resource_id);
