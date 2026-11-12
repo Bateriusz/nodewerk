@@ -767,7 +767,7 @@ def test_compose_display_stream_onto_compute_only_package() -> None:
     assert contract.validate_frame_plan(composed) == []
 
 
-def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
+def test_nw04_hardware_evidence_is_verified_and_schema_valid() -> None:
     from schema_validator import validate_file_against_schema
 
     evidence_path = REPO_ROOT / "benchmarks" / "nw04-hardware-evidence.json"
@@ -775,13 +775,25 @@ def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
     validate_file_against_schema(evidence_path, schema_path)
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["task"] == "NW-04"
-    assert evidence["verification_status"] == "pending_unverified"
+    assert evidence["verification_status"] == "verified"
     for tier in ("ada", "blackwell"):
-        assert evidence["qualifications"][tier]["status"] == "pending_unverified"
-        assert "No representative" in evidence["qualifications"][tier]["reason"]
+        assert evidence["qualifications"][tier]["status"] == "verified"
+
+    successful = [
+        execution
+        for execution in evidence["executions"]
+        if execution["execution_status"] == "passed"
+    ]
+    assert {execution["hardware_tier"] for execution in successful} == {
+        "ada",
+        "blackwell",
+    }
+    assert all(execution["d3d12_validation_clean"] for execution in successful)
+    assert len({execution["player"]["sha256"] for execution in successful}) == 1
+    assert len({execution["package"]["sha256"] for execution in successful}) == 1
+
     completion = verify_nw04.check_hardware_evidence_complete(evidence_path)
-    assert not completion.passed
-    assert "unverified tiers" in completion.detail
+    assert completion.passed
 
 
 def test_synthetic_contract_fixture_cannot_certify_hardware() -> None:
