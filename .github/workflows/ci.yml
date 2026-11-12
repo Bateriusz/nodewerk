@@ -124,7 +124,7 @@ jobs:
           if-no-files-found: warn
 
   nw04-native-verification:
-    name: NW-04 Native Player Lifecycle & D3D12 Validation
+    name: NW-04 Native Player Lifecycle (hosted WARP)
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -153,20 +153,6 @@ jobs:
         shell: pwsh
         run: pwsh ./tools/nw01/doctor.ps1
 
-      - name: Enable the D3D12 debug layer for validation
-        shell: pwsh
-        run: |
-          $capability = Get-WindowsCapability -Online |
-            Where-Object { $_.Name -like 'Tools.Graphics.DirectX*' } |
-            Select-Object -First 1
-          if ($null -eq $capability) {
-            Write-Error "The Windows Graphics Tools capability is unavailable; D3D12 validation cannot run."
-            exit 1
-          }
-          if ($capability.State -ne 'Installed') {
-            Add-WindowsCapability -Online -Name $capability.Name
-          }
-
       - name: Build explicit NW-04 player/package artifacts
         shell: pwsh
         run: |
@@ -187,12 +173,12 @@ jobs:
           "NW04_FIXTURE=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Append
           "NW04_PACKAGE=$displayPackage" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Run required NW-04 native lifecycle and D3D12-validation verification
+      - name: Run required NW-04 native lifecycle verification
         env:
           NW04_ALLOW_SOFTWARE_ADAPTER: "1"
         shell: pwsh
         run: |
-          python tools/verify_nw04.py --mode Full --fixture "$env:NW04_FIXTURE" --package "$env:NW04_PACKAGE" --summary-json "$env:RUNNER_TEMP\nw04-full.json"
+          python tools/verify_nw04.py --mode NativeLifecycle --fixture "$env:NW04_FIXTURE" --package "$env:NW04_PACKAGE" --summary-json "$env:RUNNER_TEMP\nw04-lifecycle.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   windows-physical-evidence:

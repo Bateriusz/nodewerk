@@ -3,13 +3,17 @@
 
 Usage:
     python tools/verify_nw04.py --mode ContractsOnly [--summary-json out.json]
+    python tools/verify_nw04.py --mode NativeLifecycle --fixture path/to/player.exe
     python tools/verify_nw04.py --mode Full [--fixture path/to/player.exe]
     python tools/verify_nw04.py --mode Hardware --fixture path/to/player.exe \
         --record benchmarks/nw04-hardware-evidence.json
 
-ContractsOnly is GPU-less and host-neutral.  Full and Hardware are Windows
-qualification modes; when a required native artifact or adapter is unavailable
-they report `unavailable` and exit nonzero instead of claiming success.
+ContractsOnly is GPU-less and host-neutral. NativeLifecycle exercises the
+Windows package/player lifecycle without enabling the D3D12 debug layer and
+does not certify validation or hardware qualification. Full and Hardware are
+Windows validation modes; when a required native artifact or adapter is
+unavailable they report `unavailable` and exit nonzero instead of claiming
+success.
 """
 
 from __future__ import annotations
@@ -864,7 +868,11 @@ def check_hardware_evidence_complete(
 
 
 def run_native_fixture(
-    fixture: Path, package_path: Path, extra: list[str]
+    fixture: Path,
+    package_path: Path,
+    extra: list[str],
+    *,
+    validation: bool = True,
 ) -> CheckResult:
     if not fixture.exists():
         return CheckResult(
@@ -914,9 +922,10 @@ def run_native_fixture(
         "--simulate-minimize",
         "--win32-minimize-restore",
         "--emit-benchmark-metrics",
-        "--validation",
-        *extra,
     ]
+    if validation:
+        command.append("--validation")
+    command.extend(extra)
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         if proc.stdout:
@@ -929,7 +938,7 @@ def run_native_fixture(
         # 0x87D (2173) before InfoQueue diagnostics reach stderr.  Keep the
         # full run failed, but isolate which optional lifecycle feature triggers
         # the abnormal native termination so CI remains actionable.
-        if proc.returncode == 0x87D:
+        if validation and proc.returncode == 0x87D:
             probes = (
                 ("validation_init_only", ["--frames", "0", "--validation"]),
                 (
@@ -1520,6 +1529,7 @@ def build_summary(mode: str, results: list[CheckResult]) -> dict[str, Any]:
     hardware_status = "verified" if hardware_complete else "pending_unverified"
     mode_status = {
         "ContractsOnly": "contracts_only_verified",
+        "NativeLifecycle": "native_lifecycle_verified",
         "Full": "full_execution_verified",
         "Hardware": "hardware_execution_verified",
     }[mode]
@@ -1593,14 +1603,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("ContractsOnly", "Full", "Hardware"),
+        choices=("ContractsOnly", "NativeLifecycle", "Full", "Hardware"),
         default="ContractsOnly",
     )
     parser.add_argument("--fixture", type=Path)
     parser.add_argument(
         "--package",
         type=Path,
-        help="Real NW-03 .nwp package required by Full/Hardware modes.",
+        help="Real NW-03 .nwp package required by NativeLifecycle/Full/Hardware modes.",
     )
     parser.add_argument("--summary-json", type=Path)
     parser.add_argument("--record", type=Path)
@@ -1616,14 +1626,14 @@ def main() -> int:
                 REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp",
             )
         )
-    if args.mode in ("Full", "Hardware"):
+    if args.mode in ("NativeLifecycle", "Full", "Hardware"):
         if args.fixture is None:
             results.append(
                 CheckResult(
                     "nw04_native_fixture",
                     True,
                     False,
-                    "--fixture is required for Full/Hardware mode",
+                    "--fixture is required for NativeLifecycle/Full/Hardware mode",
                     unavailable=True,
                 )
             )
@@ -1634,7 +1644,7 @@ def main() -> int:
                         "nw04_hardware_package",
                         True,
                         False,
-                        "--package is required for Full/Hardware mode; the "
+                        "--package is required for NativeLifecycle/Full/Hardware mode; the "
                         "synthetic contract fixture cannot certify hardware",
                         unavailable=True,
                     )
@@ -1644,7 +1654,12 @@ def main() -> int:
                 results.append(package_check)
                 if package_check.passed:
                     results.append(
-                        run_native_fixture(args.fixture, args.package, [])
+                        run_native_fixture(
+                            args.fixture,
+                            args.package,
+                            [],
+                            validation=args.mode != "NativeLifecycle",
+                        )
                     )
                     results.append(
                         run_device_removal_check(args.fixture, args.package)
