@@ -925,6 +925,67 @@ def run_native_fixture(
         if proc.stderr:
             print("[NW04-NATIVE-STDERR]", file=sys.stderr)
             print(proc.stderr, file=sys.stderr, end="" if proc.stderr.endswith("\n") else "\n")
+        # A Windows Direct3D debug-layer break can terminate the process with
+        # 0x87D (2173) before InfoQueue diagnostics reach stderr.  Keep the
+        # full run failed, but isolate which optional lifecycle feature triggers
+        # the abnormal native termination so CI remains actionable.
+        if proc.returncode == 0x87D:
+            probes = (
+                ("validation_only", ["--frames", "1", "--validation"]),
+                (
+                    "validation_metrics",
+                    ["--frames", "1", "--validation", "--emit-benchmark-metrics"],
+                ),
+                (
+                    "validation_resize",
+                    ["--frames", "1", "--validation", "--resize-sequence"],
+                ),
+                (
+                    "validation_simulated_minimize",
+                    ["--frames", "1", "--validation", "--simulate-minimize"],
+                ),
+                (
+                    "validation_win32_minimize_restore",
+                    ["--frames", "1", "--validation", "--win32-minimize-restore"],
+                ),
+            )
+            for probe_name, probe_args in probes:
+                probe_command = [
+                    str(fixture),
+                    "--package",
+                    str(package_path),
+                    *probe_args,
+                ]
+                probe = subprocess.run(
+                    probe_command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                print(
+                    f"[NW04-NATIVE-PROBE] {probe_name} exit={probe.returncode}",
+                    file=sys.stderr,
+                )
+                if probe.stdout:
+                    print(
+                        f"[NW04-NATIVE-PROBE-STDOUT] {probe_name}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        probe.stdout,
+                        file=sys.stderr,
+                        end="" if probe.stdout.endswith("\n") else "\n",
+                    )
+                if probe.stderr:
+                    print(
+                        f"[NW04-NATIVE-PROBE-STDERR] {probe_name}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        probe.stderr,
+                        file=sys.stderr,
+                        end="" if probe.stderr.endswith("\n") else "\n",
+                    )
         return CheckResult(
             "nw04_native_fixture",
             True,
