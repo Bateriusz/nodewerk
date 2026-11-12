@@ -13,6 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw05_export  # noqa: E402
+import nw03_compiler  # noqa: E402
+import nw05_optimizer  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 
 
@@ -69,6 +71,38 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     assert (
         first.report["provenance"]["player_template_sha256"]
         == hashlib.sha256(template.read_bytes()).hexdigest()
+    )
+    optimized = nw05_optimizer.optimize_graph(
+        nw03_compiler.load_graph(PROCEDURAL)
+    )
+    generated, diagnostics = nw03_compiler.lower_to_fused_hlsl(
+        optimized.materialize_document()
+    )
+    assert not diagnostics
+    expected_hlsl = {shader.hlsl_sha256 for shader in generated}
+    manifest_hlsl = {
+        item["hlsl_sha256"]
+        for item in common.manifest.get("shaders", [])
+    }
+    assert manifest_hlsl == expected_hlsl
+    decoded = nwp.decode_package(common.package_bytes)
+    manifest_blobs = {
+        item["blob_sha256"] for item in common.manifest.get("shaders", [])
+    }
+    assert {
+        hashlib.sha256(shader.blob).hexdigest()
+        for shader in decoded.shaders
+    } == manifest_blobs
+    present = [
+        instruction
+        for instruction in decoded.frame
+        if instruction.opcode == "frame.present"
+    ]
+    assert present
+    present_id = present[-1].operands[0].value
+    assert any(
+        resource.resource_id == present_id and resource.usage == "uav"
+        for resource in decoded.resources
     )
     completed = subprocess.run(
         [str(executable), "--frames", "1", "--allow-software-adapter"],

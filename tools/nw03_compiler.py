@@ -1568,6 +1568,11 @@ def _shader_expression_text(document: GraphDocument, node: GraphNode) -> str:
                 raise CompilerError(
                     f"shader node '{node.node_id}' references unknown node '{source_node}'"
                 )
+            if source.selected_outputs and _source_port not in source.selected_outputs:
+                raise CompilerError(
+                    f"shader node '{node.node_id}' reads dead output port "
+                    f"'{source_node}.{_source_port}'"
+                )
             parts.append(_shader_expression_text(document, source))
         if node.operator_id == "nw.shader.add":
             return f"({parts[0]} + {parts[1]})"
@@ -1594,7 +1599,14 @@ def _reachable_shader_roots(document: GraphDocument) -> list[GraphNode]:
             continue
         source_node, _source_port = connection
         source = document.nodes.get(source_node)
-        if source is not None and source.node_id not in {item.node_id for item in gpu_roots}:
+        if (
+            source is not None
+            and source.node_id not in {item.node_id for item in gpu_roots}
+            and (
+                not source.selected_outputs
+                or _source_port in source.selected_outputs
+            )
+        ):
             gpu_roots.append(source)
     if gpu_roots:
         return [node for node in gpu_roots if node.operator_id in SHADER_OPERATORS]
@@ -1619,6 +1631,8 @@ def _reachable_shader_roots(document: GraphDocument) -> list[GraphNode]:
             for consumer in consumers.get(node.node_id, [])
         )
         if is_consumed_by_shader:
+            continue
+        if node.selected_outputs and "out" not in node.selected_outputs:
             continue
         if node.node_id not in seen:
             roots.append(node)

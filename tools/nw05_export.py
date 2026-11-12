@@ -409,20 +409,12 @@ def _override_map(settings: ExportSettings) -> dict[str, str]:
 def _node_bakeable(
     optimized: optimizer.OptimizedGraph, node: optimizer.IRNode
 ) -> bool:
-    if node.operator_id in nw03.SHADER_OPERATORS:
-        return False
-    if node.constant and len(node.constant) == 1:
-        values = next(iter(node.constant.values()), None)
-        if values is not None and 1 <= len(values) <= 4:
-            return True
-    consumed = {
-        item.source_node
-        for node in optimized.nodes
-        for item in node.inputs
-        if item.source_node in {entry.node_id for entry in optimized.nodes}
-    }
-    semantic_outputs = {output.node_id for output in optimized.outputs}
-    return node.node_id not in consumed and node.node_id not in semantic_outputs
+    # The current specialized player has no runtime consumer for arbitrary
+    # baked payloads.  Emitting them would only increase package bytes, so an
+    # explicit bake request retains the correct generated path and reports why.
+    _ = optimized
+    _ = node
+    return False
 
 
 def _generation_mode_map(
@@ -506,8 +498,8 @@ def plan_generation_vs_bake(
             elif mode == "bake" and not _node_bakeable(optimized, node):
                 mode = "generate"
                 reason = (
-                    "bake of a consumed/rendered node would make the graph "
-                    "dangling; retained the correct generated path"
+                    "bake has no runtime consumer in the minimal player; "
+                    "retained the correct generated path"
                 )
         else:
             mode = "generate"
@@ -606,6 +598,8 @@ def generate_player_source(
         "        std::fprintf(stderr, \"embedded package invalid\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        "    nw::player::PlayerConfig config;\n"
+        "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
         "    unsigned long long max_frames = 0;\n"
         "    for (int index = 1; index < argc; ++index) {\n"
         "        if (std::string(argv[index]) == \"--frames\" && index + 1 < argc) {\n"
@@ -614,8 +608,6 @@ def generate_player_source(
         "            config.allow_software_adapter = true;\n"
         "        }\n"
         "    }\n"
-        "    nw::player::PlayerConfig config;\n"
-        "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
         "    nw::player::PackagePlayer player(config);\n"
         "    const auto status = player.initialize(embedded.bytes, embedded.size);\n"
         "    if (status != nw::player::ExitCode::Success) return static_cast<int>(status);\n"
@@ -686,8 +678,23 @@ def _compose_display_stream(package: nwp.NwpPackage) -> nwp.NwpPackage:
     ]
     if not outputs:
         raise ValueError("package has no UAV buffer output for display")
+    present_ids = [
+        instruction.operands[0].value
+        for instruction in frame
+        if instruction.opcode == "frame.present" and instruction.operands
+    ]
+    present_target = next(
+        (
+            resource
+            for resource in outputs
+            if present_ids and resource.resource_id == present_ids[0]
+        ),
+        None,
+    )
     preferred = [resource for resource in outputs if resource.name == "output"]
-    if len(preferred) == 1:
+    if present_target is not None:
+        output = present_target
+    elif len(preferred) == 1:
         output = preferred[0]
     elif len(outputs) == 1:
         output = outputs[0]
@@ -808,40 +815,10 @@ def _compile_profile_package(
     package_bytes = nwp.encode_package(package)
     is_common = profile_id == nwp.COMMON_PROFILE_ID
 
-    # Explicit bake overrides emit the incremental compressed node content into
-    # the existing NW-03 parameter section.  This is real package content, not
-    # just report bookkeeping, and works for shader-expression nodes too.
     baked_parameters: list[nwp.ParameterRecord] = []
     next_parameter_id = max(
         (parameter.parameter_id for parameter in package.parameters), default=0
     ) + 1
-    node_by_id = optimized.node_map()
-    for node_id, mode in sorted(generation_modes.items()):
-        if mode != "bake":
-            continue
-        node = node_by_id.get(node_id)
-        if node is None:
-            continue
-        payload = zlib.compress(
-            nwp.canonical_json_bytes(node.to_dict()), level=9
-        )
-        padded = payload + b"\x00" * ((16 - len(payload) % 16) % 16)
-        for chunk_index in range(0, len(padded), 16):
-            baked_parameters.append(
-                nwp.ParameterRecord(
-                    parameter_id=next_parameter_id,
-                    name=f"nw05.baked.{node_id}.{chunk_index // 16}",
-                    type="float4",
-                    phase="initialization",
-                    component_count=4,
-                    value=padded[chunk_index : chunk_index + 16],
-                    timeline_start_frame=0,
-                    timeline_end_frame=0,
-                    timeline_step=0,
-                    timeline_interpolation="none",
-                )
-            )
-            next_parameter_id += 1
     # Field-specific quantization is also emitted as parameter content, so the
     # published artifact carries the quantized values rather than only a report
     # claim.  Full-precision source values remain recoverable from the IR.
@@ -1272,6 +1249,19 @@ def export_graph(
                 requires_aliasing=requires_aliasing,
                 runtime_dependencies=runtime_dependencies,
             )
+            if compile_report.get("fixture", {}).get("shaders"):
+                manifest["shaders"] = [
+                    {
+                        "specialization_id": row["specialization_id"],
+                        "target": row["target"],
+                        "blob_bytes": row["blob_size"],
+                        "blob_sha256": row["blob_sha256"],
+                        "hlsl_sha256": row["hlsl_sha256"],
+                        "cache_hit": row.get("cache_hit", False),
+                        "root_node_ids": row.get("root_node_ids", []),
+                    }
+                    for row in compile_report["fixture"]["shaders"]
+                ]
             manifest["dependencies_source"] = dependency_source
             manifest["artifact_profile_id"] = profile_id
             manifest["artifact_requirements_digest"] = requirements_digest

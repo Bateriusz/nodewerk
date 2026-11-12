@@ -253,6 +253,17 @@ def test_dead_output_elimination_prunes_unused_multi_output_ports() -> None:
     ) != compiler._compiler_fingerprint(
         full_document, [], **fingerprint_args
     )
+    lowered, diagnostics = compiler.lower_to_fused_hlsl(materialized)
+    materialized.nodes["shade"].selected_outputs = ("dead_port",)
+    dead_lowered, dead_diagnostics = compiler.lower_to_fused_hlsl(
+        materialized
+    )
+    assert "shade" in {shader.specialization_id for shader in lowered}
+    assert "shade" not in {
+        shader.specialization_id for shader in dead_lowered
+    }
+    assert not diagnostics
+    assert not dead_diagnostics
 
 
 def test_optimized_document_is_what_nw03_compiles() -> None:

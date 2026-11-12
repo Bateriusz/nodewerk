@@ -145,12 +145,12 @@ Each explicit `--generation-override <node>=generate|bake` or
 
 This lets a human compare generation against baked content for a specific
 graph. The report always states `"automatic_oracle": false`.
-An explicit bake of a non-shader node emits its incremental compressed payload
-in the existing parameter section (`baked_content_emitted_bytes`) and removes
-that node from the generated document; the baked content, not generated code,
-is what the artifact carries. Shader-generation nodes cannot be baked without
-removing the rendered output, so such requests retain the correct generated
-path and say so in the decision reason. Generation remains the default.
+The current minimal specialized player has no runtime consumer for arbitrary
+baked payloads. An explicit bake request therefore retains the correct
+generated path and records `"bake has no runtime consumer..."`; it never emits
+unused parameter blobs that merely increase package size. Reducing generation
+for a node requires adding an actual consumer in a future runtime extension.
+Generation remains the default.
 
 ## Capability-profile artifacts and budgets
 

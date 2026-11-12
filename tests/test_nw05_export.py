@@ -115,6 +115,9 @@ def test_export_produces_embedded_executable_and_display_stream(tmp_path: Path) 
     ).read_text(encoding="utf-8")
     assert "PackagePlayer" in player_source
     assert "graph" in player_source.lower()
+    assert player_source.index("nw::player::PlayerConfig config;") < (
+        player_source.index("config.allow_software_adapter")
+    )
     assert common.package_bytes not in player_source.encode("utf-8")
 
 
@@ -395,10 +398,10 @@ def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
         item["node_id"]: item
         for item in result.report["generation_vs_bake"]["decisions"]
     }
-    assert decisions["roughness"]["mode"] == "bake"
+    assert decisions["roughness"]["mode"] == "generate"
     assert decisions["roughness"]["automatic_cost_oracle"] is False
-    assert decisions["roughness"]["incremental_compressed_content_bytes"] > 0
-    assert decisions["roughness"]["baked_content_emitted_bytes"] > 0
+    assert "no runtime consumer" in decisions["roughness"]["reason"]
+    assert decisions["roughness"]["baked_content_emitted_bytes"] == 0
     assert decisions["shade"]["mode"] == "generate"
     assert "unsupported" in decisions["shade"]["reason"]
     assert result.report["generation_vs_bake"]["automatic_oracle"] is False
@@ -631,7 +634,11 @@ def test_compose_display_rejects_multiple_unidentified_uav_outputs() -> None:
         capability=package.capability,
         resources=duplicate_resources,
         initialization=list(package.initialization),
-        frame=list(package.frame),
+        frame=[
+            instruction
+            for instruction in package.frame
+            if instruction.opcode != "frame.present"
+        ],
         parameters=list(package.parameters),
         shaders=list(package.shaders),
         root_signatures=list(package.root_signatures),
@@ -639,6 +646,42 @@ def test_compose_display_rejects_multiple_unidentified_uav_outputs() -> None:
     )
     with pytest.raises(ValueError, match="multiple UAV buffer outputs"):
         nw05_export._compose_display_stream(duplicate)
+
+
+def test_compose_display_honours_existing_present_target_identity() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    resources = [
+        nwp.replace(resource, name=f"uav_{index}")
+        for index, resource in enumerate(package.resources)
+    ]
+    resources.append(nwp.replace(resources[1], resource_id=3, name="chosen"))
+    frame = [
+        instruction
+        for instruction in package.frame
+        if instruction.opcode != "frame.present"
+    ] + [
+        nwp.Instruction(
+            "frame.present",
+            (nwp.InstructionOperand("resource_ref", 3),),
+        ),
+    ]
+    chosen = package.__class__(
+        capability=package.capability,
+        resources=resources,
+        initialization=list(package.initialization),
+        frame=frame,
+        parameters=list(package.parameters),
+        shaders=list(package.shaders),
+        root_signatures=list(package.root_signatures),
+        flags=package.flags,
+    )
+    composed = nw05_export._compose_display_stream(chosen)
+    presents = [
+        instruction
+        for instruction in composed.frame
+        if instruction.opcode == "frame.present"
+    ]
+    assert presents[-1].operands[0].value == 3
 
 
 def test_failed_export_never_overwrites_report_inside_prior_artifact(
