@@ -77,9 +77,13 @@ bool ReadCurrentImage(std::vector<std::uint8_t>* bytes) {
                               nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER size{};
+    // File sizes are signed in LARGE_INTEGER, but size_t is unsigned on
+    // Windows x64. Casting SIZE_MAX to LONGLONG yields -1 and would reject
+    // every non-empty executable. Also bound the single ReadFile call below
+    // to DWORD_MAX so its length cannot truncate.
     bool ok = GetFileSizeEx(file, &size) != 0 && size.QuadPart > 0 &&
-              size.QuadPart <=
-                  static_cast<LONGLONG>(std::numeric_limits<std::size_t>::max());
+              static_cast<std::uint64_t>(size.QuadPart) <=
+                  static_cast<std::uint64_t>(std::numeric_limits<DWORD>::max());
     if (ok) {
         bytes->resize(static_cast<std::size_t>(size.QuadPart));
         DWORD read = 0u;
