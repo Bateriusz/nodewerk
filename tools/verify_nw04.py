@@ -931,6 +931,15 @@ def run_native_fixture(
         # the abnormal native termination so CI remains actionable.
         if proc.returncode == 0x87D:
             probes = (
+                ("validation_init_only", ["--frames", "0", "--validation"]),
+                (
+                    "validation_headless_init",
+                    ["--frames", "0", "--validation", "--headless"],
+                ),
+                (
+                    "validation_headless_frame",
+                    ["--frames", "1", "--validation", "--headless"],
+                ),
                 ("validation_only", ["--frames", "1", "--validation"]),
                 (
                     "validation_metrics",
