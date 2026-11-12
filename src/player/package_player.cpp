@@ -3787,7 +3787,7 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     void* const query_user_data = allocation_query_ != nullptr
                                       ? allocation_user_data_
                                       : default_user_data;
-    const ResourcePlanResult plan_result =
+    ResourcePlanResult plan_result =
 #if defined(_WIN32)
         // Realize the compiler's logical alias plan against the actual
         // adapter.  Overlapping frames are serialized here (one frame slot) so
@@ -3797,6 +3797,25 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
 #else
         BuildNonAliasedResourcePlan(package_, query, query_user_data);
 #endif
+#if defined(_WIN32)
+    // Preserve the established NW-04 contract for packages with no proven
+    // alias group: use ordinary committed resources and the non-aliased plan.
+    // The placed heap path is only entered when the adapter-query proof
+    // actually found a fence-safe transient reuse.
+    if (plan_result.exit_code == ExitCode::Success &&
+        std::none_of(plan_result.plan.placements.begin(),
+                     plan_result.plan.placements.end(),
+                     [](const ResourcePlacement& placement) {
+                         return placement.aliased;
+                     })) {
+        plan_result =
+            BuildNonAliasedResourcePlan(package_, query, query_user_data);
+        using_aliased_plan_ = false;
+    } else if (plan_result.exit_code == ExitCode::Success) {
+        using_aliased_plan_ = true;
+        frames_in_flight_ = 1u;
+    }
+#endif
     if (plan_result.exit_code != ExitCode::Success) {
         code = FailPlan(plan_result);
         ReleasePlatform();
@@ -3804,10 +3823,6 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     }
     plan_ = plan_result.plan;
     stats_.package_plan_bytes = plan_.total_engine_bytes;
-#if defined(_WIN32)
-    using_aliased_plan_ = true;
-    frames_in_flight_ = 1u;
-#endif
 
     if (!BuildFrameInstructionPlan()) {
         code = last_exit_;

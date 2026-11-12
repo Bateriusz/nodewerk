@@ -207,8 +207,10 @@ schedule exposes exactly one direct queue.
 The native `src/player/resource_plan.*` API adds
 `BuildAliasedResourcePlan(..., frames_in_flight)` for startup realisation while
 keeping the NW-04 non-aliased plan available. On Windows the player calls this
-plan with the real adapter query, creates one placed heap, realizes resources
-at the proven offsets, and inserts the recorded aliasing/UAV barriers. The
+plan with the real adapter query; when the proof finds an actual fence-safe
+alias it creates one placed heap, realizes resources at the proven offsets, and
+inserts the recorded aliasing/UAV barriers. When no alias opportunity exists,
+the player preserves the established NW-04 committed non-aliased plan. The
 64 KiB simulation is never selected silently; host tests must request it
 explicitly.
 
