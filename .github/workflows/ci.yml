@@ -118,10 +118,14 @@ jobs:
       - name: Verify real-PE NW-05 export reproducibility
         shell: pwsh
         run: |
+          cmake --preset clang-cl-release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset clang-cl-release --target nw_procedural_image_player
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $template = "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
           if (-not (Test-Path $template -PathType Leaf)) {
-            cmake --build build/clang-cl-release --target nw_procedural_image_player
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Write-Error "NW-05 procedural player template was not built: $template"
+            exit 1
           }
           $env:NW05_REAL_PLAYER_TEMPLATE = (Resolve-Path $template).Path
           python -m pytest tests/test_nw05_real_export.py -v
