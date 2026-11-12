@@ -2409,6 +2409,8 @@ def export_graph(
                         "final manifest linkage",
                         dependency_path=["specialized_player", "imports"],
                     )
+                runtime_dependencies = final_dependencies
+                dependency_source = "specialized-pe-imports"
             decisions = plan_generation_vs_bake(
                 optimized,
                 settings,
@@ -2459,7 +2461,11 @@ def export_graph(
                 package_bytes,
                 manifest_bytes=len(manifest_data),
                 executable_bytes=len(executable_bytes) if executable_bytes else 0,
-                player_template_bytes=len(template_bytes),
+                player_template_bytes=(
+                    len(specialized_player_bytes)
+                    if specialized_player_bytes is not None
+                    else len(template_bytes)
+                ),
                 byte_ceiling=settings.byte_ceiling,
                 runtime_dependencies=runtime_dependencies,
                 dependency_source=dependency_source,
