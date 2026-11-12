@@ -16,6 +16,27 @@ import nw05_export  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 
 
+def _probe(tier: str = "ada") -> dict:
+    name = (
+        "NVIDIA GeForce RTX 4090"
+        if tier == "ada"
+        else "NVIDIA GeForce RTX 5090"
+    )
+    return {
+        "source": "test-probe",
+        "adapters": [
+            {
+                "device": name,
+                "adapter_description": name,
+                "driver_version": "1.2.3",
+                "pci_identifier": "0000:01:00.0",
+                "capabilities": {"compute_capability": "8.9"},
+                "hardware_tier": tier,
+            }
+        ],
+    }
+
+
 def _artifact_directory(tmp_path: Path) -> tuple[Path, bytes, bytes]:
     package = nw04_fixture.build_compute_display_package()
     package_bytes = nwp.encode_package(package)
@@ -61,6 +82,7 @@ def test_record_execution_requires_real_pass_and_preserves_failures(
             "capabilities": {"wave_ops": True},
         },
         output_path=record_path,
+        probe=lambda: _probe("ada"),
     )
     assert record["qualifications"]["ada"]["status"] == "verified"
     assert record["qualifications"]["ada"]["artifact_key"] == "sha256:v1:test-artifact"
@@ -73,6 +95,7 @@ def test_record_execution_requires_real_pass_and_preserves_failures(
         exit_code=0,
         details={"adapter_description": "missing telemetry"},
         output_path=record_path,
+        probe=lambda: {"source": "unavailable", "adapters": []},
     )
     # Missing device/driver/capabilities telemetry cannot fabricate a pass.
     assert record["qualifications"]["blackwell"]["status"] == "failed"
@@ -86,6 +109,7 @@ def test_record_execution_requires_real_pass_and_preserves_failures(
         exit_code=1,
         details={},
         output_path=record_path,
+        probe=lambda: _probe("blackwell"),
     )
     assert record["qualifications"]["blackwell"]["status"] == "failed"
     # A later pass on the other tier must not erase the executed failure.
@@ -102,6 +126,7 @@ def test_record_execution_requires_real_pass_and_preserves_failures(
             "capabilities": {"wave_ops": True},
         },
         output_path=record_path,
+        probe=lambda: _probe("ada"),
     )
     assert record["verification_status"] == "executed_failure"
 
@@ -120,5 +145,6 @@ def test_record_execution_rejects_status_mismatch(tmp_path: Path) -> None:
         exit_code=1,
         details={},
         output_path=tmp_path / "evidence.json",
+        probe=lambda: _probe("ada"),
     )
     assert record["qualifications"]["ada"]["status"] == "failed"

@@ -49,10 +49,12 @@ def _record(
         "artifact_key": other_key,
         "package_sha256": package_sha,
         "adapter_description": "desktop adapter",
+        "hardware_identity_verified": True,
     }
     execution = {
         "hardware_tier": "ada",
         "execution_status": "passed",
+        "hardware_identity_verified": True,
         "details": {
             "device": "RTX",
             "adapter_description": "desktop adapter",

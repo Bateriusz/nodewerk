@@ -406,12 +406,32 @@ def _override_map(settings: ExportSettings) -> dict[str, str]:
     return result
 
 
+def _node_bakeable(
+    optimized: optimizer.OptimizedGraph, node: optimizer.IRNode
+) -> bool:
+    if node.operator_id in nw03.SHADER_OPERATORS:
+        return False
+    if node.constant and len(node.constant) == 1:
+        values = next(iter(node.constant.values()), None)
+        if values is not None and 1 <= len(values) <= 4:
+            return True
+    consumed = {
+        item.source_node
+        for node in optimized.nodes
+        for item in node.inputs
+        if item.source_node in {entry.node_id for entry in optimized.nodes}
+    }
+    semantic_outputs = {output.node_id for output in optimized.outputs}
+    return node.node_id not in consumed and node.node_id not in semantic_outputs
+
+
 def _generation_mode_map(
     optimized: optimizer.OptimizedGraph, settings: ExportSettings
 ) -> dict[str, str]:
     overrides = _override_map(settings)
     modes: dict[str, str] = {}
     node_by_id = {node.node_id: node for node in optimized.nodes}
+
     for node_id, mode in overrides.items():
         node = node_by_id.get(node_id)
         if node is None:
@@ -421,9 +441,9 @@ def _generation_mode_map(
                 f"unsupported generation override '{mode}' for node '{node_id}'",
                 dependency_path=["generation_override", node_id],
             )
-        if mode == "bake" and node.operator_id in nw03.SHADER_OPERATORS:
-            # A shader-generation node cannot be removed without removing the
-            # rendered output.  Retain the correct generated path.
+        if mode == "bake" and not _node_bakeable(optimized, node):
+            # Replacing a consumed/rendered node would leave dangling inputs or
+            # remove the displayed output.  Retain the correct generated path.
             mode = "generate"
         modes[node_id] = mode
     return modes
@@ -482,6 +502,12 @@ def plan_generation_vs_bake(
                 reason = (
                     "bake of a shader-generation node is unsupported; retained "
                     "the correct generated path"
+                )
+            elif mode == "bake" and not _node_bakeable(optimized, node):
+                mode = "generate"
+                reason = (
+                    "bake of a consumed/rendered node would make the graph "
+                    "dangling; retained the correct generated path"
                 )
         else:
             mode = "generate"
@@ -584,6 +610,8 @@ def generate_player_source(
         "    for (int index = 1; index < argc; ++index) {\n"
         "        if (std::string(argv[index]) == \"--frames\" && index + 1 < argc) {\n"
         "            max_frames = std::strtoull(argv[++index], nullptr, 10);\n"
+        "        } else if (std::string(argv[index]) == \"--allow-software-adapter\") {\n"
+        "            config.allow_software_adapter = true;\n"
         "        }\n"
         "    }\n"
         "    nw::player::PlayerConfig config;\n"
@@ -658,12 +686,16 @@ def _compose_display_stream(package: nwp.NwpPackage) -> nwp.NwpPackage:
     ]
     if not outputs:
         raise ValueError("package has no UAV buffer output for display")
-    if len(outputs) > 1:
+    preferred = [resource for resource in outputs if resource.name == "output"]
+    if len(preferred) == 1:
+        output = preferred[0]
+    elif len(outputs) == 1:
+        output = outputs[0]
+    else:
         raise ValueError(
-            "graph package is ambiguous: multiple UAV buffer outputs could be "
-            "displayed, so no output is selected implicitly"
+            "graph package is ambiguous: multiple UAV buffer outputs exist and "
+            "none is the compiler's explicit 'output' display target"
         )
-    output = outputs[0]
     if not any(instruction.opcode == "frame.barrier" for instruction in frame):
         barrier_index = next(
             (
@@ -955,7 +987,8 @@ def _finalize_size_accounting(
     rewrites the deterministic JSON until the recorded file sizes and totals
     match the actual bytes on disk.
     """
-    for _ in range(8):
+    converged = False
+    for _ in range(64):
         stable = True
         for profile_id, artifact in artifacts.items():
             stem = _profile_file_stem(profile_id)
@@ -1003,7 +1036,19 @@ def _finalize_size_accounting(
             if previous_total != total:
                 stable = False
         if stable:
+            converged = True
             break
+    if not converged:
+        raise ExportError(
+            "size accounting did not converge",
+            [
+                nwp.package_diagnostic(
+                    "export_size_accounting_nonconvergent",
+                    "self-referential size report totals did not stabilize",
+                )
+            ],
+            dependency_path=["size_report", "convergence"],
+        )
     for profile_id, artifact in artifacts.items():
         distribution = artifact.size_report["distribution"]
         total = distribution["total_distributed_bytes"]
@@ -1714,9 +1759,19 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
     )
     if target.suffix.lower() == ".exe":
         distribution = result["distribution"]
+        sibling_package = target.parent / f"{stem.name}.nwp"
+        sibling_manifest = target.parent / f"{stem.name}.manifest.json"
+        if sibling_package.is_file():
+            artifact_files[sibling_package.name] = sibling_package.stat().st_size
+        if sibling_manifest.is_file():
+            artifact_files[sibling_manifest.name] = (
+                sibling_manifest.stat().st_size
+            )
         distribution["embedded_package_bytes"] = len(data)
         distribution["embedded_manifest_bytes"] = manifest_bytes
         distribution["embedded_content_counted_in_executable"] = True
+        distribution["artifact_files"] = dict(sorted(artifact_files.items()))
+        distribution["artifact_file_bytes"] = sum(artifact_files.values())
         distribution["total_distributed_bytes"] = (
             executable_bytes + distribution["artifact_file_bytes"]
         )

@@ -27,6 +27,8 @@ int main(int argc, char** argv) {
     for (int index = 1; index < argc; ++index) {
         if (std::string(argv[index]) == "--frames" && index + 1 < argc) {
             max_frames = std::strtoull(argv[++index], nullptr, 10);
+        } else if (std::string(argv[index]) == "--allow-software-adapter") {
+            config.allow_software_adapter = true;
         }
     }
     nw::player::PackagePlayer player(config);

@@ -382,19 +382,25 @@ def test_cli_export_and_inspect_size(tmp_path: Path) -> None:
 def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
     settings = _settings(
         tmp_path,
-        bake_overrides=(("texture_recipe", "bake"), ("image", "bake")),
+        bake_overrides=(("roughness", "bake"), ("shade", "bake")),
     )
-    result = _export(tmp_path, settings=settings)
+    result = nw05_export.export_graph(
+        REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph",
+        tmp_path / "out",
+        settings=settings,
+        dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+        allow_test_payloads=True,
+    )
     decisions = {
         item["node_id"]: item
         for item in result.report["generation_vs_bake"]["decisions"]
     }
-    assert decisions["texture_recipe"]["mode"] == "bake"
-    assert decisions["texture_recipe"]["automatic_cost_oracle"] is False
-    assert decisions["texture_recipe"]["incremental_compressed_content_bytes"] > 0
-    assert decisions["texture_recipe"]["baked_content_emitted_bytes"] > 0
-    assert decisions["image"]["mode"] == "generate"
-    assert "unsupported" in decisions["image"]["reason"]
+    assert decisions["roughness"]["mode"] == "bake"
+    assert decisions["roughness"]["automatic_cost_oracle"] is False
+    assert decisions["roughness"]["incremental_compressed_content_bytes"] > 0
+    assert decisions["roughness"]["baked_content_emitted_bytes"] > 0
+    assert decisions["shade"]["mode"] == "generate"
+    assert "unsupported" in decisions["shade"]["reason"]
     assert result.report["generation_vs_bake"]["automatic_oracle"] is False
 
 
@@ -539,6 +545,7 @@ def test_inspect_size_attributes_every_distributed_file(tmp_path: Path) -> None:
     )
     size = nw05_export.inspect_size(directory)
     assert size["total_distributed_bytes"] == expected
+    assert result.report["budgets"]["common_distributed_bytes"] == expected
     common = result.artifacts[nwp.COMMON_PROFILE_ID]
     common_size = nw05_export.inspect_size(
         directory
@@ -573,9 +580,18 @@ def test_inspect_size_reads_embedded_manifest_without_sibling(
         size["distribution"]["total_distributed_bytes"]
         == isolated_executable.stat().st_size
     )
+    normal_size = nw05_export.inspect_size(executable)
+    directory_total = sum(
+        path.stat().st_size
+        for path in (tmp_path / "out").iterdir()
+        if path.is_file()
+    )
+    assert normal_size["distribution"]["total_distributed_bytes"] == directory_total
 
 
-def test_compose_display_rejects_ambiguous_uav_outputs(tmp_path: Path) -> None:
+def test_compose_display_uses_explicit_compiler_output_target(
+    tmp_path: Path,
+) -> None:
     package = nw04_fixture.build_compute_display_package()
     extra = nwp.replace(
         package.resources[1],
@@ -585,6 +601,35 @@ def test_compose_display_rejects_ambiguous_uav_outputs(tmp_path: Path) -> None:
     duplicate = package.__class__(
         capability=package.capability,
         resources=list(package.resources) + [extra],
+        initialization=list(package.initialization),
+        frame=list(package.frame),
+        parameters=list(package.parameters),
+        shaders=list(package.shaders),
+        root_signatures=list(package.root_signatures),
+        flags=package.flags,
+    )
+    composed = nw05_export._compose_display_stream(duplicate)
+    present = [
+        instruction
+        for instruction in composed.frame
+        if instruction.opcode == "frame.present"
+    ]
+    assert present
+    assert present[-1].operands[0].value == 2
+
+
+def test_compose_display_rejects_multiple_unidentified_uav_outputs() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    resources = [
+        nwp.replace(resource, name=f"uav_{index}")
+        for index, resource in enumerate(package.resources)
+    ]
+    duplicate_resources = resources + [
+        nwp.replace(resources[1], resource_id=3, name="also_output")
+    ]
+    duplicate = package.__class__(
+        capability=package.capability,
+        resources=duplicate_resources,
         initialization=list(package.initialization),
         frame=list(package.frame),
         parameters=list(package.parameters),

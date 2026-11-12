@@ -990,6 +990,10 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
                 or not details.get("adapter_description")
                 or not details.get("driver_version")
                 or not details.get("capabilities")
+                or not execution.get("hardware_identity_verified")
+                or not record.get("qualifications", {})
+                .get(tier, {})
+                .get("hardware_identity_verified")
             ):
                 telemetry_ok = False
         identity_mismatch = (

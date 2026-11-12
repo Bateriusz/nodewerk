@@ -12,11 +12,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -27,6 +29,111 @@ import nw05_export  # noqa: E402
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def classify_hardware_tier(adapter_description: str) -> str:
+    name = adapter_description.lower()
+    if any(token in name for token in ("rtx 50", "b100", "b200", "gb200")):
+        return "blackwell"
+    if any(
+        token in name
+        for token in ("rtx 40", "l40", "a40", "a6000", "rtx a")
+    ):
+        return "ada"
+    return "unknown"
+
+
+def probe_hardware_identity() -> dict[str, Any]:
+    """Query the executing host's adapter identity instead of trusting argv."""
+    adapters: list[dict[str, Any]] = []
+    source = "unavailable"
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            completed = subprocess.run(
+                [
+                    nvidia_smi,
+                    "--query-gpu=name,driver_version,compute_cap,pci.bus_id,memory.total",
+                    "--format=csv,noheader",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            completed = None
+        if completed is not None and completed.returncode == 0:
+            source = "nvidia-smi"
+            for line in completed.stdout.splitlines():
+                fields = [field.strip() for field in line.split(",")]
+                if len(fields) != 5:
+                    continue
+                name, driver, compute_cap, pci, memory = fields
+                adapters.append(
+                    {
+                        "device": name,
+                        "adapter_description": name,
+                        "driver_version": driver,
+                        "pci_identifier": pci,
+                        "capabilities": {
+                            "compute_capability": compute_cap,
+                            "memory_total": memory,
+                        },
+                        "hardware_tier": classify_hardware_tier(name),
+                    }
+                )
+    if not adapters and os.name == "nt":
+        try:
+            completed = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_VideoController | "
+                    "Select-Object Name,DriverVersion,PNPDeviceID | "
+                    "ConvertTo-Json -Compress",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            completed = None
+        if completed is not None and completed.returncode == 0:
+            try:
+                payload = json.loads(completed.stdout or "[]")
+            except json.JSONDecodeError:
+                payload = []
+            if isinstance(payload, dict):
+                payload = [payload]
+            source = "win32-video-controller"
+            for item in payload if isinstance(payload, list) else []:
+                name = str(item.get("Name", ""))
+                if not name:
+                    continue
+                adapters.append(
+                    {
+                        "device": name,
+                        "adapter_description": name,
+                        "driver_version": str(item.get("DriverVersion", "")),
+                        "pci_identifier": str(item.get("PNPDeviceID", "")),
+                        "capabilities": {},
+                        "hardware_tier": classify_hardware_tier(name),
+                    }
+                )
+    return {"source": source, "adapters": adapters}
+
+
+def _select_probed_adapter(
+    probe: dict[str, Any], tier: str
+) -> dict[str, Any] | None:
+    adapters = probe.get("adapters", [])
+    for adapter in adapters:
+        if adapter.get("hardware_tier") == tier:
+            return adapter
+    return adapters[0] if adapters else None
 
 
 def pending_record() -> dict[str, Any]:
@@ -93,6 +200,7 @@ def record_execution(
     exit_code: int,
     details: dict[str, Any] | None = None,
     output_path: Path | None = None,
+    probe: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if tier not in {"ada", "blackwell"}:
         raise SystemExit(f"unsupported evidence tier: {tier}")
@@ -156,10 +264,44 @@ def record_execution(
         "driver_version",
         "capabilities",
     )
+    probe_fn = probe or probe_hardware_identity
+    try:
+        probed = probe_fn()
+    except Exception:
+        probed = {"source": "unavailable", "adapters": []}
+    probed_adapter = _select_probed_adapter(probed, tier)
+    probed_capabilities = (
+        probed_adapter.get("capabilities", {}) if probed_adapter else {}
+    )
+    hardware_identity_verified = bool(
+        probed_adapter
+        and probed_adapter.get("adapter_description")
+        and probed_adapter.get("driver_version")
+        and probed_capabilities
+    )
+    if probed_adapter:
+        details_payload.setdefault(
+            "device", probed_adapter.get("adapter_description", "")
+        )
+        details_payload.setdefault(
+            "adapter_description",
+            probed_adapter.get("adapter_description", ""),
+        )
+        details_payload.setdefault(
+            "driver_version", probed_adapter.get("driver_version", "")
+        )
+        if not details_payload.get("capabilities"):
+            details_payload["capabilities"] = probed_capabilities
+        details_payload["verified_capabilities"] = probed_capabilities
     missing_telemetry = [
         name for name in required_telemetry if not details_payload.get(name)
     ]
-    passed = status == "passed" and status_matches and not missing_telemetry
+    passed = (
+        status == "passed"
+        and status_matches
+        and not missing_telemetry
+        and hardware_identity_verified
+    )
     failure_reason = ""
     if not status_matches:
         failure_reason = (
@@ -171,6 +313,38 @@ def record_execution(
             "passed evidence is missing required telemetry: "
             + ", ".join(missing_telemetry)
         )
+    elif status == "passed" and not hardware_identity_verified:
+        failure_reason = (
+            "passed evidence could not independently verify adapter identity, "
+            "driver, capabilities, and requested hardware tier"
+        )
+    if status == "passed" and hardware_identity_verified and probed_adapter:
+        supplied_adapter = str(details_payload.get("adapter_description", ""))
+        supplied_driver = str(details_payload.get("driver_version", ""))
+        if (
+            supplied_adapter
+            and supplied_adapter.lower()
+            not in str(probed_adapter.get("adapter_description", "")).lower()
+            and str(probed_adapter.get("adapter_description", "")).lower()
+            not in supplied_adapter.lower()
+        ):
+            passed = False
+            failure_reason = (
+                "caller-supplied adapter does not match the probed adapter"
+            )
+        elif supplied_driver and supplied_driver != str(
+            probed_adapter.get("driver_version", "")
+        ):
+            passed = False
+            failure_reason = (
+                "caller-supplied driver does not match the probed driver"
+            )
+        elif probed_adapter.get("hardware_tier") != tier:
+            passed = False
+            failure_reason = (
+                f"probed adapter tier '{probed_adapter.get('hardware_tier')}' "
+                f"does not match requested tier '{tier}'"
+            )
     record_path = output_path or (REPO_ROOT / "benchmarks" / "nw05-hardware-evidence.json")
     record = load_record(record_path)
     execution = {
@@ -198,6 +372,8 @@ def record_execution(
             "embedded_package_matches": embedded_bytes == package_bytes,
         },
         "details": details_payload,
+        "probed_hardware": probed_adapter or {},
+        "hardware_identity_verified": hardware_identity_verified,
         "failure_reason": failure_reason,
     }
     # A later passed run must never erase an executed failure from the other
@@ -234,6 +410,9 @@ def record_execution(
     qualification["package_sha256"] = execution["package"]["sha256"]
     qualification["executable_sha256"] = execution["executable"]["sha256"]
     qualification["artifact_key"] = artifact_key
+    qualification["hardware_identity_verified"] = hardware_identity_verified
+    qualification["hardware_identity_source"] = str(probed.get("source", "unavailable"))
+    qualification["probed_hardware"] = probed_adapter or {}
     qualification["adapter_description"] = str(
         details_payload.get("adapter_description", "")
     )

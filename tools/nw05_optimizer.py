@@ -376,6 +376,7 @@ class OptimizedGraph:
                 residency=ir_node.residency,
                 params=params,
                 inputs=inputs,
+                selected_outputs=tuple(sorted(ir_node.outputs)),
             )
             fusion = accepted_fusions.get(ir_node.node_id)
             if fusion is not None and (
@@ -408,13 +409,35 @@ class OptimizedGraph:
                 del nodes[member]
 
         settings = dict(self.settings)
-        baked_nodes = {
-            node_id
-            for node_id, mode in (generation_modes or {}).items()
-            if mode == "bake"
-            and node_id in nodes
-            and nodes[node_id].operator_id not in nw03.SHADER_OPERATORS
+        ir_by_id = {node.node_id: node for node in self.nodes}
+        baked_nodes: set[str] = set()
+        constant_operator = {
+            1: "nw.math.scalar_const",
+            2: "nw.math.vec2_const",
+            3: "nw.math.vec3_const",
+            4: "nw.math.vec4_const",
         }
+        for node_id, mode in sorted((generation_modes or {}).items()):
+            if mode != "bake" or node_id not in nodes:
+                continue
+            node = nodes[node_id]
+            ir_node = ir_by_id.get(node_id)
+            if node.operator_id in nw03.SHADER_OPERATORS or ir_node is None:
+                continue
+            values = None
+            if ir_node.constant and len(ir_node.constant) == 1:
+                values = next(iter(ir_node.constant.values()), None)
+            if values is not None and 1 <= len(values) <= 4:
+                # Replace the generating operator with the baked literal while
+                # keeping the same node identity, so consumers remain wired.
+                node.operator_id = constant_operator[len(values)]
+                node.params = {
+                    "value": [_float_text(value) for value in values]
+                }
+                node.inputs = {}
+                continue
+            if not consumers.get(node_id):
+                baked_nodes.add(node_id)
         for node_id in sorted(baked_nodes):
             # A supported bake replaces generation for this node.  Its payload
             # is emitted as package parameter content by the exporter; keeping

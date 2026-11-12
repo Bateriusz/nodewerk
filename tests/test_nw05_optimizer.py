@@ -226,20 +226,47 @@ def test_dead_output_elimination_prunes_unused_multi_output_ports() -> None:
     assert ("split_probe", "w") in optimized.dead_outputs
     materialized = optimized.materialize_document()
     assert materialized.nodes["split_probe"].inputs["v"] == ("shade", "out")
+    assert materialized.nodes["split_probe"].selected_outputs == ("x",)
     assert materialized.settings["nw05.outputs.split_probe"] == "x"
+    full = compiler.GraphNode(
+        **{
+            **materialized.nodes["split_probe"].__dict__,
+            "selected_outputs": ("w", "x", "y", "z"),
+        }
+    )
+    reduced_document = compiler.GraphDocument(
+        **{**materialized.__dict__, "nodes": dict(materialized.nodes)}
+    )
+    full_document = compiler.GraphDocument(
+        **{
+            **materialized.__dict__,
+            "nodes": dict(materialized.nodes, split_probe=full),
+        }
+    )
+    fingerprint_args = dict(
+        semantic_digest="sha256:v1:test",
+        dxc_identity="dxc:test",
+        optimization="O2",
+    )
+    assert compiler._compiler_fingerprint(
+        reduced_document, [], **fingerprint_args
+    ) != compiler._compiler_fingerprint(
+        full_document, [], **fingerprint_args
+    )
 
 
 def test_optimized_document_is_what_nw03_compiles() -> None:
     document = compiler.load_graph(SEMANTICS)
     optimized = optimizer.optimize_graph(document)
     materialized = optimized.materialize_document(
-        generation_modes={"texture_recipe": "bake", "shade": "bake"}
+        generation_modes={"roughness": "bake", "shade": "bake"}
     )
     assert "unused_curve" not in materialized.nodes
     assert "shade_b" not in materialized.nodes
-    assert "texture_recipe" not in materialized.nodes
+    assert materialized.nodes["roughness"].operator_id == "nw.math.scalar_const"
+    assert materialized.nodes["roughness"].params["value"] == ["0.0"]
     assert "shade" in materialized.nodes
-    assert materialized.settings["nw05.generation.texture_recipe.mode"] == "bake"
+    assert materialized.settings["nw05.generation.roughness.mode"] == "bake"
     assert materialized.settings["nw05.generation.shade.mode"] == "bake"
     assert any(
         key.startswith("nw05.quantization.gain.value")

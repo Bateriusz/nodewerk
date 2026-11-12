@@ -465,6 +465,9 @@ class GraphNode:
     residency: str
     params: dict[str, list[str]] = field(default_factory=dict)
     inputs: dict[str, tuple[str, str]] = field(default_factory=dict)
+    # NW-05 dead-output elimination: retained output ports for this node.
+    # Empty means the operator's full declared output set.
+    selected_outputs: tuple[str, ...] = ()
 
     @property
     def operator_key(self) -> str:
@@ -2061,6 +2064,13 @@ def _compiler_fingerprint(
             {
                 "graph_semantic_digest": semantic_digest,
                 "compiler_settings": document.settings,
+                "selected_outputs": {
+                    node.node_id: list(node.selected_outputs)
+                    for node in sorted(
+                        document.nodes.values(), key=lambda item: item.node_id
+                    )
+                    if node.selected_outputs
+                },
                 "generated": [shader.specialization_key for shader in generated],
                 "dxc_identity": dxc_identity,
                 "optimization": optimization,

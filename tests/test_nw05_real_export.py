@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -69,3 +70,14 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
         first.report["provenance"]["player_template_sha256"]
         == hashlib.sha256(template.read_bytes()).hexdigest()
     )
+    completed = subprocess.run(
+        [str(executable), "--frames", "1", "--allow-software-adapter"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        completed.stdout + "\n" + completed.stderr
+    )
+    assert "NW05_FRAMES=1" in completed.stdout
