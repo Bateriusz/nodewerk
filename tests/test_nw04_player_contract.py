@@ -796,6 +796,25 @@ def test_signature_switch_regression_fixture_is_valid() -> None:
     assert package.frame[-1].opcode == "frame.present"
 
 
+def test_redundant_signature_selection_package_is_valid() -> None:
+    package = nw04_fixture.build_redundant_signature_selection_package()
+    data = nwp.encode_package(package)
+    decoded = nwp.decode_package(data)
+    assert nwp.inspect_package_bytes(data).valid
+    assert contract.validate_package_requirements(decoded) == []
+    assert contract.validate_frame_plan(decoded) == []
+    assert [instruction.opcode for instruction in decoded.frame] == [
+        "frame.set_timeline",
+        "frame.set_root_signature",
+        "frame.set_root_constants",
+        "frame.set_descriptor_table",
+        "frame.dispatch",
+        "frame.set_root_signature",
+        "frame.present",
+        "frame.dispatch",
+    ]
+
+
 def test_nw04_hardware_evidence_is_pending_and_schema_valid() -> None:
     from schema_validator import validate_file_against_schema
 

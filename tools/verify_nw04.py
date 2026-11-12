@@ -568,6 +568,7 @@ def check_player_source_contract() -> CheckResult:
         "retire_submitted_work",
         "package_root_signature",
         "package_table_valid.fill(false)",
+        "package_root_signature != root",
         "display_texture_allocation_bytes",
         "RemoveEngineResourceAllocation",
         "engine_cumulative_resource_bytes",
@@ -1442,6 +1443,85 @@ def run_root_signature_switch_check(
     )
 
 
+def run_redundant_signature_selection_check(
+    fixture: Path, package_path: Path, *, validation: bool = True
+) -> CheckResult:
+    """Re-selecting the active signature must preserve cached root arguments."""
+    if not fixture.exists():
+        return CheckResult(
+            "nw04_redundant_signature_selection",
+            True,
+            False,
+            f"fixture binary is unavailable: {fixture}",
+            unavailable=True,
+        )
+    try:
+        base = nwp.decode_package(package_path.read_bytes())
+        redundant = nw04_fixture.build_redundant_signature_selection_package(
+            base
+        )
+        with tempfile.NamedTemporaryFile(
+            prefix="nw04-redundant-signature-", suffix=".nwp", delete=False
+        ) as handle:
+            redundant_path = Path(handle.name)
+            handle.write(nwp.encode_package(redundant))
+    except Exception as exc:
+        return CheckResult(
+            "nw04_redundant_signature_selection",
+            True,
+            False,
+            f"could not compose redundant-signature package: {exc}",
+        )
+    command = [
+        str(fixture),
+        "--package",
+        str(redundant_path),
+        "--frames",
+        "1",
+    ]
+    if validation:
+        command.append("--validation")
+    try:
+        proc = subprocess.run(
+            command, capture_output=True, text=True, check=False
+        )
+    finally:
+        redundant_path.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        return CheckResult(
+            "nw04_redundant_signature_selection",
+            True,
+            False,
+            f"redundant-signature fixture exited {proc.returncode}",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if (
+        "NW_PLAYER_FRAMES=1" not in proc.stdout
+        or "NW_PLAYER_PRESENTS=1" not in proc.stdout
+    ):
+        return CheckResult(
+            "nw04_redundant_signature_selection",
+            True,
+            False,
+            "redundant-signature fixture did not render/present",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if "NW_D3D12_VALIDATION_ERROR=" in (proc.stdout + proc.stderr):
+        return CheckResult(
+            "nw04_redundant_signature_selection",
+            True,
+            False,
+            "redundant-signature selection emitted a D3D12 validation error",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    return CheckResult(
+        "nw04_redundant_signature_selection",
+        True,
+        True,
+        evidence={"stdout": proc.stdout, "stderr": proc.stderr, "command": command},
+    )
+
+
 def run_allocation_failure_check(fixture: Path, package_path: Path) -> CheckResult:
     if not fixture.exists():
         return CheckResult(
@@ -1949,6 +2029,13 @@ def main() -> int:
                     )
                     results.append(
                         run_root_signature_switch_check(
+                            args.fixture,
+                            args.package,
+                            validation=args.mode != "NativeLifecycle",
+                        )
+                    )
+                    results.append(
+                        run_redundant_signature_selection_check(
                             args.fixture,
                             args.package,
                             validation=args.mode != "NativeLifecycle",

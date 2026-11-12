@@ -2942,15 +2942,17 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "missing", "renderAtTick",
                                 "frame root signature was not created");
                 }
+                // Re-selecting the already active signature preserves root
+                // arguments in D3D12.  Only an actual signature change
+                // invalidates the cached parameter layout.
+                if (package_root_signature != root) {
+                    package_has_constants = false;
+                    package_constant_root = 0u;
+                    package_constant_count = 0u;
+                    package_table_valid.fill(false);
+                }
                 list->SetComputeRootSignature(root);
                 package_root_signature = root;
-                // Changing a root signature invalidates every previously
-                // bound root parameter.  Do not replay bindings that belonged
-                // to the old signature's parameter layout during present.
-                package_has_constants = false;
-                package_constant_root = 0u;
-                package_constant_count = 0u;
-                package_table_valid.fill(false);
                 break;
             }
             case FrameOp::Type::SetRootConstants:

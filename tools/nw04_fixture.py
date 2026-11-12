@@ -413,6 +413,134 @@ def build_signature_switch_package(
     )
 
 
+def build_redundant_signature_selection_package(
+    base: nwp.NwpPackage | None = None,
+) -> nwp.NwpPackage:
+    """Dispatch, redundantly select the same signature, present, dispatch.
+
+    D3D12 preserves root arguments when the same root signature is selected
+    again. Present must restore those cached bindings for the final dispatch.
+    """
+    base = base or build_compute_display_package()
+    params = next(
+        resource
+        for resource in base.resources
+        if resource.usage == "cbv" and resource.name == "params"
+    )
+    output = next(
+        resource
+        for resource in base.resources
+        if resource.usage == "uav" and resource.kind == "buffer"
+    )
+    shader = base.shaders[0]
+    root = next(
+        record
+        for record in base.root_signatures
+        if record.root_signature_id == shader.root_signature_id
+    )
+    parameter_id = (
+        base.parameters[0].parameter_id if base.parameters else 1
+    )
+    operand = nwp.InstructionOperand
+    initialization = [
+        instruction
+        for instruction in base.initialization
+        if not (
+            instruction.opcode == "init.create_root_signature"
+            and instruction.operands[0].value != root.root_signature_id
+        )
+        and not (
+            instruction.opcode == "init.create_pipeline"
+            and instruction.operands[0].value != shader.shader_id
+        )
+    ]
+    frame = [
+        nwp.Instruction(
+            "frame.set_timeline",
+            (operand("u32", parameter_id), operand("u64", 0)),
+        ),
+        nwp.Instruction(
+            "frame.set_root_signature",
+            (operand("root_signature_ref", root.root_signature_id),),
+        ),
+        nwp.Instruction(
+            "frame.set_root_constants",
+            (
+                operand("u32", 0),
+                operand("resource_ref", params.resource_id),
+                operand("u32", 4),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.set_descriptor_table",
+            (
+                operand("u32", 1),
+                operand("string", "cbv_srv_uav"),
+                operand("resource_ref", output.resource_id),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.dispatch",
+            (
+                operand("u32", 4),
+                operand("u32", 1),
+                operand("u32", 1),
+                operand("shader_ref", shader.shader_id),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.set_root_signature",
+            (operand("root_signature_ref", root.root_signature_id),),
+        ),
+        nwp.Instruction(
+            "frame.present", (operand("resource_ref", output.resource_id),)
+        ),
+        nwp.Instruction(
+            "frame.dispatch",
+            (
+                operand("u32", 4),
+                operand("u32", 1),
+                operand("u32", 1),
+                operand("shader_ref", shader.shader_id),
+            ),
+        ),
+    ]
+    derived = nwp.derive_capability_requirements(
+        base.resources,
+        initialization,
+        frame,
+        [shader],
+        [root],
+    )
+    capability = replace(
+        base.capability,
+        **derived,
+        required_init_instructions=tuple(
+            sorted(
+                {
+                    instruction.opcode
+                    for instruction in initialization
+                }
+            )
+        ),
+        required_frame_instructions=tuple(
+            sorted({instruction.opcode for instruction in frame})
+        ),
+    )
+    capability = replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
+    return replace(
+        base,
+        capability=capability,
+        initialization=initialization,
+        frame=frame,
+        shaders=[shader],
+        root_signatures=[root],
+    )
+
+
 def write_fixture(path: Path) -> str:
     data = package_bytes()
     path.parent.mkdir(parents=True, exist_ok=True)
