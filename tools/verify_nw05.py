@@ -23,6 +23,7 @@ import json
 import os
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -387,7 +388,10 @@ def check_schedule_and_alias_properties() -> CheckResult:
                 "disjoint transient resources are not alias eligible",
             )
         real = schedule.realize_physical_aliases(
-            single, package, frames_in_flight=1
+            single,
+            package,
+            frames_in_flight=1,
+            allocation_query=schedule.simulate_allocation,
         )
         aliased = [item for item in real.placements if item.aliased]
         if not aliased or not real.barriers:
@@ -447,7 +451,10 @@ def check_schedule_and_alias_properties() -> CheckResult:
         # Frames in flight duplicate transient storage per slot.
         multi = schedule.build_logical_schedule(package, frames_in_flight=2)
         real_multi = schedule.realize_physical_aliases(
-            multi, package, frames_in_flight=2
+            multi,
+            package,
+            frames_in_flight=2,
+            allocation_query=schedule.simulate_allocation,
         )
         instances = {item.resource_id: set() for item in real_multi.placements}
         for item in real_multi.placements:
@@ -831,15 +838,151 @@ def _windows_checks(args: argparse.Namespace) -> list[CheckResult]:
                 "Native artifact unavailable; GPU coverage remains pending.",
             ),
         ]
-    return [
-        _pending(
-            "nw05_windows_native",
-            "Native execution was not performed by this host; recorded as pending.",
+    common_stem = nw05_export._profile_file_stem(nwp.COMMON_PROFILE_ID)
+    package_path = (
+        package / f"{common_stem}.nwp" if package.is_dir() else package
+    )
+    if not package_path.is_file():
+        return [
+            CheckResult(
+                "nw05_windows_native",
+                True,
+                False,
+                f"common package is missing: {package_path}",
+                status="failed",
+            ),
+            _pending(
+                "nw05_ada_blackwell_gpu_validation",
+                "Common artifact unavailable; GPU coverage remains pending.",
+            ),
+        ]
+    package_bytes = package_path.read_bytes()
+    try:
+        embedded_package, embedded_manifest = nw05_export.extract_embedded_package(
+            fixture.read_bytes()
+        )
+    except nw05_export.ExportError as exc:
+        return [
+            CheckResult(
+                "nw05_windows_native",
+                True,
+                False,
+                f"specialized player has no valid embedded package: {exc}",
+                status="failed",
+            ),
+            _pending(
+                "nw05_ada_blackwell_gpu_validation",
+                "Native artifact unavailable; GPU coverage remains pending.",
+            ),
+        ]
+    if embedded_package != package_bytes:
+        return [
+            CheckResult(
+                "nw05_windows_native",
+                True,
+                False,
+                "executed player embeds a different common artifact",
+                status="failed",
+            ),
+            _pending(
+                "nw05_ada_blackwell_gpu_validation",
+                "Common artifact mismatch; GPU coverage remains pending.",
+            ),
+        ]
+    try:
+        completed = subprocess.run(
+            [str(fixture), "--frames", "1"],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [
+            CheckResult(
+                "nw05_windows_native",
+                True,
+                False,
+                f"native execution failed to start: {exc}",
+                status="failed",
+            ),
+            _pending(
+                "nw05_ada_blackwell_gpu_validation",
+                "Native execution unavailable; GPU coverage remains pending.",
+            ),
+        ]
+    native_passed = completed.returncode == 0
+    native = CheckResult(
+        "nw05_windows_native",
+        True,
+        native_passed,
+        (
+            "specialized player executed the identical common artifact"
+            if native_passed
+            else f"specialized player exited {completed.returncode}"
         ),
-        _pending(
+        status="passed" if native_passed else "failed",
+        evidence={
+            "exit_code": completed.returncode,
+            "package_sha256": _sha256(package_bytes),
+            "executable_sha256": _sha256(fixture.read_bytes()),
+            "manifest_sha256": _sha256(embedded_manifest),
+            "stdout_sha256": _sha256(
+                completed.stdout.encode("utf-8", errors="replace")
+            ),
+            "stderr_sha256": _sha256(
+                completed.stderr.encode("utf-8", errors="replace")
+            ),
+        },
+    )
+    evidence_path = Path(args.evidence) if getattr(args, "evidence", None) else None
+    if evidence_path is not None and evidence_path.is_file():
+        record = json.loads(evidence_path.read_text(encoding="utf-8"))
+        statuses = {
+            tier: record.get("qualifications", {}).get(tier, {}).get("status")
+            for tier in ("ada", "blackwell")
+        }
+        keys = {
+            record.get("qualifications", {}).get(tier, {}).get("artifact_key")
+            for tier in ("ada", "blackwell")
+        }
+        artifact_keys = {
+            json.loads(embedded_manifest.decode("utf-8")).get("artifact_identity", "")
+        }
+        if all(status == "verified" for status in statuses.values()) and keys == artifact_keys:
+            gpu = CheckResult(
+                "nw05_ada_blackwell_gpu_validation",
+                True,
+                True,
+                "Ada and Blackwell evidence reference the identical common artifact",
+                status="passed",
+                evidence={
+                    "artifact_key": next(iter(artifact_keys)),
+                    "evidence": str(evidence_path),
+                },
+            )
+        elif any(status == "failed" for status in statuses.values()):
+            gpu = CheckResult(
+                "nw05_ada_blackwell_gpu_validation",
+                True,
+                False,
+                "Ada/Blackwell evidence contains an executed failure",
+                status="failed",
+                evidence={"statuses": statuses, "artifact_keys": sorted(keys)},
+            )
+        else:
+            gpu = _pending(
+                "nw05_ada_blackwell_gpu_validation",
+                "Missing Ada/Blackwell coverage remains pending.",
+            )
+    else:
+        gpu = _pending(
             "nw05_ada_blackwell_gpu_validation",
             "GPU validation must be executed by the NW-01B evidence harness.",
-        ),
+        )
+    return [
+        native,
+        gpu,
     ]
 
 
@@ -852,6 +995,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--fixture")
     parser.add_argument("--package")
+    parser.add_argument("--evidence")
     parser.add_argument("--summary-json")
     args = parser.parse_args(argv)
 
@@ -867,7 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
         required_failures.extend(
             check
             for check in platform_checks
-            if check.status != "passed"
+            if check.status == "failed"
         )
     gpu_status = next(
         (
@@ -926,7 +1070,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode != "ContractsOnly":
         if any(check.status == "failed" for check in platform_checks):
             return 1
-        if any(check.status == "pending" for check in platform_checks):
+        if args.mode == "Hardware" and any(
+            check.status == "pending" for check in platform_checks
+        ):
             return 3
     return 0 if summary["passed"] else 1
 

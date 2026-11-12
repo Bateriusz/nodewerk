@@ -25,10 +25,10 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import nw03_compiler as nw03
-import nw04_fixture
 import nwp_package as nwp
 import nw05_optimizer as optimizer
 import nw05_schedule as schedule
+import dependency_check
 
 
 EXPORT_FORMAT = "nw05-export-report"
@@ -273,6 +273,9 @@ def analyze_package_size(
     executable_bytes: int = 0,
     player_template_bytes: int = 0,
     byte_ceiling: int = DEFAULT_BYTE_CEILING,
+    runtime_dependencies: Sequence[str] | None = None,
+    dependency_source: str = "package-phase-requirements",
+    artifact_files: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     sections = section_sizes(package_bytes)
     resource_bytes = sum(resource.size_bytes for resource in package.resources)
@@ -280,47 +283,33 @@ def analyze_package_size(
     unique_shader_bytes = len({shader.blob for shader in package.shaders})
     root_signature_bytes = sum(len(record.blob) for record in package.root_signatures)
     parameter_bytes = sum(len(parameter.value) for parameter in package.parameters)
+    artifact_files = dict(artifact_files or {})
     executable_growth = max(0, executable_bytes - player_template_bytes)
-    distributed = len(package_bytes) + manifest_bytes + executable_bytes
+    auxiliary_bytes = sum(artifact_files.values())
+    distributed = (
+        len(package_bytes)
+        + manifest_bytes
+        + executable_bytes
+        + auxiliary_bytes
+    )
     payload_bytes = sum(item["size_bytes"] for item in sections.values())
     directory_bytes = len(sections) * nwp.SECTION_ENTRY_SIZE
     structure_bytes = nwp.HEADER_SIZE + directory_bytes + nwp.CHECKSUM_SIZE
+    dependency_names = (
+        sorted(set(runtime_dependencies))
+        if runtime_dependencies is not None
+        else ["kernel32", "d3d12", "dxgi", "user32"]
+    )
     dependencies = [
         {
-            "name": "kernel32",
-            "kind": "windows_inbox",
+            "name": name,
+            "kind": "windows_inbox" if name != "ucrtbase" else "windows_runtime",
             "distributed_bytes": 0,
             "included": True,
-            "reason": "OS-provided Win32 process/runtime",
-        },
-        {
-            "name": "user32",
-            "kind": "windows_inbox",
-            "distributed_bytes": 0,
-            "included": True,
-            "reason": "OS-provided windowing",
-        },
-        {
-            "name": "d3d12",
-            "kind": "windows_inbox",
-            "distributed_bytes": 0,
-            "included": True,
-            "reason": "OS-provided graphics API",
-        },
-        {
-            "name": "dxgi",
-            "kind": "windows_inbox",
-            "distributed_bytes": 0,
-            "included": True,
-            "reason": "OS-provided swap chain/adapter enumeration",
-        },
-        {
-            "name": "gdi32",
-            "kind": "windows_inbox",
-            "distributed_bytes": 0,
-            "included": True,
-            "reason": "player-owned display surface",
-        },
+            "reason": "reachable player/dependency-closure import",
+        }
+        for name in dependency_names
+    ] + [
         {
             "name": "runtime-dxc",
             "kind": "forbidden_runtime_dependency",
@@ -379,12 +368,15 @@ def analyze_package_size(
             "manifest_bytes": manifest_bytes,
             "executable_bytes": executable_bytes,
             "player_template_bytes": player_template_bytes,
+            "artifact_files": artifact_files,
+            "artifact_file_bytes": auxiliary_bytes,
             "embedded_package_growth_bytes": executable_growth,
             "total_distributed_bytes": distributed,
             "byte_ceiling": byte_ceiling,
             "within_byte_ceiling": distributed <= byte_ceiling,
         },
         "dependencies": dependencies,
+        "dependency_source": dependency_source,
         "dependency_distributed_bytes": sum(
             item["distributed_bytes"] for item in dependencies if item["included"]
         ),
@@ -411,6 +403,53 @@ def _override_map(settings: ExportSettings) -> dict[str, str]:
     return result
 
 
+def _generation_mode_map(
+    optimized: optimizer.OptimizedGraph, settings: ExportSettings
+) -> dict[str, str]:
+    overrides = _override_map(settings)
+    modes: dict[str, str] = {}
+    reachable = {node.node_id for node in optimized.nodes}
+    for node_id, mode in overrides.items():
+        if node_id not in reachable:
+            continue
+        if mode not in {"bake", "generate"}:
+            raise ExportError(
+                f"unsupported generation override '{mode}' for node '{node_id}'",
+                dependency_path=["generation_override", node_id],
+            )
+        modes[node_id] = mode
+    return modes
+
+
+def _runtime_dependencies(
+    package: nwp.NwpPackage, template_bytes: bytes
+) -> tuple[list[str], str]:
+    """Derive the player dependency closure from the template or package."""
+    if template_bytes:
+        try:
+            imports = dependency_check.parse_pe64_sections_and_imports(
+                template_bytes
+            ).get("imports", [])
+            names = sorted(
+                {
+                    str(name).lower().removesuffix(".dll")
+                    for name in imports
+                    if str(name)
+                }
+            )
+            if names:
+                return names, "template-pe-imports"
+        except (ValueError, KeyError, struct.error):
+            pass
+    # Portable fallback: the release player closure is determined by package
+    # phase requirements.  Window/display dependencies are only present when
+    # the package emits frame.present.
+    dependencies = {"kernel32", "d3d12", "dxgi", "user32"}
+    if any(instruction.opcode == "frame.present" for instruction in package.frame):
+        dependencies.add("gdi32")
+    return sorted(dependencies), "package-phase-requirements"
+
+
 def plan_generation_vs_bake(
     optimized: optimizer.OptimizedGraph,
     settings: ExportSettings,
@@ -435,6 +474,9 @@ def plan_generation_vs_bake(
             reason = "default explicit generate; no automatic bake oracle is applied"
         payload = nwp.canonical_json_bytes(node.to_dict())
         compressed = zlib.compress(payload, level=9)
+        baked_bytes = (
+            ((len(compressed) + 15) // 16) * 16 if mode == "bake" else 0
+        )
         decisions.append(
             {
                 "node_id": node.node_id,
@@ -454,6 +496,8 @@ def plan_generation_vs_bake(
                 ),
                 "startup_cost_bytes": len(compressed) if mode == "bake" else 0,
                 "peak_memory_bytes": len(compressed) if mode == "bake" else len(payload),
+                "baked_content_emitted_bytes": baked_bytes,
+                "measured_expression_bytes": len(payload),
                 "automatic_cost_oracle": False,
             }
         )
@@ -512,6 +556,7 @@ def generate_player_source(
         "// embedded .nwp v1 package and drives the existing PackagePlayer.\n"
         "#include \"player/package_player.h\"\n"
         "#include \"player/embedded_package.h\"\n"
+        "#include \"player/exit_codes.h\"\n"
         "#include <cstdio>\n"
         "#include <cstdlib>\n"
         "#include <string>\n\n"
@@ -527,7 +572,9 @@ def generate_player_source(
         "            max_frames = std::strtoull(argv[++index], nullptr, 10);\n"
         "        }\n"
         "    }\n"
-        "    nw::player::PackagePlayer player;\n"
+        "    nw::player::PlayerConfig config;\n"
+        "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
+        "    nw::player::PackagePlayer player(config);\n"
         "    const auto status = player.initialize(embedded.bytes, embedded.size);\n"
         "    if (status != nw::player::ExitCode::Success) return static_cast<int>(status);\n"
         "    for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick) {\n"
@@ -548,21 +595,137 @@ def generate_player_source(
 # ---------------------------------------------------------------------------
 
 
+def _compose_display_stream(package: nwp.NwpPackage) -> nwp.NwpPackage:
+    """Append the established NW-04 display/present stream to a package.
+
+    The input package is entirely graph-derived.  This function only appends
+    the display-phase instructions required to observe the graph's UAV output;
+    it never substitutes fixture resources, shaders, or output content.
+    """
+    initialization = list(package.initialization)
+    uploaded = {
+        instruction.operands[0].value
+        for instruction in initialization
+        if instruction.opcode == "init.upload_resource"
+        and instruction.operands
+        and instruction.operands[0].type == "resource_ref"
+    }
+    for resource in package.resources:
+        if resource.usage not in {"cbv", "uav"}:
+            continue
+        if resource.resource_id in uploaded:
+            continue
+        initialization.append(
+            nwp.Instruction(
+                "init.upload_resource",
+                (nwp.InstructionOperand("resource_ref", resource.resource_id),),
+            )
+        )
+    frame = list(package.frame)
+    if package.parameters and not any(
+        instruction.opcode == "frame.set_timeline" for instruction in frame
+    ):
+        frame.insert(
+            0,
+            nwp.Instruction(
+                "frame.set_timeline",
+                (
+                    nwp.InstructionOperand(
+                        "u32", package.parameters[0].parameter_id
+                    ),
+                    nwp.InstructionOperand("u64", 0),
+                ),
+            ),
+        )
+    output = next(
+        (
+            resource
+            for resource in package.resources
+            if resource.usage == "uav" and resource.kind == "buffer"
+        ),
+        None,
+    )
+    if output is None:
+        raise ValueError("package has no UAV buffer output for display")
+    if not any(instruction.opcode == "frame.barrier" for instruction in frame):
+        barrier_index = next(
+            (
+                index
+                for index, instruction in enumerate(frame)
+                if instruction.opcode == "frame.set_descriptor_table"
+            ),
+            len(frame) - 1,
+        )
+        frame.insert(
+            barrier_index + 1,
+            nwp.Instruction(
+                "frame.barrier",
+                (
+                    nwp.InstructionOperand("u32", 4),
+                    nwp.InstructionOperand("resource_ref", output.resource_id),
+                ),
+            ),
+        )
+    if not any(instruction.opcode == "frame.present" for instruction in frame):
+        frame.append(
+            nwp.Instruction(
+                "frame.present",
+                (nwp.InstructionOperand("resource_ref", output.resource_id),),
+            )
+        )
+    derived = nwp.derive_capability_requirements(
+        package.resources,
+        initialization,
+        frame,
+        package.shaders,
+        package.root_signatures,
+    )
+    capability = replace(package.capability, **derived)
+    capability = replace(
+        capability,
+        required_init_instructions=tuple(
+            sorted({instruction.opcode for instruction in initialization})
+        ),
+        required_frame_instructions=tuple(
+            sorted({instruction.opcode for instruction in frame})
+        ),
+    )
+    capability = replace(
+        capability, profile_fingerprint=capability.computed_profile_fingerprint()
+    )
+    return replace(
+        package,
+        capability=capability,
+        initialization=initialization,
+        frame=frame,
+        flags=1,
+    )
+
+
 def _compile_profile_package(
-    document: nw03.GraphDocument,
+    optimized: optimizer.OptimizedGraph,
     destination: Path,
     *,
     profile_id: str,
     requirements_digest: str,
+    generation_modes: Mapping[str, str],
     dxc_executable: str | None,
     optimization: str,
     cache_dir: str | None,
     allow_unpinned_dxc: bool,
     allow_test_payloads: bool,
 ) -> tuple[bytes, nwp.NwpPackage, dict[str, Any]]:
+    # Compile the optimised, quantized document rather than re-reading the
+    # authoring file.  This is what makes constant propagation, DCE/CSE,
+    # accepted fusion, quantization, and generation/bake overrides observable
+    # in the emitted shader specializations and therefore in the .nwp bytes.
+    document = optimized.materialize_document(generation_modes=generation_modes)
     report = nw03.compile_package(
-        document.source_name,
+        optimized.source_name,
         destination,
+        document=document,
+        semantic_digest_override=optimized.ir_sha256(),
+        semantic_digest_test_identity=allow_test_payloads,
         cache_dir=cache_dir,
         dxc_executable=dxc_executable,
         optimization=optimization,
@@ -573,13 +736,18 @@ def _compile_profile_package(
     package = nwp.decode_package(
         package_bytes, allow_dev=not bool(package_bytes and package_bytes[16] & 1)
     )
-    # The first typed-graph-to-standalone path must display a procedural image
-    # through the established PackagePlayer.  Reuse the NW-04 streaming
-    # composer rather than adding per-demo player logic or a second package
-    # format.
+    if not any(shader.family == nw03.PASS_FAMILY for shader in package.shaders):
+        raise ExportError(
+            "graph lowering produced no executable procedural shader",
+            dependency_path=["graph", "shader"],
+        )
+    # Append the established NW-04 compute/display instruction stream to the
+    # *graph-derived* package.  No hand-authored package content contributes
+    # the visible image: the display pass presents the UAV output produced by
+    # the shader specializations compiled from this graph.
     try:
         original_flags = package.flags
-        package = nw04_fixture.compose_compute_display_package(package)
+        package = _compose_display_stream(package)
         package = replace(package, flags=original_flags)
     except ValueError as exc:
         raise ExportError(
@@ -587,31 +755,101 @@ def _compile_profile_package(
             dependency_path=["display", "frame.present"],
         ) from exc
     package_bytes = nwp.encode_package(package)
-    if profile_id != nwp.COMMON_PROFILE_ID:
-        optional_digest = KNOWN_PROFILES.get(profile_id)
-        if optional_digest is None:
-            raise ExportError(
-                f"unknown optional profile '{profile_id}'",
-                dependency_path=["optional_profile", profile_id],
+    is_common = profile_id == nwp.COMMON_PROFILE_ID
+
+    # Explicit bake overrides emit the incremental compressed node content into
+    # the existing NW-03 parameter section.  This is real package content, not
+    # just report bookkeeping, and works for shader-expression nodes too.
+    baked_parameters: list[nwp.ParameterRecord] = []
+    next_parameter_id = max(
+        (parameter.parameter_id for parameter in package.parameters), default=0
+    ) + 1
+    node_by_id = optimized.node_map()
+    for node_id, mode in sorted(generation_modes.items()):
+        if mode != "bake":
+            continue
+        node = node_by_id.get(node_id)
+        if node is None:
+            continue
+        payload = zlib.compress(
+            nwp.canonical_json_bytes(node.to_dict()), level=9
+        )
+        padded = payload + b"\x00" * ((16 - len(payload) % 16) % 16)
+        for chunk_index in range(0, len(padded), 16):
+            baked_parameters.append(
+                nwp.ParameterRecord(
+                    parameter_id=next_parameter_id,
+                    name=f"nw05.baked.{node_id}.{chunk_index // 16}",
+                    type="float4",
+                    phase="initialization",
+                    component_count=4,
+                    value=padded[chunk_index : chunk_index + 16],
+                    timeline_start_frame=0,
+                    timeline_end_frame=0,
+                    timeline_step=0,
+                    timeline_interpolation="none",
+                )
             )
-        capability = replace(
-            package.capability,
-            optional_profile_id=profile_id,
-            optional_requirements_digest=optional_digest,
-            optional_profile_separate_artifact=True,
+            next_parameter_id += 1
+    # Field-specific quantization is also emitted as parameter content, so the
+    # published artifact carries the quantized values rather than only a report
+    # claim.  Full-precision source values remain recoverable from the IR.
+    for decision in optimized.quantization:
+        if not 1 <= len(decision.quantized) <= 4:
+            continue
+        parameter_type = {
+            1: "float",
+            2: "float2",
+            3: "float3",
+            4: "float4",
+        }[len(decision.quantized)]
+        baked_parameters.append(
+            nwp.ParameterRecord(
+                parameter_id=next_parameter_id,
+                name=(
+                    f"nw05.quantized.{decision.node_id}."
+                    f"{decision.parameter}"
+                ),
+                type=parameter_type,
+                phase="initialization",
+                component_count=len(decision.quantized),
+                value=struct.pack(
+                    "<" + "f" * len(decision.quantized),
+                    *decision.quantized,
+                ),
+                timeline_start_frame=0,
+                timeline_end_frame=0,
+                timeline_step=0,
+                timeline_interpolation="none",
+            )
         )
-        capability = replace(
-            capability, profile_fingerprint=capability.computed_profile_fingerprint()
+        next_parameter_id += 1
+    if baked_parameters:
+        package = replace(
+            package, parameters=list(package.parameters) + baked_parameters
         )
-        package = replace(package, capability=capability)
         package_bytes = nwp.encode_package(package)
-        valid, diagnostics = nwp.validate_package_bytes(package_bytes)
-        if not valid:
-            raise ExportError(
-                f"optional artifact for '{profile_id}' is invalid",
-                diagnostics,
-                dependency_path=["optional_profile", profile_id],
-            )
+
+    capability = replace(
+        package.capability,
+        profile_id=profile_id,
+        requirements_digest=requirements_digest,
+        optional_profile_id="" if is_common else profile_id,
+        optional_requirements_digest="" if is_common else requirements_digest,
+        optional_profile_separate_artifact=True,
+    )
+    capability = replace(
+        capability, profile_fingerprint=capability.computed_profile_fingerprint()
+    )
+    package = replace(package, capability=capability)
+    package_bytes = nwp.encode_package(package)
+    valid, diagnostics = nwp.validate_package_bytes(package_bytes)
+    if not valid:
+        raise ExportError(
+            f"artifact for '{profile_id}' is invalid",
+            diagnostics,
+            dependency_path=["capability_profile", profile_id],
+        )
     if requirements_digest != KNOWN_PROFILES[profile_id]:
         raise ExportError(
             f"profile '{profile_id}' digest mismatch",
@@ -637,6 +875,24 @@ def _write_bytes(path: Path, data: bytes) -> None:
             pass
 
 
+def _failure_report_path(
+    report_path: str | os.PathLike[str] | None,
+    output_directory: Path,
+) -> Path | None:
+    """Never overwrite a prior complete artifact's report on failure."""
+    if report_path is None:
+        return None
+    path = Path(report_path)
+    try:
+        path.resolve().relative_to(output_directory.resolve())
+    except ValueError:
+        return path
+    suffix = path.suffix or ".json"
+    return output_directory.parent / (
+        output_directory.name + "-failed-report" + suffix
+    )
+
+
 def _publish_directory(staging: Path, destination: Path) -> None:
     """Publish a complete directory with rollback of any previous artifact."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -655,6 +911,109 @@ def _publish_directory(staging: Path, destination: Path) -> None:
     else:
         if backup is not None:
             shutil.rmtree(backup, ignore_errors=True)
+
+
+def _artifact_auxiliary_names(stem: str, *, common: bool) -> list[str]:
+    names = [
+        f"{stem}.schedule.json",
+        f"{stem}.aliases.json",
+        f"{stem}.player.cpp",
+        f"{stem}.size.json",
+    ]
+    if common:
+        names.extend(["link-manifest.json", "size-report.json"])
+    return names
+
+
+def _finalize_size_accounting(
+    staging: Path,
+    artifacts: Mapping[str, "ProfileArtifact"],
+    settings: ExportSettings,
+) -> None:
+    """Attribute every emitted artifact file, including reports themselves.
+
+    Size-report bytes are self-referential.  A bounded fixed-point iteration
+    rewrites the deterministic JSON until the recorded file sizes and totals
+    match the actual bytes on disk.
+    """
+    for _ in range(8):
+        stable = True
+        for profile_id, artifact in artifacts.items():
+            stem = _profile_file_stem(profile_id)
+            common = profile_id == nwp.COMMON_PROFILE_ID
+            files: dict[str, int] = {}
+            for name in _artifact_auxiliary_names(stem, common=common):
+                path = staging / name
+                if path.is_file():
+                    files[name] = path.stat().st_size
+            manifest_path = staging / f"{stem}.manifest.json"
+            executable_path = (
+                staging / artifact.executable_name
+                if artifact.executable_name
+                else None
+            )
+            manifest_bytes = (
+                manifest_path.stat().st_size if manifest_path.is_file() else 0
+            )
+            executable_bytes = (
+                executable_path.stat().st_size
+                if executable_path is not None and executable_path.is_file()
+                else 0
+            )
+            distribution = artifact.size_report["distribution"]
+            previous_total = distribution["total_distributed_bytes"]
+            distribution["manifest_bytes"] = manifest_bytes
+            distribution["executable_bytes"] = executable_bytes
+            distribution["artifact_files"] = dict(sorted(files.items()))
+            distribution["artifact_file_bytes"] = sum(files.values())
+            total = (
+                len(artifact.package_bytes)
+                + manifest_bytes
+                + executable_bytes
+                + sum(files.values())
+            )
+            distribution["total_distributed_bytes"] = total
+            distribution["byte_ceiling"] = settings.byte_ceiling
+            distribution["within_byte_ceiling"] = total <= settings.byte_ceiling
+            payload = json.dumps(
+                artifact.size_report, indent=2, sort_keys=True
+            ).encode("utf-8")
+            _write_bytes(staging / f"{stem}.size.json", payload)
+            if common:
+                _write_bytes(staging / "size-report.json", payload)
+            if previous_total != total:
+                stable = False
+        if stable:
+            break
+    for profile_id, artifact in artifacts.items():
+        distribution = artifact.size_report["distribution"]
+        total = distribution["total_distributed_bytes"]
+        if total > settings.byte_ceiling:
+            raise ExportError(
+                f"artifact '{profile_id}' exceeds the byte ceiling "
+                f"({total} > {settings.byte_ceiling})",
+                [
+                    nwp.package_diagnostic(
+                        "export_byte_ceiling_exceeded",
+                        "distributed bytes exceed the configured ceiling",
+                    )
+                ],
+                dependency_path=["budget", profile_id, "byte_ceiling"],
+            )
+        # Memory budget remains based on the queried physical realization.
+        if artifact.physical_realization.peak_bytes > settings.memory_budget:
+            raise ExportError(
+                f"artifact '{profile_id}' exceeds the memory budget "
+                f"({artifact.physical_realization.peak_bytes} > "
+                f"{settings.memory_budget})",
+                [
+                    nwp.package_diagnostic(
+                        "export_memory_budget_exceeded",
+                        "peak physical realization bytes exceed the budget",
+                    )
+                ],
+                dependency_path=["budget", profile_id, "memory_budget"],
+            )
 
 
 def export_graph(
@@ -729,9 +1088,10 @@ def export_graph(
         )
     except optimizer.OptimizationError as exc:
         failure = ExportError("graph optimisation failed", exc.diagnostics)
-        if report_path is not None:
+        diagnostic_path = _failure_report_path(report_path, output_directory)
+        if diagnostic_path is not None:
             _write_bytes(
-                Path(report_path),
+                diagnostic_path,
                 json.dumps(
                     {
                         "format": EXPORT_FORMAT,
@@ -741,6 +1101,10 @@ def export_graph(
                         "diagnostics": failure.diagnostics,
                         "dependency_path": failure.dependency_path,
                         "settings": settings.to_dict(),
+                        "budgets": {
+                            "byte_ceiling": settings.byte_ceiling,
+                            "memory_budget": settings.memory_budget,
+                        },
                         "preserved_previous_artifact": True,
                         "stage": "optimization",
                     },
@@ -764,16 +1128,18 @@ def export_graph(
                 - {nwp.COMMON_PROFILE_ID}
             ),
         ]
+        generation_modes = _generation_mode_map(optimized, settings)
         for profile_id in profile_order:
             is_common = profile_id == nwp.COMMON_PROFILE_ID
             requirements_digest = KNOWN_PROFILES[profile_id]
             package_path = staging / f"{_profile_file_stem(profile_id)}.nwp"
             try:
                 package_bytes, package, compile_report = _compile_profile_package(
-                    document,
+                    optimized,
                     package_path,
                     profile_id=profile_id,
                     requirements_digest=requirements_digest,
+                    generation_modes=generation_modes,
                     dxc_executable=dxc_executable,
                     optimization=optimization,
                     cache_dir=str(cache_dir) if cache_dir is not None else None,
@@ -792,6 +1158,7 @@ def export_graph(
                 allocation_query=allocation_query,
                 adapter_identity=adapter_identity,
                 frames_in_flight=settings.frames_in_flight,
+                allow_simulated_allocation=allow_test_payloads,
             )
             shader_rows = [
                 (
@@ -807,12 +1174,30 @@ def export_graph(
                 if other_profile != nwp.COMMON_PROFILE_ID
                 and other_profile != profile_id
             )
+            template_path = Path(settings.player_template) if settings.player_template else None
+            template_bytes = (
+                template_path.read_bytes()
+                if template_path is not None and template_path.is_file()
+                else b""
+            )
+            runtime_dependencies, dependency_source = _runtime_dependencies(
+                package, template_bytes
+            )
+            requires_aliasing = any(
+                bool(group.get("aliased")) for group in physical.alias_groups
+            )
             manifest = optimizer.build_link_manifest(
                 optimized,
                 package=package,
                 shader_blobs=shader_rows,
                 excluded_optional_profiles=excluded_optional,
+                profile_id=profile_id,
+                requirements_digest=requirements_digest,
+                optional_profile_id="" if is_common else profile_id,
+                requires_aliasing=requires_aliasing,
+                runtime_dependencies=runtime_dependencies,
             )
+            manifest["dependencies_source"] = dependency_source
             manifest["artifact_profile_id"] = profile_id
             manifest["artifact_requirements_digest"] = requirements_digest
             manifest["artifact_identity"] = artifact_key(
@@ -837,12 +1222,28 @@ def export_graph(
 
             executable_bytes: bytes | None = None
             executable_name = ""
-            template_bytes = b""
-            template_path = Path(settings.player_template) if settings.player_template else None
-            if template_path is not None and template_path.is_file():
-                template_bytes = template_path.read_bytes()
+            if template_bytes:
                 executable_bytes = embed_package(template_bytes, package_bytes, manifest_data)
                 executable_name = f"{_profile_file_stem(profile_id)}.exe"
+
+            schedule_data = json.dumps(
+                logical_schedule.to_dict(), indent=2, sort_keys=True
+            ).encode("utf-8")
+            aliases_data = json.dumps(
+                physical.to_dict(), indent=2, sort_keys=True
+            ).encode("utf-8")
+            player_source = generate_player_source(
+                package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+                manifest_sha256=manifest["manifest_sha256"],
+            ).encode("utf-8")
+            aux_files = {
+                f"{_profile_file_stem(profile_id)}.schedule.json": len(schedule_data),
+                f"{_profile_file_stem(profile_id)}.aliases.json": len(aliases_data),
+                f"{_profile_file_stem(profile_id)}.player.cpp": len(player_source),
+            }
+            if is_common:
+                # Conventional duplicate names are separate distributed files.
+                aux_files["link-manifest.json"] = len(manifest_data)
 
             size_report = analyze_package_size(
                 package,
@@ -851,6 +1252,9 @@ def export_graph(
                 executable_bytes=len(executable_bytes) if executable_bytes else 0,
                 player_template_bytes=len(template_bytes),
                 byte_ceiling=settings.byte_ceiling,
+                runtime_dependencies=runtime_dependencies,
+                dependency_source=dependency_source,
+                artifact_files=aux_files,
             )
             size_report["content"]["reachable_node_ids"] = list(
                 optimized.reachable_node_ids
@@ -863,6 +1267,8 @@ def export_graph(
             ]["optional_implementations"]
             size_report["artifact_identity"] = manifest["artifact_identity"]
 
+            # Budget validation runs again after auxiliary/size-report bytes
+            # are finalized below; this early check catches obvious failures.
             if not size_report["distribution"]["within_byte_ceiling"]:
                 raise ExportError(
                     f"artifact '{profile_id}' exceeds the byte ceiling "
@@ -959,6 +1365,7 @@ def export_graph(
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
 
+        _finalize_size_accounting(staging, artifacts, settings)
         common = artifacts[nwp.COMMON_PROFILE_ID]
         common_total = common.size_report["distribution"]["total_distributed_bytes"]
         optional_total = sum(
@@ -1115,10 +1522,16 @@ def export_graph(
                 "diagnostics": getattr(exc, "diagnostics", []),
                 "dependency_path": getattr(exc, "dependency_path", []),
                 "settings": settings.to_dict(),
+                "budgets": {
+                    "byte_ceiling": settings.byte_ceiling,
+                    "memory_budget": settings.memory_budget,
+                },
                 "preserved_previous_artifact": True,
             }
+            diagnostic_path = _failure_report_path(report_path, output_directory)
+            assert diagnostic_path is not None
             _write_bytes(
-                Path(report_path),
+                diagnostic_path,
                 json.dumps(diagnostic_report, indent=2, sort_keys=True).encode("utf-8"),
             )
         raise
@@ -1157,11 +1570,30 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
             executable_bytes = (
                 len(executable_path.read_bytes()) if executable_path.is_file() else 0
             )
+            manifest: dict[str, Any] = {}
+            if manifest_path.is_file():
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            common = (
+                inspection.package.capability.profile_id
+                == nwp.COMMON_PROFILE_ID
+            )
+            artifact_files: dict[str, int] = {}
+            for name in _artifact_auxiliary_names(stem.name, common=common):
+                aux_path = target / name
+                if aux_path.is_file():
+                    artifact_files[name] = aux_path.stat().st_size
             size = analyze_package_size(
                 inspection.package,
                 data,
                 manifest_bytes=manifest_bytes,
                 executable_bytes=executable_bytes,
+                runtime_dependencies=manifest.get("retained", {}).get(
+                    "dependencies"
+                ),
+                dependency_source=manifest.get(
+                    "dependencies_source", "manifest-unavailable"
+                ),
+                artifact_files=artifact_files,
             )
             size["distribution_discovered"] = {
                 "manifest_path": str(manifest_path) if manifest_path.is_file() else "",
@@ -1169,9 +1601,7 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
                 "manifest_bytes": manifest_bytes,
                 "executable_bytes": executable_bytes,
             }
-            manifest_path = package_path.with_suffix(".manifest.json")
-            if manifest_path.is_file():
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest:
                 size["manifest_sha256"] = manifest.get("manifest_sha256", "")
                 size["artifact_identity"] = manifest.get("artifact_identity", "")
             size["path"] = str(package_path)
@@ -1180,6 +1610,11 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
             total_distributed += size["distribution"]["total_distributed_bytes"]
         if not artifacts:
             raise ExportError(f"no .nwp artifacts in '{target}'")
+        total_distributed = sum(
+            path.stat().st_size
+            for path in sorted(target.iterdir())
+            if path.is_file()
+        )
         return {
             "format": "nw05-inspect-size",
             "version": 1,
@@ -1191,10 +1626,12 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
         }
     raw = target.read_bytes()
     executable_bytes = 0
+    embedded_manifest_bytes = 0
     if target.suffix.lower() == ".exe":
         try:
-            data, _manifest = extract_embedded_package(raw)
+            data, embedded_manifest = extract_embedded_package(raw)
             executable_bytes = len(raw)
+            embedded_manifest_bytes = len(embedded_manifest)
         except ExportError as exc:
             raise ExportError(
                 f"executable '{target}' has no valid embedded package: {exc}"
@@ -1209,13 +1646,30 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
     stem = target.with_suffix("")
     manifest_path = target.parent / f"{stem.name}.manifest.json"
     executable_path = target.parent / f"{stem.name}.exe"
-    manifest_bytes = len(manifest_path.read_bytes()) if manifest_path.is_file() else 0
-    executable_bytes = len(executable_path.read_bytes()) if executable_path.is_file() else 0
+    manifest_bytes = (
+        len(manifest_path.read_bytes()) if manifest_path.is_file() else embedded_manifest_bytes
+    )
+    if target.suffix.lower() != ".exe":
+        executable_bytes = (
+            len(executable_path.read_bytes()) if executable_path.is_file() else 0
+        )
+    manifest: dict[str, Any] = {}
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    common = inspection.package.capability.profile_id == nwp.COMMON_PROFILE_ID
+    artifact_files: dict[str, int] = {}
+    for name in _artifact_auxiliary_names(stem.name, common=common):
+        aux_path = target.parent / name
+        if aux_path.is_file():
+            artifact_files[name] = aux_path.stat().st_size
     result = analyze_package_size(
         inspection.package,
         data,
         manifest_bytes=manifest_bytes,
         executable_bytes=executable_bytes,
+        runtime_dependencies=manifest.get("retained", {}).get("dependencies"),
+        dependency_source=manifest.get("dependencies_source", "manifest-unavailable"),
+        artifact_files=artifact_files,
     )
     result["distribution_discovered"] = {
         "manifest_path": str(manifest_path) if manifest_path.is_file() else "",

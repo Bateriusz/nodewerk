@@ -705,8 +705,16 @@ def simulate_allocation(
 
 def normalize_allocation_query(
     query: Mapping[int, Any] | Callable[[nwp.ResourceDescriptor], Any] | None,
+    *,
+    allow_simulation: bool = False,
 ) -> Callable[[nwp.ResourceDescriptor], AllocationRequirement]:
     if query is None:
+        if not allow_simulation:
+            raise ScheduleError(
+                "physical alias realization requires an explicit adapter "
+                "allocation query; simulated 64 KiB placement is never a "
+                "silent fallback"
+            )
         return simulate_allocation
     if callable(query):
         def call(resource: nwp.ResourceDescriptor) -> AllocationRequirement:
@@ -773,6 +781,7 @@ def realize_physical_aliases(
     allocation_query: Mapping[int, Any] | Callable[[nwp.ResourceDescriptor], Any] | None = None,
     adapter_identity: str = "host-simulation",
     frames_in_flight: int | None = None,
+    allow_simulated_allocation: bool = False,
 ) -> PhysicalRealization:
     """Prove alias compatibility against queried sizes/alignments and emit barriers.
 
@@ -780,7 +789,9 @@ def realize_physical_aliases(
     appear in the logical schedule or in the `.nwp` container.
     """
     frames = schedule.frames_in_flight if frames_in_flight is None else max(1, int(frames_in_flight))
-    query = normalize_allocation_query(allocation_query)
+    query = normalize_allocation_query(
+        allocation_query, allow_simulation=allow_simulated_allocation
+    )
     resource_by_id = {resource.resource_id: resource for resource in schedule.resources}
     package_by_id = {resource.resource_id: resource for resource in package.resources}
     requirements: dict[int, AllocationRequirement] = {}

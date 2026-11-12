@@ -115,4 +115,22 @@ ResourcePlanResult BuildAliasedResourcePlan(
 ResourceAllocationQuery SimulateResourceAllocation(
     const package::ResourceDescriptor& resource, void* user_data);
 
+// Platform bridge used by PackagePlayer to realize an already-proven alias
+// plan.  Pointers are opaque here so host builds do not need D3D12 headers.
+// On Windows the returned heap is an ID3D12Heap and resources are created with
+// CreatePlacedResource at the adapter-specific offsets in the plan.  The
+// returned offsets remain runtime evidence, never portable package content.
+void* CreateAliasedResourceHeap(void* device,
+                                std::uint64_t heap_size_bytes,
+                                std::string* detail);
+bool CreateAliasedPlacedResource(void* heap,
+                                 const ResourcePlacement& placement,
+                                 void** resource,
+                                 std::string* detail);
+void ReleaseAliasedResourceHeap(void* heap);
+void EmitAliasingBarrier(void* command_list,
+                         const ResourceAliasBarrier& barrier,
+                         void* before_resource,
+                         void* after_resource);
+
 } // namespace nw::player

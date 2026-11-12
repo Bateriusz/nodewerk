@@ -169,11 +169,19 @@ def test_optional_profile_is_a_separate_budgeted_artifact(tmp_path: Path) -> Non
     common = result.artifacts[nwp.COMMON_PROFILE_ID]
     optional = result.artifacts[nwp.OPTIONAL_PROFILE_WAVE_OPS]
     assert common.package.capability.optional_profile_id == ""
+    assert optional.package.capability.profile_id == nwp.OPTIONAL_PROFILE_WAVE_OPS
+    assert optional.package.capability.requirements_digest == (
+        nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST
+    )
     assert optional.package.capability.optional_profile_id == nwp.OPTIONAL_PROFILE_WAVE_OPS
     assert optional.package.capability.optional_requirements_digest == (
         nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST
     )
     assert common.artifact_key != optional.artifact_key
+    assert optional.manifest["profile_id"] == nwp.OPTIONAL_PROFILE_WAVE_OPS
+    assert optional.manifest["requirements_digest"] == nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST
+    assert optional.manifest["feature_requirements"]["wave_ops"] is True
+    assert common.manifest["feature_requirements"]["wave_ops"] is False
     assert result.report["budgets"]["optional_independent"] is True
     assert result.report["budgets"]["common_baseline_raised_by_optional"] is False
     for directory in (tmp_path / "out",):
@@ -384,6 +392,196 @@ def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
     assert decisions["image"]["mode"] == "bake"
     assert decisions["image"]["automatic_cost_oracle"] is False
     assert decisions["image"]["incremental_compressed_content_bytes"] > 0
+    assert decisions["image"]["baked_content_emitted_bytes"] > 0
     assert decisions["texture_recipe"]["mode"] == "generate"
     assert result.report["generation_vs_bake"]["automatic_oracle"] is False
+
+
+def test_optimizer_and_fusion_settings_change_published_bytes(tmp_path: Path) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    source = PROCEDURAL.read_text(encoding="utf-8")
+    foldable = source.replace(
+        "vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), "
+        "mix(uv.y, cos(uv.x * 13.0 - time), 0.25), "
+        "sin(uv.x * 31.0 + time) * 0.5 + 0.5, 1.0)",
+        "vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), "
+        "mix(uv.y, cos(uv.x * 13.0 - time), 0.25), "
+        "sin(uv.x * 31.0 + time) * 0.5 + (0.25 + 0.25), 1.0)",
+    )
+    graph = tmp_path / "foldable.nwgraph"
+    graph.write_text(foldable, encoding="utf-8")
+    fused = nw05_export.export_graph(
+        graph,
+        tmp_path / "fused",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    unfused = nw05_export.export_graph(
+        graph,
+        tmp_path / "unfused",
+        settings=_settings(tmp_path, fusion_enabled=False),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    assert (
+        fused.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+        != unfused.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+    )
+    assert (
+        fused.artifacts[nwp.COMMON_PROFILE_ID].package.capability.compiler_fingerprint
+        != unfused.artifacts[nwp.COMMON_PROFILE_ID].package.capability.compiler_fingerprint
+    )
+
+
+def test_quantization_changes_published_package_bytes(tmp_path: Path) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    semantics = (
+        REPO_ROOT / "fixtures" / "nw05" / "optimization_semantics.nwgraph"
+    )
+    quantized = nw05_export.export_graph(
+        semantics,
+        tmp_path / "quantized",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    text = semantics.read_text(encoding="utf-8").replace(
+        "setting quantization_policy bits",
+        "setting quantization_policy none",
+    )
+    unquantized_graph = tmp_path / "unquantized.nwgraph"
+    unquantized_graph.write_text(text, encoding="utf-8")
+    plain = nw05_export.export_graph(
+        unquantized_graph,
+        tmp_path / "plain",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    assert (
+        quantized.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+        != plain.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+    )
+
+
+def test_graph_is_the_sole_source_of_published_procedural_content(
+    tmp_path: Path,
+) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    baseline = _export(tmp_path, name="baseline", dxc=dxc)
+    changed_source = PROCEDURAL.read_text(encoding="utf-8").replace(
+        "sin(uv.x * 31.0 + time)", "sin(uv.x * 37.0 + time)"
+    )
+    changed_graph = tmp_path / "changed.nwgraph"
+    changed_graph.write_text(changed_source, encoding="utf-8")
+    changed = nw05_export.export_graph(
+        changed_graph,
+        tmp_path / "changed",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    baseline_artifact = baseline.artifacts[nwp.COMMON_PROFILE_ID]
+    changed_artifact = changed.artifacts[nwp.COMMON_PROFILE_ID]
+    assert baseline_artifact.package_bytes != changed_artifact.package_bytes
+    assert (
+        baseline_artifact.package.shaders[0].blob
+        == changed_artifact.package.shaders[0].blob
+    )
+    # The mock DXC returns a stable container; the compiler fingerprint proves
+    # the graph-derived HLSL, not fixture content, determined the artifact.
+    assert (
+        baseline_artifact.package.capability.compiler_fingerprint
+        != changed_artifact.package.capability.compiler_fingerprint
+    )
+
+
+def test_unreachable_graph_additions_do_not_change_published_bytes(
+    tmp_path: Path,
+) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    baseline = _export(tmp_path, name="baseline", dxc=dxc)
+    source = PROCEDURAL.read_text(encoding="utf-8")
+    extended_source = source + (
+        "\nnode unused_extra nw.math.scalar_const@1.0.0 frequency=frame\n"
+        "  param value 99\n"
+    )
+    extended_graph = tmp_path / "extended.nwgraph"
+    extended_graph.write_text(extended_source, encoding="utf-8")
+    extended = nw05_export.export_graph(
+        extended_graph,
+        tmp_path / "extended",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    assert (
+        baseline.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+        == extended.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+    )
+
+
+def test_inspect_size_attributes_every_distributed_file(tmp_path: Path) -> None:
+    result = _export(tmp_path)
+    directory = tmp_path / "out"
+    expected = sum(
+        path.stat().st_size for path in directory.iterdir() if path.is_file()
+    )
+    size = nw05_export.inspect_size(directory)
+    assert size["total_distributed_bytes"] == expected
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    common_size = nw05_export.inspect_size(
+        directory
+        / f"{nw05_export._profile_file_stem(nwp.COMMON_PROFILE_ID)}.nwp"
+    )
+    files = common_size["distribution"]["artifact_files"]
+    for suffix in (
+        ".schedule.json",
+        ".aliases.json",
+        ".size.json",
+        ".player.cpp",
+    ):
+        assert any(name.endswith(suffix) for name in files)
+    assert files["link-manifest.json"] > 0
+    assert files["size-report.json"] > 0
+
+
+def test_inspect_size_reads_embedded_manifest_without_sibling(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    executable = tmp_path / "out" / common.executable_name
+    isolated = tmp_path / "isolated"
+    isolated.mkdir()
+    isolated_executable = isolated / executable.name
+    isolated_executable.write_bytes(executable.read_bytes())
+    size = nw05_export.inspect_size(isolated_executable)
+    assert size["distribution"]["manifest_bytes"] > 0
+    assert size["distribution"]["executable_bytes"] > 0
+
+
+def test_failed_export_never_overwrites_report_inside_prior_artifact(
+    tmp_path: Path,
+) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    report_path = tmp_path / "out" / "report.json"
+    _export(tmp_path, dxc=dxc)
+    report_path.write_text('{"prior": true}\n', encoding="utf-8")
+    before = report_path.read_bytes()
+    with pytest.raises(nw05_export.ExportError):
+        nw05_export.export_graph(
+            PROCEDURAL,
+            tmp_path / "out",
+            settings=_settings(tmp_path, byte_ceiling=1),
+            report_path=report_path,
+            dxc_executable=str(dxc),
+            allow_test_payloads=True,
+        )
+    assert report_path.read_bytes() == before
+    diagnostic = json.loads(
+        (tmp_path / "out-failed-report.json").read_text(encoding="utf-8")
+    )
+    assert diagnostic["success"] is False
 

@@ -258,6 +258,7 @@ private:
     bool force_root_signature_creation_failure_ = false;
     bool force_pipeline_creation_failure_ = false;
     bool simulate_post_initialization_allocation_ = false;
+    bool using_aliased_plan_ = false;
     std::uint32_t timeline_parameter_id_ = 0u;
     std::uint64_t timeline_tick_ = 0u;
     bool timeline_override_active_ = false;

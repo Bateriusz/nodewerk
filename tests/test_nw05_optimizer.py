@@ -204,3 +204,41 @@ def test_link_manifest_lists_exact_reachability_and_exclusions() -> None:
         for query in manifest["feature_queries"]
     )
 
+
+def test_dead_output_elimination_prunes_unused_multi_output_ports() -> None:
+    document = compiler.load_graph(SEMANTICS)
+    split = compiler.GraphNode(
+        node_id="split_probe",
+        operator_id="nw.math.vec4_split",
+        version="1.0.0",
+        frequency="frame",
+        residency="cpu",
+        params={},
+        inputs={"v": ("shade", "out")},
+    )
+    document.nodes["split_probe"] = split
+    document.nodes["roughness"].inputs["x"] = ("split_probe", "x")
+    optimized = optimizer.optimize_graph(document)
+    node = optimized.node_map()["split_probe"]
+    assert set(node.outputs) == {"x"}
+    assert ("split_probe", "y") in optimized.dead_outputs
+    assert ("split_probe", "z") in optimized.dead_outputs
+    assert ("split_probe", "w") in optimized.dead_outputs
+    materialized = optimized.materialize_document()
+    assert materialized.nodes["split_probe"].inputs["v"] == ("shade", "out")
+
+
+def test_optimized_document_is_what_nw03_compiles() -> None:
+    document = compiler.load_graph(SEMANTICS)
+    optimized = optimizer.optimize_graph(document)
+    materialized = optimized.materialize_document(
+        generation_modes={"shade": "bake"}
+    )
+    assert "unused_curve" not in materialized.nodes
+    assert "shade_b" not in materialized.nodes
+    assert materialized.settings["nw05.generation.shade.mode"] == "bake"
+    assert any(
+        key.startswith("nw05.quantization.gain.value")
+        for key in materialized.settings
+    )
+

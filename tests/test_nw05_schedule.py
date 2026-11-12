@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
@@ -89,7 +91,10 @@ def test_compatible_alias_group_realises_same_offset_and_barrier() -> None:
     package = _transient_pair()
     logical = schedule.build_logical_schedule(package, frames_in_flight=1)
     realization = schedule.realize_physical_aliases(
-        logical, package, frames_in_flight=1
+        logical,
+        package,
+        frames_in_flight=1,
+        allocation_query=schedule.simulate_allocation,
     )
     placements = {item.resource_id: item for item in realization.placements}
     assert placements[1].aliased or placements[2].aliased
@@ -144,7 +149,10 @@ def test_frames_in_flight_duplicate_transients_without_cross_slot_reuse() -> Non
     package = _transient_pair()
     logical = schedule.build_logical_schedule(package, frames_in_flight=2)
     realization = schedule.realize_physical_aliases(
-        logical, package, frames_in_flight=2
+        logical,
+        package,
+        frames_in_flight=2,
+        allocation_query=schedule.simulate_allocation,
     )
     instances = {item.resource_id: set() for item in realization.placements}
     for item in realization.placements:
@@ -161,6 +169,10 @@ def test_frames_in_flight_duplicate_transients_without_cross_slot_reuse() -> Non
 def test_adapter_query_is_required_for_realization() -> None:
     package = _transient_pair()
     logical = schedule.build_logical_schedule(package, frames_in_flight=1)
+    with pytest.raises(schedule.ScheduleError, match="explicit adapter allocation"):
+        schedule.realize_physical_aliases(
+            logical, package, frames_in_flight=1
+        )
     realization = schedule.realize_physical_aliases(
         logical,
         package,
@@ -250,7 +262,10 @@ def test_alias_reuse_checks_every_occupant_of_a_range() -> None:
     )
     logical = schedule.build_logical_schedule(package, frames_in_flight=1)
     realization = schedule.realize_physical_aliases(
-        logical, package, frames_in_flight=1
+        logical,
+        package,
+        frames_in_flight=1,
+        allocation_query=schedule.simulate_allocation,
     )
     placements = {item.resource_id: item for item in realization.placements}
     # Resource 3 aliases resource 1, so resource 2 (live with resource 3) must

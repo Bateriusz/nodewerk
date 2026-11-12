@@ -448,6 +448,9 @@ struct PlatformState {
     std::uint32_t rtv_increment = 0u;
 
     std::vector<ResourceSlot> resources;
+    // Adapter-specific placed heap proving the alias plan.  Null when the
+    // player falls back to committed resources (non-Windows simulation).
+    void* package_heap = nullptr;
     std::vector<RootSlot> root_signatures;
     std::vector<PipelineSlot> pipelines;
     std::vector<FrameSlot> frames;
@@ -1823,6 +1826,19 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
                     "frame_ring",
                     "swap-chain creation requires an initialized D3D12 device");
     }
+    if (using_aliased_plan_ && plan_.total_engine_bytes > 0u) {
+        std::string detail;
+        state->package_heap = CreateAliasedResourceHeap(
+            state->device, plan_.total_engine_bytes, &detail);
+        if (state->package_heap == nullptr) {
+            return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                        "alias_heap_creation_failed", "alias_heap",
+                        "created", detail.empty() ? "failed" : detail,
+                        "alias_realization",
+                        "adapter-specific alias heap creation failed");
+        }
+        NoteEngineAllocation(plan_.total_engine_bytes, 0u, false, true, false);
+    }
     D3D12_COMMAND_QUEUE_DESC queue_desc{};
     queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
@@ -2361,19 +2377,40 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 heap.Type = HeapTypeForUsage(placement->descriptor);
                 const D3D12_RESOURCE_STATES initial =
                     InitialStateForUsage(placement->descriptor);
-                if (FAILED(state->device->CreateCommittedResource(
-                        &heap, D3D12_HEAP_FLAG_NONE, &desc, initial, nullptr,
-                        IID_PPV_ARGS(&slot->resource))) ||
-                    slot->resource == nullptr) {
-                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
-                                "committed_resource_failed", "resource",
-                                placement->descriptor.name, "allocation failed",
-                                "init.create_resource",
-                                "CreateCommittedResource failed");
+                if (state->package_heap != nullptr &&
+                    placement->descriptor.usage != "readback") {
+                    void* placed = nullptr;
+                    std::string detail;
+                    if (!CreateAliasedPlacedResource(
+                            state->package_heap, *placement, &placed,
+                            &detail) ||
+                        placed == nullptr) {
+                        return Fail(
+                            ExitCode::ResourceAllocationFailed, "resource",
+                            "placed_resource_failed", "resource",
+                            placement->descriptor.name,
+                            detail.empty() ? "placement failed" : detail,
+                            "init.create_resource",
+                            "placed-resource creation failed for the proven alias "
+                            "offset");
+                    }
+                    slot->resource = static_cast<ID3D12Resource*>(placed);
+                } else {
+                    if (FAILED(state->device->CreateCommittedResource(
+                            &heap, D3D12_HEAP_FLAG_NONE, &desc, initial,
+                            nullptr, IID_PPV_ARGS(&slot->resource))) ||
+                        slot->resource == nullptr) {
+                        return Fail(
+                            ExitCode::ResourceAllocationFailed, "resource",
+                            "committed_resource_failed", "resource",
+                            placement->descriptor.name, "allocation failed",
+                            "init.create_resource",
+                            "CreateCommittedResource failed");
+                    }
+                    NoteEngineAllocation(placement->allocation_size_bytes, 0u,
+                                         false, false, false);
                 }
                 slot->state = initial;
-                NoteEngineAllocation(placement->allocation_size_bytes, 0u,
-                                     false, false, false);
             }
             if (slot->has_descriptor) {
                 if (placement->descriptor.usage == "sampler") {
@@ -2925,7 +2962,38 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         package_tables{};
     std::array<bool, package::kMaxRootSignatureDwordCost>
         package_table_valid{};
+    std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
     for (const auto& op : frame_ops_) {
+        if (state->package_heap != nullptr) {
+            for (std::size_t alias_index = 0u;
+                 alias_index < plan_.alias_barriers.size(); ++alias_index) {
+                if (alias_barrier_emitted[alias_index]) continue;
+                const auto& alias = plan_.alias_barriers[alias_index];
+                if (op.resource_a != alias.resource_id &&
+                    op.resource_b != alias.resource_id) {
+                    continue;
+                }
+                PlatformState::ResourceSlot* before = nullptr;
+                PlatformState::ResourceSlot* after = nullptr;
+                for (auto& candidate : state->resources) {
+                    if (candidate.resource_id == alias.before_resource_id) {
+                        before = &candidate;
+                    }
+                    if (candidate.resource_id == alias.resource_id) {
+                        after = &candidate;
+                    }
+                }
+                EmitAliasingBarrier(
+                    list, alias, before == nullptr ? nullptr : before->resource,
+                    after == nullptr ? nullptr : after->resource);
+                if (after != nullptr &&
+                    after->resource != nullptr) {
+                    after->state = D3D12_RESOURCE_STATE_COMMON;
+                }
+                if (alias.uav_barrier) ++stats_.uav_barrier_count;
+                alias_barrier_emitted[alias_index] = true;
+            }
+        }
         switch (op.type) {
             case FrameOp::Type::SetRootSignature: {
                 ID3D12RootSignature* root = nullptr;
@@ -3627,6 +3695,7 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     present_source_width_ = 0u;
     present_source_height_ = 0u;
     frames_presented_ = 0u;
+    using_aliased_plan_ = false;
     width_ = config_.width;
     height_ = config_.height;
     minimized_ = false;
@@ -3719,7 +3788,15 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
                                       ? allocation_user_data_
                                       : default_user_data;
     const ResourcePlanResult plan_result =
+#if defined(_WIN32)
+        // Realize the compiler's logical alias plan against the actual
+        // adapter.  Overlapping frames are serialized here (one frame slot) so
+        // every transient instance has a fence-safe lifetime without
+        // unproven cross-slot reuse.
+        BuildAliasedResourcePlan(package_, query, query_user_data, 1u);
+#else
         BuildNonAliasedResourcePlan(package_, query, query_user_data);
+#endif
     if (plan_result.exit_code != ExitCode::Success) {
         code = FailPlan(plan_result);
         ReleasePlatform();
@@ -3727,6 +3804,10 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     }
     plan_ = plan_result.plan;
     stats_.package_plan_bytes = plan_.total_engine_bytes;
+#if defined(_WIN32)
+    using_aliased_plan_ = true;
+    frames_in_flight_ = 1u;
+#endif
 
     if (!BuildFrameInstructionPlan()) {
         code = last_exit_;
@@ -4028,6 +4109,10 @@ void PackagePlayer::ReleasePlatform() noexcept {
         if (slot.resource != nullptr) slot.resource->Release();
     }
     state->resources.clear();
+    if (state->package_heap != nullptr) {
+        ReleaseAliasedResourceHeap(state->package_heap);
+        state->package_heap = nullptr;
+    }
     for (auto& pipeline : state->pipelines) {
         if (pipeline.pipeline_state != nullptr) {
             pipeline.pipeline_state->Release();

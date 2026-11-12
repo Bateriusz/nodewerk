@@ -2311,6 +2311,9 @@ def compile_package(
     graph_path: str | os.PathLike[str],
     output_path: str | os.PathLike[str],
     *,
+    document: GraphDocument | None = None,
+    semantic_digest_override: str | None = None,
+    semantic_digest_test_identity: bool | None = None,
     report_path: str | os.PathLike[str] | None = None,
     dev_sidecar_path: str | os.PathLike[str] | None = None,
     cache_dir: str | os.PathLike[str] | None = None,
@@ -2321,15 +2324,24 @@ def compile_package(
 ) -> dict[str, Any]:
     """Compile a graph to a validated `.nwp` package and publish atomically."""
     output_path = Path(output_path)
-    document = load_graph(graph_path)
+    if document is None:
+        document = load_graph(graph_path)
     generated, diagnostics = lower_to_fused_hlsl(document)
     if diagnostics:
         raise CompilerError("failed to lower graph", diagnostics)
     if not generated:
         raise CompilerError("graph produced no shader specializations")
-    semantic_identity = document.semantic_identity()
-    semantic_digest = semantic_identity.digest
-    test_semantic_digest = semantic_identity.is_test
+    if semantic_digest_override is not None:
+        semantic_digest = semantic_digest_override
+        test_semantic_digest = (
+            bool(semantic_digest_test_identity)
+            if semantic_digest_test_identity is not None
+            else False
+        )
+    else:
+        semantic_identity = document.semantic_identity()
+        semantic_digest = semantic_identity.digest
+        test_semantic_digest = semantic_identity.is_test
 
     dxc_bin = resolve_dxc(dxc_executable)
     if not dxc_bin:

@@ -149,6 +149,9 @@ def command_compile_package(args: argparse.Namespace) -> int:
                         for message in quantized.errors
                     ],
                 )
+            compile_document = quantized.document
+        else:
+            compile_document = graph
     except nw03_compiler.CompilerError as exc:
         payload = _error_payload(str(exc), exc.diagnostics)
         payload["profile_id"] = graph_profile
@@ -160,17 +163,20 @@ def command_compile_package(args: argparse.Namespace) -> int:
         destination = output
         if args.byte_ceiling is not None or args.memory_budget is not None:
             output.parent.mkdir(parents=True, exist_ok=True)
-            temporary_output = Path(
-                tempfile.mkstemp(
-                    prefix=".nodewerkc-budget-",
-                    suffix=".nwp",
-                    dir=str(output.parent),
-                )[1]
+            temporary_fd, temporary_name = tempfile.mkstemp(
+                prefix=".nodewerkc-budget-",
+                suffix=".nwp",
+                dir=str(output.parent),
             )
+            # mkstemp returns an open handle; close it before the compiler
+            # atomically replaces this path (required on Windows).
+            os.close(temporary_fd)
+            temporary_output = Path(temporary_name)
             destination = temporary_output
         report = nw03_compiler.compile_package(
             args.graph,
             destination,
+            document=compile_document,
             report_path=args.report,
             dev_sidecar_path=args.dev_sidecar,
             cache_dir=args.cache_dir,
@@ -186,25 +192,58 @@ def command_compile_package(args: argparse.Namespace) -> int:
         )
         distributed = len(package_bytes)
         if args.byte_ceiling is not None and distributed > args.byte_ceiling:
+            report["budgets"] = {
+                "byte_ceiling": args.byte_ceiling,
+                "memory_budget": args.memory_budget,
+                "distributed_bytes": distributed,
+                "resident_resource_bytes": None,
+                "within_byte_ceiling": False,
+                "within_memory_budget": None,
+            }
+            report["success"] = False
+            report["diagnostics"] = [
+                nwp_package.package_diagnostic(
+                    "export_byte_ceiling_exceeded",
+                    "package exceeds the configured byte ceiling",
+                )
+            ]
+            report["preserved_previous_artifact"] = True
+            if args.report:
+                nw05_export._write_bytes(
+                    Path(args.report),
+                    json.dumps(report, indent=2, sort_keys=True).encode("utf-8"),
+                )
             raise nw03_compiler.CompilerError(
                 f"package size {distributed} exceeds byte ceiling {args.byte_ceiling}",
-                [
-                    nwp_package.package_diagnostic(
-                        "export_byte_ceiling_exceeded",
-                        "package exceeds the configured byte ceiling",
-                    )
-                ],
+                report["diagnostics"],
             )
         resident_bytes = sum(resource.size_bytes for resource in package.resources)
         if args.memory_budget is not None and resident_bytes > args.memory_budget:
+            report["budgets"] = {
+                "byte_ceiling": args.byte_ceiling,
+                "memory_budget": args.memory_budget,
+                "distributed_bytes": distributed,
+                "resident_resource_bytes": resident_bytes,
+                "within_byte_ceiling": args.byte_ceiling is None
+                or distributed <= args.byte_ceiling,
+                "within_memory_budget": False,
+            }
+            report["success"] = False
+            report["diagnostics"] = [
+                nwp_package.package_diagnostic(
+                    "export_memory_budget_exceeded",
+                    "resident resource bytes exceed the configured memory budget",
+                )
+            ]
+            report["preserved_previous_artifact"] = True
+            if args.report:
+                nw05_export._write_bytes(
+                    Path(args.report),
+                    json.dumps(report, indent=2, sort_keys=True).encode("utf-8"),
+                )
             raise nw03_compiler.CompilerError(
                 f"resource memory {resident_bytes} exceeds budget {args.memory_budget}",
-                [
-                    nwp_package.package_diagnostic(
-                        "export_memory_budget_exceeded",
-                        "resident resource bytes exceed the configured memory budget",
-                    )
-                ],
+                report["diagnostics"],
             )
         if temporary_output is not None:
             os.replace(temporary_output, output)

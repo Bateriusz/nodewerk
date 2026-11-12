@@ -8,10 +8,75 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#include <d3d12.h>
+#include <dxgi.h>
+#endif
+
 namespace nw::player {
 namespace {
 
 constexpr std::uint64_t kSimulatedPlacementAlignment = 64u * 1024u;
+
+#if defined(_WIN32)
+DXGI_FORMAT PlacedFormat(const std::string& format) {
+    if (format == "DXGI_FORMAT_R8G8B8A8_UNORM") {
+        return DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+    if (format == "DXGI_FORMAT_R32G32B32A32_FLOAT") {
+        return DXGI_FORMAT_R32G32B32A32_FLOAT;
+    }
+    if (format == "DXGI_FORMAT_R32_UINT") return DXGI_FORMAT_R32_UINT;
+    if (format == "DXGI_FORMAT_D32_FLOAT") return DXGI_FORMAT_D32_FLOAT;
+    return DXGI_FORMAT_UNKNOWN;
+}
+
+D3D12_RESOURCE_DESC PlacedResourceDesc(
+    const package::ResourceDescriptor& resource) {
+    D3D12_RESOURCE_DESC desc{};
+    if (resource.kind == "buffer") {
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = resource.size_bytes;
+        desc.Height = 1u;
+        desc.DepthOrArraySize = 1u;
+        desc.MipLevels = 1u;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1u;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    } else if (resource.kind == "texture2d") {
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = resource.width;
+        desc.Height = resource.height;
+        desc.DepthOrArraySize = static_cast<UINT16>(resource.array_size);
+        desc.MipLevels = static_cast<UINT16>(resource.mip_levels);
+        desc.Format = PlacedFormat(resource.format);
+        desc.SampleDesc.Count = 1u;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    } else {
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+        desc.Width = resource.width;
+        desc.Height = resource.height;
+        desc.DepthOrArraySize = static_cast<UINT16>(resource.depth);
+        desc.MipLevels = static_cast<UINT16>(resource.mip_levels);
+        desc.Format = PlacedFormat(resource.format);
+        desc.SampleDesc.Count = 1u;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    }
+    if (resource.usage == "uav") {
+        desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
+            desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    }
+    if (resource.usage == "rtv") {
+        desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
+            desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    }
+    if (resource.usage == "dsv") {
+        desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
+            desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    }
+    return desc;
+}
+#endif
 
 std::uint32_t BytesPerElement(const std::string& format) {
     if (format == "DXGI_FORMAT_R8G8B8A8_UNORM") return 4u;
@@ -163,7 +228,14 @@ ResourcePlanResult BuildAliasedResourcePlan(
     std::uint32_t frames_in_flight) {
     ResourcePlanResult result{};
     if (query == nullptr) {
-        query = SimulateResourceAllocation;
+        AddPlanFailure(
+            &result, "resource_allocation_info_unavailable",
+            "GetResourceAllocationInfo", "adapter allocation query",
+            "unavailable",
+            "physical alias realization requires a real adapter allocation "
+            "query; simulated placement is never a silent fallback", pkg);
+        result.exit_code = ExitCode::ResourceAllocationFailed;
+        return result;
     }
     frames_in_flight = std::max<std::uint32_t>(1u, std::min<std::uint32_t>(3u, frames_in_flight));
     std::set<std::uint32_t> seen_ids;
@@ -491,6 +563,129 @@ ResourceAllocationQuery SimulateResourceAllocation(
     result.size_bytes = RoundUp(bytes, result.alignment);
     result.detail = "simulated";
     return result;
+}
+
+void* CreateAliasedResourceHeap(void* device,
+                                std::uint64_t heap_size_bytes,
+                                std::string* detail) {
+#if defined(_WIN32)
+    if (device == nullptr || heap_size_bytes == 0u) {
+        if (detail != nullptr) *detail = "device or heap size unavailable";
+        return nullptr;
+    }
+    auto* d3d_device = static_cast<ID3D12Device*>(device);
+    D3D12_HEAP_DESC desc{};
+    desc.SizeInBytes = RoundUp(
+        heap_size_bytes, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
+    desc.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    desc.Properties.CreationNodeMask = 1u;
+    desc.Properties.VisibleNodeMask = 1u;
+    desc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
+    desc.Flags = D3D12_HEAP_FLAG_NONE;
+    ID3D12Heap* heap = nullptr;
+    const HRESULT hr = d3d_device->CreateHeap(&desc, IID_PPV_ARGS(&heap));
+    if (FAILED(hr) || heap == nullptr) {
+        if (detail != nullptr) {
+            *detail = "ID3D12Device::CreateHeap failed for the alias plan";
+        }
+        return nullptr;
+    }
+    if (detail != nullptr) {
+        *detail = "ID3D12Device::CreateHeap";
+    }
+    return heap;
+#else
+    (void)device;
+    (void)heap_size_bytes;
+    if (detail != nullptr) *detail = "D3D12 unavailable on this host";
+    return nullptr;
+#endif
+}
+
+bool CreateAliasedPlacedResource(void* heap,
+                                 const ResourcePlacement& placement,
+                                 void** resource,
+                                 std::string* detail) {
+    if (resource != nullptr) *resource = nullptr;
+#if defined(_WIN32)
+    if (heap == nullptr || resource == nullptr ||
+        placement.descriptor.usage == "sampler" ||
+        placement.descriptor.usage == "readback") {
+        if (detail != nullptr) *detail = "placement is not heap-resident";
+        return false;
+    }
+    const D3D12_RESOURCE_DESC desc =
+        PlacedResourceDesc(placement.descriptor);
+    const D3D12_RESOURCE_STATES initial =
+        placement.descriptor.usage == "readback"
+            ? D3D12_RESOURCE_STATE_COPY_DEST
+            : D3D12_RESOURCE_STATE_COMMON;
+    ID3D12Device* device = nullptr;
+    if (FAILED(static_cast<ID3D12Heap*>(heap)->GetDevice(
+            IID_PPV_ARGS(&device))) ||
+        device == nullptr) {
+        if (detail != nullptr) *detail = "alias heap device query failed";
+        return false;
+    }
+    ID3D12Resource* created = nullptr;
+    const HRESULT create_hr = device->CreatePlacedResource(
+        static_cast<ID3D12Heap*>(heap), placement.heap_offset_bytes, &desc,
+        initial, nullptr, IID_PPV_ARGS(&created));
+    device->Release();
+    if (FAILED(create_hr) || created == nullptr) {
+        if (detail != nullptr) {
+            *detail = "CreatePlacedResource failed at the proven alias offset";
+        }
+        return false;
+    }
+    *resource = created;
+    if (detail != nullptr) *detail = "CreatePlacedResource";
+    return true;
+#else
+    (void)heap;
+    (void)placement;
+    if (detail != nullptr) *detail = "D3D12 unavailable on this host";
+    return false;
+#endif
+}
+
+void ReleaseAliasedResourceHeap(void* heap) {
+#if defined(_WIN32)
+    if (heap != nullptr) {
+        static_cast<ID3D12Heap*>(heap)->Release();
+    }
+#else
+    (void)heap;
+#endif
+}
+
+void EmitAliasingBarrier(void* command_list,
+                         const ResourceAliasBarrier& barrier,
+                         void* before_resource,
+                         void* after_resource) {
+#if defined(_WIN32)
+    if (command_list == nullptr) return;
+    if (before_resource == nullptr && after_resource == nullptr) return;
+    auto* list = static_cast<ID3D12GraphicsCommandList*>(command_list);
+    D3D12_RESOURCE_BARRIER alias{};
+    alias.Type = D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
+    alias.Aliasing.pResourceBefore =
+        static_cast<ID3D12Resource*>(before_resource);
+    alias.Aliasing.pResourceAfter =
+        static_cast<ID3D12Resource*>(after_resource);
+    list->ResourceBarrier(1u, &alias);
+    if (barrier.uav_barrier && after_resource != nullptr) {
+        D3D12_RESOURCE_BARRIER uav{};
+        uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        uav.UAV.pResource = static_cast<ID3D12Resource*>(after_resource);
+        list->ResourceBarrier(1u, &uav);
+    }
+#else
+    (void)command_list;
+    (void)barrier;
+    (void)before_resource;
+    (void)after_resource;
+#endif
 }
 
 } // namespace nw::player

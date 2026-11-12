@@ -1742,16 +1742,20 @@ def _validate_capability_identity(
             package_diagnostic(code, message, section=SECTION_CAPABILITY)
         )
 
-    if capability.profile_id != COMMON_PROFILE_ID:
-        error(
-            "package_profile_unknown",
-            f"unknown capability-profile identity '{capability.profile_id}'",
-        )
-    if capability.requirements_digest != COMMON_REQUIREMENTS_DIGEST:
+    if capability.profile_id == COMMON_PROFILE_ID:
+        expected_digest = COMMON_REQUIREMENTS_DIGEST
+    else:
+        expected_digest = KNOWN_OPTIONAL_PROFILES.get(capability.profile_id)
+        if expected_digest is None:
+            error(
+                "package_profile_unknown",
+                f"unknown capability-profile identity '{capability.profile_id}'",
+            )
+    if expected_digest is not None and capability.requirements_digest != expected_digest:
         error(
             "package_profile_digest_mismatch",
             "capability profile requires requirements digest "
-            f"'{COMMON_REQUIREMENTS_DIGEST}', got '{capability.requirements_digest}'",
+            f"'{expected_digest}', got '{capability.requirements_digest}'",
         )
     if capability.optional_profile_id:
         known = KNOWN_OPTIONAL_PROFILES.get(capability.optional_profile_id)

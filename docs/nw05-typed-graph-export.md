@@ -44,6 +44,10 @@ The published directory contains, per profile:
   package and calls the existing `PackagePlayer`; it contains no demo content
   or per-demo logic.
 
+The checked-in `nw_procedural_image_player` target is the compiled,
+content-free player template; on Windows it is part of the default build and
+its post-build dependency/closure check runs like the other fixtures.
+
 `tests` and `tools/verify_nw05.py --mode ContractsOnly` use a structurally
 valid synthetic DXIL payload for GPU-less closure/reproducibility checks. That
 is not hardware evidence; release export still requires the pinned real DXC.
@@ -141,6 +145,10 @@ Each explicit `--generation-override <node>=generate|bake` or
 
 This lets a human compare generation against baked content for a specific
 graph. The report always states `"automatic_oracle": false`.
+An explicit bake of a numeric node emits its constant payload in the existing
+parameter section (`baked_content_emitted_bytes`); a bake request that cannot
+produce package content is reported as such rather than silently claiming a
+size or performance win. Generation remains the default for every other node.
 
 ## Capability-profile artifacts and budgets
 
@@ -181,10 +189,11 @@ contains no physical offsets or heap assumptions.
 Physical alias realisation is a separate adapter-specific step:
 
 1. query every resource through the supplied adapter allocation query (the
-   Windows player uses `ID3D12Resource::GetResourceAllocationInfo`);
+   Windows player uses `ID3D12Device::GetResourceAllocationInfo`);
 2. reject incompatible kind/format/usage/dimension groups;
 3. reject overlapping lifetimes;
-4. duplicate transient resources once per frame slot (`frames_in_flight`);
+4. duplicate transient resources once per frame slot (`frames_in_flight`) or
+   serialize frames when the runtime uses one frame slot;
 5. reuse an offset only within the same frame-slot instance and compatible
    alias group;
 6. emit an aliasing barrier and a UAV barrier where a previous write is
@@ -197,7 +206,11 @@ schedule exposes exactly one direct queue.
 
 The native `src/player/resource_plan.*` API adds
 `BuildAliasedResourcePlan(..., frames_in_flight)` for startup realisation while
-keeping the NW-04 non-aliased plan available.
+keeping the NW-04 non-aliased plan available. On Windows the player calls this
+plan with the real adapter query, creates one placed heap, realizes resources
+at the proven offsets, and inserts the recorded aliasing/UAV barriers. The
+64 KiB simulation is never selected silently; host tests must request it
+explicitly.
 
 ## Link manifest
 

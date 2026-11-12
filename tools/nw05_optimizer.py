@@ -169,6 +169,7 @@ class IRNode:
     constant: dict[str, tuple[float, ...]] | None = None
     source_node_ids: tuple[str, ...] = ()
     cse_key: str = ""
+    raw_params: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def operator_key(self) -> str:
@@ -233,6 +234,7 @@ class FusionRecord:
     measured: bool
     accepted: bool
     reason: str
+    fused_expression: str = ""
     unfused_fallback: str = "nw03-root-lowering"
 
     def to_dict(self) -> dict[str, Any]:
@@ -249,6 +251,7 @@ class FusionRecord:
             "measured": self.measured,
             "accepted": self.accepted,
             "reason": self.reason,
+            "fused_expression": self.fused_expression,
             "unfused_fallback": self.unfused_fallback,
         }
 
@@ -315,6 +318,7 @@ class OptimizedGraph:
     quantization: tuple[QuantizationDecision, ...]
     source_sha256: str
     source_name: str
+    source_text: str = ""
 
     @property
     def reachable_node_ids(self) -> tuple[str, ...]:
@@ -332,6 +336,93 @@ class OptimizedGraph:
 
     def node_map(self) -> dict[str, IRNode]:
         return {node.node_id: node for node in self.nodes}
+
+    def materialize_document(
+        self,
+        *,
+        generation_modes: dict[str, str] | None = None,
+    ) -> nw03.GraphDocument:
+        """Materialize the optimized IR back into the existing NW-03 document.
+
+        This is the bridge that makes optimisation observable in the emitted
+        ``.nwp`` bytes: dead nodes are absent, CSE inputs point at canonical
+        nodes, accepted fusion roots are emitted as their folded expression,
+        quantized parameters carry their quantized values, and explicit
+        generation/bake decisions are part of the compiler settings identity.
+        It is not a second graph model; the resulting document is consumed by
+        the established NW-03 compiler.
+        """
+        accepted_fusions = {
+            record.root_node: record
+            for record in self.fusions
+            if record.accepted and record.fused_expression
+        }
+        nodes: dict[str, nw03.GraphNode] = {}
+        member_ids: set[str] = set()
+        for ir_node in self.nodes:
+            params = {name: list(values) for name, values in ir_node.params.items()}
+            for name in ("expression", "keys", "interpolation", "entries", "format"):
+                if name in ir_node.raw_params:
+                    params[name] = list(ir_node.raw_params[name])
+            inputs = {
+                item.port: (item.source_node, item.source_port)
+                for item in ir_node.inputs
+            }
+            node = nw03.GraphNode(
+                node_id=ir_node.node_id,
+                operator_id=ir_node.operator_id,
+                version=ir_node.operator_version,
+                frequency=ir_node.frequency,
+                residency=ir_node.residency,
+                params=params,
+                inputs=inputs,
+            )
+            fusion = accepted_fusions.get(ir_node.node_id)
+            if fusion is not None and (
+                ir_node.operator_id in nw03.SHADER_OPERATORS
+                or ir_node.operator_id == "nw.shader.expr"
+            ):
+                # The established compiler accepts the folded expression as an
+                # ordinary ShaderExpr.  Unsupported/disabled fusion leaves the
+                # original unfused node untouched.
+                node.operator_id = "nw.shader.expr"
+                node.params = {"expression": [fusion.fused_expression]}
+                node.inputs = {}
+                member_ids.update(
+                    member
+                    for member in fusion.member_nodes
+                    if member != ir_node.node_id
+                )
+            nodes[ir_node.node_id] = node
+
+        # Remove fused member shader nodes only when nothing else still
+        # consumes them (a conservative unfused fallback is preserved
+        # otherwise).
+        consumers: dict[str, list[str]] = {node_id: [] for node_id in nodes}
+        for node in nodes.values():
+            for source_node, _source_port in node.inputs.values():
+                if source_node in consumers:
+                    consumers[source_node].append(node.node_id)
+        for member in sorted(member_ids):
+            if member in nodes and not consumers.get(member):
+                del nodes[member]
+
+        settings = dict(self.settings)
+        for decision in self.quantization:
+            settings[
+                f"nw05.quantization.{decision.node_id}.{decision.parameter}"
+            ] = " ".join(_float_text(value) for value in decision.quantized)
+        for node_id, mode in sorted((generation_modes or {}).items()):
+            settings[f"nw05.generation.{node_id}.mode"] = mode
+        return nw03.GraphDocument(
+            schema_version=self.schema_version,
+            profile_id=self.profile_id,
+            requirements_digest=self.requirements_digest,
+            settings=settings,
+            nodes=nodes,
+            source_name=self.source_name,
+            source_text=self.source_text,
+        )
 
     def ir_sha256(self) -> str:
         return "sha256:v1:" + _sha256(
@@ -1084,8 +1175,10 @@ def _build_ir_nodes(
     constants: dict[str, dict[str, tuple[float, ...]]],
     *,
     cse_aliases: dict[str, str] | None = None,
+    retained_output_ports: dict[str, set[str]] | None = None,
 ) -> tuple[list[IRNode], tuple[CseRecord, ...]]:
     cse_aliases = dict(cse_aliases or {})
+    retained_output_ports = retained_output_ports or {}
     order = _topological_ids(document, reachable)
     records: list[IRNode] = []
     cse_records: list[CseRecord] = []
@@ -1113,6 +1206,13 @@ def _build_ir_nodes(
                 )
             )
         constant = constants.get(node_id)
+        specs = _output_specs(node.operator_id)
+        retained = retained_output_ports.get(node_id)
+        outputs = (
+            {port: value for port, value in specs.items() if port in retained}
+            if retained is not None
+            else specs
+        )
         ir_node = IRNode(
             node_id=node_id,
             operator_id=node.operator_id,
@@ -1121,9 +1221,12 @@ def _build_ir_nodes(
             residency=node.residency,
             params=params,
             inputs=tuple(inputs),
-            outputs=_output_specs(node.operator_id),
+            outputs=outputs,
             constant=dict(constant) if constant is not None else None,
             source_node_ids=(node_id,),
+            raw_params={
+                name: tuple(values) for name, values in node.params.items()
+            },
         )
         if node.operator_id in PURE_OPERATORS and node_id not in constants:
             cse_key = _structural_key(
@@ -1137,9 +1240,16 @@ def _build_ir_nodes(
             if cse_key in key_to_node:
                 canonical = key_to_node[cse_key]
                 aliases[node_id] = canonical
+                alias_ports = retained_output_ports.get(node_id, set())
+                alias_outputs = {
+                    port: value
+                    for port, value in _output_specs(node.operator_id).items()
+                    if port in alias_ports
+                }
                 for record in records:
                     if record.node_id == canonical:
                         record.source_node_ids = record.source_node_ids + (node_id,)
+                        record.outputs.update(alias_outputs)
                 continue
             key_to_node[cse_key] = node_id
         records.append(ir_node)
@@ -1312,7 +1422,7 @@ def _fusion_records(
                     estimated_instructions_before=0,
                     estimated_instructions_after=0,
                     correctness_preserved=False,
-                    measured=True,
+                    measured=False,
                     accepted=False,
                     reason=f"unsupported expression: {exc}",
                 )
@@ -1371,9 +1481,14 @@ def _fusion_records(
                 estimated_instructions_before=instruction_count,
                 estimated_instructions_after=after_instructions,
                 correctness_preserved=equivalent,
-                measured=True,
+                measured=(
+                    bool(members)
+                    and before_bytes > 0
+                    and len(folded_text.encode("utf-8")) > 0
+                ),
                 accepted=accepted,
                 reason=reason + (f"; {fusion_cse} duplicate AST nodes analysed" if fusion_cse else ""),
+                fused_expression=folded_text,
             )
         )
     return tuple(records)
@@ -1428,7 +1543,15 @@ def lower_typed_graph(
             for decision in decisions
             if decision.node_id in quantized_reachable
         )
-    nodes, cse_records = _build_ir_nodes(document, reachable, constants)
+    retained_ports = {node_id: set(ports) for node_id, ports in needed_ports.items()}
+    for output in outputs:
+        retained_ports.setdefault(output.node_id, set()).add(output.port)
+    nodes, cse_records = _build_ir_nodes(
+        document,
+        reachable,
+        constants,
+        retained_output_ports=retained_ports,
+    )
     partitions, partition_diagnostics = _partition_nodes(nodes)
     if partition_diagnostics:
         raise OptimizationError("frequency partition invalid", partition_diagnostics)
@@ -1445,7 +1568,7 @@ def lower_typed_graph(
     dead_outputs: list[tuple[str, str]] = []
     for node in nodes:
         used = needed_ports.get(node.node_id, set())
-        for port in sorted(node.outputs):
+        for port in sorted(_output_specs(node.operator_id)):
             if port not in used and not any(
                 output.node_id == node.node_id and output.port == port
                 for output in outputs
@@ -1490,6 +1613,7 @@ def lower_typed_graph(
             )
         ).hexdigest(),
         source_name=document.source_name,
+        source_text=document.source_text,
     )
 
 
@@ -1811,28 +1935,48 @@ def recover_full_precision(
 # ---------------------------------------------------------------------------
 
 
-def _reachable_feature_queries(optimized: OptimizedGraph) -> list[dict[str, Any]]:
+def _reachable_feature_queries(
+    optimized: OptimizedGraph,
+    *,
+    formats: Sequence[str] = (),
+    requires_aliasing: bool = True,
+    wave_ops: bool = False,
+) -> list[dict[str, Any]]:
     queries: list[dict[str, Any]] = [
-        {"name": "D3D12_FEATURE_LEVELS", "reason": "common profile feature level 12_0"},
-        {"name": "D3D12_FEATURE_SHADER_MODEL", "reason": "emitted cs_6_0 shaders"},
+        {"name": "D3D12_FEATURE_LEVELS", "reason": "declared feature level 12_0"},
         {"name": "D3D12_FEATURE_D3D12_OPTIONS", "reason": "resource binding and heap tiers"},
-        {"name": "D3D12_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT", "reason": "resource realization limits"},
     ]
-    used_operators = {node.operator_id for node in optimized.nodes}
-    if any("texture" in operator or "render" in operator for operator in used_operators):
+    if optimized.shader_node_ids:
+        queries.append(
+            {"name": "D3D12_FEATURE_SHADER_MODEL", "reason": "emitted cs_6_0 shaders"}
+        )
+    if formats:
         queries.append(
             {"name": "D3D12_FEATURE_FORMAT_SUPPORT", "reason": "emitted DXGI format support"}
         )
-    if "nw.proc.hash_noise" in used_operators:
+    used_operators = {node.operator_id for node in optimized.nodes}
+    if wave_ops:
         queries.append(
             {
                 "name": "D3D12_FEATURE_D3D12_OPTIONS1",
-                "reason": "wave-neutral hash noise implementation",
+                "reason": "declared wave-operations profile requirement",
+            }
+        )
+    if requires_aliasing:
+        queries.append(
+            {
+                "name": "D3D12_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT",
+                "reason": "resource realization limits for alias proof",
             }
         )
     queries.append(
-        {"name": "ID3D12Device::GetResourceAllocationInfo", "reason": "adapter-specific alias/proof sizing"}
+        {
+            "name": "ID3D12Device::GetResourceAllocationInfo",
+            "reason": "adapter-specific resource sizing and alias proof",
+        }
     )
+    # Keep the used-operator variable meaningful for future query derivation.
+    _ = used_operators
     return sorted(queries, key=lambda item: item["name"])
 
 
@@ -1842,6 +1986,11 @@ def build_link_manifest(
     package: nwp.NwpPackage | None = None,
     shader_blobs: Sequence[tuple[str, str, int]] = (),
     excluded_optional_profiles: Sequence[str] = (),
+    profile_id: str | None = None,
+    requirements_digest: str | None = None,
+    optional_profile_id: str = "",
+    requires_aliasing: bool = True,
+    runtime_dependencies: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Build the generated player link manifest for one profile artifact."""
     used_operators = sorted({node.operator_id for node in optimized.nodes})
@@ -1870,6 +2019,21 @@ def build_link_manifest(
         shader_targets = []
         required_init = []
         required_frame = []
+    wave_ops = (
+        optional_profile_id == nwp.OPTIONAL_PROFILE_WAVE_OPS
+        or any("wave" in operator for operator in used_operators)
+    )
+    feature_queries = _reachable_feature_queries(
+        optimized,
+        formats=formats,
+        requires_aliasing=requires_aliasing,
+        wave_ops=wave_ops,
+    )
+    dependencies = (
+        sorted(set(runtime_dependencies))
+        if runtime_dependencies is not None
+        else []
+    )
     runtime_requirements = {
         "feature_level": "12_0",
         "shader_model": "6_0",
@@ -1884,8 +2048,9 @@ def build_link_manifest(
     payload: dict[str, Any] = {
         "format": "nw05-player-link-manifest",
         "version": 1,
-        "profile_id": optimized.profile_id,
-        "requirements_digest": optimized.requirements_digest,
+        "profile_id": profile_id or optimized.profile_id,
+        "requirements_digest": requirements_digest or optimized.requirements_digest,
+        "optional_profile_id": optional_profile_id,
         "semantic_source_sha256": optimized.source_sha256,
         "ir_sha256": optimized.ir_sha256(),
         "reachable_content": {
@@ -1896,19 +2061,15 @@ def build_link_manifest(
                 name: list(values) for name, values in optimized.partitions.items()
             },
         },
-        "feature_queries": _reachable_feature_queries(optimized),
-        "used_features": [
-            query["name"] for query in _reachable_feature_queries(optimized)
-        ],
+        "feature_queries": feature_queries,
+        "used_features": [query["name"] for query in feature_queries],
         "feature_requirements": {
             "feature_level": "12_0",
             "shader_model": "6_0",
             "resource_binding_tier": 2,
             "resource_heap_tier": 2,
             "direct_queue_count": 1,
-            "wave_ops": any(
-                "wave" in node.operator_id for node in optimized.nodes
-            ),
+            "wave_ops": wave_ops,
             "sm_6_6_direct_heap_indexing": False,
             "mesh_shaders": False,
             "ray_tracing": False,
@@ -1925,13 +2086,7 @@ def build_link_manifest(
             "code": used_operators,
             "shaders": shaders,
             "data": ["package-resources", "parameters", "initialization", "frame"],
-            "dependencies": [
-                "d3d12",
-                "dxgi",
-                "kernel32",
-                "user32",
-                "gdi32",
-            ],
+            "dependencies": dependencies,
         },
         "excluded": {
             "optional_implementations": excluded,
