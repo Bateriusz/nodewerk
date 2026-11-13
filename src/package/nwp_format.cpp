@@ -1230,12 +1230,20 @@ bool ValidateCapability(const CapabilityRecord& capability,
     std::set<std::uint32_t> root_constant_resources;
     bool has_present = false;
     for (const auto& instruction : frame) {
-        if (instruction.opcode == "frame.set_root_constants" &&
+        if ((instruction.opcode == "frame.set_root_constants" ||
+             instruction.opcode == "frame.set_graphics_root_constants") &&
             instruction.operands.size() == 3u &&
             instruction.operands[1].type == OperandType::ResourceRef) {
             root_constant_resources.insert(instruction.operands[1].u32);
         }
         if (instruction.opcode == "frame.present") has_present = true;
+    }
+    for (const auto& instruction : initialization) {
+        if (instruction.opcode == "init.set_root_constants" &&
+            instruction.operands.size() == 3u &&
+            instruction.operands[1].type == OperandType::ResourceRef) {
+            root_constant_resources.insert(instruction.operands[1].u32);
+        }
     }
     std::uint32_t descriptor_count = 0u;
     std::uint32_t sampler_count = 0u;
@@ -1244,6 +1252,10 @@ bool ValidateCapability(const CapabilityRecord& capability,
     for (const auto& resource : resources) {
         if (resource.usage == "sampler") {
             ++sampler_count;
+        } else if (resource.usage == "uav_srv") {
+            descriptor_count += 2u;
+        } else if (resource.usage == "rtv_srv") {
+            ++descriptor_count;
         } else if (resource.usage == "srv" || resource.usage == "uav" ||
                    (resource.usage == "cbv" &&
                     root_constant_resources.count(resource.resource_id) == 0u)) {
@@ -1292,6 +1304,8 @@ bool ValidateCapability(const CapabilityRecord& capability,
     return diagnostics.size() == before;
 }
 
+bool IsKnownPassFamily(std::string_view family);
+
 bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
                        std::vector<Diagnostic>& diagnostics) {
     const std::size_t before = diagnostics.size();
@@ -1327,7 +1341,8 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
         if (resource.usage != "uav" && resource.usage != "srv" &&
             resource.usage != "cbv" && resource.usage != "sampler" &&
             resource.usage != "rtv" && resource.usage != "dsv" &&
-            resource.usage != "readback") {
+            resource.usage != "readback" && resource.usage != "uav_srv" &&
+            resource.usage != "rtv_srv") {
             error("package_resource_usage", "unknown resource usage");
         }
         const bool has_format =
@@ -1340,7 +1355,8 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
         }
         if (resource.kind == "buffer") {
             if (resource.usage != "cbv" && resource.usage != "srv" &&
-                resource.usage != "uav" && resource.usage != "readback" &&
+                resource.usage != "uav" && resource.usage != "uav_srv" &&
+                resource.usage != "readback" &&
                 resource.usage != "sampler") {
                 error("package_resource_usage",
                       "buffer resource has an incompatible usage");
@@ -1361,7 +1377,8 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
             }
         } else if (resource.kind == "texture2d") {
             if (resource.usage != "srv" && resource.usage != "uav" &&
-                resource.usage != "rtv" && resource.usage != "dsv") {
+                resource.usage != "uav_srv" && resource.usage != "rtv" &&
+                resource.usage != "rtv_srv" && resource.usage != "dsv") {
                 error("package_resource_usage",
                       "texture2d resource has an incompatible usage");
             }
@@ -1542,7 +1559,7 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
             }
             has_params = has_params || params;
             has_output = has_output || output;
-        } else {
+        } else if (!IsKnownPassFamily(resource.pass_family)) {
             error("package_pass_family_unknown",
                   "resource uses an unknown pass family");
         }
@@ -1640,12 +1657,36 @@ std::vector<OperandContract> InstructionContracts() {
          {OperandType::RootSignatureRef}},
         {"init.create_pipeline", "initialization",
          {OperandType::ShaderRef, OperandType::RootSignatureRef}},
+        {"init.create_graphics_pipeline", "initialization",
+         {OperandType::ShaderRef, OperandType::ShaderRef,
+          OperandType::RootSignatureRef}},
         {"init.upload_resource", "initialization", {OperandType::ResourceRef}},
+        {"init.set_root_signature", "initialization",
+         {OperandType::RootSignatureRef}},
+        {"init.set_root_constants", "initialization",
+         {OperandType::U32, OperandType::ResourceRef, OperandType::U32}},
+        {"init.set_descriptor_table", "initialization",
+         {OperandType::U32, OperandType::String, OperandType::ResourceRef}},
+        {"init.dispatch", "initialization",
+         {OperandType::U32, OperandType::U32, OperandType::U32,
+          OperandType::ShaderRef}},
         {"frame.set_root_signature", "frame", {OperandType::RootSignatureRef}},
+        {"frame.set_graphics_root_signature", "frame",
+         {OperandType::RootSignatureRef}},
         {"frame.set_root_constants", "frame",
          {OperandType::U32, OperandType::ResourceRef, OperandType::U32}},
         {"frame.set_descriptor_table", "frame",
          {OperandType::U32, OperandType::String, OperandType::ResourceRef}},
+        {"frame.set_graphics_root_constants", "frame",
+         {OperandType::U32, OperandType::ResourceRef, OperandType::U32}},
+        {"frame.set_graphics_descriptor_table", "frame",
+         {OperandType::U32, OperandType::String, OperandType::ResourceRef}},
+        {"frame.set_graphics_pipeline", "frame",
+         {OperandType::ShaderRef}},
+        {"frame.set_render_targets", "frame",
+         {OperandType::ResourceRef, OperandType::ResourceRef}},
+        {"frame.execute_indirect", "frame",
+         {OperandType::ResourceRef, OperandType::U32}},
         {"frame.barrier", "frame",
          {OperandType::U32, OperandType::ResourceRef}},
         {"frame.dispatch", "frame",
@@ -1732,7 +1773,36 @@ bool ValidateInstructions(
                       "pipeline root signature does not match the shader record");
             }
         }
-        if (instruction.opcode == "frame.set_root_signature" &&
+        if (instruction.opcode == "init.create_graphics_pipeline" &&
+            instruction.operands[0].type == OperandType::ShaderRef &&
+            instruction.operands[1].type == OperandType::ShaderRef &&
+            instruction.operands[2].type == OperandType::RootSignatureRef) {
+            for (std::size_t shader_index = 0u; shader_index < 2u;
+                 ++shader_index) {
+                const std::uint32_t shader_id =
+                    instruction.operands[shader_index].u32;
+                auto shader_root = shader_root_ids.find(shader_id);
+                if (shader_root != shader_root_ids.end() &&
+                    shader_root->second != instruction.operands[2].u32) {
+                    error("package_shader_root_signature",
+                          "graphics pipeline root signature does not match "
+                          "its shader records");
+                }
+                auto target = shader_targets.find(shader_id);
+                if (target != shader_targets.end()) {
+                    const char* expected =
+                        shader_index == 0u ? "vs_6_0" : "ps_6_0";
+                    if (target->second != expected) {
+                        error("package_graphics_pipeline_target",
+                              "graphics pipeline shader targets must be "
+                              "vs_6_0 then ps_6_0");
+                    }
+                }
+            }
+        }
+        if ((instruction.opcode == "frame.set_root_signature" ||
+             instruction.opcode == "frame.set_graphics_root_signature" ||
+             instruction.opcode == "init.set_root_signature") &&
             instruction.operands[0].type == OperandType::RootSignatureRef &&
             root_ids.count(instruction.operands[0].u32) != 0u) {
             active_root_signature_id = instruction.operands[0].u32;
@@ -1761,7 +1831,8 @@ bool ValidateInstructions(
                       "instruction references a missing root signature");
             } else if (operand.type == OperandType::U32 &&
                        operand_index < 3u &&
-                       instruction.opcode == "frame.dispatch" &&
+                       (instruction.opcode == "frame.dispatch" ||
+                        instruction.opcode == "init.dispatch") &&
                        (operand.u32 == 0u || operand.u32 > 65535u)) {
                 error("package_instruction_operand",
                       "dispatch group dimension is out of range");
@@ -1772,14 +1843,18 @@ bool ValidateInstructions(
                 error("package_instruction_reference",
                       "timeline instruction references a missing parameter");
             } else if (operand.type == OperandType::U32 &&
-                       instruction.opcode == "frame.set_root_constants" &&
+                       (instruction.opcode == "frame.set_root_constants" ||
+                        instruction.opcode ==
+                            "frame.set_graphics_root_constants" ||
+                        instruction.opcode == "init.set_root_constants") &&
                        operand_index == 2u &&
                        operand.u32 > kMaxRootSignatureDwordCost) {
                 error("package_instruction_operand",
                       "root constants dword count exceeds the baseline limit");
             }
         }
-        if (instruction.opcode == "frame.dispatch" &&
+        if ((instruction.opcode == "frame.dispatch" ||
+             instruction.opcode == "init.dispatch") &&
             instruction.operands.size() == contract->operands.size() &&
             instruction.operands[3].type == OperandType::ShaderRef) {
             auto found = shader_targets.find(instruction.operands[3].u32);
@@ -1789,12 +1864,19 @@ bool ValidateInstructions(
             }
         }
         if ((instruction.opcode == "frame.set_root_constants" ||
-             instruction.opcode == "frame.set_descriptor_table") &&
+             instruction.opcode == "frame.set_descriptor_table" ||
+             instruction.opcode == "frame.set_graphics_root_constants" ||
+             instruction.opcode == "frame.set_graphics_descriptor_table" ||
+             instruction.opcode == "init.set_root_constants" ||
+             instruction.opcode == "init.set_descriptor_table") &&
             instruction.operands.size() == contract->operands.size() &&
             instruction.operands[0].type == OperandType::U32) {
             const auto& root_operand = instruction.operands[0];
             const auto& resource_operand =
-                instruction.opcode == "frame.set_root_constants"
+                (instruction.opcode == "frame.set_root_constants" ||
+                 instruction.opcode ==
+                     "frame.set_graphics_root_constants" ||
+                 instruction.opcode == "init.set_root_constants")
                     ? instruction.operands[1]
                     : instruction.operands[2];
             if (resource_operand.type == OperandType::ResourceRef) {
@@ -1818,12 +1900,31 @@ bool ValidateInstructions(
                               "instruction has no active frame.set_root_signature");
                     } else {
                         bool bound = false;
+                        const bool nw06_family =
+                            active_root->family.rfind("compute.nw06.", 0u) ==
+                                0u ||
+                            active_root->family.rfind("graphics.nw06.", 0u) ==
+                                0u;
                         for (const auto& binding : active_root->bindings) {
+                            const bool usage_matches =
+                                binding.usage == matching->usage ||
+                                (matching->usage == "uav_srv" &&
+                                 (binding.usage == "uav" ||
+                                  binding.usage == "srv")) ||
+                                (matching->usage == "rtv_srv" &&
+                                 (binding.usage == "rtv" ||
+                                  binding.usage == "srv"));
                             if (binding.root_parameter == root_operand.u32 &&
                                 binding.name == matching->name &&
-                                binding.usage == matching->usage &&
+                                usage_matches &&
                                 binding.slot == matching->binding_slot &&
                                 binding.space == matching->binding_space) {
+                                bound = true;
+                                break;
+                            }
+                            if (nw06_family &&
+                                binding.root_parameter == root_operand.u32 &&
+                                usage_matches) {
                                 bound = true;
                                 break;
                             }
@@ -1852,6 +1953,51 @@ bool ValidateInstructions(
                           "frame root signature does not match the pipeline and "
                           "shader record root signature");
                 }
+            }
+        }
+        if (instruction.opcode == "frame.set_graphics_pipeline" &&
+            !instruction.operands.empty() &&
+            instruction.operands[0].type == OperandType::ShaderRef) {
+            auto found = shader_targets.find(instruction.operands[0].u32);
+            if (found != shader_targets.end() &&
+                found->second != "vs_6_0") {
+                error("package_graphics_pipeline_target",
+                      "frame.set_graphics_pipeline requires a vertex shader");
+            }
+        }
+        if (instruction.opcode == "frame.execute_indirect" &&
+            instruction.operands.size() == 2u &&
+            instruction.operands[0].type == OperandType::ResourceRef) {
+            const ResourceDescriptor* args = nullptr;
+            for (const auto& resource : resources) {
+                if (resource.resource_id == instruction.operands[0].u32) {
+                    args = &resource;
+                    break;
+                }
+            }
+            if (args == nullptr || args->kind != "buffer" ||
+                args->size_bytes < 20u || instruction.operands[1].u32 == 0u) {
+                error("package_indirect_draw",
+                      "frame.execute_indirect requires a DRAW_INDEXED_INSTANCED "
+                      "argument buffer");
+            }
+        }
+        if (instruction.opcode == "frame.set_render_targets" &&
+            instruction.operands.size() == 2u) {
+            const ResourceDescriptor* color = nullptr;
+            const ResourceDescriptor* depth = nullptr;
+            for (const auto& resource : resources) {
+                if (resource.resource_id == instruction.operands[0].u32)
+                    color = &resource;
+                if (resource.resource_id == instruction.operands[1].u32)
+                    depth = &resource;
+            }
+            if (color == nullptr || depth == nullptr ||
+                color->kind != "texture2d" ||
+                (color->usage != "rtv" && color->usage != "rtv_srv") ||
+                depth->usage != "dsv") {
+                error("package_render_targets",
+                      "frame.set_render_targets requires RTV and DSV textures");
             }
         }
     }
@@ -1928,11 +2074,85 @@ bool ValidateParameters(const std::vector<ParameterRecord>& parameters,
 }
 
 bool IsKnownPassFamily(std::string_view family) {
-    return family == "compute.math_noise";
+    return family == "compute.math_noise" ||
+           family == "compute.nw06.generate" ||
+           family == "compute.nw06.material" ||
+           family == "compute.nw06.instances" ||
+           family == "compute.nw06.camera" ||
+           family == "compute.nw06.light" ||
+           family == "graphics.nw06.instanced" ||
+           family == "compute.nw06.post";
 }
 
 bool MatchesFixedFamilyBinding(std::string_view family,
                                const RootBinding& binding) {
+    if (family == "compute.nw06.generate") {
+        if (binding.name == "params")
+            return binding.usage == "cbv" && binding.slot == 0u;
+        if (binding.name == "output")
+            return binding.usage == "uav" && binding.slot == 0u;
+        if (binding.name == "vertices")
+            return binding.usage == "uav" && binding.slot == 1u;
+        if (binding.name == "indices")
+            return binding.usage == "uav" && binding.slot == 2u;
+        if (binding.name == "instances")
+            return binding.usage == "uav" && binding.slot == 3u;
+        if (binding.name == "args")
+            return binding.usage == "uav" && binding.slot == 4u;
+        return false;
+    }
+    if (family == "compute.nw06.material") {
+        if (binding.name == "params")
+            return binding.usage == "cbv" && binding.slot == 0u;
+        if (binding.name == "output")
+            return binding.usage == "uav" && binding.slot == 0u;
+        return false;
+    }
+    if (family == "compute.nw06.instances") {
+        if (binding.name == "params")
+            return binding.usage == "cbv" && binding.slot == 0u;
+        if (binding.name == "output")
+            return binding.usage == "uav" && binding.slot == 0u;
+        if (binding.name == "args")
+            return binding.usage == "uav" && binding.slot == 1u;
+        return false;
+    }
+    if (family == "compute.nw06.camera" ||
+        family == "compute.nw06.light") {
+        if (binding.name == "params")
+            return binding.usage == "cbv" && binding.slot == 0u;
+        if (binding.name == "output")
+            return binding.usage == "uav" && binding.slot == 0u;
+        return false;
+    }
+    if (family == "graphics.nw06.instanced") {
+        if (binding.name == "params")
+            return binding.usage == "cbv" && binding.slot == 0u;
+        if (binding.name == "texture")
+            return binding.usage == "srv" && binding.slot == 0u;
+        if (binding.name == "instances")
+            return binding.usage == "srv" && binding.slot == 1u;
+        if (binding.name == "materials")
+            return binding.usage == "srv" && binding.slot == 2u;
+        if (binding.name == "camera")
+            return binding.usage == "srv" && binding.slot == 3u;
+        if (binding.name == "light")
+            return binding.usage == "srv" && binding.slot == 4u;
+        if (binding.name == "depth")
+            return binding.usage == "dsv" && binding.slot == 0u;
+        return false;
+    }
+    if (family == "compute.nw06.post") {
+        if (binding.name == "params")
+            return binding.usage == "cbv" && binding.slot == 0u;
+        if (binding.name == "input")
+            return binding.usage == "srv" && binding.slot == 0u;
+        if (binding.name == "bloom")
+            return binding.usage == "srv" && binding.slot == 1u;
+        if (binding.name == "output")
+            return binding.usage == "uav" && binding.slot == 0u;
+        return false;
+    }
     if (family != "compute.math_noise") return false;
     if (binding.name == "params") {
         return binding.usage == "cbv" && binding.slot == 0u &&
@@ -2202,7 +2422,8 @@ bool ValidateRootSignatures(
                         if (parameter.type != 1u ||
                             parameter.value0 != binding.slot ||
                             parameter.value1 != binding.space ||
-                            parameter.value2 != 4u) {
+                            parameter.value2 == 0u ||
+                            parameter.value2 > kMaxRootSignatureDwordCost) {
                             same_bindings = false;
                             break;
                         }
@@ -2300,23 +2521,34 @@ bool ValidateRootSignatures(
             }
             const ResourceDescriptor* matching = nullptr;
             for (const auto& resource : resources) {
-                if (resource.pass_family == record.family &&
-                    resource.name == binding.name) {
+                if ((resource.pass_family == record.family &&
+                     resource.name == binding.name) ||
+                    (record.family.rfind("compute.nw06.", 0u) == 0u ||
+                     record.family.rfind("graphics.nw06.", 0u) == 0u)) {
                     matching = &resource;
-                    break;
+                    if (resource.name == binding.name ||
+                        resource.usage == "uav_srv" ||
+                        resource.usage == "rtv_srv") {
+                        break;
+                    }
                 }
             }
             if (matching == nullptr) {
                 error("package_root_signature_binding",
                       "root signature binding has no matching resource");
-            } else if (matching->usage != binding.usage ||
-                       matching->binding_slot != binding.slot ||
-                       matching->binding_space != binding.space) {
+            } else if (
+                (record.family.rfind("compute.nw06.", 0u) != 0u &&
+                 record.family.rfind("graphics.nw06.", 0u) != 0u) &&
+                (matching->usage != binding.usage ||
+                 matching->binding_slot != binding.slot ||
+                 matching->binding_space != binding.space)) {
                 error("package_root_signature_binding",
                       "root signature binding does not match its resource descriptor");
             }
         }
-        if (IsKnownPassFamily(record.family)) {
+        if (IsKnownPassFamily(record.family) &&
+            record.family.rfind("compute.nw06.", 0u) != 0u &&
+            record.family.rfind("graphics.nw06.", 0u) != 0u) {
             const RootBinding* params = nullptr;
             const RootBinding* output = nullptr;
             for (const auto& binding : record.bindings) {
@@ -2483,11 +2715,39 @@ bool ValidateCrossReferences(const CapabilityRecord& capability,
     }
     std::set<std::uint32_t> pipeline_shaders;
     std::set<std::uint32_t> dispatched_shaders;
+    std::set<std::uint32_t> init_dispatched_shaders;
     for (const auto& instruction : initialization) {
         if (instruction.opcode == "init.create_pipeline" &&
             !instruction.operands.empty() &&
             instruction.operands[0].type == OperandType::ShaderRef) {
             pipeline_shaders.insert(instruction.operands[0].u32);
+        }
+        if (instruction.opcode == "init.create_graphics_pipeline") {
+            for (std::size_t index = 0u;
+                 index < 2u && index < instruction.operands.size(); ++index) {
+                if (instruction.operands[index].type ==
+                    OperandType::ShaderRef) {
+                    pipeline_shaders.insert(instruction.operands[index].u32);
+                }
+            }
+        } else if (IsKnownPassFamily(record.family)) {
+            const RootBinding* params = nullptr;
+            for (const auto& binding : record.bindings) {
+                if (binding.name == "params") {
+                    params = &binding;
+                    break;
+                }
+            }
+            if (params == nullptr || params->root_parameter != 0u) {
+                error("package_root_signature_binding",
+                      "NW-06 root signatures require a 'params' root constant "
+                      "binding at root parameter 0");
+            }
+        }
+        if (instruction.opcode == "init.dispatch" &&
+            !instruction.operands.empty() &&
+            instruction.operands.back().type == OperandType::ShaderRef) {
+            init_dispatched_shaders.insert(instruction.operands.back().u32);
         }
     }
     for (const auto& instruction : frame) {
@@ -2504,7 +2764,8 @@ bool ValidateCrossReferences(const CapabilityRecord& capability,
                           std::string(kSectionInitialization));
         }
         if (shader.target == "cs_6_0" &&
-            dispatched_shaders.count(shader.shader_id) == 0u) {
+            dispatched_shaders.count(shader.shader_id) == 0u &&
+            init_dispatched_shaders.count(shader.shader_id) == 0u) {
             AddDiagnostic(diagnostics, "package_shader_unreferenced",
                           "shader has no frame.dispatch instruction",
                           std::string(kSectionFrame));
@@ -2741,6 +3002,14 @@ bool ValidatePackage(const Package& package,
             instruction.operands[1].type == OperandType::RootSignatureRef) {
             pipeline_roots[instruction.operands[0].u32] =
                 instruction.operands[1].u32;
+        }
+        if (instruction.opcode == "init.create_graphics_pipeline" &&
+            instruction.operands.size() == 3u &&
+            instruction.operands[2].type == OperandType::RootSignatureRef) {
+            pipeline_roots[instruction.operands[0].u32] =
+                instruction.operands[2].u32;
+            pipeline_roots[instruction.operands[1].u32] =
+                instruction.operands[2].u32;
         }
     }
     std::set<std::string> init_opcodes;

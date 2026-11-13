@@ -41,6 +41,37 @@ nw_add_offline_compute_shader(
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/display_fixture_dxil.h"
     "kDisplayFixtureDxil"
 )
+
+# NW-06 fixed procedural generation/raster/post shaders.  They are compiled by
+# the same pinned offline DXC as the rest of the player payloads; the exporter
+# also compiles the exact same sources into the emitted .nwp package.  Runtime
+# source compilation is never used.
+foreach(_nw06_shader
+    "nw06_generate_cs:GenerateGeometryCS:cs_6_0:kNw06GenerateDxil"
+    "nw06_instances_cs:GenerateInstancesCS:cs_6_0:kNw06InstancesDxil"
+    "nw06_material_cs:MaterialCS:cs_6_0:kNw06MaterialDxil"
+    "nw06_camera_cs:CameraDataCS:cs_6_0:kNw06CameraDxil"
+    "nw06_light_cs:LightDataCS:cs_6_0:kNw06LightDxil"
+    "nw06_scene_vs:SceneVS:vs_6_0:kNw06SceneVsDxil"
+    "nw06_scene_ps:ScenePS:ps_6_0:kNw06ScenePsDxil"
+    "nw06_bloom_cs:BloomCS:cs_6_0:kNw06BloomDxil"
+    "nw06_tonemap_cs:TonemapCS:cs_6_0:kNw06TonemapDxil")
+    string(REPLACE ":" ";" _nw06_parts "${_nw06_shader}")
+    list(GET _nw06_parts 0 _nw06_name)
+    list(GET _nw06_parts 1 _nw06_entry)
+    list(GET _nw06_parts 2 _nw06_target)
+    list(GET _nw06_parts 3 _nw06_symbol)
+    nw_add_offline_compute_shader(
+        "nw_offline_${_nw06_name}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/nw06/${_nw06_name}.hlsl"
+        "${_nw06_entry}"
+        "${_nw06_target}"
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/${_nw06_name}.dxil"
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/${_nw06_name}_dxil.h"
+        "${_nw06_symbol}"
+    )
+    add_dependencies(nw_offline_shaders "nw_offline_${_nw06_name}")
+endforeach()
 else()
     # Non-Windows configuration does not need offline D3D12 payloads.
     add_custom_target(nw_offline_shaders)

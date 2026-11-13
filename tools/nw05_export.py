@@ -30,6 +30,7 @@ import nw03_oracle as oracle
 import nwp_package as nwp
 import nw05_optimizer as optimizer
 import nw05_schedule as schedule
+import nw06_export
 import dependency_check
 
 
@@ -1144,7 +1145,8 @@ def _graph_render_dimensions(
         document.nodes[node_id]
         for node_id in sorted(document.nodes)
         if node_id in reachable
-        and document.nodes[node_id].operator_id == "nw.texture.procedural"
+        and document.nodes[node_id].operator_id
+        in {"nw.texture.procedural", "nw.texture.noise2d"}
     ]
     if textures:
         return (
@@ -2079,6 +2081,49 @@ def _compile_profile_package(
     allow_unpinned_dxc: bool,
     allow_test_payloads: bool,
 ) -> tuple[bytes, nwp.NwpPackage, dict[str, Any]]:
+    if nw06_export.uses_nw06(optimized):
+        document = optimized.materialize_document(
+            generation_modes=generation_modes,
+            apply_accepted_fusions=False,
+        )
+        width, height = _graph_render_dimensions(document, optimized)
+        package_bytes, package, report = nw06_export.compile_profile_package(
+            optimized,
+            document,
+            destination,
+            dxc_executable=dxc_executable,
+            optimization=optimization,
+            allow_unpinned_dxc=allow_unpinned_dxc,
+            allow_test_payloads=allow_test_payloads,
+            width=width,
+            height=height,
+        )
+        if profile_id != nwp.COMMON_PROFILE_ID:
+            capability = replace(
+                package.capability,
+                profile_id=profile_id,
+                requirements_digest=requirements_digest,
+                optional_profile_id=profile_id,
+                optional_requirements_digest=requirements_digest,
+                optional_profile_separate_artifact=True,
+            )
+            capability = replace(
+                capability,
+                profile_fingerprint=capability.computed_profile_fingerprint(),
+            )
+            package = replace(package, capability=capability)
+            package_bytes = nwp.encode_package(package)
+            valid, diagnostics = nwp.validate_package_bytes(package_bytes)
+            if not valid:
+                raise ExportError(
+                    f"artifact for '{profile_id}' is invalid",
+                    diagnostics,
+                    dependency_path=["capability_profile", profile_id],
+                )
+        report["image_oracle_sha256"] = ""
+        report["image_oracle_status"] = "unavailable"
+        return package_bytes, package, report
+
     # Compile the optimised, quantized document rather than re-reading the
     # authoring file. Accepted measured fusion roots use one shader; rejected,
     # unmeasured, disabled, or bounded-out fusion roots retain their graph
@@ -2657,6 +2702,10 @@ def export_graph(
             manifest["image_oracle_status"] = compile_report.get(
                 "image_oracle_status", "unavailable"
             )
+            if compile_report.get("timeline"):
+                manifest["timeline"] = compile_report["timeline"]
+            if compile_report.get("instrumentation"):
+                manifest["instrumentation"] = compile_report["instrumentation"]
             manifest["artifact_identity"] = artifact_key(
                 profile_id, requirements_digest, emitted_requirements(package)
             )
@@ -2899,7 +2948,7 @@ def export_graph(
                 for profile_id, artifact in artifacts.items()
                 if profile_id != nwp.COMMON_PROFILE_ID
             )
-            return {
+            payload = {
             "format": EXPORT_FORMAT,
             "version": EXPORT_VERSION,
             "settings": settings.to_dict(),
@@ -3019,6 +3068,12 @@ def export_graph(
             },
             "success": True,
             }
+            instrumentation = compile_reports.get(
+                nwp.COMMON_PROFILE_ID, {}
+            ).get("instrumentation", {})
+            if instrumentation:
+                payload["instrumentation"] = instrumentation
+            return payload
 
         def _report_with_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
             artifact_payloads = {}

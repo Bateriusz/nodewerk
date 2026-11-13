@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.0.0",
+  "verification_status": "contracts_only_offline_sources",
+  "target_profile": "nw.common.d3d12.fl12_0.sm6_0.v1",
+  "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+  "runtime_compilation_used": false,
+  "requires_sm_6_6_heap_indexing": false,
+  "requires_enhanced_barriers": false,
+  "requires_mesh_shaders": false,
+  "requires_ray_tracing": false,
+  "requires_fp16_arithmetic": false,
+  "wave_size_assumption": false,
+  "shaders": [
+    {
+      "shader_id": "nw06_generate_cs",
+      "source_path": "shaders/nw06/nw06_generate_cs.hlsl",
+      "entry_point": "GenerateGeometryCS",
+      "target_profile": "cs_6_0",
+      "pass_family": "compute.nw06.generate",
+      "phase": "initialization"
+    },
+    {
+      "shader_id": "nw06_instances_cs",
+      "source_path": "shaders/nw06/nw06_instances_cs.hlsl",
+      "entry_point": "GenerateInstancesCS",
+      "target_profile": "cs_6_0",
+      "pass_family": "compute.nw06.instances",
+      "phase": "initialization"
+    },
+    {
+      "shader_id": "nw06_material_cs",
+      "source_path": "shaders/nw06/nw06_material_cs.hlsl",
+      "entry_point": "MaterialCS",
+      "target_profile": "cs_6_0",
+      "pass_family": "compute.nw06.material",
+      "phase": "initialization"
+    },
+    {
+      "shader_id": "nw06_camera_cs",
+      "source_path": "shaders/nw06/nw06_camera_cs.hlsl",
+      "entry_point": "CameraDataCS",
+      "target_profile": "cs_6_0",
+      "pass_family": "compute.nw06.camera",
+      "phase": "initialization"
+    },
+    {
+      "shader_id": "nw06_light_cs",
+      "source_path": "shaders/nw06/nw06_light_cs.hlsl",
+      "entry_point": "LightDataCS",
+      "target_profile": "cs_6_0",
+      "pass_family": "compute.nw06.light",
+      "phase": "initialization"
+    },
+    {
+      "shader_id": "nw06_scene_vs",
+      "source_path": "shaders/nw06/nw06_scene_vs.hlsl",
+      "entry_point": "SceneVS",
+      "target_profile": "vs_6_0",
+      "pass_family": "graphics.nw06.instanced",
+      "phase": "frame"
+    },
+    {
+      "shader_id": "nw06_scene_ps",
+      "source_path": "shaders/nw06/nw06_scene_ps.hlsl",
+      "entry_point": "ScenePS",
+      "target_profile": "ps_6_0",
+      "pass_family": "graphics.nw06.instanced",
+      "phase": "frame"
+    },
+    {
+      "shader_id": "nw06_bloom_cs",
+      "source_path": "shaders/nw06/nw06_bloom_cs.hlsl",
+      "entry_point": "BloomCS",
+      "target_profile": "cs_6_0",
+      "pass_family": "compute.nw06.post",
+      "phase": "frame"
+    },
+    {
+      "shader_id": "nw06_tonemap_cs",
+      "source_path": "shaders/nw06/nw06_tonemap_cs.hlsl",
+      "entry_point": "TonemapCS",
+      "target_profile": "cs_6_0",
+      "pass_family": "compute.nw06.post",
+      "phase": "frame"
+    }
+  ],
+  "unavailable_measurements": [
+    "compiled_dxil_bytes",
+    "compiled_dxil_sha256"
+  ]
+}

@@ -44,6 +44,7 @@ enum class LogicalType {
     SceneTable,
     Camera,
     Light,
+    Animation,
     RenderImage,
 };
 

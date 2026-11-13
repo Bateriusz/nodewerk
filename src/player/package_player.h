@@ -12,6 +12,7 @@
 // paths.
 
 #include "capability_requirements.h"
+#include "clock_provider.h"
 #include "exit_codes.h"
 #include "package/nwp_format.h"
 #include "player_instrumentation.h"
@@ -304,8 +305,14 @@ private:
             SetRootSignature,
             SetRootConstants,
             SetDescriptorTable,
+            SetGraphicsRootSignature,
+            SetGraphicsRootConstants,
+            SetGraphicsDescriptorTable,
+            SetGraphicsPipeline,
+            SetRenderTargets,
             Barrier,
             Dispatch,
+            ExecuteIndirect,
             Draw,
             CopyBuffer,
             SetTimeline,
@@ -317,6 +324,8 @@ private:
         std::uint32_t root_parameter = 0u;
         std::uint32_t resource_a = 0u;
         std::uint32_t resource_b = 0u;
+        std::uint32_t color_resource = 0u;
+        std::uint32_t depth_resource = 0u;
         // Resources bound through all active descriptor-table root parameters
         // at this instruction. The bounded snapshot is built once during
         // planning so dispatch transitions never touch inactive aliases.
@@ -324,6 +333,8 @@ private:
         std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
             descriptor_resources{};
         std::uint32_t descriptor_resource_count = 0u;
+        std::array<bool, package::kMaxRootSignatureDwordCost>
+            descriptor_resource_is_srv{};
         std::uint32_t shader_id = 0u;
         std::uint32_t group_x = 1u;
         std::uint32_t group_y = 1u;
@@ -334,6 +345,8 @@ private:
         std::int32_t time_byte_offset = -1;
         std::uint64_t byte_count = 0u;
         std::uint64_t tick_value = 0u;
+        std::uint32_t max_draw_count = 1u;
+        bool descriptor_is_srv = false;
         std::string heap_name;
         std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
             constants{};

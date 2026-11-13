@@ -62,6 +62,18 @@ OPTIONAL_IMPLEMENTATIONS = (
     "nw.render.composite",
 )
 
+NW06_OPTIONAL_IMPLEMENTATIONS = (
+    "nw.scene.instances",
+    "nw.camera.curve",
+    "nw.material.standard",
+    "nw.animation.twist",
+    "nw.texture.noise2d",
+    "nw.mesh.torus",
+    "nw.render.instanced",
+    "nw.post.bloom",
+    "nw.post.tonemap",
+)
+
 OPTIONAL_PROFILES = {
     nwp.OPTIONAL_PROFILE_WAVE_OPS: nwp.OPTIONAL_PROFILE_WAVE_OPS_DIGEST,
 }
@@ -90,9 +102,15 @@ PURE_OPERATORS = frozenset(
         "nw.curve.keyframes",
         "nw.curve.sample",
         "nw.scene.flat",
+        "nw.scene.instances",
         "nw.camera.perspective",
+        "nw.camera.curve",
         "nw.light.directional",
         "nw.material.describe",
+        "nw.material.standard",
+        "nw.animation.twist",
+        "nw.texture.noise2d",
+        "nw.mesh.torus",
         "nw.shader.vec4_const",
         "nw.shader.expr",
         "nw.shader.add",
@@ -2250,7 +2268,10 @@ def build_link_manifest(
 ) -> dict[str, Any]:
     """Build the generated player link manifest for one profile artifact."""
     used_operators = sorted({node.operator_id for node in optimized.nodes})
-    excluded = sorted(set(OPTIONAL_IMPLEMENTATIONS) - set(used_operators))
+    known_exclusions = set(OPTIONAL_IMPLEMENTATIONS)
+    if set(used_operators) & set(NW06_OPTIONAL_IMPLEMENTATIONS):
+        known_exclusions.update(NW06_OPTIONAL_IMPLEMENTATIONS)
+    excluded = sorted(known_exclusions - set(used_operators))
     shaders = [
         {"specialization_id": specialization, "target": target, "blob_bytes": size}
         for specialization, target, size in sorted(shader_blobs)
@@ -2311,6 +2332,17 @@ def build_link_manifest(
         runtime_implementations.append("player.procedural-texture-upload")
         runtime_implementations.extend(
             f"player.procedural-texture-format:{fmt}" for fmt in texture_formats
+        )
+    if "nw.render.instanced" in used_operators:
+        runtime_implementations.extend(
+            [
+                "player.nw06.gpu-initialization",
+                "player.nw06.indexed-instanced-indirect",
+                "player.nw06.analytic-lighting-twist",
+                "player.nw06.absolute-tick-camera",
+                "player.nw06.half-resolution-bloom",
+                "player.nw06.tonemap",
+            ]
         )
     runtime_implementations = sorted(set(runtime_implementations))
 

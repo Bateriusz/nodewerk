@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <set>
 #include <sstream>
+#include <tuple>
 
 namespace nw::graph {
 namespace {
@@ -685,6 +686,7 @@ std::string_view ToString(LogicalType type) noexcept {
     case LogicalType::SceneTable: return "scene_table";
     case LogicalType::Camera: return "camera";
     case LogicalType::Light: return "light";
+    case LogicalType::Animation: return "animation";
     case LogicalType::RenderImage: return "render_image";
     }
     return "scalar";
@@ -704,6 +706,7 @@ std::optional<LogicalType> ParseLogicalType(std::string_view text) {
         {"scene_table", LogicalType::SceneTable},
         {"camera", LogicalType::Camera},
         {"light", LogicalType::Light},
+        {"animation", LogicalType::Animation},
         {"render_image", LogicalType::RenderImage},
     };
     for (const auto& [name, value] : kValues) {
@@ -1485,6 +1488,149 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
                        NormalizationRule::Clamp01)};
         registry.Register(std::move(schema));
     }
+    // ---- NW-06 procedural scene proof operators ---------------------------
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.texture.noise2d", OperatorKind::CpuControl,
+            "Seeded bounded two-dimensional value-noise texture recipe",
+            AllFrequencies(), Frequency::Frame, "nw.lower.cpu.recipe");
+        schema.outputs = {ResourcePort(
+            "out", LogicalType::TextureRecipe, Residency::Logical,
+            TextureDescriptor())};
+        schema.params = {
+            IntParam("width", 256, true, 1.0, 8192.0, true),
+            IntParam("height", 256, true, 1.0, 8192.0, true),
+            EnumParam("format", "r8g8b8a8_unorm",
+                      {"r8g8b8a8_unorm", "rgba32f"}),
+            IntParam("seed", 0, true, 0.0, 4294967295.0),
+            IntParam("octaves", 4, true, 1.0, 8.0),
+            FloatParam("scale", 8.0, true, 0.000001, 100000.0),
+            FloatParam("lacunarity", 2.0, true, 1.0, 100.0),
+            FloatParam("gain", 0.5, true, 0.0, 1.0)};
+        schema.resource_descriptor = TextureDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.mesh.torus", OperatorKind::CpuControl,
+            "Parametric torus mesh recipe", AllFrequencies(),
+            Frequency::Frame, "nw.lower.cpu.recipe");
+        schema.outputs = {ResourcePort(
+            "out", LogicalType::MeshRecipe, Residency::Logical,
+            MeshDescriptor())};
+        schema.params = {
+            IntParam("major_segments", 64, true, 3.0, 4096.0, true),
+            IntParam("minor_segments", 32, true, 3.0, 4096.0, true),
+            FloatParam("major_radius", 0.7, true, 0.000001, 1000000.0),
+            FloatParam("minor_radius", 0.3, true, 0.000001, 1000000.0)};
+        schema.resource_descriptor = MeshDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.material.standard", OperatorKind::CpuControl,
+            "Dense PBR material record with a Noise2D albedo texture",
+            AllFrequencies(), Frequency::Frame, "nw.lower.cpu.material");
+        schema.inputs = {ResourcePort(
+            "albedo", LogicalType::TextureRecipe, Residency::Gpu,
+            TextureDescriptor())};
+        schema.outputs = {Port("out", LogicalType::Material, Residency::Cpu)};
+        schema.params = {
+            VectorParam("base_color", ParamType::Vec4),
+            FloatParam("roughness", 0.5, true, 0.0, 1.0),
+            FloatParam("metallic", 0.0, true, 0.0, 1.0,
+                       NormalizationRule::Clamp01),
+            FloatParam("specular", 0.5, true, 0.0, 1.0,
+                       NormalizationRule::Clamp01),
+            IntParam("texture_index", 0, true, 0.0, 4294967295.0)};
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.scene.instances", OperatorKind::CpuControl,
+            "Seeded procedural instance-placement recipe", AllFrequencies(),
+            Frequency::Frame, "nw.lower.cpu.scene");
+        schema.outputs = {Port("out", LogicalType::SceneTable,
+                               Residency::Cpu)};
+        schema.params = {
+            IntParam("count", 256, true, 1.0, 4096.0),
+            IntParam("seed", 0, true, 0.0, 4294967295.0),
+            FloatParam("placement_radius", 3.0, true, 0.000001, 1000000.0),
+            FloatParam("scale_min", 0.1, true, 0.0, 1000000.0),
+            FloatParam("scale_max", 0.2, true, 0.0, 1000000.0),
+            FloatParam("twist_radians", 3.141592653589793, true,
+                       -1000.0, 1000.0)};
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.camera.curve", OperatorKind::CpuControl,
+            "Absolute-tick camera path authoring value", AllFrequencies(),
+            Frequency::Frame, "nw.lower.cpu.camera");
+        schema.outputs = {Port("out", LogicalType::Camera, Residency::Cpu)};
+        schema.params = {
+            StringParam("keys", "0:0;48000:6.283185307179586"),
+            EnumParam("interpolation", "linear", {"linear", "step"}),
+            FloatParam("fov_degrees", 60.0, true, 1.0, 179.0,
+                       NormalizationRule::FiniteOnly),
+            FloatParam("aspect", 1.0, true, 0.0001, 1000.0),
+            FloatParam("near", 0.1, true, 0.000001, 1000000.0),
+            FloatParam("far", 100.0, true, 0.000001, 1000000000.0),
+            FloatParam("radius_min", 3.2, true, 0.0, 1000000.0),
+            FloatParam("radius_max", 4.8, true, 0.0, 1000000.0),
+            FloatParam("height", 1.6, true, -1000000.0, 1000000.0)};
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.animation.twist", OperatorKind::CpuControl,
+            "Analytic per-frame twist deformation authoring value",
+            AllFrequencies(), Frequency::Frame, "nw.lower.cpu.animation");
+        schema.outputs = {Port("out", LogicalType::Animation,
+                               Residency::Cpu)};
+        schema.params = {
+            FloatParam("max_twist_degrees", 180.0, true, -3600.0, 3600.0)};
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.post.bloom", OperatorKind::GpuPass,
+            "Half-resolution bloom post pass", RuntimeFrequencies(),
+            Frequency::Frame, "nw.lower.hlsl.post");
+        schema.inputs = {ResourcePort("image", LogicalType::RenderImage,
+                                      Residency::Gpu,
+                                      RenderImageDescriptor())};
+        schema.outputs = {ResourcePort("out", LogicalType::RenderImage,
+                                       Residency::Gpu,
+                                       RenderImageDescriptor())};
+        schema.params = {
+            FloatParam("threshold", 0.7, true, 0.0, 1000000.0),
+            FloatParam("intensity", 0.35, true, 0.0, 1000000.0),
+            FloatParam("radius", 1.5, true, 0.0, 1000.0),
+            FloatParam("resolution_scale", 0.5, true, 0.01, 1.0)};
+        schema.produces_resource = true;
+        schema.resource_descriptor = RenderImageDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.post.tonemap", OperatorKind::GpuPass,
+            "Final tonemap post pass", RuntimeFrequencies(),
+            Frequency::Frame, "nw.lower.hlsl.post");
+        schema.inputs = {ResourcePort("image", LogicalType::RenderImage,
+                                      Residency::Gpu,
+                                      RenderImageDescriptor())};
+        schema.outputs = {ResourcePort("out", LogicalType::RenderImage,
+                                       Residency::Gpu,
+                                       RenderImageDescriptor())};
+        schema.params = {
+            FloatParam("exposure", 1.0, true, 0.0, 1000000.0),
+            FloatParam("gamma", 2.2, true, 0.000001, 1000.0),
+            EnumParam("operator", "aces", {"aces", "reinhard", "linear"})};
+        schema.produces_resource = true;
+        schema.resource_descriptor = RenderImageDescriptor();
+        registry.Register(std::move(schema));
+    }
 
     // ---- Pure ShaderExpr composition --------------------------------------
     {
@@ -1651,6 +1797,56 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
     }
     {
         OperatorSchema schema = BaseOperator(
+            "nw.residency.generate_texture", OperatorKind::GpuPass,
+            "GPU-initialization procedural texture generation",
+            RuntimeFrequencies(), Frequency::Frame,
+            "nw.lower.hlsl.residency");
+        schema.inputs = {ResourcePort("texture",
+                                      LogicalType::TextureRecipe,
+                                      Residency::Logical,
+                                      TextureDescriptor())};
+        schema.outputs = {ResourcePort("out",
+                                       LogicalType::TextureRecipe,
+                                       Residency::Gpu,
+                                       TextureDescriptor())};
+        schema.explicit_residency_conversion = true;
+        schema.produces_resource = true;
+        schema.resource_descriptor = TextureDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.residency.generate_mesh", OperatorKind::GpuPass,
+            "GPU-initialization procedural mesh generation",
+            RuntimeFrequencies(), Frequency::Frame,
+            "nw.lower.hlsl.residency");
+        schema.inputs = {ResourcePort("mesh", LogicalType::MeshRecipe,
+                                      Residency::Logical,
+                                      MeshDescriptor())};
+        schema.outputs = {ResourcePort("out", LogicalType::MeshRecipe,
+                                       Residency::Gpu,
+                                       MeshDescriptor())};
+        schema.explicit_residency_conversion = true;
+        schema.produces_resource = true;
+        schema.resource_descriptor = MeshDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.residency.generate_instances", OperatorKind::GpuPass,
+            "GPU-initialization flat instance/material table generation",
+            RuntimeFrequencies(), Frequency::Frame,
+            "nw.lower.hlsl.residency");
+        schema.inputs = {
+            Port("scene", LogicalType::SceneTable, Residency::Cpu)};
+        schema.outputs = {
+            Port("out", LogicalType::SceneTable, Residency::Gpu)};
+        schema.explicit_residency_conversion = true;
+        schema.produces_resource = true;
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
             "nw.residency.gpu_to_cpu", OperatorKind::GpuPass,
             "Explicit render-image readback", {Frequency::Frame},
             Frequency::Frame, "nw.lower.hlsl.readback");
@@ -1743,6 +1939,28 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
                          RenderImageDescriptor())};
         schema.outputs = {ResourcePort(
             "out", LogicalType::RenderImage, Residency::Gpu,
+            RenderImageDescriptor())};
+        schema.produces_resource = true;
+        schema.resource_descriptor = RenderImageDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.render.instanced", OperatorKind::GpuPass,
+            "One indexed instanced raster pass with analytic lighting",
+            RuntimeFrequencies(), Frequency::Frame, "nw.lower.hlsl.render");
+        schema.inputs = {
+            ResourcePort("mesh", LogicalType::MeshRecipe, Residency::Gpu,
+                         MeshDescriptor()),
+            ResourcePort("texture", LogicalType::TextureRecipe,
+                         Residency::Gpu, TextureDescriptor()),
+            Port("scene", LogicalType::SceneTable, Residency::Gpu),
+            Port("material", LogicalType::Material, Residency::Cpu),
+            Port("camera", LogicalType::Camera, Residency::Cpu),
+            Port("light", LogicalType::Light, Residency::Cpu),
+            Port("animation", LogicalType::Animation, Residency::Cpu)};
+        schema.outputs = {ResourcePort(
+            "image", LogicalType::RenderImage, Residency::Gpu,
             RenderImageDescriptor())};
         schema.produces_resource = true;
         schema.resource_descriptor = RenderImageDescriptor();
@@ -5250,6 +5468,94 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         outputs["out"] = std::move(material);
         return true;
     }
+    if (op == "nw.material.standard") {
+        EvaluationValue material = MakeText(LogicalType::Material,
+                                            "material:standard");
+        material.component_count = 7u;
+        const ParamValue* color = param("base_color");
+        for (std::uint32_t i = 0; i < 4u; ++i) {
+            material.numbers[i] = color->components[i];
+        }
+        material.numbers[4] = param("roughness")->number;
+        material.numbers[5] = param("metallic")->number;
+        material.numbers[6] = param("specular")->number;
+        outputs["out"] = std::move(material);
+        return true;
+    }
+    if (op == "nw.texture.noise2d") {
+        CanonicalWriter writer;
+        writer.String("nwgraph.noise2d-recipe.v1");
+        writer.String(snapshot.StructuralHash(node.id));
+        writer.U64(static_cast<std::uint64_t>(param("seed")->integer));
+        writer.U64(static_cast<std::uint64_t>(param("width")->integer));
+        writer.U64(static_cast<std::uint64_t>(param("height")->integer));
+        writer.U64(static_cast<std::uint64_t>(param("octaves")->integer));
+        writer.F64(param("scale")->number);
+        writer.F64(param("lacunarity")->number);
+        writer.F64(param("gain")->number);
+        writer.String(param("format")->text);
+        const auto digest = Sha256Bytes(writer.bytes().data(),
+                                        writer.bytes().size());
+        EvaluationValue texture = MakeText(
+            LogicalType::TextureRecipe,
+            "noise2d-recipe:sha256:v1:" +
+                HexBytes(digest.data(), digest.size()),
+            Residency::Logical);
+        texture.component_count = 3u;
+        texture.numbers[0] = static_cast<double>(param("width")->integer);
+        texture.numbers[1] = static_cast<double>(param("height")->integer);
+        texture.numbers[2] = static_cast<double>(param("seed")->integer);
+        outputs["out"] = std::move(texture);
+        return true;
+    }
+    if (op == "nw.mesh.torus") {
+        EvaluationValue mesh = MakeText(LogicalType::MeshRecipe,
+                                        "mesh-recipe:torus",
+                                        Residency::Logical);
+        mesh.component_count = 2u;
+        mesh.numbers[0] = static_cast<double>(
+            param("major_segments")->integer *
+            param("minor_segments")->integer);
+        mesh.numbers[1] = static_cast<double>(
+            param("major_segments")->integer *
+            param("minor_segments")->integer * 6);
+        outputs["out"] = std::move(mesh);
+        return true;
+    }
+    if (op == "nw.scene.instances") {
+        EvaluationValue scene = MakeText(LogicalType::SceneTable,
+                                         "scene:instances");
+        scene.component_count = 2u;
+        scene.numbers[0] = static_cast<double>(param("count")->integer);
+        scene.numbers[1] = static_cast<double>(param("seed")->integer);
+        outputs["out"] = std::move(scene);
+        return true;
+    }
+    if (op == "nw.camera.curve") {
+        const CurveKeyParseResult parsed = ParseCurveKeys(param("keys")->text);
+        if (!parsed.ok) {
+            failure = EvalDiagnostic(node, parsed.error);
+            return false;
+        }
+        EvaluationValue camera = MakeText(LogicalType::Camera,
+                                          "camera:curve");
+        camera.component_count = 4u;
+        camera.numbers[0] = param("fov_degrees")->number;
+        camera.numbers[1] = param("aspect")->number;
+        camera.numbers[2] = param("near")->number;
+        camera.numbers[3] = param("far")->number;
+        camera.text += ":" + param("keys")->text;
+        outputs["out"] = std::move(camera);
+        return true;
+    }
+    if (op == "nw.animation.twist") {
+        EvaluationValue animation = MakeText(LogicalType::Animation,
+                                             "animation:twist");
+        animation.component_count = 1u;
+        animation.numbers[0] = param("max_twist_degrees")->number;
+        outputs["out"] = std::move(animation);
+        return true;
+    }
     if (op == "nw.shader.vec4_const") {
         const ParamValue* value = param("value");
         std::ostringstream text;
@@ -5330,12 +5636,20 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
     }
     if (op == "nw.residency.upload_texture" ||
         op == "nw.residency.upload_buffer" ||
-        op == "nw.residency.upload_mesh") {
-        const char* port = op == "nw.residency.upload_texture"
+        op == "nw.residency.upload_mesh" ||
+        op == "nw.residency.generate_texture" ||
+        op == "nw.residency.generate_mesh") {
+        const char* port = (op == "nw.residency.upload_texture" ||
+                            op == "nw.residency.generate_texture")
                                ? "texture"
                                : op == "nw.residency.upload_buffer" ? "buffer"
                                                                     : "mesh";
         outputs["out"] = *input(port);
+        outputs["out"].residency = Residency::Gpu;
+        return true;
+    }
+    if (op == "nw.residency.generate_instances") {
+        outputs["out"] = *input("scene");
         outputs["out"].residency = Residency::Gpu;
         return true;
     }
@@ -5361,6 +5675,14 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         return true;
     }
     if (op == "nw.render.composite") {
+        outputs["out"] = ImageOracle(snapshot, node, "out", evaluated);
+        return true;
+    }
+    if (op == "nw.render.instanced") {
+        outputs["image"] = ImageOracle(snapshot, node, "image", evaluated);
+        return true;
+    }
+    if (op == "nw.post.bloom" || op == "nw.post.tonemap") {
         outputs["out"] = ImageOracle(snapshot, node, "out", evaluated);
         return true;
     }

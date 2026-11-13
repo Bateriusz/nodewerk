@@ -30,6 +30,7 @@ import nw03_compiler  # noqa: E402
 import nwp_package  # noqa: E402
 import nw05_export  # noqa: E402
 import nw05_optimizer  # noqa: E402
+import nw06_export  # noqa: E402
 
 
 def _emit(payload: object, *, stream: object = sys.stdout) -> None:
@@ -83,22 +84,38 @@ def command_validate(args: argparse.Namespace) -> int:
         "diagnostics": diagnostics,
     }
     if document is not None and not errors:
-        generated, lowering_diagnostics = nw03_compiler.lower_to_fused_hlsl(document)
-        payload["lowering"] = {
-            "specialization_count": len(generated),
-            "specializations": [
-                {
-                    "specialization_id": shader.specialization_id,
-                    "specialization_key": shader.specialization_key,
-                    "entry_point": shader.entry_point,
-                    "target": shader.target,
-                    "hlsl_sha256": shader.hlsl_sha256,
-                    "reachable_node_ids": list(shader.root_node_ids),
-                }
-                for shader in generated
-            ],
-            "diagnostics": lowering_diagnostics,
-        }
+        optimized = nw05_optimizer.optimize_graph(document)
+        if nw06_export.uses_nw06(optimized):
+            payload["lowering"] = {
+                "specialization_count": 0,
+                "specializations": [],
+                "diagnostics": [],
+                "fixed_pipeline_operators": sorted(
+                    {
+                        node.operator_id
+                        for node in optimized.nodes
+                        if node.operator_id in nw06_export.NW06_OPERATORS
+                    }
+                ),
+                "fixed_shader_targets": ["cs_6_0", "vs_6_0", "ps_6_0"],
+            }
+        else:
+            generated, lowering_diagnostics = nw03_compiler.lower_to_fused_hlsl(document)
+            payload["lowering"] = {
+                "specialization_count": len(generated),
+                "specializations": [
+                    {
+                        "specialization_id": shader.specialization_id,
+                        "specialization_key": shader.specialization_key,
+                        "entry_point": shader.entry_point,
+                        "target": shader.target,
+                        "hlsl_sha256": shader.hlsl_sha256,
+                        "reachable_node_ids": list(shader.root_node_ids),
+                    }
+                    for shader in generated
+                ],
+                "diagnostics": lowering_diagnostics,
+            }
         # A structurally valid graph may intentionally contain no reachable
         # ShaderExpr entry point (for example a CPU-only fixture).  Lowering
         # diagnostics are reported here, but compile-package is where a missing

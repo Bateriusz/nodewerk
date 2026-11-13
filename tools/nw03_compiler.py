@@ -151,11 +151,23 @@ KNOWN_OPERATORS = {
     "nw.shader.mul",
     "nw.shader.mix",
     "nw.texture.procedural",
+    "nw.texture.noise2d",
     "nw.buffer.recipe",
     "nw.mesh.recipe",
+    "nw.mesh.torus",
+    "nw.material.standard",
+    "nw.scene.instances",
+    "nw.camera.curve",
+    "nw.animation.twist",
+    "nw.post.bloom",
+    "nw.post.tonemap",
+    "nw.render.instanced",
     "nw.residency.upload_texture",
     "nw.residency.upload_buffer",
     "nw.residency.upload_mesh",
+    "nw.residency.generate_texture",
+    "nw.residency.generate_mesh",
+    "nw.residency.generate_instances",
     "nw.residency.cpu_to_gpu",
     "nw.residency.gpu_to_cpu",
     "nw.readback.scalar",
@@ -181,12 +193,17 @@ OPERATOR_INPUTS = {
     "nw.proc.palette": {"t"},
     "nw.curve.sample": {"curve", "t"},
     "nw.material.describe": {"base_color", "roughness"},
+    "nw.material.standard": {"albedo"},
+    "nw.animation.twist": set(),
     "nw.shader.add": {"a", "b"},
     "nw.shader.mul": {"a", "b"},
     "nw.shader.mix": {"a", "b"},
     "nw.residency.upload_texture": {"texture"},
     "nw.residency.upload_buffer": {"buffer"},
     "nw.residency.upload_mesh": {"mesh"},
+    "nw.residency.generate_texture": {"texture"},
+    "nw.residency.generate_mesh": {"mesh"},
+    "nw.residency.generate_instances": {"scene"},
     "nw.residency.cpu_to_gpu": {"image"},
     "nw.residency.gpu_to_cpu": {"image"},
     "nw.readback.scalar": {"image"},
@@ -194,6 +211,17 @@ OPERATOR_INPUTS = {
     "nw.render.gbuffer": {"mesh", "material", "camera", "light", "shader"},
     "nw.render.composite": {"color", "normal"},
     "nw.render.present": {"image"},
+    "nw.render.instanced": {
+        "mesh",
+        "texture",
+        "scene",
+        "material",
+        "camera",
+        "light",
+        "animation",
+    },
+    "nw.post.bloom": {"image"},
+    "nw.post.tonemap": {"image"},
 }
 
 OUTPUT_PORTS = {
@@ -217,17 +245,29 @@ OUTPUT_PORTS = {
     "nw.camera.perspective": {"out"},
     "nw.light.directional": {"out"},
     "nw.material.describe": {"out"},
+    "nw.material.standard": {"out"},
     "nw.shader.vec4_const": {"out"},
     "nw.shader.expr": {"out"},
     "nw.shader.add": {"out"},
     "nw.shader.mul": {"out"},
     "nw.shader.mix": {"out"},
     "nw.texture.procedural": {"out"},
+    "nw.texture.noise2d": {"out"},
     "nw.buffer.recipe": {"out"},
     "nw.mesh.recipe": {"out"},
+    "nw.mesh.torus": {"out"},
+    "nw.scene.instances": {"out"},
+    "nw.camera.curve": {"out"},
+    "nw.animation.twist": {"out"},
+    "nw.post.bloom": {"out"},
+    "nw.post.tonemap": {"out"},
+    "nw.render.instanced": {"image"},
     "nw.residency.upload_texture": {"out"},
     "nw.residency.upload_buffer": {"out"},
     "nw.residency.upload_mesh": {"out"},
+    "nw.residency.generate_texture": {"out"},
+    "nw.residency.generate_mesh": {"out"},
+    "nw.residency.generate_instances": {"out"},
     "nw.residency.cpu_to_gpu": {"out"},
     "nw.residency.gpu_to_cpu": {"out"},
     "nw.readback.scalar": {"value"},
@@ -334,6 +374,10 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
         },
         "outputs": {"out": ("material", 1, "cpu")},
     },
+    "nw.material.standard": {
+        "inputs": {"albedo": ("texture", 1, "gpu")},
+        "outputs": {"out": ("material", 1, "cpu")},
+    },
     "nw.shader.vec4_const": {"outputs": {"out": ("shader_expr", 1, "logical")}},
     "nw.shader.expr": {"outputs": {"out": ("shader_expr", 1, "logical")}},
     "nw.shader.add": {
@@ -358,8 +402,33 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
         "outputs": {"out": ("shader_expr", 1, "logical")},
     },
     "nw.texture.procedural": {"outputs": {"out": ("texture", 1, "logical")}},
+    "nw.texture.noise2d": {"outputs": {"out": ("texture", 1, "logical")}},
     "nw.buffer.recipe": {"outputs": {"out": ("buffer", 1, "logical")}},
     "nw.mesh.recipe": {"outputs": {"out": ("mesh", 1, "logical")}},
+    "nw.mesh.torus": {"outputs": {"out": ("mesh", 1, "logical")}},
+    "nw.scene.instances": {"outputs": {"out": ("scene", 1, "cpu")}},
+    "nw.camera.curve": {"outputs": {"out": ("camera", 1, "cpu")}},
+    "nw.animation.twist": {"outputs": {"out": ("animation", 1, "cpu")}},
+    "nw.post.bloom": {
+        "inputs": {"image": ("image", 1, "gpu")},
+        "outputs": {"out": ("image", 1, "gpu")},
+    },
+    "nw.post.tonemap": {
+        "inputs": {"image": ("image", 1, "gpu")},
+        "outputs": {"out": ("image", 1, "gpu")},
+    },
+    "nw.render.instanced": {
+        "inputs": {
+            "mesh": ("mesh", 1, "gpu"),
+            "texture": ("texture", 1, "gpu"),
+            "scene": ("scene", 1, "gpu"),
+            "material": ("material", 1, "cpu"),
+            "camera": ("camera", 1, "cpu"),
+            "light": ("light", 1, "cpu"),
+            "animation": ("animation", 1, "cpu"),
+        },
+        "outputs": {"image": ("image", 1, "gpu")},
+    },
     "nw.residency.upload_texture": {
         "inputs": {"texture": ("texture", 1, "logical")},
         "outputs": {"out": ("texture", 1, "gpu")},
@@ -371,6 +440,18 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
     "nw.residency.upload_mesh": {
         "inputs": {"mesh": ("mesh", 1, "logical")},
         "outputs": {"out": ("mesh", 1, "gpu")},
+    },
+    "nw.residency.generate_texture": {
+        "inputs": {"texture": ("texture", 1, "logical")},
+        "outputs": {"out": ("texture", 1, "gpu")},
+    },
+    "nw.residency.generate_mesh": {
+        "inputs": {"mesh": ("mesh", 1, "logical")},
+        "outputs": {"out": ("mesh", 1, "gpu")},
+    },
+    "nw.residency.generate_instances": {
+        "inputs": {"scene": ("scene", 1, "cpu")},
+        "outputs": {"out": ("scene", 1, "gpu")},
     },
     "nw.residency.cpu_to_gpu": {
         "inputs": {"image": ("image", 1, "cpu")},
@@ -433,6 +514,20 @@ PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
         "height": {"kind": "int", "min": 1, "max": 8192},
         "format": {"kind": "enum", "values": {"r8g8b8a8_unorm", "rgba32f"}},
         "seed": {"kind": "int", "min": 0, "max": 4294967295},
+        "octaves": {"kind": "int", "min": 1, "max": 8, "optional": True},
+        "scale": {"kind": "float", "min": 0.000001, "optional": True},
+        "lacunarity": {"kind": "float", "min": 1.0, "optional": True},
+        "gain": {"kind": "float", "min": 0.0, "max": 1.0, "optional": True},
+    },
+    "nw.texture.noise2d": {
+        "width": {"kind": "int", "min": 1, "max": 8192},
+        "height": {"kind": "int", "min": 1, "max": 8192},
+        "format": {"kind": "enum", "values": {"r8g8b8a8_unorm", "rgba32f"}},
+        "seed": {"kind": "int", "min": 0, "max": 4294967295},
+        "octaves": {"kind": "int", "min": 1, "max": 8},
+        "scale": {"kind": "float", "min": 0.000001},
+        "lacunarity": {"kind": "float", "min": 1.0},
+        "gain": {"kind": "float", "min": 0.0, "max": 1.0},
     },
     "nw.buffer.recipe": {
         "bytes": {"kind": "int", "min": 1, "max": 67108864},
@@ -441,6 +536,52 @@ PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
     "nw.mesh.recipe": {
         "vertices": {"kind": "int", "min": 1, "max": 1048576},
         "indices": {"kind": "int", "min": 1, "max": 3145728},
+    },
+    "nw.mesh.torus": {
+        "major_segments": {"kind": "int", "min": 3, "max": 4096},
+        "minor_segments": {"kind": "int", "min": 3, "max": 4096},
+        "major_radius": {"kind": "float", "min": 0.000001},
+        "minor_radius": {"kind": "float", "min": 0.000001},
+    },
+    "nw.material.standard": {
+        "base_color": {"kind": "vec4"},
+        "roughness": {"kind": "float", "min": 0.0, "max": 1.0},
+        "metallic": {"kind": "float", "min": 0.0, "max": 1.0, "clamp01": True},
+        "specular": {"kind": "float", "min": 0.0, "max": 1.0, "clamp01": True},
+        "texture_index": {"kind": "int", "min": 0, "max": 4294967295},
+    },
+    "nw.scene.instances": {
+        "count": {"kind": "int", "min": 1, "max": 4096},
+        "seed": {"kind": "int", "min": 0, "max": 4294967295},
+        "placement_radius": {"kind": "float", "min": 0.000001},
+        "scale_min": {"kind": "float", "min": 0.0},
+        "scale_max": {"kind": "float", "min": 0.0},
+        "twist_radians": {"kind": "float"},
+    },
+    "nw.camera.curve": {
+        "keys": {"kind": "string"},
+        "interpolation": {"kind": "enum", "values": {"linear", "step"}},
+        "fov_degrees": {"kind": "float", "min": 1.0, "max": 179.0},
+        "aspect": {"kind": "float", "min": 0.01},
+        "near": {"kind": "float", "min": 0.0001},
+        "far": {"kind": "float", "min": 0.0002},
+        "radius_min": {"kind": "float", "min": 0.0},
+        "radius_max": {"kind": "float", "min": 0.0},
+        "height": {"kind": "float"},
+    },
+    "nw.animation.twist": {
+        "max_twist_degrees": {"kind": "float", "min": -3600.0, "max": 3600.0},
+    },
+    "nw.post.bloom": {
+        "threshold": {"kind": "float", "min": 0.0},
+        "intensity": {"kind": "float", "min": 0.0},
+        "radius": {"kind": "float", "min": 0.0},
+        "resolution_scale": {"kind": "float", "min": 0.01, "max": 1.0},
+    },
+    "nw.post.tonemap": {
+        "exposure": {"kind": "float", "min": 0.0},
+        "gamma": {"kind": "float", "min": 0.000001},
+        "operator": {"kind": "enum", "values": {"aces", "reinhard", "linear"}},
     },
     "nw.camera.perspective": {
         "fov_degrees": {"kind": "float", "min": 1.0, "max": 179.0},
@@ -976,6 +1117,8 @@ def _validate_node_parameters(node: GraphNode) -> list[dict[str, Any]]:
     for name, rule in rules.items():
         tokens = _param_tokens(node, name)
         if not tokens:
+            if rule.get("optional"):
+                continue
             diagnostics.append(
                 _diagnostic(
                     "missing_parameter",
@@ -1000,6 +1143,8 @@ def _validate_node_parameters(node: GraphNode) -> list[dict[str, Any]]:
                         port_id=name,
                     )
                 )
+            continue
+        if kind == "string":
             continue
         numeric_values: list[float] = []
         for token in tokens:

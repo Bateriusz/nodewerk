@@ -100,6 +100,8 @@ with the display signature.
 | 10 | `COPY_SOURCE` |
 | 11 | `PRESENT` |
 | 12 | `GENERIC_READ` |
+| 13 | `INDIRECT_ARGUMENT` |
+| 14 | `ALL_SHADER_RESOURCE` |
 
 Unknown state codes are rejected during frame planning; they never silently
 degrade to `COMMON`. A requested state is also checked against the target

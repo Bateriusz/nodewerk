@@ -116,3 +116,27 @@ existing `PackagePlayer`; there is no hand-edited package or per-demo player
 logic. Windows native and Ada/Blackwell alias/output-equality checks remain
 `pending` until executed through the NW-01B evidence harness. See
 [`docs/nw05-typed-graph-export.md`](docs/nw05-typed-graph-export.md).
+
+## NW-06 Procedural Scene & Integer Timeline
+
+The NW-06 proof exports a seeded 256x256 Noise2D material, a 64x32 parametric
+torus, and 256 procedurally placed instances through the existing typed-graph,
+NW-05 export, and `.nwp` v1 PackagePlayer path. GPU initialization generates the
+texture, vertex/index buffers, dense instance/material tables, and one indirect
+argument record; the frame schedule contains exactly one conventional indexed
+instanced indirect draw, analytic lighting/twist deformation, an absolute-tick
+camera curve, half-resolution bloom, and tonemapping.
+
+```bash
+python tools/nodewerkc.py export fixtures/nw06/procedural_scene.nwgraph build/nw06 \
+    --dxc <pinned-dxc> --player-template <specialized-player.exe>
+python tools/verify_nw06.py --mode ContractsOnly --summary-json build/nw06.json
+```
+
+Timeline time is 48,000 integer ticks per second with checked monotonic-clock
+conversion and rational capture steps. Curves record bounded quantization error
+and retain a full-precision escape hatch; event delivery uses ordered IDs over
+`(previousTick, currentTick]` with explicit seek/replay resets. Ada/Blackwell
+fixed-tick evidence remains `pending_unverified` until the identical common
+artifact is executed on both representative hardware tiers. See
+[`docs/nw06-procedural-scene.md`](docs/nw06-procedural-scene.md).

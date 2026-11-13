@@ -89,11 +89,11 @@ D3D12_RESOURCE_DESC PlacedResourceDesc(
         desc.SampleDesc.Count = 1u;
         desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     }
-    if (resource.usage == "uav") {
+    if (resource.usage == "uav" || resource.usage == "uav_srv") {
         desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
             desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     }
-    if (resource.usage == "rtv") {
+    if (resource.usage == "rtv" || resource.usage == "rtv_srv") {
         desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
             desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
     }
@@ -242,7 +242,9 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
             return values;
         };
         if (instruction.opcode == "frame.set_descriptor_table" ||
-            instruction.opcode == "frame.set_root_constants") {
+            instruction.opcode == "frame.set_root_constants" ||
+            instruction.opcode == "frame.set_graphics_descriptor_table" ||
+            instruction.opcode == "frame.set_graphics_root_constants") {
             const std::uint32_t root_parameter =
                 instruction.operands.empty()
                     ? 0u
@@ -250,7 +252,9 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
             bound_by_root[root_parameter] = std::set<std::uint32_t>{};
             for (const auto resource_id : refs()) {
                 bound_by_root[root_parameter].insert(resource_id);
-                if (instruction.opcode == "frame.set_root_constants") {
+                if (instruction.opcode == "frame.set_root_constants" ||
+                    instruction.opcode ==
+                        "frame.set_graphics_root_constants") {
                     mark(resource_id, true, false);
                 }
             }
@@ -260,12 +264,18 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
                     const auto resource_it = by_id.find(resource_id);
                     if (resource_it == by_id.end()) continue;
                     const std::string& usage = resource_it->second->usage;
-                    if (usage == "uav") {
+                    if (usage == "uav" || usage == "uav_srv") {
                         mark(resource_id, true, true);
                     } else if (usage == "srv" || usage == "cbv") {
                         mark(resource_id, true, false);
                     }
                 }
+            }
+        } else if (instruction.opcode == "frame.set_render_targets" ||
+                   instruction.opcode == "frame.execute_indirect") {
+            for (const auto resource_id : refs()) {
+                mark(resource_id, true,
+                     instruction.opcode == "frame.set_render_targets");
             }
         } else if (instruction.opcode == "frame.copy_buffer") {
             std::vector<std::uint32_t> ids = refs();

@@ -53,6 +53,8 @@ BARRIER_STATE_NAMES = {
     10: "COPY_SOURCE",
     11: "PRESENT",
     12: "GENERIC_READ",
+    13: "INDIRECT_ARGUMENT",
+    14: "ALL_SHADER_RESOURCE",
 }
 
 READ_STATES = frozenset(
@@ -63,6 +65,7 @@ READ_STATES = frozenset(
         "PIXEL_SHADER_RESOURCE",
         "COPY_SOURCE",
         "GENERIC_READ",
+        "ALL_SHADER_RESOURCE",
     }
 )
 WRITE_STATES = frozenset({"RENDER_TARGET", "UNORDERED_ACCESS", "DEPTH_WRITE", "COPY_DEST"})
@@ -491,13 +494,13 @@ def _barrier_state(instruction: nwp.Instruction) -> str:
 
 
 def _usage_state(usage: str) -> str:
-    if usage == "uav":
+    if usage in {"uav", "uav_srv"}:
         return "UNORDERED_ACCESS"
     if usage == "cbv":
         return "VERTEX_AND_CONSTANT_BUFFER"
-    if usage == "srv":
+    if usage in {"srv", "uav_srv", "rtv_srv"}:
         return "NON_PIXEL_SHADER_RESOURCE"
-    if usage == "rtv":
+    if usage in {"rtv", "rtv_srv"}:
         return "RENDER_TARGET"
     if usage == "dsv":
         return "DEPTH_WRITE"
@@ -654,7 +657,7 @@ def build_logical_schedule(
                 resource = resources_by_id.get(resource_id)
                 if resource is None:
                     continue
-                if resource.usage == "uav":
+                if resource.usage in {"uav", "uav_srv"}:
                     access = "write"
                 elif resource.usage in {"srv", "cbv"}:
                     access = "read"
