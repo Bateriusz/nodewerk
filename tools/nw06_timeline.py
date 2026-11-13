@@ -263,12 +263,28 @@ class RationalFrameStep:
         stepping identical to direct rational evaluation for non-integral
         ticks-per-frame values.
         """
+        if (
+            isinstance(current_tick, bool)
+            or not isinstance(current_tick, int)
+            or current_tick < 0
+            or current_tick > MAX_TICKS
+        ):
+            raise _error(
+                "invalid_curve_tick",
+                f"current tick {current_tick!r} is outside the uint64 range",
+            )
         if frames < 0:
             raise _error("invalid_frame_index", "frame count must be non-negative")
         if frame_index is not None:
             if frame_index < 0:
                 raise _error("invalid_frame_index", "frame index must be non-negative")
+            if frames == 0:
+                return self.tick_for_frame(frame_index)
             destination = frame_index + frames
+        elif frames == 0:
+            # Advancing by zero frames preserves the requested position even
+            # when the caller has not supplied a cadence frame index.
+            return current_tick
         elif (
             self._last_advance_tick is not None
             and current_tick == self._last_advance_tick
@@ -277,13 +293,23 @@ class RationalFrameStep:
         elif current_tick == 0:
             destination = frames
         else:
-            # Restart from an arbitrary absolute tick.  The first frame whose
-            # floored tick reaches it is the unique exact reconstruction point
-            # for cadences at or above one tick per frame.
-            destination = (
+            if self.numerator < self.denominator:
+                raise _error(
+                    "ambiguous_frame_position",
+                    "a sub-tick cadence cannot identify a frame from a tick; "
+                    "provide frame_index",
+                )
+            candidate = (
                 (current_tick * self.denominator + self.numerator - 1)
                 // self.numerator
-            ) + frames
+            )
+            if self.tick_for_frame(candidate) != current_tick:
+                raise _error(
+                    "invalid_frame_position",
+                    f"tick {current_tick} is not on the rational capture cadence; "
+                    "provide frame_index",
+                )
+            destination = candidate + frames
         result = self.tick_for_frame(destination)
         self._next_frame_index = destination
         self._last_advance_tick = result

@@ -199,11 +199,17 @@ artifact/package/manifest hashes, common profile and requirements digest, exact
 adapter/device, driver/OS/toolchain, queried capabilities, clocks/power/thermal
 information, cache state, capture protocol, unavailable telemetry, evaluated
 fixed ticks, capture artifacts, and validated numeric/image comparisons against
-the declared tolerances. A bare `status: passed` or caller-supplied
-qualification label is insufficient: missing required telemetry or comparison
-evidence stays pending, and an executed failure stays failed. Hardware
-classification is metadata only and never changes target selection, tolerances,
-quality/resolution requirements, or feature exclusions.
+the authoritative tolerances (`1e-5` absolute / `1e-4` relative numeric,
+`1e-4` image-channel) at the fixed 256x256 proof resolution. Every fixed tick
+must have a corresponding artifact whose path, byte size, digest, dimensions,
+and per-tick comparison are verified; artifact bytes are read and hashed before
+acceptance. A bare `status: passed`, caller-supplied `validated` flag, relaxed
+tolerance, or caller-supplied qualification label is insufficient. Missing
+required telemetry or comparison evidence stays pending, an explicit comparison
+failure or measured tolerance violation stays failed, and executed failures
+remain failures. Hardware classification is metadata only and never changes
+target selection, tolerances, quality/resolution requirements, or feature
+exclusions.
 
 Per-pass time, initialization time, shader bytes, and memory costs use the
 existing instrumentation and attribution architecture. Unavailable

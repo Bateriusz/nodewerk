@@ -29,6 +29,7 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
         "ada": "desktop_ada_representative",
         "blackwell": "desktop_blackwell_representative",
     }[tier]
+    fixed_ticks = [0, 24_000, 48_000]
     return {
         "status": "passed",
         "coverage_target": coverage,
@@ -51,37 +52,57 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
         "cache_state": "cold",
         "capture_protocol": "nw06-fixed-tick-capture.v1",
         "unavailable_telemetry": [],
-        "fixed_ticks": [0, 24_000, 48_000],
+        "fixed_ticks": fixed_ticks,
         "capture_artifacts": [
             {
-                "kind": "rgba8",
-                "path": f"captures/{tier}-0.rgba",
+                "kind": "rgba32f_raw",
+                "path": f"captures/{tier}-{tick}.rgba32f",
                 "sha256": "a" * 64,
-                "bytes": 256 * 256 * 4,
+                "bytes": 256 * 256 * 16,
+                "tick": tick,
+                "width": 256,
+                "height": 256,
             }
+            for tick in fixed_ticks
         ],
         "comparison": {
             "validated": True,
             "status": "passed",
+            "fixed_ticks": fixed_ticks,
             "numeric": {
                 "status": "passed",
                 "samples": 3,
                 "maximum_error": 0.0,
-                "tolerance": 0.001,
+                "tolerance": 1e-5,
+                "ticks": fixed_ticks,
             },
             "image": {
                 "status": "passed",
                 "pixels": 256 * 256,
                 "maximum_error": 0.0,
-                "tolerance": 0.01,
+                "tolerance": 1e-4,
+                "ticks": fixed_ticks,
+                "width": 256,
+                "height": 256,
             },
             "tolerance_check": {
                 "status": "passed",
                 "observed_maximum_error": 0.0,
-                "declared_tolerance": 0.01,
+                "declared_tolerance": 1e-4,
+                "ticks": fixed_ticks,
             },
         },
     }
+
+
+def _materialize_capture(root: Path, capture: dict) -> None:
+    for artifact in capture["capture_artifacts"]:
+        path = root / artifact["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = bytes([artifact["tick"] & 0xFF]) * artifact["bytes"]
+        path.write_bytes(payload)
+        artifact["bytes"] = len(payload)
+        artifact["sha256"] = hashlib.sha256(payload).hexdigest()
 
 
 def test_pending_evidence_is_valid_but_never_verified() -> None:
@@ -244,6 +265,7 @@ def test_record_capture_writes_schema_valid_qualifications_and_policy(
     executable.write_bytes(b"MZ" + b"\x00" * 64)
     output = tmp_path / "evidence.json"
     capture_metadata = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture_metadata)
     for name in (
         "coverage_target",
         "evidence_role",
@@ -282,8 +304,12 @@ def test_record_capture_writes_schema_valid_qualifications_and_policy(
     ).hexdigest()
 
 
-def test_pending_qualifications_prevent_verified_status() -> None:
+def test_pending_qualifications_prevent_verified_status(
+    tmp_path: Path,
+) -> None:
     captures = [_complete_capture("ada"), _complete_capture("blackwell")]
+    for capture in captures:
+        _materialize_capture(tmp_path, capture)
     pending = {
         "captures": captures,
         "qualifications": {
@@ -300,12 +326,16 @@ def test_pending_qualifications_prevent_verified_status() -> None:
         },
     }
     assert (
-        nw06_evidence.validate_evidence_record(pending)["status"]
+        nw06_evidence.validate_evidence_record(
+            pending, artifact_root=tmp_path
+        )["status"]
         == "pending_unverified"
     )
     pending["qualifications"]["ada"]["status"] = "verified"
     pending["qualifications"]["blackwell"]["status"] = "verified"
-    result = nw06_evidence.validate_evidence_record(pending)
+    result = nw06_evidence.validate_evidence_record(
+        pending, artifact_root=tmp_path
+    )
     assert result["status"] == "verified"
     assert result["qualifications"] == {
         "ada": "verified",
@@ -445,6 +475,7 @@ def test_record_capture_merges_complete_qualification_map(
         encoding="utf-8",
     )
     metadata = _complete_capture("ada")
+    _materialize_capture(tmp_path, metadata)
     for name in (
         "coverage_target",
         "evidence_role",
@@ -526,8 +557,8 @@ def test_unavailable_required_telemetry_and_unvalidated_comparison_cannot_pass()
 
     capture = _complete_capture("ada")
     capture["comparison"]["image"]["maximum_error"] = 1.0
-    capture["comparison"]["image"]["tolerance"] = 0.01
-    assert nw06_evidence.validate_capture(capture)["status"] == "pending_unverified"
+    capture["comparison"]["image"]["tolerance"] = 1e-4
+    assert nw06_evidence.validate_capture(capture)["status"] == "failed"
 
 
 def test_caller_supplied_verified_labels_do_not_establish_correctness() -> None:
@@ -552,3 +583,82 @@ def test_caller_supplied_verified_labels_do_not_establish_correctness() -> None:
     assert nw06_evidence.validate_evidence_record(record)["status"] == (
         "pending_unverified"
     )
+
+
+def test_artifact_paths_hashes_and_resolution_are_verified(
+    tmp_path: Path,
+) -> None:
+    capture = _complete_capture("ada")
+    # Fabricated metadata without files can never verify, even with a full
+    # comparison block.
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "pending_unverified"
+
+    _materialize_capture(tmp_path, capture)
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "passed"
+
+    capture["capture_artifacts"][0]["sha256"] = "f" * 64
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "failed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path / "other", capture)
+    capture["capture_artifacts"][0]["path"] = "captures/missing.rgba32f"
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "pending_unverified"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["capture_artifacts"][0]["width"] = 128
+    capture["capture_artifacts"][0]["height"] = 128
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "failed"
+
+
+def test_fixed_ticks_must_be_tied_to_artifacts_and_comparisons(
+    tmp_path: Path,
+) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["capture_artifacts"].pop()
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "failed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["numeric"]["ticks"] = [0, 24_000]
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "failed"
+
+
+def test_explicit_comparison_failures_and_relaxed_tolerances_fail(
+    tmp_path: Path,
+) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["status"] = "failed"
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "failed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["numeric"]["tolerance"] = 0.1
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "failed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["image"]["status"] = "failed"
+    assert nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )["status"] == "failed"

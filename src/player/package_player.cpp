@@ -2469,6 +2469,7 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         ++stats_.engine_heap_count;
     }
 
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
     std::size_t package_rtv_count = 0u;
     std::size_t package_dsv_count = 0u;
     for (const auto& resource : package_.resources) {
@@ -2522,6 +2523,7 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         stats_.descriptor_allocation_calls += package_dsv_count;
         ++stats_.engine_heap_count;
     }
+#endif
 
     state->resources.resize(package_.resources.size());
     std::uint32_t cbv_index = 0u;
@@ -2890,6 +2892,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
              "initialization instruction operand count is invalid");
         return false;
     };
+#if NW06_COMPILE_GPU_INITIALIZATION
     ID3D12RootSignature* init_root_signature = nullptr;
     std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
         init_constants{};
@@ -2897,6 +2900,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
     std::vector<std::pair<std::uint32_t, D3D12_GPU_DESCRIPTOR_HANDLE>>
         init_tables;
     std::vector<std::uint32_t> init_bound_resources;
+#endif
     for (const auto& instruction : package_.initialization) {
         if (instruction.opcode == "init.create_resource") {
             if (!require_operands(instruction, 1u)) {
@@ -3175,6 +3179,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                     }
                 }
             }
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             if (slot->resource != nullptr && slot->has_rtv_descriptor) {
                 D3D12_CPU_DESCRIPTOR_HANDLE handle =
                     state->package_rtv_cpu_start;
@@ -3197,6 +3202,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 slot->dsv_cpu_handle = handle;
                 slot->cpu_handle = handle;
             }
+#endif
         } else if (instruction.opcode == "init.create_root_signature") {
             if (!require_operands(instruction, 1u)) {
                 return last_exit_;
@@ -3433,6 +3439,16 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
 #endif
         } else if (instruction.opcode == "init.set_root_signature") {
+#if !NW06_COMPILE_GPU_INITIALIZATION
+            return Fail(
+                ExitCode::CommandListRecordingFailed, "command_list",
+                "gpu_initialization_binding_not_linked",
+                "init.set_root_signature",
+                "linked GPU initialization implementation", "not compiled",
+                "init.set_root_signature",
+                "generated link manifest excluded the NW-06 GPU "
+                "initialization binding path");
+#else
             if (!require_operands(instruction, 1u)) {
                 return last_exit_;
             }
@@ -3462,9 +3478,20 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "missing", "init.set_root_signature",
                             "initialization root signature was not created");
             }
+#endif
         } else if (instruction.opcode == "init.set_root_constants" ||
                    instruction.opcode ==
                        "frame.set_graphics_root_constants") {
+#if !NW06_COMPILE_GPU_INITIALIZATION
+            return Fail(
+                ExitCode::CommandListRecordingFailed, "command_list",
+                "gpu_initialization_binding_not_linked",
+                "init.set_root_constants",
+                "linked GPU initialization implementation", "not compiled",
+                "init.set_root_constants",
+                "generated link manifest excluded the NW-06 GPU "
+                "initialization binding path");
+#else
             if (!require_operands(instruction, 3u)) {
                 return last_exit_;
             }
@@ -3507,7 +3534,18 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                     parameter.value.data(), copy_bytes);
                 offset += copy_bytes;
             }
+#endif
         } else if (instruction.opcode == "init.set_descriptor_table") {
+#if !NW06_COMPILE_GPU_INITIALIZATION
+            return Fail(
+                ExitCode::CommandListRecordingFailed, "command_list",
+                "gpu_initialization_binding_not_linked",
+                "init.set_descriptor_table",
+                "linked GPU initialization implementation", "not compiled",
+                "init.set_descriptor_table",
+                "generated link manifest excluded the NW-06 GPU "
+                "initialization binding path");
+#else
             if (!require_operands(instruction, 3u)) {
                 return last_exit_;
             }
@@ -3542,6 +3580,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
             init_tables.emplace_back(instruction.operands[0].u32, handle);
             init_bound_resources.push_back(resource_id);
+#endif
         } else if (instruction.opcode == "init.dispatch") {
 #if !NW06_COMPILE_GPU_INITIALIZATION
             return Fail(
@@ -4164,11 +4203,24 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     package_constant_count = 0u;
                     package_table_valid.fill(false);
                 }
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                 if (op.type == FrameOp::Type::SetGraphicsRootSignature) {
                     list->SetGraphicsRootSignature(root);
                 } else {
                     list->SetComputeRootSignature(root);
                 }
+#else
+                if (op.type == FrameOp::Type::SetGraphicsRootSignature) {
+                    return Fail(
+                        ExitCode::RootSignatureCreationFailed, "pipeline",
+                        "graphics_root_binding_not_linked",
+                        "root_signature", "linked indexed instanced raster "
+                        "implementation", "not compiled", "renderAtTick",
+                        "generated link manifest excluded the NW-06 graphics "
+                        "root binding path");
+                }
+                list->SetComputeRootSignature(root);
+#endif
                 package_root_signature = root;
                 break;
             }
@@ -4208,6 +4260,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 op.time_byte_offset,
                             &time_value, sizeof(time_value));
                     }
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                     if (op.type == FrameOp::Type::SetGraphicsRootConstants) {
                         list->SetGraphicsRoot32BitConstants(
                             op.root_parameter, op.constant_count,
@@ -4217,6 +4270,20 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             op.root_parameter, op.constant_count,
                             values.data(), 0u);
                     }
+#else
+                    if (op.type == FrameOp::Type::SetGraphicsRootConstants) {
+                        return Fail(
+                            ExitCode::RootSignatureCreationFailed, "pipeline",
+                            "graphics_root_binding_not_linked",
+                            "root_constants", "linked indexed instanced raster "
+                            "implementation", "not compiled", "renderAtTick",
+                            "generated link manifest excluded the NW-06 "
+                            "graphics root binding path");
+                    }
+                    list->SetComputeRoot32BitConstants(
+                        op.root_parameter, op.constant_count,
+                        values.data(), 0u);
+#endif
                     if (op.root_parameter < package_constant_values.size()) {
                         package_has_constants = true;
                         package_constant_root = op.root_parameter;
@@ -4252,6 +4319,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "frame.set_descriptor_table has no descriptor "
                                 "for the referenced resource");
                 }
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                 if (op.type == FrameOp::Type::SetGraphicsDescriptorTable) {
                     list->SetGraphicsRootDescriptorTable(
                         op.root_parameter, handle);
@@ -4259,6 +4327,19 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     list->SetComputeRootDescriptorTable(
                         op.root_parameter, handle);
                 }
+#else
+                if (op.type == FrameOp::Type::SetGraphicsDescriptorTable) {
+                    return Fail(
+                        ExitCode::RootSignatureCreationFailed, "pipeline",
+                        "graphics_root_binding_not_linked",
+                        "descriptor_table", "linked indexed instanced raster "
+                        "implementation", "not compiled", "renderAtTick",
+                        "generated link manifest excluded the NW-06 graphics "
+                        "root binding path");
+                }
+                list->SetComputeRootDescriptorTable(
+                    op.root_parameter, handle);
+#endif
                 if (op.root_parameter < package_tables.size()) {
                     package_tables[op.root_parameter] = handle;
                     package_table_valid[op.root_parameter] = true;

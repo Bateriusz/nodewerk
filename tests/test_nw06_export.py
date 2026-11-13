@@ -202,6 +202,29 @@ def test_native_capability_derivation_covers_emitted_combined_usages() -> None:
     assert "init.set_root_constants" in body
 
 
+def test_nw06_runtime_branches_are_manifest_compilation_guarded() -> None:
+    source = (
+        REPO_ROOT / "src" / "player" / "package_player.cpp"
+    ).read_text(encoding="utf-8")
+    # Initialization binding handlers, graphics root bindings, and package
+    # RTV/DSV heap creation must disappear from unchanged NW-05 builds.
+    assert source.count("#if !NW06_COMPILE_GPU_INITIALIZATION") >= 4
+    assert "#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT" in source
+    for marker in (
+        "gpu_initialization_binding_not_linked",
+        "graphics_root_binding_not_linked",
+        "graphics_pipeline_not_linked",
+        "indirect_draw_not_linked",
+        "render_target_not_linked",
+    ):
+        assert marker in source
+    package_rtv = source.index("std::size_t package_rtv_count")
+    guard = source.rfind(
+        "#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT", 0, package_rtv
+    )
+    assert guard >= 0
+
+
 def test_exported_package_passes_native_capability_check(
     tmp_path: Path,
 ) -> None:

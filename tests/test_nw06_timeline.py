@@ -61,6 +61,19 @@ def test_rational_cadence_preserves_fractional_ticks_across_advances() -> None:
     sequential = timeline.RationalFrameStep(3, 2)
     assert sequential.advance(0, 1) == 1
     assert sequential.advance(1, 1) == 3
+    fresh = timeline.RationalFrameStep(3, 2)
+    assert fresh.advance(5, frames=0) == 5
+    assert fresh.advance(3, 1) == 4
+    with pytest.raises(timeline.TimelineError):
+        fresh.advance(-1)
+    with pytest.raises(timeline.TimelineError):
+        timeline.RationalFrameStep(3, 2).advance(5, 1)
+    assert (
+        timeline.RationalFrameStep(1, 3).advance(
+            0, 1, frame_index=0
+        )
+        == 0
+    )
 
 
 def test_curve_sampling_quantization_bound_and_full_precision_escape() -> None:

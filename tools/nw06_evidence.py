@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -37,6 +38,17 @@ FIXED_TICK_COVERAGE_TARGETS = {
     "ada": "desktop_ada_representative",
     "blackwell": "desktop_blackwell_representative",
 }
+
+# Authoritative evidence contract.  Callers may report stricter results, but
+# they may not relax these bounds or change the proof resolution.
+AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE = 1e-5
+AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE = 1e-4
+AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE = 1e-4
+AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE = 1e-4
+AUTHORITATIVE_CAPTURE_WIDTH = 256
+AUTHORITATIVE_CAPTURE_HEIGHT = 256
+AUTHORITATIVE_CAPTURE_FORMAT = "rgba32f"
+CAPTURE_PROTOCOL = "nw06-fixed-tick-capture.v1"
 
 REQUIRED_CAPTURE_METADATA = (
     "coverage_target",
@@ -246,82 +258,216 @@ def _valid_fixed_ticks(value: Any) -> bool:
     return len(ticks) == len(set(ticks))
 
 
-def _valid_capture_artifacts(value: Any) -> bool:
-    if not isinstance(value, (list, tuple)) or not value:
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
+
+
+def _ticks_match(value: Any, fixed_ticks: Any) -> bool:
+    if not _valid_fixed_ticks(value) or not _valid_fixed_ticks(fixed_ticks):
         return False
+    return set(value) == set(fixed_ticks) and len(value) == len(fixed_ticks)
+
+
+def _artifact_state(
+    capture: Mapping[str, Any], artifact_root: Path | None
+) -> tuple[str, str]:
+    """Classify capture artifacts as passed, failed, or missing."""
+    value = capture.get("capture_artifacts")
+    fixed_ticks = capture.get("fixed_ticks")
+    if not isinstance(value, (list, tuple)) or not value:
+        return "missing", "capture artifacts are absent"
+    ticks: list[int] = []
     for item in value:
         if not isinstance(item, Mapping):
-            return False
+            return "missing", "capture artifact descriptor is malformed"
         kind = item.get("kind")
         path = item.get("path")
         digest = item.get("sha256")
         size = item.get("bytes")
+        tick = item.get("tick")
+        width = item.get("width")
+        height = item.get("height")
         if not isinstance(kind, str) or not kind.strip():
-            return False
+            return "missing", "capture artifact kind is missing"
         if not isinstance(path, str) or not path.strip():
-            return False
+            return "missing", "capture artifact path is missing"
         if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
-            return False
+            return "missing", "capture artifact digest is invalid"
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
-            return False
-    return True
+            return "missing", "capture artifact byte size is invalid"
+        if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+            return "missing", "capture artifact tick is invalid"
+        if (
+            isinstance(width, bool)
+            or not isinstance(width, int)
+            or width <= 0
+            or isinstance(height, bool)
+            or not isinstance(height, int)
+            or height <= 0
+        ):
+            return "missing", "capture artifact resolution is invalid"
+        ticks.append(tick)
+    if not _valid_fixed_ticks(fixed_ticks):
+        return "missing", "fixed tick coverage is absent"
+    if set(ticks) != set(fixed_ticks) or len(ticks) != len(fixed_ticks):
+        return "failed", "capture artifacts do not cover every fixed tick"
+    if len(set(ticks)) != len(ticks):
+        return "failed", "capture artifacts repeat a fixed tick"
+    for item in value:
+        width = int(item["width"])
+        height = int(item["height"])
+        if (width, height) != (
+            AUTHORITATIVE_CAPTURE_WIDTH,
+            AUTHORITATIVE_CAPTURE_HEIGHT,
+        ):
+            return "failed", "capture artifact resolution violates the proof contract"
+        kind = str(item.get("kind", "")).lower()
+        expected_bytes = None
+        if "rgba32f" in kind or "raw" in kind:
+            expected_bytes = width * height * 16
+        elif "rgba8" in kind:
+            expected_bytes = width * height * 4
+        if expected_bytes is not None and int(item["bytes"]) != expected_bytes:
+            return "failed", "capture artifact byte size does not match its format"
+        if item.get("format") is not None and str(
+            item.get("format")
+        ).lower() not in {AUTHORITATIVE_CAPTURE_FORMAT, "rgba32f_raw"}:
+            return "failed", "capture artifact format violates the proof contract"
+    if artifact_root is None:
+        return "missing", "capture artifact contents were not supplied for verification"
+    for item in value:
+        root = Path(artifact_root)
+        artifact_path = root / str(item["path"])
+        if not artifact_path.is_file():
+            return "missing", f"capture artifact is unavailable: {artifact_path}"
+        if artifact_path.stat().st_size != int(item["bytes"]):
+            return "failed", "capture artifact byte size does not match the file"
+        if _sha256_file(artifact_path) != str(item["sha256"]):
+            return "failed", "capture artifact digest does not match the file"
+    return "passed", ""
 
 
-def _comparison_passed(value: Any) -> bool:
-    if not isinstance(value, Mapping) or value.get("validated") is not True:
-        return False
-    if str(value.get("status", "")).strip().lower() not in {
-        "passed",
-        "within_tolerance",
-    }:
-        return False
+def _comparison_state(value: Any, fixed_ticks: Any) -> tuple[str, str]:
+    """Classify numeric/image comparison evidence as passed, failed, or missing."""
+    if not isinstance(value, Mapping):
+        return "missing", "comparison evidence is absent"
+    if value.get("validated") is not True:
+        return "missing", "comparison was not validated"
+    status = str(value.get("status", "")).strip().lower()
+    if status == "failed":
+        return "failed", "comparison is marked failed"
+    if status not in {"passed", "within_tolerance"}:
+        return "missing", "comparison status is absent or unknown"
     numeric = value.get("numeric")
     image = value.get("image")
     tolerance = value.get("tolerance_check")
     if not all(isinstance(item, Mapping) for item in (numeric, image, tolerance)):
-        return False
-    for section, count_name in ((numeric, "samples"), (image, "pixels")):
-        if str(section.get("status", "")).strip().lower() not in {
-            "passed",
-            "within_tolerance",
-        }:
-            return False
-        count = section.get(count_name)
-        maximum = section.get("maximum_error")
-        declared = section.get("tolerance")
-        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
-            return False
-        if (
-            isinstance(maximum, bool)
-            or not isinstance(maximum, (int, float))
-            or isinstance(declared, bool)
-            or not isinstance(declared, (int, float))
-            or maximum < 0.0
-            or declared < 0.0
-            or maximum > declared
-        ):
-            return False
-    if str(tolerance.get("status", "")).strip().lower() not in {
-        "passed",
-        "within_tolerance",
-    }:
-        return False
-    observed = tolerance.get("observed_maximum_error")
-    declared = tolerance.get("declared_tolerance")
-    if (
-        isinstance(observed, bool)
-        or not isinstance(observed, (int, float))
-        or isinstance(declared, bool)
-        or not isinstance(declared, (int, float))
-        or observed < 0.0
-        or declared < 0.0
-        or observed > declared
+        return "missing", "numeric/image/tolerance comparison sections are incomplete"
+    for section in (numeric, image, tolerance):
+        section_status = str(section.get("status", "")).strip().lower()
+        if section_status == "failed":
+            return "failed", "a comparison section is marked failed"
+        if section_status not in {"passed", "within_tolerance"}:
+            return "missing", "a comparison section has no pass/fail result"
+    if not _valid_fixed_ticks(fixed_ticks):
+        return "missing", "fixed tick coverage is absent"
+    for section, name in (
+        (numeric, "numeric"),
+        (image, "image"),
+        (tolerance, "tolerance"),
     ):
-        return False
-    return True
+        if not _ticks_match(section.get("ticks"), fixed_ticks):
+            return "failed", f"{name} comparison does not cover every fixed tick"
+    samples = numeric.get("samples")
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples <= 0:
+        return "missing", "numeric comparison sample count is invalid"
+    if samples < len(fixed_ticks):
+        return "failed", "numeric comparison does not sample every fixed tick"
+    numeric_observed = _number(numeric.get("maximum_error"))
+    numeric_declared = _number(numeric.get("tolerance"))
+    if numeric_observed is None or numeric_declared is None:
+        return "missing", "numeric comparison result is incomplete"
+    if numeric_observed < 0.0 or numeric_declared < 0.0:
+        return "failed", "numeric comparison reported a negative error/tolerance"
+    if numeric_declared > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE:
+        return "failed", "numeric comparison relaxed the authoritative tolerance"
+    if numeric_observed > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE:
+        return "failed", "numeric comparison exceeded the authoritative tolerance"
+    if "maximum_relative_error" in numeric or "relative_tolerance" in numeric:
+        numeric_relative = _number(numeric.get("maximum_relative_error"))
+        relative_declared = _number(numeric.get("relative_tolerance"))
+        if numeric_relative is None or relative_declared is None:
+            return "missing", "relative numeric comparison result is incomplete"
+        if relative_declared > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
+            return "failed", "numeric comparison relaxed the authoritative relative tolerance"
+        if numeric_relative > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
+            return "failed", "numeric comparison exceeded the authoritative relative tolerance"
+
+    pixels = image.get("pixels")
+    width = image.get("width")
+    height = image.get("height")
+    if (
+        isinstance(pixels, bool)
+        or not isinstance(pixels, int)
+        or pixels <= 0
+        or isinstance(width, bool)
+        or not isinstance(width, int)
+        or isinstance(height, bool)
+        or not isinstance(height, int)
+    ):
+        return "missing", "image comparison dimensions are incomplete"
+    if (width, height) != (
+        AUTHORITATIVE_CAPTURE_WIDTH,
+        AUTHORITATIVE_CAPTURE_HEIGHT,
+    ):
+        return "failed", "image comparison resolution violates the proof contract"
+    if pixels != width * height:
+        return "failed", "image comparison does not cover every pixel"
+    image_observed = _number(image.get("maximum_error"))
+    image_declared = _number(image.get("tolerance"))
+    if image_observed is None or image_declared is None:
+        return "missing", "image comparison result is incomplete"
+    if image_observed < 0.0 or image_declared < 0.0:
+        return "failed", "image comparison reported a negative error/tolerance"
+    if image_declared > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
+        return "failed", "image comparison relaxed the authoritative tolerance"
+    if image_observed > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
+        return "failed", "image comparison exceeded the authoritative tolerance"
+    if "maximum_relative_error" in image or "relative_tolerance" in image:
+        image_relative = _number(image.get("maximum_relative_error"))
+        relative_declared = _number(image.get("relative_tolerance"))
+        if image_relative is None or relative_declared is None:
+            return "missing", "relative image comparison result is incomplete"
+        if relative_declared > AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE:
+            return "failed", "image comparison relaxed the authoritative relative tolerance"
+        if image_relative > AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE:
+            return "failed", "image comparison exceeded the authoritative relative tolerance"
+
+    observed = _number(tolerance.get("observed_maximum_error"))
+    declared = _number(tolerance.get("declared_tolerance"))
+    if observed is None or declared is None:
+        return "missing", "tolerance check result is incomplete"
+    if observed < 0.0 or declared < 0.0:
+        return "failed", "tolerance check reported a negative error/tolerance"
+    if declared > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
+        return "failed", "tolerance check relaxed the authoritative tolerance"
+    if observed > declared or observed > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
+        return "failed", "tolerance check violated the authoritative tolerance"
+    if value.get("fixed_ticks") is not None and not _ticks_match(
+        value.get("fixed_ticks"), fixed_ticks
+    ):
+        return "failed", "comparison fixed ticks do not match the capture"
+    return "passed", ""
 
 
-def _missing_metadata(capture: Mapping[str, Any]) -> list[str]:
+def _missing_metadata(
+    capture: Mapping[str, Any],
+    *,
+    artifact_root: Path | None = None,
+) -> list[str]:
     missing: list[str] = []
     unavailable = {
         str(item)
@@ -347,21 +493,31 @@ def _missing_metadata(capture: Mapping[str, Any]) -> list[str]:
         capture.get("fixed_ticks")
     ):
         missing.append("fixed_ticks")
-    if "capture_artifacts" not in missing and not _valid_capture_artifacts(
-        capture.get("capture_artifacts")
-    ):
+    artifact_state, _ = _artifact_state(capture, artifact_root)
+    if "capture_artifacts" not in missing and artifact_state == "missing":
         missing.append("capture_artifacts")
-    if "comparison" not in missing and not _comparison_passed(
-        capture.get("comparison")
-    ):
+    comparison_state, _ = _comparison_state(
+        capture.get("comparison"), capture.get("fixed_ticks")
+    )
+    if "comparison" not in missing and comparison_state == "missing":
         missing.append("comparison")
     return missing
 
 
-def validate_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
-    missing = _missing_metadata(capture)
+def validate_capture(
+    capture: Mapping[str, Any],
+    *,
+    artifact_root: Path | None = None,
+) -> dict[str, Any]:
+    missing = _missing_metadata(capture, artifact_root=artifact_root)
+    artifact_state, artifact_detail = _artifact_state(capture, artifact_root)
+    comparison_state, comparison_detail = _comparison_state(
+        capture.get("comparison"), capture.get("fixed_ticks")
+    )
     status = str(capture.get("status", "pending_unverified"))
-    if status == "passed" and missing:
+    if artifact_state == "failed" or comparison_state == "failed":
+        status = "failed"
+    elif status == "passed" and missing:
         status = "pending_unverified"
     if status not in {"pending_unverified", "passed", "failed"}:
         status = "failed"
@@ -384,14 +540,18 @@ def validate_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
     if status == "passed" and not profile_matches:
         status = "failed"
     capture_protocol = capture.get("capture_protocol")
-    if status == "passed" and capture_protocol != "nw06-fixed-tick-capture.v1":
+    if status == "passed" and capture_protocol != CAPTURE_PROTOCOL:
         status = "pending_unverified"
     return {
         "status": status,
         "missing_metadata": missing,
+        "artifact_state": artifact_state,
+        "artifact_detail": artifact_detail,
+        "comparison_state": comparison_state,
+        "comparison_detail": comparison_detail,
         "profile_matches": profile_matches,
         "capture_protocol_matches": (
-            capture_protocol == "nw06-fixed-tick-capture.v1"
+            capture_protocol == CAPTURE_PROTOCOL
         ),
         "evidence_role": evidence_role,
         "coverage_target": coverage_target,
@@ -448,12 +608,15 @@ def record_capture(
             "ticks_per_second": TICKS_PER_SECOND,
             "cache_state": capture.get("cache_state", "unknown"),
             "capture_protocol": capture.get(
-                "capture_protocol", "nw06-fixed-tick-capture.v1"
+                "capture_protocol", CAPTURE_PROTOCOL
             ),
             "unavailable_telemetry": capture.get("unavailable_telemetry", []),
         }
     )
-    validated = validate_capture(capture)
+    artifact_root = (
+        output_path.parent if output_path is not None else artifact_directory
+    )
+    validated = validate_capture(capture, artifact_root=artifact_root)
     record = pending_record()
     if output_path is not None and output_path.is_file():
         try:
@@ -550,13 +713,19 @@ def record_capture(
     return record
 
 
-def validate_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
+def validate_evidence_record(
+    record: Mapping[str, Any],
+    *,
+    artifact_root: Path | None = None,
+) -> dict[str, Any]:
     raw_captures = record.get("captures")
     if not raw_captures:
         raw_captures = record.get("executions", [])
     captures = []
     for capture in raw_captures:
-        captures.append(validate_capture(capture))
+        captures.append(
+            validate_capture(capture, artifact_root=artifact_root)
+        )
     qualification_statuses: dict[str, str] = {}
     for tier, target in FIXED_TICK_COVERAGE_TARGETS.items():
         qualification_map = record.get("qualifications", {})
@@ -659,6 +828,14 @@ __all__ = [
     "REQUIRED_CAPTURE_METADATA",
     "FIXED_TICK_EVIDENCE_ROLE",
     "FIXED_TICK_COVERAGE_TARGETS",
+    "AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE",
+    "AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE",
+    "AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE",
+    "AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE",
+    "AUTHORITATIVE_CAPTURE_WIDTH",
+    "AUTHORITATIVE_CAPTURE_HEIGHT",
+    "AUTHORITATIVE_CAPTURE_FORMAT",
+    "CAPTURE_PROTOCOL",
     "classify_hardware_tier",
     "probe_hardware_identity",
     "pending_record",

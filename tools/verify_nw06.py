@@ -731,7 +731,9 @@ def full_or_hardware(args: argparse.Namespace) -> list[CheckResult]:
                 json.dumps(mismatched, sort_keys=True),
             ),
         ]
-    status = nw06_evidence.validate_evidence_record(record)
+    status = nw06_evidence.validate_evidence_record(
+        record, artifact_root=Path(args.evidence).parent
+    )
     checks.append(
         _ok(
             "nw06_artifact_identity",
