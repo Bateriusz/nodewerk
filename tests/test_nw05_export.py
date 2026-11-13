@@ -327,9 +327,14 @@ def test_multiple_fullscreen_nodes_bind_their_own_textures(
     assert len(bound_ids) == 2
     assert set(bound_textures) == bound_ids
     assert all(
-        resource.kind == "texture2d" and resource.usage == "srv"
+        resource.kind == "texture2d"
+        and resource.usage == "srv"
+        and resource.name == "input"
         for resource in bound_textures.values()
     )
+    # The resources deliberately share the fixed semantic binding name/slot,
+    # while distinct resource IDs keep the two fullscreen inputs independent.
+    assert len(set(bound_textures)) == 2
     uploaded_ids = {
         instruction.operands[0].value
         for instruction in package.initialization

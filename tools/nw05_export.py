@@ -1682,6 +1682,16 @@ def _build_graph_derived_package(
     root_signature = root_signatures[0]
     texture_ids = set(texture_by_shader.values())
     if texture_ids:
+        # RootBinding names are semantic names for the fixed pass-family slot,
+        # not unique resource identities. Multiple texture resources may share
+        # t0 as long as frame.set_descriptor_table binds exactly one resource
+        # before each dispatch; resource_id preserves the per-pass identity.
+        resources = [
+            nwp.replace(resource, name="input")
+            if resource.resource_id in texture_ids
+            else resource
+            for resource in resources
+        ]
         bindings = list(root_signature.bindings) + [
             nwp.RootBinding("input", "srv", 0, 0, 2)
         ]
