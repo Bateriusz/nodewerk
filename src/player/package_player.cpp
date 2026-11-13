@@ -3258,7 +3258,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             if (state->indirect_signature == nullptr) {
                 D3D12_INDIRECT_ARGUMENT_DESC argument{};
                 argument.Type =
-                    D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED_INSTANCED;
+                    D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
                 D3D12_COMMAND_SIGNATURE_DESC signature{};
                 signature.ByteStride = static_cast<UINT>(
                     sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
@@ -3272,7 +3272,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         ExitCode::PipelineStateCreationFailed, "pipeline",
                         "indirect_signature_failed", "command_signature",
                         "created", "failed", "init.create_graphics_pipeline",
-                        "CreateCommandSignature(DRAW_INDEXED_INSTANCED) failed");
+                        "CreateCommandSignature(DRAW_INDEXED) failed");
                 }
             }
         } else if (instruction.opcode == "init.set_root_signature") {
