@@ -368,6 +368,60 @@ def test_readback_and_sampler_usages_follow_native_format_rules() -> None:
     ), [failure.code for failure in failures]
 
 
+def test_dispatch_with_bound_sampler_validates_descriptor_without_transition() -> None:
+    package = nw04_fixture.build_sampler_dispatch_package()
+    data = nwp.encode_package(package)
+    assert nwp.inspect_package_bytes(data).valid
+    decoded = nwp.decode_package(data)
+    sampler = next(
+        resource for resource in decoded.resources if resource.usage == "sampler"
+    )
+    assert contract.validate_package_requirements(decoded) == []
+    assert contract.validate_frame_plan(decoded) == []
+    assert any(
+        instruction.opcode == "frame.set_descriptor_table"
+        and instruction.operands[1].value == "sampler"
+        and instruction.operands[2].value == sampler.resource_id
+        for instruction in decoded.frame
+    )
+    failures, transitions = contract.simulate_dispatch_bindings(decoded)
+    assert failures == []
+    assert not any(
+        transition["resource_id"] == sampler.resource_id
+        for transition in transitions
+    )
+    output = next(
+        resource
+        for resource in decoded.resources
+        if resource.usage == "uav" and resource.kind == "buffer"
+    )
+    assert any(
+        transition["resource_id"] == output.resource_id
+        and transition["kind"] == "transition"
+        and transition["after"] == "uav"
+        for transition in transitions
+    )
+
+    # Samplers still require the descriptor created by init.create_resource.
+    # Omitting that initialization must fail closed even though no
+    # ID3D12Resource would ever exist for the sampler.
+    without_sampler_init = nwp.replace(
+        decoded,
+        initialization=[
+            instruction
+            for instruction in decoded.initialization
+            if not (
+                instruction.opcode == "init.create_resource"
+                and instruction.operands[0].value == sampler.resource_id
+            )
+        ],
+    )
+    failures, _ = contract.simulate_dispatch_bindings(without_sampler_init)
+    assert any(
+        failure.code == "dispatch_bound_sampler_missing" for failure in failures
+    )
+
+
 def test_unknown_profile_and_digest_are_rejected() -> None:
     package = nw04_fixture.build_compute_display_package()
     unknown = nwp.replace(

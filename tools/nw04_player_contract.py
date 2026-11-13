@@ -1280,6 +1280,141 @@ def _write_timeline_tick(
             values[offset : offset + 4] = struct.pack("<i", signed)
 
 
+def simulate_dispatch_bindings(
+    package: nwp.NwpPackage,
+) -> tuple[list[CapabilityMismatch], list[dict[str, int | str]]]:
+    """Mirror dispatch resource validation in ``ExecuteFrameInstructions``.
+
+    The runtime only transitions actual resources.  Sampler bindings have no
+    ``ID3D12Resource``; they validate that their descriptor was created by
+    ``CreateSampler`` and are deliberately excluded from resource-state
+    transitions.  Returning the observed transitions lets regression tests
+    prove that distinction without a GPU.
+    """
+    failures: list[CapabilityMismatch] = []
+    resources = {resource.resource_id: resource for resource in package.resources}
+    created = {
+        instruction.operands[0].value
+        for instruction in package.initialization
+        if instruction.opcode == "init.create_resource"
+        and instruction.operands
+        and instruction.operands[0].type == "resource_ref"
+    }
+    slots: dict[int, dict[str, object]] = {}
+    for resource in package.resources:
+        has_descriptor = (
+            resource.usage == "sampler"
+            or _resource_needs_cbv_srv_uav_descriptor(package, resource)
+        )
+        is_created = resource.resource_id in created
+        slots[resource.resource_id] = {
+            "resource": is_created and resource.usage != "sampler",
+            "descriptor": is_created and has_descriptor,
+            "state": _initial_state_for_usage(resource.usage),
+            "uav_accessed": False,
+        }
+
+    active_descriptors: dict[int, int] = {}
+    transitions: list[dict[str, int | str]] = []
+    for instruction in package.frame:
+        if instruction.opcode == "frame.set_descriptor_table":
+            active_descriptors[instruction.operands[0].value] = (
+                instruction.operands[2].value
+            )
+            continue
+        if instruction.opcode != "frame.dispatch":
+            continue
+        bound: list[int] = []
+        for resource_id in active_descriptors.values():
+            if resource_id not in bound:
+                bound.append(resource_id)
+        for resource_id in bound:
+            descriptor = resources.get(resource_id)
+            slot = slots.get(resource_id)
+            if descriptor is None or slot is None:
+                failures.append(
+                    _failure(
+                        package,
+                        "dispatch_bound_resource_missing",
+                        "resource_id",
+                        str(resource_id),
+                        "missing",
+                        "dispatch references a bound resource that is not known "
+                        "to the package/player state",
+                    )
+                )
+                continue
+            if descriptor.usage == "sampler":
+                if not slot["descriptor"]:
+                    failures.append(
+                        _failure(
+                            package,
+                            "dispatch_bound_sampler_missing",
+                            "resource_id",
+                            str(resource_id),
+                            "missing",
+                            "dispatch references a bound sampler whose "
+                            "descriptor was not created",
+                        )
+                    )
+                continue
+            if not slot["resource"]:
+                failures.append(
+                    _failure(
+                        package,
+                        "dispatch_bound_resource_missing",
+                        "resource_id",
+                        str(resource_id),
+                        "missing",
+                        "dispatch references a bound resource that was not "
+                        "created",
+                    )
+                )
+                continue
+            working = _working_state_for_usage(descriptor.usage)
+            if (
+                working == "uav"
+                and slot["state"] == "uav"
+                and slot["uav_accessed"]
+            ):
+                transitions.append(
+                    {
+                        "resource_id": resource_id,
+                        "kind": "uav_barrier",
+                        "before": "uav",
+                        "after": "uav",
+                    }
+                )
+            if slot["state"] != working:
+                transitions.append(
+                    {
+                        "resource_id": resource_id,
+                        "kind": "transition",
+                        "before": str(slot["state"]),
+                        "after": working,
+                    }
+                )
+                slot["state"] = working
+            if working == "uav":
+                slot["uav_accessed"] = True
+    return failures, transitions
+
+
+def _working_state_for_usage(usage: str) -> str:
+    return {
+        "uav": "uav",
+        "cbv": "constant_buffer",
+        "srv": "shader_resource",
+        "rtv": "render_target",
+        "dsv": "depth_write",
+        "readback": "copy_dest",
+    }.get(usage, "common")
+
+
+def _initial_state_for_usage(usage: str) -> str:
+    return "copy_dest" if usage == "readback" else "common"
+
+
 def apply_frame_constants(
     package: nwp.NwpPackage, tick: int
 ) -> tuple[bytes | None, int | None]:

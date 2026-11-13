@@ -338,6 +338,20 @@ def test_package_player_dispatch_transitions_only_bound_descriptors() -> None:
     assert "descriptor_index < op.descriptor_resource_count" in source
     assert "after->state = D3D12_RESOURCE_STATE_COMMON" not in source
     assert "dispatch_bound_resource_missing" in source
+    dispatch_start = source.index("case FrameOp::Type::Dispatch:")
+    dispatch_end = source.index(
+        "case FrameOp::Type::CopyBuffer:", dispatch_start
+    )
+    dispatch = source[dispatch_start:dispatch_end]
+    sampler_branch = dispatch.index('descriptor->usage == "sampler"')
+    missing_resource = dispatch.index("candidate->resource == nullptr")
+    assert sampler_branch < missing_resource
+    sampler_segment = dispatch[sampler_branch:missing_resource]
+    assert "has_descriptor" in sampler_segment
+    assert "gpu_handle.ptr" in sampler_segment
+    assert "continue;" in sampler_segment
+    assert "dispatch_bound_sampler_missing" in sampler_segment
+
 
 def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
     first_blob = nw04_fixture.make_dxil_container() + b"\x01"

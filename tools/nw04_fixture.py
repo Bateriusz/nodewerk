@@ -76,6 +76,94 @@ def build_compute_display_package(*, specialization_count: int = 1) -> nwp.NwpPa
     return compose_compute_display_package(package)
 
 
+def build_sampler_dispatch_package() -> nwp.NwpPackage:
+    """Compute/display package whose dispatch binds a sampler descriptor table.
+
+    This is the runtime regression fixture for the player dispatch path:
+    sampler resources intentionally have no ``ID3D12Resource`` and only own a
+    descriptor created by ``CreateSampler``.  Binding one before dispatch must
+    validate that descriptor without treating the null resource pointer as a
+    missing bound resource or emitting a resource-state transition.
+    """
+    base = build_compute_display_package()
+    family = "compute.math_noise"
+    sampler = nwp.ResourceDescriptor(
+        resource_id=3,
+        name="sampler",
+        kind="buffer",
+        format="DXGI_FORMAT_R32_UINT",
+        usage="sampler",
+        pass_family=family,
+        binding_slot=0,
+        binding_space=0,
+        size_bytes=4,
+    )
+    bindings = (
+        nwp.RootBinding("params", "cbv", 0, 0, 0),
+        nwp.RootBinding("output", "uav", 0, 0, 1),
+        nwp.RootBinding("sampler", "sampler", 0, 0, 2),
+    )
+    root = nwp.RootSignatureRecord(
+        1,
+        family,
+        family + ".v1",
+        6,
+        nwp.make_root_signature_blob(family, bindings),
+        bindings,
+    )
+    operand = nwp.InstructionOperand
+    initialization = list(base.initialization)
+    initialization.insert(
+        2,
+        nwp.Instruction(
+            "init.create_resource", (operand("resource_ref", 3),)
+        ),
+    )
+    frame = []
+    for instruction in base.frame:
+        frame.append(instruction)
+        if instruction.opcode == "frame.set_root_constants":
+            frame.append(
+                nwp.Instruction(
+                    "frame.set_descriptor_table",
+                    (
+                        operand("u32", 2),
+                        operand("string", "sampler"),
+                        operand("resource_ref", 3),
+                    ),
+                )
+            )
+    derived = nwp.derive_capability_requirements(
+        list(base.resources) + [sampler],
+        initialization,
+        frame,
+        base.shaders,
+        [root],
+    )
+    capability = replace(base.capability, **derived)
+    capability = replace(
+        capability,
+        required_init_instructions=tuple(
+            sorted({instruction.opcode for instruction in initialization})
+        ),
+        required_frame_instructions=tuple(
+            sorted({instruction.opcode for instruction in frame})
+        ),
+    )
+    capability = replace(
+        capability,
+        profile_fingerprint=capability.computed_profile_fingerprint(),
+    )
+    return replace(
+        base,
+        resources=list(base.resources) + [sampler],
+        initialization=initialization,
+        frame=frame,
+        root_signatures=[root],
+        capability=capability,
+    )
+
+
 def compose_compute_display_package(
     package: nwp.NwpPackage,
 ) -> nwp.NwpPackage:

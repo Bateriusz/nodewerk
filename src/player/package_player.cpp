@@ -3589,8 +3589,32 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     }
                     const package::ResourceDescriptor* descriptor =
                         FindPackageResource(package_, resource_id);
-                    if (candidate == nullptr || candidate->resource == nullptr ||
-                        descriptor == nullptr) {
+                    if (candidate == nullptr || descriptor == nullptr) {
+                        return Fail(
+                            ExitCode::ResourceAllocationFailed, "resource",
+                            "dispatch_bound_resource_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "renderAtTick",
+                            "dispatch references a bound resource that is not "
+                            "known to the package/player state");
+                    }
+                    if (descriptor->usage == "sampler") {
+                        // Samplers have no ID3D12Resource.  They own only a
+                        // descriptor created by CreateSampler, and binding one
+                        // must not emit a resource-state transition.
+                        if (!candidate->has_descriptor ||
+                            candidate->gpu_handle.ptr == 0u) {
+                            return Fail(
+                                ExitCode::ResourceAllocationFailed, "resource",
+                                "dispatch_bound_sampler_missing", "resource_id",
+                                std::to_string(resource_id), "missing",
+                                "renderAtTick",
+                                "dispatch references a bound sampler whose "
+                                "descriptor was not created");
+                        }
+                        continue;
+                    }
+                    if (candidate->resource == nullptr) {
                         return Fail(
                             ExitCode::ResourceAllocationFailed, "resource",
                             "dispatch_bound_resource_missing", "resource_id",
