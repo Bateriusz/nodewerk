@@ -54,6 +54,15 @@
 #define NW06_COMPILE_TONEMAP 1
 #endif
 
+#if NW06_COMPILE_GPU_INITIALIZATION || \
+    NW06_COMPILE_INDEXED_INSTANCED_INDIRECT || \
+    NW06_COMPILE_ANALYTIC_LIGHTING_TWIST || \
+    NW06_COMPILE_ABSOLUTE_TICK_CAMERA || \
+    NW06_COMPILE_HALF_RESOLUTION_BLOOM || NW06_COMPILE_TONEMAP
+#define NW06_COMPILE_ANY_RUNTIME 1
+#else
+#define NW06_COMPILE_ANY_RUNTIME 0
+#endif
 #if NW06_COMPILE_GPU_INITIALIZATION
 #define NW06_IF_GPU_INITIALIZATION(expr) (expr)
 #else
@@ -147,13 +156,12 @@ std::string JsonEscape(const std::string& value) {
 bool ResourceNeedsCbvSrvUavDescriptor(
     const package::Package& pkg,
     const package::ResourceDescriptor& resource) {
+#if NW06_COMPILE_ANY_RUNTIME
     if (resource.usage == "srv" || resource.usage == "uav" ||
         resource.usage == "uav_srv" || resource.usage == "rtv_srv") {
         return true;
     }
-    if (resource.usage != "cbv") {
-        return false;
-    }
+    if (resource.usage != "cbv") return false;
     const auto is_root_constant = [&resource](
                                       const package::Instruction& instruction) {
         return (instruction.opcode == "frame.set_root_constants" ||
@@ -165,16 +173,25 @@ bool ResourceNeedsCbvSrvUavDescriptor(
                instruction.operands[1].u32 == resource.resource_id;
     };
     for (const auto& instruction : pkg.initialization) {
-        if (is_root_constant(instruction)) {
-            return false;
-        }
+        if (is_root_constant(instruction)) return false;
     }
     for (const auto& instruction : pkg.frame) {
-        if (is_root_constant(instruction)) {
+        if (is_root_constant(instruction)) return false;
+    }
+    return true;
+#else
+    if (resource.usage == "srv" || resource.usage == "uav") return true;
+    if (resource.usage != "cbv") return false;
+    for (const auto& instruction : pkg.frame) {
+        if (instruction.opcode == "frame.set_root_constants" &&
+            instruction.operands.size() == 3u &&
+            instruction.operands[1].type == package::OperandType::ResourceRef &&
+            instruction.operands[1].u32 == resource.resource_id) {
             return false;
         }
     }
     return true;
+#endif
 }
 
 #if defined(_WIN32)
@@ -247,11 +264,14 @@ std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
 std::size_t CountCbvSrvUavDescriptors(const package::Package& pkg) {
     std::size_t count = 0u;
     for (const auto& resource : pkg.resources) {
+#if NW06_COMPILE_ANY_RUNTIME
         if (resource.usage == "uav_srv") {
             count += 2u;
         } else if (resource.usage == "rtv_srv") {
             ++count;
-        } else if (ResourceNeedsCbvSrvUavDescriptor(pkg, resource)) {
+        } else
+#endif
+        if (ResourceNeedsCbvSrvUavDescriptor(pkg, resource)) {
             ++count;
         }
     }
@@ -280,7 +300,11 @@ const package::ResourceDescriptor* FindPackageResource(
 // numeric convention is shared with the NW-03 instruction contract; unknown
 // codes are rejected instead of silently degenerating to COMMON.
 bool IsKnownBarrierStateCode(std::uint32_t code) noexcept {
+#if NW06_COMPILE_ANY_RUNTIME
     return code <= 14u;
+#else
+    return code <= 12u;
+#endif
 }
 
 bool BarrierStateCodeCompatibleWithUsage(std::uint32_t code,
@@ -301,11 +325,19 @@ bool BarrierStateCodeCompatibleWithUsage(std::uint32_t code,
             "PRESENT is reserved for swap-chain back buffers, not package "
             "resources");
     }
-    if (code == 4u && usage != "uav" && usage != "uav_srv") {
+    if (code == 4u && usage != "uav"
+#if NW06_COMPILE_ANY_RUNTIME
+        && usage != "uav_srv"
+#endif
+    ) {
         return incompatible(
             "UNORDERED_ACCESS requires a UAV-capable package resource");
     }
-    if (code == 3u && usage != "rtv" && usage != "rtv_srv") {
+    if (code == 3u && usage != "rtv"
+#if NW06_COMPILE_ANY_RUNTIME
+        && usage != "rtv_srv"
+#endif
+    ) {
         return incompatible(
             "RENDER_TARGET requires an RTV-capable package resource");
     }
@@ -435,7 +467,12 @@ bool ReadRootSignatureParameterType(
         std::memcpy(&static_sampler_count, payload + 12u,
                     sizeof(static_sampler_count));
         std::memcpy(&flags, payload + 20u, sizeof(flags));
-        if ((version != 1u && version != 2u) || (flags & ~1u) != 0u ||
+        if ((version != 1u && version != 2u) ||
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+            (flags & ~1u) != 0u ||
+#else
+            flags != 0u ||
+#endif
             static_sampler_count != 0u ||
             root_parameter >= parameter_count) {
             return false;
@@ -766,11 +803,19 @@ D3D12_RESOURCE_DESC MakeResourceDesc(
         desc.SampleDesc.Count = 1u;
         desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     }
-    if (resource.usage == "uav" || resource.usage == "uav_srv") {
+    if (resource.usage == "uav"
+#if NW06_COMPILE_ANY_RUNTIME
+        || resource.usage == "uav_srv"
+#endif
+    ) {
         desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
             desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     }
-    if (resource.usage == "rtv" || resource.usage == "rtv_srv") {
+    if (resource.usage == "rtv"
+#if NW06_COMPILE_ANY_RUNTIME
+        || resource.usage == "rtv_srv"
+#endif
+    ) {
         desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
             desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
     }
@@ -870,19 +915,28 @@ D3D12_RESOURCE_STATES InitialStateForUsage(
 
 D3D12_RESOURCE_STATES WorkingStateForUsage(
     const package::ResourceDescriptor& resource) {
-    if (resource.usage == "uav" || resource.usage == "uav_srv") {
+    if (resource.usage == "uav"
+#if NW06_COMPILE_ANY_RUNTIME
+        || resource.usage == "uav_srv"
+#endif
+    ) {
         return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     }
     if (resource.usage == "cbv") {
         return D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
     }
-    if (resource.usage == "srv" ||
-        resource.usage == "uav_srv" ||
-        resource.usage == "rtv_srv") {
+    if (resource.usage == "srv"
+#if NW06_COMPILE_ANY_RUNTIME
+        || resource.usage == "uav_srv" || resource.usage == "rtv_srv"
+#endif
+    ) {
         return D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     }
-    if (resource.usage == "rtv" || resource.usage == "rtv_srv")
-        return D3D12_RESOURCE_STATE_RENDER_TARGET;
+    if (resource.usage == "rtv"
+#if NW06_COMPILE_ANY_RUNTIME
+        || resource.usage == "rtv_srv"
+#endif
+    ) return D3D12_RESOURCE_STATE_RENDER_TARGET;
     if (resource.usage == "dsv") return D3D12_RESOURCE_STATE_DEPTH_WRITE;
     if (resource.usage == "readback") return D3D12_RESOURCE_STATE_COPY_DEST;
     return D3D12_RESOURCE_STATE_COMMON;
@@ -913,8 +967,10 @@ bool TryBarrierStateFromCode(std::uint32_t code,
         case 10u: *state = D3D12_RESOURCE_STATE_COPY_SOURCE; return true;
         case 11u: *state = D3D12_RESOURCE_STATE_PRESENT; return true;
         case 12u: *state = D3D12_RESOURCE_STATE_GENERIC_READ; return true;
+#if NW06_COMPILE_ANY_RUNTIME
         case 13u: *state = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT; return true;
         case 14u: *state = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE; return true;
+#endif
         default: return false;
     }
 }
