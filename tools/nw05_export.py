@@ -1288,8 +1288,6 @@ def _build_graph_derived_package(
         | {"nw.render.fullscreen", "nw.render.present"}
         | {
             "nw.texture.procedural",
-            "nw.buffer.recipe",
-            "nw.mesh.recipe",
         }
     )
     unsupported = sorted(used_operators - supported)
@@ -1389,7 +1387,7 @@ def _build_graph_derived_package(
                 nwp.ResourceDescriptor(
                     resource_id=next_resource_id,
                     name=f"texture_{node_id}",
-                    kind="texture2d",
+                    kind="buffer",
                     format=resource_format,
                     usage="srv",
                     pass_family=nw03.PASS_FAMILY,
@@ -1400,25 +1398,9 @@ def _build_graph_derived_package(
                         texture_height,
                         bytes_per_element=_FORMAT_BYTES_PER_ELEMENT[resource_format],
                     ),
-                    width=texture_width,
-                    height=texture_height,
                 )
             )
-            next_resource_id += 1
             upload_resource_by_texture[node_id] = next_resource_id
-            resources.append(
-                nwp.ResourceDescriptor(
-                    resource_id=next_resource_id,
-                    name=f"texture_upload_{node_id}",
-                    kind="buffer",
-                    format="DXGI_FORMAT_R32_UINT",
-                    usage="srv",
-                    pass_family=nw03.PASS_FAMILY,
-                    binding_slot=0,
-                    binding_space=0,
-                    size_bytes=max(1, texture_width * texture_height * 4),
-                )
-            )
             next_resource_id += 1
         elif node.operator_id == "nw.buffer.recipe":
             resource_format = _resource_format(
@@ -1552,34 +1534,10 @@ def _build_graph_derived_package(
                     ),
                     None,
                 )
-                source_node = document.nodes.get(texture_connection[0])
-                if (
-                    candidate is None
-                    or candidate.kind != "texture2d"
-                ) and source_node is not None:
-                    producer = next(iter(sorted(source_node.inputs.values())), None)
-                    producer_id = (
-                        resource_by_node.get(producer[0])
-                        if producer is not None
-                        else None
-                    )
-                    producer_resource = next(
-                        (
-                            resource
-                            for resource in resources
-                            if resource.resource_id == producer_id
-                        ),
-                        None,
-                    )
-                    if (
-                        producer_resource is not None
-                        and producer_resource.kind == "texture2d"
-                    ):
-                        candidate = producer_resource
-                if candidate is None or candidate.kind != "texture2d":
+                if candidate is None or candidate.usage != "srv":
                     raise ExportError(
                         f"fullscreen render node '{node.node_id}' does not "
-                        "resolve to a texture2d producer resource",
+                        "resolve to an uploaded SRV producer resource",
                         dependency_path=["graph", node.node_id, "texture"],
                     )
                 texture_input_resource_id = candidate.resource_id

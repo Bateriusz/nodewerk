@@ -140,10 +140,6 @@ def test_original_procedural_image_graph_exports_texture_render_path(
         resource.usage == "uav" for resource in common.package.resources
     )
     assert any(
-        resource.kind == "texture2d" and resource.usage == "srv"
-        for resource in common.package.resources
-    )
-    assert any(
         instruction.opcode == "frame.present"
         for instruction in common.package.frame
     )
@@ -156,7 +152,13 @@ def test_original_procedural_image_graph_exports_texture_render_path(
         for resource in common.package.resources
         if resource.name == "input"
     )
-    assert input_resource.kind == "texture2d"
+    assert input_resource.kind == "buffer"
+    assert any(
+        instruction.opcode == "init.upload_resource"
+        and instruction.operands[0].type == "resource_ref"
+        and instruction.operands[0].value == input_resource.resource_id
+        for instruction in common.package.initialization
+    )
     assert any(
         instruction.opcode == "frame.set_descriptor_table"
         and instruction.operands[0].value == 2
