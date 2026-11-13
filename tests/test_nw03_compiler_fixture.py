@@ -148,6 +148,25 @@ def test_oracle_matches_documented_tolerance() -> None:
     assert "g_time" in lowered
 
 
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "texture2d(uv.x)",
+        "texture2d(uv.x, uv.y, 0.0)",
+    ],
+)
+def test_texture2d_wrong_arity_raises_expression_error(expression: str) -> None:
+    parsed = oracle.parse_expression(expression)
+    with pytest.raises(oracle.ExpressionError, match=r"texture2d expects 2 arguments"):
+        oracle.lower_to_hlsl(parsed, texture_function="sample_texture")
+    with pytest.raises(oracle.ExpressionError, match=r"texture2d expects 2 arguments"):
+        oracle.evaluate(
+            parsed,
+            variables={"uv": (0.25, 0.75)},
+            texture_function=lambda u, v: (u, v, 0.0, 1.0),
+        )
+
+
 def test_generated_hlsl_expression_matches_cpu_oracle() -> None:
     document = compiler.load_graph(FIXTURE)
     generated, diagnostics = compiler.lower_to_fused_hlsl(document)

@@ -212,6 +212,70 @@ def test_original_procedural_image_graph_exports_texture_render_path(
     )
 
 
+def test_direct_procedural_texture_binding_is_initialized(tmp_path: Path) -> None:
+    graph = tmp_path / "direct_texture.nwgraph"
+    graph.write_text(
+        "\n".join(
+            [
+                "nwgraph 1",
+                "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+                "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+                "setting optimization O2",
+                "node tex nw.texture.procedural@1.0.0 frequency=initialization",
+                "  param width 32",
+                "  param height 32",
+                "  param format r8g8b8a8_unorm",
+                "  param seed 9",
+                "node image nw.shader.expr@1.0.0 frequency=frame",
+                '  param expression "texture2d(uv.x, uv.y)"',
+                "node out nw.render.fullscreen@1.0.0 frequency=frame residency=gpu",
+                "  input shader image.out",
+                "  input texture tex.out",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = nw05_export.export_graph(
+        graph,
+        tmp_path / "direct-texture-out",
+        settings=_settings(tmp_path),
+        dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+        allow_test_payloads=True,
+    )
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    texture_table = next(
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.set_descriptor_table"
+        and instruction.operands[0].value == 2
+    )
+    texture_id = next(
+        operand.value
+        for operand in texture_table.operands
+        if operand.type == "resource_ref"
+    )
+    texture = next(
+        resource
+        for resource in package.resources
+        if resource.resource_id == texture_id
+    )
+    assert texture.kind == "texture2d"
+    assert texture.usage == "srv"
+    assert any(
+        instruction.opcode == "init.upload_resource"
+        and instruction.operands[0].type == "resource_ref"
+        and instruction.operands[0].value == texture_id
+        for instruction in package.initialization
+    )
+    seed = next(
+        parameter
+        for parameter in package.parameters
+        if parameter.name == f"nw05.texture_seed.{texture_id}"
+    )
+    assert struct.unpack("<I", seed.value)[0] == 9
+
+
 def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
     first_blob = nw04_fixture.make_dxil_container() + b"\x01"
     second_blob = nw04_fixture.make_dxil_container() + b"\x02"
@@ -372,6 +436,29 @@ def test_multiple_fullscreen_nodes_bind_their_own_textures(
             if operand.type == "shader_ref"
         }
     ) == 1
+    output_tables = [
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.set_descriptor_table"
+        and instruction.operands[0].value == 1
+    ]
+    output_ids = [
+        next(
+            operand.value
+            for operand in instruction.operands
+            if operand.type == "resource_ref"
+        )
+        for instruction in output_tables
+    ]
+    assert len(output_ids) == 2
+    assert len(set(output_ids)) == 2
+    output_resources = {
+        resource.resource_id: resource
+        for resource in package.resources
+        if resource.resource_id in output_ids
+    }
+    assert set(output_resources) == set(output_ids)
+    assert all(resource.usage == "uav" for resource in output_resources.values())
 
     seed_by_resource = {
         int(name.rsplit(".", 1)[1]): seed

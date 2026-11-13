@@ -1458,6 +1458,7 @@ def _build_graph_derived_package(
     # input nodes.  Present follows its image input rather than "last dispatch".
     node_lookup = optimized.node_map()
     texture_by_render: dict[str, int] = {}
+    render_outputs_by_shader: dict[str, list[int]] = {}
     for node in sorted(document.nodes.values(), key=lambda item: item.node_id):
         if node.operator_id not in _PACKAGE_RENDER_OPERATORS:
             continue
@@ -1485,6 +1486,23 @@ def _build_graph_derived_package(
                     f"render node '{node.node_id}' has no lowered shader output",
                     dependency_path=["graph", node.node_id, "shader"],
                 )
+            render_outputs = render_outputs_by_shader.setdefault(spec, [])
+            if render_outputs:
+                template = next(
+                    resource
+                    for resource in resources
+                    if resource.resource_id == resource_by_shader[spec]
+                )
+                output_id = next_resource_id
+                resources.append(
+                    nwp.replace(
+                        template,
+                        resource_id=output_id,
+                        name=f"output_{node.node_id}",
+                    )
+                )
+                next_resource_id += 1
+            render_outputs.append(output_id)
             resource_by_output[(node.node_id, "image")] = output_id
         if node.operator_id == "nw.render.fullscreen":
             texture_connection = node.inputs.get("texture")
@@ -1555,6 +1573,11 @@ def _build_graph_derived_package(
                     dependency_path=["graph", node.node_id, "shader"],
                 )
             texture_by_render[node.node_id] = candidate.resource_id
+            # Any sampled texture must have initialized contents even when the
+            # graph binds nw.texture.procedural directly without an explicit
+            # nw.residency.upload_texture node. Explicit uploads are harmlessly
+            # deduplicated when initialization instructions are emitted.
+            uploaded_resources.append(candidate.resource_id)
 
     def shader_for_render_node(node_id: str) -> str | None:
         node = document.nodes.get(node_id)

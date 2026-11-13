@@ -371,6 +371,10 @@ def lower_to_hlsl(
     assert isinstance(expression, Call)
     name = expression.name
     if name == "texture2d":
+        if len(expression.arguments) != 2:
+            raise ExpressionError(
+                f"texture2d expects 2 arguments, got {len(expression.arguments)}"
+            )
         if texture_function is None:
             raise ExpressionError(
                 "operation 'texture2d' requires a bound texture in this pass"
@@ -550,8 +554,12 @@ def evaluate(
                 )
             raise ExpressionError(f"unsupported binary operator '{node.operator}'")
         assert isinstance(node, Call)
-        arguments = [visit(argument) for argument in node.arguments]
         name = node.name
+        if name == "texture2d" and len(node.arguments) != 2:
+            raise ExpressionError(
+                f"texture2d expects 2 arguments, got {len(node.arguments)}"
+            )
+        arguments = [visit(argument) for argument in node.arguments]
         if name in _VECTOR_CTORS:
             components: list[float] = []
             for argument in arguments:
