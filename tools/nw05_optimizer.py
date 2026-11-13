@@ -1286,11 +1286,28 @@ def _expressions_equivalent(
     tolerance_absolute: float = oracle.NUMERIC_TOLERANCE_ABSOLUTE,
     tolerance_relative: float = oracle.NUMERIC_TOLERANCE_RELATIVE,
 ) -> bool:
+    def texture_sample(u: float, v: float) -> tuple[float, float, float, float]:
+        # The fusion oracle compares two expressions, not texture contents.
+        # A deterministic function of both coordinates is sufficient to catch
+        # changes to sampling structure while keeping real texture data outside
+        # the CPU optimizer.
+        return (u, v, u * 0.5 + v * 0.25, 1.0)
+
     for uv, time_value, seed in _expression_samples():
         variables = {"uv": uv, "time": time_value, "seed": seed}
         try:
-            left_value = oracle.evaluate(left, variables=variables, float32=True)
-            right_value = oracle.evaluate(right, variables=variables, float32=True)
+            left_value = oracle.evaluate(
+                left,
+                variables=variables,
+                float32=True,
+                texture_function=texture_sample,
+            )
+            right_value = oracle.evaluate(
+                right,
+                variables=variables,
+                float32=True,
+                texture_function=texture_sample,
+            )
         except oracle.ExpressionError:
             return False
         left_values = left_value if isinstance(left_value, tuple) else (left_value,)

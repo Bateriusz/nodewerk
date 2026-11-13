@@ -131,6 +131,19 @@ def test_unreachable_quantized_operator_does_not_change_release_identity() -> No
     assert extended.quantization == base.quantization
 
 
+def test_texture_expression_oracle_requires_explicit_sampler() -> None:
+    expression = optimizer.oracle.parse_expression("texture2d(uv.x, uv.y)")
+    with pytest.raises(optimizer.oracle.ExpressionError):
+        optimizer.oracle.evaluate(expression, variables={"uv": (0.25, 0.75)})
+
+    sampled = optimizer.oracle.evaluate(
+        expression,
+        variables={"uv": (0.25, 0.75)},
+        texture_function=lambda u, v: (u, v, u + v, 1.0),
+    )
+    assert sampled == pytest.approx((0.25, 0.75, 1.0, 1.0))
+
+
 def test_fusion_is_bounded_and_falls_back_when_unmeasured_or_unsupported() -> None:
     optimized = _ir(PROCEDURAL)
     assert optimized.fusions

@@ -11,7 +11,7 @@ setting quantization_step 0
 setting shader_blob_policy stable
 setting shader_model 6_0
 node image nw.shader.expr@1.0.0 frequency=frame residency=cpu
-  param expression "vec4(mix(uv.x sin(uv.y * 17.0 + time) 0.35) mix(uv.y cos(uv.x * 13.0 - time) 0.25) sin(uv.x * 31.0 + time) * 0.5 + 0.5 1.0)"
+  param expression "mix(vec4(mix(uv.x sin(uv.y * 17.0 + time) 0.35) mix(uv.y cos(uv.x * 13.0 - time) 0.25) sin(uv.x * 31.0 + time) * 0.5 + 0.5 1.0) texture2d(uv.x uv.y) 0.25)"
 node output nw.render.fullscreen@1.0.0 frequency=frame residency=gpu
   input shader image.out
   input texture texture_gpu.out
@@ -31,6 +31,6 @@ partition frame image output screen
 dead-nodes 
 dead-outputs 
 folded 
-fusion image accepted=false nodes=1 bytes=145->145
-source-sha256 03748848a41aa2d8b7ad7226589bcd37bed004237d17183989114bb04bbff72d
-ir-sha256 sha256:v1:2cd42f8e800f2095a6c835be8081933f22bb7ae08e5972b0be79844f7b081f23
+fusion image accepted=false nodes=1 bytes=179->179
+source-sha256 3e0cf3d3988bc996949aab8c727aedb475548c3ecf16902e725ab57da859af4a
+ir-sha256 sha256:v1:5718ea3d29e8bc15e88d8b34d7180c62958cab54a0d2fdd644ced4d3c0530e3b

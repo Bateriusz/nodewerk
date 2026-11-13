@@ -495,6 +495,7 @@ def evaluate(
     *,
     variables: dict[str, Any] | None = None,
     float32: bool = False,
+    texture_function: Any | None = None,
 ) -> float | tuple[float, ...]:
     """Evaluate a parsed expression against CPU reference variables."""
     variables = variables or {}
@@ -564,6 +565,23 @@ def evaluate(
                     f"{name} constructed {len(components)} components, expected {expected}"
                 )
             return tuple(components)
+        if name == "texture2d":
+            if texture_function is None:
+                raise ExpressionError(
+                    "operation 'texture2d' has no CPU reference without a texture binding"
+                )
+            u, v = arguments
+            if not _is_scalar(u) or not _is_scalar(v):
+                raise ExpressionError("texture2d coordinates must be scalar")
+            sampled = texture_function(float(u), float(v))
+            if _is_scalar(sampled):
+                return quantize(float(sampled))
+            values = tuple(quantize(component) for component in sampled)
+            if len(values) != 4:
+                raise ExpressionError(
+                    "texture2d CPU sampler must return four components"
+                )
+            return values
         if name in _UNSUPPORTED_TEXTURE_OPERATIONS:
             raise ExpressionError(
                 f"operation '{name}' has no CPU reference without a texture binding"
