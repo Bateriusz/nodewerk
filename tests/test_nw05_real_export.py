@@ -259,6 +259,9 @@ def test_unused_nw06_runtime_is_absent_from_legacy_real_pe(
         b"CreateCommandSignature(DRAW_INDEXED) failed",
         b"initialization root signature was not created",
         b"initialization descriptor target has no descriptor",
+        b"nw06.params.",
+        b"compute.nw06.",
+        b"graphics.nw06.",
     )
     for marker in markers:
         assert marker not in legacy_pe

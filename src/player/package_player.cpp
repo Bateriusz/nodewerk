@@ -64,6 +64,20 @@
 #else
 #define NW06_IF_RASTER(expr) false
 #endif
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT || \
+    NW06_COMPILE_ANALYTIC_LIGHTING_TWIST || \
+    NW06_COMPILE_ABSOLUTE_TICK_CAMERA || \
+    NW06_COMPILE_HALF_RESOLUTION_BLOOM || NW06_COMPILE_TONEMAP
+#define NW06_COMPILE_FRAME_PARAMETER_BINDINGS 1
+#else
+#define NW06_COMPILE_FRAME_PARAMETER_BINDINGS 0
+#endif
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT || \
+    NW06_COMPILE_HALF_RESOLUTION_BLOOM || NW06_COMPILE_TONEMAP
+#define NW06_COMPILE_COMBINED_BINDINGS 1
+#else
+#define NW06_COMPILE_COMBINED_BINDINGS 0
+#endif
 
 #if (defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION) || \
     (defined(NW05_SPECIALIZED_VALIDATION) && NW05_SPECIALIZED_VALIDATION)
@@ -1327,6 +1341,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             // Pack immutable parameter values into the bounded root-constant
             // block.  This is done once during initialization, never per frame.
             std::size_t byte_offset = 0u;
+#if NW06_COMPILE_FRAME_PARAMETER_BINDINGS
             const std::string parameter_prefix =
                 "nw06.params." + std::to_string(op.resource_a) + ".";
             const bool use_prefixed_parameters = std::any_of(
@@ -1334,11 +1349,14 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 [&](const package::ParameterRecord& parameter) {
                     return parameter.name.rfind(parameter_prefix, 0u) == 0u;
                 });
+#endif
             for (const auto& parameter : package_.parameters) {
+#if NW06_COMPILE_FRAME_PARAMETER_BINDINGS
                 if (use_prefixed_parameters &&
                     parameter.name.rfind(parameter_prefix, 0u) != 0u) {
                     continue;
                 }
+#endif
                 std::uint8_t tick_kind = 0u;
                 std::uint32_t declared_bytes = 0u;
                 if (!TryParameterTickLayout(parameter, &tick_kind,
@@ -1455,6 +1473,8 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                                      binding->usage == "srv");
             if (!binding_usage_matches || binding->slot != resource->binding_slot ||
                 binding->space != resource->binding_space) {
+                bool allow_nw06_combined_binding = false;
+#if NW06_COMPILE_COMBINED_BINDINGS
                 const bool nw06_family =
                     root_record != nullptr &&
                     (root_record->family.rfind("compute.nw06.", 0u) == 0u ||
@@ -1467,7 +1487,9 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      (resource->usage == "rtv_srv" &&
                       (binding->usage == "rtv" ||
                        binding->usage == "srv")));
-                if (!nw06_family || !combined_compatible) {
+                allow_nw06_combined_binding = nw06_family && combined_compatible;
+#endif
+                if (!allow_nw06_combined_binding) {
                     Fail(ExitCode::PackageValidationFailed, "package_validation",
                          "package_descriptor_table_binding", "root_parameter",
                          std::to_string(op.root_parameter),
@@ -3454,8 +3476,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
 #endif
         } else if (NW06_IF_GPU_INITIALIZATION(
-                       instruction.opcode == "init.set_root_constants" ||
-                       instruction.opcode == "frame.set_graphics_root_constants")) {
+                       instruction.opcode == "init.set_root_constants")) {
 #if NW06_COMPILE_GPU_INITIALIZATION
             if (!require_operands(instruction, 3u)) {
                 return last_exit_;

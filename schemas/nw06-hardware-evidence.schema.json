@@ -125,7 +125,7 @@
     },
     "comparison": {
       "type": "object",
-      "required": ["validated", "status", "numeric", "image", "fixed_ticks", "tolerance_check"],
+      "required": ["validated", "status", "numeric", "image", "fixed_ticks", "per_tick", "tolerance_check"],
       "properties": {
         "validated": { "const": true },
         "status": { "enum": ["passed", "within_tolerance", "failed"] },
@@ -136,6 +136,11 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": { "type": "integer", "minimum": 0 }
+        },
+        "per_tick": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/per_tick_comparison" }
         },
         "tolerance_check": {
           "type": "object",
@@ -173,6 +178,39 @@
         "relative_tolerance": { "type": ["number", "integer"], "minimum": 0 },
         "width": { "const": 256 },
         "height": { "const": 256 }
+      },
+      "additionalProperties": true
+    },
+    "per_tick_comparison": {
+      "type": "object",
+      "required": ["tick", "artifact_sha256", "numeric", "image"],
+      "properties": {
+        "tick": { "type": "integer", "minimum": 0 },
+        "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "numeric": {
+          "type": "object",
+          "required": ["status", "maximum_error", "tolerance", "maximum_relative_error", "relative_tolerance"],
+          "properties": {
+            "status": { "enum": ["passed", "within_tolerance", "failed"] },
+            "maximum_error": { "type": ["number", "integer"], "minimum": 0 },
+            "tolerance": { "type": ["number", "integer"], "minimum": 0 },
+            "maximum_relative_error": { "type": ["number", "integer"], "minimum": 0 },
+            "relative_tolerance": { "type": ["number", "integer"], "minimum": 0 }
+          },
+          "additionalProperties": true
+        },
+        "image": {
+          "type": "object",
+          "required": ["status", "maximum_error", "tolerance", "width", "height"],
+          "properties": {
+            "status": { "enum": ["passed", "within_tolerance", "failed"] },
+            "maximum_error": { "type": ["number", "integer"], "minimum": 0 },
+            "tolerance": { "type": ["number", "integer"], "minimum": 0 },
+            "width": { "const": 256 },
+            "height": { "const": 256 }
+          },
+          "additionalProperties": true
+        }
       },
       "additionalProperties": true
     },
