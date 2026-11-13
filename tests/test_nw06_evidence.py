@@ -51,6 +51,36 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
         "cache_state": "cold",
         "capture_protocol": "nw06-fixed-tick-capture.v1",
         "unavailable_telemetry": [],
+        "fixed_ticks": [0, 24_000, 48_000],
+        "capture_artifacts": [
+            {
+                "kind": "rgba8",
+                "path": f"captures/{tier}-0.rgba",
+                "sha256": "a" * 64,
+                "bytes": 256 * 256 * 4,
+            }
+        ],
+        "comparison": {
+            "validated": True,
+            "status": "passed",
+            "numeric": {
+                "status": "passed",
+                "samples": 3,
+                "maximum_error": 0.0,
+                "tolerance": 0.001,
+            },
+            "image": {
+                "status": "passed",
+                "pixels": 256 * 256,
+                "maximum_error": 0.0,
+                "tolerance": 0.01,
+            },
+            "tolerance_check": {
+                "status": "passed",
+                "observed_maximum_error": 0.0,
+                "declared_tolerance": 0.01,
+            },
+        },
     }
 
 
@@ -224,7 +254,6 @@ def test_record_capture_writes_schema_valid_qualifications_and_policy(
         "profile_id",
         "requirements_digest",
         "status",
-        "cache_state",
         "capture_protocol",
         "unavailable_telemetry",
     ):
@@ -466,3 +495,60 @@ def test_failed_qualification_without_captures_remains_failed() -> None:
         }
     )
     assert result["status"] == "failed"
+
+
+def test_metadata_only_passed_captures_remain_pending() -> None:
+    capture = _complete_capture("ada")
+    capture.pop("fixed_ticks")
+    capture.pop("capture_artifacts")
+    capture.pop("comparison")
+    validation = nw06_evidence.validate_capture(capture)
+    assert validation["status"] == "pending_unverified"
+    assert "fixed_ticks" in validation["missing_metadata"]
+    assert "capture_artifacts" in validation["missing_metadata"]
+    assert "comparison" in validation["missing_metadata"]
+
+
+def test_unavailable_required_telemetry_and_unvalidated_comparison_cannot_pass() -> None:
+    capture = _complete_capture("ada")
+    capture["clock_information"] = {"status": "unavailable"}
+    assert nw06_evidence.validate_capture(capture)["status"] == "pending_unverified"
+
+    capture = _complete_capture("ada")
+    capture["unavailable_telemetry"] = ["thermal_information"]
+    validation = nw06_evidence.validate_capture(capture)
+    assert validation["status"] == "pending_unverified"
+    assert "thermal_information" in validation["missing_metadata"]
+
+    capture = _complete_capture("ada")
+    capture["comparison"]["validated"] = False
+    assert nw06_evidence.validate_capture(capture)["status"] == "pending_unverified"
+
+    capture = _complete_capture("ada")
+    capture["comparison"]["image"]["maximum_error"] = 1.0
+    capture["comparison"]["image"]["tolerance"] = 0.01
+    assert nw06_evidence.validate_capture(capture)["status"] == "pending_unverified"
+
+
+def test_caller_supplied_verified_labels_do_not_establish_correctness() -> None:
+    captures = [_complete_capture("ada"), _complete_capture("blackwell")]
+    for capture in captures:
+        capture.pop("comparison")
+    record = {
+        "captures": captures,
+        "qualifications": {
+            "ada": {
+                "coverage_target": "desktop_ada_representative",
+                "evidence_role": "fixed_tick_correctness",
+                "status": "verified",
+            },
+            "blackwell": {
+                "coverage_target": "desktop_blackwell_representative",
+                "evidence_role": "fixed_tick_correctness",
+                "status": "verified",
+            },
+        },
+    }
+    assert nw06_evidence.validate_evidence_record(record)["status"] == (
+        "pending_unverified"
+    )

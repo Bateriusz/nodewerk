@@ -197,7 +197,10 @@ follow D3D12 (`descriptor table = 0`, `32-bit constants = 1`; `SRV = 0`,
 `UAV = 1`, `CBV = 2`, `sampler = 3`). `ID3D12Device::CreateRootSignature`
 therefore receives serialized signature bytes; the package never stores a
 private binding-list format. Static samplers are not part of the baseline
-family. Root-signature `dword_cost` is the total D3D12 cost of all parameters
+family. The serialized `flags` field accepts only
+`ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT` (bit 0); graphics pass families require it
+when their pipeline declares a vertex input layout, and compute families emit
+zero. Root-signature `dword_cost` is the total D3D12 cost of all parameters
 (one DWORD per descriptor table plus the number of 32-bit constants), not just
 the constant count. Cross-blob function sharing is never assumed.
 

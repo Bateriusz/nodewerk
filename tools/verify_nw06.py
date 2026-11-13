@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw03_compiler as nw03  # noqa: E402
 import nw04_fixture  # noqa: E402
+import nw04_player_contract as nw04_contract  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 import nw05_export as nw05_export  # noqa: E402
 import nw05_optimizer as optimizer  # noqa: E402
@@ -352,6 +353,47 @@ def check_export_and_determinism() -> CheckResult:
                 return _fail("nw06_export", "common profile identity changed")
             if package.capability.requirements_digest != nwp.COMMON_REQUIREMENTS_DIGEST:
                 return _fail("nw06_export", "requirements digest changed")
+            derived = nwp.derive_capability_requirements(
+                package.resources,
+                package.initialization,
+                package.frame,
+                package.shaders,
+                package.root_signatures,
+            )
+            if (
+                derived["max_cbv_srv_uav_descriptors_per_frame"] != 17
+                or package.capability.max_cbv_srv_uav_descriptors_per_frame
+                != 17
+            ):
+                return _fail(
+                    "nw06_export",
+                    "native/exporter descriptor requirements disagree for "
+                    "combined usages",
+                )
+            if nw04_contract.validate_package_requirements(package):
+                return _fail(
+                    "nw06_export",
+                    "NW-04 package requirement validation rejected the NW-06 "
+                    "common artifact",
+                )
+            for root in package.root_signatures:
+                flags: list[int] = []
+                decoded = nwp._decode_root_signature_blob(
+                    root.blob, [], flags
+                )
+                if decoded is None:
+                    return _fail(
+                        "nw06_export",
+                        f"root signature {root.root_signature_id} is malformed",
+                    )
+                expected_flags = (
+                    1 if root.family.startswith("graphics.") else 0
+                )
+                if flags != [expected_flags]:
+                    return _fail(
+                        "nw06_export",
+                        "root signature flags do not match the pass family",
+                    )
             tick_parameter = next(
                 parameter
                 for parameter in package.parameters
@@ -388,6 +430,10 @@ def check_export_and_determinism() -> CheckResult:
                 or not logical.resource(17).alias_eligible
                 or not logical.resource(18).alias_eligible
                 or not logical.resource(19).alias_eligible
+                or any(
+                    logical.resource(resource_id).alias_eligible
+                    for resource_id in (2, 3, 4, 6, 7, 9, 11, 13)
+                )
             ):
                 return _fail(
                     "nw06_export",

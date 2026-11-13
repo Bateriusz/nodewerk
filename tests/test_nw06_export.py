@@ -149,6 +149,98 @@ def test_export_resources_and_capabilities_are_exact(tmp_path: Path) -> None:
     assert sum(resource.size_bytes for resource in package.resources) == (
         procedural.estimate_resources()["resident_payload_bytes"]
     )
+    # The native capability derivation must account for combined UAV/SRV and
+    # RTV/SRV resources in both initialization and frame root bindings.
+    derived = nwp.derive_capability_requirements(
+        package.resources,
+        package.initialization,
+        package.frame,
+        package.shaders,
+        package.root_signatures,
+    )
+    assert derived["max_cbv_srv_uav_descriptors_per_frame"] == 17
+    assert (
+        package.capability.max_cbv_srv_uav_descriptors_per_frame == 17
+    )
+    assert nw04_contract.validate_package_requirements(package) == []
+
+
+def test_graphics_root_signature_allows_input_assembler_layout(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    for root in package.root_signatures:
+        flags: list[int] = []
+        decoded = nwp._decode_root_signature_blob(root.blob, [], flags)
+        assert decoded is not None
+        expected = 1 if root.family.startswith("graphics.") else 0
+        assert flags == [expected], (root.family, flags)
+    # Serialization must preserve the exact D3D12 flag bit, not merely accept
+    # it during validation.
+    graphics = next(
+        root
+        for root in package.root_signatures
+        if root.family.startswith("graphics.")
+    )
+    chunk = graphics.blob.index(b"RTS0")
+    payload = chunk + 8
+    assert struct.unpack_from("<I", graphics.blob, payload + 20)[0] == 1
+
+
+def test_native_capability_derivation_covers_emitted_combined_usages() -> None:
+    source = (
+        REPO_ROOT / "src" / "player" / "capability_requirements.cpp"
+    ).read_text(encoding="utf-8")
+    start = source.index("DerivedRequirements DeriveRequirements(")
+    end = source.index("void CheckExactU32(", start)
+    body = source[start:end]
+    assert 'resource.usage == "uav_srv"' in body
+    assert 'resource.usage == "rtv_srv"' in body
+    assert "pkg.initialization" in body
+    assert "frame.set_graphics_root_constants" in body
+    assert "init.set_root_constants" in body
+
+
+def test_exported_package_passes_native_capability_check(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    package_path = (
+        tmp_path
+        / "artifact"
+        / (
+            nw05_export._profile_file_stem(nwp.COMMON_PROFILE_ID)
+            + ".nwp"
+        )
+    )
+    assert package_path.is_file()
+    candidates = sorted(
+        (REPO_ROOT / "build").glob("**/nw06_capability_check*")
+    )
+    executable = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.is_file()
+            and candidate.suffix.lower() in ("", ".exe")
+            and "CMakeFiles" not in candidate.parts
+        ),
+        None,
+    )
+    if executable is None:
+        pytest.skip(
+            "native NW-06 capability checker is not built in this workspace"
+        )
+    completed = subprocess.run(
+        [str(executable), str(package_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "NW06_NATIVE_CAPABILITY_OK" in completed.stdout
+    assert "descriptors=17" in completed.stdout
 
 
 def test_export_identity_is_deterministic_and_manifest_links_used_features(
@@ -327,6 +419,14 @@ def test_schedule_models_render_targets_indirect_draw_and_lifetimes(
     assert logical.resource(17).lifetime.last_frame >= (
         logical.resource(17).lifetime.first_frame
     )
+    # GPU initialization writes these resources, and the frame stream consumes
+    # them again next frame.  They are lifetime roots, never transient scratch
+    # that may alias with a later render output.
+    for resource_id in (2, 3, 4, 6, 7, 9, 11, 13):
+        resource = logical.resource(resource_id)
+        assert not resource.alias_eligible
+        assert resource.lifetime.persistent
+        assert "initialization-produced" in resource.lifetime.reason
 
 
 def test_step_camera_interpolation_is_encoded_not_silently_ignored(
@@ -368,6 +468,99 @@ def test_camera_curve_full_precision_escape_hatch(tmp_path: Path) -> None:
     assert curve["full_precision_escape_hatch"] is True
     assert curve["maximum_absolute_error"] == 0.0
     assert curve["recoverable"] is True
+
+
+def test_two_key_camera_curve_exports_without_duplicate_tick_failure(
+    tmp_path: Path,
+) -> None:
+    graph = tmp_path / "two-key.nwgraph"
+    graph.write_text(
+        PROCEDURAL.read_text(encoding="utf-8").replace(
+            'param keys "0:0;16000:2.0943951;32000:4.1887902;48000:6.2831853"',
+            'param keys "0:0;48000:6.2831853"',
+        ),
+        encoding="utf-8",
+    )
+    result = _export_graph(tmp_path, graph, "two-key-artifact")
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    curve = common.manifest["timeline"]["camera_curve"]
+    assert len(curve["original"]) == 2
+    assert curve["within_tolerance"] is True
+    ticks = [
+        struct.unpack("<I", parameter.value)[0]
+        for parameter in common.package.parameters
+        if parameter.name.startswith("nw06.params.10.curve_tick_")
+    ]
+    values = [
+        struct.unpack("<f", parameter.value)[0]
+        for parameter in common.package.parameters
+        if parameter.name.startswith("nw06.params.10.curve_value_")
+    ]
+    assert ticks == [0, 48_000, 48_000, 48_000]
+    assert values[0] == 0.0
+    assert values[1] == pytest.approx(6.2831853)
+    assert values[2:] == [values[1], values[1]]
+
+
+def test_reordered_post_chain_fails_instead_of_changing_semantics(
+    tmp_path: Path,
+) -> None:
+    text = PROCEDURAL.read_text(encoding="utf-8")
+    reversed_chain = text.replace(
+        "node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu\n"
+        "  input image render.image",
+        "node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu\n"
+        "  input image tonemap.out",
+    ).replace(
+        "node tonemap nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
+        "  input image bloom.out",
+        "node tonemap nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
+        "  input image render.image",
+    ).replace(
+        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
+        "  input image tonemap.out",
+        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
+        "  input image bloom.out",
+    )
+    graph = tmp_path / "reversed-post.nwgraph"
+    graph.write_text(reversed_chain, encoding="utf-8")
+    with pytest.raises(nw03.CompilerError, match="post-processing order"):
+        _export_graph(tmp_path, graph, "reversed-post-artifact")
+
+
+def test_generated_playback_uses_checked_clock_and_rational_capture(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    source = nw05_export.generate_player_source(
+        package_sha256="0" * 64,
+        manifest_sha256=common.manifest["manifest_sha256"],
+        manifest=common.manifest,
+        width=256,
+        height=256,
+    )
+    assert "CheckedTicksFromNanoseconds" in source
+    assert "std::chrono::steady_clock" in source
+    assert "frame_step_numerator" in source
+    assert "frame_step_denominator" in source
+    assert "frame_step_numerator = 800ULL" in source
+    assert "for (std::uint64_t tick = 0;" not in source
+    # The legacy NW-05 path remains unchanged and does not pull in the clock.
+    legacy = nw05_export.generate_player_source(
+        package_sha256="0" * 64,
+        manifest_sha256="sha256:v1:" + "0" * 64,
+        manifest={
+            "feature_requirements": {},
+            "retained": {
+                "code": ["nw.shader.expr"],
+                "runtime_implementations": ["player.package-core"],
+            },
+            "texture_formats": [],
+        },
+    )
+    assert "CheckedTicksFromNanoseconds" not in legacy
+    assert "for (std::uint64_t tick = 0;" in legacy
 
 
 def test_static_generators_must_remain_initialization_only(

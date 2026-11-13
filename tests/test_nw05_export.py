@@ -140,6 +140,36 @@ def test_specialized_runtime_flags_follow_reachable_texture_implementation() -> 
     assert nw05_export._specialized_implementation_mask(textured) == 3
 
 
+def test_nw06_runtime_implementations_are_manifest_guarded() -> None:
+    nw06 = {
+        "retained": {
+            "code": ["nw.render.instanced"],
+            "runtime_implementations": [
+                "player.nw06.gpu-initialization",
+                "player.nw06.indexed-instanced-indirect",
+                "player.nw06.analytic-lighting-twist",
+                "player.nw06.absolute-tick-camera",
+                "player.nw06.half-resolution-bloom",
+                "player.nw06.tonemap",
+            ],
+        },
+        "texture_formats": [],
+    }
+    flags = nw05_export._specialized_implementation_flags(nw06)
+    assert flags["NW06_COMPILE_GPU_INITIALIZATION"] is True
+    assert flags["NW06_COMPILE_INDEXED_INSTANCED_INDIRECT"] is True
+    assert flags["NW06_COMPILE_ANALYTIC_LIGHTING_TWIST"] is True
+    assert flags["NW06_COMPILE_ABSOLUTE_TICK_CAMERA"] is True
+    assert flags["NW06_COMPILE_HALF_RESOLUTION_BLOOM"] is True
+    assert flags["NW06_COMPILE_TONEMAP"] is True
+    assert nw05_export._specialized_implementation_mask(nw06) == 0x1F8
+
+    # An unchanged NW-05 shader-only export must not retain any NW-06 runtime
+    # implementation bit.
+    legacy = {"retained": {"code": ["nw.shader.expr"]}, "texture_formats": []}
+    assert nw05_export._specialized_implementation_mask(legacy) == 0
+
+
 def test_initialization_frequency_shader_dependency_fails_closed(
     tmp_path: Path,
 ) -> None:

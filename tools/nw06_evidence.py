@@ -59,7 +59,32 @@ REQUIRED_CAPTURE_METADATA = (
     "cache_state",
     "capture_protocol",
     "unavailable_telemetry",
+    # A caller-supplied claim of "passed" is never evidence.  Fixed-tick
+    # captures must name the evaluated ticks, preserve capture artifacts, and
+    # carry validated numeric/image comparisons and tolerance checks.
+    "fixed_ticks",
+    "capture_artifacts",
+    "comparison",
 )
+
+REQUIRED_TELEMETRY_METADATA = (
+    "queried_capabilities",
+    "clock_information",
+    "power_information",
+    "thermal_information",
+    "cache_state",
+)
+
+_UNAVAILABLE_VALUE_MARKERS = {
+    "",
+    "unavailable",
+    "unknown",
+    "missing",
+    "not_available",
+    "not-applicable",
+    "pending",
+}
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _sha256_file(path: Path) -> str:
@@ -190,17 +215,146 @@ def _artifact_identity(artifact_directory: Path) -> tuple[Path, bytes, str, str]
     )
 
 
+def _value_is_unavailable(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        if not value:
+            return True
+        for marker_name in ("status", "state", "availability"):
+            marker = value.get(marker_name)
+            if isinstance(marker, str) and marker.strip().lower() in (
+                _UNAVAILABLE_VALUE_MARKERS
+            ):
+                return True
+        if value.get("available") is False:
+            return True
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in _UNAVAILABLE_VALUE_MARKERS
+    return value is None
+
+
+def _valid_fixed_ticks(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)) or not value:
+        return False
+    ticks: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            return False
+        if item < 0 or item > (1 << 64) - 1:
+            return False
+        ticks.append(item)
+    return len(ticks) == len(set(ticks))
+
+
+def _valid_capture_artifacts(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)) or not value:
+        return False
+    for item in value:
+        if not isinstance(item, Mapping):
+            return False
+        kind = item.get("kind")
+        path = item.get("path")
+        digest = item.get("sha256")
+        size = item.get("bytes")
+        if not isinstance(kind, str) or not kind.strip():
+            return False
+        if not isinstance(path, str) or not path.strip():
+            return False
+        if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
+            return False
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            return False
+    return True
+
+
+def _comparison_passed(value: Any) -> bool:
+    if not isinstance(value, Mapping) or value.get("validated") is not True:
+        return False
+    if str(value.get("status", "")).strip().lower() not in {
+        "passed",
+        "within_tolerance",
+    }:
+        return False
+    numeric = value.get("numeric")
+    image = value.get("image")
+    tolerance = value.get("tolerance_check")
+    if not all(isinstance(item, Mapping) for item in (numeric, image, tolerance)):
+        return False
+    for section, count_name in ((numeric, "samples"), (image, "pixels")):
+        if str(section.get("status", "")).strip().lower() not in {
+            "passed",
+            "within_tolerance",
+        }:
+            return False
+        count = section.get(count_name)
+        maximum = section.get("maximum_error")
+        declared = section.get("tolerance")
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            return False
+        if (
+            isinstance(maximum, bool)
+            or not isinstance(maximum, (int, float))
+            or isinstance(declared, bool)
+            or not isinstance(declared, (int, float))
+            or maximum < 0.0
+            or declared < 0.0
+            or maximum > declared
+        ):
+            return False
+    if str(tolerance.get("status", "")).strip().lower() not in {
+        "passed",
+        "within_tolerance",
+    }:
+        return False
+    observed = tolerance.get("observed_maximum_error")
+    declared = tolerance.get("declared_tolerance")
+    if (
+        isinstance(observed, bool)
+        or not isinstance(observed, (int, float))
+        or isinstance(declared, bool)
+        or not isinstance(declared, (int, float))
+        or observed < 0.0
+        or declared < 0.0
+        or observed > declared
+    ):
+        return False
+    return True
+
+
 def _missing_metadata(capture: Mapping[str, Any]) -> list[str]:
     missing: list[str] = []
+    unavailable = {
+        str(item)
+        for item in (capture.get("unavailable_telemetry") or [])
+        if isinstance(item, str)
+    }
     for name in REQUIRED_CAPTURE_METADATA:
         value = capture.get(name)
         if (
-            value is None
-            or value == ""
-            or value == {}
+            name in unavailable
+            or _value_is_unavailable(value)
             or (value == [] and name != "unavailable_telemetry")
         ):
             missing.append(name)
+            continue
+        if name in REQUIRED_TELEMETRY_METADATA and name != "cache_state":
+            if not isinstance(value, Mapping) or not value:
+                missing.append(name)
+        elif name == "cache_state":
+            if _value_is_unavailable(value):
+                missing.append(name)
+    if "fixed_ticks" not in missing and not _valid_fixed_ticks(
+        capture.get("fixed_ticks")
+    ):
+        missing.append("fixed_ticks")
+    if "capture_artifacts" not in missing and not _valid_capture_artifacts(
+        capture.get("capture_artifacts")
+    ):
+        missing.append("capture_artifacts")
+    if "comparison" not in missing and not _comparison_passed(
+        capture.get("comparison")
+    ):
+        missing.append("comparison")
     return missing
 
 
@@ -219,9 +373,8 @@ def validate_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
     )
     # A malformed role/target is not merely missing coverage: it cannot be
     # accepted as fixed-tick correctness evidence.
-    if status == "passed" and (
-        (evidence_role is not None and not role_matches)
-        or (coverage_target is not None and not coverage_matches)
+    if (evidence_role is not None and not role_matches) or (
+        coverage_target is not None and not coverage_matches
     ):
         status = "failed"
     profile_matches = (
@@ -230,10 +383,16 @@ def validate_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
     )
     if status == "passed" and not profile_matches:
         status = "failed"
+    capture_protocol = capture.get("capture_protocol")
+    if status == "passed" and capture_protocol != "nw06-fixed-tick-capture.v1":
+        status = "pending_unverified"
     return {
         "status": status,
         "missing_metadata": missing,
         "profile_matches": profile_matches,
+        "capture_protocol_matches": (
+            capture_protocol == "nw06-fixed-tick-capture.v1"
+        ),
         "evidence_role": evidence_role,
         "coverage_target": coverage_target,
         "fixed_tick_role_matches": role_matches,
@@ -399,11 +558,39 @@ def validate_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
     for capture in raw_captures:
         captures.append(validate_capture(capture))
     qualification_statuses: dict[str, str] = {}
-    for tier in FIXED_TICK_COVERAGE_TARGETS:
-        qualification = record.get("qualifications", {}).get(tier, {})
-        qualification_statuses[tier] = str(
-            qualification.get("status", "pending_unverified")
+    for tier, target in FIXED_TICK_COVERAGE_TARGETS.items():
+        qualification_map = record.get("qualifications", {})
+        declared_qualification = (
+            qualification_map.get(tier, {})
+            if isinstance(qualification_map, Mapping)
+            else {}
         )
+        declared_status = (
+            str(declared_qualification.get("status"))
+            if isinstance(declared_qualification, Mapping)
+            and "status" in declared_qualification
+            else None
+        )
+        matching = [
+            item
+            for item in captures
+            if item["metadata"].get("coverage_target") == target
+        ]
+        # A qualification record can retain an executed failure, but a bare
+        # caller-supplied "verified" label never establishes correctness.  The
+        # status is derived from validated captures and comparison evidence.
+        if any(item["status"] == "failed" for item in matching):
+            qualification_statuses[tier] = "failed"
+        elif declared_status == "failed":
+            qualification_statuses[tier] = "failed"
+        elif declared_status in {"pending_unverified", "execution_recorded"}:
+            # A conservative explicit pending status is never upgraded by
+            # metadata alone.
+            qualification_statuses[tier] = "pending_unverified"
+        elif any(item["status"] == "passed" for item in matching):
+            qualification_statuses[tier] = "verified"
+        else:
+            qualification_statuses[tier] = "pending_unverified"
     if not captures:
         return {
             "status": (

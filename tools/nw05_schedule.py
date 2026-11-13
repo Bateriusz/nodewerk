@@ -528,12 +528,22 @@ def _initial_upload_bytes(resource: LogicalResource) -> int:
     return _logical_allocation_upper_bound(resource)
 
 
-def _looks_transient(resource: nwp.ResourceDescriptor, accesses: Sequence[ResourceAccess]) -> tuple[bool, str]:
+def _looks_transient(
+    resource: nwp.ResourceDescriptor,
+    accesses: Sequence[ResourceAccess],
+    initialization_roots: set[int] | None = None,
+) -> tuple[bool, str]:
     if resource.usage in {"cbv", "readback", "sampler"}:
         return False, f"{resource.usage} resources are retained across frames"
     if resource.kind not in {"buffer", "texture2d", "texture3d"}:
         return False, "unsupported resource kind for alias eligibility"
-    if any(access.opcode == "frame.set_root_constants" for access in accesses):
+    if initialization_roots and resource.resource_id in initialization_roots:
+        return False, "initialization-produced contents are retained across frames"
+    if any(
+        access.opcode
+        in {"frame.set_root_constants", "frame.set_graphics_root_constants"}
+        for access in accesses
+    ):
         return False, "root-constant resource is retained across frames"
     if any(
         access.phase == "initialization"
@@ -573,18 +583,51 @@ def build_logical_schedule(
     }
     initialization_order: list[str] = []
     frame_order: list[str] = []
+    # Resources whose contents are produced during initialization remain live
+    # for later frames even when their only frame accesses are reads or
+    # read/write barriers.  Tracking the initialization binding state is what
+    # keeps GPU-generated vertex/index/argument/instance tables out of the
+    # transient alias pool.
+    initialization_roots: set[int] = set()
+    init_bound: dict[int, int] = {}
 
     for index, instruction in enumerate(package.initialization):
         initialization_order.append(instruction.opcode)
+        opcode = instruction.opcode
+        if opcode in {"init.set_root_signature", "init.set_graphics_root_signature"}:
+            # A root-signature switch invalidates prior descriptor bindings.
+            init_bound.clear()
+        elif opcode in {
+            "init.set_descriptor_table",
+            "init.set_graphics_descriptor_table",
+            "init.set_root_constants",
+            "init.set_graphics_root_constants",
+        }:
+            for resource_id in _resource_refs(instruction):
+                if resource_id in resources_by_id:
+                    init_bound[resource_id] = resource_id
+        elif opcode == "init.dispatch":
+            initialization_roots.update(init_bound)
+        elif opcode in {
+            "init.upload_resource",
+            "init.copy_buffer",
+            "init.upload_buffer",
+            "init.upload_texture",
+        }:
+            initialization_roots.update(
+                resource_id
+                for resource_id in _resource_refs(instruction)
+                if resource_id in resources_by_id
+            )
         for resource_id in _resource_refs(instruction):
             if resource_id not in resources_by_id:
                 continue
-            access = "write" if instruction.opcode.startswith("init.") else "read"
+            access = "write" if opcode.startswith("init.") else "read"
             access_by_id[resource_id].append(
                 ResourceAccess(
                     phase="initialization",
                     index=index,
-                    opcode=instruction.opcode,
+                    opcode=opcode,
                     access=access,
                     state=_usage_state(resources_by_id[resource_id].usage),
                 )
@@ -852,7 +895,9 @@ def build_logical_schedule(
         frame_accesses = [item for item in accesses if item.phase == "frame"]
         first_frame = min((item.index for item in frame_accesses), default=0)
         last_frame = max((item.index for item in frame_accesses), default=0)
-        transient, reason = _looks_transient(resource, accesses)
+        transient, reason = _looks_transient(
+            resource, accesses, initialization_roots
+        )
         persistent = not transient
         lifetime = ResourceLifetime(
             first_instruction=first_frame,

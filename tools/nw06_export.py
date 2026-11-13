@@ -279,6 +279,7 @@ def _root_signature(
     bindings: Sequence[tuple[str, str, int, int, int]],
     *,
     constant_dwords: Mapping[str, int] | None = None,
+    flags: int = 0,
 ) -> nwp.RootSignatureRecord:
     constant_dwords = dict(constant_dwords or {})
     records = tuple(
@@ -297,7 +298,10 @@ def _root_signature(
         convention=f"{family}.v1",
         dword_cost=dword_cost,
         blob=nwp.make_root_signature_blob(
-            family, records, constant_dwords=constant_dwords
+            family,
+            records,
+            constant_dwords=constant_dwords,
+            flags=flags,
         ),
         bindings=records,
     )
@@ -413,8 +417,6 @@ def _parse_camera_keys(node: nw03.GraphNode) -> tuple[tuple[int, float], ...]:
     keys.sort()
     if any(right[0] <= left[0] for left, right in zip(keys, keys[1:])):
         raise nw03.CompilerError("camera curve keys must have strictly increasing ticks")
-    while len(keys) < 4:
-        keys.append(keys[-1])
     return tuple(keys)
 
 
@@ -471,11 +473,17 @@ def _camera_curve_encoding(node: nw03.GraphNode) -> CameraCurveEncoding:
         raise nw03.CompilerError(
             f"camera curve encoding failed: {exc}"
         ) from exc
-    keys = list(zip((key.tick for key in curve.keys), quantized.record.quantized))
-    while len(keys) < 4:
-        keys.append(keys[-1])
+    keys = list(
+        zip((key.tick for key in curve.keys), quantized.record.quantized)
+    )
+    # The authoring curve keeps its exact keys (duplicate ticks are invalid).
+    # Only the fixed GPU parameter block is padded, and padding happens after
+    # validation/quantization so one- through three-key curves remain legal.
+    gpu_keys = list(keys)
+    while len(gpu_keys) < 4:
+        gpu_keys.append(gpu_keys[-1])
     return CameraCurveEncoding(
-        keys=tuple(keys),
+        keys=tuple(gpu_keys),
         interpolation=interpolation,
         interpolation_index=1 if interpolation == "step" else 0,
         value_min=value_min,
@@ -515,54 +523,161 @@ def build_package(
             raise nw03.CompilerError(
                 "NW-06 fixes the timeline at 48,000 ticks per second"
             )
-    def find_node(preferred: str, operators: set[str]):
-        node = nodes.get(preferred)
-        if node is not None and node.operator_id in operators:
-            return node
-        return next(
-            (
-                nodes[node_id]
-                for node_id in sorted(nodes)
-                if nodes[node_id].operator_id in operators
-            ),
-            None,
+    try:
+        frame_step_numerator = int(
+            document.settings.get("nw06_frame_step_numerator", "1")
         )
+        frame_step_denominator = int(
+            document.settings.get("nw06_frame_step_denominator", "1")
+        )
+    except ValueError as exc:
+        raise nw03.CompilerError(
+            "NW-06 rational frame step settings must be integers"
+        ) from exc
+    if frame_step_numerator <= 0 or frame_step_denominator <= 0:
+        raise nw03.CompilerError(
+            "NW-06 rational frame step must be positive"
+        )
+    def unique_node(label: str, operators: set[str]) -> nw03.GraphNode:
+        matches = [
+            nodes[node_id]
+            for node_id in sorted(nodes)
+            if canonical_operator(nodes[node_id].operator_id) in operators
+        ]
+        if not matches:
+            raise nw03.CompilerError(
+                f"NW-06 proof graph is missing required node '{label}'"
+            )
+        if len(matches) > 1:
+            raise nw03.CompilerError(
+                f"NW-06 proof graph has multiple '{label}' nodes; the fixed "
+                "proof lowering requires one unambiguous operator"
+            )
+        return matches[0]
 
-    texture_node = find_node(
+    def input_source(
+        node: nw03.GraphNode, port: str, *, required: bool = True
+    ) -> nw03.GraphNode | None:
+        edge = node.inputs.get(port)
+        if edge is None:
+            if required:
+                raise nw03.CompilerError(
+                    f"node '{node.node_id}' is missing required input "
+                    f"'{port}'"
+                )
+            return None
+        source = nodes.get(edge[0])
+        if source is None:
+            raise nw03.CompilerError(
+                f"node '{node.node_id}' input '{port}' references unknown "
+                f"node '{edge[0]}'"
+            )
+        return source
+
+    texture_node = unique_node(
         "texture", {"nw.texture.noise2d", "nw.texture.procedural"}
     )
-    torus_node = find_node("torus", {"nw.mesh.torus", "nw.mesh.recipe"})
-    instances_node = find_node(
+    torus_node = unique_node(
+        "torus", {"nw.mesh.torus", "nw.mesh.recipe"}
+    )
+    instances_node = unique_node(
         "instances", {"nw.scene.instances", "nw.scene.flat"}
     )
-    material_node = find_node(
+    material_node = unique_node(
         "material", {"nw.material.standard", "nw.material.describe"}
     )
-    camera_node = find_node(
+    camera_node = unique_node(
         "camera", {"nw.camera.curve", "nw.camera.perspective"}
     )
-    twist_node = find_node("twist", {"nw.animation.twist"})
-    bloom_node = find_node("bloom", {"nw.post.bloom"})
-    tonemap_node = find_node("tonemap", {"nw.post.tonemap"})
-    for required, value in (
-        ("texture", texture_node),
-        ("torus", torus_node),
-        ("instances", instances_node),
+    twist_node = unique_node("twist", {"nw.animation.twist"})
+    light_node = unique_node("sun", {"nw.light.directional"})
+    render_node = unique_node("render", {"nw.render.instanced"})
+    present_node = unique_node("present", {"nw.render.present"})
+    texture_gpu_node = unique_node(
+        "generate_texture", {"nw.residency.generate_texture"}
+    )
+    mesh_gpu_node = unique_node(
+        "generate_mesh", {"nw.residency.generate_mesh"}
+    )
+    scene_gpu_node = unique_node(
+        "generate_instances", {"nw.residency.generate_instances"}
+    )
+
+    # Static generators consume exactly the graph's procedural recipe nodes.
+    for generator, port, recipe in (
+        (texture_gpu_node, "texture", texture_node),
+        (mesh_gpu_node, "mesh", torus_node),
+        (scene_gpu_node, "scene", instances_node),
+    ):
+        if input_source(generator, port).node_id != recipe.node_id:
+            raise nw03.CompilerError(
+                f"generator '{generator.node_id}' input '{port}' must come "
+                f"from '{recipe.node_id}'"
+            )
+    if input_source(material_node, "albedo").node_id != texture_gpu_node.node_id:
+        raise nw03.CompilerError(
+            "material albedo must consume the GPU-generated noise texture"
+        )
+
+    # The raster pass binds the generated texture/mesh/scene and the flat
+    # material/camera/light/animation resources through graph edges.
+    for port, expected in (
+        ("mesh", mesh_gpu_node),
+        ("texture", texture_gpu_node),
+        ("scene", scene_gpu_node),
         ("material", material_node),
         ("camera", camera_node),
-        ("twist", twist_node),
-        ("bloom", bloom_node),
-        ("tonemap", tonemap_node),
+        ("light", light_node),
+        ("animation", twist_node),
     ):
-        if value is None:
-            raise nw03.CompilerError(f"NW-06 proof graph is missing required node '{required}'")
-    if not any(
-        node.operator_id in {"nw.render.instanced"}
-        for node in nodes.values()
-    ):
+        if input_source(render_node, port).node_id != expected.node_id:
+            raise nw03.CompilerError(
+                f"raster pass input '{port}' must come from "
+                f"'{expected.node_id}'"
+            )
+
+    # Traverse backwards from the presented image.  Execution order and
+    # resource binding are derived from these edges rather than from preferred
+    # node names.  The fixed player can present the tonemap buffer only, so a
+    # post chain that would require different semantics fails explicitly.
+    post_operators = {"nw.post.bloom", "nw.post.tonemap"}
+    post_stages: list[nw03.GraphNode] = []
+    cursor = input_source(present_node, "image")
+    seen_post: set[str] = set()
+    while canonical_operator(cursor.operator_id) in post_operators:
+        if cursor.node_id in seen_post:
+            raise nw03.CompilerError(
+                "NW-06 post-processing chain contains a cycle"
+            )
+        seen_post.add(cursor.node_id)
+        post_stages.append(cursor)
+        cursor = input_source(cursor, "image")
+    post_stages.reverse()
+    if cursor.node_id != render_node.node_id:
         raise nw03.CompilerError(
-            "NW-06 proof graph is missing required node 'nw.render.instanced'"
+            "NW-06 presented image must trace through post operators to "
+            "'nw.render.instanced'"
         )
+    all_post_nodes = [
+        node
+        for node in nodes.values()
+        if canonical_operator(node.operator_id) in post_operators
+    ]
+    if len(all_post_nodes) != 2 or {
+        node.node_id for node in all_post_nodes
+    } != {node.node_id for node in post_stages}:
+        raise nw03.CompilerError(
+            "NW-06 proof graph must connect exactly one bloom and one tonemap "
+            "operator in the presented chain"
+        )
+    post_order = [canonical_operator(node.operator_id) for node in post_stages]
+    if post_order != ["nw.post.bloom", "nw.post.tonemap"]:
+        raise nw03.CompilerError(
+            "unsupported NW-06 post-processing order: the fixed half-resolution "
+            "bloom must precede the tonemap that writes the presentable buffer "
+            "(observed " + " -> ".join(post_order) + ")"
+        )
+    bloom_node, tonemap_node = post_stages
 
     noise = procedural.Noise2DParameters(
         width=_node_int(texture_node, "width", 256, 1, 8192),
@@ -602,9 +717,6 @@ def build_package(
         texture_index=_node_int(material_node, "texture_index", 0, 0, 0xFFFFFFFF),
     )
     material.validate()
-    light_node = find_node("sun", {"nw.light.directional"})
-    if light_node is None:
-        raise nw03.CompilerError("NW-06 proof graph is missing required node 'sun'")
     light_direction = _node_vector(light_node, "direction", (0.0, -1.0, 0.0))
     light_color = _node_vector(light_node, "color", (1.0, 1.0, 1.0))
     if len(light_direction) != 3 or len(light_color) != 3:
@@ -734,6 +846,9 @@ def build_package(
                 ("light", "srv", 4, 0, 5),
             ),
             constant_dwords={"params": 8},
+            # The graphics PSO declares a vertex input layout and binds vertex
+            # and index buffers through the input assembler.
+            flags=1,
         ),
         _root_signature(
             7,
@@ -845,8 +960,8 @@ def build_package(
     for name, value in (
         ("nw06.timeline.ticks_per_second", 48_000),
         ("nw06.timeline.duration_ticks", camera_encoding.keys[-1][0]),
-        ("nw06.timeline.frame_step_numerator", 1),
-        ("nw06.timeline.frame_step_denominator", 1),
+        ("nw06.timeline.frame_step_numerator", frame_step_numerator),
+        ("nw06.timeline.frame_step_denominator", frame_step_denominator),
         ("nw06.timeline.stateless_scene", 1),
     ):
         parameters.append(
@@ -1120,6 +1235,18 @@ def compile_profile_package(
         }
         for row in rows
     ]
+    def package_uint_parameter(name: str, default: int) -> int:
+        for parameter in package.parameters:
+            if parameter.name == name and len(parameter.value) == 4:
+                return struct.unpack("<I", parameter.value)[0]
+        return default
+
+    frame_step_numerator = package_uint_parameter(
+        "nw06.timeline.frame_step_numerator", 1
+    )
+    frame_step_denominator = package_uint_parameter(
+        "nw06.timeline.frame_step_denominator", 1
+    )
     camera_node = next(
         (
             document.nodes[node_id]
@@ -1189,6 +1316,8 @@ def compile_profile_package(
                 ),
                 0,
             ),
+            "frame_step_numerator": frame_step_numerator,
+            "frame_step_denominator": frame_step_denominator,
             "rational_frame_steps": True,
             "absolute_tick_curve_sampling": True,
             "stateless_scene": True,

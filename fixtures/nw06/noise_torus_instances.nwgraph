@@ -17,6 +17,8 @@ setting nw06_ticks_per_second 48000
 setting nw06_output_width 256
 setting nw06_output_height 256
 setting nw06_frames_in_flight 2
+setting nw06_frame_step_numerator 800
+setting nw06_frame_step_denominator 1
 
 node texture nw.texture.noise2d@1.0.0 frequency=initialization
   param width 256

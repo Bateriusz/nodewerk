@@ -41,7 +41,10 @@
     "thermal_information",
     "cache_state",
     "capture_protocol",
-    "unavailable_telemetry"
+    "unavailable_telemetry",
+    "fixed_ticks",
+    "capture_artifacts",
+    "comparison"
   ],
   "toolchain_manifest_sha256": "unavailable",
   "policy": "NW-06 fixed-tick evidence requires the identical common artifact on representative desktop Ada and Blackwell hardware. Missing coverage stays pending/unverified; executed failures stay failed. Adapter/model/generation/tier metadata never selects a target or changes tolerances, exclusions, or quality/resolution requirements."

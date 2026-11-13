@@ -48,6 +48,21 @@ def test_rational_frame_steps_do_not_accumulate_float_error() -> None:
         timeline.RationalFrameStep(1, 0)
 
 
+def test_rational_cadence_preserves_fractional_ticks_across_advances() -> None:
+    step = timeline.RationalFrameStep(3, 2)
+    cadence = timeline.RationalFrameCadence(step)
+    assert cadence.advance() == 1
+    assert cadence.advance() == 3
+    assert cadence.tick == step.tick_for_frame(2)
+    # The explicit frame index keeps a stateless caller exact as well.
+    assert step.advance(0, 1, frame_index=0) == 1
+    assert step.advance(1, 1, frame_index=1) == 3
+    assert step.advance(0, 2, frame_index=0) == 3
+    sequential = timeline.RationalFrameStep(3, 2)
+    assert sequential.advance(0, 1) == 1
+    assert sequential.advance(1, 1) == 3
+
+
 def test_curve_sampling_quantization_bound_and_full_precision_escape() -> None:
     curve = timeline.Curve(
         (
@@ -74,6 +89,24 @@ def test_curve_sampling_quantization_bound_and_full_precision_escape() -> None:
             value_min=1.0,
             value_max=0.0,
         )
+
+
+def test_quantized_curve_samples_the_encoded_keys_not_the_original() -> None:
+    curve = timeline.Curve(
+        (timeline.CurveKey(0, 0.0), timeline.CurveKey(48_000, 1.0)),
+        value_min=0.0,
+        value_max=1.0,
+    )
+    quantized = timeline.quantize_curve(curve, bits=1, tolerance=0.0)
+    assert quantized.record.maximum_absolute_error == 0.0
+    assert quantized.sample(24_000) == pytest.approx(0.5)
+
+    constant = timeline.Curve((timeline.CurveKey(0, 0.25),))
+    constant_quantized = timeline.quantize_curve(
+        constant, bits=4, tolerance=0.0
+    )
+    assert constant_quantized.sample(0) == pytest.approx(0.25)
+    assert constant_quantized.sample(48_000) == pytest.approx(0.25)
 
 
 def test_event_interval_is_previous_exclusive_current_inclusive() -> None:

@@ -2193,7 +2193,8 @@ bool ParseRootSignatureBlob(
     const std::vector<std::uint8_t>& blob,
     std::vector<SerializedRootParameter>& parameters,
     std::vector<SerializedDescriptorRange>& ranges,
-    std::vector<Diagnostic>& diagnostics) {
+    std::vector<Diagnostic>& diagnostics,
+    std::uint32_t* flags_out = nullptr) {
     auto malformed = [&](std::string message) {
         AddDiagnostic(diagnostics, "package_root_signature_malformed",
                       std::move(message),
@@ -2257,11 +2258,12 @@ bool ParseRootSignatureBlob(
             !reader.U32(static_sampler_offset) || !reader.U32(flags)) {
             return false;
         }
-        if ((version != 1u && version != 2u) || flags != 0u ||
+        if ((version != 1u && version != 2u) || (flags & ~1u) != 0u ||
             static_sampler_count != 0u) {
             return malformed(
                 "serialized root signature version/flags are unsupported");
         }
+        if (flags_out != nullptr) *flags_out = flags;
         (void)static_sampler_offset;
         if (parameter_count > kMaxRecordCount) {
             return malformed(
@@ -2399,8 +2401,17 @@ bool ValidateRootSignatures(
         } else {
             std::vector<SerializedRootParameter> parameters;
             std::vector<SerializedDescriptorRange> ranges;
+            std::uint32_t serialized_flags = 0u;
             if (ParseRootSignatureBlob(record.blob, parameters, ranges,
-                                       diagnostics)) {
+                                       diagnostics,
+                                       &serialized_flags)) {
+                const std::uint32_t expected_flags =
+                    record.family.rfind("graphics.", 0u) == 0u ? 1u : 0u;
+                if (serialized_flags != expected_flags) {
+                    error("package_root_signature_flags",
+                          "serialized root signature flags do not match the "
+                          "pass-family input-assembler contract");
+                }
                 bool same_bindings =
                     parameters.size() == record.bindings.size();
                 std::set<std::uint32_t> used_parameters;
@@ -2847,8 +2858,12 @@ std::string ComputeProfileFingerprint(const CapabilityRecord& capability) {
 }
 
 std::vector<std::uint8_t> MakeRootSignatureBlob(
-    std::string_view family, const std::vector<RootBinding>& bindings) {
+    std::string_view family, const std::vector<RootBinding>& bindings,
+    std::uint32_t flags) {
     (void)family;
+    // Only D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT is
+    // part of the v1 serialized-signature contract.
+    if ((flags & ~1u) != 0u) return {};
     std::vector<RootBinding> ordered = bindings;
     std::stable_sort(ordered.begin(), ordered.end(),
                      [](const RootBinding& a, const RootBinding& b) {
@@ -2899,7 +2914,7 @@ std::vector<std::uint8_t> MakeRootSignatureBlob(
     payload.U32(header_size);
     payload.U32(0u); // static sampler count
     payload.U32(data_start + static_cast<std::uint32_t>(data.bytes.size()));
-    payload.U32(0u); // flags
+    payload.U32(flags & 1u); // D3D12_ROOT_SIGNATURE_FLAGS
     for (const auto& parameter : parameters) {
         payload.U32(parameter.type);
         payload.U32(parameter.visibility);

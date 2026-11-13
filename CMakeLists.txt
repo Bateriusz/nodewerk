@@ -18,6 +18,12 @@ option(NW05_COMPILE_FP16_SHADER_OPS_QUERY "Compile D3D12_OPTIONS4 fp16 query sup
 option(NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD "Compile procedural texture upload implementation" ON)
 option(NW05_COMPILE_PROCEDURAL_TEXTURE_R8 "Compile R8G8B8A8 procedural texture materialization" ON)
 option(NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F "Compile RGBA32F procedural texture materialization" ON)
+option(NW06_COMPILE_GPU_INITIALIZATION "Compile GPU initialization dispatches" ON)
+option(NW06_COMPILE_INDEXED_INSTANCED_INDIRECT "Compile indexed instanced indirect raster path" ON)
+option(NW06_COMPILE_ANALYTIC_LIGHTING_TWIST "Compile analytic lighting/twist path" ON)
+option(NW06_COMPILE_ABSOLUTE_TICK_CAMERA "Compile absolute-tick camera path" ON)
+option(NW06_COMPILE_HALF_RESOLUTION_BLOOM "Compile half-resolution bloom path" ON)
+option(NW06_COMPILE_TONEMAP "Compile tonemap path" ON)
 
 if(WIN32)
 nw_add_offline_compute_shader(
@@ -118,6 +124,12 @@ if(NOT WIN32)
         NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=0
         NW05_COMPILE_PROCEDURAL_TEXTURE_R8=0
         NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=0
+        NW06_COMPILE_GPU_INITIALIZATION=0
+        NW06_COMPILE_INDEXED_INSTANCED_INDIRECT=0
+        NW06_COMPILE_ANALYTIC_LIGHTING_TWIST=0
+        NW06_COMPILE_ABSOLUTE_TICK_CAMERA=0
+        NW06_COMPILE_HALF_RESOLUTION_BLOOM=0
+        NW06_COMPILE_TONEMAP=0
     )
 endif()
 target_include_directories(nw_player_bootstrap PUBLIC
@@ -215,6 +227,21 @@ else()
     target_compile_options(nw_package_player PRIVATE -w)
 endif()
 
+# Host-only NW-06 contract check: decodes an exported common package and runs
+# the exact native capability derivation/validation used by PackagePlayer
+# initialization.  It has no D3D12 dependency and is built on every platform.
+add_executable(nw06_capability_check
+    fixtures/nw06_capability/main.cpp
+    src/player/capability_requirements.cpp
+)
+target_link_libraries(nw06_capability_check PRIVATE nw_package_player)
+target_include_directories(nw06_capability_check PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+)
+target_compile_features(nw06_capability_check PRIVATE cxx_std_20)
+
 # NW-04: package-driven compute + fullscreen-display player fixture.  The
 # fixture consumes the established NW-03 `.nwp` v1 container and never links
 # compiler/editor/reflection tooling.
@@ -276,6 +303,12 @@ if(NW05_GENERATED_PLAYER_SOURCE)
         NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD}>
         NW05_COMPILE_PROCEDURAL_TEXTURE_R8=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_R8}>
         NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F}>
+        NW06_COMPILE_GPU_INITIALIZATION=$<BOOL:${NW06_COMPILE_GPU_INITIALIZATION}>
+        NW06_COMPILE_INDEXED_INSTANCED_INDIRECT=$<BOOL:${NW06_COMPILE_INDEXED_INSTANCED_INDIRECT}>
+        NW06_COMPILE_ANALYTIC_LIGHTING_TWIST=$<BOOL:${NW06_COMPILE_ANALYTIC_LIGHTING_TWIST}>
+        NW06_COMPILE_ABSOLUTE_TICK_CAMERA=$<BOOL:${NW06_COMPILE_ABSOLUTE_TICK_CAMERA}>
+        NW06_COMPILE_HALF_RESOLUTION_BLOOM=$<BOOL:${NW06_COMPILE_HALF_RESOLUTION_BLOOM}>
+        NW06_COMPILE_TONEMAP=$<BOOL:${NW06_COMPILE_TONEMAP}>
     )
     add_dependencies(nw05_player_bootstrap nw_offline_shaders)
     add_dependencies(nw05_player_bootstrap nw_offline_display_shader)

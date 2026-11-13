@@ -2878,6 +2878,7 @@ def _validate_parameters(
 def _decode_root_signature_blob(
     blob: bytes | bytearray | memoryview,
     diagnostics: list[dict[str, Any]],
+    flags_out: list[int] | None = None,
 ) -> tuple[tuple[tuple[int, int, int, int, int], ...], tuple[tuple[int, int, int, int, int], ...]] | None:
     """Parse a serialized ``DXBC``/``RTS0`` D3D12 root signature payload.
 
@@ -2941,9 +2942,13 @@ def _decode_root_signature_blob(
             flags,
         ) = struct.unpack_from("<IIIIII", payload, 0)
         del static_sampler_offset
-        if version not in (1, 2) or flags != 0 or static_sampler_count != 0:
+        # Only ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT (bit 0) is accepted.  Other
+        # D3D12 root-signature flags are outside the common profile contract.
+        if version not in (1, 2) or (flags & ~1) != 0 or static_sampler_count != 0:
             malformed("serialized root signature version/flags are unsupported")
             return None
+        if flags_out is not None:
+            flags_out.append(flags)
         if parameter_count > MAX_RECORD_COUNT:
             malformed("serialized root signature count exceeds the v1 limit")
             return None
@@ -3058,9 +3063,22 @@ def _validate_root_signatures(
                 f"{len(record.blob)} bytes, exceeding {MAX_BLOB_BYTES}",
             )
         else:
-            decoded = _decode_root_signature_blob(record.blob, diagnostics)
+            flags_out: list[int] = []
+            decoded = _decode_root_signature_blob(
+                record.blob, diagnostics, flags_out
+            )
             if decoded is not None:
                 parameters, ranges = decoded
+                expected_flags = (
+                    1 if record.family.startswith("graphics.") else 0
+                )
+                if not flags_out or flags_out[0] != expected_flags:
+                    error(
+                        "package_root_signature_flags",
+                        f"root signature {record.root_signature_id} serialized "
+                        f"flags {flags_out[0] if flags_out else 'unavailable'} "
+                        f"do not match the expected flags {expected_flags}",
+                    )
                 same_bindings = len(parameters) == len(record.bindings)
                 used_parameters: set[int] = set()
                 referenced_ranges: set[int] = set()
@@ -4236,6 +4254,8 @@ def make_root_signature_blob(
     family: str,
     bindings: Sequence[RootBinding],
     constant_dwords: Mapping[str, int] | None = None,
+    *,
+    flags: int = 0,
 ) -> bytes:
     """Return a deterministic, reflection-free serialized D3D12 signature.
 
@@ -4246,6 +4266,17 @@ def make_root_signature_blob(
     baseline pass-family contract.
     """
     del family
+    # D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT is the only
+    # flag this v1 serializer emits.  A graphics pipeline with a vertex input
+    # layout requires it; compute signatures remain flag-free.
+    if flags & ~1:
+        raise PackageValidationError(
+            package_diagnostic(
+                "package_root_signature_flags",
+                f"serialized root signature flags 0x{flags:x} are unsupported",
+                section=SECTION_ROOT_SIGNATURES,
+            )
+        )
     constant_dwords = dict(constant_dwords or {})
     ordered = sorted(bindings, key=lambda binding: binding.root_parameter)
     range_type_for_usage = {"srv": 0, "uav": 1, "sampler": 3}
@@ -4293,7 +4324,7 @@ def make_root_signature_blob(
         header_size,
         0,
         data_start + len(data),
-        0,
+        int(flags) & 1,
     )
     payload = bytearray(header)
     for parameter in parameter_rows:

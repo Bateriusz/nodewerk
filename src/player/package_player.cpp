@@ -35,6 +35,24 @@
 #ifndef NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F
 #define NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F 1
 #endif
+#ifndef NW06_COMPILE_GPU_INITIALIZATION
+#define NW06_COMPILE_GPU_INITIALIZATION 1
+#endif
+#ifndef NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+#define NW06_COMPILE_INDEXED_INSTANCED_INDIRECT 1
+#endif
+#ifndef NW06_COMPILE_ANALYTIC_LIGHTING_TWIST
+#define NW06_COMPILE_ANALYTIC_LIGHTING_TWIST 1
+#endif
+#ifndef NW06_COMPILE_ABSOLUTE_TICK_CAMERA
+#define NW06_COMPILE_ABSOLUTE_TICK_CAMERA 1
+#endif
+#ifndef NW06_COMPILE_HALF_RESOLUTION_BLOOM
+#define NW06_COMPILE_HALF_RESOLUTION_BLOOM 1
+#endif
+#ifndef NW06_COMPILE_TONEMAP
+#define NW06_COMPILE_TONEMAP 1
+#endif
 
 #if (defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION) || \
     (defined(NW05_SPECIALIZED_VALIDATION) && NW05_SPECIALIZED_VALIDATION)
@@ -392,7 +410,7 @@ bool ReadRootSignatureParameterType(
         std::memcpy(&static_sampler_count, payload + 12u,
                     sizeof(static_sampler_count));
         std::memcpy(&flags, payload + 20u, sizeof(flags));
-        if ((version != 1u && version != 2u) || flags != 0u ||
+        if ((version != 1u && version != 2u) || (flags & ~1u) != 0u ||
             static_sampler_count != 0u ||
             root_parameter >= parameter_count) {
             return false;
@@ -938,6 +956,24 @@ std::uint32_t PackagePlayer::specialized_implementation_mask() noexcept {
 #endif
 #if NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F
     mask |= 4u;
+#endif
+#if NW06_COMPILE_GPU_INITIALIZATION
+    mask |= 8u;
+#endif
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+    mask |= 16u;
+#endif
+#if NW06_COMPILE_ANALYTIC_LIGHTING_TWIST
+    mask |= 32u;
+#endif
+#if NW06_COMPILE_ABSOLUTE_TICK_CAMERA
+    mask |= 64u;
+#endif
+#if NW06_COMPILE_HALF_RESOLUTION_BLOOM
+    mask |= 128u;
+#endif
+#if NW06_COMPILE_TONEMAP
+    mask |= 256u;
 #endif
     return mask;
 }
@@ -1567,6 +1603,14 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 return false;
             }
         } else if (type == FrameOp::Type::SetGraphicsPipeline) {
+#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+            Fail(ExitCode::PackageValidationFailed, "package_validation",
+                 "graphics_pipeline_not_linked", "pipeline",
+                 "linked indexed instanced raster implementation",
+                 "not compiled", "frame_plan",
+                 "generated link manifest excluded the NW-06 raster path");
+            return false;
+#else
             if (instruction.operands.size() != 1u ||
                 instruction.operands[0].type !=
                     package::OperandType::ShaderRef) {
@@ -1593,7 +1637,16 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "frame.set_graphics_pipeline requires a vertex shader");
                 return false;
             }
+#endif
         } else if (type == FrameOp::Type::SetRenderTargets) {
+#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+            Fail(ExitCode::PackageValidationFailed, "package_validation",
+                 "render_target_not_linked", "render_targets",
+                 "linked indexed instanced raster implementation",
+                 "not compiled", "frame_plan",
+                 "generated link manifest excluded the NW-06 raster path");
+            return false;
+#else
             if (instruction.operands.size() != 2u ||
                 instruction.operands[0].type !=
                     package::OperandType::ResourceRef ||
@@ -1620,7 +1673,16 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "frame.set_render_targets targets are invalid");
                 return false;
             }
+#endif
         } else if (type == FrameOp::Type::ExecuteIndirect) {
+#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+            Fail(ExitCode::PackageValidationFailed, "package_validation",
+                 "indirect_draw_not_linked", "arguments",
+                 "linked indexed instanced raster implementation",
+                 "not compiled", "frame_plan",
+                 "generated link manifest excluded the NW-06 raster path");
+            return false;
+#else
             if (instruction.operands.size() != 2u ||
                 instruction.operands[0].type !=
                     package::OperandType::ResourceRef ||
@@ -1643,6 +1705,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "frame.execute_indirect has no valid argument buffer");
                 return false;
             }
+#endif
         } else if (type == FrameOp::Type::Draw) {
             Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
                  "frame_draw_requires_raster_pipeline", "pipeline",
@@ -3253,6 +3316,14 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
             state->pipelines.push_back(pipeline);
         } else if (instruction.opcode == "init.create_graphics_pipeline") {
+#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+            return Fail(
+                ExitCode::PipelineStateCreationFailed, "pipeline",
+                "graphics_pipeline_not_linked", "pipeline",
+                "linked indexed instanced raster implementation",
+                "not compiled", "init.create_graphics_pipeline",
+                "generated link manifest excluded the NW-06 raster path");
+#else
             if (!require_operands(instruction, 3u)) {
                 return last_exit_;
             }
@@ -3360,6 +3431,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         "CreateCommandSignature(DRAW_INDEXED) failed");
                 }
             }
+#endif
         } else if (instruction.opcode == "init.set_root_signature") {
             if (!require_operands(instruction, 1u)) {
                 return last_exit_;
@@ -3471,6 +3543,15 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             init_tables.emplace_back(instruction.operands[0].u32, handle);
             init_bound_resources.push_back(resource_id);
         } else if (instruction.opcode == "init.dispatch") {
+#if !NW06_COMPILE_GPU_INITIALIZATION
+            return Fail(
+                ExitCode::CommandListRecordingFailed, "command_list",
+                "gpu_initialization_not_linked", "init.dispatch",
+                "linked GPU initialization implementation", "not compiled",
+                "init.dispatch",
+                "generated link manifest excluded the NW-06 GPU "
+                "initialization path");
+#else
             if (!require_operands(instruction, 4u)) {
                 return last_exit_;
             }
@@ -3582,6 +3663,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 state->fence, fence_value, state->fence_event,
                 kFenceTimeoutMs);
             if (wait != ExitCode::Success) return wait;
+#endif
         } else if (instruction.opcode == "init.upload_resource") {
             if (!require_operands(instruction, 1u)) {
                 return last_exit_;
@@ -4234,6 +4316,13 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 break;
             }
             case FrameOp::Type::SetGraphicsPipeline: {
+#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+                return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
+                            "graphics_pipeline_not_linked", "pipeline",
+                            "linked indexed instanced raster implementation",
+                            "not compiled", "renderAtTick",
+                            "generated link manifest excluded the NW-06 raster path");
+#else
                 ID3D12PipelineState* pipeline = nullptr;
                 for (const auto& candidate : state->pipelines) {
                     if (candidate.shader_id == op.shader_id) {
@@ -4277,8 +4366,16 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 }
                 state->graphics_pipeline_shader = op.shader_id;
                 break;
+#endif
             }
             case FrameOp::Type::SetRenderTargets: {
+#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "render_target_not_linked", "render_targets",
+                            "linked indexed instanced raster implementation",
+                            "not compiled", "renderAtTick",
+                            "generated link manifest excluded the NW-06 raster path");
+#else
                 PlatformState::ResourceSlot* color = nullptr;
                 PlatformState::ResourceSlot* depth = nullptr;
                 for (auto& slot : state->resources) {
@@ -4347,8 +4444,16 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 list->RSSetViewports(1u, &viewport);
                 list->RSSetScissorRects(1u, &scissor);
                 break;
+#endif
             }
             case FrameOp::Type::ExecuteIndirect: {
+#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+                return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
+                            "indirect_draw_not_linked", "pipeline",
+                            "linked indexed instanced raster implementation",
+                            "not compiled", "renderAtTick",
+                            "generated link manifest excluded the NW-06 raster path");
+#else
                 if (state->graphics_pipeline_shader == 0u) {
                     return Fail(ExitCode::PipelineStateCreationFailed,
                                 "pipeline", "graphics_pipeline_not_set",
@@ -4398,6 +4503,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     state->indirect_signature, op.max_draw_count,
                     arguments->resource, 0u, nullptr, 0u);
                 break;
+#endif
             }
             case FrameOp::Type::Dispatch: {
                 ID3D12PipelineState* pipeline = nullptr;

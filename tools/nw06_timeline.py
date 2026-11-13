@@ -14,7 +14,7 @@ from __future__ import annotations
 import bisect
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import Any, Callable, Iterable, Protocol, Sequence, runtime_checkable
@@ -186,12 +186,24 @@ class FakeClockProvider:
         return self.ticks
 
 
-@dataclass(frozen=True)
+@dataclass
 class RationalFrameStep:
-    """Exact rational capture cadence expressed in integer ticks per frame."""
+    """Exact rational capture cadence expressed in integer ticks per frame.
+
+    ``tick_for_frame`` is pure.  ``advance`` also carries the absolute frame
+    index reached by the previous sequential call so repeated stepping cannot
+    drop a fractional tick.  An explicit ``frame_index`` makes the operation
+    stateless for callers that seek or evaluate directly.
+    """
 
     numerator: int
     denominator: int = 1
+    _next_frame_index: int = field(
+        default=0, init=False, repr=False, compare=False
+    )
+    _last_advance_tick: int | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if self.denominator == 0:
@@ -217,13 +229,98 @@ class RationalFrameStep:
             raise _error("invalid_frame_index", "frame index must be non-negative")
         return (self.numerator * frame_index) % self.denominator
 
-    def advance(self, current_tick: int, frames: int = 1) -> int:
+    def advance(
+        self,
+        current_tick: int,
+        frames: int = 1,
+        *,
+        frame_index: int | None = None,
+    ) -> int:
+        """Advance a tick position.
+
+        A rational cadence cannot be reconstructed from the floored tick after
+        a partial step.  Callers stepping a capture must therefore pass the
+        absolute destination frame index via ``frame_index`` (or use
+        :class:`RationalFrameCadence`).  Without it this method is an
+        independent single-step helper and intentionally starts from
+        ``current_tick`` rather than carrying hidden mutable state.
+        """
+        return self.advance_to(
+            current_tick, frames, frame_index=frame_index
+        )
+
+    def advance_to(
+        self,
+        current_tick: int,
+        frames: int = 1,
+        *,
+        frame_index: int | None = None,
+    ) -> int:
+        """Advance and preserve the exact rational cadence.
+
+        When ``frame_index`` is supplied, the result is exactly
+        ``tick_for_frame(frame_index + frames)``.  This keeps repeated capture
+        stepping identical to direct rational evaluation for non-integral
+        ticks-per-frame values.
+        """
         if frames < 0:
             raise _error("invalid_frame_index", "frame count must be non-negative")
-        return checked_add_ticks(
-            current_tick,
-            (self.numerator * frames) // self.denominator,
-        )
+        if frame_index is not None:
+            if frame_index < 0:
+                raise _error("invalid_frame_index", "frame index must be non-negative")
+            destination = frame_index + frames
+        elif (
+            self._last_advance_tick is not None
+            and current_tick == self._last_advance_tick
+        ):
+            destination = self._next_frame_index + frames
+        elif current_tick == 0:
+            destination = frames
+        else:
+            # Restart from an arbitrary absolute tick.  The first frame whose
+            # floored tick reaches it is the unique exact reconstruction point
+            # for cadences at or above one tick per frame.
+            destination = (
+                (current_tick * self.denominator + self.numerator - 1)
+                // self.numerator
+            ) + frames
+        result = self.tick_for_frame(destination)
+        self._next_frame_index = destination
+        self._last_advance_tick = result
+        return result
+
+
+@dataclass
+class RationalFrameCadence:
+    """Stateful exact rational capture cadence.
+
+    The state is the absolute frame index, never a floating-point or floored
+    tick delta.  Repeated ``advance()`` calls therefore cannot accumulate
+    cadence error and always agree with ``tick_for_frame``.
+    """
+
+    step: RationalFrameStep
+    frame_index: int = 0
+
+    def __post_init__(self) -> None:
+        if self.frame_index < 0:
+            raise _error("invalid_frame_index", "frame index must be non-negative")
+
+    @property
+    def tick(self) -> int:
+        return self.step.tick_for_frame(self.frame_index)
+
+    def advance(self, frames: int = 1) -> int:
+        if frames < 0:
+            raise _error("invalid_frame_index", "frame count must be non-negative")
+        self.frame_index += frames
+        return self.step.tick_for_frame(self.frame_index)
+
+    def seek(self, frame_index: int) -> int:
+        if frame_index < 0:
+            raise _error("invalid_frame_index", "frame index must be non-negative")
+        self.frame_index = frame_index
+        return self.step.tick_for_frame(frame_index)
 
 
 @dataclass(frozen=True)
@@ -351,12 +448,21 @@ class QuantizedCurve:
     def sample(self, tick: int) -> float:
         if self.record.full_precision or self.record.bits is None:
             return self.curve.sample(tick)
-        value = self.curve.sample(tick)
-        minimum = self.curve.value_min
-        step = self.record.step
-        return min(
-            self.curve.value_max,
-            max(self.curve.value_min, minimum + round((value - minimum) / step) * step),
+        # The GPU stores the quantized key values.  Sampling must interpolate
+        # those encoded values rather than re-quantizing the interpolated
+        # original curve; the two differ for non-constant signed curves (for
+        # example 0 -> 1 with one bit), which is exactly what the recorded
+        # maximum error is meant to describe.
+        quantized_keys = tuple(
+            CurveKey(key.tick, value)
+            for key, value in zip(
+                self.curve.keys, self.record.quantized
+            )
+        )
+        return sample_curve(
+            quantized_keys,
+            tick,
+            interpolation=self.curve.interpolation,
         )
 
     def recover_full_precision(self) -> Curve:
@@ -590,7 +696,9 @@ class EventCursor:
 @dataclass(frozen=True)
 class Timeline:
     duration: int
-    frame_step: RationalFrameStep = RationalFrameStep(1, 1)
+    frame_step: RationalFrameStep = field(
+        default_factory=lambda: RationalFrameStep(1, 1)
+    )
     tick_rate: int = TICKS_PER_SECOND
 
     def __post_init__(self) -> None:
@@ -669,6 +777,7 @@ __all__ = [
     "MonotonicClockProvider",
     "FakeClockProvider",
     "RationalFrameStep",
+    "RationalFrameCadence",
     "CurveKey",
     "Curve",
     "QuantizationRecord",

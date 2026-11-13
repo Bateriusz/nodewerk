@@ -635,6 +635,9 @@ def _specialized_implementation_flags(
     manifest = manifest or {}
     retained = manifest.get("retained", {})
     operators = {str(item) for item in retained.get("code", [])}
+    runtime_implementations = {
+        str(item) for item in retained.get("runtime_implementations", [])
+    }
     texture_formats = {str(item) for item in manifest.get("texture_formats", [])}
     procedural_upload = (
         "nw.texture.procedural" in operators
@@ -649,6 +652,27 @@ def _specialized_implementation_flags(
             procedural_upload
             and "DXGI_FORMAT_R32G32B32A32_FLOAT" in texture_formats
         ),
+        "NW06_COMPILE_GPU_INITIALIZATION": (
+            "player.nw06.gpu-initialization" in runtime_implementations
+        ),
+        "NW06_COMPILE_INDEXED_INSTANCED_INDIRECT": (
+            "player.nw06.indexed-instanced-indirect"
+            in runtime_implementations
+        ),
+        "NW06_COMPILE_ANALYTIC_LIGHTING_TWIST": (
+            "player.nw06.analytic-lighting-twist"
+            in runtime_implementations
+        ),
+        "NW06_COMPILE_ABSOLUTE_TICK_CAMERA": (
+            "player.nw06.absolute-tick-camera" in runtime_implementations
+        ),
+        "NW06_COMPILE_HALF_RESOLUTION_BLOOM": (
+            "player.nw06.half-resolution-bloom"
+            in runtime_implementations
+        ),
+        "NW06_COMPILE_TONEMAP": (
+            "player.nw06.tonemap" in runtime_implementations
+        ),
     }
 
 
@@ -660,6 +684,12 @@ def _specialized_implementation_mask(
         (1 if flags["NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD"] else 0)
         | (2 if flags["NW05_COMPILE_PROCEDURAL_TEXTURE_R8"] else 0)
         | (4 if flags["NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F"] else 0)
+        | (8 if flags["NW06_COMPILE_GPU_INITIALIZATION"] else 0)
+        | (16 if flags["NW06_COMPILE_INDEXED_INSTANCED_INDIRECT"] else 0)
+        | (32 if flags["NW06_COMPILE_ANALYTIC_LIGHTING_TWIST"] else 0)
+        | (64 if flags["NW06_COMPILE_ABSOLUTE_TICK_CAMERA"] else 0)
+        | (128 if flags["NW06_COMPILE_HALF_RESOLUTION_BLOOM"] else 0)
+        | (256 if flags["NW06_COMPILE_TONEMAP"] else 0)
     )
 
 def generate_player_source(
@@ -683,6 +713,82 @@ def generate_player_source(
     link_fp16 = bool(feature_requirements.get("fp16_shader_ops", False))
     link_int64 = bool(feature_requirements.get("int64_shader_ops", False))
     implementation_mask = _specialized_implementation_mask(manifest)
+    retained = manifest.get("retained", {})
+    runtime_implementations = {
+        str(item) for item in retained.get("runtime_implementations", [])
+    }
+    nw06_runtime = (
+        "player.nw06.absolute-tick-camera" in runtime_implementations
+    )
+    timeline = manifest.get("timeline", {})
+    ticks_per_second = int(timeline.get("ticks_per_second", 48_000))
+    frame_step_numerator = int(
+        timeline.get("frame_step_numerator", 1)
+    )
+    frame_step_denominator = int(
+        timeline.get("frame_step_denominator", 1)
+    )
+    if nw06_runtime and (
+        ticks_per_second != 48_000
+        or frame_step_numerator <= 0
+        or frame_step_denominator <= 0
+    ):
+        raise ExportError(
+            "NW-06 generated playback requires the fixed 48,000 Hz rational "
+            "timeline"
+        )
+    if nw06_runtime:
+        clock_includes = (
+            "#include \"player/clock_provider.h\"\n"
+            "#include <chrono>\n"
+            "#include <cstdint>\n"
+        )
+        playback_loop = (
+            "    if (max_frames != 0) {\n"
+            f"        const std::uint64_t frame_step_numerator = {frame_step_numerator}ULL;\n"
+            f"        const std::uint64_t frame_step_denominator = {frame_step_denominator}ULL;\n"
+            "        for (std::uint64_t frame_index = 0; frame_index < max_frames; ++frame_index) {\n"
+            "            if (frame_step_numerator != 0ULL &&\n"
+            "                frame_index > UINT64_MAX / frame_step_numerator) {\n"
+            "                std::fprintf(stderr, \"NW06_TICK_OVERFLOW\\n\");\n"
+            "                return 70;\n"
+            "            }\n"
+            "            const std::uint64_t tick =\n"
+            "                (frame_step_numerator * frame_index) / frame_step_denominator;\n"
+            "            const auto frame = player.renderAtTick(tick);\n"
+            "            if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
+            "            if (player.window_closed()) break;\n"
+            "        }\n"
+            "    } else {\n"
+            "        const auto playback_start = std::chrono::steady_clock::now();\n"
+            "        while (!player.window_closed()) {\n"
+            "            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(\n"
+            "                std::chrono::steady_clock::now() - playback_start);\n"
+            "            if (elapsed.count() < 0) {\n"
+            "                std::fprintf(stderr, \"NW06_CLOCK_BACKWARDS\\n\");\n"
+            "                return 70;\n"
+            "            }\n"
+            "            std::uint64_t tick = 0u;\n"
+            "            if (!nw::player::CheckedTicksFromNanoseconds(\n"
+            "                    static_cast<std::uint64_t>(elapsed.count()),\n"
+            f"                    {ticks_per_second}u, &tick)) {{\n"
+            "                std::fprintf(stderr, \"NW06_CLOCK_OVERFLOW\\n\");\n"
+            "                return 70;\n"
+            "            }\n"
+            "            const auto frame = player.renderAtTick(tick);\n"
+            "            if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
+            "        }\n"
+            "    }\n"
+        )
+    else:
+        clock_includes = ""
+        playback_loop = (
+            "    for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick) {\n"
+            "        const auto frame = player.renderAtTick(tick);\n"
+            "        if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
+            "        if (player.window_closed()) break;\n"
+            "    }\n"
+        )
     manifest_payload = optimizer.manifest_bytes(manifest) if manifest else b""
     manifest_fnv = 1469598103934665603
     for byte in manifest_payload:
@@ -695,6 +801,7 @@ def generate_player_source(
         "#include \"player/package_player.h\"\n"
         "#include \"player/embedded_package.h\"\n"
         "#include \"player/exit_codes.h\"\n"
+        + clock_includes +
         "#include <cstdio>\n"
         "#include <cstdlib>\n"
         "#include <string>\n"
@@ -758,11 +865,7 @@ def generate_player_source(
         "    nw::player::PackagePlayer player(config);\n"
         "    const auto status = player.initialize(embedded.bytes, embedded.size);\n"
         "    if (status != nw::player::ExitCode::Success) return player.Report(true);\n"
-        "    for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick) {\n"
-        "        const auto frame = player.renderAtTick(tick);\n"
-        "        if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
-        "        if (player.window_closed()) break;\n"
-        "    }\n"
+        + playback_loop +
         "    if (emit_image_hash) {\n"
         "        std::vector<std::uint8_t> image;\n"
         "        const auto readback = player.readbackPresentedOutput(&image);\n"

@@ -275,7 +275,8 @@ bool ValidateDxilPayload(const std::vector<std::uint8_t>& blob,
                          std::string& reason);
 
 std::vector<std::uint8_t> MakeRootSignatureBlob(
-    std::string_view family, const std::vector<RootBinding>& bindings);
+    std::string_view family, const std::vector<RootBinding>& bindings,
+    std::uint32_t flags = 0u);
 
 std::string Sha256Hex(const std::uint8_t* data, std::size_t size);
 std::string Sha256Hex(std::string_view text);

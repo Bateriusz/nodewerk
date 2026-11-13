@@ -84,6 +84,14 @@ The frame stream is bounded and conventional:
 7. full-resolution tonemap dispatch;
 8. `frame.present` of the final RGBA32F UAV buffer.
 
+The presented post chain is traced from graph input edges rather than preferred
+node names. The fixed player supports one half-resolution bloom stage followed
+by one tonemap stage; a reordered or duplicate chain fails export explicitly
+instead of silently executing a different sequence. The graphics root
+signature serializes
+`D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT`, matching the
+PSO's nonempty vertex input layout.
+
 ## Explicit field encodings
 
 All records are little-endian and asserted by
@@ -151,6 +159,13 @@ data.
 `ClockProvider` is a standard-library-only protocol reserved for later audio
 synchronization. No audio library is imported or linked.
 
+Generated NW-06 playback converts elapsed monotonic time to 48 kHz integer
+ticks with checked overflow, so display refresh rate cannot change scene speed.
+Offline capture uses an exact rational frame index (`frame_index * numerator /
+denominator`) from the package timeline. The generated link manifest selects
+the NW-06 clock/rational path; unchanged NW-05 exports retain their existing
+frame-counter loop.
+
 ## Resource and failure behavior
 
 Invalid dimensions, indices, curve ranges, negative/invalid quantization
@@ -182,8 +197,11 @@ artifact is captured at fixed ticks on representative desktop Ada and Blackwell
 hardware. Each capture records coverage target, evidence role, identical
 artifact/package/manifest hashes, common profile and requirements digest, exact
 adapter/device, driver/OS/toolchain, queried capabilities, clocks/power/thermal
-information, cache state, capture protocol, and unavailable telemetry. Missing
-required telemetry stays pending; an executed failure stays failed. Hardware
+information, cache state, capture protocol, unavailable telemetry, evaluated
+fixed ticks, capture artifacts, and validated numeric/image comparisons against
+the declared tolerances. A bare `status: passed` or caller-supplied
+qualification label is insufficient: missing required telemetry or comparison
+evidence stays pending, and an executed failure stays failed. Hardware
 classification is metadata only and never changes target selection, tolerances,
 quality/resolution requirements, or feature exclusions.
 
