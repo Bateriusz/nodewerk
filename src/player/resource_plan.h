@@ -1,12 +1,16 @@
 #pragma once
 
-// NW-04: bounded resource realization plan.
+// NW-04/NW-05: bounded resource realization plan.
 //
 // Offline logical lifetimes and permitted alias groups describe *when* a
 // resource is live, not a portable physical memory offset.  NW-04 therefore
 // realizes every resource as an independent non-aliased allocation and queries
 // the current adapter with GetResourceAllocationInfo for its real size and
-// alignment.  Physical alias reuse is deliberately deferred to NW-05.
+// alignment.  NW-05 adds an explicit aliased realization that proves
+// compatibility against those queried sizes/alignments, duplicates transient
+// resources across overlapping frames, and records the required aliasing/UAV
+// barriers.  Physical offsets remain adapter-specific evidence and are never a
+// portable plan.
 
 #include "capability_requirements.h"
 #include "exit_codes.h"
@@ -32,6 +36,7 @@ using ResourceAllocationQueryFn = ResourceAllocationQuery (*)(
 
 enum class ResourcePlacementKind : std::uint8_t {
     NonAliasedCommitted = 0,
+    AliasedTransient = 1,
 };
 
 struct ResourceLogicalLifetime {
@@ -51,11 +56,34 @@ struct ResourcePlacement {
     std::uint64_t allocation_alignment = 0u;
     std::uint64_t heap_offset_bytes = 0u;
     bool aliased = false;
+    std::uint32_t frame_slot_instance = 0u;
     ResourceLogicalLifetime lifetime{};
+};
+
+struct ResourceAliasBarrier {
+    std::uint32_t resource_id = 0u;
+    std::uint32_t before_resource_id = 0u;
+    std::string group;
+    bool uav_barrier = false;
+    std::string reason;
+    // Activation point in the emitted frame instruction stream.  Alias
+    // barriers are emitted in execution order, including the frame-boundary
+    // transition that reactivates the first user of a reused region.
+    std::uint32_t activation_instruction = 0u;
+    bool frame_boundary = false;
+};
+
+struct ResourceAliasGroup {
+    std::string group;
+    std::vector<std::uint32_t> resource_ids;
+    std::uint32_t frame_slot_instances = 1u;
+    bool aliased = false;
 };
 
 struct ResourcePlan {
     std::vector<ResourcePlacement> placements;
+    std::vector<ResourceAliasGroup> alias_groups;
+    std::vector<ResourceAliasBarrier> alias_barriers;
     std::uint64_t total_engine_bytes = 0u;
     std::uint64_t max_alignment = 0u;
 
@@ -76,10 +104,42 @@ ResourcePlanResult BuildNonAliasedResourcePlan(
     ResourceAllocationQueryFn query,
     void* user_data);
 
+// Proves compatible alias groups against queried adapter allocation sizes and
+// alignments.  Transient resources are duplicated once per overlapping frame
+// slot; resources whose lifetimes intersect are never aliased.  The resulting
+// offsets are adapter-specific evidence, not a portable package layout.
+ResourcePlanResult BuildAliasedResourcePlan(
+    const package::Package& package,
+    ResourceAllocationQueryFn query,
+    void* user_data,
+    std::uint32_t frames_in_flight = 2u);
+
 // Deterministic fallback for GPU-less host verification.  It applies D3D12's
 // documented 64 KiB placement alignment and checked byte arithmetic; it never
 // claims to be an adapter query.
 ResourceAllocationQuery SimulateResourceAllocation(
     const package::ResourceDescriptor& resource, void* user_data);
+
+// Platform bridge used by PackagePlayer to realize an already-proven alias
+// plan.  Pointers are opaque here so host builds do not need D3D12 headers.
+// On Windows the returned heap is an ID3D12Heap and resources are created with
+// CreatePlacedResource at the adapter-specific offsets in the plan.  The
+// returned offsets remain runtime evidence, never portable package content.
+void* CreateAliasedResourceHeap(void* device,
+                                std::uint64_t heap_size_bytes,
+                                std::uint32_t heap_type,
+                                std::string* detail);
+bool CreateAliasedPlacedResource(void* heap,
+                                 const ResourcePlacement& placement,
+                                 void** resource,
+                                 std::string* detail);
+void ReleaseAliasedResourceHeap(void* heap);
+// True when the resource either needs no placed allocation (sampler/readback)
+// or can be placed in the default heap with a supported format.
+bool IsPlaceableAliasResource(const package::ResourceDescriptor& resource);
+void EmitAliasingBarrier(void* command_list,
+                         const ResourceAliasBarrier& barrier,
+                         void* before_resource,
+                         void* after_resource);
 
 } // namespace nw::player

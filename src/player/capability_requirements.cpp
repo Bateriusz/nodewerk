@@ -248,15 +248,23 @@ PackageCapabilityEvaluation ValidateEmittedRequirementsAgainstPackage(
     result.package_profile_id = capability.profile_id;
     result.package_requirements_digest = capability.requirements_digest;
 
-    // Profile identity and digest are immutable NW-03 contract values.
-    if (capability.profile_id != package::kCommonProfileId) {
+    // Profile identity and digest are immutable contract values.  The common
+    // profile is the executable baseline; a known optional profile may be a
+    // separately budgeted primary identity for its own artifact.
+    const bool optional_primary =
+        capability.profile_id == package::kOptionalWaveOpsProfileId &&
+        capability.requirements_digest ==
+            package::kOptionalWaveOpsRequirementsDigest;
+    if (capability.profile_id != package::kCommonProfileId && !optional_primary) {
         AddFailure(&result, "package_profile_unknown", "profile_id",
-                   std::string(package::kCommonProfileId),
+                   std::string(package::kCommonProfileId) + " or known optional",
                    capability.profile_id.empty() ? kUnavailable
                                                  : capability.profile_id,
-                   "only the common NW-03 profile is executable", capability);
+                   "unknown capability-profile identity", capability);
     }
-    if (capability.requirements_digest != package::kCommonRequirementsDigest) {
+    if (capability.requirements_digest !=
+            package::kCommonRequirementsDigest &&
+        !optional_primary) {
         AddFailure(&result, "package_profile_digest_mismatch",
                    "requirements_digest",
                    std::string(package::kCommonRequirementsDigest),

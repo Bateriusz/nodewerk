@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw05-link-manifest.schema.json",
+  "title": "Nodewerk NW-05 generated player link manifest",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "profile_id",
+    "requirements_digest",
+    "reachable_content",
+    "feature_queries",
+    "runtime_requirements",
+    "retained",
+    "excluded",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "format": { "const": "nw05-player-link-manifest" },
+    "version": { "const": 1 },
+    "profile_id": { "type": "string", "minLength": 1 },
+    "requirements_digest": {
+      "type": "string",
+      "pattern": "^sha256:v1:[0-9a-f]{64}$"
+    },
+    "ir_sha256": { "type": "string" },
+    "artifact_identity": { "type": "string" },
+    "reachable_content": {
+      "type": "object",
+      "required": ["node_ids", "operators", "outputs", "partitions"],
+      "properties": {
+        "node_ids": { "type": "array", "items": { "type": "string" } },
+        "operators": { "type": "array", "items": { "type": "string" } },
+        "outputs": { "type": "array", "items": { "type": "object" } },
+        "partitions": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "feature_queries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "reason"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "used_features": { "type": "array", "items": { "type": "string" } },
+    "feature_requirements": { "type": "object" },
+    "formats": { "type": "array", "items": { "type": "string" } },
+    "limits": { "type": "object" },
+    "shader_targets": { "type": "array", "items": { "type": "string" } },
+    "shaders": { "type": "array", "items": { "type": "object" } },
+    "runtime_requirements": {
+      "type": "object",
+      "required": [
+        "feature_level",
+        "shader_model",
+        "direct_queue_count",
+        "runtime_dxc_dependency",
+        "runtime_slang_dependency",
+        "agility_sdk_required"
+      ],
+      "properties": {
+        "feature_level": { "const": "12_0" },
+        "shader_model": { "const": "6_0" },
+        "direct_queue_count": { "const": 1 },
+        "runtime_dxc_dependency": { "const": false },
+        "runtime_slang_dependency": { "const": false },
+        "agility_sdk_required": { "const": false }
+      },
+      "additionalProperties": true
+    },
+    "required_init_instructions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "required_frame_instructions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "retained": {
+      "type": "object",
+      "required": ["code", "shaders", "data", "dependencies"],
+      "properties": {
+        "code": { "type": "array", "items": { "type": "string" } },
+        "shaders": { "type": "array", "items": { "type": "object" } },
+        "data": { "type": "array", "items": { "type": "string" } },
+        "dependencies": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "excluded": {
+      "type": "object",
+      "required": ["optional_implementations", "authoring_infrastructure", "gpu_name_predicates"],
+      "properties": {
+        "optional_implementations": { "type": "array", "items": { "type": "string" } },
+        "optional_profiles": { "type": "array", "items": { "type": "string" } },
+        "authoring_infrastructure": { "type": "array", "items": { "type": "string" } },
+        "gpu_name_predicates": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^sha256:v1:[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": true
+}

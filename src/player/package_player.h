@@ -45,7 +45,20 @@ struct PlayerConfig {
     bool simulate_presentation_failure = false;
     bool emit_benchmark_metrics = false;
     bool emit_readback_values = false;
+    // Diagnostic/qualification seam: force the established non-aliased
+    // committed realization even when the package has a proven alias plan.
+    bool force_non_aliased_plan = false;
     bool wait_for_gpu_each_frame = false;
+    // Generated manifests enable only the optional feature queries the linked
+    // artifact actually requires.  The common artifact leaves these false so
+    // unused OPTIONS1/OPTIONS4 queries are not part of its linked closure.
+    bool query_optional_wave_ops = false;
+    bool query_optional_int64_shader_ops = false;
+    bool query_optional_fp16_shader_ops = false;
+    // Zero means no explicit preflight memory budget.  A non-zero value is
+    // checked after native allocation requirements are queried and before any
+    // bulk resource creation.
+    std::uint64_t memory_budget_bytes = 0u;
 };
 
 struct PlayerDiagnostic {
@@ -77,6 +90,7 @@ struct PlayerAllocationStats {
     std::uint64_t frames_rendered = 0u;
     std::uint64_t frames_presented = 0u;
     std::uint64_t uav_barrier_count = 0u;
+    std::uint64_t alias_barrier_count = 0u;
     std::uint64_t present_failure_retirements = 0u;
     bool post_initialization_allocation_violation = false;
 };
@@ -98,6 +112,9 @@ public:
                         std::size_t size_bytes);
     ExitCode initializeFromFile(const char* package_path);
     ExitCode renderAtTick(std::uint64_t tick);
+    // Reads back the exact resource target of frame.present.  Diagnostic/
+    // qualification only; returns the bytes written by the package shader.
+    ExitCode readbackPresentedOutput(std::vector<std::uint8_t>* bytes);
     ExitCode resize(std::uint32_t width, std::uint32_t height);
     ExitCode shutdown();
 
@@ -142,6 +159,11 @@ public:
     std::uint32_t width() const noexcept { return width_; }
     std::uint32_t height() const noexcept { return height_; }
     bool minimized() const noexcept { return minimized_; }
+    bool window_closed() const noexcept { return window_closed_; }
+    bool using_aliased_plan() const noexcept { return using_aliased_plan_; }
+    bool validation_enabled() const noexcept {
+        return config_.enable_validation;
+    }
 
     const package::Package& package() const noexcept { return package_; }
     const ResourcePlan& resource_plan() const noexcept { return plan_; }
@@ -164,6 +186,9 @@ public:
 
     std::string diagnostics_json() const;
     int Report(bool force_diagnostic_output = false) const noexcept;
+    // Compile-time specialization fingerprint used by generated NW-05 mains
+    // to verify that the linked runtime implementations match the manifest.
+    static std::uint32_t specialized_implementation_mask() noexcept;
 
     // Explicit test seams.  They never change runtime eligibility branches;
     // they replace the queried snapshot or allocator with a deterministic
@@ -229,6 +254,7 @@ private:
     ExitCode WaitForAllFrames(const char* stage);
     bool CheckDeviceRemoved(const char* stage);
     bool CheckD3D12Validation(const char* stage);
+    ExitCode CheckMemoryBudget(const char* stage);
 
     PlayerConfig config_{};
     ExitCode last_exit_ = ExitCode::Success;
@@ -258,6 +284,7 @@ private:
     bool force_root_signature_creation_failure_ = false;
     bool force_pipeline_creation_failure_ = false;
     bool simulate_post_initialization_allocation_ = false;
+    bool using_aliased_plan_ = false;
     std::uint32_t timeline_parameter_id_ = 0u;
     std::uint64_t timeline_tick_ = 0u;
     bool timeline_override_active_ = false;
@@ -290,6 +317,13 @@ private:
         std::uint32_t root_parameter = 0u;
         std::uint32_t resource_a = 0u;
         std::uint32_t resource_b = 0u;
+        // Resources bound through all active descriptor-table root parameters
+        // at this instruction. The bounded snapshot is built once during
+        // planning so dispatch transitions never touch inactive aliases.
+        std::uint32_t descriptor_resource = 0u;
+        std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+            descriptor_resources{};
+        std::uint32_t descriptor_resource_count = 0u;
         std::uint32_t shader_id = 0u;
         std::uint32_t group_x = 1u;
         std::uint32_t group_y = 1u;
@@ -315,6 +349,7 @@ private:
         std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
             parameter_sizes{};
         std::uint32_t parameter_count = 0u;
+        std::uint32_t instruction_index = 0u;
     };
     std::vector<FrameOp> frame_ops_;
     std::vector<std::string> last_frame_order_;

@@ -16,6 +16,32 @@
 #include <utility>
 #include <vector>
 
+#ifndef NW05_COMPILE_WAVE_OPS_QUERY
+#define NW05_COMPILE_WAVE_OPS_QUERY 1
+#endif
+#ifndef NW05_COMPILE_INT64_SHADER_OPS_QUERY
+#define NW05_COMPILE_INT64_SHADER_OPS_QUERY 1
+#endif
+#ifndef NW05_COMPILE_FP16_SHADER_OPS_QUERY
+#define NW05_COMPILE_FP16_SHADER_OPS_QUERY 1
+#endif
+#ifndef NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+#define NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD 1
+#endif
+#ifndef NW05_COMPILE_PROCEDURAL_TEXTURE_R8
+#define NW05_COMPILE_PROCEDURAL_TEXTURE_R8 1
+#endif
+#ifndef NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F
+#define NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F 1
+#endif
+
+#if (defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION) || \
+    (defined(NW05_SPECIALIZED_VALIDATION) && NW05_SPECIALIZED_VALIDATION)
+#define NW_PACKAGE_PLAYER_D3D12_VALIDATION 1
+#else
+#define NW_PACKAGE_PLAYER_D3D12_VALIDATION 0
+#endif
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -26,7 +52,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
 #include <d3d12sdklayers.h>
 #endif
 
@@ -101,6 +127,47 @@ std::uint64_t RoundUp(std::uint64_t value, std::uint64_t alignment) {
     return remainder == 0u ? value : value + (alignment - remainder);
 }
 
+std::uint32_t BytesPerElement(const std::string& format);
+
+std::uint64_t InitialUploadBytes(
+    const package::ResourceDescriptor& resource) {
+    if (resource.kind != "texture2d") return resource.size_bytes;
+    const std::uint32_t bytes_per_element = BytesPerElement(resource.format);
+    if (bytes_per_element == 0u || resource.width == 0u ||
+        resource.height == 0u) {
+        return 0u;
+    }
+    const std::uint64_t row_bytes =
+        static_cast<std::uint64_t>(resource.width) * bytes_per_element;
+    const std::uint64_t row_pitch = RoundUp(
+        row_bytes, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+    if (row_pitch >
+        std::numeric_limits<std::uint64_t>::max() / resource.height) {
+        return 0u;
+    }
+    return row_pitch * resource.height;
+}
+
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+bool TextureSeedForResource(const package::Package& pkg,
+                            std::uint32_t resource_id,
+                            std::uint32_t* seed) {
+    if (seed == nullptr) return false;
+    const std::string name =
+        "nw05.texture_seed." + std::to_string(resource_id);
+    for (const auto& parameter : pkg.parameters) {
+        if (parameter.name != name) continue;
+        if (parameter.type != "uint" || parameter.component_count != 1u ||
+            parameter.value.size() != sizeof(std::uint32_t)) {
+            return false;
+        }
+        std::memcpy(seed, parameter.value.data(), sizeof(*seed));
+        return true;
+    }
+    return false;
+}
+#endif
+
 std::size_t CountCbvSrvUavDescriptors(const package::Package& pkg) {
     std::size_t count = 0u;
     for (const auto& resource : pkg.resources) {
@@ -132,7 +199,7 @@ std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
         }
         for (const auto& resource : pkg.resources) {
             if (resource.resource_id == instruction.operands[0].u32) {
-                maximum = std::max(maximum, resource.size_bytes);
+                maximum = std::max(maximum, InitialUploadBytes(resource));
             }
         }
     }
@@ -448,6 +515,12 @@ struct PlatformState {
     std::uint32_t rtv_increment = 0u;
 
     std::vector<ResourceSlot> resources;
+    // Readback destinations whose fence completion could not be proven are
+    // released only after shutdown's best-effort GPU drain.
+    std::vector<std::pair<ID3D12Resource*, std::uint64_t>> deferred_readbacks;
+    // Adapter-specific placed heap proving the alias plan.  Null when the
+    // player falls back to committed resources (non-Windows simulation).
+    void* package_heap = nullptr;
     std::vector<RootSlot> root_signatures;
     std::vector<PipelineSlot> pipelines;
     std::vector<FrameSlot> frames;
@@ -455,7 +528,7 @@ struct PlatformState {
     ID3D12Fence* fence = nullptr;
     HANDLE fence_event = nullptr;
 
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     ID3D12InfoQueue* info_queue = nullptr;
     ID3D12InfoQueue1* info_queue1 = nullptr;
     DWORD info_queue_callback_cookie = 0u;
@@ -497,7 +570,7 @@ ExitCode WaitForFenceValue(ID3D12Fence* fence,
     return ExitCode::Success;
 }
 
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
 void D3D12ImmediateMessageCallback(
     D3D12_MESSAGE_CATEGORY category,
     D3D12_MESSAGE_SEVERITY severity,
@@ -578,7 +651,7 @@ std::uint32_t BytesPerElement(const std::string& format) {
     if (format == "DXGI_FORMAT_R32G32B32A32_FLOAT") return 16u;
     if (format == "DXGI_FORMAT_R32_UINT") return 4u;
     if (format == "DXGI_FORMAT_D32_FLOAT") return 4u;
-    return 1u;
+    return 0u;
 }
 
 D3D12_RESOURCE_DESC MakeResourceDesc(
@@ -650,9 +723,55 @@ ResourceAllocationQuery QueryAdapterAllocationInfo(
     return result;
 }
 
+std::uint64_t QueryTexture2DAllocationBytes(
+    ID3D12Device* device,
+    std::uint32_t width,
+    std::uint32_t height,
+    D3D12_RESOURCE_FLAGS flags) noexcept {
+    if (device == nullptr || width == 0u || height == 0u) return 0u;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width;
+    desc.Height = height;
+    desc.DepthOrArraySize = 1u;
+    desc.MipLevels = 1u;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1u;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = flags;
+    const D3D12_RESOURCE_ALLOCATION_INFO info =
+        device->GetResourceAllocationInfo(0u, 1u, &desc);
+    if (info.SizeInBytes == 0u || info.SizeInBytes == UINT64_MAX ||
+        info.Alignment == 0u) {
+        return UINT64_MAX;
+    }
+    return info.SizeInBytes;
+}
+
+std::uint64_t QuerySwapChainAllocationBytes(
+    PlatformState* state,
+    std::uint32_t width,
+    std::uint32_t height) noexcept {
+    if (state == nullptr || state->device == nullptr ||
+        state->swapchain == nullptr || width == 0u || height == 0u) {
+        return 0u;
+    }
+    const std::uint64_t one = QueryTexture2DAllocationBytes(
+        state->device, width, height, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    if (one == UINT64_MAX ||
+        one > std::numeric_limits<std::uint64_t>::max() /
+                  package::kSwapChainBufferCount) {
+        return UINT64_MAX;
+    }
+    return one * package::kSwapChainBufferCount;
+}
+
 D3D12_HEAP_TYPE HeapTypeForUsage(const package::ResourceDescriptor& resource) {
     if (resource.usage == "readback") {
         return D3D12_HEAP_TYPE_READBACK;
+    }
+    if (resource.usage == "upload") {
+        return D3D12_HEAP_TYPE_UPLOAD;
     }
     if (resource.usage == "sampler") {
         return D3D12_HEAP_TYPE_DEFAULT;
@@ -766,6 +885,20 @@ std::string QueryAdapterDriverVersion(IDXGIAdapter1* adapter) {
 } // namespace
 #endif // _WIN32
 
+std::uint32_t PackagePlayer::specialized_implementation_mask() noexcept {
+    std::uint32_t mask = 0u;
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+    mask |= 1u;
+#endif
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_R8
+    mask |= 2u;
+#endif
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F
+    mask |= 4u;
+#endif
+    return mask;
+}
+
 PackagePlayer::PackagePlayer() : PackagePlayer(PlayerConfig{}) {}
 
 PackagePlayer::PackagePlayer(const PlayerConfig& config) : config_(config) {
@@ -876,6 +1009,47 @@ void PackagePlayer::RemoveEngineResourceAllocation(
             : stats_.engine_resource_bytes - bytes;
 }
 
+ExitCode PackagePlayer::CheckMemoryBudget(const char* stage) {
+    if (config_.memory_budget_bytes == 0u) return ExitCode::Success;
+    std::uint64_t package_descriptors = 0u;
+    for (const auto& resource : package_.resources) {
+        if (resource.usage == "sampler" ||
+            ResourceNeedsCbvSrvUavDescriptor(package_, resource)) {
+            ++package_descriptors;
+        }
+    }
+    const std::uint64_t descriptor_bytes =
+        std::max<std::uint64_t>(stats_.engine_descriptor_count,
+                                package_descriptors) *
+        64u;
+    std::uint64_t backbuffer_bytes = 0u;
+#if defined(_WIN32)
+    PlatformState* state = platform_.get();
+    if (state != nullptr && state->swapchain != nullptr &&
+        !config_.headless && width_ > 0u && height_ > 0u) {
+        backbuffer_bytes =
+            QuerySwapChainAllocationBytes(state, width_, height_);
+        if (backbuffer_bytes == UINT64_MAX) {
+            return Fail(
+                ExitCode::ResourceAllocationFailed, "memory",
+                "memory_budget_allocation_query_failed",
+                "swapchain_allocation", "queryable", "unavailable", stage,
+                "could not query adapter-specific swap-chain allocation size");
+        }
+    }
+#endif
+    const std::uint64_t accounted =
+        stats_.engine_resource_bytes + stats_.engine_upload_bytes +
+        descriptor_bytes + backbuffer_bytes;
+    if (accounted <= config_.memory_budget_bytes) return ExitCode::Success;
+    return Fail(
+        ExitCode::ResourceAllocationFailed, "memory",
+        "memory_budget_exceeded", "peak_bytes",
+        std::to_string(config_.memory_budget_bytes),
+        std::to_string(accounted), stage,
+        "accounted peak memory exceeds the generated artifact budget");
+}
+
 bool PackagePlayer::BuildFrameInstructionPlan() {
     frame_ops_.clear();
     last_frame_order_.clear();
@@ -886,6 +1060,11 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     std::set<std::uint32_t> pending_timeline_parameters;
     bool has_active_root_signature = false;
     std::uint32_t active_root_signature_id = 0u;
+    std::uint32_t active_descriptor_resource = 0u;
+    std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+        active_descriptor_resources{};
+    std::array<bool, package::kMaxRootSignatureDwordCost>
+        active_descriptor_valid{};
     present_resource_id_ = 0u;
     present_source_width_ = 0u;
     present_source_height_ = 0u;
@@ -952,6 +1131,11 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "frame.set_root_signature references a missing root "
                      "signature");
                 return false;
+            }
+            if (!has_active_root_signature ||
+                active_root_signature_id != op.root_parameter) {
+                active_descriptor_valid.fill(false);
+                active_descriptor_resource = 0u;
             }
             has_active_root_signature = true;
             active_root_signature_id = op.root_parameter;
@@ -1102,6 +1286,11 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.root_parameter = instruction.operands[0].u32;
             op.heap_name = instruction.operands[1].string_value;
             op.resource_a = instruction.operands[2].u32;
+            active_descriptor_resource = op.resource_a;
+            if (op.root_parameter < active_descriptor_resources.size()) {
+                active_descriptor_resources[op.root_parameter] = op.resource_a;
+                active_descriptor_valid[op.root_parameter] = true;
+            }
             const package::ResourceDescriptor* resource =
                 FindPackageResource(package_, op.resource_a);
             if (resource == nullptr) {
@@ -1213,6 +1402,26 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.group_y = instruction.operands[1].u32;
             op.group_z = instruction.operands[2].u32;
             op.shader_id = instruction.operands[3].u32;
+            op.descriptor_resource = active_descriptor_resource;
+            for (std::size_t root = 0u;
+                 root < active_descriptor_resources.size(); ++root) {
+                if (!active_descriptor_valid[root]) continue;
+                const std::uint32_t resource_id =
+                    active_descriptor_resources[root];
+                bool duplicate = false;
+                for (std::uint32_t index = 0u;
+                     index < op.descriptor_resource_count; ++index) {
+                    if (op.descriptor_resources[index] == resource_id) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate && op.descriptor_resource_count <
+                                      op.descriptor_resources.size()) {
+                    op.descriptor_resources[op.descriptor_resource_count++] =
+                        resource_id;
+                }
+            }
             if (instruction.operands[0].type != package::OperandType::U32 ||
                 instruction.operands[1].type != package::OperandType::U32 ||
                 instruction.operands[2].type != package::OperandType::U32 ||
@@ -1420,9 +1629,31 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             const std::uint64_t pixel_count =
                 present_resource->size_bytes / 16u;
+            bool explicit_geometry = false;
+            std::uint32_t explicit_width = 0u;
+            std::uint32_t explicit_height = 0u;
+            for (const auto& parameter : package_.parameters) {
+                if (parameter.value.size() < 4u) continue;
+                std::uint32_t value = 0u;
+                std::memcpy(&value, parameter.value.data(), sizeof(value));
+                if (parameter.name == "nw05.present.width") {
+                    explicit_width = value;
+                } else if (parameter.name == "nw05.present.height") {
+                    explicit_height = value;
+                }
+            }
+            if (explicit_width != 0u && explicit_height != 0u &&
+                static_cast<std::uint64_t>(explicit_width) * explicit_height <=
+                    pixel_count) {
+                present_source_width_ = explicit_width;
+                present_source_height_ = explicit_height;
+                explicit_geometry = true;
+            }
             const std::uint32_t side = static_cast<std::uint32_t>(
                 std::sqrt(static_cast<double>(pixel_count)));
-            if (static_cast<std::uint64_t>(side) * side == pixel_count) {
+            if (explicit_geometry) {
+                // Explicit package geometry takes precedence over inference.
+            } else if (static_cast<std::uint64_t>(side) * side == pixel_count) {
                 present_source_width_ = side;
                 present_source_height_ = side;
             } else {
@@ -1442,6 +1673,8 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             present_resource_id_ = op.resource_a;
         }
+        op.instruction_index =
+            static_cast<std::uint32_t>(frame_ops_.size());
         frame_ops_.push_back(std::move(op));
         last_frame_order_.push_back(instruction.opcode);
     }
@@ -1486,7 +1719,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     }
 
 #if defined(_WIN32)
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     if (config_.enable_validation) {
         ID3D12Debug* debug = nullptr;
         if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))) ||
@@ -1575,7 +1808,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
                     "no hardware adapter supports D3D_FEATURE_LEVEL_12_0");
     }
     platform_->device = device;
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     if (config_.enable_validation) {
         if (FAILED(device->QueryInterface(
                 __uuidof(ID3D12InfoQueue),
@@ -1681,23 +1914,46 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             static_cast<std::uint32_t>(options.MaxGPUVirtualAddressBitsPerResource);
     }
 
-    D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
-    if (SUCCEEDED(device->CheckFeatureSupport(
-            D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
-        queried.optional_features_queried = true;
-        queried.wave_ops_queried = true;
-        queried.int64_shader_ops_queried = true;
-        queried.wave_ops_supported = options1.WaveOps != FALSE;
-        queried.int64_shader_ops_supported = options1.Int64ShaderOps != FALSE;
+#if NW05_COMPILE_WAVE_OPS_QUERY || NW05_COMPILE_INT64_SHADER_OPS_QUERY
+    if (
+#if NW05_COMPILE_WAVE_OPS_QUERY
+        config_.query_optional_wave_ops ||
+#endif
+#if NW05_COMPILE_INT64_SHADER_OPS_QUERY
+        config_.query_optional_int64_shader_ops ||
+#endif
+        false) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
+        if (SUCCEEDED(device->CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1)))) {
+            queried.optional_features_queried = true;
+#if NW05_COMPILE_WAVE_OPS_QUERY
+            queried.wave_ops_queried = config_.query_optional_wave_ops;
+            queried.wave_ops_supported =
+                config_.query_optional_wave_ops && options1.WaveOps != FALSE;
+#endif
+#if NW05_COMPILE_INT64_SHADER_OPS_QUERY
+            queried.int64_shader_ops_queried =
+                config_.query_optional_int64_shader_ops;
+            queried.int64_shader_ops_supported =
+                config_.query_optional_int64_shader_ops &&
+                options1.Int64ShaderOps != FALSE;
+#endif
+        }
     }
-    D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
-    if (SUCCEEDED(device->CheckFeatureSupport(
-            D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4)))) {
-        queried.optional_features_queried = true;
-        queried.fp16_shader_ops_queried = true;
-        queried.fp16_shader_ops_supported =
-            options4.Native16BitShaderOpsSupported != FALSE;
+#endif
+#if NW05_COMPILE_FP16_SHADER_OPS_QUERY
+    if (config_.query_optional_fp16_shader_ops) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
+        if (SUCCEEDED(device->CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4)))) {
+            queried.optional_features_queried = true;
+            queried.fp16_shader_ops_queried = true;
+            queried.fp16_shader_ops_supported =
+                options4.Native16BitShaderOpsSupported != FALSE;
+        }
     }
+#endif
 
     if (max_gpu_va_bits != 0u) {
         const std::uint32_t bits = max_gpu_va_bits;
@@ -1822,6 +2078,20 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
                     "device_unavailable", "device", "created", "unavailable",
                     "frame_ring",
                     "swap-chain creation requires an initialized D3D12 device");
+    }
+    if (using_aliased_plan_ && plan_.total_engine_bytes > 0u) {
+        std::string detail;
+        state->package_heap = CreateAliasedResourceHeap(
+            state->device, plan_.total_engine_bytes,
+            static_cast<std::uint32_t>(D3D12_HEAP_TYPE_DEFAULT), &detail);
+        if (state->package_heap == nullptr) {
+            return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                        "alias_heap_creation_failed", "alias_heap",
+                        "created", detail.empty() ? "failed" : detail,
+                        "alias_realization",
+                        "adapter-specific alias heap creation failed");
+        }
+        NoteEngineAllocation(plan_.total_engine_bytes, 0u, false, true, false);
     }
     D3D12_COMMAND_QUEUE_DESC queue_desc{};
     queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -2277,7 +2547,7 @@ bool PackagePlayer::CheckDeviceRemoved(const char* stage) {
 }
 
 bool PackagePlayer::CheckD3D12Validation(const char* stage) {
-#if defined(_WIN32) && defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if defined(_WIN32) && NW_PACKAGE_PLAYER_D3D12_VALIDATION
     PlatformState* state = platform_.get();
     if (state != nullptr && state->info_queue != nullptr &&
         HasValidationError(state->info_queue)) {
@@ -2361,19 +2631,46 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 heap.Type = HeapTypeForUsage(placement->descriptor);
                 const D3D12_RESOURCE_STATES initial =
                     InitialStateForUsage(placement->descriptor);
-                if (FAILED(state->device->CreateCommittedResource(
-                        &heap, D3D12_HEAP_FLAG_NONE, &desc, initial, nullptr,
-                        IID_PPV_ARGS(&slot->resource))) ||
-                    slot->resource == nullptr) {
-                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
-                                "committed_resource_failed", "resource",
-                                placement->descriptor.name, "allocation failed",
-                                "init.create_resource",
-                                "CreateCommittedResource failed");
+                const bool heap_resident =
+                    state->package_heap != nullptr &&
+                    placement->descriptor.usage != "readback" &&
+                    placement->descriptor.usage != "sampler" &&
+                    HeapTypeForUsage(placement->descriptor) ==
+                        D3D12_HEAP_TYPE_DEFAULT;
+                if (heap_resident) {
+                    void* placed = nullptr;
+                    std::string detail;
+                    if (!CreateAliasedPlacedResource(
+                            state->package_heap, *placement, &placed,
+                            &detail) ||
+                        placed == nullptr) {
+                        return Fail(
+                            ExitCode::ResourceAllocationFailed, "resource",
+                            "placed_resource_failed", "resource",
+                            placement->descriptor.name,
+                            detail.empty() ? "placement failed" : detail,
+                            "init.create_resource",
+                            "placed-resource creation failed for the proven alias "
+                            "offset");
+                    }
+                    slot->resource = static_cast<ID3D12Resource*>(placed);
+                    slot->state = D3D12_RESOURCE_STATE_COMMON;
+                } else {
+                    if (FAILED(state->device->CreateCommittedResource(
+                            &heap, D3D12_HEAP_FLAG_NONE, &desc, initial,
+                            nullptr, IID_PPV_ARGS(&slot->resource))) ||
+                        slot->resource == nullptr) {
+                        return Fail(
+                            ExitCode::ResourceAllocationFailed, "resource",
+                            "committed_resource_failed", "resource",
+                            placement->descriptor.name, "allocation failed",
+                            "init.create_resource",
+                            "CreateCommittedResource failed");
+                    }
+                    NoteEngineAllocation(placement->allocation_size_bytes, 0u,
+                                         false, false, false);
+                    slot->state = initial;
                 }
-                slot->state = initial;
-                NoteEngineAllocation(placement->allocation_size_bytes, 0u,
-                                     false, false, false);
             }
             if (slot->has_descriptor) {
                 if (placement->descriptor.usage == "sampler") {
@@ -2670,19 +2967,53 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "init.upload_resource",
                             "upload target has no validated placement");
             }
-            if (placement->descriptor.kind != "buffer") {
+            if (placement->descriptor.kind != "buffer" &&
+                placement->descriptor.kind != "texture2d") {
                 return Fail(ExitCode::ResourceAllocationFailed, "resource",
                             "upload_kind_unsupported", "resource_kind",
-                            "buffer", placement->descriptor.kind,
+                            "buffer|texture2d", placement->descriptor.kind,
                             "init.upload_resource",
-                            "the minimal player uploads buffer resources only");
+                            "the minimal player uploads buffers and 2D textures");
             }
+#if !NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+            if (placement->descriptor.kind == "texture2d") {
+                return Fail(
+                    ExitCode::PackageValidationFailed, "package_validation",
+                    "specialized_texture_upload_not_retained",
+                    "runtime_implementation", "procedural_texture_upload",
+                    "not compiled", "init.upload_resource",
+                    "the specialized player did not retain procedural "
+                    "texture upload support");
+            }
+#endif
+            const std::uint64_t upload_bytes =
+                InitialUploadBytes(placement->descriptor);
+            std::uint32_t row_pitch = 0u;
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+            std::uint32_t texture_bytes_per_element = 0u;
+            if (placement->descriptor.kind == "texture2d") {
+                texture_bytes_per_element =
+                    BytesPerElement(placement->descriptor.format);
+                if (upload_bytes == 0u ||
+                    texture_bytes_per_element == 0u) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "upload_texture_format", "format",
+                                "supported", placement->descriptor.format,
+                                "init.upload_resource",
+                                "texture upload format is unsupported");
+                }
+                row_pitch = static_cast<std::uint32_t>(RoundUp(
+                    static_cast<std::uint64_t>(placement->descriptor.width) *
+                        texture_bytes_per_element,
+                    D3D12_TEXTURE_DATA_PITCH_ALIGNMENT));
+            }
+#endif
             if (state->frames.empty() || state->frames[0].upload == nullptr ||
                 state->frames[0].upload_size <
-                    placement->descriptor.size_bytes) {
+                    upload_bytes) {
                 return Fail(ExitCode::ResourceAllocationFailed, "resource",
                             "frame_upload_ring_unavailable", "upload_bytes",
-                            std::to_string(placement->descriptor.size_bytes),
+                            std::to_string(upload_bytes),
                             state->frames.empty() || state->frames[0].upload ==
                                     nullptr
                                 ? "unavailable"
@@ -2717,20 +3048,105 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "unavailable", "init.upload_resource",
                             "per-frame upload ring Map failed");
             }
-            std::memset(mapped, 0, static_cast<std::size_t>(
-                                      placement->descriptor.size_bytes));
-            std::size_t offset = 0u;
-            for (const auto& parameter : package_.parameters) {
-                if (offset + parameter.value.size() >
-                    placement->descriptor.size_bytes) {
-                    break;
+            std::memset(mapped, 0, static_cast<std::size_t>(upload_bytes));
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+            if (placement->descriptor.kind == "texture2d") {
+                std::uint32_t seed = 0u;
+                if (!TextureSeedForResource(package_, resource_id, &seed)) {
+                    frame.upload->Unmap(0u, nullptr);
+                    return Fail(
+                        ExitCode::PackageValidationFailed,
+                        "package_validation", "texture_seed_missing",
+                        "texture_seed", "present", "missing",
+                        "init.upload_resource",
+                        "procedural texture upload has no resource-bound seed");
                 }
-                std::memcpy(static_cast<std::uint8_t*>(mapped) + offset,
-                            parameter.value.data(), parameter.value.size());
-                offset += parameter.value.size();
+                auto hash_pixel = [seed](std::uint32_t x,
+                                         std::uint32_t y) {
+                    std::uint32_t value =
+                        seed ^ (x * 0x9e3779b9u) ^
+                        (y * 0x85ebca6bu);
+                    value ^= value >> 16u;
+                    value *= 0x7feb352du;
+                    value ^= value >> 15u;
+                    value *= 0x846ca68bu;
+                    value ^= value >> 16u;
+                    return value;
+                };
+                auto* bytes = static_cast<std::uint8_t*>(mapped);
+                for (std::uint32_t y = 0u;
+                     y < placement->descriptor.height; ++y) {
+                    std::uint8_t* row =
+                        bytes + static_cast<std::size_t>(y) * row_pitch;
+                    for (std::uint32_t x = 0u;
+                         x < placement->descriptor.width; ++x) {
+                        const std::uint32_t value = hash_pixel(x, y);
+                        bool pixel_written = false;
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_R8
+                        if (placement->descriptor.format ==
+                            "DXGI_FORMAT_R8G8B8A8_UNORM") {
+                            std::uint8_t* pixel =
+                                row + static_cast<std::size_t>(x) * 4u;
+                            pixel[0] =
+                                static_cast<std::uint8_t>(value & 0xFFu);
+                            pixel[1] = static_cast<std::uint8_t>(
+                                (value >> 8u) & 0xFFu);
+                            pixel[2] = static_cast<std::uint8_t>(
+                                (value >> 16u) & 0xFFu);
+                            pixel[3] = 0xFFu;
+                            pixel_written = true;
+                        }
+#endif
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F
+                        if (!pixel_written &&
+                            placement->descriptor.format ==
+                                "DXGI_FORMAT_R32G32B32A32_FLOAT") {
+                            const float channels[4] = {
+                                static_cast<float>(value & 0xFFu) / 255.0f,
+                                static_cast<float>((value >> 8u) & 0xFFu) /
+                                    255.0f,
+                                static_cast<float>((value >> 16u) & 0xFFu) /
+                                    255.0f,
+                                1.0f,
+                            };
+                            std::memcpy(
+                                row + static_cast<std::size_t>(x) *
+                                          sizeof(channels),
+                                channels, sizeof(channels));
+                            pixel_written = true;
+                        }
+#endif
+                        if (!pixel_written) {
+                            frame.upload->Unmap(0u, nullptr);
+                            return Fail(
+                                ExitCode::PackageValidationFailed,
+                                "package_validation",
+                                "texture_format_unsupported", "format",
+                                "format retained by specialized player",
+                                placement->descriptor.format,
+                                "init.upload_resource",
+                                "procedural texture format was not retained "
+                                "by the specialized build");
+                        }
+                    }
+                }
+            } else
+#endif
+            {
+                std::size_t offset = 0u;
+                for (const auto& parameter : package_.parameters) {
+                    if (offset + parameter.value.size() >
+                        upload_bytes) {
+                        break;
+                    }
+                    std::memcpy(
+                        static_cast<std::uint8_t*>(mapped) + offset,
+                        parameter.value.data(), parameter.value.size());
+                    offset += parameter.value.size();
+                }
             }
-            D3D12_RANGE write_range{0u, static_cast<SIZE_T>(
-                                           placement->descriptor.size_bytes)};
+            D3D12_RANGE write_range{0u,
+                                    static_cast<SIZE_T>(upload_bytes)};
             frame.upload->Unmap(0u, &write_range);
 
             if (frame.command_list == nullptr || frame.allocator == nullptr) {
@@ -2756,9 +3172,30 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             to_copy.Transition.Subresource =
                 D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             frame.command_list->ResourceBarrier(1u, &to_copy);
-            frame.command_list->CopyBufferRegion(
-                slot->resource, 0u, frame.upload, 0u,
-                placement->descriptor.size_bytes);
+            if (placement->descriptor.kind == "buffer") {
+                frame.command_list->CopyBufferRegion(
+                    slot->resource, 0u, frame.upload, 0u,
+                    placement->descriptor.size_bytes);
+            } else {
+                D3D12_TEXTURE_COPY_LOCATION source{};
+                source.pResource = frame.upload;
+                source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                source.PlacedFootprint.Offset = 0u;
+                source.PlacedFootprint.Footprint.Format =
+                    MapFormat(placement->descriptor.format);
+                source.PlacedFootprint.Footprint.Width =
+                    placement->descriptor.width;
+                source.PlacedFootprint.Footprint.Height =
+                    placement->descriptor.height;
+                source.PlacedFootprint.Footprint.Depth = 1u;
+                source.PlacedFootprint.Footprint.RowPitch = row_pitch;
+                D3D12_TEXTURE_COPY_LOCATION destination{};
+                destination.pResource = slot->resource;
+                destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                destination.SubresourceIndex = 0u;
+                frame.command_list->CopyTextureRegion(
+                    &destination, 0u, 0u, 0u, &source, nullptr);
+            }
             const D3D12_RESOURCE_STATES final_state =
                 WorkingStateForUsage(placement->descriptor);
             D3D12_RESOURCE_BARRIER to_work = to_copy;
@@ -2925,7 +3362,50 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         package_tables{};
     std::array<bool, package::kMaxRootSignatureDwordCost>
         package_table_valid{};
+    std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
     for (const auto& op : frame_ops_) {
+        if (state->package_heap != nullptr) {
+            for (std::size_t alias_index = 0u;
+                 alias_index < plan_.alias_barriers.size(); ++alias_index) {
+                if (alias_barrier_emitted[alias_index]) continue;
+                const auto& alias = plan_.alias_barriers[alias_index];
+                if (alias.activation_instruction != op.instruction_index) {
+                    continue;
+                }
+                bool references_incoming =
+                    op.resource_a == alias.resource_id ||
+                    op.resource_b == alias.resource_id ||
+                    op.descriptor_resource == alias.resource_id;
+                for (std::uint32_t descriptor_index = 0u;
+                     !references_incoming &&
+                     descriptor_index < op.descriptor_resource_count;
+                     ++descriptor_index) {
+                    references_incoming =
+                        op.descriptor_resources[descriptor_index] ==
+                        alias.resource_id;
+                }
+                if (!references_incoming) continue;
+                PlatformState::ResourceSlot* before = nullptr;
+                PlatformState::ResourceSlot* after = nullptr;
+                for (auto& candidate : state->resources) {
+                    if (candidate.resource_id == alias.before_resource_id) {
+                        before = &candidate;
+                    }
+                    if (candidate.resource_id == alias.resource_id) {
+                        after = &candidate;
+                    }
+                }
+                EmitAliasingBarrier(
+                    list, alias, before == nullptr ? nullptr : before->resource,
+                    after == nullptr ? nullptr : after->resource);
+                ++stats_.alias_barrier_count;
+                // Aliasing changes memory ownership, not D3D12 resource state.
+                // Preserve the incoming resource's last real state so a later
+                // transition emits the correct StateBefore value.
+                if (alias.uav_barrier) ++stats_.uav_barrier_count;
+                alias_barrier_emitted[alias_index] = true;
+            }
+        }
         switch (op.type) {
             case FrameOp::Type::SetRootSignature: {
                 ID3D12RootSignature* root = nullptr;
@@ -3095,46 +3575,79 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "renderAtTick",
                                 "frame.dispatch pipeline was not created");
                 }
-                for (auto& candidate : state->resources) {
-                    if (!candidate.has_descriptor ||
-                        candidate.resource == nullptr) {
+                for (std::uint32_t descriptor_index = 0u;
+                     descriptor_index < op.descriptor_resource_count;
+                     ++descriptor_index) {
+                    const std::uint32_t resource_id =
+                        op.descriptor_resources[descriptor_index];
+                    PlatformState::ResourceSlot* candidate = nullptr;
+                    for (auto& slot : state->resources) {
+                        if (slot.resource_id == resource_id) {
+                            candidate = &slot;
+                            break;
+                        }
+                    }
+                    const package::ResourceDescriptor* descriptor =
+                        FindPackageResource(package_, resource_id);
+                    if (candidate == nullptr || descriptor == nullptr) {
+                        return Fail(
+                            ExitCode::ResourceAllocationFailed, "resource",
+                            "dispatch_bound_resource_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "renderAtTick",
+                            "dispatch references a bound resource that is not "
+                            "known to the package/player state");
+                    }
+                    if (descriptor->usage == "sampler") {
+                        // Samplers have no ID3D12Resource.  They own only a
+                        // descriptor created by CreateSampler, and binding one
+                        // must not emit a resource-state transition.
+                        if (!candidate->has_descriptor ||
+                            candidate->gpu_handle.ptr == 0u) {
+                            return Fail(
+                                ExitCode::ResourceAllocationFailed, "resource",
+                                "dispatch_bound_sampler_missing", "resource_id",
+                                std::to_string(resource_id), "missing",
+                                "renderAtTick",
+                                "dispatch references a bound sampler whose "
+                                "descriptor was not created");
+                        }
                         continue;
                     }
-                    for (const auto& descriptor : package_.resources) {
-                        if (descriptor.resource_id != candidate.resource_id) {
-                            continue;
-                        }
-                        const D3D12_RESOURCE_STATES working =
-                            WorkingStateForUsage(descriptor);
-                        if (working ==
-                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
-                            candidate.state ==
-                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
-                            candidate.uav_accessed_in_frame) {
-                            D3D12_RESOURCE_BARRIER uav_barrier{};
-                            uav_barrier.Type =
-                                D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                            uav_barrier.UAV.pResource = candidate.resource;
-                            list->ResourceBarrier(1u, &uav_barrier);
-                            ++stats_.uav_barrier_count;
-                        }
-                        if (candidate.state != working) {
-                            D3D12_RESOURCE_BARRIER barrier{};
-                            barrier.Type =
-                                D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                            barrier.Transition.pResource =
-                                candidate.resource;
-                            barrier.Transition.StateBefore = candidate.state;
-                            barrier.Transition.StateAfter = working;
-                            barrier.Transition.Subresource =
-                                D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                            list->ResourceBarrier(1u, &barrier);
-                            candidate.state = working;
-                        }
-                        if (working ==
-                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
-                            candidate.uav_accessed_in_frame = true;
-                        }
+                    if (candidate->resource == nullptr) {
+                        return Fail(
+                            ExitCode::ResourceAllocationFailed, "resource",
+                            "dispatch_bound_resource_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "renderAtTick",
+                            "dispatch references a bound resource that was not "
+                            "created");
+                    }
+                    const D3D12_RESOURCE_STATES working =
+                        WorkingStateForUsage(*descriptor);
+                    if (working == D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
+                        candidate->state ==
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
+                        candidate->uav_accessed_in_frame) {
+                        D3D12_RESOURCE_BARRIER uav_barrier{};
+                        uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                        uav_barrier.UAV.pResource = candidate->resource;
+                        list->ResourceBarrier(1u, &uav_barrier);
+                        ++stats_.uav_barrier_count;
+                    }
+                    if (candidate->state != working) {
+                        D3D12_RESOURCE_BARRIER barrier{};
+                        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                        barrier.Transition.pResource = candidate->resource;
+                        barrier.Transition.StateBefore = candidate->state;
+                        barrier.Transition.StateAfter = working;
+                        barrier.Transition.Subresource =
+                            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                        list->ResourceBarrier(1u, &barrier);
+                        candidate->state = working;
+                    }
+                    if (working == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+                        candidate->uav_accessed_in_frame = true;
                     }
                 }
                 list->SetPipelineState(pipeline);
@@ -3218,7 +3731,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             "frame.draw is outside the minimal NW-04 player");
             case FrameOp::Type::Present: {
                 present_requested = true;
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.present.begin");
 #endif
@@ -3302,7 +3815,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     ++stats_.uav_barrier_count;
                     source_slot->uav_accessed_in_frame = false;
                 }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.bind.before");
 #endif
@@ -3318,12 +3831,12 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 list->SetComputeRootDescriptorTable(
                     2u, state->display_uav_gpu);
                 list->SetPipelineState(state->display_pipeline);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.dispatch.before");
 #endif
                 list->Dispatch((width_ + 7u) / 8u, (height_ + 7u) / 8u, 1u);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.dispatch.after");
 #endif
@@ -3368,13 +3881,13 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     state->backbuffer_states[backbuffer_index] =
                         D3D12_RESOURCE_STATE_COPY_DEST;
                 }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.copy.before");
 #endif
                 list->CopyResource(state->backbuffers[backbuffer_index],
                                    state->display_texture);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.copy.after");
 #endif
@@ -3432,7 +3945,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         // violation counter is exercised rather than assumed.
         NoteEngineAllocation(64u, 0u, true, true, false);
     }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.command_list.close.before");
 #endif
@@ -3441,17 +3954,17 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     "command_list_close_failed", "closed", "closed", "failed",
                     "renderAtTick", "ID3D12GraphicsCommandList::Close failed");
     }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.command_list.close.after");
 #endif
     ID3D12CommandList* lists[] = {list};
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.queue.execute.before");
 #endif
     state->queue->ExecuteCommandLists(1u, lists);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.queue.execute.after");
 #endif
@@ -3464,7 +3977,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 
     const auto retire_submitted_work = [&]() -> ExitCode {
         const std::uint64_t fence_value = next_fence_value_++;
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.queue.retire_signal.before");
 #endif
@@ -3474,7 +3987,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         "renderAtTick",
                         "ID3D12CommandQueue::Signal failed");
         }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.queue.retire_signal.after");
 #endif
@@ -3494,7 +4007,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         return ExitCode::DeviceRemoved;
     }
     if (present_requested && state->swapchain != nullptr) {
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.swapchain.present.before");
 #endif
@@ -3502,7 +4015,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
             config_.simulate_presentation_failure
                 ? static_cast<HRESULT>(E_FAIL)
                 : state->swapchain->Present(1u, 0u);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.swapchain.present.after");
 #endif
@@ -3598,6 +4111,218 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     return ExitCode::Success;
 }
 
+ExitCode PackagePlayer::readbackPresentedOutput(
+    std::vector<std::uint8_t>* bytes) {
+    if (bytes == nullptr) {
+        return Fail(ExitCode::InvalidArguments, "readback",
+                    "readback_buffer_missing", "destination", "available",
+                    "null", "readback", "readback destination is null");
+    }
+    bytes->clear();
+    if (!initialized_ || present_resource_id_ == 0u) {
+        return Fail(ExitCode::InvalidArguments, "readback",
+                    "readback_before_initialize", "initialized", "true",
+                    "false", "readback",
+                    "image readback requires an initialized presented output");
+    }
+#if defined(_WIN32)
+    PlatformState* state = platform_.get();
+    if (state == nullptr || state->device == nullptr ||
+        state->queue == nullptr || state->frames.empty()) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "readback_platform_unavailable", "device/queue",
+                    "available", "unavailable", "readback",
+                    "image readback requires the native D3D12 device");
+    }
+    const ExitCode drained = WaitForAllFrames("readback_image");
+    if (drained != ExitCode::Success) return drained;
+    PlatformState::ResourceSlot* source = nullptr;
+    for (auto& candidate : state->resources) {
+        if (candidate.resource_id == present_resource_id_) {
+            source = &candidate;
+            break;
+        }
+    }
+    const ResourcePlacement* placement = plan_.Find(present_resource_id_);
+    if (source == nullptr || source->resource == nullptr ||
+        placement == nullptr || placement->descriptor.kind != "buffer" ||
+        placement->descriptor.size_bytes == 0u) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "readback_source_missing", "present_resource",
+                    std::to_string(present_resource_id_), "unavailable",
+                    "readback",
+                    "presented output is not a readable buffer resource");
+    }
+    std::uint64_t readback_bytes = placement->descriptor.size_bytes;
+    if (present_source_width_ != 0u && present_source_height_ != 0u) {
+        const std::uint64_t image_bytes =
+            static_cast<std::uint64_t>(present_source_width_) *
+            present_source_height_ * 16u;
+        if (image_bytes != 0u &&
+            image_bytes <= placement->descriptor.size_bytes) {
+            // Unfused execution may reserve additional UAV regions after the
+            // canonical image. Presentation/readback always expose region 0.
+            readback_bytes = image_bytes;
+        }
+    }
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = readback_bytes;
+    desc.Height = 1u;
+    desc.DepthOrArraySize = 1u;
+    desc.MipLevels = 1u;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1u;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    const D3D12_RESOURCE_ALLOCATION_INFO readback_allocation =
+        state->device->GetResourceAllocationInfo(0u, 1u, &desc);
+    if (readback_allocation.SizeInBytes == 0u ||
+        readback_allocation.SizeInBytes == UINT64_MAX ||
+        readback_allocation.Alignment == 0u) {
+        return Fail(
+            ExitCode::ResourceAllocationFailed, "memory",
+            "readback_allocation_query_failed", "readback_allocation",
+            "valid size/alignment", "unavailable", "readback",
+            "GetResourceAllocationInfo rejected the readback buffer");
+    }
+    if (config_.memory_budget_bytes != 0u) {
+        std::uint64_t package_descriptors = 0u;
+        for (const auto& resource : package_.resources) {
+            if (resource.usage == "sampler" ||
+                ResourceNeedsCbvSrvUavDescriptor(package_, resource)) {
+                ++package_descriptors;
+            }
+        }
+        const std::uint64_t descriptor_bytes =
+            std::max<std::uint64_t>(
+                stats_.engine_descriptor_count, package_descriptors) *
+            64u;
+        const std::uint64_t backbuffer_bytes =
+            QuerySwapChainAllocationBytes(state, width_, height_);
+        if (backbuffer_bytes == UINT64_MAX) {
+            return Fail(
+                ExitCode::ResourceAllocationFailed, "memory",
+                "memory_budget_allocation_query_failed",
+                "swapchain_allocation", "queryable", "unavailable",
+                "readback",
+                "could not query adapter-specific swap-chain allocation size");
+        }
+        const std::uint64_t projected =
+            stats_.engine_resource_bytes + stats_.engine_upload_bytes +
+            descriptor_bytes + backbuffer_bytes +
+            readback_allocation.SizeInBytes;
+        if (projected > config_.memory_budget_bytes) {
+            return Fail(
+                ExitCode::ResourceAllocationFailed, "memory",
+                "memory_budget_exceeded", "peak_bytes",
+                std::to_string(config_.memory_budget_bytes),
+                std::to_string(projected), "readback",
+                "readback allocation would exceed the generated artifact "
+                "budget");
+        }
+    }
+    ID3D12Resource* readback = nullptr;
+    if (FAILED(state->device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&readback))) ||
+        readback == nullptr) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "readback_allocation_failed", "readback", "created",
+                    "failed", "readback",
+                    "readback buffer allocation failed");
+    }
+    NoteEngineAllocation(readback_allocation.SizeInBytes, 0u, false, false,
+                         true);
+    auto& frame = state->frames[0];
+    const D3D12_RESOURCE_STATES previous_state = source->state;
+    auto release_now = [&]() {
+        if (readback != nullptr) readback->Release();
+        RemoveEngineResourceAllocation(readback_allocation.SizeInBytes);
+    };
+    auto defer_release = [&]() {
+        if (readback != nullptr) {
+            state->deferred_readbacks.emplace_back(
+                readback, readback_allocation.SizeInBytes);
+            readback = nullptr;
+        }
+        // Keep accounting live until the deferred release actually happens.
+    };
+    if (frame.allocator == nullptr || frame.command_list == nullptr) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "readback_command_list_unavailable", "command_list",
+                    "available", "unavailable", "readback",
+                    "readback command list is unavailable");
+    }
+    if (FAILED(frame.allocator->Reset()) ||
+        FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "readback_reset_failed", "reset", "succeeded", "failed",
+                    "readback", "readback command list reset failed");
+    }
+    D3D12_RESOURCE_BARRIER to_copy{};
+    to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    to_copy.Transition.pResource = source->resource;
+    to_copy.Transition.StateBefore = previous_state;
+    to_copy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    to_copy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    frame.command_list->ResourceBarrier(1u, &to_copy);
+    frame.command_list->CopyBufferRegion(
+        readback, 0u, source->resource, 0u, readback_bytes);
+    D3D12_RESOURCE_BARRIER restore = to_copy;
+    restore.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    restore.Transition.StateAfter = previous_state;
+    frame.command_list->ResourceBarrier(1u, &restore);
+    if (FAILED(frame.command_list->Close())) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "readback_close_failed", "closed", "closed", "failed",
+                    "readback", "readback command list close failed");
+    }
+    ID3D12CommandList* lists[] = {frame.command_list};
+    state->queue->ExecuteCommandLists(1u, lists);
+    const std::uint64_t fence_value = next_fence_value_++;
+    if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+        defer_release();
+        return Fail(ExitCode::GpuSubmissionFailed, "readback",
+                    "readback_signal_failed", "signal", "succeeded", "failed",
+                    "readback", "readback queue signal failed");
+    }
+    frame.fence_value = fence_value;
+    const ExitCode wait = WaitForFenceValue(
+        state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
+    if (wait != ExitCode::Success) {
+        defer_release();
+        return wait;
+    }
+    void* mapped = nullptr;
+    D3D12_RANGE range{0u, static_cast<SIZE_T>(readback_bytes)};
+    if (FAILED(readback->Map(0u, &range, &mapped)) || mapped == nullptr) {
+        release_now();
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "readback_map_failed", "mapped", "available", "failed",
+                    "readback", "readback buffer Map failed");
+    }
+    bytes->assign(
+        static_cast<const std::uint8_t*>(mapped),
+        static_cast<const std::uint8_t*>(mapped) +
+            readback_bytes);
+    D3D12_RANGE empty{0u, 0u};
+    readback->Unmap(0u, &empty);
+    release_now();
+    return ExitCode::Success;
+#else
+    return Fail(ExitCode::InvalidArguments, "readback",
+                "readback_requires_native_device", "device", "D3D12",
+                "unavailable", "readback",
+                "image readback is a native Windows qualification path");
+#endif
+}
+
 ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     if (initialized_ || initialization_count_ != 0u) {
         return Fail(ExitCode::InvalidArguments, "lifecycle",
@@ -3627,6 +4352,7 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     present_source_width_ = 0u;
     present_source_height_ = 0u;
     frames_presented_ = 0u;
+    using_aliased_plan_ = false;
     width_ = config_.width;
     height_ = config_.height;
     minimized_ = false;
@@ -3718,8 +4444,45 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     void* const query_user_data = allocation_query_ != nullptr
                                       ? allocation_user_data_
                                       : default_user_data;
-    const ResourcePlanResult plan_result =
+    ResourcePlanResult plan_result =
+#if defined(_WIN32)
+        // Realize the compiler's logical alias plan against the actual
+        // adapter.  Overlapping frames are serialized here (one frame slot) so
+        // every transient instance has a fence-safe lifetime without
+        // unproven cross-slot reuse.
+        BuildAliasedResourcePlan(package_, query, query_user_data, 1u);
+#else
         BuildNonAliasedResourcePlan(package_, query, query_user_data);
+#endif
+#if defined(_WIN32)
+    // Preserve the established NW-04 contract for packages with no proven
+    // alias group: use ordinary committed resources and the non-aliased plan.
+    // The placed heap path is only entered when the adapter-query proof
+    // actually found a fence-safe transient reuse.
+    if (config_.force_non_aliased_plan) {
+        plan_result =
+            BuildNonAliasedResourcePlan(package_, query, query_user_data);
+        using_aliased_plan_ = false;
+    } else if (plan_result.exit_code == ExitCode::Success &&
+        (std::none_of(plan_result.plan.placements.begin(),
+                      plan_result.plan.placements.end(),
+                      [](const ResourcePlacement& placement) {
+                          return placement.aliased;
+                      }) ||
+         std::any_of(plan_result.plan.placements.begin(),
+                     plan_result.plan.placements.end(),
+                     [](const ResourcePlacement& placement) {
+                         return !IsPlaceableAliasResource(
+                             placement.descriptor);
+                     }))) {
+        plan_result =
+            BuildNonAliasedResourcePlan(package_, query, query_user_data);
+        using_aliased_plan_ = false;
+    } else if (plan_result.exit_code == ExitCode::Success) {
+        using_aliased_plan_ = true;
+        frames_in_flight_ = 1u;
+    }
+#endif
     if (plan_result.exit_code != ExitCode::Success) {
         code = FailPlan(plan_result);
         ReleasePlatform();
@@ -3727,6 +4490,53 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     }
     plan_ = plan_result.plan;
     stats_.package_plan_bytes = plan_.total_engine_bytes;
+
+    // Budget is enforced after adapter allocation requirements were queried and
+    // before any bulk GPU allocation.  It includes the alias/committed engine
+    // range plus PackagePlayer-owned swap-chain, display, upload, descriptor,
+    // and readback storage.
+    if (config_.memory_budget_bytes != 0u) {
+        const std::uint64_t pixels =
+            static_cast<std::uint64_t>(width_) * height_;
+        std::uint64_t upload_ring = 64u * 1024u;
+        for (const auto& instruction : package_.initialization) {
+            if (instruction.opcode != "init.upload_resource" ||
+                instruction.operands.empty() ||
+                instruction.operands[0].type !=
+                    package::OperandType::ResourceRef) {
+                continue;
+            }
+            for (const auto& resource : package_.resources) {
+                if (resource.resource_id == instruction.operands[0].u32) {
+                    const std::uint64_t required_upload =
+#if defined(_WIN32)
+                        InitialUploadBytes(resource);
+#else
+                        resource.size_bytes;
+#endif
+                    upload_ring = std::max(
+                        upload_ring,
+                        required_upload != 0u
+                            ? required_upload
+                            : resource.size_bytes);
+                }
+            }
+        }
+        const std::uint64_t player_owned =
+            3u * pixels * 4u +
+            static_cast<std::uint64_t>(frames_in_flight_) * upload_ring +
+            512u * 1024u + 64u * 1024u;
+        const std::uint64_t accounted =
+            plan_.total_engine_bytes + player_owned;
+        if (accounted > config_.memory_budget_bytes) {
+            return Fail(
+                ExitCode::ResourceAllocationFailed, "memory",
+                "memory_budget_exceeded", "peak_bytes",
+                std::to_string(config_.memory_budget_bytes),
+                std::to_string(accounted), "initialize",
+                "accounted peak memory exceeds the generated artifact budget");
+        }
+    }
 
     if (!BuildFrameInstructionPlan()) {
         code = last_exit_;
@@ -3748,6 +4558,11 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
         const ExitCode validation_code = last_exit_;
         ReleasePlatform();
         return validation_code;
+    }
+    const ExitCode budget_code = CheckMemoryBudget("initialize_complete");
+    if (budget_code != ExitCode::Success) {
+        ReleasePlatform();
+        return budget_code;
     }
     initialized_ = true;
     initialization_count_ = 1u;
@@ -3926,6 +4741,58 @@ ExitCode PackagePlayer::resize(std::uint32_t width, std::uint32_t height) {
 #if defined(_WIN32)
     PlatformState* state = platform_.get();
     if (state != nullptr && state->swapchain != nullptr && !config_.headless) {
+        if (config_.memory_budget_bytes != 0u) {
+            const std::uint64_t backbuffers =
+                QuerySwapChainAllocationBytes(state, width, height);
+            const std::uint64_t display =
+                present_resource_id_ == 0u
+                    ? 0u
+                    : QueryTexture2DAllocationBytes(
+                          state->device, width, height,
+                          D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+            if (backbuffers == UINT64_MAX || display == UINT64_MAX) {
+                resize_in_progress_ = false;
+                return Fail(
+                    ExitCode::ResourceAllocationFailed, "memory",
+                    "memory_budget_allocation_query_failed",
+                    "resize_allocations", "queryable", "unavailable",
+                    "resize",
+                    "could not query adapter-specific resize allocation sizes");
+            }
+            std::uint64_t package_descriptors = 0u;
+            for (const auto& resource : package_.resources) {
+                if (resource.usage == "sampler" ||
+                    ResourceNeedsCbvSrvUavDescriptor(package_, resource)) {
+                    ++package_descriptors;
+                }
+            }
+            const std::uint64_t descriptor_bytes =
+                std::max<std::uint64_t>(
+                    stats_.engine_descriptor_count, package_descriptors) *
+                64u;
+            const std::uint64_t old_display =
+                state->display_texture_allocation_bytes;
+            const std::uint64_t base_resources =
+                old_display > stats_.engine_resource_bytes
+                    ? 0u
+                    : stats_.engine_resource_bytes - old_display;
+            // During resize the new swap-chain buffers can coexist with the
+            // old display texture until render targets are rebuilt. Account
+            // for the larger of old/new display allocations at that peak.
+            const std::uint64_t projected =
+                base_resources + backbuffers +
+                std::max(old_display, display) +
+                stats_.engine_upload_bytes + descriptor_bytes;
+            if (projected > config_.memory_budget_bytes) {
+                resize_in_progress_ = false;
+                return Fail(
+                    ExitCode::ResourceAllocationFailed, "memory",
+                    "memory_budget_exceeded", "peak_bytes",
+                    std::to_string(config_.memory_budget_bytes),
+                    std::to_string(projected), "resize",
+                    "resize would exceed the generated artifact budget");
+            }
+        }
         for (ID3D12Resource* backbuffer : state->backbuffers) {
             if (backbuffer != nullptr) backbuffer->Release();
         }
@@ -3957,6 +4824,11 @@ ExitCode PackagePlayer::resize(std::uint32_t width, std::uint32_t height) {
         if (CheckD3D12Validation("resize")) {
             resize_in_progress_ = false;
             return last_exit_;
+        }
+        const ExitCode budget = CheckMemoryBudget("resize_complete");
+        if (budget != ExitCode::Success) {
+            resize_in_progress_ = false;
+            return budget;
         }
     }
 #endif
@@ -4017,6 +4889,11 @@ void PackagePlayer::ReleasePlatform() noexcept {
             }
         }
     }
+    for (auto& deferred : state->deferred_readbacks) {
+        if (deferred.first != nullptr) deferred.first->Release();
+        RemoveEngineResourceAllocation(deferred.second);
+    }
+    state->deferred_readbacks.clear();
     for (auto& frame : state->frames) {
         if (frame.upload != nullptr) frame.upload->Release();
         if (frame.command_list != nullptr) frame.command_list->Release();
@@ -4028,6 +4905,10 @@ void PackagePlayer::ReleasePlatform() noexcept {
         if (slot.resource != nullptr) slot.resource->Release();
     }
     state->resources.clear();
+    if (state->package_heap != nullptr) {
+        ReleaseAliasedResourceHeap(state->package_heap);
+        state->package_heap = nullptr;
+    }
     for (auto& pipeline : state->pipelines) {
         if (pipeline.pipeline_state != nullptr) {
             pipeline.pipeline_state->Release();
@@ -4067,7 +4948,7 @@ void PackagePlayer::ReleasePlatform() noexcept {
     }
     if (state->sampler_heap != nullptr) state->sampler_heap->Release();
     if (state->swapchain != nullptr) state->swapchain->Release();
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     if (state->info_queue1 != nullptr) {
         if (state->info_queue_callback_cookie != 0u) {
             (void)state->info_queue1->UnregisterMessageCallback(

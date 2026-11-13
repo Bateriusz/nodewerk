@@ -1,1 +1,3 @@
 *.hlsl text eol=lf
+*.nwgraph text eol=lf
+*.txt text eol=lf

@@ -1029,15 +1029,30 @@ bool ValidateCapabilityIdentity(const CapabilityRecord& capability,
         AddDiagnostic(diagnostics, std::move(code), std::move(message),
                       std::string(kSectionCapability));
     };
-    if (capability.profile_id != kCommonProfileId) {
-        error("package_profile_unknown",
-              "unknown capability-profile identity '" + capability.profile_id + "'");
-    }
-    if (capability.requirements_digest != kCommonRequirementsDigest) {
-        error("package_profile_digest_mismatch",
-              "capability profile requires requirements digest '" +
-                  std::string(kCommonRequirementsDigest) + "', got '" +
-                  capability.requirements_digest + "'");
+    const bool common_primary =
+        capability.profile_id == kCommonProfileId &&
+        capability.requirements_digest == kCommonRequirementsDigest;
+    const bool optional_primary =
+        capability.profile_id == kOptionalWaveOpsProfileId &&
+        capability.requirements_digest ==
+            kOptionalWaveOpsRequirementsDigest;
+    if (!common_primary && !optional_primary) {
+        if (capability.profile_id != kCommonProfileId &&
+            capability.profile_id != kOptionalWaveOpsProfileId) {
+            error("package_profile_unknown",
+                  "unknown capability-profile identity '" +
+                      capability.profile_id + "'");
+        } else if (capability.profile_id == kCommonProfileId) {
+            error("package_profile_digest_mismatch",
+                  "capability profile requires requirements digest '" +
+                      std::string(kCommonRequirementsDigest) + "', got '" +
+                      capability.requirements_digest + "'");
+        } else {
+            error("package_profile_digest_mismatch",
+                  "optional capability profile requires requirements digest '" +
+                      std::string(kOptionalWaveOpsRequirementsDigest) +
+                      "', got '" + capability.requirements_digest + "'");
+        }
     }
     if (!capability.optional_profile_id.empty()) {
         if (capability.optional_profile_id != kOptionalWaveOpsProfileId) {
@@ -1501,7 +1516,10 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
             error("package_resource_binding",
                   "resource binding slot/space is out of range");
         }
-        if (!bindings.insert(binding_key).second) {
+        const bool transient_shared_range =
+            resource.usage == "uav" || resource.usage == "srv";
+        if (!bindings.insert(binding_key).second &&
+            !transient_shared_range) {
             error("package_resource_binding_collision",
                   "duplicate resource binding");
         }
@@ -1540,6 +1558,73 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
                       std::string(kSectionResources));
     }
     return diagnostics.size() == before;
+}
+
+void ValidateTransientBindingReuse(
+    const std::vector<ResourceDescriptor>& resources,
+    const std::vector<Instruction>& frame,
+    std::vector<Diagnostic>& diagnostics) {
+    std::map<std::string, std::set<std::uint32_t>> ids_by_binding;
+    std::map<std::string, std::string> usage_by_binding;
+    std::map<std::uint32_t, std::string> names_by_id;
+    for (const auto& resource : resources) {
+        const std::string key =
+            resource.pass_family + "/" + resource.usage + "/" +
+            std::to_string(resource.binding_space) + ":" +
+            std::to_string(resource.binding_slot);
+        ids_by_binding[key].insert(resource.resource_id);
+        usage_by_binding[key] = resource.usage;
+        names_by_id[resource.resource_id] = resource.name;
+    }
+    std::map<std::string, std::set<std::uint32_t>> duplicates;
+    for (const auto& entry : ids_by_binding) {
+        if (entry.second.size() > 1u) duplicates.insert(entry);
+    }
+    if (duplicates.empty()) return;
+    std::set<std::uint32_t> explicitly_bound;
+    for (const auto& instruction : frame) {
+        if (instruction.opcode != "frame.set_descriptor_table") continue;
+        std::vector<std::uint32_t> bound;
+        for (const auto& operand : instruction.operands) {
+            if (operand.type == OperandType::ResourceRef) {
+                bound.push_back(operand.u32);
+            }
+        }
+        for (const auto& entry : duplicates) {
+            std::uint32_t simultaneous = 0u;
+            for (const auto resource_id : bound) {
+                if (entry.second.count(resource_id) != 0u) {
+                    ++simultaneous;
+                }
+            }
+            if (simultaneous > 1u) {
+                AddDiagnostic(
+                    diagnostics, "package_resource_binding_collision",
+                    "descriptor table binds multiple resources competing for " +
+                        entry.first,
+                    std::string(kSectionFrame));
+            }
+        }
+        explicitly_bound.insert(bound.begin(), bound.end());
+    }
+    for (const auto& entry : duplicates) {
+        const auto usage_it = usage_by_binding.find(entry.first);
+        if (usage_it == usage_by_binding.end() ||
+            usage_it->second != "uav") {
+            continue;
+        }
+        for (const auto resource_id : entry.second) {
+            if (explicitly_bound.count(resource_id) != 0u) continue;
+            const auto name_it = names_by_id.find(resource_id);
+            AddDiagnostic(
+                diagnostics, "package_resource_binding_collision",
+                "resource '" +
+                    (name_it == names_by_id.end() ? std::to_string(resource_id)
+                                                  : name_it->second) +
+                    "' shares a transient binding but is never explicitly bound",
+                std::string(kSectionResources));
+        }
+    }
 }
 
 struct OperandContract {
@@ -2596,6 +2681,8 @@ bool ValidatePackage(const Package& package,
                        package.root_signatures, diagnostics,
                        (package.flags & 1u) != 0u);
     ValidateResources(package.resources, diagnostics);
+    ValidateTransientBindingReuse(package.resources, package.frame,
+                                  diagnostics);
     ValidateParameters(package.parameters, diagnostics);
     ValidateRootSignatures(package.root_signatures, package.resources,
                            diagnostics);

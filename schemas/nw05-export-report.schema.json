@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw05-export-report.schema.json",
+  "title": "Nodewerk NW-05 export report",
+  "type": "object",
+  "required": ["format", "version", "settings", "profiles", "budgets", "success"],
+  "properties": {
+    "format": { "const": "nw05-export-report" },
+    "version": { "const": 1 },
+    "success": { "type": "boolean" },
+    "settings": {
+      "type": "object",
+      "required": [
+        "byte_ceiling",
+        "memory_budget",
+        "quantization_tolerance",
+        "target_profile",
+        "requirements_digest",
+        "frames_in_flight"
+      ],
+      "properties": {
+        "byte_ceiling": { "type": "integer", "minimum": 1 },
+        "memory_budget": { "type": "integer", "minimum": 1 },
+        "quantization_tolerance": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "target_profile": { "type": "string", "minLength": 1 },
+        "requirements_digest": {
+          "type": "string",
+          "pattern": "^sha256:v1:[0-9a-f]{64}$"
+        },
+        "frames_in_flight": { "type": "integer", "minimum": 1, "maximum": 3 }
+      },
+      "additionalProperties": true
+    },
+    "profiles": {
+      "type": "object",
+      "required": ["common", "optional"],
+      "properties": {
+        "common": {
+          "type": "object",
+          "required": ["profile_id", "requirements_digest", "artifact_key", "distributed_bytes"]
+        },
+        "optional": { "type": "array", "items": { "type": "object" } }
+      },
+      "additionalProperties": true
+    },
+    "budgets": {
+      "type": "object",
+      "required": [
+        "byte_ceiling",
+        "memory_budget",
+        "common_distributed_bytes",
+        "optional_independent",
+        "common_baseline_raised_by_optional"
+      ],
+      "properties": {
+        "byte_ceiling": { "type": "integer", "minimum": 1 },
+        "memory_budget": { "type": "integer", "minimum": 1 },
+        "common_distributed_bytes": { "type": "integer", "minimum": 0 },
+        "optional_independent": { "type": "boolean" },
+        "common_baseline_raised_by_optional": { "const": false }
+      },
+      "additionalProperties": true
+    },
+    "generation_vs_bake": {
+      "type": "object",
+      "required": ["automatic_oracle", "default", "decisions"],
+      "properties": {
+        "automatic_oracle": { "const": false },
+        "default": { "const": "generate" },
+        "decisions": { "type": "array", "items": { "type": "object" } }
+      },
+      "additionalProperties": true
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "windows_native_executable": {
+          "enum": ["generated", "pending_unavailable", "failed"]
+        },
+        "gpu_alias_validation": {
+          "enum": ["pending_unverified", "verified", "failed"]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

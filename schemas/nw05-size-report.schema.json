@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw05-size-report.schema.json",
+  "title": "Nodewerk NW-05 size attribution",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "package_sha256",
+    "package_size_bytes",
+    "sections",
+    "structure",
+    "content",
+    "distribution",
+    "dependencies"
+  ],
+  "properties": {
+    "format": {
+      "enum": ["nw05-size-report", "nw05-inspect-size"]
+    },
+    "version": { "const": 1 },
+    "package_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "package_size_bytes": { "type": "integer", "minimum": 1 },
+    "sections": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["records", "offset", "size_bytes"],
+        "properties": {
+          "records": { "type": "integer", "minimum": 0 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "size_bytes": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "structure": {
+      "type": "object",
+      "required": ["attributed_bytes", "package_bytes", "all_bytes_attributed"],
+      "properties": {
+        "attributed_bytes": { "type": "integer", "minimum": 0 },
+        "package_bytes": { "type": "integer", "minimum": 1 },
+        "all_bytes_attributed": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "content": {
+      "type": "object",
+      "required": ["resource_count", "resource_bytes", "shader_count", "shader_blob_bytes"],
+      "properties": {
+        "resource_count": { "type": "integer", "minimum": 0 },
+        "resource_bytes": { "type": "integer", "minimum": 0 },
+        "shader_count": { "type": "integer", "minimum": 0 },
+        "shader_blob_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "distribution": {
+      "type": "object",
+      "required": ["total_distributed_bytes", "byte_ceiling", "within_byte_ceiling"],
+      "properties": {
+        "total_distributed_bytes": { "type": "integer", "minimum": 0 },
+        "byte_ceiling": { "type": "integer", "minimum": 1 },
+        "within_byte_ceiling": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "distributed_bytes", "included", "reason"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "minLength": 1 },
+          "distributed_bytes": { "type": "integer", "minimum": 0 },
+          "included": { "type": "boolean" },
+          "reason": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

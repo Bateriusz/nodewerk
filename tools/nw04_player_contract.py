@@ -146,24 +146,32 @@ def _failure(
 def validate_package_requirements(package: nwp.NwpPackage) -> list[CapabilityMismatch]:
     failures: list[CapabilityMismatch] = []
     capability = package.capability
-    if capability.profile_id != nwp.COMMON_PROFILE_ID:
+    allowed_primary_digest = (
+        nwp.COMMON_REQUIREMENTS_DIGEST
+        if capability.profile_id == nwp.COMMON_PROFILE_ID
+        else nwp.KNOWN_OPTIONAL_PROFILES.get(capability.profile_id)
+    )
+    if allowed_primary_digest is None:
         failures.append(
             _failure(
                 package,
                 "package_profile_unknown",
                 "profile_id",
-                nwp.COMMON_PROFILE_ID,
+                "known common or optional profile",
                 capability.profile_id or "unavailable",
-                "only the common NW-03 profile is executable",
+                "unknown capability-profile identity",
             )
         )
-    if capability.requirements_digest != nwp.COMMON_REQUIREMENTS_DIGEST:
+    if (
+        allowed_primary_digest is not None
+        and capability.requirements_digest != allowed_primary_digest
+    ):
         failures.append(
             _failure(
                 package,
                 "package_profile_digest_mismatch",
                 "requirements_digest",
-                nwp.COMMON_REQUIREMENTS_DIGEST,
+                allowed_primary_digest,
                 capability.requirements_digest or "unavailable",
                 "requirements digest is not the finalized NW-03 digest",
             )

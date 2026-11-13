@@ -465,6 +465,9 @@ class GraphNode:
     residency: str
     params: dict[str, list[str]] = field(default_factory=dict)
     inputs: dict[str, tuple[str, str]] = field(default_factory=dict)
+    # NW-05 dead-output elimination: retained output ports for this node.
+    # Empty means the operator's full declared output set.
+    selected_outputs: tuple[str, ...] = ()
 
     @property
     def operator_key(self) -> str:
@@ -1519,6 +1522,11 @@ class GeneratedShader:
     root_expression: str
     root_node_ids: tuple[str, ...]
     thread_group: tuple[int, int, int] = THREAD_GROUP
+    execution_root: str = ""
+    execution_order: int = 0
+    output_region: int = 0
+    region_count: int = 1
+    unfused: bool = False
 
     @property
     def hlsl_sha256(self) -> str:
@@ -1565,6 +1573,11 @@ def _shader_expression_text(document: GraphDocument, node: GraphNode) -> str:
                 raise CompilerError(
                     f"shader node '{node.node_id}' references unknown node '{source_node}'"
                 )
+            if source.selected_outputs and _source_port not in source.selected_outputs:
+                raise CompilerError(
+                    f"shader node '{node.node_id}' reads dead output port "
+                    f"'{source_node}.{_source_port}'"
+                )
             parts.append(_shader_expression_text(document, source))
         if node.operator_id == "nw.shader.add":
             return f"({parts[0]} + {parts[1]})"
@@ -1591,7 +1604,14 @@ def _reachable_shader_roots(document: GraphDocument) -> list[GraphNode]:
             continue
         source_node, _source_port = connection
         source = document.nodes.get(source_node)
-        if source is not None and source.node_id not in {item.node_id for item in gpu_roots}:
+        if (
+            source is not None
+            and source.node_id not in {item.node_id for item in gpu_roots}
+            and (
+                not source.selected_outputs
+                or _source_port in source.selected_outputs
+            )
+        ):
             gpu_roots.append(source)
     if gpu_roots:
         return [node for node in gpu_roots if node.operator_id in SHADER_OPERATORS]
@@ -1616,6 +1636,8 @@ def _reachable_shader_roots(document: GraphDocument) -> list[GraphNode]:
             for consumer in consumers.get(node.node_id, [])
         )
         if is_consumed_by_shader:
+            continue
+        if node.selected_outputs and "out" not in node.selected_outputs:
             continue
         if node.node_id not in seen:
             roots.append(node)
@@ -1647,6 +1669,8 @@ def lower_to_fused_hlsl(
     entry_point: str = ENTRY_POINT,
     thread_group: tuple[int, int, int] = THREAD_GROUP,
     dispatch_groups: tuple[int, int, int] = DISPATCH_GROUPS,
+    image_width: int | None = None,
+    image_height: int | None = None,
 ) -> tuple[list[GeneratedShader], list[dict[str, Any]]]:
     """Lower all reachable shader roots and return fused generated shaders."""
     diagnostics: list[dict[str, Any]] = []
@@ -1686,6 +1710,8 @@ def lower_to_fused_hlsl(
             thread_group=thread_group,
             dispatch_groups=dispatch_groups,
             entry_point=entry_point,
+            image_width=image_width,
+            image_height=image_height,
         )
         candidate = GeneratedShader(
             specialization_id=root.node_id,
@@ -1697,11 +1723,304 @@ def lower_to_fused_hlsl(
             root_expression=expression_text,
             root_node_ids=tuple(dependency_ids),
             thread_group=thread_group,
+            execution_root=root.node_id,
         )
         if candidate.specialization_key in seen_keys:
             continue
         seen_keys.add(candidate.specialization_key)
         generated.append(candidate)
+    return generated, diagnostics
+
+
+def _shader_topological_members(
+    document: GraphDocument, root: GraphNode
+) -> list[GraphNode]:
+    order: list[GraphNode] = []
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node: GraphNode) -> None:
+        if node.node_id in visited:
+            return
+        if node.node_id in visiting:
+            raise CompilerError(
+                f"cycle detected while lowering shader node '{node.node_id}'"
+            )
+        visiting.add(node.node_id)
+        for port in sorted(node.inputs):
+            source_id, source_port = node.inputs[port]
+            source = document.nodes.get(source_id)
+            if source is None:
+                raise CompilerError(
+                    f"shader node '{node.node_id}' references unknown node "
+                    f"'{source_id}'"
+                )
+            if source.operator_id not in SHADER_OPERATORS:
+                raise CompilerError(
+                    f"shader node '{node.node_id}' input '{port}' references "
+                    f"non-shader producer '{source_id}'"
+                )
+            if source.selected_outputs and source_port not in source.selected_outputs:
+                raise CompilerError(
+                    f"shader node '{node.node_id}' reads dead output port "
+                    f"'{source_id}.{source_port}'"
+                )
+            visit(source)
+        visiting.remove(node.node_id)
+        visited.add(node.node_id)
+        order.append(node)
+
+    visit(root)
+    return order
+
+
+def _texture_binding_hlsl() -> list[str]:
+    """HLSL declarations for the fixed fullscreen SRV binding at t0."""
+    return [
+        "Texture2D<float4> nw_input : register(t0);",
+        "float4 nw_texture2d(float2 nw_uv) {",
+        "    uint nw_width = 0u;",
+        "    uint nw_height = 0u;",
+        "    nw_input.GetDimensions(nw_width, nw_height);",
+        "    if (nw_width == 0u || nw_height == 0u) return float4(0.0, 0.0, 0.0, 0.0);",
+        "    float2 nw_clamped_uv = saturate(nw_uv);",
+        "    uint nw_x = min((uint)(nw_clamped_uv.x * (float)nw_width), nw_width - 1u);",
+        "    uint nw_y = min((uint)(nw_clamped_uv.y * (float)nw_height), nw_height - 1u);",
+        "    return nw_input.Load(int3(nw_x, nw_y, 0));",
+        "}",
+    ]
+
+
+def _emit_unfused_compute_hlsl(
+    document: GraphDocument,
+    node: GraphNode,
+    *,
+    region_by_node: dict[str, int],
+    region_count: int,
+    thread_group: tuple[int, int, int],
+    dispatch_groups: tuple[int, int, int],
+    entry_point: str,
+    image_width: int | None = None,
+    image_height: int | None = None,
+    sample_texture: bool = False,
+) -> tuple[str, list[dict[str, Any]], str]:
+    group_x, group_y, group_z = thread_group
+    dispatch_x, dispatch_y, dispatch_z = dispatch_groups
+    width = image_width or group_x * dispatch_x
+    height = image_height or group_y * dispatch_y
+    plane_elements = width * height * max(1, dispatch_z)
+    output_region = region_by_node[node.node_id]
+    output_base = output_region * plane_elements
+
+    expression_text = ""
+    prelude: list[str] = []
+    if node.operator_id in {"nw.shader.expr", "nw.shader.vec4_const"}:
+        expression_text = _shader_expression_text(document, node)
+        parsed = nw03_oracle.parse_expression(expression_text)
+        hlsl_expression = nw03_oracle.lower_to_hlsl(
+            parsed,
+            texture_function="nw_texture2d" if sample_texture else None,
+        )
+    elif node.operator_id in {"nw.shader.add", "nw.shader.mul", "nw.shader.mix"}:
+        values: dict[str, str] = {}
+        for port, local_name in (("a", "nw_a"), ("b", "nw_b")):
+            connection = node.inputs.get(port)
+            if connection is None:
+                raise CompilerError(
+                    f"shader node '{node.node_id}' is missing input '{port}'"
+                )
+            source_id, _source_port = connection
+            if source_id not in region_by_node:
+                raise CompilerError(
+                    f"shader node '{node.node_id}' input '{port}' has no "
+                    f"unfused storage region"
+                )
+            source_base = region_by_node[source_id] * plane_elements
+            prelude.append(
+                f"    float4 {local_name} = asfloat(nw_output.Load4("
+                f"({source_base}u + nw_index) * 16u));"
+            )
+            values[port] = local_name
+        if node.operator_id == "nw.shader.add":
+            hlsl_expression = f"({values['a']} + {values['b']})"
+        elif node.operator_id == "nw.shader.mul":
+            hlsl_expression = f"({values['a']} * {values['b']})"
+        else:
+            factor_text = " ".join(node.params.get("factor", ["0.5"]))
+            try:
+                factor = float(factor_text)
+            except ValueError as exc:
+                raise CompilerError(
+                    f"shader mix node '{node.node_id}' has invalid factor "
+                    f"'{factor_text}'"
+                ) from exc
+            hlsl_expression = f"lerp({values['a']}, {values['b']}, {factor!r})"
+        expression_text = node.operator_id
+    else:
+        raise CompilerError(
+            f"node '{node.node_id}' ({node.operator_id}) has no unfused shader lowering"
+        )
+
+    texture_declarations = _texture_binding_hlsl() if sample_texture else []
+    lines = [
+        "// Generated by nodewerkc NW-05; unfused multi-dispatch ShaderExpr node.",
+        "// Intermediate values occupy deterministic regions of the same UAV.",
+        "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
+        "RWByteAddressBuffer nw_output : register(u0);",
+        *texture_declarations,
+        "",
+        f"[numthreads({group_x}, {group_y}, {group_z})]",
+        f"void {entry_point}(uint3 nw_dispatch_id : SV_DispatchThreadID) {{",
+        f"    if (nw_dispatch_id.x >= {width}u || nw_dispatch_id.y >= {height}u) return;",
+        f"    float2 uv = (float2(nw_dispatch_id.xy) + 0.5) / float2({float(width)}, {float(height)});",
+        "    float g_time = g_params[0].x;",
+        "    uint nw_index = nw_dispatch_id.x + nw_dispatch_id.y * "
+        f"{width}u + nw_dispatch_id.z * {width * height}u;",
+        *prelude,
+        f"    float4 nw_value = {hlsl_expression};",
+        f"    nw_output.Store4(({output_base}u + nw_index) * 16u, asuint(nw_value));",
+        "}",
+        "",
+    ]
+    value_line = next(
+        index + 1
+        for index, line in enumerate(lines)
+        if "float4 nw_value =" in line
+    )
+    source_map = [
+        {
+            "generated_line": value_line,
+            "generated_column": 24,
+            "node_id": node.node_id,
+            "expression_id": "nw_value",
+        }
+    ]
+    return "\n".join(lines), source_map, expression_text
+
+
+def lower_to_selective_hlsl(
+    document: GraphDocument,
+    *,
+    fused_roots: Iterable[str] = (),
+    target: str = SHADER_TARGET,
+    entry_point: str = ENTRY_POINT,
+    thread_group: tuple[int, int, int] = THREAD_GROUP,
+    dispatch_groups: tuple[int, int, int] = DISPATCH_GROUPS,
+    image_width: int | None = None,
+    image_height: int | None = None,
+    texture_sample_roots: Iterable[str] = (),
+) -> tuple[list[GeneratedShader], list[dict[str, Any]]]:
+    """Lower accepted fusion roots as one shader and rejected roots as real
+    multi-dispatch shaders sharing a deterministic UAV scratch image.
+
+    This keeps .nwp v1 unchanged: every unfused member is an ordinary compute
+    shader/pipeline and frame ordering plus UAV barriers preserve dependencies.
+    """
+    diagnostics: list[dict[str, Any]] = []
+    roots = _reachable_shader_roots(document)
+    if not roots:
+        return [], [
+            _diagnostic(
+                "missing_implementation",
+                "graph has no reachable ShaderExpr producer",
+            )
+        ]
+    fused = set(fused_roots)
+    texture_roots = set(texture_sample_roots)
+    generated: list[GeneratedShader] = []
+    for root in roots:
+        try:
+            members = _shader_topological_members(document, root)
+            if root.node_id in fused or len(members) == 1:
+                expression_text = _shader_expression_text(document, root)
+                parsed = nw03_oracle.parse_expression(expression_text)
+                hlsl_expression = nw03_oracle.lower_to_hlsl(
+                    parsed,
+                    texture_function=(
+                        "nw_texture2d"
+                        if root.node_id in texture_roots
+                        else None
+                    ),
+                )
+                dependency_ids = sorted(_shader_dependencies(document, root))
+                hlsl, source_map = _emit_compute_hlsl(
+                    hlsl_expression,
+                    dependency_ids,
+                    thread_group=thread_group,
+                    dispatch_groups=dispatch_groups,
+                    entry_point=entry_point,
+                    image_width=image_width,
+                    image_height=image_height,
+                    sample_texture=root.node_id in texture_roots,
+                )
+                generated.append(
+                    GeneratedShader(
+                        specialization_id=root.node_id,
+                        entry_point=entry_point,
+                        target=target,
+                        family=PASS_FAMILY,
+                        hlsl=hlsl,
+                        source_map=tuple(source_map),
+                        root_expression=expression_text,
+                        root_node_ids=tuple(dependency_ids),
+                        thread_group=thread_group,
+                        execution_root=root.node_id,
+                    )
+                )
+                continue
+
+            region_by_node: dict[str, int] = {root.node_id: 0}
+            next_region = 1
+            for member in members:
+                if member.node_id == root.node_id:
+                    continue
+                region_by_node[member.node_id] = next_region
+                next_region += 1
+            region_count = len(region_by_node)
+            for execution_order, member in enumerate(members):
+                hlsl, source_map, expression_text = _emit_unfused_compute_hlsl(
+                    document,
+                    member,
+                    region_by_node=region_by_node,
+                    region_count=region_count,
+                    thread_group=thread_group,
+                    dispatch_groups=dispatch_groups,
+                    entry_point=entry_point,
+                    image_width=image_width,
+                    image_height=image_height,
+                    sample_texture=root.node_id in texture_roots,
+                )
+                generated.append(
+                    GeneratedShader(
+                        specialization_id=(
+                            f"{root.node_id}::unfused::{execution_order:04d}::"
+                            f"{member.node_id}"
+                        ),
+                        entry_point=entry_point,
+                        target=target,
+                        family=PASS_FAMILY,
+                        hlsl=hlsl,
+                        source_map=tuple(source_map),
+                        root_expression=expression_text,
+                        root_node_ids=(root.node_id, member.node_id),
+                        thread_group=thread_group,
+                        execution_root=root.node_id,
+                        execution_order=execution_order,
+                        output_region=region_by_node[member.node_id],
+                        region_count=region_count,
+                        unfused=True,
+                    )
+                )
+        except (CompilerError, nw03_oracle.ExpressionError) as exc:
+            diagnostics.append(
+                _diagnostic(
+                    "invalid_expression",
+                    str(exc),
+                    node_id=root.node_id,
+                    operator_id=root.operator_id,
+                    port_id="expression",
+                )
+            )
     return generated, diagnostics
 
 
@@ -1712,19 +2031,25 @@ def _emit_compute_hlsl(
     thread_group: tuple[int, int, int],
     dispatch_groups: tuple[int, int, int],
     entry_point: str,
+    image_width: int | None = None,
+    image_height: int | None = None,
+    sample_texture: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     group_x, group_y, group_z = thread_group
     dispatch_x, dispatch_y, dispatch_z = dispatch_groups
-    width = group_x * dispatch_x
-    height = group_y * dispatch_y
+    width = image_width or group_x * dispatch_x
+    height = image_height or group_y * dispatch_y
+    texture_declarations = _texture_binding_hlsl() if sample_texture else []
     lines = [
         "// Generated by nodewerkc NW-03; fused ShaderExpr compute entry point.",
         "// No source paths, editor layout, reflection, or debug metadata are emitted.",
         "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
         "RWByteAddressBuffer nw_output : register(u0);",
+        *texture_declarations,
         "",
         f"[numthreads({group_x}, {group_y}, {group_z})]",
         f"void {entry_point}(uint3 nw_dispatch_id : SV_DispatchThreadID) {{",
+        f"    if (nw_dispatch_id.x >= {width}u || nw_dispatch_id.y >= {height}u) return;",
         f"    float2 uv = (float2(nw_dispatch_id.xy) + 0.5) / float2({float(width)}, {float(height)});",
         "    float g_time = g_params[0].x;",
         f"    float4 nw_value = {hlsl_expression};",
@@ -1734,11 +2059,16 @@ def _emit_compute_hlsl(
         "}",
         "",
     ]
+    value_line = next(
+        index + 1
+        for index, line in enumerate(lines)
+        if "float4 nw_value =" in line
+    )
     source_map = []
     for node_id in node_ids:
         source_map.append(
             {
-                "generated_line": 10,
+                "generated_line": value_line,
                 "generated_column": 24,
                 "node_id": node_id,
                 "expression_id": "nw_value",
@@ -1760,6 +2090,11 @@ def generated_shader_to_dict(shader: GeneratedShader) -> dict[str, Any]:
         "root_expression": shader.root_expression,
         "root_node_ids": list(shader.root_node_ids),
         "thread_group": list(shader.thread_group),
+        "execution_root": shader.execution_root or shader.specialization_id,
+        "execution_order": shader.execution_order,
+        "output_region": shader.output_region,
+        "region_count": shader.region_count,
+        "unfused": shader.unfused,
     }
 
 
@@ -1896,7 +2231,7 @@ def resolve_dxc(explicit: str | None = None) -> str | None:
     if explicit:
         candidate = Path(explicit)
         if candidate.is_file():
-            return str(candidate)
+            return str(candidate.resolve())
         resolved = shutil.which(explicit)
         if resolved:
             return resolved
@@ -1912,7 +2247,18 @@ def _run_dxc(
     target: str,
     entry_point: str,
     optimization: str,
+    working_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    # DXC can retain the source filename in the DXIL module even after
+    # -Qstrip_debug.  Compile with a stable relative source/output name from a
+    # private working directory so two clean export directories do not produce
+    # path-dependent shader blobs.
+    source_argument = (
+        hlsl_path.name if working_directory is not None else str(hlsl_path)
+    )
+    output_argument = (
+        output_path.name if working_directory is not None else str(output_path)
+    )
     command = [
         *_dxc_command_prefix(dxc_bin),
         "-T",
@@ -1925,10 +2271,16 @@ def _run_dxc(
         "-Qstrip_reflect",
         "-Qstrip_debug",
         "-Fo",
-        str(output_path),
-        str(hlsl_path),
+        output_argument,
+        source_argument,
     ]
-    return subprocess.run(command, capture_output=True, text=True, check=False)
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(working_directory) if working_directory is not None else None,
+    )
 
 
 def compile_generated_shader(
@@ -1967,6 +2319,7 @@ def compile_generated_shader(
         target=shader.target,
         entry_point=shader.entry_point,
         optimization=optimization,
+        working_directory=hlsl_path.parent,
     )
     source = shader.specialization_id or (
         shader.source_map[0]["node_id"] if shader.source_map else ""
@@ -2061,6 +2414,13 @@ def _compiler_fingerprint(
             {
                 "graph_semantic_digest": semantic_digest,
                 "compiler_settings": document.settings,
+                "selected_outputs": {
+                    node.node_id: list(node.selected_outputs)
+                    for node in sorted(
+                        document.nodes.values(), key=lambda item: item.node_id
+                    )
+                    if node.selected_outputs
+                },
                 "generated": [shader.specialization_key for shader in generated],
                 "dxc_identity": dxc_identity,
                 "optimization": optimization,
@@ -2133,7 +2493,7 @@ def _build_package(
         )
     ]
     shaders: list[ShaderRecord] = []
-    for index, shader in enumerate(sorted(generated, key=lambda item: item.specialization_id), start=1):
+    for index, shader in enumerate(generated, start=1):
         shader_compiled = compiled[shader.specialization_key]
         shaders.append(
             ShaderRecord(
@@ -2311,6 +2671,9 @@ def compile_package(
     graph_path: str | os.PathLike[str],
     output_path: str | os.PathLike[str],
     *,
+    document: GraphDocument | None = None,
+    semantic_digest_override: str | None = None,
+    semantic_digest_test_identity: bool | None = None,
     report_path: str | os.PathLike[str] | None = None,
     dev_sidecar_path: str | os.PathLike[str] | None = None,
     cache_dir: str | os.PathLike[str] | None = None,
@@ -2318,18 +2681,42 @@ def compile_package(
     optimization: str = "O2",
     allow_unpinned_dxc: bool = False,
     allow_test_payloads: bool = False,
+    shader_thread_group: tuple[int, int, int] | None = None,
+    dispatch_groups: tuple[int, int, int] | None = None,
+    image_width: int | None = None,
+    image_height: int | None = None,
+    generated_shaders_override: Sequence[GeneratedShader] | None = None,
 ) -> dict[str, Any]:
     """Compile a graph to a validated `.nwp` package and publish atomically."""
     output_path = Path(output_path)
-    document = load_graph(graph_path)
-    generated, diagnostics = lower_to_fused_hlsl(document)
+    if document is None:
+        document = load_graph(graph_path)
+    if generated_shaders_override is None:
+        generated, diagnostics = lower_to_fused_hlsl(
+            document,
+            thread_group=shader_thread_group or THREAD_GROUP,
+            dispatch_groups=dispatch_groups or DISPATCH_GROUPS,
+            image_width=image_width,
+            image_height=image_height,
+        )
+    else:
+        generated = list(generated_shaders_override)
+        diagnostics = []
     if diagnostics:
         raise CompilerError("failed to lower graph", diagnostics)
     if not generated:
         raise CompilerError("graph produced no shader specializations")
-    semantic_identity = document.semantic_identity()
-    semantic_digest = semantic_identity.digest
-    test_semantic_digest = semantic_identity.is_test
+    if semantic_digest_override is not None:
+        semantic_digest = semantic_digest_override
+        test_semantic_digest = (
+            bool(semantic_digest_test_identity)
+            if semantic_digest_test_identity is not None
+            else False
+        )
+    else:
+        semantic_identity = document.semantic_identity()
+        semantic_digest = semantic_identity.digest
+        test_semantic_digest = semantic_identity.is_test
 
     dxc_bin = resolve_dxc(dxc_executable)
     if not dxc_bin:
@@ -2529,10 +2916,11 @@ def _build_report(
     source_path: str = "",
 ) -> dict[str, Any]:
     shader_rows = []
-    for shader in sorted(generated, key=lambda item: item.specialization_id):
+    for shader_id, shader in enumerate(generated, start=1):
         result = compiled[shader.specialization_key]
         shader_rows.append(
             {
+                "shader_id": shader_id,
                 "specialization_id": shader.specialization_id,
                 "specialization_key": shader.specialization_key,
                 "entry_point": shader.entry_point,
@@ -2543,11 +2931,18 @@ def _build_report(
                 "blob_size": len(result["blob"]),
                 "cache_hit": bool(result.get("cache_hit")),
                 "root_node_ids": list(shader.root_node_ids),
+                "execution_root": shader.execution_root or shader.specialization_id,
+                "execution_order": shader.execution_order,
+                "output_region": shader.output_region,
+                "region_count": shader.region_count,
+                "unfused": shader.unfused,
             }
         )
     unique_blobs = {row["blob_sha256"]: row["blob_size"] for row in shader_rows}
     roots = _reachable_shader_roots(document)
-    emitted_roots = {shader.specialization_id for shader in generated}
+    emitted_roots = {
+        shader.execution_root or shader.specialization_id for shader in generated
+    }
     reachable_nodes: set[str] = set()
     for root in roots:
         reachable_nodes.update(_shader_dependencies(document, root))

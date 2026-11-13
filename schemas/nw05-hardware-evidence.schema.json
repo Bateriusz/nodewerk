@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw05-hardware-evidence.schema.json",
+  "title": "Nodewerk NW-05 alias/GPU evidence",
+  "type": "object",
+  "required": ["schema_version", "task", "verification_status", "qualifications", "policy"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "task": { "const": "NW-05" },
+    "verification_status": {
+      "enum": ["pending_unverified", "execution_recorded", "executed_failure", "verified"]
+    },
+    "qualifications": {
+      "type": "object",
+      "required": ["ada", "blackwell"],
+      "properties": {
+        "ada": { "$ref": "#/$defs/qualification" },
+        "blackwell": { "$ref": "#/$defs/qualification" }
+      },
+      "additionalProperties": false
+    },
+    "executions": { "type": "array", "items": { "type": "object" } },
+    "unavailable_telemetry": { "type": "array", "items": { "type": "string" } },
+    "toolchain_manifest_sha256": { "type": "string" },
+    "policy": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "qualification": {
+      "type": "object",
+      "required": ["hardware_tier", "status"],
+      "properties": {
+        "hardware_tier": { "type": "string" },
+        "status": {
+          "enum": ["pending_unverified", "execution_recorded", "failed", "verified"]
+        },
+        "reason": { "type": "string" },
+        "artifact_key": { "type": "string" },
+        "package_sha256": { "type": "string" },
+        "executable_sha256": { "type": "string" },
+        "adapter_description": { "type": "string" },
+        "generation_metadata": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

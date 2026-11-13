@@ -10,6 +10,16 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildProfiles.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompileShaders.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DependencyCheck.cmake")
 
+set(NW05_GENERATED_PLAYER_SOURCE "" CACHE FILEPATH
+    "Generated NW-05 player main to compile into the specialized executable")
+option(NW05_COMPILE_WAVE_OPS_QUERY "Compile D3D12_OPTIONS1 wave-ops query support" ON)
+option(NW05_COMPILE_INT64_SHADER_OPS_QUERY "Compile D3D12_OPTIONS1 int64 query support" ON)
+option(NW05_COMPILE_FP16_SHADER_OPS_QUERY "Compile D3D12_OPTIONS4 fp16 query support" ON)
+option(NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD "Compile procedural texture upload implementation" ON)
+option(NW05_COMPILE_PROCEDURAL_TEXTURE_R8 "Compile R8G8B8A8 procedural texture materialization" ON)
+option(NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F "Compile RGBA32F procedural texture materialization" ON)
+
+if(WIN32)
 nw_add_offline_compute_shader(
     nw_offline_shaders
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/compute_fixture.hlsl"
@@ -31,19 +41,54 @@ nw_add_offline_compute_shader(
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/display_fixture_dxil.h"
     "kDisplayFixtureDxil"
 )
+else()
+    # Non-Windows configuration does not need offline D3D12 payloads.
+    add_custom_target(nw_offline_shaders)
+    add_custom_target(nw_offline_display_shader)
+endif()
 
-add_library(nw_player_bootstrap STATIC
+set(NW_PLAYER_BOOTSTRAP_SOURCES
     src/player/diagnostics.cpp
     src/player/capability_check.cpp
     src/player/d3d12_bootstrap.cpp
     src/player/capability_requirements.cpp
     src/player/package_loader.cpp
+    src/player/embedded_package.cpp
     src/player/resource_plan.cpp
     src/player/player_instrumentation.cpp
     src/player/package_player.cpp
     src/player/player.cpp
     src/platform/win32_window.cpp
 )
+
+add_library(nw_player_bootstrap STATIC
+    ${NW_PLAYER_BOOTSTRAP_SOURCES}
+)
+
+if(NOT WIN32)
+    # Focused portability gate for NW-05 PackagePlayer. This object target
+    # compiles package_player.cpp without pulling in Windows-only bootstrap
+    # fixtures, so CI directly catches accidental non-Windows references such
+    # as InitialUploadBytes while leaving unrelated NW-01 portability debt out
+    # of the NW-05 acceptance path.
+    add_library(nw_package_player_host_compile OBJECT
+        src/player/package_player.cpp
+    )
+    target_include_directories(nw_package_player_host_compile PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
+    )
+    nw_apply_player_profile(nw_package_player_host_compile)
+    # Compile the same shader-only specialization that the real-PE NW-05
+    # export uses. This catches dead-code/warning regressions in implementations
+    # that are intentionally removed from the specialized runtime.
+    target_compile_definitions(nw_package_player_host_compile PRIVATE
+        NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=0
+        NW05_COMPILE_PROCEDURAL_TEXTURE_R8=0
+        NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=0
+    )
+endif()
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -154,6 +199,78 @@ if(WIN32)
 endif()
 nw_apply_player_profile(nw_package_player_fixture)
 nw_attach_dependency_check(nw_package_player_fixture "package_player")
+
+# NW-05: content-free specialized-player template.  `nodewerkc export` appends
+# the graph-derived .nwp package and generated link manifest to this executable
+# (or an equivalent player build) using the deterministic embedded footer.  It
+# is part of the default Windows build so the self-contained player is actually
+# compiled and reproducible.
+add_executable(nw_procedural_image_player
+    fixtures/nw05_procedural_image/main.cpp
+)
+target_link_libraries(nw_procedural_image_player PRIVATE
+    nw_player_bootstrap
+    nw_package_player
+)
+if(WIN32)
+    target_link_libraries(nw_procedural_image_player PRIVATE gdi32)
+endif()
+nw_apply_player_profile(nw_procedural_image_player)
+nw_attach_dependency_check(nw_procedural_image_player "procedural_image_player")
+
+if(NW05_GENERATED_PLAYER_SOURCE)
+    if(NOT EXISTS "${NW05_GENERATED_PLAYER_SOURCE}")
+        message(FATAL_ERROR "NW05_GENERATED_PLAYER_SOURCE does not exist: ${NW05_GENERATED_PLAYER_SOURCE}")
+    endif()
+
+    # Build the generated NW-05 artifact from an isolated player closure.
+    # Generic release/NW-04 targets retain NW_ENABLE_D3D12_VALIDATION=0;
+    # this library alone carries the real debug-layer qualification path and
+    # only the optional feature-query code retained by the generated manifest.
+    add_library(nw05_player_bootstrap STATIC
+        ${NW_PLAYER_BOOTSTRAP_SOURCES}
+    )
+    target_include_directories(nw05_player_bootstrap PUBLIC
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
+    )
+    nw_apply_player_profile(nw05_player_bootstrap)
+    target_compile_definitions(nw05_player_bootstrap PRIVATE
+        NW05_SPECIALIZED_VALIDATION=1
+        NW05_COMPILE_WAVE_OPS_QUERY=$<BOOL:${NW05_COMPILE_WAVE_OPS_QUERY}>
+        NW05_COMPILE_INT64_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_INT64_SHADER_OPS_QUERY}>
+        NW05_COMPILE_FP16_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_FP16_SHADER_OPS_QUERY}>
+        NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD}>
+        NW05_COMPILE_PROCEDURAL_TEXTURE_R8=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_R8}>
+        NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F}>
+    )
+    add_dependencies(nw05_player_bootstrap nw_offline_shaders)
+    add_dependencies(nw05_player_bootstrap nw_offline_display_shader)
+    if(WIN32)
+        target_link_libraries(nw05_player_bootstrap PUBLIC
+            d3d12
+            dxgi
+            user32
+            kernel32
+        )
+    endif()
+
+    add_executable(nw05_generated_player "${NW05_GENERATED_PLAYER_SOURCE}")
+    target_link_libraries(nw05_generated_player PRIVATE
+        nw05_player_bootstrap
+        nw_package_player
+    )
+    if(WIN32)
+        target_link_libraries(nw05_generated_player PRIVATE gdi32)
+    endif()
+    nw_apply_player_profile(nw05_generated_player)
+    set_target_properties(nw05_generated_player PROPERTIES
+        OUTPUT_NAME "nw05_generated_player"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/nw05-generated"
+    )
+endif()
 
 add_library(nw_compiler STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
     src/compiler/nw_compiler.cpp
