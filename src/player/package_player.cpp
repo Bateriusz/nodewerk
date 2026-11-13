@@ -2451,7 +2451,7 @@ bool PackagePlayer::CheckDeviceRemoved(const char* stage) {
 }
 
 bool PackagePlayer::CheckD3D12Validation(const char* stage) {
-#if defined(_WIN32) && defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if defined(_WIN32) && NW_PACKAGE_PLAYER_D3D12_VALIDATION
     PlatformState* state = platform_.get();
     if (state != nullptr && state->info_queue != nullptr &&
         HasValidationError(state->info_queue)) {
