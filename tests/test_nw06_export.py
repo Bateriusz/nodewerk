@@ -446,6 +446,53 @@ def test_render_target_binding_clears_color_and_depth() -> None:
     assert "D3D12_CLEAR_FLAG_DEPTH" in player
 
 
+def test_package_player_uses_dedicated_rtv_and_dsv_heaps() -> None:
+    source = (
+        REPO_ROOT / "src" / "player" / "package_player.cpp"
+    ).read_text(encoding="utf-8")
+    assert "package_rtv_heap" in source
+    assert "package_dsv_heap" in source
+    assert source.count("D3D12_DESCRIPTOR_HEAP_TYPE_RTV") >= 2
+    assert source.count("D3D12_DESCRIPTOR_HEAP_TYPE_DSV") >= 2
+    count_body = source[
+        source.index("std::size_t CountCbvSrvUavDescriptors") : source.index(
+            "std::size_t CountSamplerDescriptors"
+        )
+    ]
+    # Package RTV/DSV resources do not consume CBV/SRV/UAV descriptors;
+    # rtv_srv consumes exactly one SRV descriptor.
+    assert 'resource.usage == "rtv"' not in count_body
+    assert 'resource.usage == "dsv"' not in count_body
+    assert 'resource.usage == "rtv_srv"' in count_body
+
+
+def test_descriptor_srv_flag_is_set_after_binding_resolution() -> None:
+    source = (
+        REPO_ROOT / "src" / "player" / "package_player.cpp"
+    ).read_text(encoding="utf-8")
+    resolution = source.index(
+        'op.descriptor_is_srv =\n                binding != nullptr'
+    )
+    propagation = source.index(
+        "active_descriptor_is_srv[op.root_parameter] ="
+    )
+    assert resolution < propagation
+
+
+def test_resource_plan_is_binding_aware_for_init_and_indirect_draw() -> None:
+    source = (
+        REPO_ROOT / "src" / "player" / "resource_plan.cpp"
+    ).read_text(encoding="utf-8")
+    assert "binding_usage_for" in source
+    assert 'instruction.opcode == "init.dispatch"' in source
+    assert "it->second.initialized = true;" in source
+    assert 'instruction.opcode == "frame.set_root_signature"' in source
+    assert "bound_by_root.clear();" in source
+    assert 'instruction.opcode == "frame.execute_indirect"' in source
+    assert 'resource.name == "vertices"' in source
+    assert 'resource.name == "indices"' in source
+
+
 def test_player_packs_uint_tick_root_constant_at_nonzero_tick() -> None:
     # Unconditional contract assertion against the actual C++ implementation.
     # The player lowers a `uint` timeline parameter with tick_kind 1 and writes

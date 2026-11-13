@@ -468,6 +468,9 @@ def check_shader_contracts() -> CheckResult:
         player = (
             REPO_ROOT / "src" / "player" / "package_player.cpp"
         ).read_text(encoding="utf-8")
+        resource_plan = (
+            REPO_ROOT / "src" / "player" / "resource_plan.cpp"
+        ).read_text(encoding="utf-8")
         if (
             "uint4(Param0, Param1, Param2, Param3)" not in light
             or "asuint(float4(Param0" in light
@@ -512,6 +515,39 @@ def check_shader_contracts() -> CheckResult:
                 "nw06_shader_contract",
                 "PackagePlayer does not lower uint timeline ticks as integers",
             )
+        descriptor_resolution = player.find(
+            "op.descriptor_is_srv =\n                binding != nullptr"
+        )
+        descriptor_propagation = player.find(
+            "active_descriptor_is_srv[op.root_parameter] ="
+        )
+        if (
+            "package_rtv_heap" not in player
+            or "package_dsv_heap" not in player
+            or "D3D12_DESCRIPTOR_HEAP_TYPE_DSV" not in player
+            or descriptor_resolution < 0
+            or descriptor_propagation < 0
+            or descriptor_resolution >= descriptor_propagation
+        ):
+            return _fail(
+                "nw06_shader_contract",
+                "PackagePlayer descriptor-heap or SRV-binding invariants "
+                "are not satisfied",
+            )
+        if (
+            "binding_usage_for" not in resource_plan
+            or 'instruction.opcode == "init.dispatch"' not in resource_plan
+            or "it->second.initialized = true;" not in resource_plan
+            or 'instruction.opcode == "frame.set_root_signature"' not in resource_plan
+            or "bound_by_root.clear();" not in resource_plan
+            or 'instruction.opcode == "frame.execute_indirect"' not in resource_plan
+            or 'resource.name == "vertices"' not in resource_plan
+            or 'resource.name == "indices"' not in resource_plan
+        ):
+            return _fail(
+                "nw06_shader_contract",
+                "native resource lifetime analysis is not binding-aware",
+            )
         return _ok(
             "nw06_shader_contract",
             evidence={
@@ -521,6 +557,9 @@ def check_shader_contracts() -> CheckResult:
                 "camera_eye_specular": True,
                 "explicit_render_target_clears": True,
                 "package_player_uint_tick_lowering": True,
+                "dedicated_rtv_dsv_heaps": True,
+                "descriptor_srv_binding_order": True,
+                "native_resource_plan_binding_aware": True,
             },
         )
     except Exception as exc:

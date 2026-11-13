@@ -204,14 +204,11 @@ std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
 std::size_t CountCbvSrvUavDescriptors(const package::Package& pkg) {
     std::size_t count = 0u;
     for (const auto& resource : pkg.resources) {
-        if (ResourceNeedsCbvSrvUavDescriptor(pkg, resource)) {
+        if (resource.usage == "uav_srv") {
+            count += 2u;
+        } else if (resource.usage == "rtv_srv") {
             ++count;
-        }
-        if (resource.usage == "uav_srv" ||
-            resource.usage == "rtv_srv") {
-            ++count;  // Combined resources need both views.
-        } else if (resource.usage == "rtv" ||
-                   resource.usage == "dsv") {
+        } else if (ResourceNeedsCbvSrvUavDescriptor(pkg, resource)) {
             ++count;
         }
     }
@@ -485,6 +482,9 @@ struct PlatformState {
         D3D12_CPU_DESCRIPTOR_HANDLE rtv_cpu_handle{};
         std::uint32_t rtv_descriptor_index = 0xFFFFFFFFu;
         bool has_rtv_descriptor = false;
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv_cpu_handle{};
+        std::uint32_t dsv_descriptor_index = 0xFFFFFFFFu;
+        bool has_dsv_descriptor = false;
         // UAV ordering is explicit: two dependent dispatches that leave the
         // resource in UNORDERED_ACCESS still need a UAV barrier between them.
         bool uav_accessed_in_frame = false;
@@ -534,12 +534,20 @@ struct PlatformState {
 
     ID3D12DescriptorHeap* cbv_srv_uav_heap = nullptr;
     ID3D12DescriptorHeap* sampler_heap = nullptr;
+    // Package-owned RTV/DSV descriptors live in their own non-shader-visible
+    // heaps; D3D12 rejects RTV/DSV handles from a CBV/SRV/UAV heap.
+    ID3D12DescriptorHeap* package_rtv_heap = nullptr;
+    ID3D12DescriptorHeap* package_dsv_heap = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE cbv_srv_uav_cpu_start{};
     D3D12_GPU_DESCRIPTOR_HANDLE cbv_srv_uav_gpu_start{};
     D3D12_CPU_DESCRIPTOR_HANDLE sampler_cpu_start{};
     D3D12_GPU_DESCRIPTOR_HANDLE sampler_gpu_start{};
+    D3D12_CPU_DESCRIPTOR_HANDLE package_rtv_cpu_start{};
+    D3D12_CPU_DESCRIPTOR_HANDLE package_dsv_cpu_start{};
     std::uint32_t cbv_srv_uav_increment = 0u;
     std::uint32_t sampler_increment = 0u;
+    std::uint32_t package_rtv_increment = 0u;
+    std::uint32_t package_dsv_increment = 0u;
     std::uint32_t rtv_increment = 0u;
 
     std::vector<ResourceSlot> resources;
@@ -1350,8 +1358,6 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             if (op.root_parameter < active_descriptor_resources.size()) {
                 active_descriptor_resources[op.root_parameter] = op.resource_a;
                 active_descriptor_valid[op.root_parameter] = true;
-                active_descriptor_is_srv[op.root_parameter] =
-                    op.descriptor_is_srv;
             }
             const package::ResourceDescriptor* resource =
                 FindPackageResource(package_, op.resource_a);
@@ -1431,6 +1437,10 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             op.descriptor_is_srv =
                 binding != nullptr && binding->usage == "srv";
+            if (op.root_parameter < active_descriptor_is_srv.size()) {
+                active_descriptor_is_srv[op.root_parameter] =
+                    op.descriptor_is_srv;
+            }
         } else if (type == FrameOp::Type::Barrier) {
             if (instruction.operands.size() != 2u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -2396,9 +2406,65 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         ++stats_.engine_heap_count;
     }
 
+    std::size_t package_rtv_count = 0u;
+    std::size_t package_dsv_count = 0u;
+    for (const auto& resource : package_.resources) {
+        if (resource.usage == "rtv" || resource.usage == "rtv_srv") {
+            ++package_rtv_count;
+        } else if (resource.usage == "dsv") {
+            ++package_dsv_count;
+        }
+    }
+    if (package_rtv_count > 0u) {
+        D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
+        heap_desc.NumDescriptors = static_cast<UINT>(package_rtv_count);
+        heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        if (FAILED(state->device->CreateDescriptorHeap(
+                &heap_desc, IID_PPV_ARGS(&state->package_rtv_heap))) ||
+            state->package_rtv_heap == nullptr) {
+            return Fail(ExitCode::DescriptorHeapCreationFailed, "descriptor",
+                        "package_rtv_heap_failed", "rtv_descriptors",
+                        std::to_string(package_rtv_count), "0", "descriptor",
+                        "package RTV descriptor heap creation failed");
+        }
+        state->package_rtv_cpu_start =
+            state->package_rtv_heap->GetCPUDescriptorHandleForHeapStart();
+        state->package_rtv_increment =
+            state->device->GetDescriptorHandleIncrementSize(
+                D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        stats_.engine_descriptor_count += package_rtv_count;
+        stats_.descriptor_allocation_calls += package_rtv_count;
+        ++stats_.engine_heap_count;
+    }
+    if (package_dsv_count > 0u) {
+        D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
+        heap_desc.NumDescriptors = static_cast<UINT>(package_dsv_count);
+        heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        if (FAILED(state->device->CreateDescriptorHeap(
+                &heap_desc, IID_PPV_ARGS(&state->package_dsv_heap))) ||
+            state->package_dsv_heap == nullptr) {
+            return Fail(ExitCode::DescriptorHeapCreationFailed, "descriptor",
+                        "package_dsv_heap_failed", "dsv_descriptors",
+                        std::to_string(package_dsv_count), "0", "descriptor",
+                        "package DSV descriptor heap creation failed");
+        }
+        state->package_dsv_cpu_start =
+            state->package_dsv_heap->GetCPUDescriptorHandleForHeapStart();
+        state->package_dsv_increment =
+            state->device->GetDescriptorHandleIncrementSize(
+                D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+        stats_.engine_descriptor_count += package_dsv_count;
+        stats_.descriptor_allocation_calls += package_dsv_count;
+        ++stats_.engine_heap_count;
+    }
+
     state->resources.resize(package_.resources.size());
     std::uint32_t cbv_index = 0u;
     std::uint32_t sampler_index = 0u;
+    std::uint32_t package_rtv_index = 0u;
+    std::uint32_t package_dsv_index = 0u;
     for (std::size_t index = 0u; index < package_.resources.size(); ++index) {
         const auto& descriptor = package_.resources[index];
         auto& slot = state->resources[index];
@@ -2410,23 +2476,24 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         } else if (ResourceNeedsCbvSrvUavDescriptor(package_, descriptor)) {
             slot.descriptor_index = cbv_index++;
             slot.has_descriptor = true;
-            if (descriptor.usage == "uav_srv" ||
-                descriptor.usage == "rtv_srv") {
+            if (descriptor.usage == "uav_srv") {
                 slot.srv_descriptor_index = cbv_index++;
                 slot.has_srv_descriptor = true;
             }
             if (descriptor.usage == "rtv_srv") {
-                slot.rtv_descriptor_index = slot.descriptor_index;
+                // The CBV/SRV/UAV-heap descriptor for an RTV+SRV resource is
+                // its SRV; the RTV lives in the package RTV heap.
+                slot.srv_descriptor_index = slot.descriptor_index;
+                slot.has_srv_descriptor = true;
+                slot.rtv_descriptor_index = package_rtv_index++;
                 slot.has_rtv_descriptor = true;
             }
-        } else if (descriptor.usage == "rtv" ||
-                   descriptor.usage == "dsv") {
-            slot.descriptor_index = cbv_index++;
-            slot.has_descriptor = true;
-            if (descriptor.usage == "rtv") {
-                slot.rtv_descriptor_index = slot.descriptor_index;
-                slot.has_rtv_descriptor = true;
-            }
+        } else if (descriptor.usage == "rtv") {
+            slot.rtv_descriptor_index = package_rtv_index++;
+            slot.has_rtv_descriptor = true;
+        } else if (descriptor.usage == "dsv") {
+            slot.dsv_descriptor_index = package_dsv_index++;
+            slot.has_dsv_descriptor = true;
         }
     }
     state->root_signatures.reserve(package_.root_signatures.size());
@@ -2935,7 +3002,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         }
                         state->device->CreateUnorderedAccessView(
                             slot->resource, nullptr, &view, handle);
-                    } else if (placement->descriptor.usage == "srv") {
+                    } else if (placement->descriptor.usage == "srv" ||
+                               placement->descriptor.usage == "rtv_srv") {
                         D3D12_SHADER_RESOURCE_VIEW_DESC view{};
                         view.Shader4ComponentMapping =
                             D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -2984,23 +3052,18 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         }
                         state->device->CreateShaderResourceView(
                             slot->resource, &view, handle);
-                    } else if (placement->descriptor.usage == "rtv") {
-                        state->device->CreateRenderTargetView(
-                            slot->resource, nullptr, handle);
-                    } else if (placement->descriptor.usage == "rtv_srv") {
-                        state->device->CreateRenderTargetView(
-                            slot->resource, nullptr, handle);
-                    } else if (placement->descriptor.usage == "dsv") {
-                        state->device->CreateDepthStencilView(
-                            slot->resource, nullptr, handle);
                     }
                     slot->cpu_handle = handle;
                     slot->gpu_handle = state->cbv_srv_uav_gpu_start;
                     slot->gpu_handle.ptr +=
                         static_cast<UINT64>(slot->descriptor_index) *
                         state->cbv_srv_uav_increment;
-                    if ((placement->descriptor.usage == "uav_srv" ||
-                         placement->descriptor.usage == "rtv_srv") &&
+                    if (placement->descriptor.usage == "rtv_srv" &&
+                        slot->has_srv_descriptor) {
+                        slot->srv_cpu_handle = handle;
+                        slot->srv_gpu_handle = slot->gpu_handle;
+                    }
+                    if (placement->descriptor.usage == "uav_srv" &&
                         slot->has_srv_descriptor) {
                         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
                         srv.Shader4ComponentMapping =
@@ -3048,6 +3111,28 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             state->cbv_srv_uav_increment;
                     }
                 }
+            }
+            if (slot->resource != nullptr && slot->has_rtv_descriptor) {
+                D3D12_CPU_DESCRIPTOR_HANDLE handle =
+                    state->package_rtv_cpu_start;
+                handle.ptr +=
+                    static_cast<SIZE_T>(slot->rtv_descriptor_index) *
+                    state->package_rtv_increment;
+                state->device->CreateRenderTargetView(slot->resource, nullptr,
+                                                      handle);
+                slot->rtv_cpu_handle = handle;
+                slot->cpu_handle = handle;
+            }
+            if (slot->resource != nullptr && slot->has_dsv_descriptor) {
+                D3D12_CPU_DESCRIPTOR_HANDLE handle =
+                    state->package_dsv_cpu_start;
+                handle.ptr +=
+                    static_cast<SIZE_T>(slot->dsv_descriptor_index) *
+                    state->package_dsv_increment;
+                state->device->CreateDepthStencilView(slot->resource, nullptr,
+                                                      handle);
+                slot->dsv_cpu_handle = handle;
+                slot->cpu_handle = handle;
             }
         } else if (instruction.opcode == "init.create_root_signature") {
             if (!require_operands(instruction, 1u)) {
@@ -5703,6 +5788,12 @@ void PackagePlayer::ReleasePlatform() noexcept {
     }
     if (state->timestamp_heap != nullptr) state->timestamp_heap->Release();
     if (state->rtv_heap != nullptr) state->rtv_heap->Release();
+    if (state->package_rtv_heap != nullptr) {
+        state->package_rtv_heap->Release();
+    }
+    if (state->package_dsv_heap != nullptr) {
+        state->package_dsv_heap->Release();
+    }
     if (state->cbv_srv_uav_heap != nullptr) {
         state->cbv_srv_uav_heap->Release();
     }
