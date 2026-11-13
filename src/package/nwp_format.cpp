@@ -1560,6 +1560,73 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
     return diagnostics.size() == before;
 }
 
+void ValidateTransientBindingReuse(
+    const std::vector<ResourceDescriptor>& resources,
+    const std::vector<Instruction>& frame,
+    std::vector<Diagnostic>& diagnostics) {
+    std::map<std::string, std::set<std::uint32_t>> ids_by_binding;
+    std::map<std::string, std::string> usage_by_binding;
+    std::map<std::uint32_t, std::string> names_by_id;
+    for (const auto& resource : resources) {
+        const std::string key =
+            resource.pass_family + "/" + resource.usage + "/" +
+            std::to_string(resource.binding_space) + ":" +
+            std::to_string(resource.binding_slot);
+        ids_by_binding[key].insert(resource.resource_id);
+        usage_by_binding[key] = resource.usage;
+        names_by_id[resource.resource_id] = resource.name;
+    }
+    std::map<std::string, std::set<std::uint32_t>> duplicates;
+    for (const auto& entry : ids_by_binding) {
+        if (entry.second.size() > 1u) duplicates.insert(entry);
+    }
+    if (duplicates.empty()) return;
+    std::set<std::uint32_t> explicitly_bound;
+    for (const auto& instruction : frame) {
+        if (instruction.opcode != "frame.set_descriptor_table") continue;
+        std::vector<std::uint32_t> bound;
+        for (const auto& operand : instruction.operands) {
+            if (operand.type == OperandType::ResourceRef) {
+                bound.push_back(operand.u32);
+            }
+        }
+        for (const auto& entry : duplicates) {
+            std::uint32_t simultaneous = 0u;
+            for (const auto resource_id : bound) {
+                if (entry.second.count(resource_id) != 0u) {
+                    ++simultaneous;
+                }
+            }
+            if (simultaneous > 1u) {
+                AddDiagnostic(
+                    diagnostics, "package_resource_binding_collision",
+                    "descriptor table binds multiple resources competing for " +
+                        entry.first,
+                    std::string(kSectionFrame));
+            }
+        }
+        explicitly_bound.insert(bound.begin(), bound.end());
+    }
+    for (const auto& entry : duplicates) {
+        const auto usage_it = usage_by_binding.find(entry.first);
+        if (usage_it == usage_by_binding.end() ||
+            usage_it->second != "uav") {
+            continue;
+        }
+        for (const auto resource_id : entry.second) {
+            if (explicitly_bound.count(resource_id) != 0u) continue;
+            const auto name_it = names_by_id.find(resource_id);
+            AddDiagnostic(
+                diagnostics, "package_resource_binding_collision",
+                "resource '" +
+                    (name_it == names_by_id.end() ? std::to_string(resource_id)
+                                                  : name_it->second) +
+                    "' shares a transient binding but is never explicitly bound",
+                std::string(kSectionResources));
+        }
+    }
+}
+
 struct OperandContract {
     const char* opcode;
     const char* phase;
@@ -2614,6 +2681,8 @@ bool ValidatePackage(const Package& package,
                        package.root_signatures, diagnostics,
                        (package.flags & 1u) != 0u);
     ValidateResources(package.resources, diagnostics);
+    ValidateTransientBindingReuse(package.resources, package.frame,
+                                  diagnostics);
     ValidateParameters(package.parameters, diagnostics);
     ValidateRootSignatures(package.root_signatures, package.resources,
                            diagnostics);

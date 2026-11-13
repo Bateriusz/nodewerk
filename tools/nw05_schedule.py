@@ -518,6 +518,12 @@ def _looks_transient(resource: nwp.ResourceDescriptor, accesses: Sequence[Resour
         return False, "initialization-produced contents are retained across frames"
     if not accesses:
         return False, "resource has no frame access"
+    if not any(
+        access.access in {"write", "readwrite"} for access in accesses
+    ):
+        # The native planner keeps read-only bindings persistent; alias
+        # evidence must not claim a lifetime the runtime will not use.
+        return False, "read-only resource is retained across frames"
     return True, ""
 
 

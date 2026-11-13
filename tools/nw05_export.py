@@ -724,6 +724,7 @@ def generate_player_source(
         "        const auto readback = player.readbackPresentedOutput(&image);\n"
         "        if (readback != nw::player::ExitCode::Success) {\n"
         "            std::fprintf(stderr, \"NW05_IMAGE_READBACK_FAILED=%d\\n\", static_cast<int>(readback));\n"
+        "            (void)player.shutdown();\n"
         "            return static_cast<int>(readback);\n"
         "        }\n"
         "        std::uint64_t hash = 1469598103934665603ULL;\n"
@@ -1204,18 +1205,36 @@ def _shader_execution_plan(
             "compile report and package disagree about compiled shader count",
             dependency_path=["graph", "shader", "compile_report"],
         )
+    records_by_blob: dict[str, list[nwp.ShaderRecord]] = {}
+    for record in ordered_records:
+        records_by_blob.setdefault(
+            hashlib.sha256(record.blob).hexdigest(), []
+        ).append(record)
     roots: list[str] = []
     execution: list[dict[str, Any]] = []
-    for index, row in enumerate(rows):
+    for row in rows:
         specialization_id = str(row["specialization_id"])
         root = str(row.get("execution_root") or specialization_id)
+        blob_sha256 = str(row.get("blob_sha256", ""))
+        candidates = records_by_blob.get(blob_sha256)
+        if not candidates:
+            raise ExportError(
+                "compile report shader blob does not exist in the package",
+                dependency_path=[
+                    "graph",
+                    "shader",
+                    specialization_id,
+                    "blob_sha256",
+                ],
+            )
+        record = candidates.pop(0)
         if root not in roots:
             roots.append(root)
         execution.append(
             {
                 "root": root,
                 "specialization_id": specialization_id,
-                "shader_id": ordered_records[index].shader_id,
+                "shader_id": record.shader_id,
                 "execution_order": int(row.get("execution_order", 0)),
                 "output_region": int(row.get("output_region", 0)),
                 "region_count": max(1, int(row.get("region_count", 1))),
@@ -1247,7 +1266,16 @@ def _build_graph_derived_package(
     # Rich resource/material/mesh/camera/render operators are valid NW-02
     # authoring vocabulary, but until their consumers exist NW-05 must reject
     # them instead of publishing metadata-only semantics.
-    supported = set(nw03.SHADER_OPERATORS)
+    supported = (
+        set(nw03.SHADER_OPERATORS)
+        | set(_PACKAGE_UPLOAD_OPERATORS)
+        | set(_PACKAGE_RENDER_OPERATORS)
+        | {
+            "nw.texture.procedural",
+            "nw.buffer.recipe",
+            "nw.mesh.recipe",
+        }
+    )
     unsupported = sorted(used_operators - supported)
     if unsupported:
         raise ExportError(
@@ -2298,6 +2326,7 @@ def export_graph(
             ),
         ]
         generation_modes = _generation_mode_map(optimized, settings)
+        render_width, render_height = _graph_render_dimensions(document, optimized)
         for profile_id in profile_order:
             is_common = profile_id == nwp.COMMON_PROFILE_ID
             requirements_digest = KNOWN_PROFILES[profile_id]
@@ -2325,6 +2354,8 @@ def export_graph(
                 physical = schedule.pending_physical_realization(
                     logical_schedule,
                     adapter_identity="pending-native-adapter",
+                    player_width=render_width,
+                    player_height=render_height,
                 )
             else:
                 physical = schedule.realize_physical_aliases(
@@ -2334,6 +2365,8 @@ def export_graph(
                     adapter_identity=adapter_identity,
                     frames_in_flight=settings.frames_in_flight,
                     allow_simulated_allocation=allow_test_payloads,
+                    player_width=render_width,
+                    player_height=render_height,
                 )
             shader_rows = [
                 (

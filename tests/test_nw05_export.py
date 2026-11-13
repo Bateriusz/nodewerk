@@ -17,9 +17,11 @@ import nw04_fixture  # noqa: E402
 import nw03_oracle  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 import nw05_export  # noqa: E402
+import nw05_schedule as schedule  # noqa: E402
 
 
 PROCEDURAL = REPO_ROOT / "fixtures" / "nw05" / "procedural_export.nwgraph"
+ORIGINAL_PROCEDURAL = REPO_ROOT / "fixtures" / "nw05" / "procedural_image.nwgraph"
 
 
 def _make_dxc(directory: Path, *, fail: bool = False) -> Path:
@@ -120,6 +122,120 @@ def test_export_produces_embedded_executable_and_display_stream(tmp_path: Path) 
         player_source.index("config.allow_software_adapter")
     )
     assert common.package_bytes not in player_source.encode("utf-8")
+
+
+def test_original_procedural_image_graph_exports_texture_render_path(
+    tmp_path: Path,
+) -> None:
+    dxc = _make_dxc(tmp_path / "toolchain")
+    result = nw05_export.export_graph(
+        ORIGINAL_PROCEDURAL,
+        tmp_path / "original",
+        settings=_settings(tmp_path),
+        dxc_executable=str(dxc),
+        allow_test_payloads=True,
+    )
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    assert any(
+        resource.usage == "uav" for resource in common.package.resources
+    )
+    assert any(
+        resource.kind == "texture2d" and resource.usage == "srv"
+        for resource in common.package.resources
+    )
+    assert any(
+        instruction.opcode == "frame.present"
+        for instruction in common.package.frame
+    )
+
+
+def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
+    first_blob = nw04_fixture.make_dxil_container() + b"\x01"
+    second_blob = nw04_fixture.make_dxil_container() + b"\x02"
+
+    def record(shader_id: int, blob: bytes) -> nwp.ShaderRecord:
+        return nwp.ShaderRecord(
+            shader_id=shader_id,
+            entry_point="CSMain",
+            target="cs_6_0",
+            blob=blob,
+            root_signature_id=1,
+            family="compute.math_noise",
+        )
+
+    z_record = record(1, first_blob)
+    a_record = record(2, second_blob)
+    rows = [
+        {
+            "specialization_id": "z_root",
+            "blob_sha256": hashlib.sha256(first_blob).hexdigest(),
+        },
+        {
+            "specialization_id": "a_root",
+            "blob_sha256": hashlib.sha256(second_blob).hexdigest(),
+        },
+    ]
+    _, execution = nw05_export._shader_execution_plan(
+        rows, [z_record, a_record]
+    )
+    by_root = {item["root"]: item["shader_id"] for item in execution}
+    assert by_root == {"a_root": 2, "z_root": 1}
+
+
+def test_duplicate_transient_bindings_must_be_bound_one_at_a_time() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    duplicate = nwp.replace(
+        package.resources[1], resource_id=3, name="second_output"
+    )
+    simultaneous_frame = list(package.frame) + [
+        nwp.Instruction(
+            "frame.set_descriptor_table",
+            (
+                nwp.InstructionOperand("u32", 1),
+                nwp.InstructionOperand("string", "cbv_srv_uav"),
+                nwp.InstructionOperand("resource_ref", 2),
+                nwp.InstructionOperand("resource_ref", 3),
+            ),
+        )
+    ]
+    simultaneous = nwp.replace(
+        package,
+        resources=list(package.resources) + [duplicate],
+        frame=simultaneous_frame,
+    )
+    diagnostics = nwp.validate_package_model(simultaneous)
+    assert any(
+        item["code"] == "package_resource_binding_collision"
+        for item in diagnostics
+    )
+
+    separate_frame = list(package.frame) + [
+        nwp.Instruction(
+            "frame.set_descriptor_table",
+            (
+                nwp.InstructionOperand("u32", 1),
+                nwp.InstructionOperand("string", "cbv_srv_uav"),
+                nwp.InstructionOperand("resource_ref", 2),
+            ),
+        ),
+        nwp.Instruction(
+            "frame.set_descriptor_table",
+            (
+                nwp.InstructionOperand("u32", 1),
+                nwp.InstructionOperand("string", "cbv_srv_uav"),
+                nwp.InstructionOperand("resource_ref", 3),
+            ),
+        ),
+    ]
+    separate = nwp.replace(
+        package,
+        resources=list(package.resources) + [duplicate],
+        frame=separate_frame,
+    )
+    assert not any(
+        item["code"] == "package_resource_binding_collision"
+        for item in nwp.validate_package_model(separate)
+    )
 
 
 def test_export_is_byte_identical_in_two_clean_directories(tmp_path: Path) -> None:
@@ -485,6 +601,25 @@ def test_physical_realization_evidence_does_not_change_published_bytes(
     assert left.package_bytes == right.package_bytes
     assert left.executable_bytes == right.executable_bytes
     assert left.artifact_key == right.artifact_key
+
+
+def test_physical_budget_uses_graph_render_dimensions(tmp_path: Path) -> None:
+    result = _export(tmp_path)
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    logical = schedule.build_logical_schedule(
+        artifact.package, frames_in_flight=2
+    )
+    expected = schedule.realize_physical_aliases(
+        logical,
+        artifact.package,
+        frames_in_flight=2,
+        allow_simulated_allocation=True,
+        player_width=256,
+        player_height=256,
+    )
+    assert (
+        artifact.physical_realization.peak_bytes == expected.peak_bytes
+    )
 
 
 def test_quantization_changes_published_package_bytes(tmp_path: Path) -> None:

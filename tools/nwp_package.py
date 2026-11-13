@@ -2264,6 +2264,72 @@ def _validate_resources(
             )
 
 
+def _validate_transient_binding_reuse(
+    resources: Sequence[ResourceDescriptor],
+    frame: Sequence[Instruction],
+    diagnostics: list[dict[str, Any]],
+) -> None:
+    """Allow shared UAV/SRV slots only for one-resource-per-dispatch tables.
+
+    Graph-derived multi-root packages reuse the single fixed compute descriptor
+    range: each dispatch is preceded by a descriptor table binding exactly one
+    of the duplicate resources.  Duplicate bindings that are never explicitly
+    bound, or that are bound simultaneously in one table, remain invalid.
+    """
+    ids_by_binding: dict[tuple[str, str, int, int], set[int]] = {}
+    names_by_id = {resource.resource_id: resource.name for resource in resources}
+    for resource in resources:
+        key = (
+            resource.pass_family,
+            resource.usage,
+            resource.binding_slot,
+            resource.binding_space,
+        )
+        ids_by_binding.setdefault(key, set()).add(resource.resource_id)
+    duplicates = {
+        key: ids for key, ids in ids_by_binding.items() if len(ids) > 1
+    }
+    if not duplicates:
+        return
+    explicitly_bound: set[int] = set()
+    for instruction in frame:
+        if instruction.opcode != "frame.set_descriptor_table":
+            continue
+        bound = [
+            operand.value
+            for operand in instruction.operands
+            if operand.type == "resource_ref"
+        ]
+        for key, ids in duplicates.items():
+            simultaneous = [resource_id for resource_id in bound if resource_id in ids]
+            if len(simultaneous) > 1:
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_resource_binding_collision",
+                        "descriptor table binds multiple resources competing for "
+                        f"{key[0]}/{key[1]}/{key[3]}:{key[2]}",
+                        section=SECTION_FRAME,
+                    )
+                )
+        explicitly_bound.update(bound)
+    for key, ids in duplicates.items():
+        if key[1] != "uav":
+            # Read-only SRV allocations may be graph metadata for a compute
+            # pass that does not sample them; they still may not be bound
+            # simultaneously with another resource.
+            continue
+        unbound = sorted(ids - explicitly_bound)
+        for resource_id in unbound:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_resource_binding_collision",
+                    f"resource '{names_by_id.get(resource_id, resource_id)}' "
+                    "shares a transient binding but is never explicitly bound",
+                    section=SECTION_RESOURCES,
+                )
+            )
+
+
 def _validate_instructions(
     initialization: Sequence[Instruction],
     frame: Sequence[Instruction],
@@ -3140,6 +3206,9 @@ def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
         package.root_signatures,
         package.parameters,
         diagnostics,
+    )
+    _validate_transient_binding_reuse(
+        package.resources, package.frame, diagnostics
     )
     _validate_cross_references(
         package.capability,

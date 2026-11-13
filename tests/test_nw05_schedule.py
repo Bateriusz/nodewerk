@@ -223,6 +223,50 @@ def test_pending_realization_never_invents_physical_offsets() -> None:
     assert pending.accounted_peak_bytes == pending.peak_bytes
 
 
+def test_read_only_srv_and_present_outputs_are_not_alias_transient() -> None:
+    operand = nwp.InstructionOperand
+    instruction = nwp.Instruction
+    resource = nwp.ResourceDescriptor
+    package = nwp.NwpPackage(
+        resources=[
+            resource(
+                1,
+                "source",
+                "buffer",
+                "DXGI_FORMAT_R32_UINT",
+                "srv",
+                "compute.math_noise",
+                size_bytes=1024,
+            ),
+            resource(
+                2,
+                "dest",
+                "buffer",
+                "DXGI_FORMAT_R32_UINT",
+                "uav",
+                "compute.math_noise",
+                size_bytes=1024,
+            ),
+        ],
+        initialization=[],
+        frame=[
+            instruction(
+                "frame.copy_buffer",
+                (
+                    operand("resource_ref", 1),
+                    operand("resource_ref", 2),
+                    operand("u64", 64),
+                ),
+            )
+        ],
+    )
+    logical = schedule.build_logical_schedule(package, frames_in_flight=1)
+    by_id = {item.resource_id: item for item in logical.resources}
+    assert by_id[1].alias_eligible is False
+    assert "read-only" in by_id[1].alias_ineligibility_reason
+    assert by_id[2].alias_eligible is True
+
+
 def test_alias_reuse_requires_candidate_allocation_capacity() -> None:
     package = _transient_pair()
     logical = schedule.build_logical_schedule(package, frames_in_flight=1)

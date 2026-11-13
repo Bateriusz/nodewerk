@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
         if (readback != nw::player::ExitCode::Success) {
             std::fprintf(stderr, "NW05_IMAGE_READBACK_FAILED=%d\n",
                          static_cast<int>(readback));
+            (void)player.shutdown();
             return static_cast<int>(readback);
         }
         std::uint64_t hash = 1469598103934665603ULL;
