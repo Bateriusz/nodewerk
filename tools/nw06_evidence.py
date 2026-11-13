@@ -671,7 +671,9 @@ def validate_capture(
     missing = _missing_metadata(capture, artifact_root=artifact_root)
     artifact_state, artifact_detail = _artifact_state(capture, artifact_root)
     comparison_state, comparison_detail = _comparison_state(
-        capture.get("comparison"), capture.get("fixed_ticks")
+        capture.get("comparison"),
+        capture.get("fixed_ticks"),
+        capture.get("capture_artifacts"),
     )
     status = str(capture.get("status", "pending_unverified"))
     if artifact_state == "failed" or comparison_state == "failed":
