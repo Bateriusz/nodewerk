@@ -373,6 +373,27 @@ def test_multiple_fullscreen_nodes_bind_their_own_textures(
         }
     ) == 1
 
+    seed_by_resource = {
+        int(name.rsplit(".", 1)[1]): seed
+        for name, seed in seed_parameters.items()
+    }
+    active_texture = None
+    dispatch_texture_seeds: list[int] = []
+    for instruction in package.frame:
+        if (
+            instruction.opcode == "frame.set_descriptor_table"
+            and instruction.operands[0].value == 2
+        ):
+            active_texture = next(
+                operand.value
+                for operand in instruction.operands
+                if operand.type == "resource_ref"
+            )
+        elif instruction.opcode == "frame.dispatch":
+            assert active_texture is not None
+            dispatch_texture_seeds.append(seed_by_resource[active_texture])
+    assert dispatch_texture_seeds == [1, 2]
+
 
 def test_duplicate_transient_bindings_must_be_bound_one_at_a_time() -> None:
     package = nw04_fixture.build_compute_display_package()
