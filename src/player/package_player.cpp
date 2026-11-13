@@ -2871,19 +2871,40 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "init.upload_resource",
                             "upload target has no validated placement");
             }
-            if (placement->descriptor.kind != "buffer") {
+            if (placement->descriptor.kind != "buffer" &&
+                placement->descriptor.kind != "texture2d") {
                 return Fail(ExitCode::ResourceAllocationFailed, "resource",
                             "upload_kind_unsupported", "resource_kind",
-                            "buffer", placement->descriptor.kind,
+                            "buffer|texture2d", placement->descriptor.kind,
                             "init.upload_resource",
-                            "the minimal player uploads buffer resources only");
+                            "the minimal player uploads buffers and 2D textures");
+            }
+            std::uint64_t upload_bytes = placement->descriptor.size_bytes;
+            std::uint32_t row_pitch = 0u;
+            if (placement->descriptor.kind == "texture2d") {
+                const std::uint32_t bytes_per_element =
+                    BytesPerElement(placement->descriptor.format);
+                if (bytes_per_element == 0u) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "upload_texture_format", "format",
+                                "supported", placement->descriptor.format,
+                                "init.upload_resource",
+                                "texture upload format is unsupported");
+                }
+                row_pitch =
+                    ((placement->descriptor.width * bytes_per_element + 255u) /
+                     256u) *
+                    256u;
+                upload_bytes =
+                    static_cast<std::uint64_t>(row_pitch) *
+                    placement->descriptor.height;
             }
             if (state->frames.empty() || state->frames[0].upload == nullptr ||
                 state->frames[0].upload_size <
-                    placement->descriptor.size_bytes) {
+                    upload_bytes) {
                 return Fail(ExitCode::ResourceAllocationFailed, "resource",
                             "frame_upload_ring_unavailable", "upload_bytes",
-                            std::to_string(placement->descriptor.size_bytes),
+                            std::to_string(upload_bytes),
                             state->frames.empty() || state->frames[0].upload ==
                                     nullptr
                                 ? "unavailable"
@@ -2918,20 +2939,19 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "unavailable", "init.upload_resource",
                             "per-frame upload ring Map failed");
             }
-            std::memset(mapped, 0, static_cast<std::size_t>(
-                                      placement->descriptor.size_bytes));
+            std::memset(mapped, 0, static_cast<std::size_t>(upload_bytes));
             std::size_t offset = 0u;
             for (const auto& parameter : package_.parameters) {
                 if (offset + parameter.value.size() >
-                    placement->descriptor.size_bytes) {
+                    upload_bytes) {
                     break;
                 }
                 std::memcpy(static_cast<std::uint8_t*>(mapped) + offset,
                             parameter.value.data(), parameter.value.size());
                 offset += parameter.value.size();
             }
-            D3D12_RANGE write_range{0u, static_cast<SIZE_T>(
-                                           placement->descriptor.size_bytes)};
+            D3D12_RANGE write_range{0u,
+                                    static_cast<SIZE_T>(upload_bytes)};
             frame.upload->Unmap(0u, &write_range);
 
             if (frame.command_list == nullptr || frame.allocator == nullptr) {
@@ -2957,9 +2977,30 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             to_copy.Transition.Subresource =
                 D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             frame.command_list->ResourceBarrier(1u, &to_copy);
-            frame.command_list->CopyBufferRegion(
-                slot->resource, 0u, frame.upload, 0u,
-                placement->descriptor.size_bytes);
+            if (placement->descriptor.kind == "buffer") {
+                frame.command_list->CopyBufferRegion(
+                    slot->resource, 0u, frame.upload, 0u,
+                    placement->descriptor.size_bytes);
+            } else {
+                D3D12_TEXTURE_COPY_LOCATION source{};
+                source.pResource = frame.upload;
+                source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                source.PlacedFootprint.Offset = 0u;
+                source.PlacedFootprint.Footprint.Format =
+                    MapFormat(placement->descriptor.format);
+                source.PlacedFootprint.Footprint.Width =
+                    placement->descriptor.width;
+                source.PlacedFootprint.Footprint.Height =
+                    placement->descriptor.height;
+                source.PlacedFootprint.Footprint.Depth = 1u;
+                source.PlacedFootprint.Footprint.RowPitch = row_pitch;
+                D3D12_TEXTURE_COPY_LOCATION destination{};
+                destination.pResource = slot->resource;
+                destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                destination.SubresourceIndex = 0u;
+                frame.command_list->CopyTextureRegion(
+                    &destination, 0u, 0u, 0u, &source, nullptr);
+            }
             const D3D12_RESOURCE_STATES final_state =
                 WorkingStateForUsage(placement->descriptor);
             D3D12_RESOURCE_BARRIER to_work = to_copy;

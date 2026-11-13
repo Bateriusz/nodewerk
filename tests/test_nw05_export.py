@@ -152,7 +152,7 @@ def test_original_procedural_image_graph_exports_texture_render_path(
         for resource in common.package.resources
         if resource.name == "input"
     )
-    assert input_resource.kind == "buffer"
+    assert input_resource.kind == "texture2d"
     assert any(
         instruction.opcode == "init.upload_resource"
         and instruction.operands[0].type == "resource_ref"
@@ -225,6 +225,70 @@ def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
     }
     assert by_root == {"a_root": 2, "z_root": 1}
 
+
+def test_multiple_fullscreen_nodes_bind_their_own_textures(
+    tmp_path: Path,
+) -> None:
+    graph = tmp_path / "multi_texture.nwgraph"
+    graph.write_text(
+        "\n".join(
+            [
+                "nwgraph 1",
+                "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+                "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+                "setting optimization O2",
+                "node tex_a nw.texture.procedural@1.0.0 frequency=initialization",
+                "  param width 32",
+                "  param height 32",
+                "  param format r8g8b8a8_unorm",
+                "  param seed 1",
+                "node tex_a_gpu nw.residency.upload_texture@1.0.0 frequency=initialization residency=gpu",
+                "  input texture tex_a.out",
+                "node image_a nw.shader.expr@1.0.0 frequency=frame",
+                '  param expression "vec4(uv.x, 0.0, 0.0, 1.0)"',
+                "node out_a nw.render.fullscreen@1.0.0 frequency=frame residency=gpu",
+                "  input shader image_a.out",
+                "  input texture tex_a_gpu.out",
+                "node tex_b nw.texture.procedural@1.0.0 frequency=initialization",
+                "  param width 32",
+                "  param height 32",
+                "  param format r8g8b8a8_unorm",
+                "  param seed 2",
+                "node tex_b_gpu nw.residency.upload_texture@1.0.0 frequency=initialization residency=gpu",
+                "  input texture tex_b.out",
+                "node image_b nw.shader.expr@1.0.0 frequency=frame",
+                '  param expression "vec4(0.0, uv.y, 0.0, 1.0)"',
+                "node out_b nw.render.fullscreen@1.0.0 frequency=frame residency=gpu",
+                "  input shader image_b.out",
+                "  input texture tex_b_gpu.out",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = nw05_export.export_graph(
+        graph,
+        tmp_path / "multi-texture-out",
+        settings=_settings(tmp_path),
+        dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+        allow_test_payloads=True,
+    )
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    input_ids = {
+        resource.resource_id
+        for resource in package.resources
+        if resource.name == "input" and resource.kind == "texture2d"
+    }
+    bound_ids = {
+        operand.value
+        for instruction in package.frame
+        if instruction.opcode == "frame.set_descriptor_table"
+        and instruction.operands[0].value == 2
+        for operand in instruction.operands
+        if operand.type == "resource_ref"
+    }
+    assert len(input_ids) >= 2
+    assert bound_ids == input_ids
 
 def test_duplicate_transient_bindings_must_be_bound_one_at_a_time() -> None:
     package = nw04_fixture.build_compute_display_package()

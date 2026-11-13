@@ -1387,7 +1387,7 @@ def _build_graph_derived_package(
                 nwp.ResourceDescriptor(
                     resource_id=next_resource_id,
                     name=f"texture_{node_id}",
-                    kind="buffer",
+                    kind="texture2d",
                     format=resource_format,
                     usage="srv",
                     pass_family=nw03.PASS_FAMILY,
@@ -1398,9 +1398,33 @@ def _build_graph_derived_package(
                         texture_height,
                         bytes_per_element=_FORMAT_BYTES_PER_ELEMENT[resource_format],
                     ),
+                    width=texture_width,
+                    height=texture_height,
                 )
             )
+            next_resource_id += 1
+            row_pitch = (
+                (
+                    texture_width
+                    * _FORMAT_BYTES_PER_ELEMENT[resource_format]
+                    + 255
+                )
+                // 256
+            ) * 256
             upload_resource_by_texture[node_id] = next_resource_id
+            resources.append(
+                nwp.ResourceDescriptor(
+                    resource_id=next_resource_id,
+                    name=f"texture_upload_{node_id}",
+                    kind="buffer",
+                    format="DXGI_FORMAT_R32_UINT",
+                    usage="srv",
+                    pass_family=nw03.PASS_FAMILY,
+                    binding_slot=0,
+                    binding_space=0,
+                    size_bytes=max(1, row_pitch * texture_height),
+                )
+            )
             next_resource_id += 1
         elif node.operator_id == "nw.buffer.recipe":
             resource_format = _resource_format(
@@ -1468,6 +1492,7 @@ def _build_graph_derived_package(
             if upload_resource is not None:
                 resource_by_node[node_id] = upload_resource
                 uploaded_resources.append(upload_resource)
+                uploaded_resources.append(source_id)
                 continue
         source_resource = next(
             resource for resource in resources if resource.resource_id == source_id
@@ -1482,7 +1507,7 @@ def _build_graph_derived_package(
     # Render dependencies resolve to the resource produced by their declared
     # input nodes.  Present follows its image input rather than "last dispatch".
     node_lookup = optimized.node_map()
-    texture_input_resource_id: int | None = None
+    texture_by_shader: dict[str, int] = {}
     for node in sorted(document.nodes.values(), key=lambda item: item.node_id):
         if node.operator_id not in _PACKAGE_RENDER_OPERATORS:
             continue
@@ -1524,23 +1549,69 @@ def _build_graph_derived_package(
                     "unlowered texture",
                     dependency_path=["graph", node.node_id, "texture"],
                 )
-            if texture_input_resource_id is None:
-                candidate_id = resource_by_node[texture_connection[0]]
-                candidate = next(
+            candidate_id = resource_by_node[texture_connection[0]]
+            candidate = next(
+                (
+                    resource
+                    for resource in resources
+                    if resource.resource_id == candidate_id
+                ),
+                None,
+            )
+            source_node = document.nodes.get(texture_connection[0])
+            if (
+                candidate is None or candidate.kind != "texture2d"
+            ) and source_node is not None:
+                producer = next(iter(sorted(source_node.inputs.values())), None)
+                producer_id = (
+                    resource_by_node.get(producer[0])
+                    if producer is not None
+                    else None
+                )
+                producer_resource = next(
                     (
                         resource
                         for resource in resources
-                        if resource.resource_id == candidate_id
+                        if resource.resource_id == producer_id
                     ),
                     None,
                 )
-                if candidate is None or candidate.usage != "srv":
-                    raise ExportError(
-                        f"fullscreen render node '{node.node_id}' does not "
-                        "resolve to an uploaded SRV producer resource",
-                        dependency_path=["graph", node.node_id, "texture"],
-                    )
-                texture_input_resource_id = candidate.resource_id
+                if (
+                    producer_resource is not None
+                    and producer_resource.kind == "texture2d"
+                ):
+                    candidate = producer_resource
+            if candidate is None or candidate.kind != "texture2d":
+                raise ExportError(
+                    f"fullscreen render node '{node.node_id}' does not "
+                    "resolve to a texture2d producer resource",
+                    dependency_path=["graph", node.node_id, "texture"],
+                )
+            shader_connection_for_texture = node.inputs.get("shader")
+            texture_spec = (
+                node_lookup.get(shader_connection_for_texture[0]).node_id
+                if shader_connection_for_texture is not None
+                and node_lookup.get(shader_connection_for_texture[0]) is not None
+                else (
+                    shader_connection_for_texture[0]
+                    if shader_connection_for_texture is not None
+                    else None
+                )
+            )
+            if texture_spec is None:
+                raise ExportError(
+                    f"fullscreen render node '{node.node_id}' has no shader "
+                    "root for texture binding",
+                    dependency_path=["graph", node.node_id, "shader"],
+                )
+            previous = texture_by_shader.get(texture_spec)
+            if previous is not None and previous != candidate.resource_id:
+                raise ExportError(
+                    f"shader root '{texture_spec}' is used by multiple "
+                    "fullscreen nodes with different texture inputs",
+                    dependency_path=["graph", node.node_id, "texture"],
+                )
+            texture_by_shader[texture_spec] = candidate.resource_id
 
     def shader_for_render_node(node_id: str) -> str | None:
         node = document.nodes.get(node_id)
@@ -1643,10 +1714,11 @@ def _build_graph_derived_package(
             dependency_path=["graph", "root_signature"],
         )
     root_signature = root_signatures[0]
-    if texture_input_resource_id is not None:
+    texture_ids = set(texture_by_shader.values())
+    if texture_ids:
         resources = [
             nwp.replace(resource, name="input")
-            if resource.resource_id == texture_input_resource_id
+            if resource.resource_id in texture_ids
             else resource
             for resource in resources
         ]
@@ -1731,20 +1803,6 @@ def _build_graph_derived_package(
             ),
         ),
     ]
-    if texture_input_resource_id is not None:
-        frame.append(
-            nwp.Instruction(
-                "frame.set_descriptor_table",
-                (
-                    nwp.InstructionOperand("u32", 2),
-                    nwp.InstructionOperand("string", "cbv_srv_uav"),
-                    nwp.InstructionOperand(
-                        "resource_ref", texture_input_resource_id
-                    ),
-                ),
-            )
-        )
-
     dispatch_order: list[str] = []
     ordered_partitions = (
         list(optimized.partitions.get("initialization", ()))
@@ -1793,6 +1851,18 @@ def _build_graph_derived_package(
                 ),
             )
         )
+        texture_id = texture_by_shader.get(spec)
+        if texture_id is not None:
+            frame.append(
+                nwp.Instruction(
+                    "frame.set_descriptor_table",
+                    (
+                        nwp.InstructionOperand("u32", 2),
+                        nwp.InstructionOperand("string", "cbv_srv_uav"),
+                        nwp.InstructionOperand("resource_ref", texture_id),
+                    ),
+                )
+            )
         for execution in executions:
             frame.extend(
                 [
