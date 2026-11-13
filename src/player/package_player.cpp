@@ -26,6 +26,13 @@
 #define NW05_COMPILE_FP16_SHADER_OPS_QUERY 1
 #endif
 
+#if (defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION) || \
+    (defined(NW05_SPECIALIZED_VALIDATION) && NW05_SPECIALIZED_VALIDATION)
+#define NW_PACKAGE_PLAYER_D3D12_VALIDATION 1
+#else
+#define NW_PACKAGE_PLAYER_D3D12_VALIDATION 0
+#endif
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -36,7 +43,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
 #include <d3d12sdklayers.h>
 #endif
 
@@ -471,7 +478,7 @@ struct PlatformState {
     ID3D12Fence* fence = nullptr;
     HANDLE fence_event = nullptr;
 
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     ID3D12InfoQueue* info_queue = nullptr;
     ID3D12InfoQueue1* info_queue1 = nullptr;
     DWORD info_queue_callback_cookie = 0u;
@@ -513,7 +520,7 @@ ExitCode WaitForFenceValue(ID3D12Fence* fence,
     return ExitCode::Success;
 }
 
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
 void D3D12ImmediateMessageCallback(
     D3D12_MESSAGE_CATEGORY category,
     D3D12_MESSAGE_SEVERITY severity,
@@ -1616,7 +1623,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     }
 
 #if defined(_WIN32)
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     if (config_.enable_validation) {
         ID3D12Debug* debug = nullptr;
         if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))) ||
@@ -1705,7 +1712,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
                     "no hardware adapter supports D3D_FEATURE_LEVEL_12_0");
     }
     platform_->device = device;
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     if (config_.enable_validation) {
         if (FAILED(device->QueryInterface(
                 __uuidof(ID3D12InfoQueue),
@@ -3448,7 +3455,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             "frame.draw is outside the minimal NW-04 player");
             case FrameOp::Type::Present: {
                 present_requested = true;
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.present.begin");
 #endif
@@ -3532,7 +3539,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     ++stats_.uav_barrier_count;
                     source_slot->uav_accessed_in_frame = false;
                 }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.bind.before");
 #endif
@@ -3548,12 +3555,12 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 list->SetComputeRootDescriptorTable(
                     2u, state->display_uav_gpu);
                 list->SetPipelineState(state->display_pipeline);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.dispatch.before");
 #endif
                 list->Dispatch((width_ + 7u) / 8u, (height_ + 7u) / 8u, 1u);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.dispatch.after");
 #endif
@@ -3598,13 +3605,13 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     state->backbuffer_states[backbuffer_index] =
                         D3D12_RESOURCE_STATE_COPY_DEST;
                 }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.copy.before");
 #endif
                 list->CopyResource(state->backbuffers[backbuffer_index],
                                    state->display_texture);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
                 TraceD3D12ValidationStage(config_.enable_validation,
                                           "frame.display.copy.after");
 #endif
@@ -3662,7 +3669,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         // violation counter is exercised rather than assumed.
         NoteEngineAllocation(64u, 0u, true, true, false);
     }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.command_list.close.before");
 #endif
@@ -3671,17 +3678,17 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     "command_list_close_failed", "closed", "closed", "failed",
                     "renderAtTick", "ID3D12GraphicsCommandList::Close failed");
     }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.command_list.close.after");
 #endif
     ID3D12CommandList* lists[] = {list};
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.queue.execute.before");
 #endif
     state->queue->ExecuteCommandLists(1u, lists);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.queue.execute.after");
 #endif
@@ -3694,7 +3701,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 
     const auto retire_submitted_work = [&]() -> ExitCode {
         const std::uint64_t fence_value = next_fence_value_++;
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.queue.retire_signal.before");
 #endif
@@ -3704,7 +3711,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         "renderAtTick",
                         "ID3D12CommandQueue::Signal failed");
         }
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.queue.retire_signal.after");
 #endif
@@ -3724,7 +3731,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         return ExitCode::DeviceRemoved;
     }
     if (present_requested && state->swapchain != nullptr) {
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.swapchain.present.before");
 #endif
@@ -3732,7 +3739,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
             config_.simulate_presentation_failure
                 ? static_cast<HRESULT>(E_FAIL)
                 : state->swapchain->Present(1u, 0u);
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.swapchain.present.after");
 #endif
@@ -4655,7 +4662,7 @@ void PackagePlayer::ReleasePlatform() noexcept {
     }
     if (state->sampler_heap != nullptr) state->sampler_heap->Release();
     if (state->swapchain != nullptr) state->swapchain->Release();
-#if defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION
+#if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     if (state->info_queue1 != nullptr) {
         if (state->info_queue_callback_cookie != 0u) {
             (void)state->info_queue1->UnregisterMessageCallback(

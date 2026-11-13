@@ -986,7 +986,6 @@ def _build_specialized_player(
         "-B",
         str(build_root),
         f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
-        "-DNW_FORCE_D3D12_VALIDATION:BOOL=ON",
     ]
     configure.extend(
         f"-D{name}:BOOL={'ON' if enabled else 'OFF'}"

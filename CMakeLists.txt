@@ -38,7 +38,7 @@ nw_add_offline_compute_shader(
     "kDisplayFixtureDxil"
 )
 
-add_library(nw_player_bootstrap STATIC
+set(NW_PLAYER_BOOTSTRAP_SOURCES
     src/player/diagnostics.cpp
     src/player/capability_check.cpp
     src/player/d3d12_bootstrap.cpp
@@ -51,6 +51,10 @@ add_library(nw_player_bootstrap STATIC
     src/player/player.cpp
     src/platform/win32_window.cpp
 )
+
+add_library(nw_player_bootstrap STATIC
+    ${NW_PLAYER_BOOTSTRAP_SOURCES}
+)
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -58,11 +62,6 @@ target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
 )
 nw_apply_player_profile(nw_player_bootstrap)
-target_compile_definitions(nw_player_bootstrap PRIVATE
-    NW05_COMPILE_WAVE_OPS_QUERY=$<BOOL:${NW05_COMPILE_WAVE_OPS_QUERY}>
-    NW05_COMPILE_INT64_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_INT64_SHADER_OPS_QUERY}>
-    NW05_COMPILE_FP16_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_FP16_SHADER_OPS_QUERY}>
-)
 add_dependencies(nw_player_bootstrap nw_offline_shaders)
 add_dependencies(nw_player_bootstrap nw_offline_display_shader)
 
@@ -189,9 +188,41 @@ if(NW05_GENERATED_PLAYER_SOURCE)
     if(NOT EXISTS "${NW05_GENERATED_PLAYER_SOURCE}")
         message(FATAL_ERROR "NW05_GENERATED_PLAYER_SOURCE does not exist: ${NW05_GENERATED_PLAYER_SOURCE}")
     endif()
+
+    # Build the generated NW-05 artifact from an isolated player closure.
+    # Generic release/NW-04 targets retain NW_ENABLE_D3D12_VALIDATION=0;
+    # this library alone carries the real debug-layer qualification path and
+    # only the optional feature-query code retained by the generated manifest.
+    add_library(nw05_player_bootstrap STATIC
+        ${NW_PLAYER_BOOTSTRAP_SOURCES}
+    )
+    target_include_directories(nw05_player_bootstrap PUBLIC
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
+    )
+    nw_apply_player_profile(nw05_player_bootstrap)
+    target_compile_definitions(nw05_player_bootstrap PRIVATE
+        NW05_SPECIALIZED_VALIDATION=1
+        NW05_COMPILE_WAVE_OPS_QUERY=$<BOOL:${NW05_COMPILE_WAVE_OPS_QUERY}>
+        NW05_COMPILE_INT64_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_INT64_SHADER_OPS_QUERY}>
+        NW05_COMPILE_FP16_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_FP16_SHADER_OPS_QUERY}>
+    )
+    add_dependencies(nw05_player_bootstrap nw_offline_shaders)
+    add_dependencies(nw05_player_bootstrap nw_offline_display_shader)
+    if(WIN32)
+        target_link_libraries(nw05_player_bootstrap PUBLIC
+            d3d12
+            dxgi
+            user32
+            kernel32
+        )
+    endif()
+
     add_executable(nw05_generated_player "${NW05_GENERATED_PLAYER_SOURCE}")
     target_link_libraries(nw05_generated_player PRIVATE
-        nw_player_bootstrap
+        nw05_player_bootstrap
         nw_package_player
     )
     if(WIN32)
