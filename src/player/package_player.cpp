@@ -2931,7 +2931,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 offset += parameter.value.size();
             }
             D3D12_RANGE write_range{0u, static_cast<SIZE_T>(
-                                           readback_bytes)};
+                                           placement->descriptor.size_bytes)};
             frame.upload->Unmap(0u, &write_range);
 
             if (frame.command_list == nullptr || frame.allocator == nullptr) {
@@ -2959,7 +2959,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             frame.command_list->ResourceBarrier(1u, &to_copy);
             frame.command_list->CopyBufferRegion(
                 slot->resource, 0u, frame.upload, 0u,
-                readback_bytes);
+                placement->descriptor.size_bytes);
             const D3D12_RESOURCE_STATES final_state =
                 WorkingStateForUsage(placement->descriptor);
             D3D12_RESOURCE_BARRIER to_work = to_copy;

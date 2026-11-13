@@ -892,9 +892,35 @@ def test_graph_output_dimensions_control_exported_output(tmp_path: Path) -> None
         dxc_executable=str(dxc),
         allow_test_payloads=True,
     )
-    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
-    output = next(resource for resource in package.resources if resource.usage == "uav")
-    assert output.size_bytes == 128 * 64 * 16
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    package = artifact.package
+    presents = [
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.present"
+    ]
+    assert presents
+    present_id = presents[-1].operands[0].value
+    output = next(
+        resource
+        for resource in package.resources
+        if resource.resource_id == present_id and resource.usage == "uav"
+    )
+    image_shaders = [
+        item
+        for item in artifact.manifest.get("shaders", [])
+        if item.get("execution_root") == "image"
+    ]
+    assert image_shaders
+    assert {int(item["region_count"]) for item in image_shaders} == {
+        len(image_shaders)
+    }
+    assert {int(item["output_region"]) for item in image_shaders} == set(
+        range(len(image_shaders))
+    )
+    # Region zero is the logical image; the remaining regions are the real
+    # unfused intermediate values executed by the selective lowering path.
+    assert output.size_bytes == 128 * 64 * 16 * len(image_shaders)
     present_parameters = {
         parameter.name: parameter.value
         for parameter in package.parameters
