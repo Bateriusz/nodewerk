@@ -12,7 +12,6 @@
 // paths.
 
 #include "capability_requirements.h"
-#include "clock_provider.h"
 #include "exit_codes.h"
 #include "package/nwp_format.h"
 #include "player_instrumentation.h"
