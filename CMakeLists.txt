@@ -80,6 +80,14 @@ if(NOT WIN32)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
     )
     nw_apply_player_profile(nw_package_player_host_compile)
+    # Compile the same shader-only specialization that the real-PE NW-05
+    # export uses. This catches dead-code/warning regressions in implementations
+    # that are intentionally removed from the specialized runtime.
+    target_compile_definitions(nw_package_player_host_compile PRIVATE
+        NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=0
+        NW05_COMPILE_PROCEDURAL_TEXTURE_R8=0
+        NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=0
+    )
 endif()
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"

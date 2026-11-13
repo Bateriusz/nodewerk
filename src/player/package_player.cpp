@@ -2989,8 +2989,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             const std::uint64_t upload_bytes =
                 InitialUploadBytes(placement->descriptor);
             std::uint32_t row_pitch = 0u;
-            std::uint32_t texture_bytes_per_element = 0u;
 #if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+            std::uint32_t texture_bytes_per_element = 0u;
             if (placement->descriptor.kind == "texture2d") {
                 texture_bytes_per_element =
                     BytesPerElement(placement->descriptor.format);
