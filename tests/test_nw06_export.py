@@ -206,18 +206,16 @@ def test_nw06_runtime_branches_are_manifest_compilation_guarded() -> None:
     source = (
         REPO_ROOT / "src" / "player" / "package_player.cpp"
     ).read_text(encoding="utf-8")
-    # Initialization binding handlers, graphics root bindings, and package
-    # RTV/DSV heap creation must disappear from unchanged NW-05 builds.
-    assert source.count("#if !NW06_COMPILE_GPU_INITIALIZATION") >= 4
-    assert "#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT" in source
-    for marker in (
-        "gpu_initialization_binding_not_linked",
-        "graphics_root_binding_not_linked",
-        "graphics_pipeline_not_linked",
-        "indirect_draw_not_linked",
-        "render_target_not_linked",
-    ):
-        assert marker in source
+    # Opcode recognition and implementation bodies are both compile-time gated.
+    # Disabled specializations must not retain feature-specific error branches.
+    assert "NW06_IF_GPU_INITIALIZATION" in source
+    assert "NW06_IF_RASTER" in source
+    assert "#if !NW06_COMPILE_GPU_INITIALIZATION" not in source
+    assert "#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT" not in source
+    assert "gpu_initialization_binding_not_linked" not in source
+    assert "graphics_root_binding_not_linked" not in source
+    assert 'NW06_IF_GPU_INITIALIZATION(instruction.opcode == "init.set_root_signature")' in source
+    assert 'NW06_IF_RASTER(instruction.opcode == "frame.set_graphics_pipeline")' in source
     package_rtv = source.index("std::size_t package_rtv_count")
     guard = source.rfind(
         "#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT", 0, package_rtv

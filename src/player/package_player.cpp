@@ -54,6 +54,17 @@
 #define NW06_COMPILE_TONEMAP 1
 #endif
 
+#if NW06_COMPILE_GPU_INITIALIZATION
+#define NW06_IF_GPU_INITIALIZATION(expr) (expr)
+#else
+#define NW06_IF_GPU_INITIALIZATION(expr) false
+#endif
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+#define NW06_IF_RASTER(expr) (expr)
+#else
+#define NW06_IF_RASTER(expr) false
+#endif
+
 #if (defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION) || \
     (defined(NW05_SPECIALIZED_VALIDATION) && NW05_SPECIALIZED_VALIDATION)
 #define NW_PACKAGE_PLAYER_D3D12_VALIDATION 1
@@ -1154,17 +1165,17 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             type = FrameOp::Type::SetRootConstants;
         } else if (instruction.opcode == "frame.set_descriptor_table") {
             type = FrameOp::Type::SetDescriptorTable;
-        } else if (instruction.opcode == "frame.set_graphics_root_signature") {
+        } else if (NW06_IF_RASTER(instruction.opcode == "frame.set_graphics_root_signature")) {
             type = FrameOp::Type::SetGraphicsRootSignature;
-        } else if (instruction.opcode == "frame.set_graphics_root_constants") {
+        } else if (NW06_IF_RASTER(instruction.opcode == "frame.set_graphics_root_constants")) {
             type = FrameOp::Type::SetGraphicsRootConstants;
-        } else if (instruction.opcode == "frame.set_graphics_descriptor_table") {
+        } else if (NW06_IF_RASTER(instruction.opcode == "frame.set_graphics_descriptor_table")) {
             type = FrameOp::Type::SetGraphicsDescriptorTable;
-        } else if (instruction.opcode == "frame.set_graphics_pipeline") {
+        } else if (NW06_IF_RASTER(instruction.opcode == "frame.set_graphics_pipeline")) {
             type = FrameOp::Type::SetGraphicsPipeline;
-        } else if (instruction.opcode == "frame.set_render_targets") {
+        } else if (NW06_IF_RASTER(instruction.opcode == "frame.set_render_targets")) {
             type = FrameOp::Type::SetRenderTargets;
-        } else if (instruction.opcode == "frame.execute_indirect") {
+        } else if (NW06_IF_RASTER(instruction.opcode == "frame.execute_indirect")) {
             type = FrameOp::Type::ExecuteIndirect;
         } else if (instruction.opcode == "frame.barrier") {
             type = FrameOp::Type::Barrier;
@@ -1192,7 +1203,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
         op.type = type;
         op.opcode = instruction.opcode;
         if (type == FrameOp::Type::SetRootSignature ||
-            type == FrameOp::Type::SetGraphicsRootSignature) {
+            NW06_IF_RASTER(type == FrameOp::Type::SetGraphicsRootSignature)) {
             if (instruction.operands.size() != 1u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
                      "package_instruction_operand_count", "operand_count", "1",
@@ -1231,7 +1242,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             has_active_root_signature = true;
             active_root_signature_id = op.root_parameter;
         } else if (type == FrameOp::Type::SetRootConstants ||
-                   type == FrameOp::Type::SetGraphicsRootConstants) {
+                   NW06_IF_RASTER(type == FrameOp::Type::SetGraphicsRootConstants)) {
             if (instruction.operands.size() != 3u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
                      "package_instruction_operand_count", "operand_count", "3",
@@ -1379,7 +1390,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 }
             }
         } else if (type == FrameOp::Type::SetDescriptorTable ||
-                   type == FrameOp::Type::SetGraphicsDescriptorTable) {
+                   NW06_IF_RASTER(type == FrameOp::Type::SetGraphicsDescriptorTable)) {
             if (instruction.operands.size() != 3u) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
                      "package_instruction_operand_count", "operand_count", "3",
@@ -1602,15 +1613,8 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "signature");
                 return false;
             }
-        } else if (type == FrameOp::Type::SetGraphicsPipeline) {
-#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
-            Fail(ExitCode::PackageValidationFailed, "package_validation",
-                 "graphics_pipeline_not_linked", "pipeline",
-                 "linked indexed instanced raster implementation",
-                 "not compiled", "frame_plan",
-                 "generated link manifest excluded the NW-06 raster path");
-            return false;
-#else
+        } else if (NW06_IF_RASTER(type == FrameOp::Type::SetGraphicsPipeline)) {
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             if (instruction.operands.size() != 1u ||
                 instruction.operands[0].type !=
                     package::OperandType::ShaderRef) {
@@ -1638,15 +1642,8 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 return false;
             }
 #endif
-        } else if (type == FrameOp::Type::SetRenderTargets) {
-#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
-            Fail(ExitCode::PackageValidationFailed, "package_validation",
-                 "render_target_not_linked", "render_targets",
-                 "linked indexed instanced raster implementation",
-                 "not compiled", "frame_plan",
-                 "generated link manifest excluded the NW-06 raster path");
-            return false;
-#else
+        } else if (NW06_IF_RASTER(type == FrameOp::Type::SetRenderTargets)) {
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             if (instruction.operands.size() != 2u ||
                 instruction.operands[0].type !=
                     package::OperandType::ResourceRef ||
@@ -1674,15 +1671,8 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 return false;
             }
 #endif
-        } else if (type == FrameOp::Type::ExecuteIndirect) {
-#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
-            Fail(ExitCode::PackageValidationFailed, "package_validation",
-                 "indirect_draw_not_linked", "arguments",
-                 "linked indexed instanced raster implementation",
-                 "not compiled", "frame_plan",
-                 "generated link manifest excluded the NW-06 raster path");
-            return false;
-#else
+        } else if (NW06_IF_RASTER(type == FrameOp::Type::ExecuteIndirect)) {
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             if (instruction.operands.size() != 2u ||
                 instruction.operands[0].type !=
                     package::OperandType::ResourceRef ||
@@ -3321,15 +3311,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "CreateComputePipelineState failed for offline DXIL");
             }
             state->pipelines.push_back(pipeline);
-        } else if (instruction.opcode == "init.create_graphics_pipeline") {
-#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
-            return Fail(
-                ExitCode::PipelineStateCreationFailed, "pipeline",
-                "graphics_pipeline_not_linked", "pipeline",
-                "linked indexed instanced raster implementation",
-                "not compiled", "init.create_graphics_pipeline",
-                "generated link manifest excluded the NW-06 raster path");
-#else
+        } else if (NW06_IF_RASTER(instruction.opcode == "init.create_graphics_pipeline")) {
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             if (!require_operands(instruction, 3u)) {
                 return last_exit_;
             }
@@ -3438,17 +3421,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 }
             }
 #endif
-        } else if (instruction.opcode == "init.set_root_signature") {
-#if !NW06_COMPILE_GPU_INITIALIZATION
-            return Fail(
-                ExitCode::CommandListRecordingFailed, "command_list",
-                "gpu_initialization_binding_not_linked",
-                "init.set_root_signature",
-                "linked GPU initialization implementation", "not compiled",
-                "init.set_root_signature",
-                "generated link manifest excluded the NW-06 GPU "
-                "initialization binding path");
-#else
+        } else if (NW06_IF_GPU_INITIALIZATION(instruction.opcode == "init.set_root_signature")) {
+#if NW06_COMPILE_GPU_INITIALIZATION
             if (!require_operands(instruction, 1u)) {
                 return last_exit_;
             }
@@ -3479,19 +3453,10 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "initialization root signature was not created");
             }
 #endif
-        } else if (instruction.opcode == "init.set_root_constants" ||
-                   instruction.opcode ==
-                       "frame.set_graphics_root_constants") {
-#if !NW06_COMPILE_GPU_INITIALIZATION
-            return Fail(
-                ExitCode::CommandListRecordingFailed, "command_list",
-                "gpu_initialization_binding_not_linked",
-                "init.set_root_constants",
-                "linked GPU initialization implementation", "not compiled",
-                "init.set_root_constants",
-                "generated link manifest excluded the NW-06 GPU "
-                "initialization binding path");
-#else
+        } else if (NW06_IF_GPU_INITIALIZATION(
+                       instruction.opcode == "init.set_root_constants" ||
+                       instruction.opcode == "frame.set_graphics_root_constants")) {
+#if NW06_COMPILE_GPU_INITIALIZATION
             if (!require_operands(instruction, 3u)) {
                 return last_exit_;
             }
@@ -3535,17 +3500,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 offset += copy_bytes;
             }
 #endif
-        } else if (instruction.opcode == "init.set_descriptor_table") {
-#if !NW06_COMPILE_GPU_INITIALIZATION
-            return Fail(
-                ExitCode::CommandListRecordingFailed, "command_list",
-                "gpu_initialization_binding_not_linked",
-                "init.set_descriptor_table",
-                "linked GPU initialization implementation", "not compiled",
-                "init.set_descriptor_table",
-                "generated link manifest excluded the NW-06 GPU "
-                "initialization binding path");
-#else
+        } else if (NW06_IF_GPU_INITIALIZATION(instruction.opcode == "init.set_descriptor_table")) {
+#if NW06_COMPILE_GPU_INITIALIZATION
             if (!require_operands(instruction, 3u)) {
                 return last_exit_;
             }
@@ -3581,16 +3537,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             init_tables.emplace_back(instruction.operands[0].u32, handle);
             init_bound_resources.push_back(resource_id);
 #endif
-        } else if (instruction.opcode == "init.dispatch") {
-#if !NW06_COMPILE_GPU_INITIALIZATION
-            return Fail(
-                ExitCode::CommandListRecordingFailed, "command_list",
-                "gpu_initialization_not_linked", "init.dispatch",
-                "linked GPU initialization implementation", "not compiled",
-                "init.dispatch",
-                "generated link manifest excluded the NW-06 GPU "
-                "initialization path");
-#else
+        } else if (NW06_IF_GPU_INITIALIZATION(instruction.opcode == "init.dispatch")) {
+#if NW06_COMPILE_GPU_INITIALIZATION
             if (!require_operands(instruction, 4u)) {
                 return last_exit_;
             }
@@ -4210,15 +4158,6 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     list->SetComputeRootSignature(root);
                 }
 #else
-                if (op.type == FrameOp::Type::SetGraphicsRootSignature) {
-                    return Fail(
-                        ExitCode::RootSignatureCreationFailed, "pipeline",
-                        "graphics_root_binding_not_linked",
-                        "root_signature", "linked indexed instanced raster "
-                        "implementation", "not compiled", "renderAtTick",
-                        "generated link manifest excluded the NW-06 graphics "
-                        "root binding path");
-                }
                 list->SetComputeRootSignature(root);
 #endif
                 package_root_signature = root;
@@ -4271,15 +4210,6 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             values.data(), 0u);
                     }
 #else
-                    if (op.type == FrameOp::Type::SetGraphicsRootConstants) {
-                        return Fail(
-                            ExitCode::RootSignatureCreationFailed, "pipeline",
-                            "graphics_root_binding_not_linked",
-                            "root_constants", "linked indexed instanced raster "
-                            "implementation", "not compiled", "renderAtTick",
-                            "generated link manifest excluded the NW-06 "
-                            "graphics root binding path");
-                    }
                     list->SetComputeRoot32BitConstants(
                         op.root_parameter, op.constant_count,
                         values.data(), 0u);
@@ -4328,15 +4258,6 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         op.root_parameter, handle);
                 }
 #else
-                if (op.type == FrameOp::Type::SetGraphicsDescriptorTable) {
-                    return Fail(
-                        ExitCode::RootSignatureCreationFailed, "pipeline",
-                        "graphics_root_binding_not_linked",
-                        "descriptor_table", "linked indexed instanced raster "
-                        "implementation", "not compiled", "renderAtTick",
-                        "generated link manifest excluded the NW-06 graphics "
-                        "root binding path");
-                }
                 list->SetComputeRootDescriptorTable(
                     op.root_parameter, handle);
 #endif
@@ -4397,13 +4318,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 break;
             }
             case FrameOp::Type::SetGraphicsPipeline: {
-#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
-                return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
-                            "graphics_pipeline_not_linked", "pipeline",
-                            "linked indexed instanced raster implementation",
-                            "not compiled", "renderAtTick",
-                            "generated link manifest excluded the NW-06 raster path");
-#else
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                 ID3D12PipelineState* pipeline = nullptr;
                 for (const auto& candidate : state->pipelines) {
                     if (candidate.shader_id == op.shader_id) {
@@ -4450,13 +4365,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 #endif
             }
             case FrameOp::Type::SetRenderTargets: {
-#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
-                return Fail(ExitCode::ResourceAllocationFailed, "resource",
-                            "render_target_not_linked", "render_targets",
-                            "linked indexed instanced raster implementation",
-                            "not compiled", "renderAtTick",
-                            "generated link manifest excluded the NW-06 raster path");
-#else
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                 PlatformState::ResourceSlot* color = nullptr;
                 PlatformState::ResourceSlot* depth = nullptr;
                 for (auto& slot : state->resources) {
@@ -4528,13 +4437,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 #endif
             }
             case FrameOp::Type::ExecuteIndirect: {
-#if !NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
-                return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
-                            "indirect_draw_not_linked", "pipeline",
-                            "linked indexed instanced raster implementation",
-                            "not compiled", "renderAtTick",
-                            "generated link manifest excluded the NW-06 raster path");
-#else
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                 if (state->graphics_pipeline_shader == 0u) {
                     return Fail(ExitCode::PipelineStateCreationFailed,
                                 "pipeline", "graphics_pipeline_not_set",
