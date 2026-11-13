@@ -543,6 +543,7 @@ def check_shader_contracts() -> CheckResult:
             or 'instruction.opcode == "frame.execute_indirect"' not in resource_plan
             or 'resource.name == "vertices"' not in resource_plan
             or 'resource.name == "indices"' not in resource_plan
+            or resource_plan.count("root_bindings.clear();") < 2
         ):
             return _fail(
                 "nw06_shader_contract",

@@ -491,6 +491,113 @@ def test_resource_plan_is_binding_aware_for_init_and_indirect_draw() -> None:
     assert 'instruction.opcode == "frame.execute_indirect"' in source
     assert 'resource.name == "vertices"' in source
     assert 'resource.name == "indices"' in source
+    assert source.count("root_bindings.clear();") >= 2
+
+
+def _model_native_binding_accesses(package: nwp.NwpPackage) -> dict:
+    """Reference trace of resource_plan.cpp's per-root binding replacement."""
+    roots = {root.root_signature_id: root for root in package.root_signatures}
+    by_id = {resource.resource_id: resource for resource in package.resources}
+
+    def binding_usage(root_id: int, root_parameter: int) -> str:
+        root = roots.get(root_id)
+        if root is None:
+            return ""
+        for binding in root.bindings:
+            if binding.root_parameter == root_parameter:
+                return binding.usage
+        return ""
+
+    accesses: dict[int, list[tuple[int, str]]] = {
+        resource.resource_id: [] for resource in package.resources
+    }
+    bound_by_root: dict[int, dict[int, str]] = {}
+    active_root = 0
+    for index, instruction in enumerate(package.frame):
+        refs = [
+            operand.value
+            for operand in instruction.operands
+            if operand.type == "resource_ref"
+        ]
+        if instruction.opcode in {
+            "frame.set_root_signature",
+            "frame.set_graphics_root_signature",
+        }:
+            root_id = instruction.operands[0].value
+            if root_id != active_root:
+                active_root = root_id
+                bound_by_root.clear()
+        elif instruction.opcode in {
+            "frame.set_descriptor_table",
+            "frame.set_root_constants",
+            "frame.set_graphics_descriptor_table",
+            "frame.set_graphics_root_constants",
+        }:
+            root_parameter = instruction.operands[0].value
+            root_constants = instruction.opcode in {
+                "frame.set_root_constants",
+                "frame.set_graphics_root_constants",
+            }
+            binding = (
+                "cbv"
+                if root_constants
+                else binding_usage(active_root, root_parameter)
+            )
+            # The native planner replaces, rather than merges, a root's
+            # previous binding set when the root parameter is rebound.
+            bound_by_root[root_parameter] = {
+                resource_id: binding or by_id[resource_id].usage
+                for resource_id in refs
+            }
+        elif instruction.opcode == "frame.dispatch":
+            for root_bindings in bound_by_root.values():
+                for resource_id, usage in root_bindings.items():
+                    accesses[resource_id].append(
+                        (index, "write" if usage == "uav" else "read")
+                    )
+        elif instruction.opcode == "frame.execute_indirect":
+            for resource_id in refs:
+                accesses[resource_id].append((index, "read"))
+            for root_bindings in bound_by_root.values():
+                for resource_id in root_bindings:
+                    accesses[resource_id].append((index, "read"))
+            for resource in package.resources:
+                if resource.name in {"vertices", "indices"}:
+                    accesses[resource.resource_id].append((index, "read"))
+    return accesses
+
+
+def test_native_resource_plan_rebinds_tonemap_root_without_writing_bloom(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    accesses = _model_native_binding_accesses(package)
+    dispatch_indices = [
+        index
+        for index, instruction in enumerate(package.frame)
+        if instruction.opcode == "frame.dispatch"
+    ]
+    bloom_index, tonemap_index = dispatch_indices
+    assert ("write" in [
+        access for index, access in accesses[18] if index == bloom_index
+    ])
+    # Root 3 is rebound from the bloom UAV (18) to the tonemap output (19).
+    # Resource 18 must be read through root 2, never written by TonemapCS.
+    tonemap_18 = [
+        access for index, access in accesses[18] if index == tonemap_index
+    ]
+    tonemap_17 = [
+        access for index, access in accesses[17] if index == tonemap_index
+    ]
+    tonemap_19 = [
+        access for index, access in accesses[19] if index == tonemap_index
+    ]
+    assert tonemap_18 == ["read"]
+    assert tonemap_17 == ["read"]
+    assert tonemap_19 == ["write"]
+    assert accesses[18][-1] == (tonemap_index, "read")
+    assert accesses[19][-1] == (tonemap_index, "write")
 
 
 def test_player_packs_uint_tick_root_constant_at_nonzero_tick() -> None:

@@ -256,6 +256,7 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
                     : binding_usage_for(init_root_signature_id,
                                         root_parameter);
             auto& root_bindings = init_bound_by_root[root_parameter];
+            root_bindings.clear();
             for (const std::uint32_t resource_id : refs) {
                 root_bindings[resource_id] =
                     effective_usage(resource_id, binding);
@@ -342,6 +343,7 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
                     : binding_usage_for(active_root_signature_id,
                                         root_parameter);
             auto& root_bindings = bound_by_root[root_parameter];
+            root_bindings.clear();
             for (const std::uint32_t resource_id : refs()) {
                 root_bindings[resource_id] =
                     effective_usage(resource_id, binding);
