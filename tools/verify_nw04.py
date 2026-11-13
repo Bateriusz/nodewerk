@@ -1369,6 +1369,113 @@ def run_present_then_dispatch_check(
     )
 
 
+def run_bound_sampler_dispatch_check(
+    fixture: Path, package_path: Path, *, validation: bool = True
+) -> CheckResult:
+    """Run a real PackagePlayer dispatch with a bound sampler descriptor."""
+    if not fixture.exists():
+        return CheckResult(
+            "nw04_bound_sampler_dispatch",
+            True,
+            False,
+            f"fixture binary is unavailable: {fixture}",
+            unavailable=True,
+        )
+    try:
+        base = nwp.decode_package(package_path.read_bytes())
+        sampler_package = nw04_fixture.compose_sampler_dispatch_package(base)
+        failures = contract.validate_package_requirements(sampler_package)
+        plan_failures = contract.validate_frame_plan(sampler_package)
+        if failures or plan_failures:
+            detail = contract.format_failures(failures + plan_failures)
+            return CheckResult(
+                "nw04_bound_sampler_dispatch",
+                True,
+                False,
+                f"composed sampler package is invalid: {detail}",
+            )
+        encoded = nwp.encode_package(sampler_package)
+        with tempfile.NamedTemporaryFile(
+            prefix="nw04-bound-sampler-", suffix=".nwp", delete=False
+        ) as handle:
+            sampler_path = Path(handle.name)
+            handle.write(encoded)
+    except Exception as exc:
+        return CheckResult(
+            "nw04_bound_sampler_dispatch",
+            True,
+            False,
+            f"could not compose bound-sampler package: {exc}",
+        )
+
+    command = [
+        str(fixture),
+        "--package",
+        str(sampler_path),
+        "--frames",
+        "1",
+    ]
+    if validation:
+        command.append("--validation")
+    try:
+        proc = subprocess.run(
+            command, capture_output=True, text=True, check=False
+        )
+    finally:
+        sampler_path.unlink(missing_ok=True)
+
+    combined = proc.stdout + proc.stderr
+    if proc.returncode != 0:
+        return CheckResult(
+            "nw04_bound_sampler_dispatch",
+            True,
+            False,
+            f"bound-sampler fixture exited {proc.returncode}",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if (
+        "NW_PLAYER_FRAMES=1" not in proc.stdout
+        or "NW_PLAYER_PRESENTS=1" not in proc.stdout
+    ):
+        return CheckResult(
+            "nw04_bound_sampler_dispatch",
+            True,
+            False,
+            "bound-sampler fixture did not execute and present the dispatch",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if (
+        "dispatch_bound_resource_missing" in combined
+        or "dispatch_bound_sampler_missing" in combined
+    ):
+        return CheckResult(
+            "nw04_bound_sampler_dispatch",
+            True,
+            False,
+            "bound sampler was rejected by the native dispatch path",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    if "NW_D3D12_VALIDATION_ERROR=" in combined:
+        return CheckResult(
+            "nw04_bound_sampler_dispatch",
+            True,
+            False,
+            "bound-sampler dispatch emitted a D3D12 validation error",
+            evidence={"stdout": proc.stdout, "stderr": proc.stderr},
+        )
+    return CheckResult(
+        "nw04_bound_sampler_dispatch",
+        True,
+        True,
+        evidence={
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "command": command,
+            "package_sha256": hashlib.sha256(encoded).hexdigest(),
+        },
+    )
+
+
 def run_root_signature_switch_check(
     fixture: Path, package_path: Path, *, validation: bool = True
 ) -> CheckResult:
@@ -2007,6 +2114,13 @@ def main() -> int:
                             args.fixture,
                             args.package,
                             [],
+                            validation=args.mode != "NativeLifecycle",
+                        )
+                    )
+                    results.append(
+                        run_bound_sampler_dispatch_check(
+                            args.fixture,
+                            args.package,
                             validation=args.mode != "NativeLifecycle",
                         )
                     )

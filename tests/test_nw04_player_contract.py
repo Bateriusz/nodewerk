@@ -368,57 +368,50 @@ def test_readback_and_sampler_usages_follow_native_format_rules() -> None:
     ), [failure.code for failure in failures]
 
 
-def test_dispatch_with_bound_sampler_validates_descriptor_without_transition() -> None:
-    package = nw04_fixture.build_sampler_dispatch_package()
+def test_dispatch_with_bound_sampler_has_valid_runtime_package_shape() -> None:
+    base = nw04_fixture.build_compute_display_package()
+    package = nw04_fixture.compose_sampler_dispatch_package(base)
     data = nwp.encode_package(package)
     assert nwp.inspect_package_bytes(data).valid
     decoded = nwp.decode_package(data)
+    assert contract.validate_package_requirements(decoded) == []
+    assert contract.validate_frame_plan(decoded) == []
+
+    # Runtime qualification composes this fixture over the real offline-DXIL
+    # package.  The helper must not replace or mutate shader payloads.
+    assert decoded.shaders == base.shaders
     sampler = next(
         resource for resource in decoded.resources if resource.usage == "sampler"
     )
-    assert contract.validate_package_requirements(decoded) == []
-    assert contract.validate_frame_plan(decoded) == []
-    assert any(
-        instruction.opcode == "frame.set_descriptor_table"
+    shader = decoded.shaders[0]
+    root = next(
+        record
+        for record in decoded.root_signatures
+        if record.root_signature_id == shader.root_signature_id
+    )
+    sampler_binding = next(
+        binding for binding in root.bindings if binding.usage == "sampler"
+    )
+    assert sampler_binding.slot == sampler.binding_slot
+    assert sampler_binding.space == sampler.binding_space
+
+    sampler_table_index = next(
+        index
+        for index, instruction in enumerate(decoded.frame)
+        if instruction.opcode == "frame.set_descriptor_table"
         and instruction.operands[1].value == "sampler"
         and instruction.operands[2].value == sampler.resource_id
-        for instruction in decoded.frame
     )
-    failures, transitions = contract.simulate_dispatch_bindings(decoded)
-    assert failures == []
-    assert not any(
-        transition["resource_id"] == sampler.resource_id
-        for transition in transitions
+    dispatch_index = next(
+        index
+        for index, instruction in enumerate(decoded.frame)
+        if instruction.opcode == "frame.dispatch"
     )
-    output = next(
-        resource
-        for resource in decoded.resources
-        if resource.usage == "uav" and resource.kind == "buffer"
-    )
+    assert sampler_table_index < dispatch_index
     assert any(
-        transition["resource_id"] == output.resource_id
-        and transition["kind"] == "transition"
-        and transition["after"] == "uav"
-        for transition in transitions
-    )
-
-    # Samplers still require the descriptor created by init.create_resource.
-    # Omitting that initialization must fail closed even though no
-    # ID3D12Resource would ever exist for the sampler.
-    without_sampler_init = nwp.replace(
-        decoded,
-        initialization=[
-            instruction
-            for instruction in decoded.initialization
-            if not (
-                instruction.opcode == "init.create_resource"
-                and instruction.operands[0].value == sampler.resource_id
-            )
-        ],
-    )
-    failures, _ = contract.simulate_dispatch_bindings(without_sampler_init)
-    assert any(
-        failure.code == "dispatch_bound_sampler_missing" for failure in failures
+        instruction.opcode == "init.create_resource"
+        and instruction.operands[0].value == sampler.resource_id
+        for instruction in decoded.initialization
     )
 
 

@@ -76,69 +76,148 @@ def build_compute_display_package(*, specialization_count: int = 1) -> nwp.NwpPa
     return compose_compute_display_package(package)
 
 
-def build_sampler_dispatch_package() -> nwp.NwpPackage:
-    """Compute/display package whose dispatch binds a sampler descriptor table.
+def compose_sampler_dispatch_package(base: nwp.NwpPackage) -> nwp.NwpPackage:
+    """Add a live sampler binding to a package without changing its shader blobs.
 
-    This is the runtime regression fixture for the player dispatch path:
-    sampler resources intentionally have no ``ID3D12Resource`` and only own a
-    descriptor created by ``CreateSampler``.  Binding one before dispatch must
-    validate that descriptor without treating the null resource pointer as a
-    missing bound resource or emitting a resource-state transition.
+    The runtime regression must exercise the real PackagePlayer with the real
+    offline-compiled shader package used by Full verification.  The sampler is
+    added to the root signature used by the first dispatch and bound immediately
+    before that dispatch.  Samplers intentionally have no ID3D12Resource.
     """
-    base = build_compute_display_package()
-    family = "compute.math_noise"
+    if not base.shaders:
+        raise ValueError("package has no shader to dispatch")
+    if any(resource.usage == "sampler" for resource in base.resources):
+        raise ValueError("package already contains a sampler resource")
+
+    first_dispatch = next(
+        (
+            instruction
+            for instruction in base.frame
+            if instruction.opcode == "frame.dispatch"
+            and len(instruction.operands) == 4
+        ),
+        None,
+    )
+    if first_dispatch is None:
+        raise ValueError("package has no frame.dispatch instruction")
+    shader_id = first_dispatch.operands[3].value
+    shader = next(
+        (item for item in base.shaders if item.shader_id == shader_id),
+        None,
+    )
+    if shader is None:
+        raise ValueError(f"dispatch references unknown shader {shader_id}")
+    root = next(
+        (
+            item
+            for item in base.root_signatures
+            if item.root_signature_id == shader.root_signature_id
+        ),
+        None,
+    )
+    if root is None:
+        raise ValueError(
+            f"shader {shader_id} references unknown root signature "
+            f"{shader.root_signature_id}"
+        )
+    if any(binding.usage == "sampler" for binding in root.bindings):
+        raise ValueError("dispatch root signature already contains a sampler")
+
+    sampler_root_parameter = (
+        max((binding.root_parameter for binding in root.bindings), default=-1) + 1
+    )
     sampler = nwp.ResourceDescriptor(
-        resource_id=3,
+        resource_id=max(
+            (resource.resource_id for resource in base.resources), default=0
+        )
+        + 1,
         name="sampler",
         kind="buffer",
         format="DXGI_FORMAT_R32_UINT",
         usage="sampler",
-        pass_family=family,
+        pass_family=root.family,
         binding_slot=0,
         binding_space=0,
         size_bytes=4,
     )
-    bindings = (
-        nwp.RootBinding("params", "cbv", 0, 0, 0),
-        nwp.RootBinding("output", "uav", 0, 0, 1),
-        nwp.RootBinding("sampler", "sampler", 0, 0, 2),
+    sampler_binding = nwp.RootBinding(
+        "sampler", "sampler", 0, 0, sampler_root_parameter
     )
-    root = nwp.RootSignatureRecord(
-        1,
-        family,
-        family + ".v1",
-        6,
-        nwp.make_root_signature_blob(family, bindings),
-        bindings,
+    root_bindings = tuple(root.bindings) + (sampler_binding,)
+    updated_root = replace(
+        root,
+        dword_cost=root.dword_cost + 1,
+        blob=nwp.make_root_signature_blob(root.family, root_bindings),
+        bindings=root_bindings,
     )
+    root_signatures = [
+        updated_root
+        if item.root_signature_id == root.root_signature_id
+        else item
+        for item in base.root_signatures
+    ]
+
     operand = nwp.InstructionOperand
     initialization = list(base.initialization)
+    create_index = next(
+        (
+            index
+            for index, instruction in enumerate(initialization)
+            if instruction.opcode == "init.create_root_signature"
+            and instruction.operands
+            and instruction.operands[0].value == root.root_signature_id
+        ),
+        len(initialization),
+    )
     initialization.insert(
-        2,
+        create_index,
         nwp.Instruction(
-            "init.create_resource", (operand("resource_ref", 3),)
+            "init.create_resource",
+            (operand("resource_ref", sampler.resource_id),),
         ),
     )
-    frame = []
-    for instruction in base.frame:
-        frame.append(instruction)
-        if instruction.opcode == "frame.set_root_constants":
-            frame.append(
-                nwp.Instruction(
-                    "frame.set_descriptor_table",
-                    (
-                        operand("u32", 2),
-                        operand("string", "sampler"),
-                        operand("resource_ref", 3),
-                    ),
+
+    frame = list(base.frame)
+    active_root_signature = None
+    dispatch_index = None
+    for index, instruction in enumerate(frame):
+        if (
+            instruction.opcode == "frame.set_root_signature"
+            and instruction.operands
+        ):
+            active_root_signature = instruction.operands[0].value
+        if (
+            instruction.opcode == "frame.dispatch"
+            and len(instruction.operands) == 4
+            and instruction.operands[3].value == shader_id
+        ):
+            if active_root_signature != root.root_signature_id:
+                raise ValueError(
+                    "first dispatch does not have its shader root signature active"
                 )
-            )
+            dispatch_index = index
+            break
+    if dispatch_index is None:
+        raise ValueError("could not locate dispatch insertion point")
+    frame.insert(
+        dispatch_index,
+        nwp.Instruction(
+            "frame.set_descriptor_table",
+            (
+                operand("u32", sampler_root_parameter),
+                operand("string", "sampler"),
+                operand("resource_ref", sampler.resource_id),
+            ),
+        ),
+    )
+
+    resources = list(base.resources) + [sampler]
     derived = nwp.derive_capability_requirements(
-        list(base.resources) + [sampler],
+        resources,
         initialization,
         frame,
         base.shaders,
-        [root],
+        root_signatures,
     )
     capability = replace(base.capability, **derived)
     capability = replace(
@@ -156,12 +235,17 @@ def build_sampler_dispatch_package() -> nwp.NwpPackage:
     )
     return replace(
         base,
-        resources=list(base.resources) + [sampler],
+        resources=resources,
         initialization=initialization,
         frame=frame,
-        root_signatures=[root],
+        root_signatures=root_signatures,
         capability=capability,
     )
+
+
+def build_sampler_dispatch_package() -> nwp.NwpPackage:
+    """Synthetic contract fixture for the bound-sampler package shape."""
+    return compose_sampler_dispatch_package(build_compute_display_package())
 
 
 def compose_compute_display_package(
