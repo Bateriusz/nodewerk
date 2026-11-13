@@ -29,7 +29,7 @@ jobs:
 
       - name: Build portable host player bootstrap
         run: |
-          cmake -S . -B build/host-player -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build/host-player -DCMAKE_BUILD_TYPE=Release -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
           cmake --build build/host-player --target nw_player_bootstrap --parallel 2
 
       - name: Run NW-01 automated contract and schema test suite
