@@ -66,6 +66,7 @@ READ_STATES = frozenset(
         "COPY_SOURCE",
         "GENERIC_READ",
         "ALL_SHADER_RESOURCE",
+        "INDIRECT_ARGUMENT",
     }
 )
 WRITE_STATES = frozenset({"RENDER_TARGET", "UNORDERED_ACCESS", "DEPTH_WRITE", "COPY_DEST"})
@@ -591,12 +592,42 @@ def build_logical_schedule(
 
     # Descriptor tables and root constants bind resources for subsequent
     # dispatches in the same frame stream.  Track the current binding set.
-    bound_by_root: dict[int, set[int]] = {}
+    root_by_id = {
+        root.root_signature_id: root for root in package.root_signatures
+    }
+    active_root_signature_id: int | None = None
+
+    def binding_usage(root_parameter: int) -> str | None:
+        if active_root_signature_id is None:
+            return None
+        root_record = root_by_id.get(active_root_signature_id)
+        if root_record is None:
+            return None
+        for binding in root_record.bindings:
+            if binding.root_parameter == root_parameter:
+                return binding.usage
+        return None
+
+    # root parameter -> resource id -> binding usage
+    bound_by_root: dict[int, dict[int, str]] = {}
     bound: dict[int, str] = {}
     for index, instruction in enumerate(package.frame):
         frame_order.append(instruction.opcode)
         opcode = instruction.opcode
         if opcode in {
+            "frame.set_root_signature",
+            "frame.set_graphics_root_signature",
+        }:
+            root_parameter = (
+                int(instruction.operands[0].value)
+                if instruction.operands
+                else -1
+            )
+            if root_parameter != active_root_signature_id:
+                active_root_signature_id = root_parameter
+                bound_by_root.clear()
+                bound.clear()
+        elif opcode in {
             "frame.set_descriptor_table",
             "frame.set_graphics_descriptor_table",
         }:
@@ -606,25 +637,27 @@ def build_logical_schedule(
                 if instruction.operands
                 else -1
             )
-            bound_by_root[root_parameter] = set(refs)
-            bound = {
-                resource_id: resources_by_id[resource_id].usage
-                for resource_ids in bound_by_root.values()
-                for resource_id in resource_ids
-                if resource_id in resources_by_id
-            }
+            root_usage = binding_usage(root_parameter)
+            usage_by_resource: dict[int, str] = {}
             for resource_id in refs:
                 resource = resources_by_id.get(resource_id)
                 if resource is None:
                     continue
-                bound[resource_id] = resource.usage
+                usage_by_resource[resource_id] = root_usage or resource.usage
+            bound_by_root[root_parameter] = usage_by_resource
+            bound = {
+                resource_id: usage
+                for usage_by_resource in bound_by_root.values()
+                for resource_id, usage in usage_by_resource.items()
+            }
+            for resource_id, usage in usage_by_resource.items():
                 access_by_id[resource_id].append(
                     ResourceAccess(
                         phase="frame",
                         index=index,
                         opcode=opcode,
                         access="read",
-                        state=_usage_state(resource.usage),
+                        state=_usage_state(usage),
                     )
                 )
         elif opcode in {
@@ -637,35 +670,34 @@ def build_logical_schedule(
                 if instruction.operands
                 else -1
             )
-            bound_by_root[root_parameter] = set(refs)
-            bound = {
-                resource_id: resources_by_id[resource_id].usage
-                for resource_ids in bound_by_root.values()
-                for resource_id in resource_ids
-                if resource_id in resources_by_id
-            }
+            root_usage = binding_usage(root_parameter)
+            usage_by_resource: dict[int, str] = {}
             for resource_id in refs:
                 resource = resources_by_id.get(resource_id)
                 if resource is None:
                     continue
-                bound[resource_id] = resource.usage
+                usage_by_resource[resource_id] = root_usage or resource.usage
+            bound_by_root[root_parameter] = usage_by_resource
+            bound = {
+                resource_id: usage
+                for usage_by_resource in bound_by_root.values()
+                for resource_id, usage in usage_by_resource.items()
+            }
+            for resource_id, usage in usage_by_resource.items():
                 access_by_id[resource_id].append(
                     ResourceAccess(
                         phase="frame",
                         index=index,
                         opcode=opcode,
                         access="read",
-                        state=_usage_state(resource.usage),
+                        state=_usage_state(usage),
                     )
                 )
         elif opcode == "frame.dispatch":
-            for resource_id in sorted(bound):
-                resource = resources_by_id.get(resource_id)
-                if resource is None:
-                    continue
-                if resource.usage in {"uav", "uav_srv"}:
+            for resource_id, usage in sorted(bound.items()):
+                if usage == "uav":
                     access = "write"
-                elif resource.usage in {"srv", "cbv"}:
+                elif usage in {"srv", "cbv"}:
                     access = "read"
                 else:
                     continue
@@ -675,7 +707,7 @@ def build_logical_schedule(
                         index=index,
                         opcode=opcode,
                         access=access,
-                        state=_usage_state(resource.usage),
+                        state=_usage_state(usage),
                     )
                 )
         elif opcode == "frame.set_graphics_pipeline":

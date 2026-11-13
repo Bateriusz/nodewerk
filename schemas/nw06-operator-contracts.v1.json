@@ -127,8 +127,8 @@
         {"name": "height", "type": "float", "required": true},
         {"name": "curve_value_min", "type": "float", "required": false},
         {"name": "curve_value_max", "type": "float", "required": false},
-        {"name": "curve_quantization_bits", "type": "int", "required": true, "minimum": 0, "maximum": 24},
-        {"name": "curve_tolerance", "type": "float", "required": true, "minimum": 0.0}
+        {"name": "curve_quantization_bits", "type": "int", "required": false, "minimum": 0, "maximum": 24},
+        {"name": "curve_tolerance", "type": "float", "required": false, "minimum": 0.0}
       ],
       "lowering": "nw.lower.cpu.camera",
       "produces_resource": false

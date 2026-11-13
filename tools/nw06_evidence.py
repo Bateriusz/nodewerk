@@ -255,6 +255,15 @@ def record_capture(
 ) -> dict[str, Any]:
     if tier not in {"ada", "blackwell"}:
         raise ValueError(f"unsupported evidence tier: {tier}")
+    if coverage_target != FIXED_TICK_COVERAGE_TARGETS[tier]:
+        raise ValueError(
+            f"tier '{tier}' requires coverage target "
+            f"'{FIXED_TICK_COVERAGE_TARGETS[tier]}', got '{coverage_target}'"
+        )
+    if evidence_role != FIXED_TICK_EVIDENCE_ROLE:
+        raise ValueError(
+            f"evidence role must be '{FIXED_TICK_EVIDENCE_ROLE}'"
+        )
     if status not in {"passed", "failed"}:
         raise ValueError(f"unsupported execution status: {status}")
     _, package_bytes, artifact_key, manifest_sha256 = _artifact_identity(
@@ -295,8 +304,22 @@ def record_capture(
         if isinstance(existing, dict):
             # Preserve recorded evidence while regenerating required metadata.
             record.update(existing)
-            record.setdefault("qualifications", pending_record()["qualifications"])
             record.setdefault("policy", pending_record()["policy"])
+    # Merge the complete pending qualification map so a pre-existing file that
+    # contains no qualifications (or only one tier) still gains every
+    # schema-required tier.
+    pending_qualifications = pending_record()["qualifications"]
+    existing_qualifications = record.get("qualifications")
+    if not isinstance(existing_qualifications, dict):
+        existing_qualifications = {}
+    merged_qualifications: dict[str, Any] = {}
+    for name, default_entry in pending_qualifications.items():
+        entry = dict(default_entry)
+        prior_entry = existing_qualifications.get(name)
+        if isinstance(prior_entry, dict):
+            entry.update(prior_entry)
+        merged_qualifications[name] = entry
+    record["qualifications"] = merged_qualifications
     record["captures"] = list(record.get("captures", [])) + [capture]
     record["executions"] = list(record.get("executions", [])) + [capture]
     record["validation"] = validated
@@ -354,6 +377,17 @@ def record_capture(
             json.dumps(record, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        from schema_validator import validate_file_against_schema
+
+        schema_path = (
+            REPO_ROOT / "schemas" / "nw06-hardware-evidence.schema.json"
+        )
+        try:
+            validate_file_against_schema(output_path, schema_path)
+        except Exception as exc:
+            raise ValueError(
+                f"recorded evidence failed schema validation: {exc}"
+            ) from exc
     return record
 
 
@@ -372,8 +406,16 @@ def validate_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
         )
     if not captures:
         return {
-            "status": "pending_unverified",
-            "reason": "no hardware captures recorded",
+            "status": (
+                "failed"
+                if "failed" in qualification_statuses.values()
+                else "pending_unverified"
+            ),
+            "reason": (
+                "a qualification retains an executed failure"
+                if "failed" in qualification_statuses.values()
+                else "no hardware captures recorded"
+            ),
             "captures": [],
             "qualifications": qualification_statuses,
         }

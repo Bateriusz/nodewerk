@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import os
 import struct
+import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw03_compiler as nw03  # noqa: E402
 import nw04_fixture  # noqa: E402
+import nw04_player_contract as nw04_contract  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 import nw05_export  # noqa: E402
 import nw05_optimizer as optimizer  # noqa: E402
@@ -302,6 +305,17 @@ def test_schedule_models_render_targets_indirect_draw_and_lifetimes(
         for access in logical.resource(6).access
     )
     assert any(
+        access.opcode == "frame.execute_indirect"
+        and access.state == "INDIRECT_ARGUMENT"
+        for access in logical.resource(7).access
+    )
+    assert all(
+        access.access != "write"
+        for resource_id in (6, 9, 11, 13, 17, 18)
+        for access in logical.resource(resource_id).access
+        if access.opcode == "frame.set_graphics_descriptor_table"
+    )
+    assert any(
         access.state == "RENDER_TARGET" for access in logical.resource(17).access
     )
     assert any(
@@ -342,8 +356,8 @@ def test_camera_curve_full_precision_escape_hatch(tmp_path: Path) -> None:
     graph = tmp_path / "full-precision.nwgraph"
     graph.write_text(
         PROCEDURAL.read_text(encoding="utf-8").replace(
-            "  param height 1.6\n",
-            "  param height 1.6\n  param curve_quantization_bits 0\n",
+            "  param curve_quantization_bits 16\n",
+            "  param curve_quantization_bits 0\n",
         ),
         encoding="utf-8",
     )
@@ -380,14 +394,10 @@ def test_static_generators_must_remain_initialization_only(
         ("param radius_min 3.2", "param radius_min 5.0"),
         ("param radius_max 4.8", "param radius_max 1.0"),
         ("param interpolation linear", "param interpolation nearest"),
+        ("param curve_value_min 0", "param curve_value_min 7"),
         (
-            "param height 1.6",
-            "param height 1.6\n  param curve_value_min 7",
-        ),
-        (
-            "param height 1.6",
-            "param height 1.6\n  param curve_value_min 5\n"
-            "  param curve_value_max 1",
+            "param curve_value_min 0\n  param curve_value_max 6.2831853",
+            "param curve_value_min 5\n  param curve_value_max 1",
         ),
     ],
 )
@@ -434,3 +444,71 @@ def test_render_target_binding_clears_color_and_depth() -> None:
     assert "ClearRenderTargetView(rtv" in player
     assert "ClearDepthStencilView(" in player
     assert "D3D12_CLEAR_FLAG_DEPTH" in player
+
+
+def test_player_packs_uint_tick_root_constant_at_nonzero_tick() -> None:
+    candidates = []
+    override = os.environ.get("NW04_FIXTURE")
+    if override:
+        candidates.append(Path(override))
+    candidates.extend(
+        sorted((REPO_ROOT / "build").glob("**/nw_package_player_fixture*"))
+    )
+    fixture = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.is_file()
+            and candidate.suffix.lower() in ("", ".exe")
+            and "CMakeFiles" not in candidate.parts
+        ),
+        None,
+    )
+    if fixture is None:
+        pytest.skip("native NW-04 PackagePlayer fixture is not built")
+    package_path = (
+        REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp"
+    )
+    completed = subprocess.run(
+        [
+            str(fixture),
+            "--package",
+            str(package_path),
+            "--frames",
+            "2",
+            "--tick-start",
+            "0",
+            "--tick-step",
+            "24000",
+            "--planner-self-test",
+            "--planner-mutation",
+            "timeline-uint",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "NW_PLAYER_PLANNER_SELF_TEST=1" in completed.stdout
+    # 24,000 decimal = 0x00005DC0, proving the player path wrote an integer
+    # tick rather than float seconds (which would be 0x46BB8000).
+    assert "NW_PLAYER_LAST_ROOT_CONSTANT0=0x00005DC0" in completed.stdout
+
+
+def test_player_contract_mirror_uses_uint_tick_representation() -> None:
+    package = nw04_fixture.build_compute_display_package()
+    tick_parameter = replace(
+        package.parameters[0],
+        type="uint",
+        component_count=1,
+        value=struct.pack("<I", 0),
+    )
+    package = replace(
+        package, parameters=[tick_parameter, *package.parameters[1:]]
+    )
+    last_constants, timeline = nw04_contract.apply_frame_constants(
+        package, 24_000
+    )
+    assert timeline == 24_000
+    assert last_constants is not None
+    assert struct.unpack_from("<I", last_constants, 0)[0] == 24_000

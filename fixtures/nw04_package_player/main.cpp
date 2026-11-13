@@ -282,6 +282,17 @@ int main(int argc, char** argv) {
                     mutated = true;
                 }
             } else if (std::strcmp(args.planner_mutation,
+                                   "timeline-uint") == 0) {
+                if (!package.parameters.empty()) {
+                    // Exercise the integer-tick representation used by the
+                    // NW-06 graphics parameter without guessing at bit
+                    // patterns in the test harness.
+                    package.parameters.front().type = "uint";
+                    package.parameters.front().component_count = 1u;
+                    package.parameters.front().value = {0u, 0u, 0u, 0u};
+                    mutated = true;
+                }
+            } else if (std::strcmp(args.planner_mutation,
                                    "root-constant-bound") == 0) {
                 for (auto& instruction : package.frame) {
                     if (instruction.opcode == "frame.set_root_constants" &&

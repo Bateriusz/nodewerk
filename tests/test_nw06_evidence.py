@@ -312,3 +312,115 @@ def test_full_verification_rejects_mismatched_artifact_and_executable(
     by_name = {check.name: check for check in checks}
     assert by_name["nw06_artifact_identity"].status == "failed"
     assert by_name["nw06_hardware_capture"].status == "failed"
+
+
+def test_record_capture_rejects_tier_coverage_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        nw06_evidence,
+        "_artifact_identity",
+        lambda directory: (
+            directory / "artifact.nwp",
+            b"package",
+            "sha256:v1:artifact",
+            "sha256:v1:" + "6" * 64,
+        ),
+    )
+    executable = tmp_path / "player.exe"
+    executable.write_bytes(b"MZ" + b"\x00" * 32)
+    with pytest.raises(ValueError, match="coverage target"):
+        nw06_evidence.record_capture(
+            artifact_directory=tmp_path,
+            executable=executable,
+            tier="blackwell",
+            coverage_target="desktop_ada_representative",
+            evidence_role="fixed_tick_correctness",
+            status="passed",
+            metadata=_complete_capture("ada"),
+        )
+
+
+def test_record_capture_merges_complete_qualification_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        nw06_evidence,
+        "_artifact_identity",
+        lambda directory: (
+            directory / "artifact.nwp",
+            b"package",
+            "sha256:v1:artifact",
+            "sha256:v1:" + "7" * 64,
+        ),
+    )
+    executable = tmp_path / "player.exe"
+    executable.write_bytes(b"MZ" + b"\x00" * 32)
+    output = tmp_path / "evidence.json"
+    # Simulate a pre-existing file with an empty qualifications object.
+    output.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "task": "NW-06",
+                "verification_status": "pending_unverified",
+                "profile_id": nwp.COMMON_PROFILE_ID,
+                "requirements_digest": nwp.COMMON_REQUIREMENTS_DIGEST,
+                "ticks_per_second": 48_000,
+                "qualifications": {"ada": {"status": "pending_unverified"}},
+                "policy": "fixed-tick coverage",
+            }
+        ),
+        encoding="utf-8",
+    )
+    metadata = _complete_capture("ada")
+    for name in (
+        "coverage_target",
+        "evidence_role",
+        "artifact_key",
+        "package_sha256",
+        "executable_sha256",
+        "manifest_sha256",
+        "profile_id",
+        "requirements_digest",
+        "status",
+    ):
+        metadata.pop(name, None)
+    nw06_evidence.record_capture(
+        artifact_directory=tmp_path,
+        executable=executable,
+        tier="ada",
+        coverage_target="desktop_ada_representative",
+        evidence_role="fixed_tick_correctness",
+        status="passed",
+        metadata=metadata,
+        output_path=output,
+    )
+    validate_file_against_schema(output, SCHEMA)
+    recorded = json.loads(output.read_text(encoding="utf-8"))
+    assert set(recorded["qualifications"]) == {"ada", "blackwell"}
+    assert (
+        recorded["qualifications"]["blackwell"]["status"]
+        == "pending_unverified"
+    )
+
+
+def test_failed_qualification_without_captures_remains_failed() -> None:
+    result = nw06_evidence.validate_evidence_record(
+        {
+            "captures": [],
+            "qualifications": {
+                "ada": {
+                    "coverage_target": "desktop_ada_representative",
+                    "evidence_role": "fixed_tick_correctness",
+                    "status": "failed",
+                },
+                "blackwell": {
+                    "coverage_target": "desktop_blackwell_representative",
+                    "evidence_role": "fixed_tick_correctness",
+                    "status": "pending_unverified",
+                },
+            },
+        }
+    )
+    assert result["status"] == "failed"

@@ -568,6 +568,19 @@ PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
         "radius_min": {"kind": "float", "min": 0.0},
         "radius_max": {"kind": "float", "min": 0.0},
         "height": {"kind": "float"},
+        "curve_value_min": {"kind": "float", "optional": True},
+        "curve_value_max": {"kind": "float", "optional": True},
+        "curve_quantization_bits": {
+            "kind": "int",
+            "min": 0,
+            "max": 24,
+            "optional": True,
+        },
+        "curve_tolerance": {
+            "kind": "float",
+            "min": 0.0,
+            "optional": True,
+        },
     },
     "nw.animation.twist": {
         "max_twist_degrees": {"kind": "float", "min": -3600.0, "max": 3600.0},
