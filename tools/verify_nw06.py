@@ -352,6 +352,47 @@ def check_export_and_determinism() -> CheckResult:
                 return _fail("nw06_export", "common profile identity changed")
             if package.capability.requirements_digest != nwp.COMMON_REQUIREMENTS_DIGEST:
                 return _fail("nw06_export", "requirements digest changed")
+            tick_parameter = next(
+                parameter
+                for parameter in package.parameters
+                if parameter.name == "nw06.params.14.tick"
+            )
+            if tick_parameter.type != "uint":
+                return _fail(
+                    "nw06_export",
+                    "graphics tick is not an explicit integer tick parameter",
+                )
+            packed = nw06_export.pack_frame_root_constants(package, 14, 24_000)
+            if struct.unpack_from("<I", packed, 0)[0] != 24_000:
+                return _fail(
+                    "nw06_export",
+                    "frame root constants do not pack an absolute integer tick",
+                )
+            camera_curve = common.manifest.get("timeline", {}).get(
+                "camera_curve", {}
+            )
+            if (
+                not camera_curve
+                or not camera_curve.get("within_tolerance")
+                or camera_curve.get("maximum_absolute_error", 1.0)
+                > camera_curve.get("declared_tolerance", 0.0)
+            ):
+                return _fail(
+                    "nw06_export",
+                    "camera curve quantization was not bounded and recorded",
+                )
+            logical = common.logical_schedule
+            if (
+                "frame.set_render_targets" not in logical.frame_order
+                or "frame.execute_indirect" not in logical.frame_order
+                or not logical.resource(17).alias_eligible
+                or not logical.resource(18).alias_eligible
+                or not logical.resource(19).alias_eligible
+            ):
+                return _fail(
+                    "nw06_export",
+                    "lifetime/alias planning did not include the raster/post resources",
+                )
             targets = set(package.capability.emitted_shader_targets)
             if targets != {"cs_6_0", "vs_6_0", "ps_6_0"}:
                 return _fail("nw06_export", f"unexpected shader targets {sorted(targets)}")
@@ -397,10 +438,82 @@ def check_export_and_determinism() -> CheckResult:
                     "init_ops": init_ops,
                     "frame_ops": frame_ops,
                     "shader_targets": sorted(targets),
+                    "camera_curve": camera_curve,
+                    "alias_eligible_resources": [
+                        resource.resource_id
+                        for resource in logical.resources
+                        if resource.alias_eligible
+                    ],
                 },
             )
     except Exception as exc:
         return _fail("nw06_export", str(exc))
+
+
+def check_shader_contracts() -> CheckResult:
+    try:
+        shader_root = REPO_ROOT / "shaders" / "nw06"
+        light = (shader_root / "nw06_scene_data_cs.hlsl").read_text(
+            encoding="utf-8"
+        )
+        material = (shader_root / "nw06_material_cs.hlsl").read_text(
+            encoding="utf-8"
+        )
+        vertex = (shader_root / "nw06_scene_vs.hlsl").read_text(
+            encoding="utf-8"
+        )
+        pixel = (shader_root / "nw06_scene_ps.hlsl").read_text(
+            encoding="utf-8"
+        )
+        player = (
+            REPO_ROOT / "src" / "player" / "package_player.cpp"
+        ).read_text(encoding="utf-8")
+        if (
+            "uint4(Param0, Param1, Param2, Param3)" not in light
+            or "asuint(float4(Param0" in light
+        ):
+            return _fail(
+                "nw06_shader_contract",
+                "light record does not preserve float bit patterns",
+            )
+        if "float(TextureIndex)" in material or "TextureIndex))" not in material:
+            return _fail(
+                "nw06_shader_contract",
+                "material texture index is not encoded as uint",
+            )
+        if "uint Tick;" not in vertex:
+            return _fail(
+                "nw06_shader_contract", "vertex tick is not an integer tick"
+            )
+        if (
+            "output.camera_position = eye;" not in vertex
+            or "normalize(input.camera_position - input.world_position)"
+            not in pixel
+        ):
+            return _fail(
+                "nw06_shader_contract",
+                "pixel lighting does not use the animated camera eye",
+            )
+        if (
+            "ClearRenderTargetView(rtv" not in player
+            or "ClearDepthStencilView(" not in player
+        ):
+            return _fail(
+                "nw06_shader_contract",
+                "render-target binding does not clear colour/depth",
+            )
+        return _ok(
+            "nw06_shader_contract",
+            evidence={
+                "light_bit_preserving": True,
+                "material_uint_texture_index": True,
+                "integer_tick": True,
+                "camera_eye_specular": True,
+                "explicit_render_target_clears": True,
+            },
+        )
+    except Exception as exc:
+        return _fail("nw06_shader_contract", str(exc))
 
 
 def check_evidence_contract() -> CheckResult:
@@ -440,6 +553,7 @@ def contracts_only() -> list[CheckResult]:
         check_mesh_and_encodings(),
         check_timeline(),
         check_export_and_determinism(),
+        check_shader_contracts(),
         check_evidence_contract(),
     ]
 
@@ -462,22 +576,73 @@ def full_or_hardware(args: argparse.Namespace) -> list[CheckResult]:
             )
         ]
     package_dir = Path(args.package)
+    executable_path = Path(args.fixture)
+    if not executable_path.is_file():
+        return [
+            _fail(
+                "nw06_artifact_identity",
+                f"capture executable is unavailable: {executable_path}",
+            )
+        ]
     try:
-        _, package_bytes, artifact_key, _ = nw06_evidence._artifact_identity(package_dir)
+        _, package_bytes, artifact_key, manifest_sha256 = (
+            nw06_evidence._artifact_identity(package_dir)
+        )
     except Exception as exc:
         return [_fail("nw06_artifact_identity", str(exc))]
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    executable_sha256 = hashlib.sha256(
+        executable_path.read_bytes()
+    ).hexdigest()
     record = _load_evidence(Path(args.evidence))
     try:
         validate_file_against_schema(Path(args.evidence), EVIDENCE_SCHEMA)
     except Exception as exc:
         return [_fail("nw06_evidence_schema", str(exc))]
+    captures = record.get("captures") or record.get("executions") or []
+    mismatched: list[dict[str, Any]] = []
+    for capture in captures:
+        expected = {
+            "artifact_key": artifact_key,
+            "package_sha256": package_sha256,
+            "manifest_sha256": manifest_sha256,
+            "executable_sha256": executable_sha256,
+        }
+        differences = {
+            name: {
+                "expected": value,
+                "recorded": capture.get(name),
+            }
+            for name, value in expected.items()
+            if capture.get(name) != value
+        }
+        if differences:
+            mismatched.append(
+                {
+                    "capture_id": capture.get("capture_id", ""),
+                    "differences": differences,
+                }
+            )
+    if mismatched:
+        return [
+            _fail(
+                "nw06_artifact_identity",
+                "supplied artifact/executable do not match the capture record",
+            ),
+            _fail(
+                "nw06_hardware_capture",
+                json.dumps(mismatched, sort_keys=True),
+            ),
+        ]
     status = nw06_evidence.validate_evidence_record(record)
     checks.append(
         _ok(
             "nw06_artifact_identity",
             evidence={
                 "artifact_key": artifact_key,
-                "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
+                "package_sha256": package_sha256,
+                "manifest_sha256": manifest_sha256,
+                "executable_sha256": executable_sha256,
             },
         )
     )

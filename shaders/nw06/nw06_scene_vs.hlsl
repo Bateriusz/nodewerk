@@ -5,7 +5,8 @@
 
 cbuffer Nw06GraphicsParams : register(b0, space0)
 {
-    float Tick;
+    // Absolute integer tick at the fixed NW-06 rate of 48,000 ticks/second.
+    uint Tick;
     float FovDegrees;
     float Aspect;
     float NearPlane;
@@ -33,6 +34,7 @@ struct VSOutput
     float3 world_normal : TEXCOORD1;
     float2 uv : TEXCOORD2;
     nointerpolation uint material_index : TEXCOORD3;
+    float3 camera_position : TEXCOORD4;
 };
 
 uint LoadUInt(uint byte_offset)
@@ -45,7 +47,7 @@ float LoadFloat(uint byte_offset)
     return asfloat(LoadUInt(byte_offset));
 }
 
-float SampleCurve(float tick)
+float SampleCurve(uint tick, uint interpolation)
 {
     uint tick0 = NwCamera.Load(0u);
     uint tick1 = NwCamera.Load(1u);
@@ -55,9 +57,17 @@ float SampleCurve(float tick)
     float value1 = asfloat(NwCamera.Load(5u));
     float value2 = asfloat(NwCamera.Load(6u));
     float value3 = asfloat(NwCamera.Load(7u));
-    float t = tick;
+    float t = float(tick);
     if (t <= float(tick0)) return value0;
     if (t >= float(tick3)) return value3;
+    if (interpolation == 1u)
+    {
+        // (previous, current] step semantics: a sample on a key uses that
+        // key's value.
+        if (t < float(tick1)) return value0;
+        if (t < float(tick2)) return value1;
+        return value2;
+    }
     if (t <= float(tick1))
     {
         float d = max(1.0, float(tick1 - tick0));
@@ -111,14 +121,15 @@ VSOutput SceneVS(VSInput input)
         LoadFloat(offset + 48u), LoadFloat(offset + 52u), LoadFloat(offset + 56u), LoadFloat(offset + 60u));
     uint material_index = LoadUInt(offset + 64u);
 
-    float phase = Tick * (6.283185307179586 / 48000.0);
+    float phase = float(Tick) * (6.283185307179586 / 48000.0);
     float twist = TwistRadians * sin(phase) * input.position.y;
     float3 local_position = RotateY(input.position, twist);
     float3 local_normal = RotateY(input.normal, twist);
     float4 world = mul(float4(local_position, 1.0), transform);
     float3 world_normal = normalize(mul(float4(local_normal, 0.0), transform).xyz);
 
-    float camera_angle = SampleCurve(Tick);
+    uint camera_interpolation = NwCamera.Load(11u);
+    float camera_angle = SampleCurve(Tick, camera_interpolation);
     float radius_min = asfloat(NwCamera.Load(8u));
     float radius_max = asfloat(NwCamera.Load(9u));
     float camera_height = asfloat(NwCamera.Load(10u));
@@ -136,5 +147,6 @@ VSOutput SceneVS(VSInput input)
     output.world_normal = world_normal;
     output.uv = input.uv;
     output.material_index = material_index;
+    output.camera_position = eye;
     return output;
 }

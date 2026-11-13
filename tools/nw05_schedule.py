@@ -596,7 +596,10 @@ def build_logical_schedule(
     for index, instruction in enumerate(package.frame):
         frame_order.append(instruction.opcode)
         opcode = instruction.opcode
-        if opcode == "frame.set_descriptor_table":
+        if opcode in {
+            "frame.set_descriptor_table",
+            "frame.set_graphics_descriptor_table",
+        }:
             refs = _resource_refs(instruction)
             root_parameter = (
                 int(instruction.operands[0].value)
@@ -624,7 +627,10 @@ def build_logical_schedule(
                         state=_usage_state(resource.usage),
                     )
                 )
-        elif opcode == "frame.set_root_constants":
+        elif opcode in {
+            "frame.set_root_constants",
+            "frame.set_graphics_root_constants",
+        }:
             refs = _resource_refs(instruction)
             root_parameter = (
                 int(instruction.operands[0].value)
@@ -672,6 +678,77 @@ def build_logical_schedule(
                         state=_usage_state(resource.usage),
                     )
                 )
+        elif opcode == "frame.set_graphics_pipeline":
+            # Pipeline selection binds the raster shaders.  It consumes no
+            # resource directly; the vertex/index/instance/material accesses
+            # are attributed to the following frame.execute_indirect.
+            pass
+        elif opcode == "frame.set_render_targets":
+            # Operand 0 is the colour RTV and operand 1 is the depth DSV.
+            for operand_index, resource_id in enumerate(
+                _resource_refs(instruction)
+            ):
+                if resource_id not in resources_by_id:
+                    continue
+                access_by_id[resource_id].append(
+                    ResourceAccess(
+                        phase="frame",
+                        index=index,
+                        opcode=opcode,
+                        access="write",
+                        state=(
+                            "RENDER_TARGET"
+                            if operand_index == 0
+                            else "DEPTH_WRITE"
+                        ),
+                    )
+                )
+        elif opcode == "frame.execute_indirect":
+            # ARGUMENT buffer plus the currently bound resources and the
+            # conventional vertex/index buffers selected by name.
+            for resource_id in _resource_refs(instruction):
+                if resource_id not in resources_by_id:
+                    continue
+                access_by_id[resource_id].append(
+                    ResourceAccess(
+                        phase="frame",
+                        index=index,
+                        opcode=opcode,
+                        access="read",
+                        state="INDIRECT_ARGUMENT",
+                    )
+                )
+            for resource_id in sorted(bound):
+                access_by_id[resource_id].append(
+                    ResourceAccess(
+                        phase="frame",
+                        index=index,
+                        opcode=opcode,
+                        access="read",
+                        state="ALL_SHADER_RESOURCE",
+                    )
+                )
+            for resource in package.resources:
+                if resource.name == "vertices":
+                    access_by_id[resource.resource_id].append(
+                        ResourceAccess(
+                            phase="frame",
+                            index=index,
+                            opcode=opcode,
+                            access="read",
+                            state="VERTEX_AND_CONSTANT_BUFFER",
+                        )
+                    )
+                elif resource.name == "indices":
+                    access_by_id[resource.resource_id].append(
+                        ResourceAccess(
+                            phase="frame",
+                            index=index,
+                            opcode=opcode,
+                            access="read",
+                            state="INDEX_BUFFER",
+                        )
+                    )
         elif opcode == "frame.copy_buffer":
             refs = _resource_refs(instruction)
             if len(refs) >= 2:

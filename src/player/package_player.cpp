@@ -4235,6 +4235,14 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 D3D12_CPU_DESCRIPTOR_HANDLE rtv = color->cpu_handle;
                 D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth->cpu_handle;
                 list->OMSetRenderTargets(1u, &rtv, FALSE, &dsv);
+                // D3D12 does not initialize render targets.  Clear both
+                // targets when the render pass is bound so captures are
+                // deterministic and the LESS_EQUAL depth test starts from a
+                // defined far value rather than undefined/zero memory.
+                const float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+                list->ClearRenderTargetView(rtv, clear_color, 0u, nullptr);
+                list->ClearDepthStencilView(
+                    dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0u, 0u, nullptr);
                 const package::ResourceDescriptor* color_descriptor =
                     FindPackageResource(package_, op.color_resource);
                 const float target_width =

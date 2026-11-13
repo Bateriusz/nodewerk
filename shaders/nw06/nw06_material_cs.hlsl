@@ -22,5 +22,8 @@ void MaterialCS(uint3 dispatch_id : SV_DispatchThreadID)
         return;
     }
     NwMaterials.Store4(0u, asuint(float4(BaseR, BaseG, BaseB, BaseA)));
-    NwMaterials.Store4(16u, asuint(float4(Roughness, Metallic, Specular, float(TextureIndex))));
+    NwMaterials.Store4(
+        16u,
+        uint4(asuint(Roughness), asuint(Metallic), asuint(Specular),
+              TextureIndex));
 }

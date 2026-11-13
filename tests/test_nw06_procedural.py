@@ -155,3 +155,55 @@ def test_invalid_dimensions_topology_ranges_and_indices_fail() -> None:
     )
     with pytest.raises(procedural.ProceduralError):
         procedural.validate_mesh(mesh)
+
+
+def test_torus_reference_is_independent_and_detects_broken_generators() -> None:
+    mesh = procedural.generate_torus_mesh()
+    comparison = procedural.validate_torus_reference_tolerance(mesh)
+    assert comparison["within_tolerance"]
+    assert comparison["maximum_implicit_surface_residual"] <= 1e-5
+
+    # Reflect Z without reflecting the reference normals.  A reference built by
+    # calling the same generator would still report a zero error here.
+    corrupted = procedural.MeshData(
+        vertices=tuple(
+            procedural.Vertex(
+                (vertex.position[0], vertex.position[1], -vertex.position[2]),
+                vertex.normal,
+                vertex.uv,
+            )
+            for vertex in mesh.vertices
+        ),
+        indices=mesh.indices,
+    )
+    corrupted_comparison = procedural.validate_torus_reference_tolerance(
+        corrupted
+    )
+    assert not corrupted_comparison["within_tolerance"]
+    assert corrupted_comparison["maximum_position_error"] > 1e-3
+
+
+def test_nonzero_material_texture_index_and_light_record_layout() -> None:
+    material = procedural.generate_materials(
+        procedural.MaterialParameters(texture_index=17)
+    )[0]
+    encoded = material.encode()
+    assert len(encoded) == 32
+    assert struct.unpack_from("<I", encoded, 28)[0] == 17
+    assert procedural.MATERIAL_LAYOUT[-1]["name"] == "texture_index"
+    assert procedural.MATERIAL_LAYOUT[-1]["offset"] == 28
+
+    direction = (-0.4, -1.0, -0.3)
+    color = (1.0, 0.75, 0.5)
+    light = procedural.encode_light_record(direction, color)
+    assert len(light) == procedural.LIGHT_BYTES == 32
+    assert struct.unpack_from("<3f", light, 0) == pytest.approx(direction)
+    assert struct.unpack_from("<3f", light, 16) == pytest.approx(color)
+    assert struct.unpack_from("<f", light, 12)[0] == 0.0
+    assert struct.unpack_from("<f", light, 28)[0] == 0.0
+    assert [entry["offset"] for entry in procedural.LIGHT_LAYOUT] == [
+        0,
+        12,
+        16,
+        28,
+    ]

@@ -1216,6 +1216,11 @@ const std::vector<Frequency>& FrameFrequency() {
     static const std::vector<Frequency> frequencies = {Frequency::Frame};
     return frequencies;
 }
+const std::vector<Frequency>& InitializationFrequency() {
+    static const std::vector<Frequency> frequencies = {
+        Frequency::Initialization};
+    return frequencies;
+}
 
 } // namespace
 
@@ -1576,7 +1581,11 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             FloatParam("far", 100.0, true, 0.000001, 1000000000.0),
             FloatParam("radius_min", 3.2, true, 0.0, 1000000.0),
             FloatParam("radius_max", 4.8, true, 0.0, 1000000.0),
-            FloatParam("height", 1.6, true, -1000000.0, 1000000.0)};
+            FloatParam("height", 1.6, true, -1000000.0, 1000000.0),
+            FloatParam("curve_value_min", 0.0, true, -1000000.0, 1000000.0),
+            FloatParam("curve_value_max", 0.0, true, -1000000.0, 1000000.0),
+            IntParam("curve_quantization_bits", 16, true, 0.0, 24.0),
+            FloatParam("curve_tolerance", 1e-4, true, 0.0, 1000000.0)};
         registry.Register(std::move(schema));
     }
     {
@@ -1797,7 +1806,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         OperatorSchema schema = BaseOperator(
             "nw.residency.generate_texture", OperatorKind::GpuPass,
             "GPU-initialization procedural texture generation",
-            RuntimeFrequencies(), Frequency::Frame,
+            InitializationFrequency(), Frequency::Initialization,
             "nw.lower.hlsl.residency");
         schema.inputs = {ResourcePort("texture",
                                       LogicalType::TextureRecipe,
@@ -1816,7 +1825,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         OperatorSchema schema = BaseOperator(
             "nw.residency.generate_mesh", OperatorKind::GpuPass,
             "GPU-initialization procedural mesh generation",
-            RuntimeFrequencies(), Frequency::Frame,
+            InitializationFrequency(), Frequency::Initialization,
             "nw.lower.hlsl.residency");
         schema.inputs = {ResourcePort("mesh", LogicalType::MeshRecipe,
                                       Residency::Logical,
@@ -1833,7 +1842,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         OperatorSchema schema = BaseOperator(
             "nw.residency.generate_instances", OperatorKind::GpuPass,
             "GPU-initialization flat instance/material table generation",
-            RuntimeFrequencies(), Frequency::Frame,
+            InitializationFrequency(), Frequency::Initialization,
             "nw.lower.hlsl.residency");
         schema.inputs = {
             Port("scene", LogicalType::SceneTable, Residency::Cpu)};

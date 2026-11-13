@@ -21,18 +21,18 @@
         {"name": "lacunarity", "type": "float", "required": true, "minimum": 1.0},
         {"name": "gain", "type": "float", "required": true, "minimum": 0.0, "maximum": 1.0}
       ],
-      "lowering": "compute.nw06.generate",
+      "lowering": "nw.lower.cpu.recipe",
       "produces_resource": false
     },
     {
       "operator_id": "nw.residency.generate_texture",
       "operator_version": "1.0.0",
       "kind": "gpu_pass",
-      "frequencies": ["initialization", "frame"],
+      "frequencies": ["initialization"],
       "inputs": [{"port": "texture", "logical_type": "texture_recipe", "residency": "logical"}],
       "outputs": [{"port": "out", "logical_type": "texture_recipe", "residency": "gpu"}],
       "parameters": [],
-      "lowering": "init.dispatch",
+      "lowering": "nw.lower.hlsl.residency",
       "produces_resource": true
     },
     {
@@ -48,18 +48,18 @@
         {"name": "major_radius", "type": "float", "required": true, "minimum": 0.000001},
         {"name": "minor_radius", "type": "float", "required": true, "minimum": 0.000001}
       ],
-      "lowering": "compute.nw06.generate",
+      "lowering": "nw.lower.cpu.recipe",
       "produces_resource": false
     },
     {
       "operator_id": "nw.residency.generate_mesh",
       "operator_version": "1.0.0",
       "kind": "gpu_pass",
-      "frequencies": ["initialization", "frame"],
+      "frequencies": ["initialization"],
       "inputs": [{"port": "mesh", "logical_type": "mesh_recipe", "residency": "logical"}],
       "outputs": [{"port": "out", "logical_type": "mesh_recipe", "residency": "gpu"}],
       "parameters": [],
-      "lowering": "init.dispatch",
+      "lowering": "nw.lower.hlsl.residency",
       "produces_resource": true
     },
     {
@@ -77,18 +77,18 @@
         {"name": "scale_max", "type": "float", "required": true, "minimum": 0.0},
         {"name": "twist_radians", "type": "float", "required": true}
       ],
-      "lowering": "compute.nw06.generate",
+      "lowering": "nw.lower.cpu.scene",
       "produces_resource": false
     },
     {
       "operator_id": "nw.residency.generate_instances",
       "operator_version": "1.0.0",
       "kind": "gpu_pass",
-      "frequencies": ["initialization", "frame"],
+      "frequencies": ["initialization"],
       "inputs": [{"port": "scene", "logical_type": "scene_table", "residency": "cpu"}],
       "outputs": [{"port": "out", "logical_type": "scene_table", "residency": "gpu"}],
       "parameters": [],
-      "lowering": "init.dispatch",
+      "lowering": "nw.lower.hlsl.residency",
       "produces_resource": true
     },
     {
@@ -105,7 +105,7 @@
         {"name": "specular", "type": "float", "required": true, "minimum": 0.0, "maximum": 1.0},
         {"name": "texture_index", "type": "int", "required": true, "minimum": 0}
       ],
-      "lowering": "compute.nw06.material",
+      "lowering": "nw.lower.cpu.material",
       "produces_resource": false
     },
     {
@@ -124,9 +124,13 @@
         {"name": "far", "type": "float", "required": true, "minimum": 0.000001},
         {"name": "radius_min", "type": "float", "required": true, "minimum": 0.0},
         {"name": "radius_max", "type": "float", "required": true, "minimum": 0.0},
-        {"name": "height", "type": "float", "required": true}
+        {"name": "height", "type": "float", "required": true},
+        {"name": "curve_value_min", "type": "float", "required": false},
+        {"name": "curve_value_max", "type": "float", "required": false},
+        {"name": "curve_quantization_bits", "type": "int", "required": true, "minimum": 0, "maximum": 24},
+        {"name": "curve_tolerance", "type": "float", "required": true, "minimum": 0.0}
       ],
-      "lowering": "absolute_tick_curve",
+      "lowering": "nw.lower.cpu.camera",
       "produces_resource": false
     },
     {
@@ -139,7 +143,7 @@
       "parameters": [
         {"name": "max_twist_degrees", "type": "float", "required": true, "minimum": -3600.0, "maximum": 3600.0}
       ],
-      "lowering": "graphics.nw06.instanced",
+      "lowering": "nw.lower.cpu.animation",
       "produces_resource": false
     },
     {
@@ -158,7 +162,7 @@
       ],
       "outputs": [{"port": "image", "logical_type": "render_image", "residency": "gpu"}],
       "parameters": [],
-      "lowering": "graphics.nw06.instanced",
+      "lowering": "nw.lower.hlsl.render",
       "produces_resource": true
     },
     {
@@ -174,7 +178,7 @@
         {"name": "radius", "type": "float", "required": true, "minimum": 0.0},
         {"name": "resolution_scale", "type": "float", "required": true, "minimum": 0.01, "maximum": 1.0}
       ],
-      "lowering": "compute.nw06.post",
+      "lowering": "nw.lower.hlsl.post",
       "produces_resource": true
     },
     {
@@ -189,7 +193,7 @@
         {"name": "gamma", "type": "float", "required": true, "minimum": 0.000001},
         {"name": "operator", "type": "enum", "required": true}
       ],
-      "lowering": "compute.nw06.post",
+      "lowering": "nw.lower.hlsl.post",
       "produces_resource": true
     }
   ]

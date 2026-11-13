@@ -24,6 +24,8 @@ from typing import Any, Mapping, Sequence
 import nw03_compiler as nw03
 import nwp_package as nwp
 import nw05_optimizer as optimizer
+import nw05_schedule as schedule
+import nw06_timeline as timeline
 
 try:  # Script-style imports from tools/.
     import nw06_procedural as procedural
@@ -67,6 +69,8 @@ NW06_OPERATOR_ALIASES = {
 }
 
 TICKS_PER_SECOND = 48_000
+CAMERA_CURVE_BITS = 16
+CAMERA_CURVE_TOLERANCE = 1e-4
 SHADER_ROOT = Path(__file__).resolve().parent.parent / "shaders" / "nw06"
 
 
@@ -335,6 +339,53 @@ def _params(
     return records, parameter_id
 
 
+def pack_frame_root_constants(
+    package: nwp.NwpPackage,
+    resource_id: int,
+    tick: int,
+) -> bytes:
+    """Reference packing of one frame root-constant block at an absolute tick.
+
+    This mirrors PackagePlayer's bounded timeline substitution: parameters are
+    concatenated in package order and the selected ``.tick`` parameter receives
+    the integer tick in the parameter's declared representation.  The NW-06
+    graphics parameter is ``uint`` so the shader's absolute tick is never
+    confused with float seconds.
+    """
+    prefix = f"nw06.params.{resource_id}."
+    packed = bytearray()
+    for parameter in package.parameters:
+        if not parameter.name.startswith(prefix):
+            continue
+        value = parameter.value
+        if parameter.name.endswith(".tick"):
+            if parameter.type == "uint":
+                value = struct.pack("<I", int(tick) & 0xFFFFFFFF)
+            elif parameter.type == "int":
+                value = struct.pack("<i", int(tick))
+            else:
+                value = struct.pack("<f", float(tick))
+        packed.extend(value)
+    return bytes(packed)
+
+
+@dataclass(frozen=True)
+class CameraCurveEncoding:
+    keys: tuple[tuple[int, float], ...]
+    interpolation: str
+    interpolation_index: int
+    value_min: float
+    value_max: float
+    quantization: timeline.QuantizationRecord
+
+    def report(self) -> dict[str, Any]:
+        record = self.quantization.to_dict()
+        record["interpolation"] = self.interpolation
+        record["value_min"] = self.value_min
+        record["value_max"] = self.value_max
+        return record
+
+
 def _parse_camera_keys(node: nw03.GraphNode) -> tuple[tuple[int, float], ...]:
     text = " ".join(node.params.get("keys", ["0:0"]))
     keys: list[tuple[int, float]] = []
@@ -367,6 +418,72 @@ def _parse_camera_keys(node: nw03.GraphNode) -> tuple[tuple[int, float], ...]:
     return tuple(keys)
 
 
+def _camera_curve_encoding(node: nw03.GraphNode) -> CameraCurveEncoding:
+    """Validate the authored absolute-tick curve and choose its encoding.
+
+    The fixed NW-06 raster shader samples at most four absolute tick keys.  The
+    authored ``interpolation`` value is part of the encoding rather than being
+    ignored.  Quantization uses the shared timeline curve validator and records
+    the measured maximum error against the declared (key-derived) value range.
+    ``curve_quantization_bits == 0`` is the documented full-precision escape
+    hatch.
+    """
+    parsed = _parse_camera_keys(node)
+    interpolation = node.params.get("interpolation", ["linear"])[0]
+    if interpolation not in {"linear", "step"}:
+        raise nw03.CompilerError(
+            f"camera curve interpolation '{interpolation}' is not supported"
+        )
+    value_min = min(value for _, value in parsed)
+    value_max = max(value for _, value in parsed)
+    if "curve_value_min" in node.params:
+        value_min = _node_float(node, "curve_value_min", value_min)
+    if "curve_value_max" in node.params:
+        value_max = _node_float(node, "curve_value_max", value_max)
+    if value_min > value_max:
+        raise nw03.CompilerError(
+            "camera curve declared value range is invalid"
+        )
+    try:
+        curve = timeline.Curve(
+            tuple(timeline.CurveKey(tick, value) for tick, value in parsed),
+            interpolation=interpolation,
+            value_min=value_min,
+            value_max=value_max,
+        )
+        bits = _node_int(node, "curve_quantization_bits", CAMERA_CURVE_BITS, 0, 24)
+        tolerance = _node_float(
+            node, "curve_tolerance", CAMERA_CURVE_TOLERANCE
+        )
+        if tolerance < 0.0:
+            raise timeline.TimelineError(
+                "camera curve tolerance must be non-negative"
+            )
+        if bits == 0:
+            quantized = timeline.quantize_curve(
+                curve, full_precision=True, tolerance=tolerance
+            )
+        else:
+            quantized = timeline.quantize_curve(
+                curve, bits=bits, tolerance=tolerance
+            )
+    except timeline.TimelineError as exc:
+        raise nw03.CompilerError(
+            f"camera curve encoding failed: {exc}"
+        ) from exc
+    keys = list(zip((key.tick for key in curve.keys), quantized.record.quantized))
+    while len(keys) < 4:
+        keys.append(keys[-1])
+    return CameraCurveEncoding(
+        keys=tuple(keys),
+        interpolation=interpolation,
+        interpolation_index=1 if interpolation == "step" else 0,
+        value_min=value_min,
+        value_max=value_max,
+        quantization=quantized.record,
+    )
+
+
 def build_package(
     optimized: optimizer.OptimizedGraph,
     *,
@@ -377,6 +494,15 @@ def build_package(
     allow_test_payloads: bool,
 ) -> nwp.NwpPackage:
     nodes = document.nodes
+    for node in nodes.values():
+        if node.operator_id in {
+            "nw.residency.generate_texture",
+            "nw.residency.generate_mesh",
+            "nw.residency.generate_instances",
+        } and node.frequency != "initialization":
+            raise nw03.CompilerError(
+                f"static generator '{node.node_id}' must remain initialization-only"
+            )
     declared_tick_rate = document.settings.get("nw06_ticks_per_second")
     if declared_tick_rate is not None:
         try:
@@ -485,7 +611,7 @@ def build_package(
         raise nw03.CompilerError(
             "directional light direction/color must have three components"
         )
-    keys = _parse_camera_keys(camera_node)
+    camera_encoding = _camera_curve_encoding(camera_node)
     fov = _node_float(camera_node, "fov_degrees", 60.0)
     aspect = _node_float(camera_node, "aspect", 1.0)
     near = _node_float(camera_node, "near", 0.1)
@@ -493,6 +619,22 @@ def build_package(
     radius_min = _node_float(camera_node, "radius_min", 3.2)
     radius_max = _node_float(camera_node, "radius_max", 4.8)
     height_value = _node_float(camera_node, "height", 1.6)
+    if not (math.isfinite(fov) and 1.0 <= fov <= 179.0):
+        raise nw03.CompilerError("camera fov_degrees must be in 1..179")
+    if not (math.isfinite(aspect) and aspect > 0.0):
+        raise nw03.CompilerError("camera aspect must be positive")
+    if not (math.isfinite(near) and math.isfinite(far) and 0.0 < near < far):
+        raise nw03.CompilerError("camera near/far must satisfy 0 < near < far")
+    if not (
+        math.isfinite(radius_min)
+        and math.isfinite(radius_max)
+        and 0.0 <= radius_min <= radius_max
+    ):
+        raise nw03.CompilerError(
+            "camera radius_min/radius_max must satisfy 0 <= radius_min <= radius_max"
+        )
+    if not math.isfinite(height_value):
+        raise nw03.CompilerError("camera height must be finite")
     twist = math.radians(_node_float(twist_node, "max_twist_degrees", 180.0))
     exposure = _node_float(tonemap_node, "exposure", 1.0)
     gamma = _node_float(tonemap_node, "gamma", 2.2)
@@ -572,7 +714,7 @@ def build_package(
             4,
             CAMERA_FAMILY,
             (("params", "cbv", 0, 0, 0), ("output", "uav", 0, 0, 1)),
-            constant_dwords={"params": 11},
+            constant_dwords={"params": 12},
         ),
         _root_signature(
             5,
@@ -646,17 +788,18 @@ def build_package(
     generated, next_id = _params(next_id, 8, material_values)
     parameters.extend(generated)
     camera_values = [
-        ("curve_tick_0", "uint", (float(keys[0][0]),)),
-        ("curve_tick_1", "uint", (float(keys[1][0]),)),
-        ("curve_tick_2", "uint", (float(keys[2][0]),)),
-        ("curve_tick_3", "uint", (float(keys[3][0]),)),
-        ("curve_value_0", "float", (keys[0][1],)),
-        ("curve_value_1", "float", (keys[1][1],)),
-        ("curve_value_2", "float", (keys[2][1],)),
-        ("curve_value_3", "float", (keys[3][1],)),
+        ("curve_tick_0", "uint", (float(camera_encoding.keys[0][0]),)),
+        ("curve_tick_1", "uint", (float(camera_encoding.keys[1][0]),)),
+        ("curve_tick_2", "uint", (float(camera_encoding.keys[2][0]),)),
+        ("curve_tick_3", "uint", (float(camera_encoding.keys[3][0]),)),
+        ("curve_value_0", "float", (camera_encoding.keys[0][1],)),
+        ("curve_value_1", "float", (camera_encoding.keys[1][1],)),
+        ("curve_value_2", "float", (camera_encoding.keys[2][1],)),
+        ("curve_value_3", "float", (camera_encoding.keys[3][1],)),
         ("radius_min", "float", (radius_min,)),
         ("radius_max", "float", (radius_max,)),
         ("height", "float", (height_value,)),
+        ("curve_interpolation", "uint", (camera_encoding.interpolation_index,)),
     ]
     generated, next_id = _params(next_id, 10, camera_values)
     parameters.extend(generated)
@@ -673,7 +816,7 @@ def build_package(
     generated, next_id = _params(next_id, 12, light_values)
     parameters.extend(generated)
     graphics_values = [
-        ("tick", "float", (0.0,)),
+        ("tick", "uint", (0.0,)),
         ("fov_degrees", "float", (fov,)),
         ("aspect", "float", (aspect,)),
         ("near", "float", (near,)),
@@ -701,7 +844,7 @@ def build_package(
     parameters.extend(generated)
     for name, value in (
         ("nw06.timeline.ticks_per_second", 48_000),
-        ("nw06.timeline.duration_ticks", keys[-1][0]),
+        ("nw06.timeline.duration_ticks", camera_encoding.keys[-1][0]),
         ("nw06.timeline.frame_step_numerator", 1),
         ("nw06.timeline.frame_step_denominator", 1),
         ("nw06.timeline.stateless_scene", 1),
@@ -795,7 +938,7 @@ def build_package(
             nwp.Instruction("init.set_descriptor_table", (nwp.InstructionOperand("u32", 1), nwp.InstructionOperand("string", "cbv_srv_uav"), nwp.InstructionOperand("resource_ref", 9))),
             nwp.Instruction("init.dispatch", (nwp.InstructionOperand("u32", 1), nwp.InstructionOperand("u32", 1), nwp.InstructionOperand("u32", 1), nwp.InstructionOperand("shader_ref", 3))),
             nwp.Instruction("init.set_root_signature", (nwp.InstructionOperand("root_signature_ref", 4),)),
-            nwp.Instruction("init.set_root_constants", (nwp.InstructionOperand("u32", 0), nwp.InstructionOperand("resource_ref", 10), nwp.InstructionOperand("u32", 11))),
+            nwp.Instruction("init.set_root_constants", (nwp.InstructionOperand("u32", 0), nwp.InstructionOperand("resource_ref", 10), nwp.InstructionOperand("u32", 12))),
             nwp.Instruction("init.set_descriptor_table", (nwp.InstructionOperand("u32", 1), nwp.InstructionOperand("string", "cbv_srv_uav"), nwp.InstructionOperand("resource_ref", 11))),
             nwp.Instruction("init.dispatch", (nwp.InstructionOperand("u32", 1), nwp.InstructionOperand("u32", 1), nwp.InstructionOperand("u32", 1), nwp.InstructionOperand("shader_ref", 4))),
             nwp.Instruction("init.set_root_signature", (nwp.InstructionOperand("root_signature_ref", 5),)),
@@ -871,7 +1014,7 @@ def build_package(
         capability,
         profile_fingerprint=capability.computed_profile_fingerprint(),
     )
-    return nwp.NwpPackage(
+    built = nwp.NwpPackage(
         capability=capability,
         resources=resources,
         initialization=initialization,
@@ -881,6 +1024,12 @@ def build_package(
         root_signatures=roots,
         flags=0 if allow_test_payloads else 1,
     )
+    # Every generated resource and frame instruction must be representable by
+    # the shared single-queue lifetime/alias planner.  This is deliberately
+    # invoked here as well as by the export driver so a direct package build
+    # cannot bypass scheduling validation.
+    schedule.build_logical_schedule(built, frames_in_flight=2)
+    return built
 
 
 def compile_profile_package(
@@ -971,6 +1120,39 @@ def compile_profile_package(
         }
         for row in rows
     ]
+    camera_node = next(
+        (
+            document.nodes[node_id]
+            for node_id in sorted(document.nodes)
+            if document.nodes[node_id].operator_id
+            in {"nw.camera.curve", "nw.camera.perspective"}
+        ),
+        None,
+    )
+    camera_curve_report = (
+        _camera_curve_encoding(camera_node).report()
+        if camera_node is not None
+        else {}
+    )
+    # Schedule and lifetime/alias planning consume the exact package that the
+    # player executes.  The contract-only path uses the shared deterministic
+    # allocation simulation; a release export waits for the native adapter
+    # query rather than inventing offsets.
+    logical_schedule = schedule.build_logical_schedule(
+        package, frames_in_flight=2
+    )
+    if allow_test_payloads:
+        physical_realization = schedule.realize_physical_aliases(
+            logical_schedule,
+            package,
+            allocation_query=schedule.simulate_allocation,
+            frames_in_flight=2,
+            allow_simulated_allocation=True,
+        )
+    else:
+        physical_realization = schedule.pending_physical_realization(
+            logical_schedule
+        )
     report = {
         "format": "nw06-build-report",
         "version": 1,
@@ -1011,6 +1193,11 @@ def compile_profile_package(
             "absolute_tick_curve_sampling": True,
             "stateless_scene": True,
             "clock_provider_audio_independent": True,
+            "camera_curve": camera_curve_report,
+        },
+        "runtime_plan": {
+            "logical_schedule": logical_schedule.to_dict(),
+            "physical_realization": physical_realization.to_dict(),
         },
         "instrumentation": {
             "initialization_time": {
@@ -1065,6 +1252,7 @@ __all__ = [
     "canonical_operator",
     "build_package",
     "compile_profile_package",
+    "pack_frame_root_constants",
 ]
 
 # Downstream-friendly names used by verification/tooling.

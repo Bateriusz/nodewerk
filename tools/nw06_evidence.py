@@ -32,6 +32,11 @@ TASK = "NW-06"
 COMMON_PROFILE_ID = nwp.COMMON_PROFILE_ID
 COMMON_REQUIREMENTS_DIGEST = nwp.COMMON_REQUIREMENTS_DIGEST
 TICKS_PER_SECOND = 48_000
+FIXED_TICK_EVIDENCE_ROLE = "fixed_tick_correctness"
+FIXED_TICK_COVERAGE_TARGETS = {
+    "ada": "desktop_ada_representative",
+    "blackwell": "desktop_blackwell_representative",
+}
 
 REQUIRED_CAPTURE_METADATA = (
     "coverage_target",
@@ -206,6 +211,19 @@ def validate_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
         status = "pending_unverified"
     if status not in {"pending_unverified", "passed", "failed"}:
         status = "failed"
+    evidence_role = capture.get("evidence_role")
+    coverage_target = capture.get("coverage_target")
+    role_matches = evidence_role == FIXED_TICK_EVIDENCE_ROLE
+    coverage_matches = coverage_target in set(
+        FIXED_TICK_COVERAGE_TARGETS.values()
+    )
+    # A malformed role/target is not merely missing coverage: it cannot be
+    # accepted as fixed-tick correctness evidence.
+    if status == "passed" and (
+        (evidence_role is not None and not role_matches)
+        or (coverage_target is not None and not coverage_matches)
+    ):
+        status = "failed"
     profile_matches = (
         capture.get("profile_id") == COMMON_PROFILE_ID
         and capture.get("requirements_digest") == COMMON_REQUIREMENTS_DIGEST
@@ -216,6 +234,10 @@ def validate_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
         "status": status,
         "missing_metadata": missing,
         "profile_matches": profile_matches,
+        "evidence_role": evidence_role,
+        "coverage_target": coverage_target,
+        "fixed_tick_role_matches": role_matches,
+        "fixed_tick_coverage_matches": coverage_matches,
         "metadata": dict(capture),
     }
 
@@ -264,25 +286,68 @@ def record_capture(
         }
     )
     validated = validate_capture(capture)
-    record = {
-        "schema_version": "1.0.0",
-        "task": TASK,
-        "verification_status": (
-            "executed_failure"
-            if validated["status"] == "failed"
-            else (
-                "execution_recorded"
-                if validated["status"] == "passed"
-                else "pending_unverified"
-            )
-        ),
-        "profile_id": COMMON_PROFILE_ID,
-        "requirements_digest": COMMON_REQUIREMENTS_DIGEST,
-        "ticks_per_second": TICKS_PER_SECOND,
-        "captures": [capture],
-        "executions": [capture],
-        "validation": validated,
+    record = pending_record()
+    if output_path is not None and output_path.is_file():
+        try:
+            existing = json.loads(output_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if isinstance(existing, dict):
+            # Preserve recorded evidence while regenerating required metadata.
+            record.update(existing)
+            record.setdefault("qualifications", pending_record()["qualifications"])
+            record.setdefault("policy", pending_record()["policy"])
+    record["captures"] = list(record.get("captures", [])) + [capture]
+    record["executions"] = list(record.get("executions", [])) + [capture]
+    record["validation"] = validated
+    qualification = record["qualifications"].setdefault(
+        tier,
+        {
+            "coverage_target": FIXED_TICK_COVERAGE_TARGETS[tier],
+            "evidence_role": FIXED_TICK_EVIDENCE_ROLE,
+            "status": "pending_unverified",
+        },
+    )
+    prior_status = qualification.get("status")
+    if validated["status"] == "passed":
+        qualification["status"] = (
+            "failed" if prior_status == "failed" else "verified"
+        )
+        qualification["reason"] = (
+            "tier retains an earlier executed failure"
+            if prior_status == "failed"
+            else ""
+        )
+    elif validated["status"] == "failed":
+        qualification["status"] = "failed"
+        qualification["reason"] = "executed fixed-tick capture failed"
+    else:
+        qualification["status"] = "pending_unverified"
+        qualification["reason"] = "required capture telemetry is incomplete"
+    qualification.update(
+        {
+            "coverage_target": coverage_target,
+            "evidence_role": evidence_role,
+            "artifact_key": artifact_key,
+            "package_sha256": capture["package_sha256"],
+            "executable_sha256": capture["executable_sha256"],
+        }
+    )
+    statuses = {
+        name: record["qualifications"].get(name, {}).get("status")
+        for name in FIXED_TICK_COVERAGE_TARGETS
     }
+    if "failed" in statuses.values() or any(
+        item.get("status") == "failed"
+        for item in record["captures"]
+    ):
+        record["verification_status"] = "executed_failure"
+    elif all(value == "verified" for value in statuses.values()):
+        record["verification_status"] = "verified"
+    elif record["captures"]:
+        record["verification_status"] = "execution_recorded"
+    else:
+        record["verification_status"] = "pending_unverified"
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
@@ -293,19 +358,37 @@ def record_capture(
 
 
 def validate_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    raw_captures = record.get("captures")
+    if not raw_captures:
+        raw_captures = record.get("executions", [])
     captures = []
-    for capture in record.get("captures", record.get("executions", [])):
+    for capture in raw_captures:
         captures.append(validate_capture(capture))
+    qualification_statuses: dict[str, str] = {}
+    for tier in FIXED_TICK_COVERAGE_TARGETS:
+        qualification = record.get("qualifications", {}).get(tier, {})
+        qualification_statuses[tier] = str(
+            qualification.get("status", "pending_unverified")
+        )
     if not captures:
         return {
             "status": "pending_unverified",
             "reason": "no hardware captures recorded",
             "captures": [],
+            "qualifications": qualification_statuses,
         }
     statuses = {item["status"] for item in captures}
     if "failed" in statuses:
         status = "failed"
+    elif "failed" in qualification_statuses.values():
+        status = "failed"
     elif "pending_unverified" in statuses or len(captures) < 2:
+        status = "pending_unverified"
+    elif any(
+        value != "verified" for value in qualification_statuses.values()
+    ):
+        # Complete capture metadata alone cannot override pending
+        # qualification records; missing required coverage stays pending.
         status = "pending_unverified"
     else:
         identities = {
@@ -323,6 +406,7 @@ def validate_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
                 "status": status,
                 "reason": "captures do not reference the identical common artifact",
                 "captures": captures,
+                "qualifications": qualification_statuses,
             }
         coverage = {
             str(item["metadata"].get("coverage_target", ""))
@@ -331,7 +415,11 @@ def validate_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
         has_ada = any("ada" in value for value in coverage)
         has_blackwell = any("blackwell" in value for value in coverage)
         status = "verified" if has_ada and has_blackwell else "pending_unverified"
-    return {"status": status, "captures": captures}
+    return {
+        "status": status,
+        "captures": captures,
+        "qualifications": qualification_statuses,
+    }
 
 
 record_execution = record_capture
@@ -340,6 +428,8 @@ validate_evidence = validate_evidence_record
 
 __all__ = [
     "REQUIRED_CAPTURE_METADATA",
+    "FIXED_TICK_EVIDENCE_ROLE",
+    "FIXED_TICK_COVERAGE_TARGETS",
     "classify_hardware_tier",
     "probe_hardware_identity",
     "pending_record",

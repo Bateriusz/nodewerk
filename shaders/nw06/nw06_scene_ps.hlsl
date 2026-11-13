@@ -23,6 +23,7 @@ struct PSInput
     float3 world_normal : TEXCOORD1;
     float2 uv : TEXCOORD2;
     nointerpolation uint material_index : TEXCOORD3;
+    float3 camera_position : TEXCOORD4;
 };
 
 float4 ScenePS(PSInput input) : SV_Target
@@ -54,7 +55,7 @@ float4 ScenePS(PSInput input) : SV_Target
         asfloat(NwLight.Load(6u)));
     float3 light_dir = normalize(-light_direction);
     float ndotl = saturate(dot(normal, light_dir));
-    float3 view_dir = normalize(float3(0.0, 0.0, 0.0) - input.world_position);
+    float3 view_dir = normalize(input.camera_position - input.world_position);
     float3 half_vector = normalize(light_dir + view_dir);
     float ndoth = saturate(dot(normal, half_vector));
     float shininess = lerp(4.0, 128.0, 1.0 - saturate(roughness));

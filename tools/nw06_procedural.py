@@ -44,8 +44,10 @@ INDEX_STRUCT = struct.Struct("<I")
 INDEX_BYTES = INDEX_STRUCT.size  # 4
 INSTANCE_STRUCT = struct.Struct("<16fIIII")  # row-major float4x4, material, seed, flags, pad
 INSTANCE_BYTES = INSTANCE_STRUCT.size  # 80
-MATERIAL_STRUCT = struct.Struct("<4f4f")  # base color, roughness/metallic/specular/texture index
+MATERIAL_STRUCT = struct.Struct("<4f3fI")  # base color, roughness/metallic/specular, uint texture index
 MATERIAL_BYTES = MATERIAL_STRUCT.size  # 32
+LIGHT_STRUCT = struct.Struct("<3f1f3f1f")  # direction.xyz, pad, color.rgb, pad
+LIGHT_BYTES = LIGHT_STRUCT.size  # 32
 INDIRECT_ARGS_STRUCT = struct.Struct("<5I")
 INDIRECT_ARGS_BYTES = INDIRECT_ARGS_STRUCT.size  # 20
 
@@ -67,6 +69,12 @@ MATERIAL_LAYOUT = (
     {"name": "metallic", "format": "R32_FLOAT", "offset": 20, "bytes": 4},
     {"name": "specular", "format": "R32_FLOAT", "offset": 24, "bytes": 4},
     {"name": "texture_index", "format": "R32_UINT", "offset": 28, "bytes": 4},
+)
+LIGHT_LAYOUT = (
+    {"name": "direction", "format": "R32G32B32_FLOAT", "offset": 0, "bytes": 12},
+    {"name": "direction_pad", "format": "R32_FLOAT", "offset": 12, "bytes": 4},
+    {"name": "color", "format": "R32G32B32_FLOAT", "offset": 16, "bytes": 12},
+    {"name": "color_pad", "format": "R32_FLOAT", "offset": 28, "bytes": 4},
 )
 INDIRECT_ARGS_LAYOUT = (
     {"name": "index_count_per_instance", "offset": 0},
@@ -569,52 +577,97 @@ def validate_torus_reference_tolerance(
     absolute_tolerance: float = 1e-5,
     relative_tolerance: float = 1e-4,
 ) -> dict[str, Any]:
-    """Compare a generated torus against the high-precision CPU reference."""
+    """Compare encoded torus data against an independent high-precision model.
+
+    The reference is evaluated independently with complex exponentials and the
+    implicit torus equation.  Comparing against the same ``generate_torus_mesh``
+    implementation would make a broken generator appear perfect, so the actual
+    encoded vertex bytes are decoded and checked here.
+    """
     mesh = mesh or generate_torus_mesh(
         major_segments,
         minor_segments,
         major_radius=major_radius,
         minor_radius=minor_radius,
     )
-    reference = generate_torus_mesh(
-        major_segments,
-        minor_segments,
-        major_radius=major_radius,
-        minor_radius=minor_radius,
+    params = TorusParameters(
+        max(3, int(major_segments)),
+        max(3, int(minor_segments)),
+        float(major_radius),
+        float(minor_radius),
     )
+    params.validate()
     if (
-        mesh.vertex_count != reference.vertex_count
-        or mesh.index_count != reference.index_count
+        mesh.vertex_count != params.vertex_count
+        or mesh.index_count != params.index_count
     ):
         return {
             "within_tolerance": False,
             "reason": "vertex/index count differs from the reference",
         }
-    max_position = 0.0
-    max_normal = 0.0
-    for actual, expected in zip(mesh.vertices, reference.vertices):
+    # Independent reference: a circle of radius r swept around the Y axis at
+    # radius R, expressed with complex exponentials rather than the generator's
+    # cos/sin sequence.
+    import cmath
+
+    two_pi = 2.0 * math.pi
+    reference: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+    for major in range(params.major_segments):
+        ring = cmath.exp(1j * (two_pi * major / params.major_segments))
+        for minor in range(params.minor_segments):
+            tube = cmath.exp(1j * (two_pi * minor / params.minor_segments))
+            radial = params.major_radius + params.minor_radius * tube.real
+            reference.append(
+                (
+                    (radial * ring.real, params.minor_radius * tube.imag,
+                     radial * ring.imag),
+                    (tube.real * ring.real, tube.imag,
+                     tube.real * ring.imag),
+                )
+            )
+    encoded = mesh.encode_vertices()
+    maximum_position = 0.0
+    maximum_normal = 0.0
+    maximum_surface_residual = 0.0
+    for index, (expected_position, expected_normal) in enumerate(reference):
+        fields = VERTEX_STRUCT.unpack_from(encoded, index * VERTEX_BYTES)
+        actual_position = fields[0:3]
+        actual_normal = fields[3:6]
         for actual_value, expected_value in zip(
-            actual.position, expected.position
+            actual_position, expected_position
         ):
-            max_position = max(
-                max_position,
+            maximum_position = max(
+                maximum_position,
                 abs(float32(actual_value) - expected_value),
             )
         for actual_value, expected_value in zip(
-            actual.normal, expected.normal
+            actual_normal, expected_normal
         ):
-            max_normal = max(
-                max_normal,
+            maximum_normal = max(
+                maximum_normal,
                 abs(float32(actual_value) - expected_value),
             )
-    within = max_position <= absolute_tolerance and (
-        max_normal <= absolute_tolerance
-        or max_normal <= relative_tolerance * max(1.0, max_normal)
+        x, y, z = actual_position
+        radial = math.hypot(x, z)
+        residual = abs(
+            (radial - params.major_radius) ** 2
+            + y * y
+            - params.minor_radius ** 2
+        )
+        maximum_surface_residual = max(maximum_surface_residual, residual)
+    within = maximum_position <= absolute_tolerance and (
+        maximum_normal <= absolute_tolerance
+        or maximum_normal <= relative_tolerance * max(1.0, maximum_normal)
+    ) and (
+        maximum_surface_residual <= absolute_tolerance
+        or maximum_surface_residual
+        <= relative_tolerance * max(1.0, params.minor_radius ** 2)
     )
     return {
         "within_tolerance": within,
-        "maximum_position_error": max_position,
-        "maximum_normal_error": max_normal,
+        "maximum_position_error": maximum_position,
+        "maximum_normal_error": maximum_normal,
+        "maximum_implicit_surface_residual": maximum_surface_residual,
         "absolute_tolerance": absolute_tolerance,
         "relative_tolerance": relative_tolerance,
         "vertex_count": mesh.vertex_count,
@@ -770,6 +823,24 @@ def generate_materials(
     )
 
 
+def encode_light_record(
+    direction: Sequence[float],
+    color: Sequence[float],
+) -> bytes:
+    """Exact 32-byte directional-light record used by the GPU initializer."""
+    if len(direction) != 3 or len(color) != 3:
+        raise ProceduralError(
+            "light direction and color must each have three components"
+        )
+    values = tuple(float(value) for value in (*direction, *color))
+    if any(not math.isfinite(value) for value in values):
+        raise ProceduralError("light direction/color must be finite")
+    return LIGHT_STRUCT.pack(
+        values[0], values[1], values[2], 0.0,
+        values[3], values[4], values[5], 0.0,
+    )
+
+
 def encode_instances(records: Iterable[InstanceRecord]) -> bytes:
     return b"".join(record.encode() for record in records)
 
@@ -848,7 +919,7 @@ def estimate_resources(
     bloom_bytes = bloom_width * bloom_height * 16
     final_bytes = width * height * 16
     camera_curve_bytes = 48
-    light_bytes = 32
+    light_bytes = LIGHT_BYTES
     depth_bytes = width * height * 4
     parameter_buffer_bytes = 7 * 256
     total = (
@@ -1016,11 +1087,14 @@ __all__ = [
     "INSTANCE_BYTES",
     "MATERIAL_STRUCT",
     "MATERIAL_BYTES",
+    "LIGHT_STRUCT",
+    "LIGHT_BYTES",
     "INDIRECT_ARGS_STRUCT",
     "INDIRECT_ARGS_BYTES",
     "VERTEX_LAYOUT",
     "INSTANCE_LAYOUT",
     "MATERIAL_LAYOUT",
+    "LIGHT_LAYOUT",
     "INDIRECT_ARGS_LAYOUT",
     "ProceduralError",
     "Noise2DParameters",
@@ -1061,6 +1135,7 @@ __all__ = [
     "generate_instances",
     "place_instances",
     "generate_materials",
+    "encode_light_record",
     "encode_instances",
     "encode_materials",
     "indirect_args",

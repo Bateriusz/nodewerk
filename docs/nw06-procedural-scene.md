@@ -46,7 +46,7 @@ half-resolution bloom pass and a tonemap pass produce the existing
 | `nw.scene.instances@1.0.0` | none | `out: scene_table(cpu)` | `count`, `seed`, `placement_radius`, `scale_min`, `scale_max`, `twist_radians` |
 | `nw.residency.generate_instances@1.0.0` | `scene` | `out: scene_table(gpu)` | none |
 | `nw.material.standard@1.0.0` | `albedo: texture_recipe(gpu)` | `out: material(cpu)` | `base_color`, `roughness`, `metallic`, `specular`, `texture_index` |
-| `nw.camera.curve@1.0.0` | none | `out: camera(cpu)` | `keys`, `interpolation`, `fov_degrees`, `aspect`, `near`, `far`, `radius_min`, `radius_max`, `height` |
+| `nw.camera.curve@1.0.0` | none | `out: camera(cpu)` | `keys`, `interpolation`, `fov_degrees`, `aspect`, `near`, `far`, `radius_min`, `radius_max`, `height`, `curve_quantization_bits` (0 = full precision), `curve_tolerance` |
 | `nw.animation.twist@1.0.0` | none | `out: curve(cpu)` | `max_twist_degrees` |
 | `nw.render.instanced@1.0.0` | `mesh`, `texture`, `scene`, `material`, `camera`, `light`, `animation` | `image: render_image(gpu)` | none |
 | `nw.post.bloom@1.0.0` | `image` | `out: render_image(gpu)` | `threshold`, `intensity`, `radius`, `resolution_scale` |
@@ -77,7 +77,8 @@ The frame stream is bounded and conventional:
 1. absolute tick selection for the camera curve;
 2. read-state barriers for generated resources;
 3. one graphics root signature, root constants, and descriptor tables;
-4. one graphics pipeline selection and render-target bind;
+4. one graphics pipeline selection and render-target bind (colour and depth
+   are explicitly cleared);
 5. exactly one `frame.execute_indirect` draw;
 6. half-resolution bloom dispatch;
 7. full-resolution tonemap dispatch;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import struct
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import nw06_procedural as procedural  # noqa: E402
 
 
 PROCEDURAL = REPO_ROOT / "fixtures" / "nw06" / "procedural_scene.nwgraph"
+SHADER_ROOT = REPO_ROOT / "shaders" / "nw06"
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +49,12 @@ def _mock_dxc(directory: Path) -> Path:
 
 
 def _export(tmp_path: Path) -> nw05_export.ExportResult:
+    return _export_graph(tmp_path, PROCEDURAL, "artifact")
+
+
+def _export_graph(
+    tmp_path: Path, graph_path: Path, artifact_name: str
+) -> nw05_export.ExportResult:
     template = tmp_path / "template.exe"
     template.write_bytes(b"MZ" + b"\x00" * 256)
     settings = nw05_export.ExportSettings(
@@ -55,8 +63,8 @@ def _export(tmp_path: Path) -> nw05_export.ExportResult:
         player_template=str(template),
     )
     return nw05_export.export_graph(
-        PROCEDURAL,
-        tmp_path / "artifact",
+        graph_path,
+        tmp_path / artifact_name,
         settings=settings,
         dxc_executable=str(_mock_dxc(tmp_path / "toolchain")),
         allow_test_payloads=True,
@@ -217,3 +225,212 @@ def test_failed_validation_preserves_previous_preview(tmp_path: Path) -> None:
         if path.is_file()
     }
     assert after == before
+
+
+def test_frame_tick_is_explicit_uint_and_packs_at_nonzero_tick(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    tick_parameter = next(
+        parameter
+        for parameter in package.parameters
+        if parameter.name == "nw06.params.14.tick"
+    )
+    assert tick_parameter.type == "uint"
+    assert tick_parameter.component_count == 1
+    assert tick_parameter.value == struct.pack("<I", 0)
+    timeline_instruction = next(
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.set_timeline"
+    )
+    assert timeline_instruction.operands[0].value == tick_parameter.parameter_id
+    packed = nw06_export.pack_frame_root_constants(package, 14, 24_000)
+    assert len(packed) == 8 * 4
+    assert struct.unpack_from("<I", packed, 0)[0] == 24_000
+    # A numeric float conversion at this offset would not equal 24,000.
+    assert struct.unpack_from("<f", packed, 0)[0] != 24_000.0
+
+
+def test_camera_curve_quantization_is_bounded_recorded_and_recoverable(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    curve = common.manifest["timeline"]["camera_curve"]
+    assert curve["interpolation"] == "linear"
+    assert curve["within_tolerance"] is True
+    assert (
+        curve["maximum_absolute_error"]
+        <= curve["declared_tolerance"]
+    )
+    assert curve["value_min"] == 0.0
+    assert curve["value_max"] == pytest.approx(6.2831853)
+    assert curve["recoverable"] is True
+    camera_interpolation = next(
+        parameter
+        for parameter in common.package.parameters
+        if parameter.name == "nw06.params.10.curve_interpolation"
+    )
+    assert camera_interpolation.type == "uint"
+    assert struct.unpack("<I", camera_interpolation.value)[0] == 0
+
+
+def test_schedule_models_render_targets_indirect_draw_and_lifetimes(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    logical = common.logical_schedule
+    assert "frame.set_render_targets" in logical.frame_order
+    assert "frame.execute_indirect" in logical.frame_order
+    assert "frame.set_graphics_pipeline" in logical.frame_order
+    assert any(
+        access.opcode == "frame.execute_indirect"
+        and access.state == "VERTEX_AND_CONSTANT_BUFFER"
+        for access in logical.resource(3).access
+    )
+    assert any(
+        access.opcode == "frame.execute_indirect"
+        and access.state == "INDEX_BUFFER"
+        for access in logical.resource(4).access
+    )
+    assert any(
+        access.opcode == "frame.execute_indirect"
+        and access.state == "ALL_SHADER_RESOURCE"
+        for access in logical.resource(6).access
+    )
+    assert any(
+        access.state == "RENDER_TARGET" for access in logical.resource(17).access
+    )
+    assert any(
+        access.state == "DEPTH_WRITE" for access in logical.resource(15).access
+    )
+    assert logical.resource(17).alias_eligible
+    assert logical.resource(18).alias_eligible
+    assert logical.resource(19).alias_eligible
+    assert logical.resource(17).lifetime.last_frame >= (
+        logical.resource(17).lifetime.first_frame
+    )
+
+
+def test_step_camera_interpolation_is_encoded_not_silently_ignored(
+    tmp_path: Path,
+) -> None:
+    graph = tmp_path / "step.nwgraph"
+    graph.write_text(
+        PROCEDURAL.read_text(encoding="utf-8").replace(
+            "param interpolation linear", "param interpolation step"
+        ),
+        encoding="utf-8",
+    )
+    result = _export_graph(tmp_path, graph, "step-artifact")
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    assert (
+        common.manifest["timeline"]["camera_curve"]["interpolation"] == "step"
+    )
+    interpolation = next(
+        parameter
+        for parameter in common.package.parameters
+        if parameter.name == "nw06.params.10.curve_interpolation"
+    )
+    assert struct.unpack("<I", interpolation.value)[0] == 1
+
+
+def test_camera_curve_full_precision_escape_hatch(tmp_path: Path) -> None:
+    graph = tmp_path / "full-precision.nwgraph"
+    graph.write_text(
+        PROCEDURAL.read_text(encoding="utf-8").replace(
+            "  param height 1.6\n",
+            "  param height 1.6\n  param curve_quantization_bits 0\n",
+        ),
+        encoding="utf-8",
+    )
+    result = _export_graph(tmp_path, graph, "full-precision-artifact")
+    curve = result.artifacts[nwp.COMMON_PROFILE_ID].manifest["timeline"][
+        "camera_curve"
+    ]
+    assert curve["full_precision_escape_hatch"] is True
+    assert curve["maximum_absolute_error"] == 0.0
+    assert curve["recoverable"] is True
+
+
+def test_static_generators_must_remain_initialization_only(
+    tmp_path: Path,
+) -> None:
+    graph = tmp_path / "frame-generation.nwgraph"
+    graph.write_text(
+        PROCEDURAL.read_text(encoding="utf-8").replace(
+            "node texture_gpu nw.residency.generate_texture@1.0.0 "
+            "frequency=initialization",
+            "node texture_gpu nw.residency.generate_texture@1.0.0 "
+            "frequency=frame",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(nw03.CompilerError, match="initialization-only"):
+        _export_graph(tmp_path, graph, "frame-generation-artifact")
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("param near 0.1", "param near 100"),
+        ("param radius_min 3.2", "param radius_min 5.0"),
+        ("param radius_max 4.8", "param radius_max 1.0"),
+        ("param interpolation linear", "param interpolation nearest"),
+        (
+            "param height 1.6",
+            "param height 1.6\n  param curve_value_min 7",
+        ),
+        (
+            "param height 1.6",
+            "param height 1.6\n  param curve_value_min 5\n"
+            "  param curve_value_max 1",
+        ),
+    ],
+)
+def test_invalid_camera_ranges_and_interpolation_fail_before_dispatch(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    graph = tmp_path / "invalid-camera.nwgraph"
+    graph.write_text(
+        PROCEDURAL.read_text(encoding="utf-8").replace(old, new),
+        encoding="utf-8",
+    )
+    with pytest.raises(nw03.CompilerError):
+        _export_graph(tmp_path, graph, "invalid-artifact")
+
+
+def test_nw06_shader_contracts_preserve_bits_eye_and_tick_units() -> None:
+    light = (SHADER_ROOT / "nw06_scene_data_cs.hlsl").read_text(
+        encoding="utf-8"
+    )
+    assert "uint4(Param0, Param1, Param2, Param3)" in light
+    assert "asuint(float4(Param0" not in light
+
+    material = (SHADER_ROOT / "nw06_material_cs.hlsl").read_text(
+        encoding="utf-8"
+    )
+    assert "float(TextureIndex)" not in material
+    assert "TextureIndex))" in material
+
+    vertex = (SHADER_ROOT / "nw06_scene_vs.hlsl").read_text(encoding="utf-8")
+    assert "uint Tick;" in vertex
+    assert "output.camera_position = eye;" in vertex
+    assert "SampleCurve(uint tick, uint interpolation)" in vertex
+
+    pixel = (SHADER_ROOT / "nw06_scene_ps.hlsl").read_text(encoding="utf-8")
+    assert "float3 camera_position : TEXCOORD4;" in pixel
+    assert "normalize(input.camera_position - input.world_position)" in pixel
+    assert "float3(0.0, 0.0, 0.0) - input.world_position" not in pixel
+
+
+def test_render_target_binding_clears_color_and_depth() -> None:
+    player = (
+        REPO_ROOT / "src" / "player" / "package_player.cpp"
+    ).read_text(encoding="utf-8")
+    assert "ClearRenderTargetView(rtv" in player
+    assert "ClearDepthStencilView(" in player
+    assert "D3D12_CLEAR_FLAG_DEPTH" in player
