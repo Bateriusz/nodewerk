@@ -42,15 +42,7 @@ nw_add_offline_compute_shader(
     "kDisplayFixtureDxil"
 )
 else()
-    # Portable host verification compiles player code without requiring the
-    # Windows-only pinned DXC shader toolchain. The non-Windows code path never
-    # executes these payloads, but d3d12_bootstrap.cpp still names the compute
-    # fixture in portable code, so provide compile-only placeholders.
-    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated")
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/compute_fixture_dxil.h"
-        "inline constexpr unsigned char kComputeFixtureDxil[] = {0u};\n")
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/display_fixture_dxil.h"
-        "inline constexpr unsigned char kDisplayFixtureDxil[] = {0u};\n")
+    # Non-Windows configuration does not need offline D3D12 payloads.
     add_custom_target(nw_offline_shaders)
     add_custom_target(nw_offline_display_shader)
 endif()
@@ -72,6 +64,23 @@ set(NW_PLAYER_BOOTSTRAP_SOURCES
 add_library(nw_player_bootstrap STATIC
     ${NW_PLAYER_BOOTSTRAP_SOURCES}
 )
+
+if(NOT WIN32)
+    # Focused portability gate for NW-05 PackagePlayer. This object target
+    # compiles package_player.cpp without pulling in Windows-only bootstrap
+    # fixtures, so CI directly catches accidental non-Windows references such
+    # as InitialUploadBytes while leaving unrelated NW-01 portability debt out
+    # of the NW-05 acceptance path.
+    add_library(nw_package_player_host_compile OBJECT
+        src/player/package_player.cpp
+    )
+    target_include_directories(nw_package_player_host_compile PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
+    )
+    nw_apply_player_profile(nw_package_player_host_compile)
+endif()
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
