@@ -186,6 +186,9 @@ public:
 
     std::string diagnostics_json() const;
     int Report(bool force_diagnostic_output = false) const noexcept;
+    // Compile-time specialization fingerprint used by generated NW-05 mains
+    // to verify that the linked runtime implementations match the manifest.
+    static std::uint32_t specialized_implementation_mask() noexcept;
 
     // Explicit test seams.  They never change runtime eligibility branches;
     // they replace the queried snapshot or allocator with a deterministic
@@ -314,10 +317,13 @@ private:
         std::uint32_t root_parameter = 0u;
         std::uint32_t resource_a = 0u;
         std::uint32_t resource_b = 0u;
-        // Resource currently bound through the active descriptor table.  Used
-        // to place alias-activation barriers immediately before the dispatch
-        // that first uses the incoming resource.
+        // Resources bound through all active descriptor-table root parameters
+        // at this instruction. The bounded snapshot is built once during
+        // planning so dispatch transitions never touch inactive aliases.
         std::uint32_t descriptor_resource = 0u;
+        std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+            descriptor_resources{};
+        std::uint32_t descriptor_resource_count = 0u;
         std::uint32_t shader_id = 0u;
         std::uint32_t group_x = 1u;
         std::uint32_t group_y = 1u;

@@ -25,6 +25,15 @@
 #ifndef NW05_COMPILE_FP16_SHADER_OPS_QUERY
 #define NW05_COMPILE_FP16_SHADER_OPS_QUERY 1
 #endif
+#ifndef NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+#define NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD 1
+#endif
+#ifndef NW05_COMPILE_PROCEDURAL_TEXTURE_R8
+#define NW05_COMPILE_PROCEDURAL_TEXTURE_R8 1
+#endif
+#ifndef NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F
+#define NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F 1
+#endif
 
 #if (defined(NW_ENABLE_D3D12_VALIDATION) && NW_ENABLE_D3D12_VALIDATION) || \
     (defined(NW05_SPECIALIZED_VALIDATION) && NW05_SPECIALIZED_VALIDATION)
@@ -139,6 +148,7 @@ std::uint64_t InitialUploadBytes(
     return row_pitch * resource.height;
 }
 
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
 bool TextureSeedForResource(const package::Package& pkg,
                             std::uint32_t resource_id,
                             std::uint32_t* seed) {
@@ -156,6 +166,7 @@ bool TextureSeedForResource(const package::Package& pkg,
     }
     return false;
 }
+#endif
 
 std::size_t CountCbvSrvUavDescriptors(const package::Package& pkg) {
     std::size_t count = 0u;
@@ -874,6 +885,20 @@ std::string QueryAdapterDriverVersion(IDXGIAdapter1* adapter) {
 } // namespace
 #endif // _WIN32
 
+std::uint32_t PackagePlayer::specialized_implementation_mask() noexcept {
+    std::uint32_t mask = 0u;
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+    mask |= 1u;
+#endif
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_R8
+    mask |= 2u;
+#endif
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F
+    mask |= 4u;
+#endif
+    return mask;
+}
+
 PackagePlayer::PackagePlayer() : PackagePlayer(PlayerConfig{}) {}
 
 PackagePlayer::PackagePlayer(const PlayerConfig& config) : config_(config) {
@@ -1036,6 +1061,10 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     bool has_active_root_signature = false;
     std::uint32_t active_root_signature_id = 0u;
     std::uint32_t active_descriptor_resource = 0u;
+    std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+        active_descriptor_resources{};
+    std::array<bool, package::kMaxRootSignatureDwordCost>
+        active_descriptor_valid{};
     present_resource_id_ = 0u;
     present_source_width_ = 0u;
     present_source_height_ = 0u;
@@ -1102,6 +1131,11 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "frame.set_root_signature references a missing root "
                      "signature");
                 return false;
+            }
+            if (!has_active_root_signature ||
+                active_root_signature_id != op.root_parameter) {
+                active_descriptor_valid.fill(false);
+                active_descriptor_resource = 0u;
             }
             has_active_root_signature = true;
             active_root_signature_id = op.root_parameter;
@@ -1253,6 +1287,10 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.heap_name = instruction.operands[1].string_value;
             op.resource_a = instruction.operands[2].u32;
             active_descriptor_resource = op.resource_a;
+            if (op.root_parameter < active_descriptor_resources.size()) {
+                active_descriptor_resources[op.root_parameter] = op.resource_a;
+                active_descriptor_valid[op.root_parameter] = true;
+            }
             const package::ResourceDescriptor* resource =
                 FindPackageResource(package_, op.resource_a);
             if (resource == nullptr) {
@@ -1365,6 +1403,25 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             op.group_z = instruction.operands[2].u32;
             op.shader_id = instruction.operands[3].u32;
             op.descriptor_resource = active_descriptor_resource;
+            for (std::size_t root = 0u;
+                 root < active_descriptor_resources.size(); ++root) {
+                if (!active_descriptor_valid[root]) continue;
+                const std::uint32_t resource_id =
+                    active_descriptor_resources[root];
+                bool duplicate = false;
+                for (std::uint32_t index = 0u;
+                     index < op.descriptor_resource_count; ++index) {
+                    if (op.descriptor_resources[index] == resource_id) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate && op.descriptor_resource_count <
+                                      op.descriptor_resources.size()) {
+                    op.descriptor_resources[op.descriptor_resource_count++] =
+                        resource_id;
+                }
+            }
             if (instruction.operands[0].type != package::OperandType::U32 ||
                 instruction.operands[1].type != package::OperandType::U32 ||
                 instruction.operands[2].type != package::OperandType::U32 ||
@@ -2918,10 +2975,22 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "init.upload_resource",
                             "the minimal player uploads buffers and 2D textures");
             }
+#if !NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
+            if (placement->descriptor.kind == "texture2d") {
+                return Fail(
+                    ExitCode::PackageValidationFailed, "package_validation",
+                    "specialized_texture_upload_not_retained",
+                    "runtime_implementation", "procedural_texture_upload",
+                    "not compiled", "init.upload_resource",
+                    "the specialized player did not retain procedural "
+                    "texture upload support");
+            }
+#endif
             const std::uint64_t upload_bytes =
                 InitialUploadBytes(placement->descriptor);
             std::uint32_t row_pitch = 0u;
             std::uint32_t texture_bytes_per_element = 0u;
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
             if (placement->descriptor.kind == "texture2d") {
                 texture_bytes_per_element =
                     BytesPerElement(placement->descriptor.format);
@@ -2938,6 +3007,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         texture_bytes_per_element,
                     D3D12_TEXTURE_DATA_PITCH_ALIGNMENT));
             }
+#endif
             if (state->frames.empty() || state->frames[0].upload == nullptr ||
                 state->frames[0].upload_size <
                     upload_bytes) {
@@ -2979,6 +3049,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "per-frame upload ring Map failed");
             }
             std::memset(mapped, 0, static_cast<std::size_t>(upload_bytes));
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD
             if (placement->descriptor.kind == "texture2d") {
                 std::uint32_t seed = 0u;
                 if (!TextureSeedForResource(package_, resource_id, &seed)) {
@@ -3010,6 +3081,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                     for (std::uint32_t x = 0u;
                          x < placement->descriptor.width; ++x) {
                         const std::uint32_t value = hash_pixel(x, y);
+                        bool pixel_written = false;
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_R8
                         if (placement->descriptor.format ==
                             "DXGI_FORMAT_R8G8B8A8_UNORM") {
                             std::uint8_t* pixel =
@@ -3021,9 +3094,13 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             pixel[2] = static_cast<std::uint8_t>(
                                 (value >> 16u) & 0xFFu);
                             pixel[3] = 0xFFu;
-                        } else if (
+                            pixel_written = true;
+                        }
+#endif
+#if NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F
+                        if (!pixel_written &&
                             placement->descriptor.format ==
-                            "DXGI_FORMAT_R32G32B32A32_FLOAT") {
+                                "DXGI_FORMAT_R32G32B32A32_FLOAT") {
                             const float channels[4] = {
                                 static_cast<float>(value & 0xFFu) / 255.0f,
                                 static_cast<float>((value >> 8u) & 0xFFu) /
@@ -3036,21 +3113,26 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                                 row + static_cast<std::size_t>(x) *
                                           sizeof(channels),
                                 channels, sizeof(channels));
-                        } else {
+                            pixel_written = true;
+                        }
+#endif
+                        if (!pixel_written) {
                             frame.upload->Unmap(0u, nullptr);
                             return Fail(
                                 ExitCode::PackageValidationFailed,
                                 "package_validation",
                                 "texture_format_unsupported", "format",
-                                "sampleable procedural texture",
+                                "format retained by specialized player",
                                 placement->descriptor.format,
                                 "init.upload_resource",
-                                "procedural texture format cannot be "
-                                "materialized");
+                                "procedural texture format was not retained "
+                                "by the specialized build");
                         }
                     }
                 }
-            } else {
+            } else
+#endif
+            {
                 std::size_t offset = 0u;
                 for (const auto& parameter : package_.parameters) {
                     if (offset + parameter.value.size() >
@@ -3290,11 +3372,19 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 if (alias.activation_instruction != op.instruction_index) {
                     continue;
                 }
-                if (op.resource_a != alias.resource_id &&
-                    op.resource_b != alias.resource_id &&
-                    op.descriptor_resource != alias.resource_id) {
-                    continue;
+                bool references_incoming =
+                    op.resource_a == alias.resource_id ||
+                    op.resource_b == alias.resource_id ||
+                    op.descriptor_resource == alias.resource_id;
+                for (std::uint32_t descriptor_index = 0u;
+                     !references_incoming &&
+                     descriptor_index < op.descriptor_resource_count;
+                     ++descriptor_index) {
+                    references_incoming =
+                        op.descriptor_resources[descriptor_index] ==
+                        alias.resource_id;
                 }
+                if (!references_incoming) continue;
                 PlatformState::ResourceSlot* before = nullptr;
                 PlatformState::ResourceSlot* after = nullptr;
                 for (auto& candidate : state->resources) {
@@ -3309,10 +3399,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     list, alias, before == nullptr ? nullptr : before->resource,
                     after == nullptr ? nullptr : after->resource);
                 ++stats_.alias_barrier_count;
-                if (after != nullptr &&
-                    after->resource != nullptr) {
-                    after->state = D3D12_RESOURCE_STATE_COMMON;
-                }
+                // Aliasing changes memory ownership, not D3D12 resource state.
+                // Preserve the incoming resource's last real state so a later
+                // transition emits the correct StateBefore value.
                 if (alias.uav_barrier) ++stats_.uav_barrier_count;
                 alias_barrier_emitted[alias_index] = true;
             }
@@ -3486,46 +3575,55 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "renderAtTick",
                                 "frame.dispatch pipeline was not created");
                 }
-                for (auto& candidate : state->resources) {
-                    if (!candidate.has_descriptor ||
-                        candidate.resource == nullptr) {
-                        continue;
+                for (std::uint32_t descriptor_index = 0u;
+                     descriptor_index < op.descriptor_resource_count;
+                     ++descriptor_index) {
+                    const std::uint32_t resource_id =
+                        op.descriptor_resources[descriptor_index];
+                    PlatformState::ResourceSlot* candidate = nullptr;
+                    for (auto& slot : state->resources) {
+                        if (slot.resource_id == resource_id) {
+                            candidate = &slot;
+                            break;
+                        }
                     }
-                    for (const auto& descriptor : package_.resources) {
-                        if (descriptor.resource_id != candidate.resource_id) {
-                            continue;
-                        }
-                        const D3D12_RESOURCE_STATES working =
-                            WorkingStateForUsage(descriptor);
-                        if (working ==
-                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
-                            candidate.state ==
-                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
-                            candidate.uav_accessed_in_frame) {
-                            D3D12_RESOURCE_BARRIER uav_barrier{};
-                            uav_barrier.Type =
-                                D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                            uav_barrier.UAV.pResource = candidate.resource;
-                            list->ResourceBarrier(1u, &uav_barrier);
-                            ++stats_.uav_barrier_count;
-                        }
-                        if (candidate.state != working) {
-                            D3D12_RESOURCE_BARRIER barrier{};
-                            barrier.Type =
-                                D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                            barrier.Transition.pResource =
-                                candidate.resource;
-                            barrier.Transition.StateBefore = candidate.state;
-                            barrier.Transition.StateAfter = working;
-                            barrier.Transition.Subresource =
-                                D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                            list->ResourceBarrier(1u, &barrier);
-                            candidate.state = working;
-                        }
-                        if (working ==
-                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
-                            candidate.uav_accessed_in_frame = true;
-                        }
+                    const package::ResourceDescriptor* descriptor =
+                        FindPackageResource(package_, resource_id);
+                    if (candidate == nullptr || candidate->resource == nullptr ||
+                        descriptor == nullptr) {
+                        return Fail(
+                            ExitCode::ResourceAllocationFailed, "resource",
+                            "dispatch_bound_resource_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "renderAtTick",
+                            "dispatch references a bound resource that was not "
+                            "created");
+                    }
+                    const D3D12_RESOURCE_STATES working =
+                        WorkingStateForUsage(*descriptor);
+                    if (working == D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
+                        candidate->state ==
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
+                        candidate->uav_accessed_in_frame) {
+                        D3D12_RESOURCE_BARRIER uav_barrier{};
+                        uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                        uav_barrier.UAV.pResource = candidate->resource;
+                        list->ResourceBarrier(1u, &uav_barrier);
+                        ++stats_.uav_barrier_count;
+                    }
+                    if (candidate->state != working) {
+                        D3D12_RESOURCE_BARRIER barrier{};
+                        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                        barrier.Transition.pResource = candidate->resource;
+                        barrier.Transition.StateBefore = candidate->state;
+                        barrier.Transition.StateAfter = working;
+                        barrier.Transition.Subresource =
+                            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                        list->ResourceBarrier(1u, &barrier);
+                        candidate->state = working;
+                    }
+                    if (working == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+                        candidate->uav_accessed_in_frame = true;
                     }
                 }
                 list->SetPipelineState(pipeline);
@@ -4387,7 +4485,11 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
             for (const auto& resource : package_.resources) {
                 if (resource.resource_id == instruction.operands[0].u32) {
                     const std::uint64_t required_upload =
+#if defined(_WIN32)
                         InitialUploadBytes(resource);
+#else
+                        resource.size_bytes;
+#endif
                     upload_ring = std::max(
                         upload_ring,
                         required_upload != 0u

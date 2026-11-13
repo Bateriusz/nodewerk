@@ -628,12 +628,47 @@ def extract_embedded_package(executable: bytes) -> tuple[bytes, bytes]:
     return package_bytes, manifest_bytes
 
 
+def _specialized_implementation_flags(
+    manifest: Mapping[str, Any] | None,
+) -> dict[str, bool]:
+    manifest = manifest or {}
+    retained = manifest.get("retained", {})
+    operators = {str(item) for item in retained.get("code", [])}
+    texture_formats = {str(item) for item in manifest.get("texture_formats", [])}
+    procedural_upload = (
+        "nw.texture.procedural" in operators
+        and "nw.residency.upload_texture" in operators
+    )
+    return {
+        "NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD": procedural_upload,
+        "NW05_COMPILE_PROCEDURAL_TEXTURE_R8": (
+            procedural_upload and "DXGI_FORMAT_R8G8B8A8_UNORM" in texture_formats
+        ),
+        "NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F": (
+            procedural_upload
+            and "DXGI_FORMAT_R32G32B32A32_FLOAT" in texture_formats
+        ),
+    }
+
+
+def _specialized_implementation_mask(
+    manifest: Mapping[str, Any] | None,
+) -> int:
+    flags = _specialized_implementation_flags(manifest)
+    return (
+        (1 if flags["NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD"] else 0)
+        | (2 if flags["NW05_COMPILE_PROCEDURAL_TEXTURE_R8"] else 0)
+        | (4 if flags["NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F"] else 0)
+    )
+
 def generate_player_source(
     *,
     package_sha256: str,
     manifest_sha256: str,
     manifest: Mapping[str, Any] | None = None,
     memory_budget_bytes: int = 0,
+    width: int = 1280,
+    height: int = 720,
 ) -> str:
     """Generate a specialized-player main with no per-demo content logic.
 
@@ -646,6 +681,7 @@ def generate_player_source(
     link_wave_ops = bool(feature_requirements.get("wave_ops", False))
     link_fp16 = bool(feature_requirements.get("fp16_shader_ops", False))
     link_int64 = bool(feature_requirements.get("int64_shader_ops", False))
+    implementation_mask = _specialized_implementation_mask(manifest)
     manifest_payload = optimizer.manifest_bytes(manifest) if manifest else b""
     manifest_fnv = 1469598103934665603
     for byte in manifest_payload:
@@ -689,9 +725,16 @@ def generate_player_source(
         "        std::fprintf(stderr, \"NW05_LINK_METADATA_MISMATCH\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        f"    if (nw::player::PackagePlayer::specialized_implementation_mask() != {implementation_mask}u) {{\n"
+        "        std::fprintf(stderr, \"NW05_SPECIALIZED_IMPLEMENTATION_MISMATCH\\n\");\n"
+        "        return 70;\n"
+        "    }\n"
         "    std::printf(\"NW05_LINK_MANIFEST_VERIFIED=1\\n\");\n"
+        "    std::printf(\"NW05_RUNTIME_IMPLEMENTATION_MASK=%u\\n\", nw::player::PackagePlayer::specialized_implementation_mask());\n"
         "    nw::player::PlayerConfig config;\n"
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
+        f"    config.width = {int(width)}u;\n"
+        f"    config.height = {int(height)}u;\n"
         f"    config.query_optional_wave_ops = {'true' if link_wave_ops else 'false'};\n"
         f"    config.query_optional_fp16_shader_ops = {'true' if link_fp16 else 'false'};\n"
         f"    config.query_optional_int64_shader_ops = {'true' if link_int64 else 'false'};\n"
@@ -713,10 +756,10 @@ def generate_player_source(
         "    }\n"
         "    nw::player::PackagePlayer player(config);\n"
         "    const auto status = player.initialize(embedded.bytes, embedded.size);\n"
-        "    if (status != nw::player::ExitCode::Success) return static_cast<int>(status);\n"
+        "    if (status != nw::player::ExitCode::Success) return player.Report(true);\n"
         "    for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick) {\n"
         "        const auto frame = player.renderAtTick(tick);\n"
-        "        if (frame != nw::player::ExitCode::Success) return static_cast<int>(frame);\n"
+        "        if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
         "        if (player.window_closed()) break;\n"
         "    }\n"
         "    if (emit_image_hash) {\n"
@@ -724,8 +767,9 @@ def generate_player_source(
         "        const auto readback = player.readbackPresentedOutput(&image);\n"
         "        if (readback != nw::player::ExitCode::Success) {\n"
         "            std::fprintf(stderr, \"NW05_IMAGE_READBACK_FAILED=%d\\n\", static_cast<int>(readback));\n"
+        "            const int reported = player.Report(true);\n"
         "            (void)player.shutdown();\n"
-        "            return static_cast<int>(readback);\n"
+        "            return reported;\n"
         "        }\n"
         "        std::uint64_t hash = 1469598103934665603ULL;\n"
         "        std::uint64_t nonzero_bytes = 0u;\n"
@@ -750,7 +794,7 @@ def generate_player_source(
         "    const auto shutdown = player.shutdown();\n"
         "    std::printf(\"NW05_FRAMES=%llu\\n\", static_cast<unsigned long long>(player.frames_rendered()));\n"
         "    std::printf(\"NW05_PRESENTS=%llu\\n\", static_cast<unsigned long long>(player.frames_presented()));\n"
-        "    return shutdown == nw::player::ExitCode::Success ? 0 : static_cast<int>(shutdown);\n"
+        "    return shutdown == nw::player::ExitCode::Success ? 0 : player.Report(true);\n"
         "}\n"
         f"// package_sha256={package_sha256}\n"
         f"// link_manifest_sha256={manifest_sha256}\n"
@@ -979,6 +1023,7 @@ def _build_specialized_player(
         "NW05_COMPILE_INT64_SHADER_OPS_QUERY": bool(
             requirements.get("int64_shader_ops", False)
         ),
+        **_specialized_implementation_flags(manifest),
     }
     configure = [
         "cmake",
@@ -1336,6 +1381,26 @@ def _build_graph_derived_package(
                 for operator_id in unsupported
             ],
             dependency_path=["graph", unsupported[0]],
+        )
+
+    initialization_shaders = sorted(
+        node.node_id
+        for node in optimized.nodes
+        if node.operator_id in nw03.SHADER_OPERATORS
+        and node.frequency == "initialization"
+    )
+    if initialization_shaders:
+        raise ExportError(
+            "initialization-frequency shader execution is not representable by "
+            "the .nwp v1 player",
+            [
+                nwp.package_diagnostic(
+                    "missing_implementation",
+                    f"shader node {node_id} requires initialization-phase dispatch",
+                )
+                for node_id in initialization_shaders
+            ],
+            dependency_path=["graph", initialization_shaders[0], "frequency"],
         )
 
     shader_rows = sorted(
@@ -2613,6 +2678,8 @@ def export_graph(
                     manifest_sha256=manifest["manifest_sha256"],
                     manifest=manifest,
                     memory_budget_bytes=settings.memory_budget,
+                preliminary_source =     width=render_width,
+                preliminary_source =     height=render_height,
                 )
                 preliminary_player = _build_specialized_player(
                     template_path, preliminary_source, manifest, profile_id
@@ -2628,6 +2695,8 @@ def export_graph(
                     manifest_sha256=manifest["manifest_sha256"],
                     manifest=manifest,
                     memory_budget_bytes=settings.memory_budget,
+                final_source =     width=render_width,
+                final_source =     height=render_height,
                 )
                 specialized_player_bytes = _build_specialized_player(
                     template_path, final_source, manifest, profile_id
@@ -2676,6 +2745,8 @@ def export_graph(
                 manifest_sha256=manifest["manifest_sha256"],
                 manifest=manifest,
                 memory_budget_bytes=settings.memory_budget,
+            player_source =     width=render_width,
+            player_source =     height=render_height,
             ).encode("utf-8")
             aux_files = {
                 f"{_profile_file_stem(profile_id)}.schedule.json": len(schedule_data),
@@ -2803,6 +2874,8 @@ def export_graph(
                     manifest_sha256=artifact.manifest["manifest_sha256"],
                     manifest=artifact.manifest,
                     memory_budget_bytes=settings.memory_budget,
+                source =     width=render_width,
+                source =     height=render_height,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
             else:
@@ -2811,6 +2884,8 @@ def export_graph(
                     manifest_sha256=artifact.manifest["manifest_sha256"],
                     manifest=artifact.manifest,
                     memory_budget_bytes=settings.memory_budget,
+                source =     width=render_width,
+                source =     height=render_height,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
 

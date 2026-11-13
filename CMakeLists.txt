@@ -15,7 +15,11 @@ set(NW05_GENERATED_PLAYER_SOURCE "" CACHE FILEPATH
 option(NW05_COMPILE_WAVE_OPS_QUERY "Compile D3D12_OPTIONS1 wave-ops query support" ON)
 option(NW05_COMPILE_INT64_SHADER_OPS_QUERY "Compile D3D12_OPTIONS1 int64 query support" ON)
 option(NW05_COMPILE_FP16_SHADER_OPS_QUERY "Compile D3D12_OPTIONS4 fp16 query support" ON)
+option(NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD "Compile procedural texture upload implementation" ON)
+option(NW05_COMPILE_PROCEDURAL_TEXTURE_R8 "Compile R8G8B8A8 procedural texture materialization" ON)
+option(NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F "Compile RGBA32F procedural texture materialization" ON)
 
+if(WIN32)
 nw_add_offline_compute_shader(
     nw_offline_shaders
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/compute_fixture.hlsl"
@@ -37,6 +41,12 @@ nw_add_offline_compute_shader(
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/display_fixture_dxil.h"
     "kDisplayFixtureDxil"
 )
+else()
+    # Portable host verification compiles player code without requiring the
+    # Windows-only pinned DXC shader toolchain.
+    add_custom_target(nw_offline_shaders)
+    add_custom_target(nw_offline_display_shader)
+endif()
 
 set(NW_PLAYER_BOOTSTRAP_SOURCES
     src/player/diagnostics.cpp
@@ -208,6 +218,9 @@ if(NW05_GENERATED_PLAYER_SOURCE)
         NW05_COMPILE_WAVE_OPS_QUERY=$<BOOL:${NW05_COMPILE_WAVE_OPS_QUERY}>
         NW05_COMPILE_INT64_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_INT64_SHADER_OPS_QUERY}>
         NW05_COMPILE_FP16_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_FP16_SHADER_OPS_QUERY}>
+        NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD}>
+        NW05_COMPILE_PROCEDURAL_TEXTURE_R8=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_R8}>
+        NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F}>
     )
     add_dependencies(nw05_player_bootstrap nw_offline_shaders)
     add_dependencies(nw05_player_bootstrap nw_offline_display_shader)

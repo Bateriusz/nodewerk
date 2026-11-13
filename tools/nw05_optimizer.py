@@ -2256,7 +2256,15 @@ def build_link_manifest(
         for specialization, target, size in sorted(shader_blobs)
     ]
     if package is not None:
-        formats = sorted({resource.format for resource in package.resources})
+        package_formats = sorted({resource.format for resource in package.resources})
+        # The player-owned display/swap-chain path always retains R8G8B8A8,
+        # independently of graph resources. Keep that baseline distinct from
+        # graph-selected procedural texture implementations.
+        formats = sorted(set(package_formats) | {"DXGI_FORMAT_R8G8B8A8_UNORM"})
+        resource_kinds = sorted({resource.kind for resource in package.resources})
+        texture_formats = sorted(
+            {resource.format for resource in package.resources if resource.kind == "texture2d"}
+        )
         limits = {
             "max_cbv_srv_uav_descriptors_per_frame": package.capability.max_cbv_srv_uav_descriptors_per_frame,
             "max_sampler_descriptors_per_frame": package.capability.max_sampler_descriptors_per_frame,
@@ -2270,7 +2278,9 @@ def build_link_manifest(
         required_init = list(package.capability.required_init_instructions)
         required_frame = list(package.capability.required_frame_instructions)
     else:
-        formats = []
+        formats = ["DXGI_FORMAT_R8G8B8A8_UNORM"]
+        resource_kinds = []
+        texture_formats = []
         limits = {}
         shader_targets = []
         required_init = []
@@ -2290,6 +2300,20 @@ def build_link_manifest(
         if runtime_dependencies is not None
         else []
     )
+    runtime_implementations = [
+        "player.package-core",
+        "player.display-r8g8b8a8",
+    ]
+    if (
+        "nw.texture.procedural" in used_operators
+        and "nw.residency.upload_texture" in used_operators
+    ):
+        runtime_implementations.append("player.procedural-texture-upload")
+        runtime_implementations.extend(
+            f"player.procedural-texture-format:{fmt}" for fmt in texture_formats
+        )
+    runtime_implementations = sorted(set(runtime_implementations))
+
     runtime_requirements = {
         "feature_level": "12_0",
         "shader_model": "6_0",
@@ -2333,6 +2357,8 @@ def build_link_manifest(
             "enhanced_barriers": False,
         },
         "formats": formats,
+        "resource_kinds": resource_kinds,
+        "texture_formats": texture_formats,
         "limits": limits,
         "shader_targets": shader_targets,
         "shaders": shaders,
@@ -2347,6 +2373,7 @@ def build_link_manifest(
         "required_frame_instructions": required_frame,
         "retained": {
             "code": used_operators,
+            "runtime_implementations": runtime_implementations,
             "shaders": shaders,
             "data": ["package-resources", "parameters", "initialization", "frame"],
             "dependencies": dependencies,

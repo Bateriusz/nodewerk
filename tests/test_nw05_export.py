@@ -96,6 +96,82 @@ def _hashes(directory: Path) -> dict[str, str]:
     }
 
 
+def test_generated_player_uses_export_dimensions_and_reports_failures() -> None:
+    manifest = {
+        "feature_requirements": {},
+        "retained": {"code": []},
+        "texture_formats": [],
+    }
+    source = nw05_export.generate_player_source(
+        package_sha256="00" * 32,
+        manifest_sha256="sha256:v1:" + "11" * 32,
+        manifest=manifest,
+        memory_budget_bytes=2 * 1024 * 1024,
+        width=96,
+        height=48,
+    )
+    assert "config.width = 96u;" in source
+    assert "config.height = 48u;" in source
+    assert source.count("player.Report(true)") >= 3
+    assert "NW05_SPECIALIZED_IMPLEMENTATION_MISMATCH" in source
+    assert "specialized_implementation_mask() != 0u" in source
+
+
+def test_specialized_runtime_flags_follow_reachable_texture_implementation() -> None:
+    shader_only = {
+        "retained": {"code": ["nw.shader.expr"]},
+        "texture_formats": [],
+    }
+    assert nw05_export._specialized_implementation_mask(shader_only) == 0
+    textured = {
+        "retained": {
+            "code": [
+                "nw.shader.expr",
+                "nw.texture.procedural",
+                "nw.residency.upload_texture",
+            ]
+        },
+        "texture_formats": ["DXGI_FORMAT_R8G8B8A8_UNORM"],
+    }
+    flags = nw05_export._specialized_implementation_flags(textured)
+    assert flags["NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD"] is True
+    assert flags["NW05_COMPILE_PROCEDURAL_TEXTURE_R8"] is True
+    assert flags["NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F"] is False
+    assert nw05_export._specialized_implementation_mask(textured) == 3
+
+
+def test_initialization_frequency_shader_dependency_fails_closed(
+    tmp_path: Path,
+) -> None:
+    graph = tmp_path / "init_shader_dependency.nwgraph"
+    graph.write_text(
+        "\n".join(
+            [
+                "nwgraph 1",
+                "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+                "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+                "setting optimization O2",
+                "node init_expr nw.shader.expr@1.0.0 frequency=initialization",
+                '  param expression "vec4(0.25, 0.5, 0.75, 1.0)"',
+                "node frame_expr nw.shader.add@1.0.0 frequency=frame",
+                "  input a init_expr.out",
+                "  input b init_expr.out",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        nw05_export.ExportError, match="initialization-frequency shader"
+    ):
+        nw05_export.export_graph(
+            graph,
+            tmp_path / "init-shader-out",
+            settings=_settings(tmp_path),
+            dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+            allow_test_payloads=True,
+        )
+
 def test_export_produces_embedded_executable_and_display_stream(tmp_path: Path) -> None:
     result = _export(tmp_path)
     common = result.artifacts[nwp.COMMON_PROFILE_ID]
@@ -249,6 +325,19 @@ def test_direct_procedural_texture_binding_is_rejected(tmp_path: Path) -> None:
             allow_test_payloads=True,
         )
 
+
+def test_package_player_dispatch_transitions_only_bound_descriptors() -> None:
+    source = (REPO_ROOT / "src" / "player" / "package_player.cpp").read_text(
+        encoding="utf-8"
+    )
+    header = (REPO_ROOT / "src" / "player" / "package_player.h").read_text(
+        encoding="utf-8"
+    )
+    assert "descriptor_resources" in header
+    assert "descriptor_resource_count" in header
+    assert "descriptor_index < op.descriptor_resource_count" in source
+    assert "after->state = D3D12_RESOURCE_STATE_COMMON" not in source
+    assert "dispatch_bound_resource_missing" in source
 
 def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
     first_blob = nw04_fixture.make_dxil_container() + b"\x01"

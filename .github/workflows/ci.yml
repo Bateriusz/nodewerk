@@ -27,6 +27,11 @@ jobs:
       - name: Install pytest
         run: python -m pip install pytest
 
+      - name: Build portable host player bootstrap
+        run: |
+          cmake -S . -B build/host-player -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/host-player --target nw_player_bootstrap --parallel 2
+
       - name: Run NW-01 automated contract and schema test suite
         run: pytest -v
 
