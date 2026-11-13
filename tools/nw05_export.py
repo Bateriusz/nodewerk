@@ -1206,6 +1206,7 @@ def _shader_execution_plan(
             dependency_path=["graph", "shader", "compile_report"],
         )
     records_by_blob: dict[str, list[nwp.ShaderRecord]] = {}
+    records_by_id = {record.shader_id: record for record in ordered_records}
     for record in ordered_records:
         records_by_blob.setdefault(
             hashlib.sha256(record.blob).hexdigest(), []
@@ -1216,18 +1217,27 @@ def _shader_execution_plan(
         specialization_id = str(row["specialization_id"])
         root = str(row.get("execution_root") or specialization_id)
         blob_sha256 = str(row.get("blob_sha256", ""))
-        candidates = records_by_blob.get(blob_sha256)
-        if not candidates:
-            raise ExportError(
-                "compile report shader blob does not exist in the package",
-                dependency_path=[
-                    "graph",
-                    "shader",
-                    specialization_id,
-                    "blob_sha256",
-                ],
-            )
-        record = candidates.pop(0)
+        report_shader_id = row.get("shader_id")
+        record = None
+        if report_shader_id is not None:
+            record = records_by_id.get(int(report_shader_id))
+            if record is not None and blob_sha256 and (
+                hashlib.sha256(record.blob).hexdigest() != blob_sha256
+            ):
+                record = None
+        if record is None:
+            candidates = records_by_blob.get(blob_sha256)
+            if not candidates:
+                raise ExportError(
+                    "compile report shader blob does not exist in the package",
+                    dependency_path=[
+                        "graph",
+                        "shader",
+                        specialization_id,
+                        "blob_sha256",
+                    ],
+                )
+            record = candidates.pop(0)
         if root not in roots:
             roots.append(root)
         execution.append(
@@ -1269,7 +1279,7 @@ def _build_graph_derived_package(
     supported = (
         set(nw03.SHADER_OPERATORS)
         | set(_PACKAGE_UPLOAD_OPERATORS)
-        | set(_PACKAGE_RENDER_OPERATORS)
+        | {"nw.render.fullscreen", "nw.render.present"}
         | {
             "nw.texture.procedural",
             "nw.buffer.recipe",
@@ -1484,6 +1494,7 @@ def _build_graph_derived_package(
     # Render dependencies resolve to the resource produced by their declared
     # input nodes.  Present follows its image input rather than "last dispatch".
     node_lookup = optimized.node_map()
+    texture_input_resource_id: int | None = None
     for node in sorted(document.nodes.values(), key=lambda item: item.node_id):
         if node.operator_id not in _PACKAGE_RENDER_OPERATORS:
             continue
@@ -1493,8 +1504,12 @@ def _build_graph_derived_package(
                 "the .nwp v1 player has no initialization-phase dispatch",
                 dependency_path=["graph", node.node_id, "frequency"],
             )
-        if node.operator_id == "nw.render.composite":
-            continue
+        if node.operator_id in {"nw.render.composite", "nw.render.gbuffer"}:
+            raise ExportError(
+                f"render node '{node.node_id}' has no complete package output "
+                "lowering",
+                dependency_path=["graph", node.node_id],
+            )
         shader_connection = node.inputs.get("shader")
         if shader_connection is not None:
             source = node_lookup.get(shader_connection[0])
@@ -1508,24 +1523,7 @@ def _build_graph_derived_package(
                     dependency_path=["graph", node.node_id, "shader"],
                 )
             resource_by_output[(node.node_id, "image")] = output_id
-            if node.operator_id == "nw.render.gbuffer":
-                resource_by_output[(node.node_id, "color")] = output_id
-                resources.append(
-                    nwp.ResourceDescriptor(
-                        resource_id=next_resource_id,
-                        name="output",
-                        kind="buffer",
-                        format="DXGI_FORMAT_R32_UINT",
-                        usage="uav",
-                        pass_family=nw03.PASS_FAMILY,
-                        binding_slot=0,
-                        binding_space=0,
-                        size_bytes=width * height * 16,
-                    )
-                )
-                resource_by_output[(node.node_id, "normals")] = next_resource_id
-                next_resource_id += 1
-        elif node.operator_id == "nw.render.fullscreen":
+        if node.operator_id == "nw.render.fullscreen":
             texture_connection = node.inputs.get("texture")
             if texture_connection is None:
                 raise ExportError(
@@ -1538,6 +1536,10 @@ def _build_graph_derived_package(
                     "unlowered texture",
                     dependency_path=["graph", node.node_id, "texture"],
                 )
+            if texture_input_resource_id is None:
+                texture_input_resource_id = resource_by_node[
+                    texture_connection[0]
+                ]
 
     def shader_for_render_node(node_id: str) -> str | None:
         node = document.nodes.get(node_id)
@@ -1640,6 +1642,25 @@ def _build_graph_derived_package(
             dependency_path=["graph", "root_signature"],
         )
     root_signature = root_signatures[0]
+    if texture_input_resource_id is not None:
+        resources = [
+            nwp.replace(resource, name="input")
+            if resource.resource_id == texture_input_resource_id
+            else resource
+            for resource in resources
+        ]
+        bindings = list(root_signature.bindings) + [
+            nwp.RootBinding("input", "srv", 0, 0, 2)
+        ]
+        root_signature = nwp.replace(
+            root_signature,
+            bindings=tuple(bindings),
+            blob=nwp.make_root_signature_blob(
+                root_signature.family, bindings
+            ),
+            dword_cost=root_signature.dword_cost + 1,
+        )
+        root_signatures[0] = root_signature
 
     initialization: list[nwp.Instruction] = [
         nwp.Instruction(
@@ -1709,6 +1730,19 @@ def _build_graph_derived_package(
             ),
         ),
     ]
+    if texture_input_resource_id is not None:
+        frame.append(
+            nwp.Instruction(
+                "frame.set_descriptor_table",
+                (
+                    nwp.InstructionOperand("u32", 2),
+                    nwp.InstructionOperand("string", "cbv_srv_uav"),
+                    nwp.InstructionOperand(
+                        "resource_ref", texture_input_resource_id
+                    ),
+                ),
+            )
+        )
 
     dispatch_order: list[str] = []
     ordered_partitions = (

@@ -147,6 +147,19 @@ def test_original_procedural_image_graph_exports_texture_render_path(
         instruction.opcode == "frame.present"
         for instruction in common.package.frame
     )
+    assert any(
+        binding.name == "input" and binding.usage == "srv"
+        for binding in common.package.root_signatures[0].bindings
+    )
+    assert any(
+        instruction.opcode == "frame.set_descriptor_table"
+        and instruction.operands[0].value == 2
+        and any(
+            operand.type == "resource_ref"
+            for operand in instruction.operands
+        )
+        for instruction in common.package.frame
+    )
 
 
 def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
@@ -179,6 +192,28 @@ def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
         rows, [z_record, a_record]
     )
     by_root = {item["root"]: item["shader_id"] for item in execution}
+    assert by_root == {"a_root": 2, "z_root": 1}
+
+    shared_blob = nw04_fixture.make_dxil_container()
+    shared_rows = [
+        {
+            "specialization_id": "z_root",
+            "shader_id": 1,
+            "blob_sha256": hashlib.sha256(shared_blob).hexdigest(),
+        },
+        {
+            "specialization_id": "a_root",
+            "shader_id": 2,
+            "blob_sha256": hashlib.sha256(shared_blob).hexdigest(),
+        },
+    ]
+    _, shared_execution = nw05_export._shader_execution_plan(
+        shared_rows,
+        [record(1, shared_blob), record(2, shared_blob)],
+    )
+    by_root = {
+        item["root"]: item["shader_id"] for item in shared_execution
+    }
     assert by_root == {"a_root": 2, "z_root": 1}
 
 

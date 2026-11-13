@@ -2869,10 +2869,13 @@ def _build_report(
     source_path: str = "",
 ) -> dict[str, Any]:
     shader_rows = []
-    for shader in sorted(generated, key=lambda item: item.specialization_id):
+    for shader_id, shader in enumerate(
+        sorted(generated, key=lambda item: item.specialization_id), start=1
+    ):
         result = compiled[shader.specialization_key]
         shader_rows.append(
             {
+                "shader_id": shader_id,
                 "specialization_id": shader.specialization_id,
                 "specialization_key": shader.specialization_key,
                 "entry_point": shader.entry_point,
