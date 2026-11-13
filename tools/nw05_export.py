@@ -1498,7 +1498,6 @@ def _build_graph_derived_package(
                     nwp.replace(
                         template,
                         resource_id=output_id,
-                        name=f"output_{node.node_id}",
                     )
                 )
                 next_resource_id += 1
@@ -1527,6 +1526,15 @@ def _build_graph_derived_package(
                 None,
             )
             source_node = document.nodes.get(texture_connection[0])
+            if (
+                source_node is not None
+                and source_node.operator_id == "nw.texture.procedural"
+            ):
+                raise ExportError(
+                    f"fullscreen render node '{node.node_id}' must bind procedural "
+                    "textures through nw.residency.upload_texture",
+                    dependency_path=["graph", node.node_id, "texture"],
+                )
             if (
                 candidate is None or candidate.kind != "texture2d"
             ) and source_node is not None:
@@ -1573,11 +1581,6 @@ def _build_graph_derived_package(
                     dependency_path=["graph", node.node_id, "shader"],
                 )
             texture_by_render[node.node_id] = candidate.resource_id
-            # Any sampled texture must have initialized contents even when the
-            # graph binds nw.texture.procedural directly without an explicit
-            # nw.residency.upload_texture node. Explicit uploads are harmlessly
-            # deduplicated when initialization instructions are emitted.
-            uploaded_resources.append(candidate.resource_id)
 
     def shader_for_render_node(node_id: str) -> str | None:
         node = document.nodes.get(node_id)

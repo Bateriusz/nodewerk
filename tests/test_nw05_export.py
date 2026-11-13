@@ -212,7 +212,7 @@ def test_original_procedural_image_graph_exports_texture_render_path(
     )
 
 
-def test_direct_procedural_texture_binding_is_initialized(tmp_path: Path) -> None:
+def test_direct_procedural_texture_binding_is_rejected(tmp_path: Path) -> None:
     graph = tmp_path / "direct_texture.nwgraph"
     graph.write_text(
         "\n".join(
@@ -236,44 +236,18 @@ def test_direct_procedural_texture_binding_is_initialized(tmp_path: Path) -> Non
         + "\n",
         encoding="utf-8",
     )
-    result = nw05_export.export_graph(
-        graph,
-        tmp_path / "direct-texture-out",
-        settings=_settings(tmp_path),
-        dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
-        allow_test_payloads=True,
-    )
-    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
-    texture_table = next(
-        instruction
-        for instruction in package.frame
-        if instruction.opcode == "frame.set_descriptor_table"
-        and instruction.operands[0].value == 2
-    )
-    texture_id = next(
-        operand.value
-        for operand in texture_table.operands
-        if operand.type == "resource_ref"
-    )
-    texture = next(
-        resource
-        for resource in package.resources
-        if resource.resource_id == texture_id
-    )
-    assert texture.kind == "texture2d"
-    assert texture.usage == "srv"
-    assert any(
-        instruction.opcode == "init.upload_resource"
-        and instruction.operands[0].type == "resource_ref"
-        and instruction.operands[0].value == texture_id
-        for instruction in package.initialization
-    )
-    seed = next(
-        parameter
-        for parameter in package.parameters
-        if parameter.name == f"nw05.texture_seed.{texture_id}"
-    )
-    assert struct.unpack("<I", seed.value)[0] == 9
+    # NW-02 graph semantics require an explicit residency/upload edge before a
+    # procedural texture can be consumed by fullscreen rendering. Keeping this
+    # fail-closed prevents _build_graph_derived_package from ever emitting an
+    # uninitialized sampled texture for a valid authored graph.
+    with pytest.raises(nw03.CompilerError):
+        nw05_export.export_graph(
+            graph,
+            tmp_path / "direct-texture-out",
+            settings=_settings(tmp_path),
+            dxc_executable=str(_make_dxc(tmp_path / "toolchain")),
+            allow_test_payloads=True,
+        )
 
 
 def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
