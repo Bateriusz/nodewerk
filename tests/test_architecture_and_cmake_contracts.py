@@ -93,6 +93,14 @@ def test_player_fixtures_use_distinct_dependency_staging_ids() -> None:
         assert task_id in adr5, f"Downstream contract missing for {task_id}"
 
 
+def test_native_capability_checker_uses_player_crt_profile() -> None:
+    cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    # The checker links nw_package_player (static /MT).  Its own objects must
+    # use the same runtime or MSVC rejects the link with RuntimeLibrary
+    # /failifmismatch.
+    assert "nw_apply_player_profile(nw06_capability_check)" in cmake
+
+
 def test_cmake_profiles_and_presets_contract() -> None:
     presets = json.loads((REPO_ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
     preset_names = {p["name"]: p for p in presets["configurePresets"]}

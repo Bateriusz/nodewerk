@@ -241,6 +241,10 @@ target_include_directories(nw06_capability_check PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
 )
 target_compile_features(nw06_capability_check PRIVATE cxx_std_20)
+# Link with the same player CRT/profile as nw_package_player.  Without this,
+# MSVC builds the checker's main object as /MD while the package library is
+# /MT and lld-link reports a RuntimeLibrary /failifmismatch error.
+nw_apply_player_profile(nw06_capability_check)
 
 # NW-04: package-driven compute + fullscreen-display player fixture.  The
 # fixture consumes the established NW-03 `.nwp` v1 container and never links

@@ -19,13 +19,15 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "cannot open package: %s\n", argv[1]);
         return 2;
     }
-    std::vector<std::uint8_t> bytes(
+    const std::vector<char> raw(
         (std::istreambuf_iterator<char>(input)),
         std::istreambuf_iterator<char>());
+    const auto* bytes =
+        reinterpret_cast<const std::uint8_t*>(raw.data());
     nw::package::Package package;
     std::vector<nw::package::Diagnostic> diagnostics;
     if (!nw::package::DecodePackage(
-            bytes.data(), bytes.size(), package, diagnostics,
+            bytes, raw.size(), package, diagnostics,
             /*allow_dev=*/false, nw::package::kMaxPackageBytes,
             nw::package::kMaxSectionBytes, /*verify_integrity=*/true)) {
         std::fprintf(stderr, "package decode failed\n");
