@@ -686,7 +686,6 @@ std::string_view ToString(LogicalType type) noexcept {
     case LogicalType::SceneTable: return "scene_table";
     case LogicalType::Camera: return "camera";
     case LogicalType::Light: return "light";
-    case LogicalType::Animation: return "animation";
     case LogicalType::RenderImage: return "render_image";
     }
     return "scalar";
@@ -706,7 +705,6 @@ std::optional<LogicalType> ParseLogicalType(std::string_view text) {
         {"scene_table", LogicalType::SceneTable},
         {"camera", LogicalType::Camera},
         {"light", LogicalType::Light},
-        {"animation", LogicalType::Animation},
         {"render_image", LogicalType::RenderImage},
     };
     for (const auto& [name, value] : kValues) {
@@ -1586,7 +1584,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             "nw.animation.twist", OperatorKind::CpuControl,
             "Analytic per-frame twist deformation authoring value",
             AllFrequencies(), Frequency::Frame, "nw.lower.cpu.animation");
-        schema.outputs = {Port("out", LogicalType::Animation,
+        schema.outputs = {Port("out", LogicalType::Curve,
                                Residency::Cpu)};
         schema.params = {
             FloatParam("max_twist_degrees", 180.0, true, -3600.0, 3600.0)};
@@ -1958,7 +1956,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             Port("material", LogicalType::Material, Residency::Cpu),
             Port("camera", LogicalType::Camera, Residency::Cpu),
             Port("light", LogicalType::Light, Residency::Cpu),
-            Port("animation", LogicalType::Animation, Residency::Cpu)};
+            Port("animation", LogicalType::Curve, Residency::Cpu)};
         schema.outputs = {ResourcePort(
             "image", LogicalType::RenderImage, Residency::Gpu,
             RenderImageDescriptor())};
@@ -5549,7 +5547,7 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         return true;
     }
     if (op == "nw.animation.twist") {
-        EvaluationValue animation = MakeText(LogicalType::Animation,
+        EvaluationValue animation = MakeText(LogicalType::Curve,
                                              "animation:twist");
         animation.component_count = 1u;
         animation.numbers[0] = param("max_twist_degrees")->number;

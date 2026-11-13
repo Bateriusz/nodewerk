@@ -408,7 +408,7 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
     "nw.mesh.torus": {"outputs": {"out": ("mesh", 1, "logical")}},
     "nw.scene.instances": {"outputs": {"out": ("scene", 1, "cpu")}},
     "nw.camera.curve": {"outputs": {"out": ("camera", 1, "cpu")}},
-    "nw.animation.twist": {"outputs": {"out": ("animation", 1, "cpu")}},
+    "nw.animation.twist": {"outputs": {"out": ("curve", 1, "cpu")}},
     "nw.post.bloom": {
         "inputs": {"image": ("image", 1, "gpu")},
         "outputs": {"out": ("image", 1, "gpu")},
@@ -425,7 +425,7 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
             "material": ("material", 1, "cpu"),
             "camera": ("camera", 1, "cpu"),
             "light": ("light", 1, "cpu"),
-            "animation": ("animation", 1, "cpu"),
+            "animation": ("curve", 1, "cpu"),
         },
         "outputs": {"image": ("image", 1, "gpu")},
     },

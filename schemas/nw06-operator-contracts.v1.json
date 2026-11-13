@@ -135,7 +135,7 @@
       "kind": "cpu_control",
       "frequencies": ["compile-time", "initialization", "frame"],
       "inputs": [],
-      "outputs": [{"port": "out", "logical_type": "animation", "residency": "cpu"}],
+      "outputs": [{"port": "out", "logical_type": "curve", "residency": "cpu"}],
       "parameters": [
         {"name": "max_twist_degrees", "type": "float", "required": true, "minimum": -3600.0, "maximum": 3600.0}
       ],
@@ -154,7 +154,7 @@
         {"port": "material", "logical_type": "material", "residency": "cpu"},
         {"port": "camera", "logical_type": "camera", "residency": "cpu"},
         {"port": "light", "logical_type": "light", "residency": "cpu"},
-        {"port": "animation", "logical_type": "animation", "residency": "cpu"}
+        {"port": "animation", "logical_type": "curve", "residency": "cpu"}
       ],
       "outputs": [{"port": "image", "logical_type": "render_image", "residency": "gpu"}],
       "parameters": [],

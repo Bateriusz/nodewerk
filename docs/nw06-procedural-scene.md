@@ -47,7 +47,7 @@ half-resolution bloom pass and a tonemap pass produce the existing
 | `nw.residency.generate_instances@1.0.0` | `scene` | `out: scene_table(gpu)` | none |
 | `nw.material.standard@1.0.0` | `albedo: texture_recipe(gpu)` | `out: material(cpu)` | `base_color`, `roughness`, `metallic`, `specular`, `texture_index` |
 | `nw.camera.curve@1.0.0` | none | `out: camera(cpu)` | `keys`, `interpolation`, `fov_degrees`, `aspect`, `near`, `far`, `radius_min`, `radius_max`, `height` |
-| `nw.animation.twist@1.0.0` | none | `out: animation(cpu)` | `max_twist_degrees` |
+| `nw.animation.twist@1.0.0` | none | `out: curve(cpu)` | `max_twist_degrees` |
 | `nw.render.instanced@1.0.0` | `mesh`, `texture`, `scene`, `material`, `camera`, `light`, `animation` | `image: render_image(gpu)` | none |
 | `nw.post.bloom@1.0.0` | `image` | `out: render_image(gpu)` | `threshold`, `intensity`, `radius`, `resolution_scale` |
 | `nw.post.tonemap@1.0.0` | `image` | `out: render_image(gpu)` | `exposure`, `gamma`, `operator` |

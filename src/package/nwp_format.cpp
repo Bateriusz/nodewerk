@@ -2569,6 +2569,19 @@ bool ValidateRootSignatures(
                 error("package_root_signature_root_parameter",
                       "root signature binding 'output' must use root parameter 1");
             }
+        } else if (IsKnownPassFamily(record.family)) {
+            const RootBinding* params = nullptr;
+            for (const auto& binding : record.bindings) {
+                if (binding.name == "params") {
+                    params = &binding;
+                    break;
+                }
+            }
+            if (params == nullptr || params->root_parameter != 0u) {
+                error("package_root_signature_binding",
+                      "NW-06 root signatures require a 'params' root constant "
+                      "binding at root parameter 0");
+            }
         }
     }
     return diagnostics.size() == before;
@@ -2729,19 +2742,6 @@ bool ValidateCrossReferences(const CapabilityRecord& capability,
                     OperandType::ShaderRef) {
                     pipeline_shaders.insert(instruction.operands[index].u32);
                 }
-            }
-        } else if (IsKnownPassFamily(record.family)) {
-            const RootBinding* params = nullptr;
-            for (const auto& binding : record.bindings) {
-                if (binding.name == "params") {
-                    params = &binding;
-                    break;
-                }
-            }
-            if (params == nullptr || params->root_parameter != 0u) {
-                error("package_root_signature_binding",
-                      "NW-06 root signatures require a 'params' root constant "
-                      "binding at root parameter 0");
             }
         }
         if (instruction.opcode == "init.dispatch" &&
