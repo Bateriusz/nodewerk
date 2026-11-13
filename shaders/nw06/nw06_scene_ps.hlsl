@@ -59,6 +59,8 @@ float4 ScenePS(PSInput input) : SV_Target
     float ndoth = saturate(dot(normal, half_vector));
     float shininess = lerp(4.0, 128.0, 1.0 - saturate(roughness));
     float3 diffuse = albedo * (0.16 + 0.84 * ndotl) * light_color;
-    float3 specular_term = float3(1.0 - roughness) * pow(ndoth, shininess) * specular * (1.0 - metallic);
+    float specular_term =
+        (1.0 - roughness) * pow(ndoth, shininess) * specular *
+        (1.0 - metallic);
     return float4(diffuse + specular_term, 1.0);
 }

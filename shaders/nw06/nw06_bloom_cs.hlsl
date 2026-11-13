@@ -30,7 +30,7 @@ void BloomCS(uint3 dispatch_id : SV_DispatchThreadID)
     }
     float2 uv = (float2(dispatch_id.xy) + 0.5) / float2(HalfWidth, HalfHeight);
     float2 texel = 1.0 / float2(Width, Height);
-    float3 color = 0.0;
+    float3 color = float3(0.0, 0.0, 0.0);
     [unroll]
     for (int y = -1; y <= 1; ++y)
     {

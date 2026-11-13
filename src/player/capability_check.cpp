@@ -125,7 +125,9 @@ ExitCode ValidateOfflineDxilContainer(const std::uint8_t* data, std::size_t size
             }
             has_psv0_chunk = true;
         }
-        // DXIL chunk: verify DxilProgramHeader (cs_6_0) and LLVM 3.7 bitcode stream header
+        // DXIL chunk: verify DxilProgramHeader (SM 6.0 vs/ps/cs) and LLVM 3.7
+        // bitcode stream header. NW-06's fixed raster stage requires vertex and
+        // pixel shader targets in addition to the original compute family.
         else if (data[offset] == 'D' && data[offset + 1] == 'X' &&
                  data[offset + 2] == 'I' && data[offset + 3] == 'L') {
             if (chunk_size < 28u) {
@@ -142,9 +144,16 @@ ExitCode ValidateOfflineDxilContainer(const std::uint8_t* data, std::size_t size
             std::memcpy(&bitcode_offset, payload + 16u, sizeof(std::uint32_t));
             std::memcpy(&bitcode_size, payload + 20u, sizeof(std::uint32_t));
 
-            // ProgramVersion for cs_6_0: program_type=5 (CS), major=6, minor=0 -> 0x00050060
-            static constexpr std::uint32_t kCs60ProgramVersion = (5u << 16) | (6u << 4) | 0u;
-            if (prog_ver != kCs60ProgramVersion) {
+            // ProgramVersion: program_type (PS=0, VS=1, CS=5), major=6, minor=0.
+            static constexpr std::uint32_t kPs60ProgramVersion =
+                (0u << 16) | (6u << 4) | 0u;
+            static constexpr std::uint32_t kVs60ProgramVersion =
+                (1u << 16) | (6u << 4) | 0u;
+            static constexpr std::uint32_t kCs60ProgramVersion =
+                (5u << 16) | (6u << 4) | 0u;
+            if (prog_ver != kPs60ProgramVersion &&
+                prog_ver != kVs60ProgramVersion &&
+                prog_ver != kCs60ProgramVersion) {
                 return ExitCode::OfflineShaderPayloadInvalid;
             }
             // SizeInUint32 covers DxilProgramHeader + bitcode in 32-bit words;
