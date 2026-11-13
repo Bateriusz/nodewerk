@@ -2678,8 +2678,8 @@ def export_graph(
                     manifest_sha256=manifest["manifest_sha256"],
                     manifest=manifest,
                     memory_budget_bytes=settings.memory_budget,
-                preliminary_source =     width=render_width,
-                preliminary_source =     height=render_height,
+                    width=render_width,
+                    height=render_height,
                 )
                 preliminary_player = _build_specialized_player(
                     template_path, preliminary_source, manifest, profile_id
@@ -2695,8 +2695,8 @@ def export_graph(
                     manifest_sha256=manifest["manifest_sha256"],
                     manifest=manifest,
                     memory_budget_bytes=settings.memory_budget,
-                final_source =     width=render_width,
-                final_source =     height=render_height,
+                    width=render_width,
+                    height=render_height,
                 )
                 specialized_player_bytes = _build_specialized_player(
                     template_path, final_source, manifest, profile_id
@@ -2745,8 +2745,8 @@ def export_graph(
                 manifest_sha256=manifest["manifest_sha256"],
                 manifest=manifest,
                 memory_budget_bytes=settings.memory_budget,
-            player_source =     width=render_width,
-            player_source =     height=render_height,
+                width=render_width,
+                height=render_height,
             ).encode("utf-8")
             aux_files = {
                 f"{_profile_file_stem(profile_id)}.schedule.json": len(schedule_data),
@@ -2874,8 +2874,8 @@ def export_graph(
                     manifest_sha256=artifact.manifest["manifest_sha256"],
                     manifest=artifact.manifest,
                     memory_budget_bytes=settings.memory_budget,
-                source =     width=render_width,
-                source =     height=render_height,
+                    width=render_width,
+                    height=render_height,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
             else:
@@ -2884,8 +2884,8 @@ def export_graph(
                     manifest_sha256=artifact.manifest["manifest_sha256"],
                     manifest=artifact.manifest,
                     memory_budget_bytes=settings.memory_budget,
-                source =     width=render_width,
-                source =     height=render_height,
+                    width=render_width,
+                    height=render_height,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
 
