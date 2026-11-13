@@ -43,7 +43,14 @@ nw_add_offline_compute_shader(
 )
 else()
     # Portable host verification compiles player code without requiring the
-    # Windows-only pinned DXC shader toolchain.
+    # Windows-only pinned DXC shader toolchain. The non-Windows code path never
+    # executes these payloads, but d3d12_bootstrap.cpp still names the compute
+    # fixture in portable code, so provide compile-only placeholders.
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/compute_fixture_dxil.h"
+        "inline constexpr unsigned char kComputeFixtureDxil[] = {0u};\n")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/display_fixture_dxil.h"
+        "inline constexpr unsigned char kDisplayFixtureDxil[] = {0u};\n")
     add_custom_target(nw_offline_shaders)
     add_custom_target(nw_offline_display_shader)
 endif()
