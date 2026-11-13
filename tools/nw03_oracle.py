@@ -335,8 +335,22 @@ def _swizzle_text(selector: str) -> str:
     return mapped
 
 
-def lower_to_hlsl(expression: Expression) -> str:
-    """Lower a parsed expression tree to HLSL expression text."""
+def lower_to_hlsl(
+    expression: Expression,
+    *,
+    texture_function: str | None = None,
+) -> str:
+    """Lower a parsed expression tree to HLSL expression text.
+
+    texture2d(u, v) is lowered only when the caller supplies the bound-texture
+    helper for the pass. Ordinary NW-03 compute lowering therefore stays
+    fail-closed, while NW-05 fullscreen passes can author texture sampling in
+    the graph instead of receiving hidden image-composition math.
+    """
+
+    def lower(node: Expression) -> str:
+        return lower_to_hlsl(node, texture_function=texture_function)
+
     if isinstance(expression, Literal):
         return _number_text(expression.value)
     if isinstance(expression, Variable):
@@ -346,16 +360,23 @@ def lower_to_hlsl(expression: Expression) -> str:
             return "g_time"
         raise ExpressionError(f"unsupported variable '{expression.name}'")
     if isinstance(expression, Member):
-        return f"({lower_to_hlsl(expression.base)}).{_swizzle_text(expression.selector)}"
+        return f"({lower(expression.base)}).{_swizzle_text(expression.selector)}"
     if isinstance(expression, Unary):
-        return f"({expression.operator}{lower_to_hlsl(expression.operand)})"
+        return f"({expression.operator}{lower(expression.operand)})"
     if isinstance(expression, Binary):
         return (
-            f"({lower_to_hlsl(expression.left)} {expression.operator} "
-            f"{lower_to_hlsl(expression.right)})"
+            f"({lower(expression.left)} {expression.operator} "
+            f"{lower(expression.right)})"
         )
     assert isinstance(expression, Call)
     name = expression.name
+    if name == "texture2d":
+        if texture_function is None:
+            raise ExpressionError(
+                "operation 'texture2d' requires a bound texture in this pass"
+            )
+        u, v = (lower(argument) for argument in expression.arguments)
+        return f"{texture_function}(float2({u}, {v}))"
     if name in _UNSUPPORTED_TEXTURE_OPERATIONS:
         raise ExpressionError(
             f"operation '{name}' requires a bound texture and is not emitted by the "
@@ -364,7 +385,7 @@ def lower_to_hlsl(expression: Expression) -> str:
     if name == "const":
         # NW-02's const(x) is a semantic identity on its argument; it is not an
         # HLSL intrinsic and must be lowered away before emission.
-        return f"({lower_to_hlsl(expression.arguments[0])})"
+        return f"({lower(expression.arguments[0])})"
     hlsl_name = {
         "vec2": "float2",
         "vec3": "float3",
@@ -375,7 +396,7 @@ def lower_to_hlsl(expression: Expression) -> str:
         "fract": "frac",
         "saturate": "saturate",
     }.get(name, name)
-    arguments = ", ".join(lower_to_hlsl(argument) for argument in expression.arguments)
+    arguments = ", ".join(lower(argument) for argument in expression.arguments)
     return f"{hlsl_name}({arguments})"
 
 

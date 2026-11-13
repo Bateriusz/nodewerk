@@ -1457,7 +1457,7 @@ def _build_graph_derived_package(
     # Render dependencies resolve to the resource produced by their declared
     # input nodes.  Present follows its image input rather than "last dispatch".
     node_lookup = optimized.node_map()
-    texture_by_shader: dict[str, int] = {}
+    texture_by_render: dict[str, int] = {}
     for node in sorted(document.nodes.values(), key=lambda item: item.node_id):
         if node.operator_id not in _PACKAGE_RENDER_OPERATORS:
             continue
@@ -1554,14 +1554,7 @@ def _build_graph_derived_package(
                     "root for texture binding",
                     dependency_path=["graph", node.node_id, "shader"],
                 )
-            previous = texture_by_shader.get(texture_spec)
-            if previous is not None and previous != candidate.resource_id:
-                raise ExportError(
-                    f"shader root '{texture_spec}' is used by multiple "
-                    "fullscreen nodes with different texture inputs",
-                    dependency_path=["graph", node.node_id, "texture"],
-                )
-            texture_by_shader[texture_spec] = candidate.resource_id
+            texture_by_render[node.node_id] = candidate.resource_id
 
     def shader_for_render_node(node_id: str) -> str | None:
         node = document.nodes.get(node_id)
@@ -1680,7 +1673,7 @@ def _build_graph_derived_package(
             dependency_path=["graph", "root_signature"],
         )
     root_signature = root_signatures[0]
-    texture_ids = set(texture_by_shader.values())
+    texture_ids = set(texture_by_render.values())
     if texture_ids:
         # RootBinding names are semantic names for the fixed pass-family slot,
         # not unique resource identities. Multiple texture resources may share
@@ -1773,7 +1766,8 @@ def _build_graph_derived_package(
             ),
         ),
     ]
-    dispatch_order: list[str] = []
+    dispatch_passes: list[tuple[str | None, str]] = []
+    rendered_specs: set[str] = set()
     ordered_partitions = (
         list(optimized.partitions.get("initialization", ()))
         + list(optimized.partitions.get("frame", ()))
@@ -1785,20 +1779,31 @@ def _build_graph_derived_package(
         if node.operator_id == "nw.render.present":
             continue
         spec = shader_for_render_node(node_id)
-        if spec in resource_by_shader and spec not in dispatch_order:
-            dispatch_order.append(spec)
-    # Shader-only graphs (no render node) still execute every compiled root.
+        if spec in resource_by_shader:
+            # Render nodes are execution instances. One compiled shader may be
+            # dispatched repeatedly with different resource bindings.
+            dispatch_passes.append((node_id, spec))
+            rendered_specs.add(spec)
+    # Shader-only graphs still execute roots that have no render pass.
     for spec in specs:
-        if spec not in dispatch_order:
-            dispatch_order.append(spec)
-    if not dispatch_order:
+        if spec not in rendered_specs:
+            dispatch_passes.append((None, spec))
+    if not dispatch_passes:
         raise ExportError(
             "reachable graph has no executable shader root",
             dependency_path=["graph", "shader"],
         )
 
-    for spec in dispatch_order:
-        output_id = resource_by_shader[spec]
+    last_dispatch_output_id: int | None = None
+    for render_node_id, spec in dispatch_passes:
+        output_id = (
+            resource_by_output.get((render_node_id, "image"))
+            if render_node_id is not None
+            else None
+        )
+        if output_id is None:
+            output_id = resource_by_shader[spec]
+        last_dispatch_output_id = output_id
         executions = sorted(
             (item for item in shader_execution if item["root"] == spec),
             key=lambda item: (
@@ -1821,7 +1826,11 @@ def _build_graph_derived_package(
                 ),
             )
         )
-        texture_id = texture_by_shader.get(spec)
+        texture_id = (
+            texture_by_render.get(render_node_id)
+            if render_node_id is not None
+            else None
+        )
         if texture_id is not None:
             frame.append(
                 nwp.Instruction(
@@ -1875,7 +1884,7 @@ def _build_graph_derived_package(
                         present_target = resource_id
                         break
     if present_target is None:
-        present_target = resource_by_shader.get(dispatch_order[-1])
+        present_target = last_dispatch_output_id
     if present_target is None:
         raise ExportError(
             "graph package has no displayable procedural output",

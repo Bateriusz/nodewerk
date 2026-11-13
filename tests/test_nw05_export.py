@@ -198,9 +198,13 @@ def test_original_procedural_image_graph_exports_texture_render_path(
     image_shader = next(
         shader for shader in generated if shader.execution_root == "image"
     )
+    assert "texture2d(uv.x, uv.y)" in image_shader.root_expression
+    assert image_shader.root_expression.endswith(", 0.25)")
     assert "Texture2D<float4> nw_input : register(t0);" in image_shader.hlsl
+    assert "float4 nw_texture2d(float2 nw_uv)" in image_shader.hlsl
     assert "nw_input.Load(" in image_shader.hlsl
-    assert "nw_texture" in image_shader.hlsl
+    assert "nw_texture2d(float2(" in image_shader.hlsl
+    assert "nw_texture, 0.25" not in image_shader.hlsl
     assert any(
         row.get("execution_root") == "image"
         and row.get("hlsl_sha256") == image_shader.hlsl_sha256
@@ -281,10 +285,10 @@ def test_multiple_fullscreen_nodes_bind_their_own_textures(
                 "  param seed 1",
                 "node tex_a_gpu nw.residency.upload_texture@1.0.0 frequency=initialization residency=gpu",
                 "  input texture tex_a.out",
-                "node image_a nw.shader.expr@1.0.0 frequency=frame",
-                '  param expression "vec4(uv.x, 0.0, 0.0, 1.0)"',
+                "node image nw.shader.expr@1.0.0 frequency=frame",
+                '  param expression "mix(vec4(uv.x, uv.y, 0.0, 1.0), texture2d(uv.x, uv.y), 0.5)"',
                 "node out_a nw.render.fullscreen@1.0.0 frequency=frame residency=gpu",
-                "  input shader image_a.out",
+                "  input shader image.out",
                 "  input texture tex_a_gpu.out",
                 "node tex_b nw.texture.procedural@1.0.0 frequency=initialization",
                 "  param width 32",
@@ -293,10 +297,8 @@ def test_multiple_fullscreen_nodes_bind_their_own_textures(
                 "  param seed 2",
                 "node tex_b_gpu nw.residency.upload_texture@1.0.0 frequency=initialization residency=gpu",
                 "  input texture tex_b.out",
-                "node image_b nw.shader.expr@1.0.0 frequency=frame",
-                '  param expression "vec4(0.0, uv.y, 0.0, 1.0)"',
                 "node out_b nw.render.fullscreen@1.0.0 frequency=frame residency=gpu",
-                "  input shader image_b.out",
+                "  input shader image.out",
                 "  input texture tex_b_gpu.out",
             ]
         )
@@ -349,6 +351,28 @@ def test_multiple_fullscreen_nodes_bind_their_own_textures(
         if parameter.name.startswith("nw05.texture_seed.")
     }
     assert set(seed_parameters.values()) >= {1, 2}
+    texture_tables = [
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.set_descriptor_table"
+        and instruction.operands[0].value == 2
+    ]
+    dispatches = [
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.dispatch"
+    ]
+    assert len(texture_tables) == 2
+    assert len(dispatches) == 2
+    assert len(
+        {
+            operand.value
+            for instruction in dispatches
+            for operand in instruction.operands
+            if operand.type == "shader_ref"
+        }
+    ) == 1
+
 
 def test_duplicate_transient_bindings_must_be_bound_one_at_a_time() -> None:
     package = nw04_fixture.build_compute_display_package()

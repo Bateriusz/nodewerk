@@ -14,7 +14,7 @@ setting quantization_step 0
 # The graph is the sole source of the procedural demo image.  No hand-authored
 # package content or per-demo player code is involved.
 node image nw.shader.expr@1.0.0 frequency=frame
-  param expression "vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), mix(uv.y, cos(uv.x * 13.0 - time), 0.25), sin(uv.x * 31.0 + time) * 0.5 + 0.5, 1.0)"
+  param expression "mix(vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), mix(uv.y, cos(uv.x * 13.0 - time), 0.25), sin(uv.x * 31.0 + time) * 0.5 + 0.5, 1.0), texture2d(uv.x, uv.y), 0.25)"
 
 node texture_recipe nw.texture.procedural@1.0.0 frequency=initialization
   param width 256
