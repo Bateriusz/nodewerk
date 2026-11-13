@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw04_fixture  # noqa: E402
+import nw03_compiler as nw03  # noqa: E402
 import nw03_oracle  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 import nw05_export  # noqa: E402
@@ -147,27 +148,63 @@ def test_original_procedural_image_graph_exports_texture_render_path(
         binding.name == "input" and binding.usage == "srv"
         for binding in common.package.root_signatures[0].bindings
     )
+    texture_bindings = [
+        instruction
+        for instruction in common.package.frame
+        if instruction.opcode == "frame.set_descriptor_table"
+        and instruction.operands[0].value == 2
+    ]
+    assert texture_bindings
+    input_resource_id = next(
+        operand.value
+        for operand in texture_bindings[0].operands
+        if operand.type == "resource_ref"
+    )
     input_resource = next(
         resource
         for resource in common.package.resources
-        if resource.name == "input"
+        if resource.resource_id == input_resource_id
     )
     assert input_resource.kind == "texture2d"
+    assert input_resource.usage == "srv"
+    assert not any(
+        resource.name.startswith("texture_upload_")
+        for resource in common.package.resources
+    )
     assert any(
         instruction.opcode == "init.upload_resource"
         and instruction.operands[0].type == "resource_ref"
         and instruction.operands[0].value == input_resource.resource_id
         for instruction in common.package.initialization
     )
+    texture_seed = next(
+        parameter
+        for parameter in common.package.parameters
+        if parameter.name == f"nw05.texture_seed.{input_resource.resource_id}"
+    )
+    assert texture_seed.type == "uint"
+    assert struct.unpack("<I", texture_seed.value)[0] == 7
+
+    document = nw03.load_graph(ORIGINAL_PROCEDURAL)
+    generated, diagnostics = nw03.lower_to_selective_hlsl(
+        document,
+        thread_group=(256, 1, 1),
+        dispatch_groups=(1, 256, 1),
+        image_width=256,
+        image_height=256,
+        texture_sample_roots={"image"},
+    )
+    assert not diagnostics
+    image_shader = next(
+        shader for shader in generated if shader.execution_root == "image"
+    )
+    assert "Texture2D<float4> nw_input : register(t0);" in image_shader.hlsl
+    assert "nw_input.Load(" in image_shader.hlsl
+    assert "nw_texture" in image_shader.hlsl
     assert any(
-        instruction.opcode == "frame.set_descriptor_table"
-        and instruction.operands[0].value == 2
-        and any(
-            operand.type == "resource_ref"
-            and operand.value == input_resource.resource_id
-            for operand in instruction.operands
-        )
-        for instruction in common.package.frame
+        row.get("execution_root") == "image"
+        and row.get("hlsl_sha256") == image_shader.hlsl_sha256
+        for row in common.manifest.get("shaders", [])
     )
 
 
@@ -274,11 +311,6 @@ def test_multiple_fullscreen_nodes_bind_their_own_textures(
         allow_test_payloads=True,
     )
     package = result.artifacts[nwp.COMMON_PROFILE_ID].package
-    input_ids = {
-        resource.resource_id
-        for resource in package.resources
-        if resource.name == "input" and resource.kind == "texture2d"
-    }
     bound_ids = {
         operand.value
         for instruction in package.frame
@@ -287,8 +319,31 @@ def test_multiple_fullscreen_nodes_bind_their_own_textures(
         for operand in instruction.operands
         if operand.type == "resource_ref"
     }
-    assert len(input_ids) >= 2
-    assert bound_ids == input_ids
+    bound_textures = {
+        resource.resource_id: resource
+        for resource in package.resources
+        if resource.resource_id in bound_ids
+    }
+    assert len(bound_ids) == 2
+    assert set(bound_textures) == bound_ids
+    assert all(
+        resource.kind == "texture2d" and resource.usage == "srv"
+        for resource in bound_textures.values()
+    )
+    uploaded_ids = {
+        instruction.operands[0].value
+        for instruction in package.initialization
+        if instruction.opcode == "init.upload_resource"
+        and instruction.operands
+        and instruction.operands[0].type == "resource_ref"
+    }
+    assert bound_ids <= uploaded_ids
+    seed_parameters = {
+        parameter.name: struct.unpack("<I", parameter.value)[0]
+        for parameter in package.parameters
+        if parameter.name.startswith("nw05.texture_seed.")
+    }
+    assert set(seed_parameters.values()) >= {1, 2}
 
 def test_duplicate_transient_bindings_must_be_bound_one_at_a_time() -> None:
     package = nw04_fixture.build_compute_display_package()

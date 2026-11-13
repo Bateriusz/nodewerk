@@ -1284,10 +1284,11 @@ def _build_graph_derived_package(
     # them instead of publishing metadata-only semantics.
     supported = (
         set(nw03.SHADER_OPERATORS)
-        | set(_PACKAGE_UPLOAD_OPERATORS)
-        | {"nw.render.fullscreen", "nw.render.present"}
         | {
             "nw.texture.procedural",
+            "nw.residency.upload_texture",
+            "nw.render.fullscreen",
+            "nw.render.present",
         }
     )
     unsupported = sorted(used_operators - supported)
@@ -1328,7 +1329,7 @@ def _build_graph_derived_package(
     )
     resources: list[nwp.ResourceDescriptor] = [params]
     resource_by_node: dict[str, int] = {}
-    upload_resource_by_texture: dict[str, int] = {}
+    texture_seed_by_resource: dict[int, int] = {}
     resource_by_output: dict[tuple[str, str], int] = {}
     resource_by_shader: dict[str, int] = {}
     next_resource_id = 2
@@ -1380,9 +1381,22 @@ def _build_graph_derived_package(
         if node.operator_id == "nw.texture.procedural":
             format_name = node.params.get("format", ["r8g8b8a8_unorm"])[0]
             resource_format = _resource_format(format_name)
+            if resource_format not in {
+                "DXGI_FORMAT_R8G8B8A8_UNORM",
+                "DXGI_FORMAT_R32G32B32A32_FLOAT",
+            }:
+                raise ExportError(
+                    f"procedural texture '{node_id}' uses unsupported sampled "
+                    f"format '{format_name}'",
+                    dependency_path=["graph", node_id, "format"],
+                )
             texture_width = _node_int(node, "width", 256)
             texture_height = _node_int(node, "height", 256)
+            texture_seed = _node_int(
+                node, "seed", 0, minimum=0, maximum=0xFFFFFFFF
+            )
             resource_by_node[node_id] = next_resource_id
+            texture_seed_by_resource[next_resource_id] = texture_seed
             resources.append(
                 nwp.ResourceDescriptor(
                     resource_id=next_resource_id,
@@ -1400,68 +1414,6 @@ def _build_graph_derived_package(
                     ),
                     width=texture_width,
                     height=texture_height,
-                )
-            )
-            next_resource_id += 1
-            row_pitch = (
-                (
-                    texture_width
-                    * _FORMAT_BYTES_PER_ELEMENT[resource_format]
-                    + 255
-                )
-                // 256
-            ) * 256
-            upload_resource_by_texture[node_id] = next_resource_id
-            resources.append(
-                nwp.ResourceDescriptor(
-                    resource_id=next_resource_id,
-                    name=f"texture_upload_{node_id}",
-                    kind="buffer",
-                    format="DXGI_FORMAT_R32_UINT",
-                    usage="srv",
-                    pass_family=nw03.PASS_FAMILY,
-                    binding_slot=0,
-                    binding_space=0,
-                    size_bytes=max(1, row_pitch * texture_height),
-                )
-            )
-            next_resource_id += 1
-        elif node.operator_id == "nw.buffer.recipe":
-            resource_format = _resource_format(
-                node.params.get("format", ["r32_uint"])[0]
-            )
-            resource_by_node[node_id] = next_resource_id
-            resources.append(
-                nwp.ResourceDescriptor(
-                    resource_id=next_resource_id,
-                    name=f"buffer_{node_id}",
-                    kind="buffer",
-                    format=resource_format,
-                    usage="srv",
-                    pass_family=nw03.PASS_FAMILY,
-                    binding_slot=0,
-                    binding_space=0,
-                    size_bytes=_node_int(
-                        node, "bytes", 256, minimum=1, maximum=nwp.MAX_BUFFER_BYTES
-                    ),
-                )
-            )
-            next_resource_id += 1
-        elif node.operator_id == "nw.mesh.recipe":
-            vertices = _node_int(node, "vertices", 3, maximum=1048576)
-            indices = _node_int(node, "indices", 3, maximum=3145728)
-            resource_by_node[node_id] = next_resource_id
-            resources.append(
-                nwp.ResourceDescriptor(
-                    resource_id=next_resource_id,
-                    name=f"mesh_{node_id}",
-                    kind="buffer",
-                    format="DXGI_FORMAT_R32_UINT",
-                    usage="srv",
-                    pass_family=nw03.PASS_FAMILY,
-                    binding_slot=0,
-                    binding_space=0,
-                    size_bytes=vertices * 32 + indices * 4,
                 )
             )
             next_resource_id += 1
@@ -1486,23 +1438,21 @@ def _build_graph_derived_package(
                 f"upload node '{node_id}' has no lowered producer resource",
                 dependency_path=["graph", node_id, "input"],
             )
-        resource_by_node[node_id] = source_id
-        if node.operator_id == "nw.residency.upload_texture":
-            upload_resource = upload_resource_by_texture.get(connection[0])
-            if upload_resource is not None:
-                resource_by_node[node_id] = upload_resource
-                uploaded_resources.append(upload_resource)
-                uploaded_resources.append(source_id)
-                continue
+        if node.operator_id != "nw.residency.upload_texture":
+            raise ExportError(
+                f"upload node '{node_id}' has no executable package lowering",
+                dependency_path=["graph", node_id],
+            )
         source_resource = next(
             resource for resource in resources if resource.resource_id == source_id
         )
-        if (
-            node.operator_id
-            in {"nw.residency.upload_buffer", "nw.residency.upload_mesh"}
-            and source_resource.kind == "buffer"
-        ):
-            uploaded_resources.append(source_id)
+        if source_resource.kind != "texture2d":
+            raise ExportError(
+                f"texture upload node '{node_id}' does not resolve to texture2d",
+                dependency_path=["graph", node_id, "texture"],
+            )
+        resource_by_node[node_id] = source_id
+        uploaded_resources.append(source_id)
 
     # Render dependencies resolve to the resource produced by their declared
     # input nodes.  Present follows its image input rather than "last dispatch".
@@ -1672,6 +1622,22 @@ def _build_graph_derived_package(
             )
         )
         next_parameter_id += 1
+    for resource_id, seed in sorted(texture_seed_by_resource.items()):
+        parameters.append(
+            nwp.ParameterRecord(
+                parameter_id=next_parameter_id,
+                name=f"nw05.texture_seed.{resource_id}",
+                type="uint",
+                phase="initialization",
+                component_count=1,
+                value=struct.pack("<I", seed),
+                timeline_start_frame=0,
+                timeline_end_frame=0,
+                timeline_step=0,
+                timeline_interpolation="none",
+            )
+        )
+        next_parameter_id += 1
     node_by_id = {node.node_id: node for node in optimized.nodes}
     for node_id in sorted(document.nodes):
         if node_id not in reachable:
@@ -1716,12 +1682,6 @@ def _build_graph_derived_package(
     root_signature = root_signatures[0]
     texture_ids = set(texture_by_shader.values())
     if texture_ids:
-        resources = [
-            nwp.replace(resource, name="input")
-            if resource.resource_id in texture_ids
-            else resource
-            for resource in resources
-        ]
         bindings = list(root_signature.bindings) + [
             nwp.RootBinding("input", "srv", 0, 0, 2)
         ]
@@ -2002,8 +1962,15 @@ def _compile_profile_package(
         max(1, height),
         1,
     )
+    texture_sample_roots = {
+        connection[0]
+        for node in document.nodes.values()
+        if node.operator_id == "nw.render.fullscreen"
+        for connection in [node.inputs.get("shader")]
+        if connection is not None
+    }
     generated_override = None
-    if has_composed_shader:
+    if has_composed_shader or texture_sample_roots:
         generated_override, diagnostics = nw03.lower_to_selective_hlsl(
             document,
             fused_roots={
@@ -2013,6 +1980,7 @@ def _compile_profile_package(
             dispatch_groups=dispatch_groups,
             image_width=width,
             image_height=height,
+            texture_sample_roots=texture_sample_roots,
         )
         if diagnostics:
             raise nw03.CompilerError("failed to lower selective shader graph", diagnostics)

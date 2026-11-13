@@ -118,6 +118,45 @@ std::uint64_t RoundUp(std::uint64_t value, std::uint64_t alignment) {
     return remainder == 0u ? value : value + (alignment - remainder);
 }
 
+std::uint32_t BytesPerElement(const std::string& format);
+
+std::uint64_t InitialUploadBytes(
+    const package::ResourceDescriptor& resource) {
+    if (resource.kind != "texture2d") return resource.size_bytes;
+    const std::uint32_t bytes_per_element = BytesPerElement(resource.format);
+    if (bytes_per_element == 0u || resource.width == 0u ||
+        resource.height == 0u) {
+        return 0u;
+    }
+    const std::uint64_t row_bytes =
+        static_cast<std::uint64_t>(resource.width) * bytes_per_element;
+    const std::uint64_t row_pitch = RoundUp(
+        row_bytes, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+    if (row_pitch >
+        std::numeric_limits<std::uint64_t>::max() / resource.height) {
+        return 0u;
+    }
+    return row_pitch * resource.height;
+}
+
+bool TextureSeedForResource(const package::Package& pkg,
+                            std::uint32_t resource_id,
+                            std::uint32_t* seed) {
+    if (seed == nullptr) return false;
+    const std::string name =
+        "nw05.texture_seed." + std::to_string(resource_id);
+    for (const auto& parameter : pkg.parameters) {
+        if (parameter.name != name) continue;
+        if (parameter.type != "uint" || parameter.component_count != 1u ||
+            parameter.value.size() != sizeof(std::uint32_t)) {
+            return false;
+        }
+        std::memcpy(seed, parameter.value.data(), sizeof(*seed));
+        return true;
+    }
+    return false;
+}
+
 std::size_t CountCbvSrvUavDescriptors(const package::Package& pkg) {
     std::size_t count = 0u;
     for (const auto& resource : pkg.resources) {
@@ -149,7 +188,7 @@ std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
         }
         for (const auto& resource : pkg.resources) {
             if (resource.resource_id == instruction.operands[0].u32) {
-                maximum = std::max(maximum, resource.size_bytes);
+                maximum = std::max(maximum, InitialUploadBytes(resource));
             }
         }
     }
@@ -601,7 +640,7 @@ std::uint32_t BytesPerElement(const std::string& format) {
     if (format == "DXGI_FORMAT_R32G32B32A32_FLOAT") return 16u;
     if (format == "DXGI_FORMAT_R32_UINT") return 4u;
     if (format == "DXGI_FORMAT_D32_FLOAT") return 4u;
-    return 1u;
+    return 0u;
 }
 
 D3D12_RESOURCE_DESC MakeResourceDesc(
@@ -2879,25 +2918,25 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "init.upload_resource",
                             "the minimal player uploads buffers and 2D textures");
             }
-            std::uint64_t upload_bytes = placement->descriptor.size_bytes;
+            const std::uint64_t upload_bytes =
+                InitialUploadBytes(placement->descriptor);
             std::uint32_t row_pitch = 0u;
+            std::uint32_t texture_bytes_per_element = 0u;
             if (placement->descriptor.kind == "texture2d") {
-                const std::uint32_t bytes_per_element =
+                texture_bytes_per_element =
                     BytesPerElement(placement->descriptor.format);
-                if (bytes_per_element == 0u) {
+                if (upload_bytes == 0u ||
+                    texture_bytes_per_element == 0u) {
                     return Fail(ExitCode::ResourceAllocationFailed, "resource",
                                 "upload_texture_format", "format",
                                 "supported", placement->descriptor.format,
                                 "init.upload_resource",
                                 "texture upload format is unsupported");
                 }
-                row_pitch =
-                    ((placement->descriptor.width * bytes_per_element + 255u) /
-                     256u) *
-                    256u;
-                upload_bytes =
-                    static_cast<std::uint64_t>(row_pitch) *
-                    placement->descriptor.height;
+                row_pitch = static_cast<std::uint32_t>(RoundUp(
+                    static_cast<std::uint64_t>(placement->descriptor.width) *
+                        texture_bytes_per_element,
+                    D3D12_TEXTURE_DATA_PITCH_ALIGNMENT));
             }
             if (state->frames.empty() || state->frames[0].upload == nullptr ||
                 state->frames[0].upload_size <
@@ -2940,15 +2979,89 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             "per-frame upload ring Map failed");
             }
             std::memset(mapped, 0, static_cast<std::size_t>(upload_bytes));
-            std::size_t offset = 0u;
-            for (const auto& parameter : package_.parameters) {
-                if (offset + parameter.value.size() >
-                    upload_bytes) {
-                    break;
+            if (placement->descriptor.kind == "texture2d") {
+                std::uint32_t seed = 0u;
+                if (!TextureSeedForResource(package_, resource_id, &seed)) {
+                    frame.upload->Unmap(0u, nullptr);
+                    return Fail(
+                        ExitCode::PackageValidationFailed,
+                        "package_validation", "texture_seed_missing",
+                        "texture_seed", "present", "missing",
+                        "init.upload_resource",
+                        "procedural texture upload has no resource-bound seed");
                 }
-                std::memcpy(static_cast<std::uint8_t*>(mapped) + offset,
-                            parameter.value.data(), parameter.value.size());
-                offset += parameter.value.size();
+                auto hash_pixel = [seed](std::uint32_t x,
+                                         std::uint32_t y) {
+                    std::uint32_t value =
+                        seed ^ (x * 0x9e3779b9u) ^
+                        (y * 0x85ebca6bu);
+                    value ^= value >> 16u;
+                    value *= 0x7feb352du;
+                    value ^= value >> 15u;
+                    value *= 0x846ca68bu;
+                    value ^= value >> 16u;
+                    return value;
+                };
+                auto* bytes = static_cast<std::uint8_t*>(mapped);
+                for (std::uint32_t y = 0u;
+                     y < placement->descriptor.height; ++y) {
+                    std::uint8_t* row =
+                        bytes + static_cast<std::size_t>(y) * row_pitch;
+                    for (std::uint32_t x = 0u;
+                         x < placement->descriptor.width; ++x) {
+                        const std::uint32_t value = hash_pixel(x, y);
+                        if (placement->descriptor.format ==
+                            "DXGI_FORMAT_R8G8B8A8_UNORM") {
+                            std::uint8_t* pixel =
+                                row + static_cast<std::size_t>(x) * 4u;
+                            pixel[0] =
+                                static_cast<std::uint8_t>(value & 0xFFu);
+                            pixel[1] = static_cast<std::uint8_t>(
+                                (value >> 8u) & 0xFFu);
+                            pixel[2] = static_cast<std::uint8_t>(
+                                (value >> 16u) & 0xFFu);
+                            pixel[3] = 0xFFu;
+                        } else if (
+                            placement->descriptor.format ==
+                            "DXGI_FORMAT_R32G32B32A32_FLOAT") {
+                            const float channels[4] = {
+                                static_cast<float>(value & 0xFFu) / 255.0f,
+                                static_cast<float>((value >> 8u) & 0xFFu) /
+                                    255.0f,
+                                static_cast<float>((value >> 16u) & 0xFFu) /
+                                    255.0f,
+                                1.0f,
+                            };
+                            std::memcpy(
+                                row + static_cast<std::size_t>(x) *
+                                          sizeof(channels),
+                                channels, sizeof(channels));
+                        } else {
+                            frame.upload->Unmap(0u, nullptr);
+                            return Fail(
+                                ExitCode::PackageValidationFailed,
+                                "package_validation",
+                                "texture_format_unsupported", "format",
+                                "sampleable procedural texture",
+                                placement->descriptor.format,
+                                "init.upload_resource",
+                                "procedural texture format cannot be "
+                                "materialized");
+                        }
+                    }
+                }
+            } else {
+                std::size_t offset = 0u;
+                for (const auto& parameter : package_.parameters) {
+                    if (offset + parameter.value.size() >
+                        upload_bytes) {
+                        break;
+                    }
+                    std::memcpy(
+                        static_cast<std::uint8_t*>(mapped) + offset,
+                        parameter.value.data(), parameter.value.size());
+                    offset += parameter.value.size();
+                }
             }
             D3D12_RANGE write_range{0u,
                                     static_cast<SIZE_T>(upload_bytes)};
@@ -4273,7 +4386,13 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
             }
             for (const auto& resource : package_.resources) {
                 if (resource.resource_id == instruction.operands[0].u32) {
-                    upload_ring = std::max(upload_ring, resource.size_bytes);
+                    const std::uint64_t required_upload =
+                        InitialUploadBytes(resource);
+                    upload_ring = std::max(
+                        upload_ring,
+                        required_upload != 0u
+                            ? required_upload
+                            : resource.size_bytes);
                 }
             }
         }

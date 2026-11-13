@@ -223,6 +223,47 @@ def test_pending_realization_never_invents_physical_offsets() -> None:
     assert pending.accounted_peak_bytes == pending.peak_bytes
 
 
+def test_texture_upload_accounting_includes_padded_row_pitch() -> None:
+    operand = nwp.InstructionOperand
+    instruction = nwp.Instruction
+    resource = nwp.ResourceDescriptor
+    package = nwp.NwpPackage(
+        resources=[
+            resource(
+                1,
+                "narrow_texture",
+                "texture2d",
+                "DXGI_FORMAT_R8G8B8A8_UNORM",
+                "srv",
+                "compute.math_noise",
+                size_bytes=4 * 8192,
+                width=1,
+                height=8192,
+            ),
+        ],
+        initialization=[
+            instruction(
+                "init.create_resource",
+                (operand("resource_ref", 1),),
+            ),
+            instruction(
+                "init.upload_resource",
+                (operand("resource_ref", 1),),
+            ),
+        ],
+        frame=[],
+    )
+    logical = schedule.build_logical_schedule(package, frames_in_flight=1)
+    pending = schedule.pending_physical_realization(
+        logical,
+        player_width=1,
+        player_height=1,
+    )
+    padded_upload = 256 * 8192
+    assert pending.player_owned_bytes >= padded_upload
+    assert pending.peak_bytes >= pending.player_owned_bytes
+
+
 def test_read_only_srv_and_present_outputs_are_not_alias_transient() -> None:
     operand = nwp.InstructionOperand
     instruction = nwp.Instruction

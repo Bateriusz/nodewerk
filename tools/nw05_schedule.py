@@ -432,8 +432,13 @@ def pending_physical_realization(
     )
     upload_ring = max(
         [
-            _logical_allocation_upper_bound(resource)
+            _initial_upload_bytes(resource)
             for resource in schedule.resources
+            if any(
+                access.phase == "initialization"
+                and access.opcode == "init.upload_resource"
+                for access in resource.access
+            )
         ]
         or [PLAYER_OWNED_FRAME_UPLOAD_BYTES]
     )
@@ -501,6 +506,22 @@ def _usage_state(usage: str) -> str:
     if usage == "sampler":
         return "NON_PIXEL_SHADER_RESOURCE"
     return "COMMON"
+
+
+def _initial_upload_bytes(resource: LogicalResource) -> int:
+    if resource.kind == "texture2d":
+        bytes_per_element = {
+            "DXGI_FORMAT_R8G8B8A8_UNORM": 4,
+            "DXGI_FORMAT_R32G32B32A32_FLOAT": 16,
+            "DXGI_FORMAT_R32_UINT": 4,
+            "DXGI_FORMAT_D32_FLOAT": 4,
+        }.get(resource.format)
+        if bytes_per_element is not None:
+            row_pitch = (
+                (max(1, resource.width) * bytes_per_element + 255) // 256
+            ) * 256
+            return max(1, row_pitch * max(1, resource.height))
+    return _logical_allocation_upper_bound(resource)
 
 
 def _looks_transient(resource: nwp.ResourceDescriptor, accesses: Sequence[ResourceAccess]) -> tuple[bool, str]:
@@ -1312,8 +1333,13 @@ def realize_physical_aliases(
     )
     upload_ring = max(
         [
-            _logical_allocation_upper_bound(resource)
+            _initial_upload_bytes(resource)
             for resource in schedule.resources
+            if any(
+                access.phase == "initialization"
+                and access.opcode == "init.upload_resource"
+                for access in resource.access
+            )
         ]
         or [PLAYER_OWNED_FRAME_UPLOAD_BYTES]
     )
