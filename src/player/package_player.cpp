@@ -81,8 +81,7 @@
 #else
 #define NW06_COMPILE_FRAME_PARAMETER_BINDINGS 0
 #endif
-#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT || \
-    NW06_COMPILE_HALF_RESOLUTION_BLOOM || NW06_COMPILE_TONEMAP
+#if NW06_COMPILE_ANY_RUNTIME
 #define NW06_COMPILE_COMBINED_BINDINGS 1
 #else
 #define NW06_COMPILE_COMBINED_BINDINGS 0
@@ -555,16 +554,20 @@ struct PlatformState {
         D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle{};
         std::uint32_t descriptor_index = 0xFFFFFFFFu;
         bool has_descriptor = false;
+#if NW06_COMPILE_COMBINED_BINDINGS
         D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_handle{};
         D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_handle{};
         std::uint32_t srv_descriptor_index = 0xFFFFFFFFu;
         bool has_srv_descriptor = false;
+#endif
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
         D3D12_CPU_DESCRIPTOR_HANDLE rtv_cpu_handle{};
         std::uint32_t rtv_descriptor_index = 0xFFFFFFFFu;
         bool has_rtv_descriptor = false;
         D3D12_CPU_DESCRIPTOR_HANDLE dsv_cpu_handle{};
         std::uint32_t dsv_descriptor_index = 0xFFFFFFFFu;
         bool has_dsv_descriptor = false;
+#endif
         // UAV ordering is explicit: two dependent dispatches that leave the
         // resource in UNORDERED_ACCESS still need a UAV barrier between them.
         bool uav_accessed_in_frame = false;
@@ -614,20 +617,26 @@ struct PlatformState {
 
     ID3D12DescriptorHeap* cbv_srv_uav_heap = nullptr;
     ID3D12DescriptorHeap* sampler_heap = nullptr;
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
     // Package-owned RTV/DSV descriptors live in their own non-shader-visible
     // heaps; D3D12 rejects RTV/DSV handles from a CBV/SRV/UAV heap.
     ID3D12DescriptorHeap* package_rtv_heap = nullptr;
     ID3D12DescriptorHeap* package_dsv_heap = nullptr;
+#endif
     D3D12_CPU_DESCRIPTOR_HANDLE cbv_srv_uav_cpu_start{};
     D3D12_GPU_DESCRIPTOR_HANDLE cbv_srv_uav_gpu_start{};
     D3D12_CPU_DESCRIPTOR_HANDLE sampler_cpu_start{};
     D3D12_GPU_DESCRIPTOR_HANDLE sampler_gpu_start{};
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
     D3D12_CPU_DESCRIPTOR_HANDLE package_rtv_cpu_start{};
     D3D12_CPU_DESCRIPTOR_HANDLE package_dsv_cpu_start{};
+#endif
     std::uint32_t cbv_srv_uav_increment = 0u;
     std::uint32_t sampler_increment = 0u;
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
     std::uint32_t package_rtv_increment = 0u;
     std::uint32_t package_dsv_increment = 0u;
+#endif
     std::uint32_t rtv_increment = 0u;
 
     std::vector<ResourceSlot> resources;
@@ -639,8 +648,10 @@ struct PlatformState {
     void* package_heap = nullptr;
     std::vector<RootSlot> root_signatures;
     std::vector<PipelineSlot> pipelines;
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
     ID3D12CommandSignature* indirect_signature = nullptr;
     std::uint32_t graphics_pipeline_shader = 0u;
+#endif
     std::vector<FrameSlot> frames;
 
     ID3D12Fence* fence = nullptr;
@@ -2596,8 +2607,10 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
     state->resources.resize(package_.resources.size());
     std::uint32_t cbv_index = 0u;
     std::uint32_t sampler_index = 0u;
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
     std::uint32_t package_rtv_index = 0u;
     std::uint32_t package_dsv_index = 0u;
+#endif
     for (std::size_t index = 0u; index < package_.resources.size(); ++index) {
         const auto& descriptor = package_.resources[index];
         auto& slot = state->resources[index];
@@ -2609,10 +2622,13 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         } else if (ResourceNeedsCbvSrvUavDescriptor(package_, descriptor)) {
             slot.descriptor_index = cbv_index++;
             slot.has_descriptor = true;
+#if NW06_COMPILE_COMBINED_BINDINGS
             if (descriptor.usage == "uav_srv") {
                 slot.srv_descriptor_index = cbv_index++;
                 slot.has_srv_descriptor = true;
             }
+#endif
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             if (descriptor.usage == "rtv_srv") {
                 // The CBV/SRV/UAV-heap descriptor for an RTV+SRV resource is
                 // its SRV; the RTV lives in the package RTV heap.
@@ -2627,6 +2643,7 @@ ExitCode PackagePlayer::CreateSwapChainAndFrames() {
         } else if (descriptor.usage == "dsv") {
             slot.dsv_descriptor_index = package_dsv_index++;
             slot.has_dsv_descriptor = true;
+#endif
         }
     }
     state->root_signatures.reserve(package_.root_signatures.size());
@@ -3091,8 +3108,11 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                                 (placement->descriptor.size_bytes + 255u) &
                                     ~255ull));
                         state->device->CreateConstantBufferView(&view, handle);
-                    } else if (placement->descriptor.usage == "uav" ||
-                               placement->descriptor.usage == "uav_srv") {
+                    } else if (placement->descriptor.usage == "uav"
+#if NW06_COMPILE_COMBINED_BINDINGS
+                               || placement->descriptor.usage == "uav_srv"
+#endif
+                    ) {
                         D3D12_UNORDERED_ACCESS_VIEW_DESC view{};
                         if (placement->descriptor.kind == "buffer") {
                             // NW-03's compute output is a RWByteAddressBuffer.
@@ -3137,8 +3157,11 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         }
                         state->device->CreateUnorderedAccessView(
                             slot->resource, nullptr, &view, handle);
-                    } else if (placement->descriptor.usage == "srv" ||
-                               placement->descriptor.usage == "rtv_srv") {
+                    } else if (placement->descriptor.usage == "srv"
+#if NW06_COMPILE_COMBINED_BINDINGS
+                               || placement->descriptor.usage == "rtv_srv"
+#endif
+                    ) {
                         D3D12_SHADER_RESOURCE_VIEW_DESC view{};
                         view.Shader4ComponentMapping =
                             D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -3193,6 +3216,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                     slot->gpu_handle.ptr +=
                         static_cast<UINT64>(slot->descriptor_index) *
                         state->cbv_srv_uav_increment;
+#if NW06_COMPILE_COMBINED_BINDINGS
                     if (placement->descriptor.usage == "rtv_srv" &&
                         slot->has_srv_descriptor) {
                         slot->srv_cpu_handle = handle;
@@ -3245,6 +3269,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                             static_cast<UINT64>(slot->srv_descriptor_index) *
                             state->cbv_srv_uav_increment;
                     }
+#endif
                 }
             }
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
@@ -4317,11 +4342,15 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         !candidate.has_descriptor) {
                         continue;
                     }
+#if NW06_COMPILE_COMBINED_BINDINGS
                     handle =
                         op.descriptor_is_srv &&
                                 candidate.has_srv_descriptor
                             ? candidate.srv_gpu_handle
                             : candidate.gpu_handle;
+#else
+                    handle = candidate.gpu_handle;
+#endif
                     break;
                 }
                 if (handle.ptr == 0u) {
@@ -4639,6 +4668,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             "dispatch references a bound resource that was not "
                             "created");
                     }
+#if NW06_COMPILE_COMBINED_BINDINGS
                     const bool bound_as_srv =
                         descriptor_index <
                             op.descriptor_resource_is_srv.size() &&
@@ -4647,6 +4677,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         bound_as_srv
                             ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE
                             : WorkingStateForUsage(*descriptor);
+#else
+                    const D3D12_RESOURCE_STATES working =
+                        WorkingStateForUsage(*descriptor);
+#endif
                     if (working == D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
                         candidate->state ==
                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS &&
@@ -5933,10 +5967,12 @@ void PackagePlayer::ReleasePlatform() noexcept {
         }
     }
     state->pipelines.clear();
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
     if (state->indirect_signature != nullptr) {
         state->indirect_signature->Release();
         state->indirect_signature = nullptr;
     }
+#endif
     for (auto& root : state->root_signatures) {
         if (root.root_signature != nullptr) root.root_signature->Release();
     }
@@ -5965,12 +6001,14 @@ void PackagePlayer::ReleasePlatform() noexcept {
     }
     if (state->timestamp_heap != nullptr) state->timestamp_heap->Release();
     if (state->rtv_heap != nullptr) state->rtv_heap->Release();
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
     if (state->package_rtv_heap != nullptr) {
         state->package_rtv_heap->Release();
     }
     if (state->package_dsv_heap != nullptr) {
         state->package_dsv_heap->Release();
     }
+#endif
     if (state->cbv_srv_uav_heap != nullptr) {
         state->cbv_srv_uav_heap->Release();
     }
