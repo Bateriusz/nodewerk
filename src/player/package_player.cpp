@@ -4967,6 +4967,17 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 }
                 break;
             }
+            default:
+                // A specialized NW-05 player can compile out NW-06 graphics
+                // operations while the FrameOp enum still contains them.
+                // Reject any unexpected operation rather than silently
+                // omitting it or suppressing -Wswitch diagnostics.
+                return Fail(ExitCode::CommandListRecordingFailed,
+                            "command_list", "unsupported_frame_operation",
+                            "frame_op", "supported by this player build",
+                            std::to_string(static_cast<unsigned>(op.type)),
+                            "renderAtTick",
+                            "frame operation is unavailable in this build");
         }
     }
     if (present_requested && state->swapchain != nullptr) {
