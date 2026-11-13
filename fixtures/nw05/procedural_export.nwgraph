@@ -13,15 +13,33 @@ setting quantization_step 0
 setting nw05_output_width 256
 setting nw05_output_height 256
 
-# Two terminal shader roots are intentional: the first is transient scratch and
-# the second is the presented procedural image. This gives the physical planner
-# a real non-overlapping UAV alias opportunity without inventing unsupported
-# texture/material/render semantics.
-node aux nw.shader.expr@1.0.0 frequency=frame
+# Both terminal roots deliberately contain composition. With no measured
+# profitable fusion, NW-05 must execute the dependency DAG as real ordered
+# compute dispatches. Equal-sized multi-region UAVs also give the physical
+# planner a genuine non-overlapping alias opportunity.
+node aux_a nw.shader.expr@1.0.0 frequency=frame
   param expression "vec4(uv.y * 0.125, uv.x * 0.125, 0.0, 1.0)"
 
-node image nw.shader.expr@1.0.0 frequency=frame
+node aux_b nw.shader.vec4_const@1.0.0 frequency=frame
+  param value 0.0 0.0 0.0 0.0
+
+node aux nw.shader.add@1.0.0 frequency=frame
+  input a aux_a.out
+  input b aux_b.out
+
+node image_a nw.shader.expr@1.0.0 frequency=frame
   param expression "vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), mix(uv.y, cos(uv.x * 13.0 - time), 0.25), sin(uv.x * 31.0 + time) * 0.5 + 0.5, 1.0)"
 
-layout aux 0 0
-layout image 220 0
+node image_b nw.shader.vec4_const@1.0.0 frequency=frame
+  param value 0.0 0.0 0.0 0.0
+
+node image nw.shader.add@1.0.0 frequency=frame
+  input a image_a.out
+  input b image_b.out
+
+layout aux_a 0 0
+layout aux_b 0 100
+layout aux 220 50
+layout image_a 440 0
+layout image_b 440 100
+layout image 660 50

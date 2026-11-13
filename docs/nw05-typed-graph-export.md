@@ -281,8 +281,10 @@ They are never emitted as inert parameters and called implemented.
 
 The checked-in rich `procedural_image.nwgraph` remains the optimizer/golden
 fixture. `procedural_export.nwgraph` is the bounded executable acceptance
-fixture: two terminal shader roots give a real disjoint UAV lifetime for alias
-qualification, with the canonical final root presented as the procedural image.
+fixture: two terminal composed shader DAGs exercise the real multi-dispatch
+unfused fallback. Their equal-sized multi-region UAVs give a real disjoint
+lifetime for alias qualification, with the canonical final root presented as
+the procedural image.
 
 Production Windows export compiles the generated specialized main. Optional
 D3D12 OPTIONS1/OPTIONS4 query code is selected at compile time from the link
@@ -290,3 +292,11 @@ manifest; the generated executable is inspected for its actual imports and
 rebuilt against that exact dependency list before embedding. Hardware evidence
 uses the real D3D12 debug-layer path via `--validation`; no metadata-only
 validation flag is accepted.
+
+
+Rejected, unmeasured, disabled, or bound-exceeding shader fusion does not fall
+back to recursive expression inlining. Each ShaderExpr dependency is compiled
+as its own compute pipeline; ordered dispatches exchange values through
+deterministic image-sized regions of the root UAV with explicit UAV barriers.
+The root writes region zero, so presentation and readback expose only the
+canonical image while scratch regions remain private to execution.

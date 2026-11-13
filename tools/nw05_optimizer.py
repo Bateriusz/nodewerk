@@ -235,7 +235,7 @@ class FusionRecord:
     accepted: bool
     reason: str
     fused_expression: str = ""
-    unfused_fallback: str = "nw03-root-lowering"
+    unfused_fallback: str = "nw05-multi-dispatch-uav"
     measured_hlsl_bytes_before: int = 0
     measured_hlsl_bytes_after: int = 0
     measured_runtime_ns_before: int = 0
@@ -398,6 +398,7 @@ class OptimizedGraph:
         self,
         *,
         generation_modes: dict[str, str] | None = None,
+        apply_accepted_fusions: bool = True,
     ) -> nw03.GraphDocument:
         """Materialize the optimized IR back into the existing NW-03 document.
 
@@ -409,11 +410,15 @@ class OptimizedGraph:
         It is not a second graph model; the resulting document is consumed by
         the established NW-03 compiler.
         """
-        accepted_fusions = {
-            record.root_node: record
-            for record in self.fusions
-            if record.accepted and record.fused_expression
-        }
+        accepted_fusions = (
+            {
+                record.root_node: record
+                for record in self.fusions
+                if record.accepted and record.fused_expression
+            }
+            if apply_accepted_fusions
+            else {}
+        )
         nodes: dict[str, nw03.GraphNode] = {}
         member_ids: set[str] = set()
         for ir_node in self.nodes:
@@ -1662,7 +1667,7 @@ def _fusion_records(
         elif not measurement_ok:
             reason = (
                 "exported fused/unfused implementation measurements unavailable; "
-                "retained the correct unfused NW-03 lowering"
+                "retained the correct NW-05 multi-dispatch UAV fallback"
             )
         elif measured_hlsl_after > measured_hlsl_before:
             reason = "measured emitted HLSL is larger than the unfused path"

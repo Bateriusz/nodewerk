@@ -89,13 +89,19 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
         max(1, graph_height),
         1,
     )
-    generated, diagnostics = nw03_compiler.lower_to_fused_hlsl(
+    generated, diagnostics = nw03_compiler.lower_to_selective_hlsl(
         materialized,
+        fused_roots={
+            record.root_node for record in optimized.fusions if record.accepted
+        },
         thread_group=thread_group,
         dispatch_groups=dispatch_groups,
+        image_width=graph_width,
+        image_height=graph_height,
     )
     assert not diagnostics
-    assert len(generated) >= 1
+    assert len(generated) == 6
+    assert all(shader.unfused for shader in generated)
     expected_hlsl = {shader.hlsl_sha256 for shader in generated}
     manifest_hlsl = {
         item["hlsl_sha256"]

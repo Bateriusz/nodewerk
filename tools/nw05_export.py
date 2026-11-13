@@ -1194,24 +1194,36 @@ def _texture_storage_bytes(
     return max(1, total)
 
 
-def _shader_resource_specs(
+def _shader_execution_plan(
     shader_rows: Sequence[Mapping[str, Any]],
     shader_records: Sequence[nwp.ShaderRecord],
-) -> tuple[list[str], dict[str, int]]:
-    specs = [str(row["specialization_id"]) for row in shader_rows]
-    if len(specs) != len(shader_records):
+) -> tuple[list[str], list[dict[str, Any]]]:
+    rows = sorted(shader_rows, key=lambda item: str(item.get("specialization_id", "")))
+    ordered_records = sorted(shader_records, key=lambda item: item.shader_id)
+    if len(rows) != len(ordered_records):
         raise ExportError(
             "compile report and package disagree about compiled shader count",
             dependency_path=["graph", "shader", "compile_report"],
         )
-    # nw03_compiler._build_report does not carry shader_id.  Package shader IDs
-    # follow the same sorted specialization order, so establish the map here.
-    ordered_records = sorted(shader_records, key=lambda item: item.shader_id)
-    return specs, {
-        spec: ordered_records[index].shader_id
-        for index, spec in enumerate(specs)
-    }
-
+    roots: list[str] = []
+    execution: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        specialization_id = str(row["specialization_id"])
+        root = str(row.get("execution_root") or specialization_id)
+        if root not in roots:
+            roots.append(root)
+        execution.append(
+            {
+                "root": root,
+                "specialization_id": specialization_id,
+                "shader_id": ordered_records[index].shader_id,
+                "execution_order": int(row.get("execution_order", 0)),
+                "output_region": int(row.get("output_region", 0)),
+                "region_count": max(1, int(row.get("region_count", 1))),
+                "unfused": bool(row.get("unfused", False)),
+            }
+        )
+    return sorted(roots), execution
 
 def _build_graph_derived_package(
     document: nw03.GraphDocument,
@@ -1232,17 +1244,6 @@ def _build_graph_derived_package(
     metadata parameters.
     """
     used_operators = {node.operator_id for node in optimized.nodes}
-    composed_shader_operators = sorted(
-        used_operators & {"nw.shader.add", "nw.shader.mul", "nw.shader.mix"}
-    )
-    if composed_shader_operators and not any(
-        record.accepted for record in optimized.fusions
-    ):
-        raise ExportError(
-            "shader composition nodes require a measured fused implementation; "
-            "no genuine unfused execution path is available",
-            dependency_path=["graph", composed_shader_operators[0], "fusion"],
-        )
     # Export only semantics the current package/player actually executes.
     # Rich resource/material/mesh/camera/render operators are valid NW-02
     # authoring vocabulary, but until their consumers exist NW-05 must reject
@@ -1290,7 +1291,7 @@ def _build_graph_derived_package(
     resource_by_output: dict[tuple[str, str], int] = {}
     resource_by_shader: dict[str, int] = {}
     next_resource_id = 2
-    specs, shader_id_by_spec = _shader_resource_specs(shader_rows, shader_records)
+    specs, shader_execution = _shader_execution_plan(shader_rows, shader_records)
     for spec in specs:
         root = document.nodes.get(spec)
         if root is not None and root.frequency == "initialization":
@@ -1301,15 +1302,23 @@ def _build_graph_derived_package(
                 dependency_path=["graph", spec, "frequency"],
             )
 
-    # Independent UAV destinations for every compiled shader root.  Multiple
-    # resources may share the fixed u0 range because each dispatch binds one.
+    # One UAV allocation per terminal shader root. Rejected/unmeasured fusion
+    # uses multiple deterministic image-sized regions inside that allocation:
+    # dependencies write non-zero regions, while the final root always writes
+    # region zero so presentation/readback sees the canonical output.
     for spec in specs:
+        region_count = max(
+            (
+                int(item["region_count"])
+                for item in shader_execution
+                if item["root"] == spec
+            ),
+            default=1,
+        )
         resource_by_shader[spec] = next_resource_id
         resources.append(
             nwp.ResourceDescriptor(
                 resource_id=next_resource_id,
-                # All shader outputs share the single fixed u0 root binding;
-                # the frame stream selects exactly one per dispatch.
                 name="output",
                 kind="buffer",
                 format="DXGI_FORMAT_R32_UINT",
@@ -1317,7 +1326,7 @@ def _build_graph_derived_package(
                 pass_family=nw03.PASS_FAMILY,
                 binding_slot=0,
                 binding_space=0,
-                size_bytes=width * height * 16,
+                size_bytes=width * height * 16 * region_count,
             )
         )
         next_resource_id += 1
@@ -1700,35 +1709,51 @@ def _build_graph_derived_package(
 
     for spec in dispatch_order:
         output_id = resource_by_shader[spec]
-        shader_id = shader_id_by_spec[spec]
-        frame.extend(
-            [
-                nwp.Instruction(
-                    "frame.set_descriptor_table",
-                    (
-                        nwp.InstructionOperand("u32", 1),
-                        nwp.InstructionOperand("string", "cbv_srv_uav"),
-                        nwp.InstructionOperand("resource_ref", output_id),
-                    ),
-                ),
-                nwp.Instruction(
-                    "frame.barrier",
-                    (
-                        nwp.InstructionOperand("u32", 4),
-                        nwp.InstructionOperand("resource_ref", output_id),
-                    ),
-                ),
-                nwp.Instruction(
-                    "frame.dispatch",
-                    (
-                        nwp.InstructionOperand("u32", dispatch_groups[0]),
-                        nwp.InstructionOperand("u32", dispatch_groups[1]),
-                        nwp.InstructionOperand("u32", dispatch_groups[2]),
-                        nwp.InstructionOperand("shader_ref", shader_id),
-                    ),
-                ),
-            ]
+        executions = sorted(
+            (item for item in shader_execution if item["root"] == spec),
+            key=lambda item: (
+                int(item["execution_order"]),
+                str(item["specialization_id"]),
+            ),
         )
+        if not executions:
+            raise ExportError(
+                f"shader root '{spec}' has no compiled execution plan",
+                dependency_path=["graph", spec, "shader"],
+            )
+        frame.append(
+            nwp.Instruction(
+                "frame.set_descriptor_table",
+                (
+                    nwp.InstructionOperand("u32", 1),
+                    nwp.InstructionOperand("string", "cbv_srv_uav"),
+                    nwp.InstructionOperand("resource_ref", output_id),
+                ),
+            )
+        )
+        for execution in executions:
+            frame.extend(
+                [
+                    nwp.Instruction(
+                        "frame.barrier",
+                        (
+                            nwp.InstructionOperand("u32", 4),
+                            nwp.InstructionOperand("resource_ref", output_id),
+                        ),
+                    ),
+                    nwp.Instruction(
+                        "frame.dispatch",
+                        (
+                            nwp.InstructionOperand("u32", dispatch_groups[0]),
+                            nwp.InstructionOperand("u32", dispatch_groups[1]),
+                            nwp.InstructionOperand("u32", dispatch_groups[2]),
+                            nwp.InstructionOperand(
+                                "shader_ref", int(execution["shader_id"])
+                            ),
+                        ),
+                    ),
+                ]
+            )
 
     present_target: int | None = None
     for node in document.nodes.values():
@@ -1827,10 +1852,17 @@ def _compile_profile_package(
     allow_test_payloads: bool,
 ) -> tuple[bytes, nwp.NwpPackage, dict[str, Any]]:
     # Compile the optimised, quantized document rather than re-reading the
-    # authoring file.  This is what makes constant propagation, DCE/CSE,
-    # accepted fusion, quantization, and generation/bake overrides observable
-    # in the emitted shader specializations and therefore in the .nwp bytes.
-    document = optimized.materialize_document(generation_modes=generation_modes)
+    # authoring file. Accepted measured fusion roots use one shader; rejected,
+    # unmeasured, disabled, or bounded-out fusion roots retain their graph
+    # dependencies and lower to a real multi-dispatch UAV execution plan.
+    has_composed_shader = any(
+        node.operator_id in {"nw.shader.add", "nw.shader.mul", "nw.shader.mix"}
+        for node in optimized.nodes
+    )
+    document = optimized.materialize_document(
+        generation_modes=generation_modes,
+        apply_accepted_fusions=not has_composed_shader,
+    )
     width, height = _graph_render_dimensions(document, optimized)
     thread_group = (max(1, min(1024, width)), 1, 1)
     dispatch_groups = (
@@ -1838,6 +1870,20 @@ def _compile_profile_package(
         max(1, height),
         1,
     )
+    generated_override = None
+    if has_composed_shader:
+        generated_override, diagnostics = nw03.lower_to_selective_hlsl(
+            document,
+            fused_roots={
+                record.root_node for record in optimized.fusions if record.accepted
+            },
+            thread_group=thread_group,
+            dispatch_groups=dispatch_groups,
+            image_width=width,
+            image_height=height,
+        )
+        if diagnostics:
+            raise nw03.CompilerError("failed to lower selective shader graph", diagnostics)
     report = nw03.compile_package(
         optimized.source_name,
         destination,
@@ -1855,6 +1901,7 @@ def _compile_profile_package(
         dispatch_groups=dispatch_groups,
         image_width=width,
         image_height=height,
+        generated_shaders_override=generated_override,
     )
     package_bytes = destination.read_bytes()
     package = nwp.decode_package(
@@ -2347,6 +2394,13 @@ def export_graph(
                         "blob_sha256": row["blob_sha256"],
                         "hlsl_sha256": row["hlsl_sha256"],
                         "root_node_ids": row.get("root_node_ids", []),
+                        "execution_root": row.get(
+                            "execution_root", row["specialization_id"]
+                        ),
+                        "execution_order": int(row.get("execution_order", 0)),
+                        "output_region": int(row.get("output_region", 0)),
+                        "region_count": int(row.get("region_count", 1)),
+                        "unfused": bool(row.get("unfused", False)),
                     }
                     for row in compile_report["fixture"]["shaders"]
                 ]

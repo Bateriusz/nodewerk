@@ -666,6 +666,49 @@ ResourceAllocationQuery QueryAdapterAllocationInfo(
     return result;
 }
 
+std::uint64_t QueryTexture2DAllocationBytes(
+    ID3D12Device* device,
+    std::uint32_t width,
+    std::uint32_t height,
+    D3D12_RESOURCE_FLAGS flags) noexcept {
+    if (device == nullptr || width == 0u || height == 0u) return 0u;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width;
+    desc.Height = height;
+    desc.DepthOrArraySize = 1u;
+    desc.MipLevels = 1u;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1u;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = flags;
+    const D3D12_RESOURCE_ALLOCATION_INFO info =
+        device->GetResourceAllocationInfo(0u, 1u, &desc);
+    if (info.SizeInBytes == 0u || info.SizeInBytes == UINT64_MAX ||
+        info.Alignment == 0u) {
+        return UINT64_MAX;
+    }
+    return info.SizeInBytes;
+}
+
+std::uint64_t QuerySwapChainAllocationBytes(
+    PlatformState* state,
+    std::uint32_t width,
+    std::uint32_t height) noexcept {
+    if (state == nullptr || state->device == nullptr ||
+        state->swapchain == nullptr || width == 0u || height == 0u) {
+        return 0u;
+    }
+    const std::uint64_t one = QueryTexture2DAllocationBytes(
+        state->device, width, height, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    if (one == UINT64_MAX ||
+        one > std::numeric_limits<std::uint64_t>::max() /
+                  package::kSwapChainBufferCount) {
+        return UINT64_MAX;
+    }
+    return one * package::kSwapChainBufferCount;
+}
+
 D3D12_HEAP_TYPE HeapTypeForUsage(const package::ResourceDescriptor& resource) {
     if (resource.usage == "readback") {
         return D3D12_HEAP_TYPE_READBACK;
@@ -908,9 +951,22 @@ ExitCode PackagePlayer::CheckMemoryBudget(const char* stage) {
         std::max<std::uint64_t>(stats_.engine_descriptor_count,
                                 package_descriptors) *
         64u;
-    const std::uint64_t backbuffer_bytes =
-        static_cast<std::uint64_t>(package::kSwapChainBufferCount) *
-        static_cast<std::uint64_t>(width_) * height_ * 4u;
+    std::uint64_t backbuffer_bytes = 0u;
+#if defined(_WIN32)
+    PlatformState* state = platform_.get();
+    if (state != nullptr && state->swapchain != nullptr &&
+        !config_.headless && width_ > 0u && height_ > 0u) {
+        backbuffer_bytes =
+            QuerySwapChainAllocationBytes(state, width_, height_);
+        if (backbuffer_bytes == UINT64_MAX) {
+            return Fail(
+                ExitCode::ResourceAllocationFailed, "memory",
+                "memory_budget_allocation_query_failed",
+                "swapchain_allocation", "queryable", "unavailable", stage,
+                "could not query adapter-specific swap-chain allocation size");
+        }
+    }
+#endif
     const std::uint64_t accounted =
         stats_.engine_resource_bytes + stats_.engine_upload_bytes +
         descriptor_bytes + backbuffer_bytes;
@@ -1484,7 +1540,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 }
             }
             if (explicit_width != 0u && explicit_height != 0u &&
-                static_cast<std::uint64_t>(explicit_width) * explicit_height ==
+                static_cast<std::uint64_t>(explicit_width) * explicit_height <=
                     pixel_count) {
                 present_source_width_ = explicit_width;
                 present_source_height_ = explicit_height;
@@ -2868,7 +2924,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 offset += parameter.value.size();
             }
             D3D12_RANGE write_range{0u, static_cast<SIZE_T>(
-                                           placement->descriptor.size_bytes)};
+                                           readback_bytes)};
             frame.upload->Unmap(0u, &write_range);
 
             if (frame.command_list == nullptr || frame.allocator == nullptr) {
@@ -2896,7 +2952,7 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             frame.command_list->ResourceBarrier(1u, &to_copy);
             frame.command_list->CopyBufferRegion(
                 slot->resource, 0u, frame.upload, 0u,
-                placement->descriptor.size_bytes);
+                readback_bytes);
             const D3D12_RESOURCE_STATES final_state =
                 WorkingStateForUsage(placement->descriptor);
             D3D12_RESOURCE_BARRIER to_work = to_copy;
@@ -3814,14 +3870,66 @@ ExitCode PackagePlayer::readbackPresentedOutput(
                     "readback",
                     "presented output is not a readable buffer resource");
     }
+    std::uint64_t readback_bytes = placement->descriptor.size_bytes;
+    if (present_source_width_ != 0u && present_source_height_ != 0u) {
+        const std::uint64_t image_bytes =
+            static_cast<std::uint64_t>(present_source_width_) *
+            present_source_height_ * 16u;
+        if (image_bytes != 0u &&
+            image_bytes <= placement->descriptor.size_bytes) {
+            // Unfused execution may reserve additional UAV regions after the
+            // canonical image. Presentation/readback always expose region 0.
+            readback_bytes = image_bytes;
+        }
+    }
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = readback_bytes;
+    desc.Height = 1u;
+    desc.DepthOrArraySize = 1u;
+    desc.MipLevels = 1u;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1u;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    const D3D12_RESOURCE_ALLOCATION_INFO readback_allocation =
+        state->device->GetResourceAllocationInfo(0u, 1u, &desc);
+    if (readback_allocation.SizeInBytes == 0u ||
+        readback_allocation.SizeInBytes == UINT64_MAX ||
+        readback_allocation.Alignment == 0u) {
+        return Fail(
+            ExitCode::ResourceAllocationFailed, "memory",
+            "readback_allocation_query_failed", "readback_allocation",
+            "valid size/alignment", "unavailable", "readback",
+            "GetResourceAllocationInfo rejected the readback buffer");
+    }
     if (config_.memory_budget_bytes != 0u) {
+        std::uint64_t package_descriptors = 0u;
+        for (const auto& resource : package_.resources) {
+            if (resource.usage == "sampler" ||
+                ResourceNeedsCbvSrvUavDescriptor(package_, resource)) {
+                ++package_descriptors;
+            }
+        }
+        const std::uint64_t descriptor_bytes =
+            std::max<std::uint64_t>(
+                stats_.engine_descriptor_count, package_descriptors) *
+            64u;
         const std::uint64_t backbuffer_bytes =
-            static_cast<std::uint64_t>(package::kSwapChainBufferCount) *
-            static_cast<std::uint64_t>(width_) * height_ * 4u;
+            QuerySwapChainAllocationBytes(state, width_, height_);
+        if (backbuffer_bytes == UINT64_MAX) {
+            return Fail(
+                ExitCode::ResourceAllocationFailed, "memory",
+                "memory_budget_allocation_query_failed",
+                "swapchain_allocation", "queryable", "unavailable",
+                "readback",
+                "could not query adapter-specific swap-chain allocation size");
+        }
         const std::uint64_t projected =
             stats_.engine_resource_bytes + stats_.engine_upload_bytes +
-            stats_.engine_descriptor_count * 64u +
-            placement->allocation_size_bytes + backbuffer_bytes;
+            descriptor_bytes + backbuffer_bytes +
+            readback_allocation.SizeInBytes;
         if (projected > config_.memory_budget_bytes) {
             return Fail(
                 ExitCode::ResourceAllocationFailed, "memory",
@@ -3832,17 +3940,6 @@ ExitCode PackagePlayer::readbackPresentedOutput(
                 "budget");
         }
     }
-    D3D12_HEAP_PROPERTIES heap{};
-    heap.Type = D3D12_HEAP_TYPE_READBACK;
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = placement->descriptor.size_bytes;
-    desc.Height = 1u;
-    desc.DepthOrArraySize = 1u;
-    desc.MipLevels = 1u;
-    desc.Format = DXGI_FORMAT_UNKNOWN;
-    desc.SampleDesc.Count = 1u;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     ID3D12Resource* readback = nullptr;
     if (FAILED(state->device->CreateCommittedResource(
             &heap, D3D12_HEAP_FLAG_NONE, &desc,
@@ -3854,18 +3951,18 @@ ExitCode PackagePlayer::readbackPresentedOutput(
                     "failed", "readback",
                     "readback buffer allocation failed");
     }
-    NoteEngineAllocation(placement->allocation_size_bytes, 0u, false, false,
+    NoteEngineAllocation(readback_allocation.SizeInBytes, 0u, false, false,
                          true);
     auto& frame = state->frames[0];
     const D3D12_RESOURCE_STATES previous_state = source->state;
     auto release_now = [&]() {
         if (readback != nullptr) readback->Release();
-        RemoveEngineResourceAllocation(placement->allocation_size_bytes);
+        RemoveEngineResourceAllocation(readback_allocation.SizeInBytes);
     };
     auto defer_release = [&]() {
         if (readback != nullptr) {
             state->deferred_readbacks.emplace_back(
-                readback, placement->allocation_size_bytes);
+                readback, readback_allocation.SizeInBytes);
             readback = nullptr;
         }
         // Keep accounting live until the deferred release actually happens.
@@ -3892,8 +3989,7 @@ ExitCode PackagePlayer::readbackPresentedOutput(
     to_copy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     frame.command_list->ResourceBarrier(1u, &to_copy);
     frame.command_list->CopyBufferRegion(
-        readback, 0u, source->resource, 0u,
-        placement->descriptor.size_bytes);
+        readback, 0u, source->resource, 0u, readback_bytes);
     D3D12_RESOURCE_BARRIER restore = to_copy;
     restore.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
     restore.Transition.StateAfter = previous_state;
@@ -3921,8 +4017,7 @@ ExitCode PackagePlayer::readbackPresentedOutput(
         return wait;
     }
     void* mapped = nullptr;
-    D3D12_RANGE range{0u, static_cast<SIZE_T>(
-                               placement->descriptor.size_bytes)};
+    D3D12_RANGE range{0u, static_cast<SIZE_T>(readback_bytes)};
     if (FAILED(readback->Map(0u, &range, &mapped)) || mapped == nullptr) {
         release_now();
         return Fail(ExitCode::ResourceAllocationFailed, "readback",
@@ -3932,7 +4027,7 @@ ExitCode PackagePlayer::readbackPresentedOutput(
     bytes->assign(
         static_cast<const std::uint8_t*>(mapped),
         static_cast<const std::uint8_t*>(mapped) +
-            placement->descriptor.size_bytes);
+            readback_bytes);
     D3D12_RANGE empty{0u, 0u};
     readback->Unmap(0u, &empty);
     release_now();
@@ -4355,14 +4450,46 @@ ExitCode PackagePlayer::resize(std::uint32_t width, std::uint32_t height) {
     if (state != nullptr && state->swapchain != nullptr && !config_.headless) {
         if (config_.memory_budget_bytes != 0u) {
             const std::uint64_t backbuffers =
-                static_cast<std::uint64_t>(
-                    package::kSwapChainBufferCount) *
-                width * height * 4u;
+                QuerySwapChainAllocationBytes(state, width, height);
             const std::uint64_t display =
-                static_cast<std::uint64_t>(width) * height * 4u;
+                present_resource_id_ == 0u
+                    ? 0u
+                    : QueryTexture2DAllocationBytes(
+                          state->device, width, height,
+                          D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+            if (backbuffers == UINT64_MAX || display == UINT64_MAX) {
+                resize_in_progress_ = false;
+                return Fail(
+                    ExitCode::ResourceAllocationFailed, "memory",
+                    "memory_budget_allocation_query_failed",
+                    "resize_allocations", "queryable", "unavailable",
+                    "resize",
+                    "could not query adapter-specific resize allocation sizes");
+            }
+            std::uint64_t package_descriptors = 0u;
+            for (const auto& resource : package_.resources) {
+                if (resource.usage == "sampler" ||
+                    ResourceNeedsCbvSrvUavDescriptor(package_, resource)) {
+                    ++package_descriptors;
+                }
+            }
+            const std::uint64_t descriptor_bytes =
+                std::max<std::uint64_t>(
+                    stats_.engine_descriptor_count, package_descriptors) *
+                64u;
+            const std::uint64_t old_display =
+                state->display_texture_allocation_bytes;
+            const std::uint64_t base_resources =
+                old_display > stats_.engine_resource_bytes
+                    ? 0u
+                    : stats_.engine_resource_bytes - old_display;
+            // During resize the new swap-chain buffers can coexist with the
+            // old display texture until render targets are rebuilt. Account
+            // for the larger of old/new display allocations at that peak.
             const std::uint64_t projected =
-                stats_.engine_resource_bytes + stats_.engine_upload_bytes +
-                stats_.engine_descriptor_count * 64u + backbuffers + display;
+                base_resources + backbuffers +
+                std::max(old_display, display) +
+                stats_.engine_upload_bytes + descriptor_bytes;
             if (projected > config_.memory_budget_bytes) {
                 resize_in_progress_ = false;
                 return Fail(

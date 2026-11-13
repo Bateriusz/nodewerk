@@ -135,10 +135,10 @@ def test_fusion_is_bounded_and_falls_back_when_unmeasured_or_unsupported() -> No
     optimized = _ir(PROCEDURAL)
     assert optimized.fusions
     # Without measurements of the actual exported implementations the correct
-    # unfused NW-03 lowering is retained.
+    # unfused multi-dispatch UAV execution is retained.
     assert all(not record.accepted for record in optimized.fusions)
     assert all(
-        record.unfused_fallback == "nw03-root-lowering"
+        record.unfused_fallback == "nw05-multi-dispatch-uav"
         for record in optimized.fusions
     )
     measured = optimizer.optimize_graph(
@@ -165,7 +165,7 @@ def test_fusion_is_bounded_and_falls_back_when_unmeasured_or_unsupported() -> No
     )
     assert all(not record.accepted for record in disabled.fusions)
     assert all(
-        record.unfused_fallback == "nw03-root-lowering"
+        record.unfused_fallback == "nw05-multi-dispatch-uav"
         for record in disabled.fusions
     )
     bounded = optimizer.optimize_graph(

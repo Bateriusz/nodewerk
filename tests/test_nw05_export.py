@@ -407,44 +407,58 @@ def test_generation_and_bake_overrides_are_explicit(tmp_path: Path) -> None:
     assert excinfo.value.dependency_path
     assert excinfo.value.dependency_path[0] == "generation_override"
 
-def test_unmeasured_fusion_retains_identical_unfused_export(tmp_path: Path) -> None:
+def test_unmeasured_fusion_uses_real_multi_dispatch_unfused_export(
+    tmp_path: Path,
+) -> None:
     dxc = _make_dxc(tmp_path / "toolchain")
-    source = PROCEDURAL.read_text(encoding="utf-8")
-    foldable = source.replace(
-        "vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), "
-        "mix(uv.y, cos(uv.x * 13.0 - time), 0.25), "
-        "sin(uv.x * 31.0 + time) * 0.5 + 0.5, 1.0)",
-        "vec4(mix(uv.x, sin(uv.y * 17.0 + time), 0.35), "
-        "mix(uv.y, cos(uv.x * 13.0 - time), 0.25), "
-        "sin(uv.x * 31.0 + time) * 0.5 + (0.25 + 0.25), 1.0)",
-    )
-    graph = tmp_path / "foldable.nwgraph"
-    graph.write_text(foldable, encoding="utf-8")
-    fused = nw05_export.export_graph(
-        graph,
-        tmp_path / "fused",
+    default = nw05_export.export_graph(
+        PROCEDURAL,
+        tmp_path / "default",
         settings=_settings(tmp_path),
         dxc_executable=str(dxc),
         allow_test_payloads=True,
     )
-    unfused = nw05_export.export_graph(
-        graph,
-        tmp_path / "unfused",
+    disabled = nw05_export.export_graph(
+        PROCEDURAL,
+        tmp_path / "disabled",
         settings=_settings(tmp_path, fusion_enabled=False),
         dxc_executable=str(dxc),
         allow_test_payloads=True,
     )
+    common = default.artifacts[nwp.COMMON_PROFILE_ID]
+    dispatches = [
+        instruction
+        for instruction in common.package.frame
+        if instruction.opcode == "frame.dispatch"
+    ]
+    # Two three-node terminal DAGs: every dependency is an actual pipeline and
+    # dispatch, not recursively inlined by the old NW-03 root lowering.
+    assert len(common.package.shaders) == 6
+    assert len(dispatches) == 6
+    manifest_shaders = common.manifest.get("shaders", [])
+    assert len(manifest_shaders) == 6
+    assert all(item["unfused"] for item in manifest_shaders)
+    assert sorted(
+        (item["execution_root"], item["execution_order"], item["output_region"])
+        for item in manifest_shaders
+    ) == [
+        ("aux", 0, 1),
+        ("aux", 1, 2),
+        ("aux", 2, 0),
+        ("image", 0, 1),
+        ("image", 1, 2),
+        ("image", 2, 0),
+    ]
+    uavs = [resource for resource in common.package.resources if resource.usage == "uav"]
+    assert len(uavs) == 2
+    assert all(resource.size_bytes == 3 * 256 * 256 * 16 for resource in uavs)
     assert (
-        fused.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
-        == unfused.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
-    )
-    assert (
-        fused.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
-        == unfused.artifacts[nwp.COMMON_PROFILE_ID].artifact_key
+        common.package_bytes
+        == disabled.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
     )
     assert all(
         not record["accepted"]
-        for record in fused.report["optimized_ir"]["fusions"]
+        for record in default.report["optimized_ir"]["fusions"]
     )
 
 
@@ -461,9 +475,8 @@ def test_physical_realization_evidence_does_not_change_published_bytes(
         allow_test_payloads=True,
         allocation_query={
             1: {"size_bytes": 65536, "alignment": 65536},
-            2: {"size_bytes": 131072, "alignment": 65536},
-            3: {"size_bytes": 262144, "alignment": 65536},
-            4: {"size_bytes": 262144, "alignment": 65536},
+            2: {"size_bytes": 4194304, "alignment": 65536},
+            3: {"size_bytes": 4194304, "alignment": 65536},
         },
         adapter_identity="query:test-adapter",
     )
