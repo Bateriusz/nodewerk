@@ -48,6 +48,7 @@ AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE = 1e-4
 AUTHORITATIVE_CAPTURE_WIDTH = 256
 AUTHORITATIVE_CAPTURE_HEIGHT = 256
 AUTHORITATIVE_CAPTURE_FORMAT = "rgba32f"
+AUTHORITATIVE_CAPTURE_KIND = "rgba32f_raw"
 CAPTURE_PROTOCOL = "nw06-fixed-tick-capture.v1"
 
 REQUIRED_CAPTURE_METADATA = (
@@ -284,6 +285,7 @@ def _artifact_state(
         if not isinstance(item, Mapping):
             return "missing", "capture artifact descriptor is malformed"
         kind = item.get("kind")
+        format_name = item.get("format")
         path = item.get("path")
         digest = item.get("sha256")
         size = item.get("bytes")
@@ -292,6 +294,8 @@ def _artifact_state(
         height = item.get("height")
         if not isinstance(kind, str) or not kind.strip():
             return "missing", "capture artifact kind is missing"
+        if not isinstance(format_name, str) or not format_name.strip():
+            return "missing", "capture artifact format is missing"
         if not isinstance(path, str) or not path.strip():
             return "missing", "capture artifact path is missing"
         if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
@@ -325,22 +329,23 @@ def _artifact_state(
         ):
             return "failed", "capture artifact resolution violates the proof contract"
         kind = str(item.get("kind", "")).lower()
-        expected_bytes = None
-        if "rgba32f" in kind or "raw" in kind:
-            expected_bytes = width * height * 16
-        elif "rgba8" in kind:
-            expected_bytes = width * height * 4
-        if expected_bytes is not None and int(item["bytes"]) != expected_bytes:
-            return "failed", "capture artifact byte size does not match its format"
-        if item.get("format") is not None and str(
-            item.get("format")
-        ).lower() not in {AUTHORITATIVE_CAPTURE_FORMAT, "rgba32f_raw"}:
+        format_name = str(item.get("format", "")).lower()
+        if kind != AUTHORITATIVE_CAPTURE_KIND:
+            return "failed", "capture artifact kind violates the proof contract"
+        if format_name != AUTHORITATIVE_CAPTURE_FORMAT:
             return "failed", "capture artifact format violates the proof contract"
+        expected_bytes = width * height * 16
+        if int(item["bytes"]) != expected_bytes:
+            return "failed", "capture artifact byte size does not match rgba32f"
     if artifact_root is None:
         return "missing", "capture artifact contents were not supplied for verification"
+    root = Path(artifact_root).resolve()
     for item in value:
-        root = Path(artifact_root)
-        artifact_path = root / str(item["path"])
+        artifact_path = (root / str(item["path"])).resolve()
+        try:
+            artifact_path.relative_to(root)
+        except ValueError:
+            return "failed", "capture artifact path escapes the evidence root"
         if not artifact_path.is_file():
             return "missing", f"capture artifact is unavailable: {artifact_path}"
         if artifact_path.stat().st_size != int(item["bytes"]):
@@ -374,6 +379,11 @@ def _comparison_state(value: Any, fixed_ticks: Any) -> tuple[str, str]:
             return "missing", "a comparison section has no pass/fail result"
     if not _valid_fixed_ticks(fixed_ticks):
         return "missing", "fixed tick coverage is absent"
+    comparison_ticks = value.get("fixed_ticks")
+    if comparison_ticks is None:
+        return "missing", "comparison fixed-tick coverage is absent"
+    if not _ticks_match(comparison_ticks, fixed_ticks):
+        return "failed", "comparison fixed ticks do not match the capture"
     for section, name in (
         (numeric, "numeric"),
         (image, "image"),
@@ -394,17 +404,18 @@ def _comparison_state(value: Any, fixed_ticks: Any) -> tuple[str, str]:
         return "failed", "numeric comparison reported a negative error/tolerance"
     if numeric_declared > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE:
         return "failed", "numeric comparison relaxed the authoritative tolerance"
-    if numeric_observed > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE:
-        return "failed", "numeric comparison exceeded the authoritative tolerance"
-    if "maximum_relative_error" in numeric or "relative_tolerance" in numeric:
-        numeric_relative = _number(numeric.get("maximum_relative_error"))
-        relative_declared = _number(numeric.get("relative_tolerance"))
-        if numeric_relative is None or relative_declared is None:
-            return "missing", "relative numeric comparison result is incomplete"
-        if relative_declared > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
-            return "failed", "numeric comparison relaxed the authoritative relative tolerance"
-        if numeric_relative > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
-            return "failed", "numeric comparison exceeded the authoritative relative tolerance"
+    if numeric_observed > numeric_declared or numeric_observed > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE:
+        return "failed", "numeric comparison exceeded the declared/authoritative tolerance"
+    numeric_relative = _number(numeric.get("maximum_relative_error"))
+    relative_declared = _number(numeric.get("relative_tolerance"))
+    if numeric_relative is None or relative_declared is None:
+        return "missing", "relative numeric comparison result is incomplete"
+    if numeric_relative < 0.0 or relative_declared < 0.0:
+        return "failed", "relative numeric comparison reported a negative error/tolerance"
+    if relative_declared > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
+        return "failed", "numeric comparison relaxed the authoritative relative tolerance"
+    if numeric_relative > relative_declared or numeric_relative > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
+        return "failed", "numeric comparison exceeded the declared/authoritative relative tolerance"
 
     pixels = image.get("pixels")
     width = image.get("width")
@@ -434,8 +445,8 @@ def _comparison_state(value: Any, fixed_ticks: Any) -> tuple[str, str]:
         return "failed", "image comparison reported a negative error/tolerance"
     if image_declared > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
         return "failed", "image comparison relaxed the authoritative tolerance"
-    if image_observed > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
-        return "failed", "image comparison exceeded the authoritative tolerance"
+    if image_observed > image_declared or image_observed > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
+        return "failed", "image comparison exceeded the declared/authoritative tolerance"
     if "maximum_relative_error" in image or "relative_tolerance" in image:
         image_relative = _number(image.get("maximum_relative_error"))
         relative_declared = _number(image.get("relative_tolerance"))
@@ -456,10 +467,6 @@ def _comparison_state(value: Any, fixed_ticks: Any) -> tuple[str, str]:
         return "failed", "tolerance check relaxed the authoritative tolerance"
     if observed > declared or observed > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
         return "failed", "tolerance check violated the authoritative tolerance"
-    if value.get("fixed_ticks") is not None and not _ticks_match(
-        value.get("fixed_ticks"), fixed_ticks
-    ):
-        return "failed", "comparison fixed ticks do not match the capture"
     return "passed", ""
 
 
@@ -835,6 +842,7 @@ __all__ = [
     "AUTHORITATIVE_CAPTURE_WIDTH",
     "AUTHORITATIVE_CAPTURE_HEIGHT",
     "AUTHORITATIVE_CAPTURE_FORMAT",
+    "AUTHORITATIVE_CAPTURE_KIND",
     "CAPTURE_PROTOCOL",
     "classify_hardware_tier",
     "probe_hardware_identity",

@@ -201,9 +201,10 @@ information, cache state, capture protocol, unavailable telemetry, evaluated
 fixed ticks, capture artifacts, and validated numeric/image comparisons against
 the authoritative tolerances (`1e-5` absolute / `1e-4` relative numeric,
 `1e-4` image-channel) at the fixed 256x256 proof resolution. Every fixed tick
-must have a corresponding artifact whose path, byte size, digest, dimensions,
-and per-tick comparison are verified; artifact bytes are read and hashed before
-acceptance. A bare `status: passed`, caller-supplied `validated` flag, relaxed
+must have a corresponding raw RGBA32F artifact whose path, byte size, digest,
+dimensions, and per-tick comparison are verified; artifact bytes are read and
+hashed before acceptance. Numeric evidence must carry both absolute and relative
+errors against the authoritative bounds. A bare `status: passed`, caller-supplied `validated` flag, relaxed
 tolerance, or caller-supplied qualification label is insufficient. Missing
 required telemetry or comparison evidence stays pending, an explicit comparison
 failure or measured tolerance violation stays failed, and executed failures

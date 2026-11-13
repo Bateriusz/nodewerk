@@ -43,7 +43,7 @@ def test_rational_frame_steps_do_not_accumulate_float_error() -> None:
     step = timeline.RationalFrameStep(1001, 30_000)
     assert step.tick_for_frame(30_000) == 1001
     assert step.tick_for_frame(60_000) == 2002
-    assert step.advance(0, 30_000) == 1001
+    assert step.advance(0, 30_000, frame_index=0) == 1001
     with pytest.raises(timeline.TimelineError):
         timeline.RationalFrameStep(1, 0)
 
@@ -68,12 +68,16 @@ def test_rational_cadence_preserves_fractional_ticks_across_advances() -> None:
         fresh.advance(-1)
     with pytest.raises(timeline.TimelineError):
         timeline.RationalFrameStep(3, 2).advance(5, 1)
+    with pytest.raises(timeline.TimelineError):
+        timeline.RationalFrameStep(1, 3).advance(0, 1)
     assert (
         timeline.RationalFrameStep(1, 3).advance(
             0, 1, frame_index=0
         )
         == 0
     )
+    with pytest.raises(timeline.TimelineError):
+        timeline.RationalFrameStep(3, 2).advance(1, 0, frame_index=0)
 
 
 def test_curve_sampling_quantization_bound_and_full_precision_escape() -> None:

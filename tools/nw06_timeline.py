@@ -273,32 +273,44 @@ class RationalFrameStep:
                 "invalid_curve_tick",
                 f"current tick {current_tick!r} is outside the uint64 range",
             )
-        if frames < 0:
-            raise _error("invalid_frame_index", "frame count must be non-negative")
+        if isinstance(frames, bool) or not isinstance(frames, int) or frames < 0:
+            raise _error("invalid_frame_index", "frame count must be a non-negative integer")
         if frame_index is not None:
-            if frame_index < 0:
+            if (
+                isinstance(frame_index, bool)
+                or not isinstance(frame_index, int)
+                or frame_index < 0
+            ):
                 raise _error("invalid_frame_index", "frame index must be non-negative")
+            expected_tick = self.tick_for_frame(frame_index)
+            if expected_tick != current_tick:
+                raise _error(
+                    "invalid_frame_position",
+                    f"tick {current_tick} does not match frame_index {frame_index} "
+                    f"(expected tick {expected_tick})",
+                )
             if frames == 0:
-                return self.tick_for_frame(frame_index)
+                return current_tick
             destination = frame_index + frames
         elif frames == 0:
-            # Advancing by zero frames preserves the requested position even
-            # when the caller has not supplied a cadence frame index.
+            # Zero-frame advancement is identity even for an arbitrary tick.
             return current_tick
         elif (
             self._last_advance_tick is not None
             and current_tick == self._last_advance_tick
         ):
             destination = self._next_frame_index + frames
+        elif self.numerator < self.denominator:
+            # Multiple frame indices can map to the same integer tick. A tick
+            # alone therefore cannot identify the cadence position.
+            raise _error(
+                "ambiguous_frame_position",
+                "a sub-tick cadence cannot identify a frame from a tick; "
+                "provide frame_index or use RationalFrameCadence",
+            )
         elif current_tick == 0:
             destination = frames
         else:
-            if self.numerator < self.denominator:
-                raise _error(
-                    "ambiguous_frame_position",
-                    "a sub-tick cadence cannot identify a frame from a tick; "
-                    "provide frame_index",
-                )
             candidate = (
                 (current_tick * self.denominator + self.numerator - 1)
                 // self.numerator

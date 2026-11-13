@@ -56,6 +56,7 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
         "capture_artifacts": [
             {
                 "kind": "rgba32f_raw",
+                "format": "rgba32f",
                 "path": f"captures/{tier}-{tick}.rgba32f",
                 "sha256": "a" * 64,
                 "bytes": 256 * 256 * 16,
@@ -74,6 +75,8 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
                 "samples": 3,
                 "maximum_error": 0.0,
                 "tolerance": 1e-5,
+                "maximum_relative_error": 0.0,
+                "relative_tolerance": 1e-4,
                 "ticks": fixed_ticks,
             },
             "image": {
@@ -662,3 +665,49 @@ def test_explicit_comparison_failures_and_relaxed_tolerances_fail(
     assert nw06_evidence.validate_capture(
         capture, artifact_root=tmp_path
     )["status"] == "failed"
+
+
+def test_capture_format_and_paths_are_fail_closed(tmp_path: Path) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["capture_artifacts"][0]["kind"] = "opaque_blob"
+    assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "failed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["capture_artifacts"][0]["format"] = "rgba8"
+    assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "failed"
+
+    root = tmp_path / "evidence-root"
+    capture = _complete_capture("ada")
+    _materialize_capture(root, capture)
+    artifact = capture["capture_artifacts"][0]
+    inside = root / artifact["path"]
+    outside = tmp_path / "escaped.rgba32f"
+    inside.replace(outside)
+    artifact["path"] = "../escaped.rgba32f"
+    assert nw06_evidence.validate_capture(capture, artifact_root=root)["status"] == "failed"
+
+
+def test_numeric_relative_and_declared_tolerances_are_authoritative(tmp_path: Path) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["numeric"].pop("maximum_relative_error")
+    assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "pending_unverified"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["numeric"]["relative_tolerance"] = 0.1
+    assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "failed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["numeric"]["tolerance"] = 1e-6
+    capture["comparison"]["numeric"]["maximum_error"] = 5e-6
+    assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "failed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["numeric"]["relative_tolerance"] = 1e-5
+    capture["comparison"]["numeric"]["maximum_relative_error"] = 5e-5
+    assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "failed"
