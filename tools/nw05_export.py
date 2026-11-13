@@ -1198,7 +1198,13 @@ def _shader_execution_plan(
     shader_rows: Sequence[Mapping[str, Any]],
     shader_records: Sequence[nwp.ShaderRecord],
 ) -> tuple[list[str], list[dict[str, Any]]]:
-    rows = sorted(shader_rows, key=lambda item: str(item.get("specialization_id", "")))
+    if all(row.get("shader_id") is not None for row in shader_rows):
+        rows = sorted(shader_rows, key=lambda item: int(item["shader_id"]))
+    else:
+        rows = sorted(
+            shader_rows,
+            key=lambda item: str(item.get("specialization_id", "")),
+        )
     ordered_records = sorted(shader_records, key=lambda item: item.shader_id)
     if len(rows) != len(ordered_records):
         raise ExportError(
@@ -1537,9 +1543,46 @@ def _build_graph_derived_package(
                     dependency_path=["graph", node.node_id, "texture"],
                 )
             if texture_input_resource_id is None:
-                texture_input_resource_id = resource_by_node[
-                    texture_connection[0]
-                ]
+                candidate_id = resource_by_node[texture_connection[0]]
+                candidate = next(
+                    (
+                        resource
+                        for resource in resources
+                        if resource.resource_id == candidate_id
+                    ),
+                    None,
+                )
+                source_node = document.nodes.get(texture_connection[0])
+                if (
+                    candidate is None
+                    or candidate.kind != "texture2d"
+                ) and source_node is not None:
+                    producer = next(iter(sorted(source_node.inputs.values())), None)
+                    producer_id = (
+                        resource_by_node.get(producer[0])
+                        if producer is not None
+                        else None
+                    )
+                    producer_resource = next(
+                        (
+                            resource
+                            for resource in resources
+                            if resource.resource_id == producer_id
+                        ),
+                        None,
+                    )
+                    if (
+                        producer_resource is not None
+                        and producer_resource.kind == "texture2d"
+                    ):
+                        candidate = producer_resource
+                if candidate is None or candidate.kind != "texture2d":
+                    raise ExportError(
+                        f"fullscreen render node '{node.node_id}' does not "
+                        "resolve to a texture2d producer resource",
+                        dependency_path=["graph", node.node_id, "texture"],
+                    )
+                texture_input_resource_id = candidate.resource_id
 
     def shader_for_render_node(node_id: str) -> str | None:
         node = document.nodes.get(node_id)

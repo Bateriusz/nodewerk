@@ -151,11 +151,18 @@ def test_original_procedural_image_graph_exports_texture_render_path(
         binding.name == "input" and binding.usage == "srv"
         for binding in common.package.root_signatures[0].bindings
     )
+    input_resource = next(
+        resource
+        for resource in common.package.resources
+        if resource.name == "input"
+    )
+    assert input_resource.kind == "texture2d"
     assert any(
         instruction.opcode == "frame.set_descriptor_table"
         and instruction.operands[0].value == 2
         and any(
             operand.type == "resource_ref"
+            and operand.value == input_resource.resource_id
             for operand in instruction.operands
         )
         for instruction in common.package.frame

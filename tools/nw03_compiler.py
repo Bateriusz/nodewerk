@@ -2446,7 +2446,7 @@ def _build_package(
         )
     ]
     shaders: list[ShaderRecord] = []
-    for index, shader in enumerate(sorted(generated, key=lambda item: item.specialization_id), start=1):
+    for index, shader in enumerate(generated, start=1):
         shader_compiled = compiled[shader.specialization_key]
         shaders.append(
             ShaderRecord(
@@ -2869,9 +2869,7 @@ def _build_report(
     source_path: str = "",
 ) -> dict[str, Any]:
     shader_rows = []
-    for shader_id, shader in enumerate(
-        sorted(generated, key=lambda item: item.specialization_id), start=1
-    ):
+    for shader_id, shader in enumerate(generated, start=1):
         result = compiled[shader.specialization_key]
         shader_rows.append(
             {
