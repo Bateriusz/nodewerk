@@ -1259,6 +1259,39 @@ def _shader_execution_plan(
         )
     return sorted(roots), execution
 
+
+def _append_render_output_clone(
+    resources: list[nwp.ResourceDescriptor],
+    *,
+    source_resource_id: int,
+    new_resource_id: int,
+    render_node_id: str,
+) -> int:
+    """Clone the output resource resolved for a repeated render instance.
+
+    The source may come from the direct shader-root allocation or from an
+    already-lowered producer output.  Using the resolved resource identity
+    keeps repeated render instances independent without assuming that every
+    valid path is present in resource_by_shader.
+    """
+    template = next(
+        (
+            resource
+            for resource in resources
+            if resource.resource_id == source_resource_id
+        ),
+        None,
+    )
+    if template is None:
+        raise ExportError(
+            f"render node '{render_node_id}' resolved missing output resource "
+            f"{source_resource_id}",
+            dependency_path=["graph", render_node_id, "output"],
+        )
+    resources.append(nwp.replace(template, resource_id=new_resource_id))
+    return new_resource_id
+
+
 def _build_graph_derived_package(
     document: nw03.GraphDocument,
     optimized: optimizer.OptimizedGraph,
@@ -1488,17 +1521,11 @@ def _build_graph_derived_package(
                 )
             render_outputs = render_outputs_by_shader.setdefault(spec, [])
             if render_outputs:
-                template = next(
-                    resource
-                    for resource in resources
-                    if resource.resource_id == resource_by_shader[spec]
-                )
-                output_id = next_resource_id
-                resources.append(
-                    nwp.replace(
-                        template,
-                        resource_id=output_id,
-                    )
+                output_id = _append_render_output_clone(
+                    resources,
+                    source_resource_id=output_id,
+                    new_resource_id=next_resource_id,
+                    render_node_id=node.node_id,
                 )
                 next_resource_id += 1
             render_outputs.append(output_id)
@@ -1530,10 +1557,9 @@ def _build_graph_derived_package(
                 source_node is not None
                 and source_node.operator_id == "nw.texture.procedural"
             ):
-                raise ExportError(
+                raise nw03.CompilerError(
                     f"fullscreen render node '{node.node_id}' must bind procedural "
-                    "textures through nw.residency.upload_texture",
-                    dependency_path=["graph", node.node_id, "texture"],
+                    "textures through nw.residency.upload_texture"
                 )
             if (
                 candidate is None or candidate.kind != "texture2d"

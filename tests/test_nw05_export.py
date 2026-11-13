@@ -305,6 +305,32 @@ def test_shader_execution_plan_maps_roots_by_blob_not_index() -> None:
     assert by_root == {"a_root": 2, "z_root": 1}
 
 
+def test_repeated_render_output_clones_the_resolved_resource() -> None:
+    resolved = nwp.ResourceDescriptor(
+        resource_id=41,
+        name="output",
+        kind="buffer",
+        format="DXGI_FORMAT_R32_UINT",
+        usage="uav",
+        pass_family=nw03.PASS_FAMILY,
+        size_bytes=4096,
+    )
+    resources = [resolved]
+
+    cloned_id = nw05_export._append_render_output_clone(
+        resources,
+        source_resource_id=41,
+        new_resource_id=42,
+        render_node_id="out_b",
+    )
+
+    assert cloned_id == 42
+    assert len(resources) == 2
+    assert resources[1] == nwp.replace(resolved, resource_id=42)
+    assert resources[1].name == "output"
+    assert resources[1].usage == "uav"
+
+
 def test_multiple_fullscreen_nodes_bind_their_own_textures(
     tmp_path: Path,
 ) -> None:
