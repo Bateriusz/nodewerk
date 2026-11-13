@@ -4127,7 +4127,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         }
         switch (op.type) {
             case FrameOp::Type::SetRootSignature:
-            case FrameOp::Type::SetGraphicsRootSignature: {
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+            case FrameOp::Type::SetGraphicsRootSignature:
+#endif
+            {
                 ID3D12RootSignature* root = nullptr;
                 for (const auto& candidate : state->root_signatures) {
                     if (candidate.root_signature_id == op.root_parameter) {
@@ -4164,7 +4167,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 break;
             }
             case FrameOp::Type::SetRootConstants:
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             case FrameOp::Type::SetGraphicsRootConstants:
+#endif
                 if (op.constant_count > 0u) {
                     // A `time` parameter is advanced from the supplied tick
                     // without allocating or rebuilding the frame plan.
@@ -4225,7 +4230,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 }
                 break;
             case FrameOp::Type::SetDescriptorTable:
-            case FrameOp::Type::SetGraphicsDescriptorTable: {
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+            case FrameOp::Type::SetGraphicsDescriptorTable:
+#endif
+            {
                 D3D12_GPU_DESCRIPTOR_HANDLE handle{};
                 for (const auto& candidate : state->resources) {
                     if (candidate.resource_id != op.resource_a ||
@@ -4317,6 +4325,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 }
                 break;
             }
+#if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             case FrameOp::Type::SetGraphicsPipeline: {
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                 ID3D12PipelineState* pipeline = nullptr;
@@ -4489,6 +4498,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 break;
 #endif
             }
+#endif
             case FrameOp::Type::Dispatch: {
                 ID3D12PipelineState* pipeline = nullptr;
                 for (const auto& candidate : state->pipelines) {
