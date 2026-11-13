@@ -502,6 +502,16 @@ def check_shader_contracts() -> CheckResult:
                 "nw06_shader_contract",
                 "render-target binding does not clear colour/depth",
             )
+        if (
+            '} else if (parameter.type == "uint") {' not in player
+            or "*tick_kind = 1u;" not in player
+            or "if (tick_kind == 1u) {" not in player
+            or "static_cast<std::uint32_t>(tick)" not in player
+        ):
+            return _fail(
+                "nw06_shader_contract",
+                "PackagePlayer does not lower uint timeline ticks as integers",
+            )
         return _ok(
             "nw06_shader_contract",
             evidence={
@@ -510,6 +520,7 @@ def check_shader_contracts() -> CheckResult:
                 "integer_tick": True,
                 "camera_eye_specular": True,
                 "explicit_render_target_clears": True,
+                "package_player_uint_tick_lowering": True,
             },
         )
     except Exception as exc:

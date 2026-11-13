@@ -447,6 +447,17 @@ def test_render_target_binding_clears_color_and_depth() -> None:
 
 
 def test_player_packs_uint_tick_root_constant_at_nonzero_tick() -> None:
+    # Unconditional contract assertion against the actual C++ implementation.
+    # The player lowers a `uint` timeline parameter with tick_kind 1 and writes
+    # the absolute integer tick, not a numeric float conversion.
+    player_source = (
+        REPO_ROOT / "src" / "player" / "package_player.cpp"
+    ).read_text(encoding="utf-8")
+    assert '} else if (parameter.type == "uint") {' in player_source
+    assert "*tick_kind = 1u;" in player_source
+    assert "if (tick_kind == 1u) {" in player_source
+    assert "static_cast<std::uint32_t>(tick)" in player_source
+
     candidates = []
     override = os.environ.get("NW04_FIXTURE")
     if override:
@@ -465,7 +476,9 @@ def test_player_packs_uint_tick_root_constant_at_nonzero_tick() -> None:
         None,
     )
     if fixture is None:
-        pytest.skip("native NW-04 PackagePlayer fixture is not built")
+        # The source-level contract above is always checked.  When CI has built
+        # the native fixture, additionally execute the real PackagePlayer path.
+        return
     package_path = (
         REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp"
     )

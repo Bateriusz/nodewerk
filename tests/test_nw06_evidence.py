@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw06_evidence  # noqa: E402
+import nw03_compiler as nw03  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 import verify_nw06  # noqa: E402
 from schema_validator import validate_file_against_schema  # noqa: E402
@@ -148,6 +149,47 @@ def test_operator_contract_lowerings_and_generation_frequencies_match_registry()
     assert registry_source.count(
         "InitializationFrequency(), Frequency::Initialization"
     ) >= 3
+
+
+def test_camera_controls_are_consistently_optional_in_all_contracts() -> None:
+    document = json.loads(OPERATOR_DOCUMENT.read_text(encoding="utf-8"))
+    camera = next(
+        operator
+        for operator in document["operators"]
+        if operator["operator_id"] == "nw.camera.curve"
+    )
+    optional_names = {
+        "curve_value_min",
+        "curve_value_max",
+        "curve_quantization_bits",
+        "curve_tolerance",
+    }
+    by_name = {parameter["name"]: parameter for parameter in camera["parameters"]}
+    for name in optional_names:
+        assert by_name[name]["required"] is False
+    rules = nw03.PARAM_RULES["nw.camera.curve"]
+    for name in optional_names:
+        assert rules[name].get("optional") is True
+    registry_source = (
+        REPO_ROOT / "src" / "graph" / "nw_graph.cpp"
+    ).read_text(encoding="utf-8")
+    for name in (
+        "curve_value_min",
+        "curve_value_max",
+        "curve_tolerance",
+    ):
+        assert f'OptionalRangedFloatParam("{name}"' in registry_source
+    assert (
+        'OptionalRangedIntParam("curve_quantization_bits"'
+        in registry_source
+    )
+    for stale in (
+        'FloatParam("curve_value_min", 0.0, true',
+        'FloatParam("curve_value_max", 0.0, true',
+        'IntParam("curve_quantization_bits", 16, true',
+        'FloatParam("curve_tolerance", 1e-4, true',
+    ):
+        assert stale not in registry_source
 
 
 def test_record_capture_writes_schema_valid_qualifications_and_policy(

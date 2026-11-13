@@ -1103,6 +1103,26 @@ ParamSpec IntParam(std::string id, std::int64_t default_value,
     return spec;
 }
 
+// Ranged parameters that are explicitly optional.  The JSON/Python contracts
+// mark the corresponding NW-06 camera controls `"required": false`; these
+// helpers keep the C++ registry aligned without relying on the generic
+// factory's default `required` flag.
+ParamSpec OptionalRangedFloatParam(std::string id, double default_value,
+                                   double min_value, double max_value) {
+    ParamSpec spec = FloatParam(std::move(id), default_value, true,
+                                min_value, max_value);
+    spec.required = false;
+    return spec;
+}
+
+ParamSpec OptionalRangedIntParam(std::string id, std::int64_t default_value,
+                                 double min_value, double max_value) {
+    ParamSpec spec = IntParam(std::move(id), default_value, true,
+                              min_value, max_value);
+    spec.required = false;
+    return spec;
+}
+
 ParamSpec StringParam(std::string id, std::string default_value,
                       ParamType type = ParamType::String) {
     ParamSpec spec;
@@ -1582,10 +1602,13 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             FloatParam("radius_min", 3.2, true, 0.0, 1000000.0),
             FloatParam("radius_max", 4.8, true, 0.0, 1000000.0),
             FloatParam("height", 1.6, true, -1000000.0, 1000000.0),
-            FloatParam("curve_value_min", 0.0, true, -1000000.0, 1000000.0),
-            FloatParam("curve_value_max", 0.0, true, -1000000.0, 1000000.0),
-            IntParam("curve_quantization_bits", 16, true, 0.0, 24.0),
-            FloatParam("curve_tolerance", 1e-4, true, 0.0, 1000000.0)};
+            OptionalRangedFloatParam("curve_value_min", 0.0, -1000000.0,
+                                     1000000.0),
+            OptionalRangedFloatParam("curve_value_max", 0.0, -1000000.0,
+                                     1000000.0),
+            OptionalRangedIntParam("curve_quantization_bits", 16, 0.0, 24.0),
+            OptionalRangedFloatParam("curve_tolerance", 1e-4, 0.0,
+                                     1000000.0)};
         registry.Register(std::move(schema));
     }
     {
