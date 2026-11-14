@@ -292,7 +292,7 @@ def test_record_capture_writes_schema_valid_qualifications_and_policy(
     executable.write_bytes(b"MZ" + b"\x00" * 64)
     output = tmp_path / "evidence.json"
     capture_metadata = _complete_capture("ada")
-    _materialize_capture(tmp_path, capture_metadata)
+    _materialize_capture(artifact, capture_metadata)
     for name in (
         "coverage_target",
         "evidence_role",
@@ -534,6 +534,57 @@ def test_record_capture_merges_complete_qualification_map(
     )
 
 
+def test_record_capture_resolves_artifacts_against_artifact_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "artifact-root"
+    evidence_directory = tmp_path / "evidence-root"
+    artifact.mkdir()
+    evidence_directory.mkdir()
+    monkeypatch.setattr(
+        nw06_evidence,
+        "_artifact_identity",
+        lambda directory: (
+            directory / "artifact.nwp",
+            b"package",
+            "sha256:v1:artifact",
+            "sha256:v1:" + "8" * 64,
+        ),
+    )
+    executable = tmp_path / "player.exe"
+    executable.write_bytes(b"MZ" + b"\x00" * 32)
+    metadata = _complete_capture("ada")
+    _materialize_capture(artifact, metadata)
+    for name in (
+        "coverage_target",
+        "evidence_role",
+        "artifact_key",
+        "package_sha256",
+        "executable_sha256",
+        "manifest_sha256",
+        "profile_id",
+        "requirements_digest",
+        "status",
+    ):
+        metadata.pop(name, None)
+    record = nw06_evidence.record_capture(
+        artifact_directory=artifact,
+        executable=executable,
+        tier="ada",
+        coverage_target="desktop_ada_representative",
+        evidence_role="fixed_tick_correctness",
+        status="passed",
+        metadata=metadata,
+        output_path=evidence_directory / "evidence.json",
+    )
+    assert record["validation"]["artifact_state"] == "passed"
+    assert record["qualifications"]["ada"]["status"] == "verified"
+    assert (
+        record["qualifications"]["blackwell"]["status"]
+        == "pending_unverified"
+    )
+
+
 def test_failed_qualification_without_captures_remains_failed() -> None:
     result = nw06_evidence.validate_evidence_record(
         {
@@ -746,6 +797,83 @@ def test_per_tick_comparison_is_bound_to_each_capture_artifact(
     assert nw06_evidence.validate_capture(
         capture, artifact_root=tmp_path
     )["status"] == "failed"
+
+
+def test_tolerance_check_cannot_understate_aggregate_image_error(
+    tmp_path: Path,
+) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["image"]["maximum_error"] = 8e-5
+    capture["comparison"]["tolerance_check"]["observed_maximum_error"] = 0.0
+    validation = nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )
+    assert validation["comparison_state"] == "failed"
+    assert validation["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("kind", 7),
+        ("format", None),
+        ("path", 3),
+        ("sha256", "not-a-digest"),
+        ("bytes", 0),
+        ("tick", -1),
+        ("width", 0),
+        ("height", 0),
+    ],
+)
+def test_malformed_capture_artifacts_fail_closed(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["capture_artifacts"][0][field] = value
+    validation = nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )
+    assert validation["artifact_state"] == "failed"
+    assert validation["status"] == "failed"
+
+
+def test_missing_capture_artifacts_make_per_tick_comparison_pending() -> None:
+    capture = _complete_capture("ada")
+    capture.pop("capture_artifacts")
+    validation = nw06_evidence.validate_capture(capture)
+    assert validation["comparison_state"] == "missing"
+    assert validation["status"] == "pending_unverified"
+
+
+def test_missing_qualifications_prevent_verified_status(tmp_path: Path) -> None:
+    captures = [_complete_capture("ada"), _complete_capture("blackwell")]
+    for capture in captures:
+        _materialize_capture(tmp_path, capture)
+    without_qualifications = {"captures": captures}
+    assert (
+        nw06_evidence.validate_evidence_record(
+            without_qualifications, artifact_root=tmp_path
+        )["status"]
+        == "pending_unverified"
+    )
+    one_tier = {
+        "captures": captures,
+        "qualifications": {
+            "ada": {
+                "coverage_target": "desktop_ada_representative",
+                "evidence_role": "fixed_tick_correctness",
+                "status": "verified",
+            }
+        },
+    }
+    assert (
+        nw06_evidence.validate_evidence_record(
+            one_tier, artifact_root=tmp_path
+        )["status"]
+        == "pending_unverified"
+    )
 
     capture = _complete_capture("ada")
     _materialize_capture(tmp_path, capture)

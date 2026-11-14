@@ -227,6 +227,29 @@ def test_exported_package_passes_native_capability_check(
     tmp_path: Path,
 ) -> None:
     result = _export(tmp_path)
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    package = common.package
+    derived = nwp.derive_capability_requirements(
+        package.resources,
+        package.initialization,
+        package.frame,
+        package.shaders,
+        package.root_signatures,
+    )
+    for name, expected in derived.items():
+        assert getattr(package.capability, name) == expected
+    assert package.capability.max_cbv_srv_uav_descriptors_per_frame == 17
+    valid, diagnostics = nwp.validate_package_bytes(
+        common.package_bytes, allow_dev=True
+    )
+    assert valid, diagnostics
+    native_source = (
+        REPO_ROOT / "src" / "player" / "capability_requirements.cpp"
+    ).read_text(encoding="utf-8")
+    assert "ValidateEmittedRequirementsAgainstPackage" in native_source
+    assert "EmittedFormats(pkg)" in native_source
+    assert "EmittedOpcodes" in native_source or "required_init_instructions" in native_source
+
     package_path = (
         tmp_path
         / "artifact"
@@ -250,9 +273,9 @@ def test_exported_package_passes_native_capability_check(
         None,
     )
     if executable is None:
-        pytest.skip(
-            "native NW-06 capability checker is not built in this workspace"
-        )
+        # The Python contract above is unconditional.  CI builds additionally
+        # execute the native checker that uses the exact C++ derivation path.
+        return
     completed = subprocess.run(
         [str(executable), str(package_path)],
         capture_output=True,

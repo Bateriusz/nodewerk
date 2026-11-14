@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -370,6 +371,53 @@ def check_export_and_determinism() -> CheckResult:
                     "native/exporter descriptor requirements disagree for "
                     "combined usages",
                 )
+            for name, expected in derived.items():
+                if getattr(package.capability, name) != expected:
+                    return _fail(
+                        "nw06_export",
+                        f"capability field '{name}' does not match emitted "
+                        "requirements",
+                    )
+            checker = next(
+                (
+                    candidate
+                    for candidate in sorted(
+                        (REPO_ROOT / "build").glob(
+                            "**/nw06_capability_check*"
+                        )
+                    )
+                    if candidate.is_file()
+                    and candidate.suffix.lower() in ("", ".exe")
+                    and "CMakeFiles" not in candidate.parts
+                ),
+                None,
+            )
+            if checker is not None:
+                package_path = (
+                    temp
+                    / "artifact"
+                    / (
+                        nw05_export._profile_file_stem(
+                            nwp.COMMON_PROFILE_ID
+                        )
+                        + ".nwp"
+                    )
+                )
+                completed = subprocess.run(
+                    [str(checker), str(package_path)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if (
+                    completed.returncode != 0
+                    or "NW06_NATIVE_CAPABILITY_OK" not in completed.stdout
+                ):
+                    return _fail(
+                        "nw06_export",
+                        "native capability checker rejected the artifact: "
+                        + completed.stderr,
+                    )
             if nw04_contract.validate_package_requirements(package):
                 return _fail(
                     "nw06_export",

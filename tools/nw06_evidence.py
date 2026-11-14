@@ -283,7 +283,7 @@ def _artifact_state(
     ticks: list[int] = []
     for item in value:
         if not isinstance(item, Mapping):
-            return "missing", "capture artifact descriptor is malformed"
+            return "failed", "capture artifact descriptor is malformed"
         kind = item.get("kind")
         format_name = item.get("format")
         path = item.get("path")
@@ -293,17 +293,17 @@ def _artifact_state(
         width = item.get("width")
         height = item.get("height")
         if not isinstance(kind, str) or not kind.strip():
-            return "missing", "capture artifact kind is missing"
+            return "failed", "capture artifact kind is malformed"
         if not isinstance(format_name, str) or not format_name.strip():
-            return "missing", "capture artifact format is missing"
+            return "failed", "capture artifact format is malformed"
         if not isinstance(path, str) or not path.strip():
-            return "missing", "capture artifact path is missing"
+            return "failed", "capture artifact path is malformed"
         if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
-            return "missing", "capture artifact digest is invalid"
+            return "failed", "capture artifact digest is invalid"
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
-            return "missing", "capture artifact byte size is invalid"
+            return "failed", "capture artifact byte size is invalid"
         if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
-            return "missing", "capture artifact tick is invalid"
+            return "failed", "capture artifact tick is invalid"
         if (
             isinstance(width, bool)
             or not isinstance(width, int)
@@ -312,7 +312,7 @@ def _artifact_state(
             or not isinstance(height, int)
             or height <= 0
         ):
-            return "missing", "capture artifact resolution is invalid"
+            return "failed", "capture artifact resolution is invalid"
         ticks.append(tick)
     if not _valid_fixed_ticks(fixed_ticks):
         return "missing", "fixed tick coverage is absent"
@@ -366,20 +366,26 @@ def _per_tick_comparison_state(
     if not _valid_fixed_ticks(fixed_ticks):
         return "missing", "fixed tick coverage is absent", {}
 
+    if not isinstance(capture_artifacts, (list, tuple)) or not capture_artifacts:
+        return (
+            "missing",
+            "capture artifacts are absent, so per-tick comparisons cannot be "
+            "bound to captured bytes",
+            {},
+        )
     artifact_sha_by_tick: dict[int, str] = {}
-    if isinstance(capture_artifacts, (list, tuple)):
-        for artifact in capture_artifacts:
-            if not isinstance(artifact, Mapping):
-                continue
-            tick = artifact.get("tick")
-            digest = artifact.get("sha256")
-            if (
-                isinstance(tick, int)
-                and not isinstance(tick, bool)
-                and isinstance(digest, str)
-                and _SHA256_PATTERN.fullmatch(digest)
-            ):
-                artifact_sha_by_tick[tick] = digest
+    for artifact in capture_artifacts:
+        if not isinstance(artifact, Mapping):
+            continue
+        tick = artifact.get("tick")
+        digest = artifact.get("sha256")
+        if (
+            isinstance(tick, int)
+            and not isinstance(tick, bool)
+            and isinstance(digest, str)
+            and _SHA256_PATTERN.fullmatch(digest)
+        ):
+            artifact_sha_by_tick[tick] = digest
 
     expected_ticks = set(fixed_ticks)
     seen_ticks: set[int] = set()
@@ -615,6 +621,11 @@ def _comparison_state(
         return "failed", "tolerance check relaxed the authoritative tolerance"
     if observed > declared or observed > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
         return "failed", "tolerance check violated the authoritative tolerance"
+    if observed < image_observed:
+        return (
+            "failed",
+            "tolerance check understates the aggregate image maximum error",
+        )
     if observed < per_tick_maxima["image_absolute"]:
         return "failed", "tolerance summary understates a per-tick image error"
     return "passed", ""
@@ -774,9 +785,9 @@ def record_capture(
             "unavailable_telemetry": capture.get("unavailable_telemetry", []),
         }
     )
-    artifact_root = (
-        output_path.parent if output_path is not None else artifact_directory
-    )
+    # Capture artifact paths are relative to the explicit artifact directory,
+    # not to wherever the evidence JSON happens to be written.
+    artifact_root = artifact_directory
     validated = validate_capture(capture, artifact_root=artifact_root)
     record = pending_record()
     if output_path is not None and output_path.is_file():
@@ -888,19 +899,50 @@ def validate_evidence_record(
             validate_capture(capture, artifact_root=artifact_root)
         )
     qualification_statuses: dict[str, str] = {}
+    qualifications_complete = True
+    qualification_map = record.get("qualifications")
+    if not isinstance(qualification_map, Mapping):
+        qualification_map = {}
     for tier, target in FIXED_TICK_COVERAGE_TARGETS.items():
-        qualification_map = record.get("qualifications", {})
         declared_qualification = (
             qualification_map.get(tier, {})
             if isinstance(qualification_map, Mapping)
             else {}
         )
+        if not isinstance(declared_qualification, Mapping):
+            qualifications_complete = False
+            qualification_statuses[tier] = "pending_unverified"
+            continue
         declared_status = (
             str(declared_qualification.get("status"))
             if isinstance(declared_qualification, Mapping)
             and "status" in declared_qualification
             else None
         )
+        declared_coverage = declared_qualification.get("coverage_target")
+        declared_role = declared_qualification.get("evidence_role")
+        if (
+            declared_coverage is None
+            or declared_role is None
+            or declared_status is None
+        ):
+            qualifications_complete = False
+            qualification_statuses[tier] = "pending_unverified"
+            continue
+        if (
+            declared_coverage != target
+            or declared_role != FIXED_TICK_EVIDENCE_ROLE
+            or declared_status
+            not in {
+                "pending_unverified",
+                "execution_recorded",
+                "failed",
+                "verified",
+            }
+        ):
+            qualifications_complete = False
+            qualification_statuses[tier] = "failed"
+            continue
         matching = [
             item
             for item in captures
@@ -948,6 +990,8 @@ def validate_evidence_record(
     ):
         # Complete capture metadata alone cannot override pending
         # qualification records; missing required coverage stays pending.
+        status = "pending_unverified"
+    elif not qualifications_complete:
         status = "pending_unverified"
     else:
         identities = {
