@@ -53,6 +53,7 @@ AUTHORITATIVE_CAPTURE_KIND = "rgba32f_raw"
 CAPTURE_PROTOCOL = "nw06-fixed-tick-capture.v1"
 
 REQUIRED_CAPTURE_METADATA = (
+    "capture_id",
     "coverage_target",
     "evidence_role",
     "artifact_key",
@@ -291,6 +292,7 @@ def _compare_float_samples(
     *,
     absolute_tolerance: float,
     relative_tolerance: float,
+    relative_can_satisfy: bool = True,
 ) -> tuple[str, str, float, float]:
     if count <= 0 or count > len(captured) or count > len(reference):
         return "missing", "comparison sample count is outside the captured data", 0.0, 0.0
@@ -305,13 +307,19 @@ def _compare_float_samples(
         relative = difference / max(1e-30, abs(expected))
         maximum_absolute = max(maximum_absolute, difference)
         maximum_relative = max(maximum_relative, relative)
-        if (
-            difference > absolute_tolerance
-            and relative > relative_tolerance
+        absolute_failed = difference > absolute_tolerance
+        relative_failed = relative > relative_tolerance
+        if absolute_failed and (
+            not relative_can_satisfy or relative_failed
         ):
+            criterion = (
+                "absolute OR relative"
+                if relative_can_satisfy
+                else "absolute"
+            )
             return (
                 "failed",
-                "captured data exceeds the absolute OR relative tolerance",
+                f"captured data exceeds the {criterion} tolerance",
                 maximum_absolute,
                 maximum_relative,
             )
@@ -355,20 +363,32 @@ def _recorded_image_violation(section: Mapping[str, Any]) -> bool:
     absolute = _number(section.get("maximum_error"))
     tolerance = _number(section.get("tolerance"))
     relative = _number(section.get("maximum_relative_error"))
+    relative_tolerance = _number(section.get("relative_tolerance"))
     if absolute is not None and absolute < 0.0:
         return True
     if relative is not None and relative < 0.0:
         return True
     if tolerance is not None and tolerance > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
         return True
-    if absolute is not None and tolerance is not None:
-        if relative is not None:
-            return not (
-                absolute <= tolerance
-                or relative <= AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE
-            )
-        return absolute > tolerance
-    if relative is not None and relative > AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE:
+    if (
+        relative_tolerance is not None
+        and relative_tolerance > AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE
+    ):
+        return True
+    # Image acceptance retains the pre-existing absolute channel bound.
+    # Relative image evidence, when supplied, is an additional check and can
+    # never rescue an absolute-tolerance violation.
+    if (
+        absolute is not None
+        and tolerance is not None
+        and absolute > tolerance
+    ):
+        return True
+    if (
+        relative is not None
+        and relative_tolerance is not None
+        and relative > relative_tolerance
+    ):
         return True
     return False
 
@@ -539,6 +559,33 @@ def _reference_state(
     provenance = reference.get("provenance")
     if not isinstance(provenance, Mapping):
         return "missing", "reference artifact provenance is absent", None
+
+    # A reference is evidence from an independent execution, not metadata that
+    # the capture under test may manufacture for itself.  The common artifact
+    # identity must match, while execution identity/environment must be
+    # recorded separately and must not identify the current capture.
+    if provenance.get("source_kind") != "independent_execution":
+        return "failed", "reference provenance is not an independent execution", None
+    source_capture_id = provenance.get("source_capture_id")
+    capture_id = capture.get("capture_id")
+    if not isinstance(source_capture_id, str) or not source_capture_id.strip():
+        return "missing", "reference source capture id is absent", None
+    if not isinstance(capture_id, str) or not capture_id.strip():
+        return "missing", "capture id is absent", None
+    if source_capture_id == capture_id:
+        return "failed", "reference reuses the capture under test", None
+    if provenance.get("source_capture_protocol") != CAPTURE_PROTOCOL:
+        return "failed", "reference execution used an unknown capture protocol", None
+    for key in (
+        "source_captured_at_utc",
+        "source_adapter_description",
+        "source_device",
+        "source_driver_version",
+        "source_os_version",
+    ):
+        value = provenance.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return "missing", f"reference execution provenance is missing {key}", None
     for key in (
         "artifact_key",
         "package_sha256",
@@ -551,7 +598,7 @@ def _reference_state(
         if str(provenance.get(key, "")) != str(capture.get(key, "")):
             return (
                 "failed",
-                f"reference artifact provenance does not match capture {key}",
+                f"reference artifact provenance does not match common artifact {key}",
                 None,
             )
     if artifact_root is None:
@@ -737,6 +784,7 @@ def _per_tick_comparison_state(
                 pixels * 4,
                 absolute_tolerance=image_tolerance,
                 relative_tolerance=AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE,
+                relative_can_satisfy=False,
             )
         )
         if image_state != "passed":
@@ -891,14 +939,11 @@ def _comparison_state(
     if image_declared > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
         return "failed", "image comparison relaxed the authoritative tolerance"
     image_relative = _number(image.get("maximum_relative_error"))
-    if not (
-        image_observed <= image_declared
-        or (
-            image_relative is not None
-            and image_relative <= AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE
-        )
+    if (
+        image_observed > image_declared
+        or image_observed > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE
     ):
-        return "failed", "image comparison exceeded the absolute OR relative tolerance"
+        return "failed", "image comparison exceeded the declared/authoritative absolute tolerance"
     if image_observed < max(
         per_tick_maxima["image_absolute"],
         per_tick_maxima["image_absolute_reported"],
@@ -1089,25 +1134,8 @@ def record_capture(
             "unavailable_telemetry": capture.get("unavailable_telemetry", []),
         }
     )
-    comparison = capture.get("comparison")
-    if isinstance(comparison, Mapping):
-        for row in comparison.get("per_tick", ()):
-            if not isinstance(row, dict):
-                continue
-            reference = row.get("reference")
-            if isinstance(reference, dict):
-                reference["provenance"] = {
-                    key: capture[key]
-                    for key in (
-                        "artifact_key",
-                        "package_sha256",
-                        "executable_sha256",
-                        "manifest_sha256",
-                        "profile_id",
-                        "requirements_digest",
-                        "toolchain_identity",
-                    )
-                }
+    # Reference provenance is supplied by the independent reference execution.
+    # Never synthesize or overwrite it from the capture being validated.
     # Capture artifact paths are relative to the explicit artifact directory,
     # not to wherever the evidence JSON happens to be written.
     artifact_root = artifact_directory

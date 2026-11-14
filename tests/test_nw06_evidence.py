@@ -32,6 +32,7 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
     }[tier]
     fixed_ticks = [0, 24_000, 48_000]
     return {
+        "capture_id": f"{tier}-capture-under-test",
         "status": "passed",
         "coverage_target": coverage,
         "evidence_role": "fixed_tick_correctness",
@@ -103,6 +104,14 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
                         "width": 256,
                         "height": 256,
                         "provenance": {
+                            "source_kind": "independent_execution",
+                            "source_capture_id": f"reference-{tier}-{tick}",
+                            "source_captured_at_utc": "2026-11-14T00:00:00+00:00",
+                            "source_adapter_description": "independent reference adapter",
+                            "source_device": "independent reference device",
+                            "source_driver_version": "1.0",
+                            "source_os_version": "Windows 11",
+                            "source_capture_protocol": "nw06-fixed-tick-capture.v1",
                             "artifact_key": artifact_key,
                             "package_sha256": "1" * 64,
                             "executable_sha256": "2" * 64,
@@ -153,18 +162,6 @@ def _materialize_capture(root: Path, capture: dict) -> None:
             if row["tick"] == artifact["tick"]:
                 row["artifact_sha256"] = artifact["sha256"]
                 reference = row["reference"]
-                reference["provenance"] = {
-                    key: capture[key]
-                    for key in (
-                        "artifact_key",
-                        "package_sha256",
-                        "executable_sha256",
-                        "manifest_sha256",
-                        "profile_id",
-                        "requirements_digest",
-                        "toolchain_identity",
-                    )
-                }
                 reference_path = root / reference["path"]
                 reference_path.parent.mkdir(parents=True, exist_ok=True)
                 reference_path.write_bytes(payload)
@@ -838,6 +835,50 @@ def test_reference_provenance_must_match_the_capture(tmp_path: Path) -> None:
     )
     assert validation["comparison_state"] == "failed"
     assert validation["status"] == "failed"
+
+
+def test_reference_must_come_from_an_independent_execution(tmp_path: Path) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    provenance = capture["comparison"]["per_tick"][0]["reference"]["provenance"]
+    provenance["source_capture_id"] = capture["capture_id"]
+    validation = nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )
+    assert validation["comparison_state"] == "failed"
+    assert validation["status"] == "failed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["per_tick"][0]["reference"]["provenance"].pop(
+        "source_device"
+    )
+    validation = nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )
+    assert validation["comparison_state"] == "missing"
+    assert validation["status"] == "pending_unverified"
+
+
+def test_numeric_or_does_not_relax_image_absolute_tolerance() -> None:
+    numeric = nw06_evidence._compare_float_samples(
+        [10.0005],
+        [10.0],
+        1,
+        absolute_tolerance=1e-4,
+        relative_tolerance=1e-4,
+    )
+    assert numeric[0] == "passed"
+
+    image = nw06_evidence._compare_float_samples(
+        [10.0005],
+        [10.0],
+        1,
+        absolute_tolerance=1e-4,
+        relative_tolerance=1e-4,
+        relative_can_satisfy=False,
+    )
+    assert image[0] == "failed"
 
 
 def test_recorded_failures_are_detected_before_missing_sections() -> None:

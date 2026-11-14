@@ -67,6 +67,7 @@
         "status"
       ],
       "properties": {
+        "capture_id": { "type": "string", "minLength": 1 },
         "coverage_target": { "type": "string", "minLength": 1 },
         "evidence_role": { "const": "fixed_tick_correctness" },
         "artifact_key": { "type": "string", "minLength": 1 },
@@ -242,6 +243,14 @@
         "provenance": {
           "type": "object",
           "required": [
+            "source_kind",
+            "source_capture_id",
+            "source_captured_at_utc",
+            "source_adapter_description",
+            "source_device",
+            "source_driver_version",
+            "source_os_version",
+            "source_capture_protocol",
             "artifact_key",
             "package_sha256",
             "executable_sha256",
@@ -250,6 +259,16 @@
             "requirements_digest",
             "toolchain_identity"
           ],
+          "properties": {
+            "source_kind": { "const": "independent_execution" },
+            "source_capture_id": { "type": "string", "minLength": 1 },
+            "source_captured_at_utc": { "type": "string", "minLength": 1 },
+            "source_adapter_description": { "type": "string", "minLength": 1 },
+            "source_device": { "type": "string", "minLength": 1 },
+            "source_driver_version": { "type": "string", "minLength": 1 },
+            "source_os_version": { "type": "string", "minLength": 1 },
+            "source_capture_protocol": { "const": "nw06-fixed-tick-capture.v1" }
+          },
           "additionalProperties": true
         }
       },

@@ -206,12 +206,18 @@ dimensions, and per-tick comparison are verified; artifact bytes are read and
 hashed before acceptance. Each per-tick comparison names the SHA-256 of the
 artifact it evaluates, covers that exact tick, and is checked against the
 aggregate summary. Each comparison row also identifies an RGBA32F reference
-artifact with package/executable/manifest/toolchain provenance. Artifact and
-reference bytes are read and compared directly; caller-reported errors are
-cross-checked but are never the source of truth. Numeric acceptance preserves
-the established reference contract: a sample passes when it is within the
-absolute bound **or** the relative bound, so near-zero values are not rejected
-by an unnecessarily strict relative check. A bare `status: passed`,
+artifact from a separately identified reference execution. Its execution ID,
+timestamp, adapter/device, driver/OS, capture protocol, and
+package/executable/manifest/toolchain provenance are validated; the reference
+execution may not identify the capture currently under test, and capture
+recording never synthesizes reference provenance. Artifact and reference bytes
+are read and compared directly; caller-reported errors are cross-checked but
+are never the source of truth. Numeric acceptance preserves the established
+reference contract: a sample passes when it is within the absolute bound
+**or** the relative bound, so near-zero values are not rejected by an
+unnecessarily strict relative check. Image-channel acceptance retains its
+existing absolute tolerance; relative image metadata, when present, is
+additional evidence and cannot rescue an absolute image violation. A bare `status: passed`,
 caller-supplied `validated` flag, relaxed tolerance, or caller-supplied
 qualification label is insufficient. Missing required telemetry or comparison
 evidence stays pending, an explicit comparison failure or measured tolerance
