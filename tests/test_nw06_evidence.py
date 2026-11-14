@@ -442,6 +442,73 @@ def test_full_verification_rejects_mismatched_artifact_and_executable(
     assert by_name["nw06_hardware_capture"].status == "failed"
 
 
+def test_full_verification_resolves_artifacts_against_package_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package_dir = tmp_path / "package"
+    evidence_dir = tmp_path / "evidence"
+    package_dir.mkdir()
+    evidence_dir.mkdir()
+    package_bytes = b"nw06-package"
+    artifact_key = "sha256:v1:verified-artifact"
+    manifest_sha256 = "sha256:v1:" + "9" * 64
+    monkeypatch.setattr(
+        nw06_evidence,
+        "_artifact_identity",
+        lambda directory: (
+            directory / "artifact.nwp",
+            package_bytes,
+            artifact_key,
+            manifest_sha256,
+        ),
+    )
+    executable = tmp_path / "player.exe"
+    executable.write_bytes(b"MZ" + b"\x00" * 64)
+    executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
+    captures = []
+    for tier in ("ada", "blackwell"):
+        capture = _complete_capture(tier)
+        capture["artifact_key"] = artifact_key
+        capture["package_sha256"] = hashlib.sha256(package_bytes).hexdigest()
+        capture["manifest_sha256"] = manifest_sha256
+        capture["executable_sha256"] = executable_sha256
+        _materialize_capture(package_dir, capture)
+        captures.append(capture)
+    record = {
+        "schema_version": "1.0.0",
+        "task": "NW-06",
+        "verification_status": "verified",
+        "profile_id": nwp.COMMON_PROFILE_ID,
+        "requirements_digest": nwp.COMMON_REQUIREMENTS_DIGEST,
+        "ticks_per_second": 48_000,
+        "qualifications": {
+            tier: {
+                "coverage_target": target,
+                "evidence_role": "fixed_tick_correctness",
+                "status": "verified",
+            }
+            for tier, target in nw06_evidence.FIXED_TICK_COVERAGE_TARGETS.items()
+        },
+        "captures": captures,
+        "policy": "fixed-tick coverage",
+    }
+    evidence_path = evidence_dir / "evidence.json"
+    evidence_path.write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    checks = verify_nw06.full_or_hardware(
+        argparse.Namespace(
+            fixture=str(executable),
+            package=str(package_dir),
+            evidence=str(evidence_path),
+        )
+    )
+    by_name = {check.name: check for check in checks}
+    assert by_name["nw06_artifact_identity"].status == "passed"
+    assert by_name["nw06_hardware_capture"].status == "passed"
+
+
 def test_record_capture_rejects_tier_coverage_mismatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

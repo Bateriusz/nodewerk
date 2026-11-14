@@ -780,7 +780,7 @@ def full_or_hardware(args: argparse.Namespace) -> list[CheckResult]:
             ),
         ]
     status = nw06_evidence.validate_evidence_record(
-        record, artifact_root=Path(args.evidence).parent
+        record, artifact_root=package_dir
     )
     checks.append(
         _ok(
