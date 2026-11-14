@@ -590,6 +590,54 @@ def test_record_capture_rejects_tier_coverage_mismatch(
         )
 
 
+def test_record_capture_preserves_identity_and_rejects_self_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    package_bytes = b"nw06-self-reference-package"
+    artifact_key = "sha256:v1:self-reference-artifact"
+    manifest_sha256 = "sha256:v1:" + "a" * 64
+    monkeypatch.setattr(
+        nw06_evidence,
+        "_artifact_identity",
+        lambda directory: (
+            directory / "artifact.nwp",
+            package_bytes,
+            artifact_key,
+            manifest_sha256,
+        ),
+    )
+    executable = tmp_path / "player.exe"
+    executable.write_bytes(b"MZ" + b"\x00" * 64)
+    executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
+    capture_id = "ada-caller-supplied-execution"
+    capture = _complete_capture("ada")
+    capture["capture_id"] = capture_id
+    capture["artifact_key"] = artifact_key
+    capture["package_sha256"] = hashlib.sha256(package_bytes).hexdigest()
+    capture["manifest_sha256"] = manifest_sha256
+    capture["executable_sha256"] = executable_sha256
+    for row in capture["comparison"]["per_tick"]:
+        row["reference"]["provenance"]["source_capture_id"] = capture_id
+    _materialize_capture(artifact, capture)
+
+    record = nw06_evidence.record_capture(
+        artifact_directory=artifact,
+        executable=executable,
+        tier="ada",
+        coverage_target="desktop_ada_representative",
+        evidence_role="fixed_tick_correctness",
+        status="passed",
+        metadata=capture,
+        output_path=tmp_path / "evidence.json",
+    )
+    assert record["captures"][0]["capture_id"] == capture_id
+    assert record["validation"]["comparison_state"] == "failed"
+    assert record["validation"]["status"] == "failed"
+    assert record["qualifications"]["ada"]["status"] == "failed"
+
+
 def test_record_capture_merges_complete_qualification_map(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

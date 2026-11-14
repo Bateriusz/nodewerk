@@ -1114,12 +1114,22 @@ def record_capture(
     capture = dict(metadata or {})
     captured_at_utc = datetime.now(timezone.utc).isoformat()
     executable_sha256 = _sha256_file(executable)
+    supplied_capture_id = capture.get("capture_id")
+    if not isinstance(supplied_capture_id, str) or not supplied_capture_id.strip():
+        supplied_capture_id = None
     execution_identity = hashlib.sha256(
         f"{tier}:{captured_at_utc}:{executable_sha256}".encode("utf-8")
     ).hexdigest()[:16]
     capture.update(
         {
-            "capture_id": f"{tier}-{execution_identity}",
+            # A caller-supplied execution identity is authoritative.  Replacing
+            # it would let a reference that deliberately names the capture under
+            # test become a "different" execution after validation.
+            "capture_id": (
+                supplied_capture_id
+                if supplied_capture_id is not None
+                else f"{tier}-{execution_identity}"
+            ),
             "captured_at_utc": captured_at_utc,
             "tier_metadata_only": tier,
             "coverage_target": coverage_target,
