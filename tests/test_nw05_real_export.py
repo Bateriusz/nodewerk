@@ -255,17 +255,28 @@ def test_unused_nw06_runtime_is_absent_from_legacy_real_pe(
         - nw05_export.EMBED_FOOTER_SIZE
     )
     legacy_pe = common.executable_bytes[:raw_size]
-    markers = (
+    # These strings belong to optional NW-06 runtime implementations and must
+    # disappear completely from an unchanged NW-05 specialization.
+    runtime_markers = (
         b"CreateGraphicsPipelineState failed for offline DXIL",
         b"CreateCommandSignature(DRAW_INDEXED) failed",
         b"initialization root signature was not created",
         b"initialization descriptor target has no descriptor",
         b"nw06.params.",
+    )
+    for marker in runtime_markers:
+        assert marker not in legacy_pe
+
+    # Pass-family names are part of the immutable .nwp v1 parser/validator,
+    # which is deliberately linked into every generated player. Their presence
+    # is package-contract metadata, not evidence that the NW-06 runtime path
+    # survived specialization.
+    parser_contract_markers = (
         b"compute.nw06.",
         b"graphics.nw06.",
     )
-    for marker in markers:
-        assert marker not in legacy_pe
+    for marker in parser_contract_markers:
+        assert marker in legacy_pe
 
     enabled_manifest = json.loads(json.dumps(common.manifest))
     retained = dict(enabled_manifest.get("retained", {}))
@@ -291,7 +302,9 @@ def test_unused_nw06_runtime_is_absent_from_legacy_real_pe(
         enabled_manifest,
         nwp.COMMON_PROFILE_ID,
     )
-    for marker in markers:
+    for marker in runtime_markers:
+        assert marker in enabled_pe
+    for marker in parser_contract_markers:
         assert marker in enabled_pe
     assert len(legacy_pe) < len(enabled_pe)
     assert nw05_export._pe_runtime_dependencies(legacy_pe) == (
