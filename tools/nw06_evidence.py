@@ -18,9 +18,10 @@ import shutil
 import subprocess
 import sys
 import time
+from array import array
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -272,6 +273,152 @@ def _ticks_match(value: Any, fixed_ticks: Any) -> bool:
     return set(value) == set(fixed_ticks) and len(value) == len(fixed_ticks)
 
 
+def _read_rgba32f(path: Path, expected_bytes: int) -> array | None:
+    data = path.read_bytes()
+    if len(data) != expected_bytes or len(data) % 4 != 0:
+        return None
+    values = array("f")
+    values.frombytes(data)
+    if sys.byteorder != "little":
+        values.byteswap()
+    return values
+
+
+def _compare_float_samples(
+    captured: Sequence[float],
+    reference: Sequence[float],
+    count: int,
+    *,
+    absolute_tolerance: float,
+    relative_tolerance: float,
+) -> tuple[str, str, float, float]:
+    if count <= 0 or count > len(captured) or count > len(reference):
+        return "missing", "comparison sample count is outside the captured data", 0.0, 0.0
+    maximum_absolute = 0.0
+    maximum_relative = 0.0
+    for index in range(count):
+        actual = _number(captured[index])
+        expected = _number(reference[index])
+        if actual is None or expected is None:
+            return "failed", "captured/reference data contains a non-finite value", 0.0, 0.0
+        difference = abs(actual - expected)
+        relative = difference / max(1e-30, abs(expected))
+        maximum_absolute = max(maximum_absolute, difference)
+        maximum_relative = max(maximum_relative, relative)
+        if (
+            difference > absolute_tolerance
+            and relative > relative_tolerance
+        ):
+            return (
+                "failed",
+                "captured data exceeds the absolute OR relative tolerance",
+                maximum_absolute,
+                maximum_relative,
+            )
+    return "passed", "", maximum_absolute, maximum_relative
+
+
+def _recorded_numeric_violation(section: Mapping[str, Any]) -> bool:
+    if str(section.get("status", "")).strip().lower() == "failed":
+        return True
+    absolute = _number(section.get("maximum_error"))
+    absolute_tolerance = _number(section.get("tolerance"))
+    relative = _number(section.get("maximum_relative_error"))
+    relative_tolerance = _number(section.get("relative_tolerance"))
+    if absolute is not None and absolute < 0.0:
+        return True
+    if relative is not None and relative < 0.0:
+        return True
+    if (
+        absolute_tolerance is not None
+        and absolute_tolerance > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE
+    ):
+        return True
+    if (
+        relative_tolerance is not None
+        and relative_tolerance > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE
+    ):
+        return True
+    if absolute is not None and absolute_tolerance is not None:
+        if relative is not None and relative_tolerance is not None:
+            return not (
+                absolute <= absolute_tolerance
+                or relative <= relative_tolerance
+            )
+        return absolute > absolute_tolerance
+    return False
+
+
+def _recorded_image_violation(section: Mapping[str, Any]) -> bool:
+    if str(section.get("status", "")).strip().lower() == "failed":
+        return True
+    absolute = _number(section.get("maximum_error"))
+    tolerance = _number(section.get("tolerance"))
+    relative = _number(section.get("maximum_relative_error"))
+    if absolute is not None and absolute < 0.0:
+        return True
+    if relative is not None and relative < 0.0:
+        return True
+    if tolerance is not None and tolerance > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
+        return True
+    if absolute is not None and tolerance is not None:
+        if relative is not None:
+            return not (
+                absolute <= tolerance
+                or relative <= AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE
+            )
+        return absolute > tolerance
+    if relative is not None and relative > AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE:
+        return True
+    return False
+
+
+def _recorded_failure(value: Any) -> str | None:
+    """Return a failure reason without letting incomplete fields hide it."""
+    if not isinstance(value, Mapping):
+        return None
+    if str(value.get("status", "")).strip().lower() == "failed":
+        return "comparison is marked failed"
+    for name, check in (
+        ("numeric", _recorded_numeric_violation),
+        ("image", _recorded_image_violation),
+    ):
+        section = value.get(name)
+        if isinstance(section, Mapping) and check(section):
+            return f"{name} comparison records a failure or tolerance violation"
+    tolerance = value.get("tolerance_check")
+    if isinstance(tolerance, Mapping):
+        if str(tolerance.get("status", "")).strip().lower() == "failed":
+            return "tolerance check is marked failed"
+        observed = _number(tolerance.get("observed_maximum_error"))
+        declared = _number(tolerance.get("declared_tolerance"))
+        if (
+            observed is not None
+            and declared is not None
+            and (observed < 0.0 or observed > declared)
+        ):
+            return "tolerance check records an executed violation"
+        if (
+            declared is not None
+            and declared > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE
+        ):
+            return "tolerance check relaxed the authoritative tolerance"
+    per_tick = value.get("per_tick")
+    if isinstance(per_tick, (list, tuple)):
+        for row in per_tick:
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("status", "")).strip().lower() == "failed":
+                return "a per-tick comparison is marked failed"
+            numeric = row.get("numeric")
+            image = row.get("image")
+            if isinstance(numeric, Mapping) and _recorded_numeric_violation(numeric):
+                return "a per-tick numeric comparison records a violation"
+            if isinstance(image, Mapping) and _recorded_image_violation(image):
+                return "a per-tick image comparison records a violation"
+    return None
+
+
 def _artifact_state(
     capture: Mapping[str, Any], artifact_root: Path | None
 ) -> tuple[str, str]:
@@ -355,17 +502,90 @@ def _artifact_state(
     return "passed", ""
 
 
+def _reference_state(
+    reference: Any,
+    capture: Mapping[str, Any],
+    tick: int,
+    artifact_root: Path | None,
+) -> tuple[str, str, Path | None]:
+    """Verify a per-tick reference descriptor and its execution provenance."""
+    if not isinstance(reference, Mapping):
+        return "missing", "reference artifact descriptor is absent", None
+    if str(reference.get("kind", "")).lower() != AUTHORITATIVE_CAPTURE_KIND:
+        return "failed", "reference artifact kind violates the proof contract", None
+    if str(reference.get("format", "")).lower() != AUTHORITATIVE_CAPTURE_FORMAT:
+        return "failed", "reference artifact format violates the proof contract", None
+    if (
+        reference.get("width") != AUTHORITATIVE_CAPTURE_WIDTH
+        or reference.get("height") != AUTHORITATIVE_CAPTURE_HEIGHT
+        or reference.get("tick") != tick
+    ):
+        return "failed", "reference artifact tick/resolution is wrong", None
+    path = reference.get("path")
+    digest = reference.get("sha256")
+    size = reference.get("bytes")
+    if not isinstance(path, str) or not path.strip():
+        return "missing", "reference artifact path is absent", None
+    if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
+        return "failed", "reference artifact digest is invalid", None
+    if (
+        isinstance(size, bool)
+        or not isinstance(size, int)
+        or size != AUTHORITATIVE_CAPTURE_WIDTH
+        * AUTHORITATIVE_CAPTURE_HEIGHT
+        * 16
+    ):
+        return "failed", "reference artifact byte size is invalid", None
+    provenance = reference.get("provenance")
+    if not isinstance(provenance, Mapping):
+        return "missing", "reference artifact provenance is absent", None
+    for key in (
+        "artifact_key",
+        "package_sha256",
+        "executable_sha256",
+        "manifest_sha256",
+        "profile_id",
+        "requirements_digest",
+        "toolchain_identity",
+    ):
+        if str(provenance.get(key, "")) != str(capture.get(key, "")):
+            return (
+                "failed",
+                f"reference artifact provenance does not match capture {key}",
+                None,
+            )
+    if artifact_root is None:
+        return "missing", "reference artifact contents were not supplied", None
+    root = Path(artifact_root).resolve()
+    reference_path = (root / path).resolve()
+    try:
+        reference_path.relative_to(root)
+    except ValueError:
+        return "failed", "reference artifact path escapes the evidence root", None
+    if not reference_path.is_file():
+        return "missing", "reference artifact is unavailable", None
+    if reference_path.stat().st_size != size:
+        return "failed", "reference artifact byte size does not match the file", None
+    if _sha256_file(reference_path) != digest:
+        return "failed", "reference artifact digest does not match the file", None
+    return "passed", "", reference_path
+
+
 def _per_tick_comparison_state(
     value: Any,
-    fixed_ticks: Any,
-    capture_artifacts: Any,
+    capture: Mapping[str, Any],
+    artifact_root: Path | None,
 ) -> tuple[str, str, dict[str, float]]:
-    """Validate per-tick comparison rows and bind them to captured bytes."""
+    """Compute per-tick comparisons from captured and reference bytes."""
     if not isinstance(value, (list, tuple)) or not value:
         return "missing", "per-tick comparison evidence is absent", {}
+    failure = _recorded_failure({"per_tick": value})
+    if failure is not None:
+        return "failed", failure, {}
+    fixed_ticks = capture.get("fixed_ticks")
     if not _valid_fixed_ticks(fixed_ticks):
         return "missing", "fixed tick coverage is absent", {}
-
+    capture_artifacts = capture.get("capture_artifacts")
     if not isinstance(capture_artifacts, (list, tuple)) or not capture_artifacts:
         return (
             "missing",
@@ -373,25 +593,22 @@ def _per_tick_comparison_state(
             "bound to captured bytes",
             {},
         )
-    artifact_sha_by_tick: dict[int, str] = {}
+    artifact_by_tick: dict[int, Mapping[str, Any]] = {}
     for artifact in capture_artifacts:
         if not isinstance(artifact, Mapping):
             continue
         tick = artifact.get("tick")
-        digest = artifact.get("sha256")
-        if (
-            isinstance(tick, int)
-            and not isinstance(tick, bool)
-            and isinstance(digest, str)
-            and _SHA256_PATTERN.fullmatch(digest)
-        ):
-            artifact_sha_by_tick[tick] = digest
+        if isinstance(tick, int) and not isinstance(tick, bool):
+            artifact_by_tick[tick] = artifact
 
     expected_ticks = set(fixed_ticks)
     seen_ticks: set[int] = set()
     max_numeric_absolute = 0.0
     max_numeric_relative = 0.0
     max_image_absolute = 0.0
+    max_numeric_absolute_reported = 0.0
+    max_numeric_relative_reported = 0.0
+    max_image_absolute_reported = 0.0
 
     for row in value:
         if not isinstance(row, Mapping):
@@ -402,8 +619,11 @@ def _per_tick_comparison_state(
         if tick not in expected_ticks or tick in seen_ticks:
             return "failed", "per-tick comparison coverage is duplicated or unexpected", {}
         seen_ticks.add(tick)
+        artifact = artifact_by_tick.get(tick)
+        if artifact is None:
+            return "missing", "per-tick captured artifact is absent", {}
         artifact_sha = row.get("artifact_sha256")
-        if artifact_sha_by_tick.get(tick) != artifact_sha:
+        if artifact.get("sha256") != artifact_sha:
             return "failed", "per-tick comparison is not tied to the captured artifact digest", {}
 
         numeric = row.get("numeric")
@@ -417,50 +637,86 @@ def _per_tick_comparison_state(
             if section_status not in {"passed", "within_tolerance"}:
                 return "missing", "a per-tick comparison has no pass/fail result", {}
 
-        numeric_absolute = _number(numeric.get("maximum_error"))
+        reference_state, reference_detail, reference_path = _reference_state(
+            row.get("reference"), capture, tick, artifact_root
+        )
+        if reference_state != "passed" or reference_path is None:
+            return reference_state, reference_detail, {}
+        if artifact_root is None:
+            return "missing", "captured artifact contents were not supplied", {}
+        root = Path(artifact_root).resolve()
+        captured_path = (root / str(artifact.get("path", ""))).resolve()
+        try:
+            captured_path.relative_to(root)
+        except ValueError:
+            return "failed", "captured artifact path escapes the evidence root", {}
+        if not captured_path.is_file():
+            return "missing", "captured artifact is unavailable", {}
+        expected_bytes = (
+            AUTHORITATIVE_CAPTURE_WIDTH * AUTHORITATIVE_CAPTURE_HEIGHT * 16
+        )
+        captured_values = _read_rgba32f(captured_path, expected_bytes)
+        reference_values = _read_rgba32f(reference_path, expected_bytes)
+        if captured_values is None or reference_values is None:
+            return "failed", "captured/reference data is not complete rgba32f", {}
+
         numeric_tolerance = _number(numeric.get("tolerance"))
-        numeric_relative = _number(numeric.get("maximum_relative_error"))
-        numeric_relative_tolerance = _number(numeric.get("relative_tolerance"))
-        if None in (
-            numeric_absolute,
-            numeric_tolerance,
-            numeric_relative,
-            numeric_relative_tolerance,
+        numeric_relative_tolerance = _number(
+            numeric.get("relative_tolerance")
+        )
+        if (
+            numeric_tolerance is None
+            or numeric_relative_tolerance is None
         ):
             return "missing", "per-tick numeric comparison is incomplete", {}
-        assert numeric_absolute is not None
-        assert numeric_tolerance is not None
-        assert numeric_relative is not None
-        assert numeric_relative_tolerance is not None
-        if min(
-            numeric_absolute,
-            numeric_tolerance,
-            numeric_relative,
-            numeric_relative_tolerance,
-        ) < 0.0:
+        if numeric_tolerance < 0.0 or numeric_relative_tolerance < 0.0:
             return "failed", "per-tick numeric comparison reports a negative value", {}
         if numeric_tolerance > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE:
             return "failed", "per-tick numeric comparison relaxed the authoritative tolerance", {}
         if numeric_relative_tolerance > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
             return "failed", "per-tick numeric comparison relaxed the authoritative relative tolerance", {}
-        if (
-            numeric_absolute > numeric_tolerance
-            or numeric_absolute > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE
-        ):
-            return "failed", "per-tick numeric comparison exceeded the absolute tolerance", {}
-        if (
-            numeric_relative > numeric_relative_tolerance
-            or numeric_relative > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE
-        ):
-            return "failed", "per-tick numeric comparison exceeded the relative tolerance", {}
 
-        image_absolute = _number(image.get("maximum_error"))
+        samples = numeric.get("samples")
+        if isinstance(samples, bool) or not isinstance(samples, int) or samples <= 0:
+            return "missing", "per-tick numeric sample count is invalid", {}
+        numeric_state, numeric_detail, numeric_absolute, numeric_relative = (
+            _compare_float_samples(
+                captured_values,
+                reference_values,
+                samples,
+                absolute_tolerance=numeric_tolerance,
+                relative_tolerance=numeric_relative_tolerance,
+            )
+        )
+        if numeric_state != "passed":
+            return numeric_state, numeric_detail, {}
+        reported_numeric_absolute = _number(numeric.get("maximum_error"))
+        reported_numeric_relative = _number(
+            numeric.get("maximum_relative_error")
+        )
+        if (
+            reported_numeric_absolute is None
+            or reported_numeric_relative is None
+        ):
+            return "missing", "per-tick numeric comparison result is incomplete", {}
+        if (
+            reported_numeric_absolute < numeric_absolute
+            or reported_numeric_relative < numeric_relative
+        ):
+            return "failed", "per-tick numeric summary understates measured error", {}
+        max_numeric_absolute_reported = max(
+            max_numeric_absolute_reported, reported_numeric_absolute
+        )
+        max_numeric_relative_reported = max(
+            max_numeric_relative_reported, reported_numeric_relative
+        )
+
         image_tolerance = _number(image.get("tolerance"))
         width = image.get("width")
         height = image.get("height")
-        if image_absolute is None or image_tolerance is None:
+        if image_tolerance is None:
             return "missing", "per-tick image comparison is incomplete", {}
-        if image_absolute < 0.0 or image_tolerance < 0.0:
+        if image_tolerance < 0.0:
             return "failed", "per-tick image comparison reports a negative value", {}
         if (width, height) != (
             AUTHORITATIVE_CAPTURE_WIDTH,
@@ -469,11 +725,30 @@ def _per_tick_comparison_state(
             return "failed", "per-tick image comparison resolution violates the proof contract", {}
         if image_tolerance > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
             return "failed", "per-tick image comparison relaxed the authoritative tolerance", {}
-        if (
-            image_absolute > image_tolerance
-            or image_absolute > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE
-        ):
-            return "failed", "per-tick image comparison exceeded the tolerance", {}
+        pixels = image.get("pixels")
+        if isinstance(pixels, bool) or not isinstance(pixels, int) or pixels <= 0:
+            return "missing", "per-tick image pixel count is invalid", {}
+        if pixels != AUTHORITATIVE_CAPTURE_WIDTH * AUTHORITATIVE_CAPTURE_HEIGHT:
+            return "failed", "per-tick image comparison does not cover every pixel", {}
+        image_state, image_detail, image_absolute, image_relative = (
+            _compare_float_samples(
+                captured_values,
+                reference_values,
+                pixels * 4,
+                absolute_tolerance=image_tolerance,
+                relative_tolerance=AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE,
+            )
+        )
+        if image_state != "passed":
+            return image_state, image_detail, {}
+        reported_image_absolute = _number(image.get("maximum_error"))
+        if reported_image_absolute is None:
+            return "missing", "per-tick image comparison result is incomplete", {}
+        if reported_image_absolute < image_absolute:
+            return "failed", "per-tick image summary understates measured error", {}
+        max_image_absolute_reported = max(
+            max_image_absolute_reported, reported_image_absolute
+        )
 
         max_numeric_absolute = max(max_numeric_absolute, numeric_absolute)
         max_numeric_relative = max(max_numeric_relative, numeric_relative)
@@ -488,23 +763,27 @@ def _per_tick_comparison_state(
             "numeric_absolute": max_numeric_absolute,
             "numeric_relative": max_numeric_relative,
             "image_absolute": max_image_absolute,
+            "numeric_absolute_reported": max_numeric_absolute_reported,
+            "numeric_relative_reported": max_numeric_relative_reported,
+            "image_absolute_reported": max_image_absolute_reported,
         },
     )
 
 
 def _comparison_state(
     value: Any,
-    fixed_ticks: Any,
-    capture_artifacts: Any,
+    capture: Mapping[str, Any],
+    artifact_root: Path | None,
 ) -> tuple[str, str]:
     """Classify numeric/image comparison evidence as passed, failed, or missing."""
     if not isinstance(value, Mapping):
         return "missing", "comparison evidence is absent"
+    failure = _recorded_failure(value)
+    if failure is not None:
+        return "failed", failure
     if value.get("validated") is not True:
         return "missing", "comparison was not validated"
     status = str(value.get("status", "")).strip().lower()
-    if status == "failed":
-        return "failed", "comparison is marked failed"
     if status not in {"passed", "within_tolerance"}:
         return "missing", "comparison status is absent or unknown"
     numeric = value.get("numeric")
@@ -514,10 +793,9 @@ def _comparison_state(
         return "missing", "numeric/image/tolerance comparison sections are incomplete"
     for section in (numeric, image, tolerance):
         section_status = str(section.get("status", "")).strip().lower()
-        if section_status == "failed":
-            return "failed", "a comparison section is marked failed"
         if section_status not in {"passed", "within_tolerance"}:
             return "missing", "a comparison section has no pass/fail result"
+    fixed_ticks = capture.get("fixed_ticks")
     if not _valid_fixed_ticks(fixed_ticks):
         return "missing", "fixed tick coverage is absent"
     comparison_ticks = value.get("fixed_ticks")
@@ -526,7 +804,7 @@ def _comparison_state(
     if not _ticks_match(comparison_ticks, fixed_ticks):
         return "failed", "comparison fixed ticks do not match the capture"
     per_tick_state, per_tick_detail, per_tick_maxima = _per_tick_comparison_state(
-        value.get("per_tick"), fixed_ticks, capture_artifacts
+        value.get("per_tick"), capture, artifact_root
     )
     if per_tick_state != "passed":
         return per_tick_state, per_tick_detail
@@ -544,27 +822,44 @@ def _comparison_state(
         return "failed", "numeric comparison does not sample every fixed tick"
     numeric_observed = _number(numeric.get("maximum_error"))
     numeric_declared = _number(numeric.get("tolerance"))
-    if numeric_observed is None or numeric_declared is None:
+    numeric_relative = _number(numeric.get("maximum_relative_error"))
+    relative_declared = _number(numeric.get("relative_tolerance"))
+    if None in (
+        numeric_observed,
+        numeric_declared,
+        numeric_relative,
+        relative_declared,
+    ):
         return "missing", "numeric comparison result is incomplete"
-    if numeric_observed < 0.0 or numeric_declared < 0.0:
+    assert numeric_observed is not None
+    assert numeric_declared is not None
+    assert numeric_relative is not None
+    assert relative_declared is not None
+    if (
+        numeric_observed < 0.0
+        or numeric_declared < 0.0
+        or numeric_relative < 0.0
+        or relative_declared < 0.0
+    ):
         return "failed", "numeric comparison reported a negative error/tolerance"
     if numeric_declared > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE:
         return "failed", "numeric comparison relaxed the authoritative tolerance"
-    if numeric_observed > numeric_declared or numeric_observed > AUTHORITATIVE_NUMERIC_ABSOLUTE_TOLERANCE:
-        return "failed", "numeric comparison exceeded the declared/authoritative tolerance"
-    numeric_relative = _number(numeric.get("maximum_relative_error"))
-    relative_declared = _number(numeric.get("relative_tolerance"))
-    if numeric_relative is None or relative_declared is None:
-        return "missing", "relative numeric comparison result is incomplete"
-    if numeric_relative < 0.0 or relative_declared < 0.0:
-        return "failed", "relative numeric comparison reported a negative error/tolerance"
     if relative_declared > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
         return "failed", "numeric comparison relaxed the authoritative relative tolerance"
-    if numeric_relative > relative_declared or numeric_relative > AUTHORITATIVE_NUMERIC_RELATIVE_TOLERANCE:
-        return "failed", "numeric comparison exceeded the declared/authoritative relative tolerance"
-    if numeric_observed < per_tick_maxima["numeric_absolute"]:
+    if not (
+        numeric_observed <= numeric_declared
+        or numeric_relative <= relative_declared
+    ):
+        return "failed", "numeric comparison exceeded the absolute OR relative tolerance"
+    if numeric_observed < max(
+        per_tick_maxima["numeric_absolute"],
+        per_tick_maxima["numeric_absolute_reported"],
+    ):
         return "failed", "numeric summary understates a per-tick absolute error"
-    if numeric_relative < per_tick_maxima["numeric_relative"]:
+    if numeric_relative < max(
+        per_tick_maxima["numeric_relative"],
+        per_tick_maxima["numeric_relative_reported"],
+    ):
         return "failed", "numeric summary understates a per-tick relative error"
 
     pixels = image.get("pixels")
@@ -595,9 +890,19 @@ def _comparison_state(
         return "failed", "image comparison reported a negative error/tolerance"
     if image_declared > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
         return "failed", "image comparison relaxed the authoritative tolerance"
-    if image_observed > image_declared or image_observed > AUTHORITATIVE_IMAGE_ABSOLUTE_TOLERANCE:
-        return "failed", "image comparison exceeded the declared/authoritative tolerance"
-    if image_observed < per_tick_maxima["image_absolute"]:
+    image_relative = _number(image.get("maximum_relative_error"))
+    if not (
+        image_observed <= image_declared
+        or (
+            image_relative is not None
+            and image_relative <= AUTHORITATIVE_IMAGE_RELATIVE_TOLERANCE
+        )
+    ):
+        return "failed", "image comparison exceeded the absolute OR relative tolerance"
+    if image_observed < max(
+        per_tick_maxima["image_absolute"],
+        per_tick_maxima["image_absolute_reported"],
+    ):
         return "failed", "image summary understates a per-tick error"
     if "maximum_relative_error" in image or "relative_tolerance" in image:
         image_relative = _number(image.get("maximum_relative_error"))
@@ -626,7 +931,10 @@ def _comparison_state(
             "failed",
             "tolerance check understates the aggregate image maximum error",
         )
-    if observed < per_tick_maxima["image_absolute"]:
+    if observed < max(
+        per_tick_maxima["image_absolute"],
+        per_tick_maxima["image_absolute_reported"],
+    ):
         return "failed", "tolerance summary understates a per-tick image error"
     return "passed", ""
 
@@ -665,9 +973,7 @@ def _missing_metadata(
     if "capture_artifacts" not in missing and artifact_state == "missing":
         missing.append("capture_artifacts")
     comparison_state, _ = _comparison_state(
-        capture.get("comparison"),
-        capture.get("fixed_ticks"),
-        capture.get("capture_artifacts"),
+        capture.get("comparison"), capture, artifact_root
     )
     if "comparison" not in missing and comparison_state == "missing":
         missing.append("comparison")
@@ -682,9 +988,7 @@ def validate_capture(
     missing = _missing_metadata(capture, artifact_root=artifact_root)
     artifact_state, artifact_detail = _artifact_state(capture, artifact_root)
     comparison_state, comparison_detail = _comparison_state(
-        capture.get("comparison"),
-        capture.get("fixed_ticks"),
-        capture.get("capture_artifacts"),
+        capture.get("comparison"), capture, artifact_root
     )
     status = str(capture.get("status", "pending_unverified"))
     if artifact_state == "failed" or comparison_state == "failed":
@@ -785,6 +1089,25 @@ def record_capture(
             "unavailable_telemetry": capture.get("unavailable_telemetry", []),
         }
     )
+    comparison = capture.get("comparison")
+    if isinstance(comparison, Mapping):
+        for row in comparison.get("per_tick", ()):
+            if not isinstance(row, dict):
+                continue
+            reference = row.get("reference")
+            if isinstance(reference, dict):
+                reference["provenance"] = {
+                    key: capture[key]
+                    for key in (
+                        "artifact_key",
+                        "package_sha256",
+                        "executable_sha256",
+                        "manifest_sha256",
+                        "profile_id",
+                        "requirements_digest",
+                        "toolchain_identity",
+                    )
+                }
     # Capture artifact paths are relative to the explicit artifact directory,
     # not to wherever the evidence JSON happens to be written.
     artifact_root = artifact_directory

@@ -731,6 +731,21 @@ def test_resource_plan_is_binding_aware_for_init_and_indirect_draw() -> None:
     assert source.count("root_bindings.clear();") >= 2
 
 
+def test_legacy_resource_plan_invalidates_bindings_on_signature_change() -> None:
+    source = (
+        REPO_ROOT / "src" / "player" / "resource_plan.cpp"
+    ).read_text(encoding="utf-8")
+    marker = (
+        "#else\n"
+        "std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses("
+    )
+    start = source.index(marker)
+    end = source.index("#endif", start)
+    legacy = source[start:end]
+    assert 'instruction.opcode == "frame.set_root_signature"' in legacy
+    assert "bound_by_root.clear();" in legacy
+
+
 def _model_native_binding_accesses(package: nwp.NwpPackage) -> dict:
     """Reference trace of resource_plan.cpp's per-root binding replacement."""
     roots = {root.root_signature_id: root for root in package.root_signatures}

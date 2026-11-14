@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import hashlib
+import struct
 import sys
 from pathlib import Path
 
@@ -92,8 +93,28 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
                 {
                     "tick": tick,
                     "artifact_sha256": "a" * 64,
+                    "reference": {
+                        "kind": "rgba32f_raw",
+                        "format": "rgba32f",
+                        "path": f"references/{tier}-{tick}.rgba32f",
+                        "sha256": "b" * 64,
+                        "bytes": 256 * 256 * 16,
+                        "tick": tick,
+                        "width": 256,
+                        "height": 256,
+                        "provenance": {
+                            "artifact_key": artifact_key,
+                            "package_sha256": "1" * 64,
+                            "executable_sha256": "2" * 64,
+                            "manifest_sha256": "sha256:v1:" + "3" * 64,
+                            "profile_id": nwp.COMMON_PROFILE_ID,
+                            "requirements_digest": nwp.COMMON_REQUIREMENTS_DIGEST,
+                            "toolchain_identity": "dxc:1.8.2407",
+                        },
+                    },
                     "numeric": {
                         "status": "passed",
+                        "samples": 3,
                         "maximum_error": 0.0,
                         "tolerance": 1e-5,
                         "maximum_relative_error": 0.0,
@@ -101,6 +122,7 @@ def _complete_capture(tier: str, *, artifact_key: str = "sha256:v1:artifact") ->
                     },
                     "image": {
                         "status": "passed",
+                        "pixels": 256 * 256,
                         "maximum_error": 0.0,
                         "tolerance": 1e-4,
                         "width": 256,
@@ -130,6 +152,24 @@ def _materialize_capture(root: Path, capture: dict) -> None:
         for row in capture["comparison"]["per_tick"]:
             if row["tick"] == artifact["tick"]:
                 row["artifact_sha256"] = artifact["sha256"]
+                reference = row["reference"]
+                reference["provenance"] = {
+                    key: capture[key]
+                    for key in (
+                        "artifact_key",
+                        "package_sha256",
+                        "executable_sha256",
+                        "manifest_sha256",
+                        "profile_id",
+                        "requirements_digest",
+                        "toolchain_identity",
+                    )
+                }
+                reference_path = root / reference["path"]
+                reference_path.parent.mkdir(parents=True, exist_ok=True)
+                reference_path.write_bytes(payload)
+                reference["bytes"] = len(payload)
+                reference["sha256"] = hashlib.sha256(payload).hexdigest()
 
 
 def test_pending_evidence_is_valid_but_never_verified() -> None:
@@ -766,6 +806,62 @@ def test_artifact_paths_hashes_and_resolution_are_verified(
     )["status"] == "failed"
 
 
+def test_reference_payload_is_the_comparison_source(tmp_path: Path) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    artifact = capture["capture_artifacts"][0]
+    path = tmp_path / artifact["path"]
+    payload = bytearray(path.read_bytes())
+    payload[:4] = struct.pack("<f", 10.0)
+    path.write_bytes(payload)
+    artifact["sha256"] = hashlib.sha256(payload).hexdigest()
+    for row in capture["comparison"]["per_tick"]:
+        if row["tick"] == artifact["tick"]:
+            row["artifact_sha256"] = artifact["sha256"]
+    # Caller-reported zero error must not override the measured difference
+    # between the captured bytes and the identified reference artifact.
+    validation = nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )
+    assert validation["comparison_state"] == "failed"
+    assert validation["status"] == "failed"
+
+
+def test_reference_provenance_must_match_the_capture(tmp_path: Path) -> None:
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["per_tick"][0]["reference"]["provenance"][
+        "package_sha256"
+    ] = "f" * 64
+    validation = nw06_evidence.validate_capture(
+        capture, artifact_root=tmp_path
+    )
+    assert validation["comparison_state"] == "failed"
+    assert validation["status"] == "failed"
+
+
+def test_recorded_failures_are_detected_before_missing_sections() -> None:
+    capture = _complete_capture("ada")
+    capture["comparison"]["validated"] = False
+    capture["comparison"]["status"] = "failed"
+    capture["comparison"]["numeric"]["status"] = "failed"
+    capture["comparison"].pop("image")
+    capture["comparison"].pop("per_tick")
+    validation = nw06_evidence.validate_capture(capture)
+    assert validation["comparison_state"] == "failed"
+    assert validation["status"] == "failed"
+
+
+def test_aggregate_violation_is_detected_without_per_tick_rows() -> None:
+    capture = _complete_capture("ada")
+    capture["comparison"].pop("per_tick")
+    capture["comparison"]["numeric"]["maximum_error"] = 2e-5
+    capture["comparison"]["numeric"]["maximum_relative_error"] = 5e-4
+    validation = nw06_evidence.validate_capture(capture)
+    assert validation["comparison_state"] == "failed"
+    assert validation["status"] == "failed"
+
+
 def test_fixed_ticks_must_be_tied_to_artifacts_and_comparisons(
     tmp_path: Path,
 ) -> None:
@@ -846,12 +942,21 @@ def test_numeric_relative_and_declared_tolerances_are_authoritative(tmp_path: Pa
     _materialize_capture(tmp_path, capture)
     capture["comparison"]["numeric"]["tolerance"] = 1e-6
     capture["comparison"]["numeric"]["maximum_error"] = 5e-6
+    # Absolute OR relative acceptance preserves the established reference
+    # contract: the relative error remains well inside its own bound.
+    assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "passed"
+
+    capture = _complete_capture("ada")
+    _materialize_capture(tmp_path, capture)
+    capture["comparison"]["numeric"]["maximum_error"] = 2e-5
+    capture["comparison"]["numeric"]["maximum_relative_error"] = 5e-4
     assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "failed"
 
     capture = _complete_capture("ada")
     _materialize_capture(tmp_path, capture)
     capture["comparison"]["numeric"]["relative_tolerance"] = 1e-5
     capture["comparison"]["numeric"]["maximum_relative_error"] = 5e-5
+    capture["comparison"]["numeric"]["maximum_error"] = 2e-5
     assert nw06_evidence.validate_capture(capture, artifact_root=tmp_path)["status"] == "failed"
 
 
@@ -952,6 +1057,7 @@ def test_missing_qualifications_prevent_verified_status(tmp_path: Path) -> None:
     capture = _complete_capture("ada")
     _materialize_capture(tmp_path, capture)
     capture["comparison"]["per_tick"][0]["numeric"]["maximum_error"] = 2e-5
+    capture["comparison"]["per_tick"][0]["numeric"]["maximum_relative_error"] = 5e-4
     assert nw06_evidence.validate_capture(
         capture, artifact_root=tmp_path
     )["status"] == "failed"

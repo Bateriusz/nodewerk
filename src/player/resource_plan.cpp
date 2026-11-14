@@ -490,6 +490,7 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
     // though those dispatches carry no ResourceRef operand.  Track the active
     // binding set, and derive read/write access from each resource's usage.
     std::map<std::uint32_t, std::set<std::uint32_t>> bound_by_root;
+    std::uint32_t active_root_signature_id = 0u;
     std::uint64_t frame_index = 0u;
     auto mark = [&](std::uint32_t resource_id, bool read, bool write) {
         auto it = uses.find(resource_id);
@@ -514,7 +515,16 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
             }
             return values;
         };
-        if (instruction.opcode == "frame.set_descriptor_table" ||
+        if (instruction.opcode == "frame.set_root_signature" ||
+            instruction.opcode == "frame.set_graphics_root_signature") {
+            const std::uint32_t root_id =
+                instruction.operands.empty() ? 0u
+                                             : instruction.operands[0].u32;
+            if (root_id != active_root_signature_id) {
+                active_root_signature_id = root_id;
+                bound_by_root.clear();
+            }
+        } else if (instruction.opcode == "frame.set_descriptor_table" ||
             instruction.opcode == "frame.set_root_constants") {
             const std::uint32_t root_parameter =
                 instruction.operands.empty()

@@ -205,14 +205,19 @@ must have a corresponding raw RGBA32F artifact whose path, byte size, digest,
 dimensions, and per-tick comparison are verified; artifact bytes are read and
 hashed before acceptance. Each per-tick comparison names the SHA-256 of the
 artifact it evaluates, covers that exact tick, and is checked against the
-aggregate summary. Numeric evidence must carry both absolute and relative errors
-against the authoritative bounds. A bare `status: passed`, caller-supplied `validated` flag, relaxed
-tolerance, or caller-supplied qualification label is insufficient. Missing
-required telemetry or comparison evidence stays pending, an explicit comparison
-failure or measured tolerance violation stays failed, and executed failures
-remain failures. Hardware classification is metadata only and never changes
-target selection, tolerances, quality/resolution requirements, or feature
-exclusions.
+aggregate summary. Each comparison row also identifies an RGBA32F reference
+artifact with package/executable/manifest/toolchain provenance. Artifact and
+reference bytes are read and compared directly; caller-reported errors are
+cross-checked but are never the source of truth. Numeric acceptance preserves
+the established reference contract: a sample passes when it is within the
+absolute bound **or** the relative bound, so near-zero values are not rejected
+by an unnecessarily strict relative check. A bare `status: passed`,
+caller-supplied `validated` flag, relaxed tolerance, or caller-supplied
+qualification label is insufficient. Missing required telemetry or comparison
+evidence stays pending, an explicit comparison failure or measured tolerance
+violation stays failed, and executed failures remain failures. Hardware
+classification is metadata only and never changes target selection,
+tolerances, quality/resolution requirements, or feature exclusions.
 
 Per-pass time, initialization time, shader bytes, and memory costs use the
 existing instrumentation and attribution architecture. Unavailable
