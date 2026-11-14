@@ -1,0 +1,96 @@
+# Stable alternate name for the NW-06 proof graph.  It declares the same nodes
+# and parameters as procedural_scene.nwgraph so tests and release tooling may
+# select either documented name.
+nwgraph 1
+profile nw.common.d3d12.fl12_0.sm6_0.v1 sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a
+setting optimization O2
+setting deterministic true
+setting api d3d12
+setting feature_level 12_0
+setting shader_model 6_0
+setting frequency_policy strict
+setting shader_blob_policy stable
+setting quantization_policy none
+setting quantization_bits 0
+setting quantization_step 0
+setting nw06_ticks_per_second 48000
+setting nw06_output_width 256
+setting nw06_output_height 256
+setting nw06_frames_in_flight 2
+setting nw06_frame_step_numerator 800
+setting nw06_frame_step_denominator 1
+
+node texture nw.texture.noise2d@1.0.0 frequency=initialization
+  param width 256
+  param height 256
+  param format r8g8b8a8_unorm
+  param seed 1297036693
+  param octaves 4
+  param scale 8
+  param lacunarity 2
+  param gain 0.5
+node texture_gpu nw.residency.generate_texture@1.0.0 frequency=initialization residency=gpu
+  input texture texture.out
+node torus nw.mesh.torus@1.0.0 frequency=initialization
+  param major_segments 64
+  param minor_segments 32
+  param major_radius 0.7
+  param minor_radius 0.3
+node mesh_gpu nw.residency.generate_mesh@1.0.0 frequency=initialization residency=gpu
+  input mesh torus.out
+node instances nw.scene.instances@1.0.0 frequency=initialization
+  param count 256
+  param seed 439041101
+  param placement_radius 3
+  param scale_min 0.1
+  param scale_max 0.2
+  param twist_radians 3.141592653589793
+node scene_gpu nw.residency.generate_instances@1.0.0 frequency=initialization residency=gpu
+  input scene instances.out
+node material nw.material.standard@1.0.0 frequency=frame
+  input albedo texture_gpu.out
+  param base_color 0.72 0.78 0.86 1
+  param roughness 0.42
+  param metallic 0
+  param specular 0.5
+  param texture_index 0
+node camera nw.camera.curve@1.0.0 frequency=frame
+  param keys "0:0;16000:2.0943951;32000:4.1887902;48000:6.2831853"
+  param interpolation linear
+  param fov_degrees 60
+  param aspect 1
+  param near 0.1
+  param far 100
+  param radius_min 3.2
+  param radius_max 4.8
+  param height 1.6
+  param curve_value_min 0
+  param curve_value_max 6.2831853
+  param curve_quantization_bits 16
+  param curve_tolerance 0.0001
+node sun nw.light.directional@1.0.0 frequency=frame
+  param direction -0.4 -1 -0.3
+  param color 1 1 1
+node twist nw.animation.twist@1.0.0 frequency=frame
+  param max_twist_degrees 180
+node render nw.render.instanced@1.0.0 frequency=frame residency=gpu
+  input mesh mesh_gpu.out
+  input texture texture_gpu.out
+  input scene scene_gpu.out
+  input material material.out
+  input camera camera.out
+  input light sun.out
+  input animation twist.out
+node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu
+  input image render.image
+  param threshold 0.7
+  param intensity 0.35
+  param radius 1.5
+  param resolution_scale 0.5
+node tonemap nw.post.tonemap@1.0.0 frequency=frame residency=gpu
+  input image bloom.out
+  param exposure 1.1
+  param gamma 2.2
+  param operator aces
+node screen nw.render.present@1.0.0 frequency=frame residency=gpu
+  input image tonemap.out

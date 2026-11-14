@@ -100,12 +100,20 @@ struct DerivedRequirements {
 DerivedRequirements DeriveRequirements(const Package& pkg) {
     DerivedRequirements derived{};
     std::set<std::uint32_t> root_constant_resources;
-    for (const auto& instruction : pkg.frame) {
-        if (instruction.opcode == "frame.set_root_constants" &&
+    const auto record_root_constants = [&](const Instruction& instruction) {
+        if ((instruction.opcode == "frame.set_root_constants" ||
+             instruction.opcode == "frame.set_graphics_root_constants" ||
+             instruction.opcode == "init.set_root_constants") &&
             instruction.operands.size() == 3u &&
             instruction.operands[1].type == package::OperandType::ResourceRef) {
             root_constant_resources.insert(instruction.operands[1].u32);
         }
+    };
+    for (const auto& instruction : pkg.initialization) {
+        record_root_constants(instruction);
+    }
+    for (const auto& instruction : pkg.frame) {
+        record_root_constants(instruction);
         if (instruction.opcode == "frame.present") {
             derived.swap_chain_buffer_count = package::kSwapChainBufferCount;
         }
@@ -113,6 +121,15 @@ DerivedRequirements DeriveRequirements(const Package& pkg) {
     for (const auto& resource : pkg.resources) {
         if (resource.usage == "sampler") {
             ++derived.sampler_count;
+        } else if (resource.usage == "uav_srv") {
+            // A combined UAV/SRV resource consumes one descriptor in each
+            // view; the native requirement derivation must agree with the
+            // exporter's derive_capability_requirements().
+            derived.descriptor_count += 2u;
+        } else if (resource.usage == "rtv_srv") {
+            // The RTV is a non-shader-visible descriptor; only the SRV view
+            // counts toward the per-frame CBV/SRV/UAV descriptor budget.
+            ++derived.descriptor_count;
         } else if (resource.usage == "srv" || resource.usage == "uav" ||
                    (resource.usage == "cbv" &&
                     root_constant_resources.count(resource.resource_id) == 0u)) {

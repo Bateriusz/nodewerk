@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -219,3 +220,93 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     )
     assert changed_hash is not None
     assert changed_hash.group(1) != image_hash.group(1)
+
+
+def test_unused_nw06_runtime_is_absent_from_legacy_real_pe(
+    tmp_path: Path,
+) -> None:
+    template_value = os.environ.get("NW05_REAL_PLAYER_TEMPLATE", "")
+    if os.name != "nt" or not template_value:
+        pytest.skip("real PE closure validation runs in Windows CI")
+    template = Path(template_value)
+    assert template.is_file()
+    dxc = shutil.which("dxc") or shutil.which("dxc.exe")
+    assert dxc, "pinned DXC must be on PATH for real-PE closure validation"
+    settings = nw05_export.ExportSettings(
+        byte_ceiling=64 * 1024 * 1024,
+        memory_budget=512 * 1024 * 1024,
+        player_template=str(template),
+    )
+    result = nw05_export.export_graph(
+        PROCEDURAL,
+        tmp_path / "legacy",
+        settings=settings,
+        dxc_executable=dxc,
+    )
+    common = result.artifacts[nwp.COMMON_PROFILE_ID]
+    assert common.executable_bytes is not None
+    package_bytes, manifest_bytes = nw05_export.extract_embedded_package(
+        common.executable_bytes
+    )
+    raw_size = (
+        len(common.executable_bytes)
+        - len(package_bytes)
+        - len(manifest_bytes)
+        - nw05_export.EMBED_FOOTER_SIZE
+    )
+    legacy_pe = common.executable_bytes[:raw_size]
+    # These strings belong to optional NW-06 runtime implementations and must
+    # disappear completely from an unchanged NW-05 specialization.
+    runtime_markers = (
+        b"CreateGraphicsPipelineState failed for offline DXIL",
+        b"CreateCommandSignature(DRAW_INDEXED) failed",
+        b"initialization root signature was not created",
+        b"initialization descriptor target has no descriptor",
+        b"nw06.params.",
+    )
+    for marker in runtime_markers:
+        assert marker not in legacy_pe
+
+    # Pass-family names are part of the immutable .nwp v1 parser/validator,
+    # which is deliberately linked into every generated player. Their presence
+    # is package-contract metadata, not evidence that the NW-06 runtime path
+    # survived specialization.
+    parser_contract_markers = (
+        b"compute.nw06.",
+        b"graphics.nw06.",
+    )
+    for marker in parser_contract_markers:
+        assert marker in legacy_pe
+
+    enabled_manifest = json.loads(json.dumps(common.manifest))
+    retained = dict(enabled_manifest.get("retained", {}))
+    runtime = set(retained.get("runtime_implementations", []))
+    runtime.update(
+        {
+            "player.nw06.gpu-initialization",
+            "player.nw06.indexed-instanced-indirect",
+        }
+    )
+    retained["runtime_implementations"] = sorted(runtime)
+    enabled_manifest["retained"] = retained
+    nw05_export._refresh_manifest_sha256(enabled_manifest)
+    enabled_source = nw05_export.generate_player_source(
+        package_sha256=hashlib.sha256(common.package_bytes).hexdigest(),
+        manifest_sha256=enabled_manifest["manifest_sha256"],
+        manifest=enabled_manifest,
+        memory_budget_bytes=settings.memory_budget,
+    )
+    enabled_pe = nw05_export._build_specialized_player(
+        template,
+        enabled_source,
+        enabled_manifest,
+        nwp.COMMON_PROFILE_ID,
+    )
+    for marker in runtime_markers:
+        assert marker in enabled_pe
+    for marker in parser_contract_markers:
+        assert marker in enabled_pe
+    assert len(legacy_pe) < len(enabled_pe)
+    assert nw05_export._pe_runtime_dependencies(legacy_pe) == (
+        nw05_export._pe_runtime_dependencies(enabled_pe)
+    )

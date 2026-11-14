@@ -23,7 +23,7 @@ import struct
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 try:  # The package tooling and the NW-01 shader tool live in the same directory.
     from offline_shader_pack import validate_dxil_container
@@ -107,7 +107,9 @@ KNOWN_DXGI_FORMATS = frozenset(REQUIRED_DXGI_FORMATS)
 KNOWN_SHADER_TARGETS = frozenset({"cs_6_0", "vs_6_0", "ps_6_0"})
 KNOWN_SHADER_TARGET_PREFIXES = frozenset({"cs", "vs", "ps"})
 KNOWN_RESOURCE_KINDS = frozenset({"buffer", "texture2d", "texture3d"})
-KNOWN_RESOURCE_USAGES = frozenset({"uav", "srv", "cbv", "sampler", "rtv", "dsv", "readback"})
+KNOWN_RESOURCE_USAGES = frozenset(
+    {"uav", "srv", "cbv", "sampler", "rtv", "dsv", "readback", "uav_srv", "rtv_srv"}
+)
 KNOWN_PARAMETER_TYPES = frozenset(
     {"float", "float2", "float3", "float4", "uint", "int"}
 )
@@ -122,6 +124,55 @@ PASS_FAMILY_BINDINGS: dict[str, dict[str, tuple[str, int, int]]] = {
         "input": ("srv", 0, 0),    # t0
         "output": ("uav", 0, 0),   # u0
         "sampler": ("sampler", 0, 0),  # s0
+    },
+    # NW-06 GPU initialization.  One generation dispatch writes the texture,
+    # vertex/index buffers, flat instance/material tables, and indirect draw
+    # arguments.  It is initialization-only and never enters the frame stream.
+    "compute.nw06.generate": {
+        "params": ("cbv", 0, 0),
+        "output": ("uav", 0, 0),
+        "vertices": ("uav", 1, 0),
+        "indices": ("uav", 2, 0),
+        "instances": ("uav", 3, 0),
+        "args": ("uav", 4, 0),
+    },
+    # Dense material table generation.  Separate from the scene generator so
+    # the material constants use their own bounded root-constant block.
+    "compute.nw06.material": {
+        "params": ("cbv", 0, 0),
+        "output": ("uav", 0, 0),
+    },
+    "compute.nw06.instances": {
+        "params": ("cbv", 0, 0),
+        "output": ("uav", 0, 0),
+        "args": ("uav", 1, 0),
+    },
+    "compute.nw06.camera": {
+        "params": ("cbv", 0, 0),
+        "output": ("uav", 0, 0),
+    },
+    "compute.nw06.light": {
+        "params": ("cbv", 0, 0),
+        "output": ("uav", 0, 0),
+    },
+    # One conventional indexed instanced raster pass.  The vertex and index
+    # buffers are bound through the input assembler; instance and material
+    # tables are dense structured/raw SRV tables.
+    "graphics.nw06.instanced": {
+        "params": ("cbv", 0, 0),
+        "texture": ("srv", 0, 0),
+        "instances": ("srv", 1, 0),
+        "materials": ("srv", 2, 0),
+        "camera": ("srv", 3, 0),
+        "light": ("srv", 4, 0),
+        "depth": ("dsv", 0, 0),
+    },
+    # Half-resolution bloom and tonemapping compute post chain.
+    "compute.nw06.post": {
+        "params": ("cbv", 0, 0),
+        "input": ("srv", 0, 0),
+        "bloom": ("srv", 1, 0),
+        "output": ("uav", 0, 0),
     },
 }
 
@@ -207,6 +258,17 @@ INSTRUCTION_CONTRACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "init.create_root_signature": ("initialization", ("root_signature_ref",)),
     "init.create_pipeline": ("initialization", ("shader_ref", "root_signature_ref")),
     "init.upload_resource": ("initialization", ("resource_ref",)),
+    "init.set_root_signature": ("initialization", ("root_signature_ref",)),
+    "init.set_root_constants": ("initialization", ("u32", "resource_ref", "u32")),
+    "init.set_descriptor_table": (
+        "initialization",
+        ("u32", "string", "resource_ref"),
+    ),
+    "init.dispatch": ("initialization", ("u32", "u32", "u32", "shader_ref")),
+    "init.create_graphics_pipeline": (
+        "initialization",
+        ("shader_ref", "shader_ref", "root_signature_ref"),
+    ),
     "frame.set_root_signature": ("frame", ("root_signature_ref",)),
     "frame.set_root_constants": ("frame", ("u32", "resource_ref", "u32")),
     "frame.set_descriptor_table": ("frame", ("u32", "string", "resource_ref")),
@@ -216,6 +278,18 @@ INSTRUCTION_CONTRACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "frame.copy_buffer": ("frame", ("resource_ref", "resource_ref", "u64")),
     "frame.set_timeline": ("frame", ("u32", "u64")),
     "frame.present": ("frame", ("resource_ref",)),
+    "frame.set_graphics_pipeline": ("frame", ("shader_ref",)),
+    "frame.set_graphics_root_signature": ("frame", ("root_signature_ref",)),
+    "frame.set_graphics_root_constants": (
+        "frame",
+        ("u32", "resource_ref", "u32"),
+    ),
+    "frame.set_graphics_descriptor_table": (
+        "frame",
+        ("u32", "string", "resource_ref"),
+    ),
+    "frame.set_render_targets": ("frame", ("resource_ref", "resource_ref")),
+    "frame.execute_indirect": ("frame", ("resource_ref", "u32")),
 }
 
 
@@ -1792,8 +1866,13 @@ def derive_capability_requirements(
     """Return the exact capability requirements emitted by a package."""
     root_constant_resources = {
         instruction.operands[1].value
-        for instruction in frame
-        if instruction.opcode == "frame.set_root_constants"
+        for instruction in (*initialization, *frame)
+        if instruction.opcode
+        in {
+            "frame.set_root_constants",
+            "frame.set_graphics_root_constants",
+            "init.set_root_constants",
+        }
         and len(instruction.operands) == 3
         and instruction.operands[1].type == "resource_ref"
     }
@@ -1804,7 +1883,11 @@ def derive_capability_requirements(
     for resource in resources:
         if resource.usage == "sampler":
             sampler_count += 1
-        elif resource.usage == "srv" or resource.usage == "uav" or (
+        elif resource.usage == "uav_srv":
+            descriptor_count += 2
+        elif resource.usage == "rtv_srv":
+            descriptor_count += 1
+        elif resource.usage in {"srv", "uav"} or (
             resource.usage == "cbv"
             and resource.resource_id not in root_constant_resources
         ):
@@ -2021,7 +2104,14 @@ def _validate_resources(
                 f"unknown resource usage '{resource.usage}'",
             )
         if resource.kind == "buffer":
-            if resource.usage not in {"cbv", "srv", "uav", "readback", "sampler"}:
+            if resource.usage not in {
+                "cbv",
+                "srv",
+                "uav",
+                "uav_srv",
+                "readback",
+                "sampler",
+            }:
                 error(
                     "package_resource_usage",
                     f"buffer resource '{resource.name}' has incompatible usage '{resource.usage}'",
@@ -2042,7 +2132,14 @@ def _validate_resources(
                     f"buffer resource '{resource.name}' must be a single array slice/mip",
                 )
         elif resource.kind == "texture2d":
-            if resource.usage not in {"srv", "uav", "rtv", "dsv"}:
+            if resource.usage not in {
+                "srv",
+                "uav",
+                "uav_srv",
+                "rtv",
+                "rtv_srv",
+                "dsv",
+            }:
                 error(
                     "package_resource_usage",
                     f"texture2d resource '{resource.name}' has incompatible usage '{resource.usage}'",
@@ -2120,7 +2217,7 @@ def _validate_resources(
                     f"texture2d '{resource.name}' size_bytes does not match its checked allocation",
                 )
         else:  # texture3d
-            if resource.usage not in {"srv", "uav"}:
+            if resource.usage not in {"srv", "uav", "uav_srv"}:
                 error(
                     "package_resource_usage",
                     f"texture3d resource '{resource.name}' has incompatible usage '{resource.usage}'",
@@ -2234,7 +2331,17 @@ def _validate_resources(
             )
             continue
         allowed = tuple(family_contract.values())
-        if (resource.usage, resource.binding_slot, resource.binding_space) not in allowed:
+        satisfied = False
+        for usage, slot, space in allowed:
+            usage_matches = resource.usage == usage or (
+                resource.usage == "uav_srv" and usage in {"uav", "srv"}
+            ) or (
+                resource.usage == "rtv_srv" and usage in {"rtv", "srv"}
+            )
+            if usage_matches and resource.binding_slot == slot and resource.binding_space == space:
+                satisfied = True
+                break
+        if not satisfied:
             error(
                 "package_resource_binding_contract",
                 f"resource '{resource.name}' does not obey the fixed "
@@ -2251,8 +2358,19 @@ def _validate_resources(
         # Input SRV and sampler bindings are only required when the emitted
         # shader family actually consumes them.  The math/noise fixture reads
         # only root constants and writes its UAV.
-        required.discard(contract["sampler"])
-        required.discard(contract["input"])
+        if "sampler" in contract:
+            required.discard(contract["sampler"])
+        if "input" in contract:
+            required.discard(contract["input"])
+        if family.startswith("compute.nw06.") or family.startswith("graphics.nw06."):
+            # NW-06 resources are shared between generation, raster, and post
+            # passes; each root signature proves its own used binding subset.
+            required = set()
+        if not present and family == "compute.math_noise":
+            # The baseline family is only required when the artifact actually
+            # emits compute.math_noise resources. NW-06 graphics artifacts do
+            # not add an unused compute fixture closure.
+            continue
         missing = sorted(required - present)
         if missing:
             diagnostics.append(
@@ -2406,8 +2524,38 @@ def _validate_instructions(
                             f"signature {root_operand.value}, but the shader record "
                             f"requires {shader.root_signature_id}",
                         )
+            if instruction.opcode == "init.create_graphics_pipeline":
+                vertex_operand, pixel_operand, root_operand = instruction.operands
+                if (
+                    vertex_operand.type == "shader_ref"
+                    and pixel_operand.type == "shader_ref"
+                    and root_operand.type == "root_signature_ref"
+                ):
+                    vertex_shader = shader_by_id.get(vertex_operand.value)
+                    pixel_shader = shader_by_id.get(pixel_operand.value)
+                    if vertex_shader is not None and vertex_shader.target != "vs_6_0":
+                        error(
+                            "package_graphics_pipeline_target",
+                            "graphics pipeline first shader must be vs_6_0",
+                        )
+                    if pixel_shader is not None and pixel_shader.target != "ps_6_0":
+                        error(
+                            "package_graphics_pipeline_target",
+                            "graphics pipeline second shader must be ps_6_0",
+                        )
+                    for shader in (vertex_shader, pixel_shader):
+                        if shader is not None and shader.root_signature_id != root_operand.value:
+                            error(
+                                "package_shader_root_signature",
+                                "graphics pipeline shaders and root signature disagree",
+                            )
             if (
-                instruction.opcode == "frame.set_root_signature"
+                instruction.opcode
+                in {
+                    "frame.set_root_signature",
+                    "frame.set_graphics_root_signature",
+                    "init.set_root_signature",
+                }
                 and instruction.operands[0].type == "root_signature_ref"
                 and instruction.operands[0].value in root_ids
             ):
@@ -2440,7 +2588,7 @@ def _validate_instructions(
                 elif (
                     operand.type == "u32"
                     and operand_index in (0, 1, 2)
-                    and instruction.opcode == "frame.dispatch"
+                    and instruction.opcode in {"frame.dispatch", "init.dispatch"}
                 ):
                     if operand.value == 0 or operand.value > 65535:
                         error(
@@ -2453,13 +2601,22 @@ def _validate_instructions(
                             "package_instruction_reference",
                             f"timeline instruction references missing parameter {operand.value}",
                         )
-                elif operand.type == "u32" and instruction.opcode == "frame.set_root_constants" and operand_index == 2:
+                elif (
+                    operand.type == "u32"
+                    and instruction.opcode
+                    in {"frame.set_root_constants", "frame.set_graphics_root_constants", "init.set_root_constants"}
+                    and operand_index == 2
+                ):
                     if operand.value > MAX_ROOT_SIGNATURE_DWORD_COST:
                         error(
                             "package_instruction_operand",
                             f"root constants dword count {operand.value} exceeds {MAX_ROOT_SIGNATURE_DWORD_COST}",
                         )
-                elif operand.type == "resource_ref" and instruction.opcode == "frame.set_root_constants":
+                elif (
+                    operand.type == "resource_ref"
+                    and instruction.opcode
+                    in {"frame.set_root_constants", "frame.set_graphics_root_constants", "init.set_root_constants"}
+                ):
                     # The second operand names the root-constant resource.  It
                     # must be a CBV resource.
                     matching = next(
@@ -2477,7 +2634,14 @@ def _validate_instructions(
             # usage for both root constants and descriptor tables.
             if (
                 instruction.opcode
-                in {"frame.set_root_constants", "frame.set_descriptor_table"}
+                in {
+                    "frame.set_root_constants",
+                    "frame.set_descriptor_table",
+                    "frame.set_graphics_root_constants",
+                    "frame.set_graphics_descriptor_table",
+                    "init.set_root_constants",
+                    "init.set_descriptor_table",
+                }
                 and len(instruction.operands) == len(operand_types)
                 and instruction.operands[0].type == "u32"
             ):
@@ -2505,6 +2669,19 @@ def _validate_instructions(
                                 "frame.set_root_signature",
                             )
                         else:
+                            nw06_family = active_root.family.startswith(
+                                "compute.nw06."
+                            ) or active_root.family.startswith("graphics.nw06.")
+
+                            def usage_matches(expected: str) -> bool:
+                                return expected == resource.usage or (
+                                    resource.usage == "uav_srv"
+                                    and expected in {"uav", "srv"}
+                                ) or (
+                                    resource.usage == "rtv_srv"
+                                    and expected in {"rtv", "srv"}
+                                )
+
                             matched = any(
                                 binding.root_parameter == root_parameter
                                 and binding.name == resource.name
@@ -2513,6 +2690,12 @@ def _validate_instructions(
                                 and binding.space == resource.binding_space
                                 for binding in active_root.bindings
                             )
+                            if not matched and nw06_family:
+                                matched = any(
+                                    binding.root_parameter == root_parameter
+                                    and usage_matches(binding.usage)
+                                    for binding in active_root.bindings
+                                )
                             if not matched:
                                 error(
                                     "package_root_signature_binding",
@@ -2543,6 +2726,67 @@ def _validate_instructions(
                                 f"not match pipeline root signature {pipeline_root} for "
                                 f"shader {shader.shader_id}",
                             )
+            if instruction.opcode == "init.dispatch":
+                shader_operand = instruction.operands[-1]
+                if shader_operand.type == "shader_ref":
+                    shader = shader_by_id.get(shader_operand.value)
+                    if shader is not None and shader.target != "cs_6_0":
+                        error(
+                            "package_dispatch_shader_target",
+                            "init.dispatch requires a compute shader target",
+                        )
+            if instruction.opcode == "frame.set_graphics_pipeline":
+                shader_operand = instruction.operands[0]
+                if shader_operand.type == "shader_ref":
+                    shader = shader_by_id.get(shader_operand.value)
+                    if shader is not None and shader.target != "vs_6_0":
+                        error(
+                            "package_graphics_pipeline_target",
+                            "frame.set_graphics_pipeline requires a vertex shader",
+                        )
+            if instruction.opcode == "frame.execute_indirect":
+                args = next(
+                    (
+                        item
+                        for item in resources
+                        if item.resource_id == instruction.operands[0].value
+                    ),
+                    None,
+                )
+                if (
+                    args is None
+                    or args.kind != "buffer"
+                    or args.size_bytes < 20
+                    or instruction.operands[1].value == 0
+                ):
+                    error(
+                        "package_indirect_draw",
+                        "frame.execute_indirect requires a buffer with at least "
+                        "one DRAW_INDEXED_INSTANCED argument record",
+                    )
+            if instruction.opcode == "frame.set_render_targets":
+                color_id = instruction.operands[0].value
+                depth_id = instruction.operands[1].value
+                color = next(
+                    (item for item in resources if item.resource_id == color_id),
+                    None,
+                )
+                depth = next(
+                    (item for item in resources if item.resource_id == depth_id),
+                    None,
+                )
+                if (
+                    color is None
+                    or color.kind != "texture2d"
+                    or color.usage not in {"rtv", "rtv_srv"}
+                    or depth is None
+                    or depth.usage != "dsv"
+                ):
+                    error(
+                        "package_render_targets",
+                        "frame.set_render_targets requires an RTV texture and a "
+                        "depth-stencil texture",
+                    )
 
     for phase_name, actual, required in (
         ("initialization", actual_init, set(CapabilityRecord().required_init_instructions)),
@@ -2634,6 +2878,7 @@ def _validate_parameters(
 def _decode_root_signature_blob(
     blob: bytes | bytearray | memoryview,
     diagnostics: list[dict[str, Any]],
+    flags_out: list[int] | None = None,
 ) -> tuple[tuple[tuple[int, int, int, int, int], ...], tuple[tuple[int, int, int, int, int], ...]] | None:
     """Parse a serialized ``DXBC``/``RTS0`` D3D12 root signature payload.
 
@@ -2697,9 +2942,13 @@ def _decode_root_signature_blob(
             flags,
         ) = struct.unpack_from("<IIIIII", payload, 0)
         del static_sampler_offset
-        if version not in (1, 2) or flags != 0 or static_sampler_count != 0:
+        # Only ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT (bit 0) is accepted.  Other
+        # D3D12 root-signature flags are outside the common profile contract.
+        if version not in (1, 2) or (flags & ~1) != 0 or static_sampler_count != 0:
             malformed("serialized root signature version/flags are unsupported")
             return None
+        if flags_out is not None:
+            flags_out.append(flags)
         if parameter_count > MAX_RECORD_COUNT:
             malformed("serialized root signature count exceeds the v1 limit")
             return None
@@ -2814,9 +3063,22 @@ def _validate_root_signatures(
                 f"{len(record.blob)} bytes, exceeding {MAX_BLOB_BYTES}",
             )
         else:
-            decoded = _decode_root_signature_blob(record.blob, diagnostics)
+            flags_out: list[int] = []
+            decoded = _decode_root_signature_blob(
+                record.blob, diagnostics, flags_out
+            )
             if decoded is not None:
                 parameters, ranges = decoded
+                expected_flags = (
+                    1 if record.family.startswith("graphics.") else 0
+                )
+                if not flags_out or flags_out[0] != expected_flags:
+                    error(
+                        "package_root_signature_flags",
+                        f"root signature {record.root_signature_id} serialized "
+                        f"flags {flags_out[0] if flags_out else 'unavailable'} "
+                        f"do not match the expected flags {expected_flags}",
+                    )
                 same_bindings = len(parameters) == len(record.bindings)
                 used_parameters: set[int] = set()
                 referenced_ranges: set[int] = set()
@@ -2837,7 +3099,7 @@ def _validate_root_signatures(
                             parameter[0] != 1
                             or parameter[2] != binding.slot
                             or parameter[3] != binding.space
-                            or parameter[4] != 4
+                            or not 1 <= parameter[4] <= MAX_ROOT_SIGNATURE_DWORD_COST
                         ):
                             same_bindings = False
                             break
@@ -2943,7 +3205,10 @@ def _validate_root_signatures(
                     f"root signature binding '{binding.name}' is not declared by the "
                     f"{record.family} pass-family contract",
                 )
-            if (record.family, binding.name) not in resource_names:
+            nw06_family = record.family.startswith(
+                "compute.nw06."
+            ) or record.family.startswith("graphics.nw06.")
+            if (record.family, binding.name) not in resource_names and not nw06_family:
                 error(
                     "package_root_signature_binding",
                     f"root signature binding '{binding.name}' has no matching resource descriptor",
@@ -2958,6 +3223,19 @@ def _validate_root_signatures(
                 ),
                 None,
             )
+            if matching is None and nw06_family:
+                matching = next(
+                    (
+                        item
+                        for item in resources
+                        if item.name == binding.name
+                        or (
+                            binding.usage in {"srv", "uav"}
+                            and item.usage in {"uav_srv"}
+                        )
+                    ),
+                    None,
+                )
             if matching is not None and (
                 binding.usage,
                 binding.slot,
@@ -2966,7 +3244,7 @@ def _validate_root_signatures(
                 matching.usage,
                 matching.binding_slot,
                 matching.binding_space,
-            ):
+            ) and not nw06_family:
                 error(
                     "package_root_signature_binding",
                     f"root signature binding '{binding.name}' does not match its "
@@ -2976,10 +3254,13 @@ def _validate_root_signatures(
             bindings_by_name = {
                 binding.name: binding for binding in record.bindings
             }
-            for required_name, expected_root_parameter in (
-                ("params", 0),
-                ("output", 1),
+            required = [("params", 0)]
+            if not (
+                record.family.startswith("compute.nw06.")
+                or record.family.startswith("graphics.nw06.")
             ):
+                required.append(("output", 1))
+            for required_name, expected_root_parameter in required:
                 binding = bindings_by_name.get(required_name)
                 if binding is None:
                     error(
@@ -3148,10 +3429,27 @@ def _validate_cross_references(
         and instruction.operands
         and instruction.operands[0].type == "shader_ref"
     }
+    for instruction in initialization:
+        if (
+            instruction.opcode == "init.create_graphics_pipeline"
+            and len(instruction.operands) >= 2
+        ):
+            pipeline_shaders.update(
+                operand.value
+                for operand in instruction.operands[:2]
+                if operand.type == "shader_ref"
+            )
     dispatched_shaders = {
         instruction.operands[-1].value
         for instruction in frame
         if instruction.opcode == "frame.dispatch"
+        and instruction.operands
+        and instruction.operands[-1].type == "shader_ref"
+    }
+    init_dispatched_shaders = {
+        instruction.operands[-1].value
+        for instruction in initialization
+        if instruction.opcode == "init.dispatch"
         and instruction.operands
         and instruction.operands[-1].type == "shader_ref"
     }
@@ -3164,7 +3462,11 @@ def _validate_cross_references(
                     section=SECTION_INITIALIZATION,
                 )
             )
-        if shader.target == "cs_6_0" and shader.shader_id not in dispatched_shaders:
+        if (
+            shader.target == "cs_6_0"
+            and shader.shader_id not in dispatched_shaders
+            and shader.shader_id not in init_dispatched_shaders
+        ):
             diagnostics.append(
                 package_diagnostic(
                     "package_shader_unreferenced",
@@ -3951,6 +4253,9 @@ validate_package = validate_package_bytes
 def make_root_signature_blob(
     family: str,
     bindings: Sequence[RootBinding],
+    constant_dwords: Mapping[str, int] | None = None,
+    *,
+    flags: int = 0,
 ) -> bytes:
     """Return a deterministic, reflection-free serialized D3D12 signature.
 
@@ -3961,6 +4266,18 @@ def make_root_signature_blob(
     baseline pass-family contract.
     """
     del family
+    # D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT is the only
+    # flag this v1 serializer emits.  A graphics pipeline with a vertex input
+    # layout requires it; compute signatures remain flag-free.
+    if flags & ~1:
+        raise PackageValidationError(
+            package_diagnostic(
+                "package_root_signature_flags",
+                f"serialized root signature flags 0x{flags:x} are unsupported",
+                section=SECTION_ROOT_SIGNATURES,
+            )
+        )
+    constant_dwords = dict(constant_dwords or {})
     ordered = sorted(bindings, key=lambda binding: binding.root_parameter)
     range_type_for_usage = {"srv": 0, "uav": 1, "sampler": 3}
     header_size = 24
@@ -3972,7 +4289,17 @@ def make_root_signature_blob(
         data_offset = data_start + len(data)
         if binding.usage == "cbv":
             parameter_rows.append((1, 0, data_offset))
-            data += struct.pack("<III", binding.slot, binding.space, 4)
+            dwords = int(constant_dwords.get(binding.name, 4))
+            if not 1 <= dwords <= MAX_ROOT_SIGNATURE_DWORD_COST:
+                raise PackageValidationError(
+                    package_diagnostic(
+                        "package_root_signature_cost",
+                        f"root-constant binding '{binding.name}' declares "
+                        f"{dwords} dwords outside 1..{MAX_ROOT_SIGNATURE_DWORD_COST}",
+                        section=SECTION_ROOT_SIGNATURES,
+                    )
+                )
+            data += struct.pack("<III", binding.slot, binding.space, dwords)
             continue
         range_type = range_type_for_usage.get(binding.usage)
         if range_type is None:
@@ -3997,7 +4324,7 @@ def make_root_signature_blob(
         header_size,
         0,
         data_start + len(data),
-        0,
+        int(flags) & 1,
     )
     payload = bytearray(header)
     for parameter in parameter_rows:

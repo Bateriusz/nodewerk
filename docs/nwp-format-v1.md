@@ -142,6 +142,39 @@ constants) and `output` occupies root parameter 1 (descriptor table). Every
 `frame.set_root_constants` / `frame.set_descriptor_table` operand must select
 the same root parameter as the binding it references.
 
+### NW-06 additive pass families and instructions
+
+NW-06 extends the v1 instruction/opcode vocabulary without changing the
+container header, section IDs, directory layout, or checksum rules. These
+additions are emitted only by graphs that use the NW-06 operators:
+
+| Family | Bindings |
+| :--- | :--- |
+| `compute.nw06.generate` | `params` b0, `output` u0, `vertices` u1, `indices` u2 |
+| `compute.nw06.instances` | `params` b0, `output` u0, `args` u1 |
+| `compute.nw06.material` | `params` b0, `output` u0 |
+| `compute.nw06.camera` | `params` b0, `output` u0 |
+| `compute.nw06.light` | `params` b0, `output` u0 |
+| `graphics.nw06.instanced` | `params` b0, `texture` t0, `instances` t1, `materials` t2, `camera` t3, `light` t4 |
+| `compute.nw06.post` | `params` b0, `input` t0, `bloom` t1, `output` u0 |
+
+The initialization opcodes are `init.set_root_signature`,
+`init.set_root_constants`, `init.set_descriptor_table`, `init.dispatch`, and
+`init.create_graphics_pipeline`. The frame opcodes are
+`frame.set_graphics_root_signature`, `frame.set_graphics_root_constants`,
+`frame.set_graphics_descriptor_table`, `frame.set_graphics_pipeline`,
+`frame.set_render_targets`, and `frame.execute_indirect`. GPU generation is
+initialization-only; static generators never enter `FRAM`.
+
+`frame.execute_indirect` consumes one 20-byte
+`DRAW_INDEXED_INSTANCED` argument record generated on the GPU. Resource usage
+`uav_srv` exposes the same GPU resource through UAV and SRV descriptors, while
+`rtv_srv` exposes RTV and SRV descriptors. Combined descriptors are player
+plumbing only and do not alter the package section format.
+
+`frame.barrier` code `13` maps to `INDIRECT_ARGUMENT`, and code `14` maps to
+`ALL_SHADER_RESOURCE`; codes `0..12` retain their existing NW-04 meanings.
+
 The resource descriptors, root-signature records, and dependent instruction
 operands must agree. Duplicate bindings, out-of-contract bindings, missing
 required `b0`/`u0` bindings, unknown pass families, and undeclared formats are
@@ -164,7 +197,10 @@ follow D3D12 (`descriptor table = 0`, `32-bit constants = 1`; `SRV = 0`,
 `UAV = 1`, `CBV = 2`, `sampler = 3`). `ID3D12Device::CreateRootSignature`
 therefore receives serialized signature bytes; the package never stores a
 private binding-list format. Static samplers are not part of the baseline
-family. Root-signature `dword_cost` is the total D3D12 cost of all parameters
+family. The serialized `flags` field accepts only
+`ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT` (bit 0); graphics pass families require it
+when their pipeline declares a vertex input layout, and compute families emit
+zero. Root-signature `dword_cost` is the total D3D12 cost of all parameters
 (one DWORD per descriptor table plus the number of 32-bit constants), not just
 the constant count. Cross-blob function sharing is never assumed.
 

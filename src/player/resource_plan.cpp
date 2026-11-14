@@ -8,6 +8,34 @@
 #include <utility>
 #include <vector>
 
+#ifndef NW06_COMPILE_GPU_INITIALIZATION
+#define NW06_COMPILE_GPU_INITIALIZATION 1
+#endif
+#ifndef NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
+#define NW06_COMPILE_INDEXED_INSTANCED_INDIRECT 1
+#endif
+#ifndef NW06_COMPILE_ANALYTIC_LIGHTING_TWIST
+#define NW06_COMPILE_ANALYTIC_LIGHTING_TWIST 1
+#endif
+#ifndef NW06_COMPILE_ABSOLUTE_TICK_CAMERA
+#define NW06_COMPILE_ABSOLUTE_TICK_CAMERA 1
+#endif
+#ifndef NW06_COMPILE_HALF_RESOLUTION_BLOOM
+#define NW06_COMPILE_HALF_RESOLUTION_BLOOM 1
+#endif
+#ifndef NW06_COMPILE_TONEMAP
+#define NW06_COMPILE_TONEMAP 1
+#endif
+#if NW06_COMPILE_GPU_INITIALIZATION || \
+    NW06_COMPILE_INDEXED_INSTANCED_INDIRECT || \
+    NW06_COMPILE_ANALYTIC_LIGHTING_TWIST || \
+    NW06_COMPILE_ABSOLUTE_TICK_CAMERA || \
+    NW06_COMPILE_HALF_RESOLUTION_BLOOM || NW06_COMPILE_TONEMAP
+#define NW06_COMPILE_ANY_RUNTIME 1
+#else
+#define NW06_COMPILE_ANY_RUNTIME 0
+#endif
+
 #if defined(_WIN32)
 #include <d3d12.h>
 #include <dxgi.h>
@@ -89,11 +117,19 @@ D3D12_RESOURCE_DESC PlacedResourceDesc(
         desc.SampleDesc.Count = 1u;
         desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     }
-    if (resource.usage == "uav") {
+    if (resource.usage == "uav"
+#if NW06_COMPILE_ANY_RUNTIME
+        || resource.usage == "uav_srv"
+#endif
+    ) {
         desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
             desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     }
-    if (resource.usage == "rtv") {
+    if (resource.usage == "rtv"
+#if NW06_COMPILE_ANY_RUNTIME
+        || resource.usage == "rtv_srv"
+#endif
+    ) {
         desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(
             desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
     }
@@ -187,6 +223,243 @@ bool BarrierStateWrites(std::uint32_t state) {
     }
 }
 
+#if NW06_COMPILE_ANY_RUNTIME
+std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
+    const package::Package& pkg) {
+    std::map<std::uint32_t, DerivedResourceUse> uses;
+    std::map<std::uint32_t, const package::ResourceDescriptor*> by_id;
+    for (const auto& resource : pkg.resources) {
+        DerivedResourceUse use{};
+        use.alias_group = AliasCandidateGroup(resource);
+        uses[resource.resource_id] = use;
+        by_id[resource.resource_id] = &resource;
+    }
+
+    std::map<std::uint32_t, const package::RootSignatureRecord*> roots_by_id;
+    for (const auto& root : pkg.root_signatures) {
+        roots_by_id[root.root_signature_id] = &root;
+    }
+    const auto binding_usage_for = [&roots_by_id](std::uint32_t root_id,
+                                                  std::uint32_t root_parameter)
+        -> std::string {
+        const auto root_it = roots_by_id.find(root_id);
+        if (root_it == roots_by_id.end() || root_it->second == nullptr) {
+            return {};
+        }
+        for (const auto& binding : root_it->second->bindings) {
+            if (binding.root_parameter == root_parameter) {
+                return binding.usage;
+            }
+        }
+        return {};
+    };
+    const auto effective_usage =
+        [&by_id](std::uint32_t resource_id,
+                 const std::string& binding) -> std::string {
+        if (!binding.empty()) return binding;
+        const auto it = by_id.find(resource_id);
+        return it == by_id.end() ? std::string{} : it->second->usage;
+    };
+
+    // Initialization-produced contents are lifetime roots: resources uploaded
+    // or written by GPU initialization may not be aliased over by frame
+    // scratch that is still expected to preserve those contents.
+    std::map<std::uint32_t, std::map<std::uint32_t, std::string>>
+        init_bound_by_root;
+    std::uint32_t init_root_signature_id = 0u;
+    for (const auto& instruction : pkg.initialization) {
+        std::vector<std::uint32_t> refs;
+        for (const auto& operand : instruction.operands) {
+            if (operand.type == package::OperandType::ResourceRef) {
+                refs.push_back(operand.u32);
+            }
+        }
+        if (instruction.opcode == "init.set_root_signature") {
+            const std::uint32_t root_id =
+                instruction.operands.empty() ? 0u
+                                             : instruction.operands[0].u32;
+            if (root_id != init_root_signature_id) {
+                init_root_signature_id = root_id;
+                init_bound_by_root.clear();
+            }
+        } else if (instruction.opcode == "init.set_descriptor_table" ||
+                   instruction.opcode == "init.set_root_constants") {
+            const std::uint32_t root_parameter =
+                instruction.operands.empty() ? 0u
+                                             : instruction.operands[0].u32;
+            const std::string binding =
+                instruction.opcode == "init.set_root_constants"
+                    ? std::string("cbv")
+                    : binding_usage_for(init_root_signature_id,
+                                        root_parameter);
+            auto& root_bindings = init_bound_by_root[root_parameter];
+            root_bindings.clear();
+            for (const std::uint32_t resource_id : refs) {
+                root_bindings[resource_id] =
+                    effective_usage(resource_id, binding);
+            }
+        } else if (instruction.opcode == "init.dispatch") {
+            for (const auto& root_binding : init_bound_by_root) {
+                for (const auto& resource_binding : root_binding.second) {
+                    const auto it = uses.find(resource_binding.first);
+                    if (it == uses.end()) continue;
+                    if (resource_binding.second == "uav" ||
+                        resource_binding.second == "uav_srv") {
+                        it->second.initialized = true;
+                        it->second.write = true;
+                    } else if (resource_binding.second == "srv" ||
+                               resource_binding.second == "cbv") {
+                        it->second.read = true;
+                    }
+                }
+            }
+        } else if (instruction.opcode == "init.upload_resource") {
+            for (const std::uint32_t resource_id : refs) {
+                auto it = uses.find(resource_id);
+                if (it == uses.end()) continue;
+                it->second.initialized = true;
+                it->second.write = true;
+            }
+        }
+    }
+
+    // Descriptor bindings remain live for every subsequent frame.dispatch even
+    // though those dispatches carry no ResourceRef operand.  Track the active
+    // binding set, and derive read/write access from the active root binding's
+    // usage rather than a combined uav_srv resource usage.
+    std::map<std::uint32_t, std::map<std::uint32_t, std::string>>
+        bound_by_root;
+    std::uint32_t active_root_signature_id = 0u;
+    std::uint64_t frame_index = 0u;
+    auto mark = [&](std::uint32_t resource_id, bool read, bool write) {
+        auto it = uses.find(resource_id);
+        if (it == uses.end()) return;
+        it->second.read = it->second.read || read;
+        it->second.write = it->second.write || write;
+        it->second.frame_access = true;
+        it->second.first_frame =
+            std::min(it->second.first_frame, frame_index);
+        it->second.activation_frame =
+            std::min(it->second.activation_frame, frame_index);
+        it->second.last_frame =
+            std::max(it->second.last_frame, frame_index);
+    };
+    for (const auto& instruction : pkg.frame) {
+        const auto refs = [&instruction]() {
+            std::vector<std::uint32_t> values;
+            for (const auto& operand : instruction.operands) {
+                if (operand.type == package::OperandType::ResourceRef) {
+                    values.push_back(operand.u32);
+                }
+            }
+            return values;
+        };
+        if (instruction.opcode == "frame.set_root_signature" ||
+            instruction.opcode == "frame.set_graphics_root_signature") {
+            const std::uint32_t root_id =
+                instruction.operands.empty() ? 0u
+                                             : instruction.operands[0].u32;
+            if (root_id != active_root_signature_id) {
+                active_root_signature_id = root_id;
+                bound_by_root.clear();
+            }
+        } else if (instruction.opcode == "frame.set_descriptor_table" ||
+            instruction.opcode == "frame.set_root_constants" ||
+            instruction.opcode == "frame.set_graphics_descriptor_table" ||
+            instruction.opcode == "frame.set_graphics_root_constants") {
+            const std::uint32_t root_parameter =
+                instruction.operands.empty()
+                    ? 0u
+                    : instruction.operands[0].u32;
+            const bool root_constants =
+                instruction.opcode == "frame.set_root_constants" ||
+                instruction.opcode == "frame.set_graphics_root_constants";
+            const std::string binding =
+                root_constants
+                    ? std::string("cbv")
+                    : binding_usage_for(active_root_signature_id,
+                                        root_parameter);
+            auto& root_bindings = bound_by_root[root_parameter];
+            root_bindings.clear();
+            for (const std::uint32_t resource_id : refs()) {
+                root_bindings[resource_id] =
+                    effective_usage(resource_id, binding);
+                mark(resource_id, true, false);
+            }
+        } else if (instruction.opcode == "frame.dispatch") {
+            for (const auto& binding : bound_by_root) {
+                for (const auto& resource_binding : binding.second) {
+                    if (resource_binding.second == "uav" ||
+                        resource_binding.second == "uav_srv") {
+                        mark(resource_binding.first, true, true);
+                    } else if (resource_binding.second == "srv" ||
+                               resource_binding.second == "cbv") {
+                        mark(resource_binding.first, true, false);
+                    }
+                }
+            }
+        } else if (instruction.opcode == "frame.set_render_targets") {
+            std::vector<std::uint32_t> ids = refs();
+            if (!ids.empty()) mark(ids[0], false, true);
+            if (ids.size() > 1u) mark(ids[1], false, true);
+        } else if (instruction.opcode == "frame.execute_indirect") {
+            for (const auto resource_id : refs()) {
+                mark(resource_id, true, false);
+            }
+            for (const auto& binding : bound_by_root) {
+                for (const auto& resource_binding : binding.second) {
+                    mark(resource_binding.first, true, false);
+                }
+            }
+            for (const auto& resource : pkg.resources) {
+                if (resource.name == "vertices" ||
+                    resource.name == "indices") {
+                    mark(resource.resource_id, true, false);
+                }
+            }
+        } else if (instruction.opcode == "frame.copy_buffer") {
+            std::vector<std::uint32_t> ids = refs();
+            if (!ids.empty()) mark(ids[0], true, false);
+            if (ids.size() > 1u) mark(ids[1], false, true);
+        } else if (instruction.opcode == "frame.barrier") {
+            if (!instruction.operands.empty()) {
+                const bool writes =
+                    BarrierStateWrites(instruction.operands[0].u32);
+                for (const auto resource_id : refs()) {
+                    mark(resource_id, true, writes);
+                }
+            }
+        } else if (instruction.opcode == "frame.present") {
+            for (const auto resource_id : refs()) {
+                mark(resource_id, true, false);
+            }
+        } else {
+            for (const auto resource_id : refs()) {
+                mark(resource_id, true, false);
+            }
+        }
+        ++frame_index;
+    }
+
+    for (auto& entry : uses) {
+        DerivedResourceUse& use = entry.second;
+        const auto resource_it = by_id.find(entry.first);
+        if (resource_it == by_id.end()) continue;
+        const std::string& usage = resource_it->second->usage;
+        // Constant/uniform inputs, samples, readback targets, and any resource
+        // whose contents originate in initialization persist across frames.
+        use.persistent = usage == "cbv" || usage == "sampler" ||
+                         usage == "readback" || use.initialized ||
+                         (use.read && !use.write);
+        if (!use.frame_access) {
+            use.first_frame = 0u;
+            use.last_frame = 0u;
+        }
+    }
+    return uses;
+}
+
+#else
 std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
     const package::Package& pkg) {
     std::map<std::uint32_t, DerivedResourceUse> uses;
@@ -217,6 +490,7 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
     // though those dispatches carry no ResourceRef operand.  Track the active
     // binding set, and derive read/write access from each resource's usage.
     std::map<std::uint32_t, std::set<std::uint32_t>> bound_by_root;
+    std::uint32_t active_root_signature_id = 0u;
     std::uint64_t frame_index = 0u;
     auto mark = [&](std::uint32_t resource_id, bool read, bool write) {
         auto it = uses.find(resource_id);
@@ -241,7 +515,16 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
             }
             return values;
         };
-        if (instruction.opcode == "frame.set_descriptor_table" ||
+        if (instruction.opcode == "frame.set_root_signature" ||
+            instruction.opcode == "frame.set_graphics_root_signature") {
+            const std::uint32_t root_id =
+                instruction.operands.empty() ? 0u
+                                             : instruction.operands[0].u32;
+            if (root_id != active_root_signature_id) {
+                active_root_signature_id = root_id;
+                bound_by_root.clear();
+            }
+        } else if (instruction.opcode == "frame.set_descriptor_table" ||
             instruction.opcode == "frame.set_root_constants") {
             const std::uint32_t root_parameter =
                 instruction.operands.empty()
@@ -308,6 +591,8 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
     }
     return uses;
 }
+
+#endif
 
 void DeriveLifetimes(const package::Package& pkg, ResourcePlan* plan) {
     const auto uses = DeriveResourceUses(pkg);

@@ -53,6 +53,8 @@ BARRIER_STATE_NAMES = {
     10: "COPY_SOURCE",
     11: "PRESENT",
     12: "GENERIC_READ",
+    13: "INDIRECT_ARGUMENT",
+    14: "ALL_SHADER_RESOURCE",
 }
 
 READ_STATES = frozenset(
@@ -63,6 +65,8 @@ READ_STATES = frozenset(
         "PIXEL_SHADER_RESOURCE",
         "COPY_SOURCE",
         "GENERIC_READ",
+        "ALL_SHADER_RESOURCE",
+        "INDIRECT_ARGUMENT",
     }
 )
 WRITE_STATES = frozenset({"RENDER_TARGET", "UNORDERED_ACCESS", "DEPTH_WRITE", "COPY_DEST"})
@@ -491,13 +495,13 @@ def _barrier_state(instruction: nwp.Instruction) -> str:
 
 
 def _usage_state(usage: str) -> str:
-    if usage == "uav":
+    if usage in {"uav", "uav_srv"}:
         return "UNORDERED_ACCESS"
     if usage == "cbv":
         return "VERTEX_AND_CONSTANT_BUFFER"
-    if usage == "srv":
+    if usage in {"srv", "uav_srv", "rtv_srv"}:
         return "NON_PIXEL_SHADER_RESOURCE"
-    if usage == "rtv":
+    if usage in {"rtv", "rtv_srv"}:
         return "RENDER_TARGET"
     if usage == "dsv":
         return "DEPTH_WRITE"
@@ -524,12 +528,22 @@ def _initial_upload_bytes(resource: LogicalResource) -> int:
     return _logical_allocation_upper_bound(resource)
 
 
-def _looks_transient(resource: nwp.ResourceDescriptor, accesses: Sequence[ResourceAccess]) -> tuple[bool, str]:
+def _looks_transient(
+    resource: nwp.ResourceDescriptor,
+    accesses: Sequence[ResourceAccess],
+    initialization_roots: set[int] | None = None,
+) -> tuple[bool, str]:
     if resource.usage in {"cbv", "readback", "sampler"}:
         return False, f"{resource.usage} resources are retained across frames"
     if resource.kind not in {"buffer", "texture2d", "texture3d"}:
         return False, "unsupported resource kind for alias eligibility"
-    if any(access.opcode == "frame.set_root_constants" for access in accesses):
+    if initialization_roots and resource.resource_id in initialization_roots:
+        return False, "initialization-produced contents are retained across frames"
+    if any(
+        access.opcode
+        in {"frame.set_root_constants", "frame.set_graphics_root_constants"}
+        for access in accesses
+    ):
         return False, "root-constant resource is retained across frames"
     if any(
         access.phase == "initialization"
@@ -569,18 +583,51 @@ def build_logical_schedule(
     }
     initialization_order: list[str] = []
     frame_order: list[str] = []
+    # Resources whose contents are produced during initialization remain live
+    # for later frames even when their only frame accesses are reads or
+    # read/write barriers.  Tracking the initialization binding state is what
+    # keeps GPU-generated vertex/index/argument/instance tables out of the
+    # transient alias pool.
+    initialization_roots: set[int] = set()
+    init_bound: dict[int, int] = {}
 
     for index, instruction in enumerate(package.initialization):
         initialization_order.append(instruction.opcode)
+        opcode = instruction.opcode
+        if opcode in {"init.set_root_signature", "init.set_graphics_root_signature"}:
+            # A root-signature switch invalidates prior descriptor bindings.
+            init_bound.clear()
+        elif opcode in {
+            "init.set_descriptor_table",
+            "init.set_graphics_descriptor_table",
+            "init.set_root_constants",
+            "init.set_graphics_root_constants",
+        }:
+            for resource_id in _resource_refs(instruction):
+                if resource_id in resources_by_id:
+                    init_bound[resource_id] = resource_id
+        elif opcode == "init.dispatch":
+            initialization_roots.update(init_bound)
+        elif opcode in {
+            "init.upload_resource",
+            "init.copy_buffer",
+            "init.upload_buffer",
+            "init.upload_texture",
+        }:
+            initialization_roots.update(
+                resource_id
+                for resource_id in _resource_refs(instruction)
+                if resource_id in resources_by_id
+            )
         for resource_id in _resource_refs(instruction):
             if resource_id not in resources_by_id:
                 continue
-            access = "write" if instruction.opcode.startswith("init.") else "read"
+            access = "write" if opcode.startswith("init.") else "read"
             access_by_id[resource_id].append(
                 ResourceAccess(
                     phase="initialization",
                     index=index,
-                    opcode=instruction.opcode,
+                    opcode=opcode,
                     access=access,
                     state=_usage_state(resources_by_id[resource_id].usage),
                 )
@@ -588,75 +635,112 @@ def build_logical_schedule(
 
     # Descriptor tables and root constants bind resources for subsequent
     # dispatches in the same frame stream.  Track the current binding set.
-    bound_by_root: dict[int, set[int]] = {}
+    root_by_id = {
+        root.root_signature_id: root for root in package.root_signatures
+    }
+    active_root_signature_id: int | None = None
+
+    def binding_usage(root_parameter: int) -> str | None:
+        if active_root_signature_id is None:
+            return None
+        root_record = root_by_id.get(active_root_signature_id)
+        if root_record is None:
+            return None
+        for binding in root_record.bindings:
+            if binding.root_parameter == root_parameter:
+                return binding.usage
+        return None
+
+    # root parameter -> resource id -> binding usage
+    bound_by_root: dict[int, dict[int, str]] = {}
     bound: dict[int, str] = {}
     for index, instruction in enumerate(package.frame):
         frame_order.append(instruction.opcode)
         opcode = instruction.opcode
-        if opcode == "frame.set_descriptor_table":
+        if opcode in {
+            "frame.set_root_signature",
+            "frame.set_graphics_root_signature",
+        }:
+            root_parameter = (
+                int(instruction.operands[0].value)
+                if instruction.operands
+                else -1
+            )
+            if root_parameter != active_root_signature_id:
+                active_root_signature_id = root_parameter
+                bound_by_root.clear()
+                bound.clear()
+        elif opcode in {
+            "frame.set_descriptor_table",
+            "frame.set_graphics_descriptor_table",
+        }:
             refs = _resource_refs(instruction)
             root_parameter = (
                 int(instruction.operands[0].value)
                 if instruction.operands
                 else -1
             )
-            bound_by_root[root_parameter] = set(refs)
-            bound = {
-                resource_id: resources_by_id[resource_id].usage
-                for resource_ids in bound_by_root.values()
-                for resource_id in resource_ids
-                if resource_id in resources_by_id
-            }
+            root_usage = binding_usage(root_parameter)
+            usage_by_resource: dict[int, str] = {}
             for resource_id in refs:
                 resource = resources_by_id.get(resource_id)
                 if resource is None:
                     continue
-                bound[resource_id] = resource.usage
+                usage_by_resource[resource_id] = root_usage or resource.usage
+            bound_by_root[root_parameter] = usage_by_resource
+            bound = {
+                resource_id: usage
+                for usage_by_resource in bound_by_root.values()
+                for resource_id, usage in usage_by_resource.items()
+            }
+            for resource_id, usage in usage_by_resource.items():
                 access_by_id[resource_id].append(
                     ResourceAccess(
                         phase="frame",
                         index=index,
                         opcode=opcode,
                         access="read",
-                        state=_usage_state(resource.usage),
+                        state=_usage_state(usage),
                     )
                 )
-        elif opcode == "frame.set_root_constants":
+        elif opcode in {
+            "frame.set_root_constants",
+            "frame.set_graphics_root_constants",
+        }:
             refs = _resource_refs(instruction)
             root_parameter = (
                 int(instruction.operands[0].value)
                 if instruction.operands
                 else -1
             )
-            bound_by_root[root_parameter] = set(refs)
-            bound = {
-                resource_id: resources_by_id[resource_id].usage
-                for resource_ids in bound_by_root.values()
-                for resource_id in resource_ids
-                if resource_id in resources_by_id
-            }
+            root_usage = binding_usage(root_parameter)
+            usage_by_resource: dict[int, str] = {}
             for resource_id in refs:
                 resource = resources_by_id.get(resource_id)
                 if resource is None:
                     continue
-                bound[resource_id] = resource.usage
+                usage_by_resource[resource_id] = root_usage or resource.usage
+            bound_by_root[root_parameter] = usage_by_resource
+            bound = {
+                resource_id: usage
+                for usage_by_resource in bound_by_root.values()
+                for resource_id, usage in usage_by_resource.items()
+            }
+            for resource_id, usage in usage_by_resource.items():
                 access_by_id[resource_id].append(
                     ResourceAccess(
                         phase="frame",
                         index=index,
                         opcode=opcode,
                         access="read",
-                        state=_usage_state(resource.usage),
+                        state=_usage_state(usage),
                     )
                 )
         elif opcode == "frame.dispatch":
-            for resource_id in sorted(bound):
-                resource = resources_by_id.get(resource_id)
-                if resource is None:
-                    continue
-                if resource.usage == "uav":
+            for resource_id, usage in sorted(bound.items()):
+                if usage == "uav":
                     access = "write"
-                elif resource.usage in {"srv", "cbv"}:
+                elif usage in {"srv", "cbv"}:
                     access = "read"
                 else:
                     continue
@@ -666,9 +750,80 @@ def build_logical_schedule(
                         index=index,
                         opcode=opcode,
                         access=access,
-                        state=_usage_state(resource.usage),
+                        state=_usage_state(usage),
                     )
                 )
+        elif opcode == "frame.set_graphics_pipeline":
+            # Pipeline selection binds the raster shaders.  It consumes no
+            # resource directly; the vertex/index/instance/material accesses
+            # are attributed to the following frame.execute_indirect.
+            pass
+        elif opcode == "frame.set_render_targets":
+            # Operand 0 is the colour RTV and operand 1 is the depth DSV.
+            for operand_index, resource_id in enumerate(
+                _resource_refs(instruction)
+            ):
+                if resource_id not in resources_by_id:
+                    continue
+                access_by_id[resource_id].append(
+                    ResourceAccess(
+                        phase="frame",
+                        index=index,
+                        opcode=opcode,
+                        access="write",
+                        state=(
+                            "RENDER_TARGET"
+                            if operand_index == 0
+                            else "DEPTH_WRITE"
+                        ),
+                    )
+                )
+        elif opcode == "frame.execute_indirect":
+            # ARGUMENT buffer plus the currently bound resources and the
+            # conventional vertex/index buffers selected by name.
+            for resource_id in _resource_refs(instruction):
+                if resource_id not in resources_by_id:
+                    continue
+                access_by_id[resource_id].append(
+                    ResourceAccess(
+                        phase="frame",
+                        index=index,
+                        opcode=opcode,
+                        access="read",
+                        state="INDIRECT_ARGUMENT",
+                    )
+                )
+            for resource_id in sorted(bound):
+                access_by_id[resource_id].append(
+                    ResourceAccess(
+                        phase="frame",
+                        index=index,
+                        opcode=opcode,
+                        access="read",
+                        state="ALL_SHADER_RESOURCE",
+                    )
+                )
+            for resource in package.resources:
+                if resource.name == "vertices":
+                    access_by_id[resource.resource_id].append(
+                        ResourceAccess(
+                            phase="frame",
+                            index=index,
+                            opcode=opcode,
+                            access="read",
+                            state="VERTEX_AND_CONSTANT_BUFFER",
+                        )
+                    )
+                elif resource.name == "indices":
+                    access_by_id[resource.resource_id].append(
+                        ResourceAccess(
+                            phase="frame",
+                            index=index,
+                            opcode=opcode,
+                            access="read",
+                            state="INDEX_BUFFER",
+                        )
+                    )
         elif opcode == "frame.copy_buffer":
             refs = _resource_refs(instruction)
             if len(refs) >= 2:
@@ -740,7 +895,9 @@ def build_logical_schedule(
         frame_accesses = [item for item in accesses if item.phase == "frame"]
         first_frame = min((item.index for item in frame_accesses), default=0)
         last_frame = max((item.index for item in frame_accesses), default=0)
-        transient, reason = _looks_transient(resource, accesses)
+        transient, reason = _looks_transient(
+            resource, accesses, initialization_roots
+        )
         persistent = not transient
         lifetime = ResourceLifetime(
             first_instruction=first_frame,

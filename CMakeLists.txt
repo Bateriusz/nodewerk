@@ -18,6 +18,12 @@ option(NW05_COMPILE_FP16_SHADER_OPS_QUERY "Compile D3D12_OPTIONS4 fp16 query sup
 option(NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD "Compile procedural texture upload implementation" ON)
 option(NW05_COMPILE_PROCEDURAL_TEXTURE_R8 "Compile R8G8B8A8 procedural texture materialization" ON)
 option(NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F "Compile RGBA32F procedural texture materialization" ON)
+option(NW06_COMPILE_GPU_INITIALIZATION "Compile GPU initialization dispatches" ON)
+option(NW06_COMPILE_INDEXED_INSTANCED_INDIRECT "Compile indexed instanced indirect raster path" ON)
+option(NW06_COMPILE_ANALYTIC_LIGHTING_TWIST "Compile analytic lighting/twist path" ON)
+option(NW06_COMPILE_ABSOLUTE_TICK_CAMERA "Compile absolute-tick camera path" ON)
+option(NW06_COMPILE_HALF_RESOLUTION_BLOOM "Compile half-resolution bloom path" ON)
+option(NW06_COMPILE_TONEMAP "Compile tonemap path" ON)
 
 if(WIN32)
 nw_add_offline_compute_shader(
@@ -41,6 +47,37 @@ nw_add_offline_compute_shader(
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/display_fixture_dxil.h"
     "kDisplayFixtureDxil"
 )
+
+# NW-06 fixed procedural generation/raster/post shaders.  They are compiled by
+# the same pinned offline DXC as the rest of the player payloads; the exporter
+# also compiles the exact same sources into the emitted .nwp package.  Runtime
+# source compilation is never used.
+foreach(_nw06_shader
+    "nw06_generate_cs:GenerateGeometryCS:cs_6_0:kNw06GenerateDxil"
+    "nw06_instances_cs:GenerateInstancesCS:cs_6_0:kNw06InstancesDxil"
+    "nw06_material_cs:MaterialCS:cs_6_0:kNw06MaterialDxil"
+    "nw06_camera_cs:CameraDataCS:cs_6_0:kNw06CameraDxil"
+    "nw06_light_cs:LightDataCS:cs_6_0:kNw06LightDxil"
+    "nw06_scene_vs:SceneVS:vs_6_0:kNw06SceneVsDxil"
+    "nw06_scene_ps:ScenePS:ps_6_0:kNw06ScenePsDxil"
+    "nw06_bloom_cs:BloomCS:cs_6_0:kNw06BloomDxil"
+    "nw06_tonemap_cs:TonemapCS:cs_6_0:kNw06TonemapDxil")
+    string(REPLACE ":" ";" _nw06_parts "${_nw06_shader}")
+    list(GET _nw06_parts 0 _nw06_name)
+    list(GET _nw06_parts 1 _nw06_entry)
+    list(GET _nw06_parts 2 _nw06_target)
+    list(GET _nw06_parts 3 _nw06_symbol)
+    nw_add_offline_compute_shader(
+        "nw_offline_${_nw06_name}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/nw06/${_nw06_name}.hlsl"
+        "${_nw06_entry}"
+        "${_nw06_target}"
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/${_nw06_name}.dxil"
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated/${_nw06_name}_dxil.h"
+        "${_nw06_symbol}"
+    )
+    add_dependencies(nw_offline_shaders "nw_offline_${_nw06_name}")
+endforeach()
 else()
     # Non-Windows configuration does not need offline D3D12 payloads.
     add_custom_target(nw_offline_shaders)
@@ -87,6 +124,12 @@ if(NOT WIN32)
         NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=0
         NW05_COMPILE_PROCEDURAL_TEXTURE_R8=0
         NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=0
+        NW06_COMPILE_GPU_INITIALIZATION=0
+        NW06_COMPILE_INDEXED_INSTANCED_INDIRECT=0
+        NW06_COMPILE_ANALYTIC_LIGHTING_TWIST=0
+        NW06_COMPILE_ABSOLUTE_TICK_CAMERA=0
+        NW06_COMPILE_HALF_RESOLUTION_BLOOM=0
+        NW06_COMPILE_TONEMAP=0
     )
 endif()
 target_include_directories(nw_player_bootstrap PUBLIC
@@ -184,6 +227,25 @@ else()
     target_compile_options(nw_package_player PRIVATE -w)
 endif()
 
+# Host-only NW-06 contract check: decodes an exported common package and runs
+# the exact native capability derivation/validation used by PackagePlayer
+# initialization.  It has no D3D12 dependency and is built on every platform.
+add_executable(nw06_capability_check
+    fixtures/nw06_capability/main.cpp
+    src/player/capability_requirements.cpp
+)
+target_link_libraries(nw06_capability_check PRIVATE nw_package_player)
+target_include_directories(nw06_capability_check PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+)
+target_compile_features(nw06_capability_check PRIVATE cxx_std_20)
+# Link with the same player CRT/profile as nw_package_player.  Without this,
+# MSVC builds the checker's main object as /MD while the package library is
+# /MT and lld-link reports a RuntimeLibrary /failifmismatch error.
+nw_apply_player_profile(nw06_capability_check)
+
 # NW-04: package-driven compute + fullscreen-display player fixture.  The
 # fixture consumes the established NW-03 `.nwp` v1 container and never links
 # compiler/editor/reflection tooling.
@@ -245,6 +307,12 @@ if(NW05_GENERATED_PLAYER_SOURCE)
         NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD}>
         NW05_COMPILE_PROCEDURAL_TEXTURE_R8=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_R8}>
         NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F}>
+        NW06_COMPILE_GPU_INITIALIZATION=$<BOOL:${NW06_COMPILE_GPU_INITIALIZATION}>
+        NW06_COMPILE_INDEXED_INSTANCED_INDIRECT=$<BOOL:${NW06_COMPILE_INDEXED_INSTANCED_INDIRECT}>
+        NW06_COMPILE_ANALYTIC_LIGHTING_TWIST=$<BOOL:${NW06_COMPILE_ANALYTIC_LIGHTING_TWIST}>
+        NW06_COMPILE_ABSOLUTE_TICK_CAMERA=$<BOOL:${NW06_COMPILE_ABSOLUTE_TICK_CAMERA}>
+        NW06_COMPILE_HALF_RESOLUTION_BLOOM=$<BOOL:${NW06_COMPILE_HALF_RESOLUTION_BLOOM}>
+        NW06_COMPILE_TONEMAP=$<BOOL:${NW06_COMPILE_TONEMAP}>
     )
     add_dependencies(nw05_player_bootstrap nw_offline_shaders)
     add_dependencies(nw05_player_bootstrap nw_offline_display_shader)

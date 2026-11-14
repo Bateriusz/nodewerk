@@ -32,6 +32,10 @@ jobs:
           cmake -S . -B build/host-player -DCMAKE_BUILD_TYPE=Release -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
           cmake --build build/host-player --target nw_package_player_host_compile --parallel 2
 
+      - name: Build NW-06 native capability checker
+        run: |
+          cmake --build build/host-player --target nw06_capability_check --parallel 2
+
       - name: Run NW-01 automated contract and schema test suite
         run: pytest -v
 

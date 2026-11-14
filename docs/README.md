@@ -22,6 +22,7 @@ graph semantics and `.nwgraph` schema.
 13. [`.nwp` Version 1 Container Contract](nwp-format-v1.md)
 14. [NW-04 Package Player Runtime](nw04-player-runtime.md)
 15. [NW-05 Typed-Graph Export and Procedural-Image Path](nw05-typed-graph-export.md)
+16. [NW-06 Procedural Scene, Timeline & Fixed-Tick Evidence](nw06-procedural-scene.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -39,4 +40,6 @@ graph semantics and `.nwgraph` schema.
 - NW-04 Player Hardware Evidence: [`benchmarks/nw04-hardware-evidence.json`](../benchmarks/nw04-hardware-evidence.json) (validated by [`schemas/nw04-player-evidence.schema.json`](../schemas/nw04-player-evidence.schema.json))
 - NW-05 Alias/GPU Evidence: [`benchmarks/nw05-hardware-evidence.json`](../benchmarks/nw05-hardware-evidence.json) (validated by [`schemas/nw05-hardware-evidence.schema.json`](../schemas/nw05-hardware-evidence.schema.json)); remains pending until identical-artifact Ada/Blackwell execution is recorded.
 - NW-05 Link Manifest, Export Report & Size Attribution Schemas: [`schemas/nw05-link-manifest.schema.json`](../schemas/nw05-link-manifest.schema.json), [`schemas/nw05-export-report.schema.json`](../schemas/nw05-export-report.schema.json), [`schemas/nw05-size-report.schema.json`](../schemas/nw05-size-report.schema.json)
+- NW-06 Fixed-Tick Hardware Evidence: [`benchmarks/nw06-hardware-evidence.json`](../benchmarks/nw06-hardware-evidence.json) (validated by [`schemas/nw06-hardware-evidence.schema.json`](../schemas/nw06-hardware-evidence.schema.json)); pending until identical-artifact Ada/Blackwell captures are recorded.
+- NW-06 Operator Contract Schema: [`schemas/nw06-operator-contracts.schema.json`](../schemas/nw06-operator-contracts.schema.json) with [`schemas/nw06-operator-contracts.v1.json`](../schemas/nw06-operator-contracts.v1.json)
 - Upstream Measured-Evidence Status: [`benchmarks/evidence-status.json`](../benchmarks/evidence-status.json) (complete for recorded Windows/RTX captures)

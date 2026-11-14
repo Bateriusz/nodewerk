@@ -65,6 +65,11 @@ from nw05_schedule import (  # noqa: F401
     schedule_digest,
     simulate_allocation,
 )
+from nw06_export import (  # noqa: F401
+    build_nw06_package,
+    compile_nw06_package,
+    uses_nw06,
+)
 
 
 def compile_export(graph_path, output_directory, **kwargs):
@@ -89,5 +94,8 @@ __all__ = [
     "realize_physical_aliases",
     "quantize_document",
     "recover_full_precision",
+    "build_nw06_package",
+    "compile_nw06_package",
+    "uses_nw06",
 ]
 
