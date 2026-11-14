@@ -1112,17 +1112,22 @@ def record_capture(
     if not executable.is_file():
         raise ValueError(f"executed evidence requires an existing player: {executable}")
     capture = dict(metadata or {})
+    captured_at_utc = datetime.now(timezone.utc).isoformat()
+    executable_sha256 = _sha256_file(executable)
+    execution_identity = hashlib.sha256(
+        f"{tier}:{captured_at_utc}:{executable_sha256}".encode("utf-8")
+    ).hexdigest()[:16]
     capture.update(
         {
-            "capture_id": f"{tier}-{hashlib.sha256(executable.read_bytes()).hexdigest()[:16]}",
-            "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+            "capture_id": f"{tier}-{execution_identity}",
+            "captured_at_utc": captured_at_utc,
             "tier_metadata_only": tier,
             "coverage_target": coverage_target,
             "evidence_role": evidence_role,
             "status": status,
             "artifact_key": artifact_key,
             "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
-            "executable_sha256": _sha256_file(executable),
+            "executable_sha256": executable_sha256,
             "manifest_sha256": manifest_sha256,
             "profile_id": COMMON_PROFILE_ID,
             "requirements_digest": COMMON_REQUIREMENTS_DIGEST,

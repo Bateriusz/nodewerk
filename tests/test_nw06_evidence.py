@@ -162,6 +162,17 @@ def _materialize_capture(root: Path, capture: dict) -> None:
             if row["tick"] == artifact["tick"]:
                 row["artifact_sha256"] = artifact["sha256"]
                 reference = row["reference"]
+                provenance = reference["provenance"]
+                for key in (
+                    "artifact_key",
+                    "package_sha256",
+                    "executable_sha256",
+                    "manifest_sha256",
+                    "profile_id",
+                    "requirements_digest",
+                    "toolchain_identity",
+                ):
+                    provenance[key] = capture[key]
                 reference_path = root / reference["path"]
                 reference_path.parent.mkdir(parents=True, exist_ok=True)
                 reference_path.write_bytes(payload)
@@ -329,6 +340,12 @@ def test_record_capture_writes_schema_valid_qualifications_and_policy(
     executable.write_bytes(b"MZ" + b"\x00" * 64)
     output = tmp_path / "evidence.json"
     capture_metadata = _complete_capture("ada")
+    capture_metadata["artifact_key"] = artifact_key
+    capture_metadata["package_sha256"] = hashlib.sha256(package_bytes).hexdigest()
+    capture_metadata["executable_sha256"] = hashlib.sha256(
+        executable.read_bytes()
+    ).hexdigest()
+    capture_metadata["manifest_sha256"] = manifest_sha256
     _materialize_capture(artifact, capture_metadata)
     for name in (
         "coverage_target",
@@ -606,6 +623,12 @@ def test_record_capture_merges_complete_qualification_map(
         encoding="utf-8",
     )
     metadata = _complete_capture("ada")
+    metadata["artifact_key"] = "sha256:v1:artifact"
+    metadata["package_sha256"] = hashlib.sha256(b"package").hexdigest()
+    metadata["executable_sha256"] = hashlib.sha256(
+        executable.read_bytes()
+    ).hexdigest()
+    metadata["manifest_sha256"] = "sha256:v1:" + "7" * 64
     _materialize_capture(tmp_path, metadata)
     for name in (
         "coverage_target",
@@ -658,6 +681,12 @@ def test_record_capture_resolves_artifacts_against_artifact_directory(
     executable = tmp_path / "player.exe"
     executable.write_bytes(b"MZ" + b"\x00" * 32)
     metadata = _complete_capture("ada")
+    metadata["artifact_key"] = "sha256:v1:artifact"
+    metadata["package_sha256"] = hashlib.sha256(b"package").hexdigest()
+    metadata["executable_sha256"] = hashlib.sha256(
+        executable.read_bytes()
+    ).hexdigest()
+    metadata["manifest_sha256"] = "sha256:v1:" + "8" * 64
     _materialize_capture(artifact, metadata)
     for name in (
         "coverage_target",
