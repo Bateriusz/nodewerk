@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Branch-only export/validation helper for NW-07-test-demo.
 
-This helper deliberately composes the existing NW-03/NW-05/NW-06/NW-07
-pipeline.  It does not add a new runtime path, operator, package format, or
-player semantics.
+The demo keeps the established NW-03/NW-05/NW-06 graph/package/player path,
+but installs three branch-local shader specializations during this export only:
+a tunnel instance generator, a forward-flight vertex shader, and a warm
+industrial/asteroid pixel shader.  Canonical NW-07 shaders are never replaced.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import argparse
 import json
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +33,14 @@ LOOP_TICKS = 1_152_000
 LOOP_SECONDS = 24
 OUTPUT_WIDTH = 1920
 OUTPUT_HEIGHT = 1080
-INSTANCE_COUNT = 4096
+INSTANCE_COUNT = 1536
+TUNNEL_RADIUS = 4.6
+
+DEMO_SHADER_FILES = (
+    REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_instances_cs.hlsl",
+    REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_scene_vs.hlsl",
+    REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_scene_ps.hlsl",
+)
 
 ALLOWED_OPERATORS = frozenset(
     {
@@ -54,7 +63,7 @@ ALLOWED_OPERATORS = frozenset(
 
 
 class DemoContractError(RuntimeError):
-    """Raised when the branch-only demo leaves the NW-07 capability envelope."""
+    """Raised when the branch-only demo leaves its intended capability envelope."""
 
 
 def _scalar(node: nw03.GraphNode, name: str) -> str:
@@ -94,7 +103,39 @@ def _camera_keys(node: nw03.GraphNode) -> tuple[tuple[int, float], ...]:
     return tuple(rows)
 
 
+def _install_demo_shader_specialization() -> tuple[Any, ...]:
+    module = nw05_export.nw06_export
+    original = module.FIXED_SHADERS
+    overrides = {
+        2: (
+            "nw07_test_demo_instances_cs",
+            "../nw07_test_demo/nw07_test_demo_instances_cs.hlsl",
+        ),
+        6: (
+            "nw07_test_demo_scene_vs",
+            "../nw07_test_demo/nw07_test_demo_scene_vs.hlsl",
+        ),
+        7: (
+            "nw07_test_demo_scene_ps",
+            "../nw07_test_demo/nw07_test_demo_scene_ps.hlsl",
+        ),
+    }
+    module.FIXED_SHADERS = tuple(
+        replace(fixed, name=overrides[fixed.shader_id][0], source=overrides[fixed.shader_id][1])
+        if fixed.shader_id in overrides
+        else fixed
+        for fixed in original
+    )
+    return original
+
+
 def validate_demo_graph(path: Path = DEMO_GRAPH) -> dict[str, Any]:
+    for shader_path in DEMO_SHADER_FILES:
+        if not shader_path.is_file():
+            raise DemoContractError(
+                f"demo shader specialization is unavailable: {shader_path}"
+            )
+
     document = nw03.load_graph(path)
     if document.profile_id != PROFILE_ID:
         raise DemoContractError("demo changed the common capability profile")
@@ -140,39 +181,42 @@ def validate_demo_graph(path: Path = DEMO_GRAPH) -> dict[str, Any]:
         if node_id not in optimized.partitions.get("initialization", ()):
             raise DemoContractError(f"'{node_id}' must remain initialization-only")
 
-    for node_id in ("material", "camera", "sun", "twist", "render", "bloom", "tonemap", "screen"):
+    for node_id in (
+        "material",
+        "camera",
+        "sun",
+        "twist",
+        "render",
+        "bloom",
+        "tonemap",
+        "screen",
+    ):
         if node_id not in optimized.partitions.get("frame", ()):
             raise DemoContractError(f"'{node_id}' must remain frame-frequency")
 
     if int(_float(node_map["instances"], "count")) != INSTANCE_COUNT:
-        raise DemoContractError("demo must use 4096 ring instances")
+        raise DemoContractError(f"demo must use {INSTANCE_COUNT} instances")
+    if abs(_float(node_map["instances"], "placement_radius") - TUNNEL_RADIUS) > 1e-9:
+        raise DemoContractError("demo tunnel radius changed unexpectedly")
     if _float(node_map["torus"], "minor_radius") >= _float(
         node_map["torus"], "major_radius"
     ):
-        raise DemoContractError("demo torus must remain a valid thin ring")
+        raise DemoContractError("demo source torus must remain topologically valid")
     if _scalar(node_map["tonemap"], "operator") != "aces":
         raise DemoContractError("demo must retain ACES tonemapping")
     if abs(_float(node_map["bloom"], "resolution_scale") - 0.5) > 1e-9:
         raise DemoContractError("demo must use the existing half-resolution bloom path")
-    if abs(_float(node_map["camera"], "radius_min") - 5.2) > 1e-9:
-        raise DemoContractError("demo camera radius changed unexpectedly")
-    if abs(_float(node_map["camera"], "radius_max") - 5.2) > 1e-9:
-        raise DemoContractError("demo camera radius changed unexpectedly")
 
     keys = _camera_keys(node_map["camera"])
     if len(keys) != 4:
-        raise DemoContractError("existing NW-07 camera path supports exactly four demo keys")
+        raise DemoContractError("demo timeline carrier must contain four camera keys")
     if keys[0][0] != 0 or keys[-1][0] != LOOP_TICKS:
         raise DemoContractError("camera curve does not span the complete loop")
     if abs(keys[0][1]) > 1e-12 or abs(keys[-1][1] - math.tau) > 1e-12:
-        raise DemoContractError("camera loop does not close at one full revolution")
+        raise DemoContractError("camera timeline carrier does not close after one turn")
     expected_key_ticks = (0, LOOP_TICKS // 3, (2 * LOOP_TICKS) // 3, LOOP_TICKS)
     if tuple(tick for tick, _ in keys) != expected_key_ticks:
         raise DemoContractError("camera keys are not evenly spaced")
-    expected_values = (0.0, math.tau / 3.0, 2.0 * math.tau / 3.0, math.tau)
-    for (_, value), expected in zip(keys, expected_values):
-        if abs(value - expected) > 1e-12:
-            raise DemoContractError("camera curve is not constant-speed around the loop")
 
     render_dimensions = nw05_export._graph_render_dimensions(document, optimized)
     if render_dimensions != (OUTPUT_WIDTH, OUTPUT_HEIGHT):
@@ -186,11 +230,15 @@ def validate_demo_graph(path: Path = DEMO_GRAPH) -> dict[str, Any]:
         "requirements_digest": document.requirements_digest,
         "operators": sorted(used),
         "instance_count": INSTANCE_COUNT,
+        "tunnel_radius": TUNNEL_RADIUS,
         "loop_ticks": LOOP_TICKS,
         "loop_seconds": LOOP_SECONDS,
         "render_width": render_dimensions[0],
         "render_height": render_dimensions[1],
         "camera_keys": [[tick, value] for tick, value in keys],
+        "demo_shader_specialization": [
+            str(path.relative_to(REPO_ROOT)) for path in DEMO_SHADER_FILES
+        ],
         "branch_only": True,
     }
 
@@ -205,13 +253,39 @@ def export_demo(
     contracts_only: bool,
 ) -> nw05_export.ExportResult:
     validate_demo_graph()
+    module = nw05_export.nw06_export
+    original_shaders = _install_demo_shader_specialization()
+    try:
+        if contracts_only:
+            settings = nw05_export.ExportSettings(
+                byte_ceiling=64 * 1024 * 1024,
+                memory_budget=512 * 1024 * 1024,
+                frames_in_flight=2,
+                present_sync_interval=0,
+                include_optional_artifacts=False,
+                allow_optional_profiles=False,
+            )
+            return nw05_export.export_graph(
+                DEMO_GRAPH,
+                output,
+                settings=settings,
+                report_path=report_path,
+                allow_test_payloads=True,
+            )
 
-    if contracts_only:
+        if player_template is None or dxc is None:
+            raise DemoContractError(
+                "release export requires both --player-template and --dxc"
+            )
+
         settings = nw05_export.ExportSettings(
             byte_ceiling=64 * 1024 * 1024,
             memory_budget=512 * 1024 * 1024,
             frames_in_flight=2,
+            player_template=str(player_template),
+            specialized_build_root=str(build_root) if build_root is not None else "",
             present_sync_interval=0,
+            frozen_embedded_specialization=True,
             include_optional_artifacts=False,
             allow_optional_profiles=False,
         )
@@ -220,33 +294,11 @@ def export_demo(
             output,
             settings=settings,
             report_path=report_path,
-            allow_test_payloads=True,
+            dxc_executable=str(dxc),
+            optimization="O2",
         )
-
-    if player_template is None or dxc is None:
-        raise DemoContractError(
-            "release export requires both --player-template and --dxc"
-        )
-
-    settings = nw05_export.ExportSettings(
-        byte_ceiling=64 * 1024 * 1024,
-        memory_budget=512 * 1024 * 1024,
-        frames_in_flight=2,
-        player_template=str(player_template),
-        specialized_build_root=str(build_root) if build_root is not None else "",
-        present_sync_interval=0,
-        frozen_embedded_specialization=True,
-        include_optional_artifacts=False,
-        allow_optional_profiles=False,
-    )
-    return nw05_export.export_graph(
-        DEMO_GRAPH,
-        output,
-        settings=settings,
-        report_path=report_path,
-        dxc_executable=str(dxc),
-        optimization="O2",
-    )
+    finally:
+        module.FIXED_SHADERS = original_shaders
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -304,6 +356,9 @@ def main(argv: list[str] | None = None) -> int:
                 "peak_resource_bytes": common.physical_realization.peak_bytes,
                 "loop_ticks": LOOP_TICKS,
                 "loop_seconds": LOOP_SECONDS,
+                "instance_count": INSTANCE_COUNT,
+                "tunnel_radius": TUNNEL_RADIUS,
+                "demo_shader_specialization": True,
             },
             indent=2,
             sort_keys=True,
