@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw08_editor as editor  # noqa: E402
 import nw08_preview as preview  # noqa: E402
+import nw08_cache as cache  # noqa: E402
 
 
 PROBE = REPO_ROOT / "fixtures" / "nw08" / "shader_edit_probe.nwgraph"
@@ -129,6 +130,59 @@ def test_device_loss_and_recreation_reject_old_jobs_and_realizations() -> None:
     assert pipeline.last_valid_preview.frame.tick == 30
     assert pipeline.last_valid_preview.token.device_epoch == 1
     assert pipeline.snapshot_generation == snapshot_generation
+
+
+class _ReloadDeviceLossBackend(preview.ReferencePreviewBackend):
+    def __init__(self) -> None:
+        self.epoch = 0
+        self.prepares = 0
+        self.reinitialized = 0
+        self.loss_pending = False
+
+    def prepare(self, document, *, width, height):
+        self.prepares += 1
+        if self.loss_pending:
+            error = cache.DeviceLostError(
+                "device removed during reload initialization fence wait"
+            )
+            error.device_epoch = self.epoch
+            raise error
+        return self.epoch
+
+    def reinitialize_device(self, minimum_epoch=None):
+        self.reinitialized += 1
+        self.loss_pending = False
+        self.epoch = int(minimum_epoch if minimum_epoch is not None else self.epoch + 1)
+        return self.epoch
+
+
+def test_device_loss_during_reload_requires_explicit_reinitialization() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    backend = _ReloadDeviceLossBackend()
+    pipeline = preview.PreviewPipeline(session, backend=backend)
+    assert pipeline.preview_now(tick=0).accepted
+    assert pipeline.last_valid_preview is not None
+
+    assert session.set_parameter("texture", "seed", "1297036694").valid
+    backend.loss_pending = True
+    decision = pipeline.preview_now(tick=0)
+    assert decision.accepted is False
+    assert decision.reason == "preview_device_lost"
+    assert pipeline.device.lost is True
+    assert pipeline.last_valid_preview is None
+
+    # The lost instance is never replayed implicitly: a subsequent job is
+    # rejected before prepare()/export/initialization can run.
+    prepares = backend.prepares
+    with pytest.raises(cache.DeviceLostError):
+        pipeline.preview_now(tick=0)
+    assert backend.prepares == prepares
+
+    generation = pipeline.reinitialize_device()
+    assert generation.epoch == 1
+    assert backend.reinitialized == 1
+    assert pipeline.preview_now(tick=0).accepted
+    assert pipeline.last_valid_preview.token.device_epoch == 1
 
 
 def test_windows_backend_uses_existing_player_command(tmp_path: Path) -> None:

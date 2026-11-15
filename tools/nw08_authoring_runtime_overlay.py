@@ -62,6 +62,8 @@ struct AuthoringReloadResult {
     std::uint32_t recreated_root_signatures = 0u;
     std::uint32_t reused_pipelines = 0u;
     std::uint32_t recreated_pipelines = 0u;
+    std::uint32_t executed_init_dispatches = 0u;
+    std::uint32_t skipped_init_dispatches = 0u;
 };
 
 struct AuthoringPassTiming {
@@ -105,6 +107,12 @@ struct AuthoringPassTiming {
         r"""    std::vector<std::string> last_frame_order_;
 #if NW08_AUTHORING_RUNTIME
     std::vector<std::uint32_t> authoring_retained_resource_ids_;
+    std::vector<std::uint32_t> authoring_dirty_resource_ids_;
+    std::vector<std::uint32_t> authoring_reused_root_signature_ids_;
+    std::vector<std::uint32_t> authoring_reused_pipeline_ids_;
+    std::vector<std::string> authoring_init_dispatch_signatures_;
+    std::uint32_t authoring_executed_init_dispatches_ = 0u;
+    std::uint32_t authoring_skipped_init_dispatches_ = 0u;
     std::vector<AuthoringPassTiming> authoring_pass_timings_;
     AuthoringReloadResult authoring_reload_stats_{};
     bool authoring_reload_in_progress_ = false;
@@ -160,6 +168,17 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
         authoring_reload_stats_ = result;
         authoring_retained_resource_ids_.clear();
         authoring_reload_in_progress_ = false;
+        if (recreate) {
+            // A failed in-place reload has no coherent initialization graph.
+            // The caller will recreate the device and replay the package in a
+            // fresh process, so never reuse partially recorded dispatch state.
+            authoring_dirty_resource_ids_.clear();
+            authoring_reused_root_signature_ids_.clear();
+            authoring_reused_pipeline_ids_.clear();
+            authoring_init_dispatch_signatures_.clear();
+            authoring_executed_init_dispatches_ = 0u;
+            authoring_skipped_init_dispatches_ = 0u;
+        }
         return result;
     };
     if (package_path == nullptr || *package_path == '\0' || !initialized_ ||
@@ -315,6 +334,8 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
         return nullptr;
     };
 
+    authoring_reused_pipeline_ids_.clear();
+    authoring_reused_root_signature_ids_.clear();
     for (auto it = state->pipelines.begin(); it != state->pipelines.end();) {
         const auto* old_shader = find_shader(old_package, it->shader_id);
         const auto* new_shader = find_shader(loaded.package, it->shader_id);
@@ -338,6 +359,7 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
                    root_equal(*old_root, *new_root);
         }
         if (keep) {
+            authoring_reused_pipeline_ids_.push_back(it->shader_id);
             ++result.reused_pipelines;
             ++it;
         } else {
@@ -355,6 +377,8 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
                           new_root != nullptr &&
                           root_equal(*old_root, *new_root);
         if (keep) {
+            authoring_reused_root_signature_ids_.push_back(
+                it->root_signature_id);
             ++result.reused_root_signatures;
             ++it;
         } else {
@@ -420,6 +444,14 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
     if (!BuildFrameInstructionPlan()) {
         return finish(last_exit_, true);
     }
+    authoring_dirty_resource_ids_.clear();
+    for (const auto& slot : state->resources) {
+        if (!IsAuthoringRetainedResource(slot.resource_id)) {
+            authoring_dirty_resource_ids_.push_back(slot.resource_id);
+        }
+    }
+    authoring_executed_init_dispatches_ = 0u;
+    authoring_skipped_init_dispatches_ = 0u;
     authoring_reload_in_progress_ = true;
     const ExitCode init = RunInitializationInstructions();
     authoring_reload_in_progress_ = false;
@@ -428,6 +460,8 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
     }
     authoring_retained_resource_ids_.clear();
 
+    result.executed_init_dispatches = authoring_executed_init_dispatches_;
+    result.skipped_init_dispatches = authoring_skipped_init_dispatches_;
     result.recreated_resources =
         static_cast<std::uint32_t>(state->resources.size()) -
         result.reused_resources;
@@ -457,6 +491,51 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
         "ExitCode PackagePlayer::initialize(const package::Package& pkg) {",
         methods + "ExitCode PackagePlayer::initialize(const package::Package& pkg) {",
         "authoring implementation",
+    )
+    cpp = replace_once(
+        cpp,
+        "ExitCode PackagePlayer::RunInitializationInstructions() {",
+        r"""#if NW08_AUTHORING_RUNTIME
+void AuthoringAppendU32(std::string* signature, std::uint32_t value) {
+    signature->push_back(static_cast<char>(value & 0xFFu));
+    signature->push_back(static_cast<char>((value >> 8u) & 0xFFu));
+    signature->push_back(static_cast<char>((value >> 16u) & 0xFFu));
+    signature->push_back(static_cast<char>((value >> 24u) & 0xFFu));
+}
+
+std::string AuthoringInitDispatchSignature(
+    std::uint32_t groups_x, std::uint32_t groups_y, std::uint32_t groups_z,
+    std::uint32_t shader_id, std::uint32_t root_signature_id,
+    const std::uint32_t* constants, std::uint32_t constant_count,
+    const std::vector<std::uint32_t>& bound_resources,
+    const std::string& binding_signature) {
+    std::string signature;
+    AuthoringAppendU32(&signature, groups_x);
+    AuthoringAppendU32(&signature, groups_y);
+    AuthoringAppendU32(&signature, groups_z);
+    AuthoringAppendU32(&signature, shader_id);
+    AuthoringAppendU32(&signature, root_signature_id);
+    AuthoringAppendU32(&signature, constant_count);
+    for (std::uint32_t index = 0u; index < constant_count; ++index) {
+        AuthoringAppendU32(&signature, constants[index]);
+    }
+    AuthoringAppendU32(&signature,
+                       static_cast<std::uint32_t>(bound_resources.size()));
+    for (const std::uint32_t resource_id : bound_resources) {
+        AuthoringAppendU32(&signature, resource_id);
+    }
+    // Descriptor-table root slots/heap names/resource ids and root-constant
+    // binding identity are part of the dispatch's actual bound state even
+    // when the resource-id list alone is unchanged.
+    AuthoringAppendU32(
+        &signature, static_cast<std::uint32_t>(binding_signature.size()));
+    signature.append(binding_signature);
+    return signature;
+}
+#endif
+
+ExitCode PackagePlayer::RunInitializationInstructions() {""",
+        "authoring dispatch signature helper",
     )
     cpp = replace_once(
         cpp,
@@ -500,6 +579,211 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
 #endif
             if (force_root_signature_creation_failure_) {""",
         "root-signature reuse",
+    )
+    cpp = replace_once(
+        cpp,
+        r"""#if NW06_COMPILE_GPU_INITIALIZATION
+    ID3D12RootSignature* init_root_signature = nullptr;""",
+        r"""#if NW06_COMPILE_GPU_INITIALIZATION
+    ID3D12RootSignature* init_root_signature = nullptr;
+#if NW08_AUTHORING_RUNTIME
+    std::uint32_t init_root_signature_id = 0u;
+    std::size_t authoring_dispatch_index = 0u;
+    std::string init_binding_signature;
+#endif""",
+        "authoring initialization dispatch state",
+    )
+    cpp = replace_once(
+        cpp,
+        r"""            init_root_signature = nullptr;
+            for (const auto& candidate : state->root_signatures) {
+                if (candidate.root_signature_id ==
+                    instruction.operands[0].u32) {
+                    init_root_signature = candidate.root_signature;
+                    break;
+                }
+            }""",
+        r"""            init_root_signature = nullptr;
+#if NW08_AUTHORING_RUNTIME
+            init_root_signature_id = instruction.operands[0].u32;
+#endif
+            for (const auto& candidate : state->root_signatures) {
+                if (candidate.root_signature_id ==
+                    instruction.operands[0].u32) {
+                    init_root_signature = candidate.root_signature;
+                    break;
+                }
+            }""",
+        "authoring init root-signature identity",
+    )
+    cpp = replace_once(
+        cpp,
+        r"""            init_tables.clear();
+            init_bound_resources.clear();""",
+        r"""            init_tables.clear();
+            init_bound_resources.clear();
+#if NW08_AUTHORING_RUNTIME
+            init_binding_signature.clear();
+#endif""",
+        "authoring init table-signature reset",
+    )
+    cpp = replace_once(
+        cpp,
+        r"""            init_constants.fill(0u);
+            init_constant_count = std::min<std::uint32_t>(
+                instruction.operands[2].u32,
+                package::kMaxRootSignatureDwordCost);
+            const std::uint32_t resource_id = instruction.operands[1].u32;""",
+        r"""            init_constants.fill(0u);
+            init_constant_count = std::min<std::uint32_t>(
+                instruction.operands[2].u32,
+                package::kMaxRootSignatureDwordCost);
+            const std::uint32_t resource_id = instruction.operands[1].u32;
+#if NW08_AUTHORING_RUNTIME
+            // Root-constant binding identity is distinct from the packed
+            // values: the root parameter slot and source group must also match
+            // before an initialization dispatch can be skipped.
+            AuthoringAppendU32(&init_binding_signature,
+                               instruction.operands[0].u32);
+            AuthoringAppendU32(&init_binding_signature,
+                               instruction.operands[1].u32);
+            AuthoringAppendU32(&init_binding_signature,
+                               instruction.operands[2].u32);
+#endif""",
+        "authoring init root-constants binding identity",
+    )
+    cpp = replace_once(
+        cpp,
+        r"""            init_tables.emplace_back(instruction.operands[0].u32, handle);
+            init_bound_resources.push_back(resource_id);
+#endif""",
+        r"""            init_tables.emplace_back(instruction.operands[0].u32, handle);
+            init_bound_resources.push_back(resource_id);
+#if NW08_AUTHORING_RUNTIME
+            AuthoringAppendU32(&init_binding_signature,
+                               instruction.operands[0].u32);
+            AuthoringAppendU32(
+                &init_binding_signature,
+                static_cast<std::uint32_t>(
+                    instruction.operands[1].string_value.size()));
+            init_binding_signature.append(instruction.operands[1].string_value);
+            AuthoringAppendU32(&init_binding_signature, resource_id);
+#endif
+#endif""",
+        "authoring init table-signature binding",
+    )
+    cpp = replace_once(
+        cpp,
+        r"""            if (pipeline == nullptr) {
+                return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
+                            "pipeline_missing", "shader_id",
+                            std::to_string(instruction.operands[3].u32),
+                            "missing", "init.dispatch",
+                            "initialization pipeline was not created");
+            }
+            auto& frame = state->frames[0];""",
+        r"""            if (pipeline == nullptr) {
+                return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
+                            "pipeline_missing", "shader_id",
+                            std::to_string(instruction.operands[3].u32),
+                            "missing", "init.dispatch",
+                            "initialization pipeline was not created");
+            }
+#if NW08_AUTHORING_RUNTIME
+            const std::uint32_t dispatch_shader_id =
+                instruction.operands[3].u32;
+            const std::string dispatch_signature =
+                AuthoringInitDispatchSignature(
+                    instruction.operands[0].u32,
+                    instruction.operands[1].u32,
+                    instruction.operands[2].u32, dispatch_shader_id,
+                    init_root_signature_id, init_constants.data(),
+                    init_constant_count, init_bound_resources,
+                    init_binding_signature);
+            bool authoring_resources_clean = true;
+            for (const std::uint32_t bound_resource_id :
+                 init_bound_resources) {
+                if (std::find(authoring_dirty_resource_ids_.begin(),
+                              authoring_dirty_resource_ids_.end(),
+                              bound_resource_id) !=
+                    authoring_dirty_resource_ids_.end()) {
+                    authoring_resources_clean = false;
+                    break;
+                }
+            }
+            const bool authoring_root_reused =
+                std::find(authoring_reused_root_signature_ids_.begin(),
+                          authoring_reused_root_signature_ids_.end(),
+                          init_root_signature_id) !=
+                authoring_reused_root_signature_ids_.end();
+            const bool authoring_pipeline_reused =
+                std::find(authoring_reused_pipeline_ids_.begin(),
+                          authoring_reused_pipeline_ids_.end(),
+                          dispatch_shader_id) !=
+                authoring_reused_pipeline_ids_.end();
+            const bool authoring_signature_unchanged =
+                authoring_dispatch_index <
+                    authoring_init_dispatch_signatures_.size() &&
+                authoring_init_dispatch_signatures_[authoring_dispatch_index] ==
+                    dispatch_signature;
+            if (authoring_reload_in_progress_ &&
+                authoring_signature_unchanged && authoring_root_reused &&
+                authoring_pipeline_reused && authoring_resources_clean) {
+                // Dependency-based native invalidation: identical dispatch
+                // inputs, unchanged bound resources, and retained root
+                // signature/pipeline state mean this initialization pass would
+                // produce exactly the same resource contents.  Do not submit
+                // the dispatch again.
+                ++authoring_skipped_init_dispatches_;
+                ++authoring_dispatch_index;
+                continue;
+            }
+#endif
+            auto& frame = state->frames[0];""",
+        "authoring init dispatch invalidation",
+    )
+    cpp = replace_once(
+        cpp,
+        r"""            const ExitCode wait = WaitForFenceValue(
+                state->fence, fence_value, state->fence_event,
+                kFenceTimeoutMs);
+            if (wait != ExitCode::Success) return wait;
+#endif
+        } else if (instruction.opcode == "init.upload_resource") {""",
+        r"""            const ExitCode wait = WaitForFenceValue(
+                state->fence, fence_value, state->fence_event,
+                kFenceTimeoutMs);
+            if (wait != ExitCode::Success) return wait;
+#if NW08_AUTHORING_RUNTIME
+            if (authoring_dispatch_index <
+                authoring_init_dispatch_signatures_.size()) {
+                authoring_init_dispatch_signatures_[authoring_dispatch_index] =
+                    dispatch_signature;
+            } else {
+                authoring_init_dispatch_signatures_.push_back(
+                    dispatch_signature);
+            }
+            // The package instruction stream does not distinguish SRV/UAV
+            // roles.  Conservatively treat every bound resource as rewritten so
+            // any dispatch that consumes a resource touched by this pass is
+            // invalidated too.  Independent passes keep their signatures and
+            // resource ids clean and are skipped.
+            for (const std::uint32_t bound_resource_id :
+                 init_bound_resources) {
+                if (std::find(authoring_dirty_resource_ids_.begin(),
+                              authoring_dirty_resource_ids_.end(),
+                              bound_resource_id) ==
+                    authoring_dirty_resource_ids_.end()) {
+                    authoring_dirty_resource_ids_.push_back(
+                        bound_resource_id);
+                }
+            }
+            ++authoring_executed_init_dispatches_;
+            ++authoring_dispatch_index;
+#endif
+#endif
+        } else if (instruction.opcode == "init.upload_resource") {""",
+        "authoring init dispatch execution accounting",
     )
     cpp = replace_once(
         cpp,
@@ -591,6 +875,12 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
     last_frame_order_.clear();
 #if NW08_AUTHORING_RUNTIME
     authoring_retained_resource_ids_.clear();
+    authoring_dirty_resource_ids_.clear();
+    authoring_reused_root_signature_ids_.clear();
+    authoring_reused_pipeline_ids_.clear();
+    authoring_init_dispatch_signatures_.clear();
+    authoring_executed_init_dispatches_ = 0u;
+    authoring_skipped_init_dispatches_ = 0u;
     authoring_pass_timings_.clear();
     authoring_reload_stats_ = AuthoringReloadResult{};
     authoring_reload_in_progress_ = false;

@@ -440,6 +440,66 @@ def test_one_shot_runtime_advances_epoch_for_every_device_instance() -> None:
     assert session.prepare(bundle, width=8, height=8) == 2
 
 
+def test_reload_device_removed_enters_lost_state_without_replay(
+    monkeypatch,
+) -> None:
+    session = preview.AuthoringRuntimeSession(
+        "/tmp/preview-host", mode="package-host"
+    )
+    starts: list[str] = []
+    commands: list[str] = []
+
+    def fake_start(bundle, *, width, height, memory_budget_bytes):
+        starts.append(bundle.package_sha256)
+        session._package_sha = bundle.package_sha256
+        session._process = _DummyProcess()
+
+    def fake_write(command):
+        commands.append(command)
+
+    def fake_read_response(*, timeout):
+        return {
+            "event": "reload",
+            "ok": False,
+            "requires_device_recreation": True,
+            "exit_code": preview.DEVICE_REMOVED_EXIT_CODE,
+            "device_removed": True,
+            "message": "removed during initialization fence wait",
+        }
+
+    monkeypatch.setattr(session, "_start_process", fake_start)
+    monkeypatch.setattr(session, "_write", fake_write)
+    monkeypatch.setattr(session, "_read_response", fake_read_response)
+
+    bundle_a = preview.PreviewExportBundle(
+        package_sha256="aaa", package_path=Path("/tmp/a.nwp")
+    )
+    bundle_b = preview.PreviewExportBundle(
+        package_sha256="bbb", package_path=Path("/tmp/b.nwp")
+    )
+
+    assert session.prepare(bundle_a, width=8, height=8) == 0
+    assert len(starts) == 1
+    with pytest.raises(preview.DeviceLostError) as lost:
+        session.prepare(bundle_b, width=8, height=8)
+    assert getattr(lost.value, "device_epoch", None) == 0
+    assert session.report()["lost"] is True
+    # The native process is not silently restarted and the package is not
+    # replayed.  The device instance that owned the fence wait is lost.
+    assert len(starts) == 1
+    assert commands == [f"load {bundle_b.package_path}"]
+
+    # A lost device requires explicit reinitialization; prepare() must not
+    # recover implicitly.
+    with pytest.raises(preview.DeviceLostError):
+        session.prepare(bundle_b, width=8, height=8)
+    assert len(starts) == 1
+
+    assert session.reinitialize() == 1
+    assert session.prepare(bundle_b, width=8, height=8) == 1
+    assert starts[-1] == "bbb"
+
+
 def test_runtime_backend_reports_measured_timings_and_no_fabricated_readback(
     tmp_path: Path,
 ) -> None:
@@ -859,6 +919,56 @@ def test_authoring_runtime_overlay_preserves_frozen_release_inputs(
         REPO_ROOT / "src" / "studio" / "nw_studio_preview_host.cpp"
     ).read_text(encoding="utf-8")
     assert "runtime_pass_timings" in host_text
+
+
+def test_authoring_overlay_dependency_invalidates_init_dispatches(
+    tmp_path: Path,
+) -> None:
+    overlay = REPO_ROOT / "tools" / "nw08_authoring_runtime_overlay.py"
+    generated = tmp_path / "overlay-dispatches"
+    subprocess.run(
+        [
+            sys.executable,
+            str(overlay),
+            "--repo-root",
+            str(REPO_ROOT),
+            "--output-dir",
+            str(generated),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    cpp = (generated / "package_player.cpp").read_text(encoding="utf-8")
+
+    # Native initialization passes compare their full dependency signature
+    # (dispatch constants/dimensions, shader and root signature identity, and
+    # bound resources), not just retained-object counts.
+    assert "std::string AuthoringInitDispatchSignature(" in cpp
+    assert "authoring_init_dispatch_signatures_" in cpp
+    assert "authoring_dirty_resource_ids_" in cpp
+    assert "authoring_reused_root_signature_ids_" in cpp
+    assert "authoring_reused_pipeline_ids_" in cpp
+    assert "if (!IsAuthoringRetainedResource(slot.resource_id))" in cpp
+    skip_site = cpp.index("++authoring_skipped_init_dispatches_;")
+    skip_block = cpp[max(0, skip_site - 2400) : skip_site + 200]
+    assert "authoring_resources_clean" in skip_block
+    assert "authoring_root_reused" in skip_block
+    assert "authoring_pipeline_reused" in skip_block
+    assert "authoring_signature_unchanged" in skip_block
+    assert "continue;" in skip_block
+    # The skip happens before the command list is reset or the dispatch is
+    # submitted, so a skipped pass executes no GPU work.
+    dispatch_site = cpp.index("list->Dispatch(", skip_site)
+    assert skip_site < dispatch_site
+    executed_site = cpp.index("++authoring_executed_init_dispatches_;")
+    assert dispatch_site < executed_site
+
+    host_text = (
+        REPO_ROOT / "src" / "studio" / "nw_studio_preview_host.cpp"
+    ).read_text(encoding="utf-8")
+    assert "executed_init_dispatches" in host_text
+    assert "skipped_init_dispatches" in host_text
 
 
 def test_tk_image_names_normalizes_ttk_singleton_tuple() -> None:

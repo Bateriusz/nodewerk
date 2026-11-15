@@ -72,6 +72,10 @@ NO_SHADER_IDENTITY = sha256_value(
     {"domain": "nw08.preview.no-shader.v1"}
 )
 
+# Mirrors src/player/exit_codes.h ExitCode::DeviceRemoved.  Device removal is a
+# lost-device condition, never a recoverable layout mismatch.
+DEVICE_REMOVED_EXIT_CODE = 51
+
 
 class PreviewError(RuntimeError):
     """Raised when preview execution cannot produce a valid frame."""
@@ -889,6 +893,11 @@ class AuthoringRuntimeSession:
     ) -> int:
         """Ensure a device exists for ``bundle`` and return its epoch."""
         with self._lock:
+            if self._lost:
+                raise DeviceLostError(
+                    "runtime device is lost; reinitialize before preparing a "
+                    "preview"
+                )
             if self._persistent:
                 alive = (
                     self._device_running
@@ -925,6 +934,26 @@ class AuthoringRuntimeSession:
                             + json.dumps(response, sort_keys=True)
                         )
                     self._last_reload = dict(response)
+                    exit_code = int(response.get("exit_code", 0) or 0)
+                    device_removed = (
+                        bool(response.get("device_removed"))
+                        or exit_code == DEVICE_REMOVED_EXIT_CODE
+                    )
+                    if device_removed:
+                        # DeviceRemoved can surface from fence waits or
+                        # initialization inside the reload path.  It is not a
+                        # recoverable layout mismatch: enter the lost-device
+                        # state and require explicit reinitialization instead
+                        # of silently restarting and replaying the package.
+                        self._lost = True
+                        self._reservations.clear()
+                        self._stop_process()
+                        error = DeviceLostError(
+                            "authoring runtime device was removed during "
+                            f"package reload (exit {exit_code})"
+                        )
+                        error.device_epoch = self.device_epoch
+                        raise error
                     if response.get("ok", False) and not response.get(
                         "requires_device_recreation", False
                     ):
@@ -1080,10 +1109,10 @@ class AuthoringRuntimeSession:
             "tick": tick,
             "returncode": process.returncode,
             "stderr": process.stderr or "",
-            "device_removed": process.returncode == 51,
+            "device_removed": process.returncode == DEVICE_REMOVED_EXIT_CODE,
         }
         if process.returncode != 0:
-            if process.returncode == 51:
+            if process.returncode == DEVICE_REMOVED_EXIT_CODE:
                 self._lost = True
                 error = DeviceLostError(
                     f"package player reported device removal: "
@@ -1110,7 +1139,10 @@ class AuthoringRuntimeSession:
         response["tick"] = tick
         if not response.get("ok", False):
             exit_code = int(response.get("exit_code", 1) or 1)
-            device_removed = bool(response.get("device_removed")) or exit_code == 51
+            device_removed = (
+                bool(response.get("device_removed"))
+                or exit_code == DEVICE_REMOVED_EXIT_CODE
+            )
             if device_removed:
                 self._lost = True
                 error = DeviceLostError(

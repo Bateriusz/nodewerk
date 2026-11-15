@@ -822,6 +822,23 @@ def _runtime_fence_safe_cache(
                     "reload": reload,
                 },
             )
+        executed_init = int(reload.get("executed_init_dispatches", -1))
+        skipped_init = int(reload.get("skipped_init_dispatches", -1))
+        if executed_init != 1 or skipped_init != 4:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {
+                    "reason": (
+                        "native initialization did not honor dependency-based "
+                        "invalidation; unchanged instance/camera/lighting "
+                        "dispatches must not be re-submitted"
+                    ),
+                    "executed_init_dispatches": executed_init,
+                    "skipped_init_dispatches": skipped_init,
+                    "reload": reload,
+                },
+            )
         if not edited.cached_nodes:
             return _check(
                 "runtime_fence_safe_cache",
@@ -845,6 +862,8 @@ def _runtime_fence_safe_cache(
                 "scrub_cached_nodes": list(scrub.cached_nodes),
                 "edited_cached_nodes": list(edited.cached_nodes),
                 "edited_recomputed_nodes": list(edited.recomputed_nodes),
+                "executed_init_dispatches": executed_init,
+                "skipped_init_dispatches": skipped_init,
                 "session": runtime_session,
             },
         )

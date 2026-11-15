@@ -264,6 +264,8 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
         "\"authoring_recreated_root_signatures\":%u,"
         "\"authoring_reused_pipelines\":%u,"
         "\"authoring_recreated_pipelines\":%u,"
+        "\"authoring_executed_init_dispatches\":%u,"
+        "\"authoring_skipped_init_dispatches\":%u,"
         "\"package_sha256\":\"%s\"}\n",
         static_cast<unsigned long long>(stats.engine_resource_bytes),
         static_cast<unsigned long long>(peak_stats.engine_resource_bytes),
@@ -302,6 +304,8 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
         reload.recreated_root_signatures,
         reload.reused_pipelines,
         reload.recreated_pipelines,
+        reload.executed_init_dispatches,
+        reload.skipped_init_dispatches,
         player.package_sha256().c_str());
     std::fclose(file);
     return written > 0;
@@ -436,6 +440,8 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
                 "\"reused_root_signatures\":%u,"
                 "\"recreated_root_signatures\":%u,"
                 "\"reused_pipelines\":%u,\"recreated_pipelines\":%u,"
+                "\"executed_init_dispatches\":%u,"
+                "\"skipped_init_dispatches\":%u,"
                 "\"package_sha256\":\"%s\"}\n",
                 ok ? "true" : "false",
                 reload.requires_device_recreation ? "true" : "false",
@@ -443,6 +449,7 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
                 reload.reused_root_signatures,
                 reload.recreated_root_signatures,
                 reload.reused_pipelines, reload.recreated_pipelines,
+                reload.executed_init_dispatches, reload.skipped_init_dispatches,
                 player->package_sha256().c_str());
             std::fflush(stdout);
             continue;
