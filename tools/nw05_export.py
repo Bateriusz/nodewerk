@@ -129,6 +129,11 @@ class ExportSettings:
     bake_overrides: tuple[tuple[str, str], ...] = ()
     frames_in_flight: int = 2
     player_template: str = ""
+    # Empty means "inherit the player template's CMake build directory".
+    # NW-07 clean-directory reproducibility sets an independent empty root.
+    specialized_build_root: str = ""
+    # DXGI Present sync interval frozen by the production configuration.
+    present_sync_interval: int = 1
     allow_optional_profiles: bool = False
     include_optional_artifacts: bool = True
     fusion_enabled: bool = True
@@ -147,6 +152,8 @@ class ExportSettings:
             "bake_overrides": dict(self.bake_overrides),
             "frames_in_flight": self.frames_in_flight,
             "player_template": self.player_template,
+            "specialized_build_root": self.specialized_build_root,
+            "present_sync_interval": self.present_sync_interval,
             "allow_optional_profiles": self.allow_optional_profiles,
             "include_optional_artifacts": self.include_optional_artifacts,
             "fusion_enabled": self.fusion_enabled,
@@ -715,6 +722,7 @@ def generate_player_source(
     memory_budget_bytes: int = 0,
     width: int = 1280,
     height: int = 720,
+    present_sync_interval: int = 1,
 ) -> str:
     """Generate a specialized-player main with no per-demo content logic.
 
@@ -723,6 +731,10 @@ def generate_player_source(
     runtime checks the embedded manifest hash before initializing the player.
     """
     manifest = manifest or {}
+    if present_sync_interval not in (0, 1):
+        raise ExportError(
+            "generated player present sync interval must be 0 (uncapped) or 1 (vsync)"
+        )
     feature_requirements = manifest.get("feature_requirements", {})
     link_wave_ops = bool(feature_requirements.get("wave_ops", False))
     link_fp16 = bool(feature_requirements.get("fp16_shader_ops", False))
@@ -863,6 +875,7 @@ def generate_player_source(
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
         f"    config.width = {int(width)}u;\n"
         f"    config.height = {int(height)}u;\n"
+        f"    config.present_sync_interval = {int(present_sync_interval)}u;\n"
         f"    config.query_optional_wave_ops = {'true' if link_wave_ops else 'false'};\n"
         f"    config.query_optional_fp16_shader_ops = {'true' if link_fp16 else 'false'};\n"
         f"    config.query_optional_int64_shader_ops = {'true' if link_int64 else 'false'};\n"
@@ -934,6 +947,7 @@ def generate_player_source(
         "    std::printf(\"NW05_ALIAS_ACTIVATIONS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().alias_barrier_count));\n"
         "    std::printf(\"NW05_UAV_BARRIERS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().uav_barrier_count));\n"
         "    std::printf(\"NW05_VALIDATION_ENABLED=%d\\n\", player.validation_enabled() ? 1 : 0);\n"
+        "    std::printf(\"NW05_PRESENT_SYNC_INTERVAL=%u\\n\", config.present_sync_interval);\n"
         "    const auto shutdown = player.shutdown();\n"
         "    std::printf(\"NW05_FRAMES=%llu\\n\", static_cast<unsigned long long>(player.frames_rendered()));\n"
         "    std::printf(\"NW05_PRESENTS=%llu\\n\", static_cast<unsigned long long>(player.frames_presented()));\n"
@@ -1140,18 +1154,67 @@ def _pe_runtime_dependencies(executable: bytes) -> list[str]:
     return dependencies
 
 
+def _template_build_configuration(template_path: Path) -> dict[str, str]:
+    """Read the exact toolchain/profile settings from the template build tree.
+
+    Clean reproducibility builds must not inherit a stale CMake cache, but they
+    still have to reproduce the same toolchain and profile decisions as the
+    built template.  Only explicit, known cache entries are carried forward.
+    """
+    build_root = _cmake_build_root_from_template(template_path)
+    cache_path = build_root / "CMakeCache.txt"
+    values: dict[str, str] = {}
+    for line in cache_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line or line.startswith(("#", "//")) or "=" not in line:
+            continue
+        key_type, value = line.split("=", 1)
+        key = key_type.split(":", 1)[0].strip()
+        if key in {
+            "CMAKE_TOOLCHAIN_FILE",
+            "CMAKE_BUILD_TYPE",
+            "CMAKE_GENERATOR",
+            "CMAKE_MAKE_PROGRAM",
+            "NW_BUILD_PROFILE",
+            "NW_ENFORCE_PINNED_TOOLCHAIN",
+            "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
+            "NW07_CAPTURE_CONTROLS",
+        }:
+            values[key] = value
+    if values.get("NW_ENFORCE_PINNED_TOOLCHAIN", "").upper() != "ON":
+        raise ExportError(
+            "release player template was configured without "
+            "NW_ENFORCE_PINNED_TOOLCHAIN=ON; the release export cannot prove "
+            "the frozen toolchain",
+            dependency_path=["specialized_player", "toolchain_enforcement"],
+        )
+    return values
+
+
 def _build_specialized_player(
     template_path: Path,
     source_text: str,
     manifest: Mapping[str, Any],
     profile_id: str,
+    *,
+    build_root_override: Path | None = None,
 ) -> bytes:
     if os.name != "nt":
         raise ExportError(
             "production specialized-player linking requires the pinned Windows build",
             dependency_path=["specialized_player", "platform"],
         )
-    build_root = _cmake_build_root_from_template(template_path)
+    template_root = _cmake_build_root_from_template(template_path)
+    build_root = (
+        Path(build_root_override)
+        if build_root_override is not None
+        else template_root
+    )
+    build_root.mkdir(parents=True, exist_ok=True)
+    inherited = (
+        _template_build_configuration(template_path)
+        if build_root.resolve() != template_root.resolve()
+        else {}
+    )
     generated_dir = build_root / "nw05-generated-src"
     generated_dir.mkdir(parents=True, exist_ok=True)
     source_path = generated_dir / f"{_profile_file_stem(profile_id)}.cpp"
@@ -1168,14 +1231,32 @@ def _build_specialized_player(
         ),
         **_specialized_implementation_flags(manifest),
     }
-    configure = [
-        "cmake",
-        "-S",
-        str(REPO_ROOT),
-        "-B",
-        str(build_root),
-        f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
-    ]
+    configure = ["cmake"]
+    if inherited.get("CMAKE_GENERATOR"):
+        configure.extend(["-G", inherited["CMAKE_GENERATOR"]])
+    configure.extend(
+        [
+            "-S",
+            str(REPO_ROOT),
+            "-B",
+            str(build_root),
+            f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
+        ]
+    )
+    for name in (
+        "CMAKE_TOOLCHAIN_FILE",
+        "CMAKE_BUILD_TYPE",
+        "CMAKE_MAKE_PROGRAM",
+        "NW_BUILD_PROFILE",
+        "NW_ENFORCE_PINNED_TOOLCHAIN",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
+        "NW07_CAPTURE_CONTROLS",
+    ):
+        if name in inherited:
+            value = inherited[name]
+            # CMake cache variable names are typed by CMake itself; FILEPATH
+            # and BOOL are accepted as generic -D values.
+            configure.append(f"-D{name}={value}")
     configure.extend(
         f"-D{name}:BOOL={'ON' if enabled else 'OFF'}"
         for name, enabled in sorted(flags.items())
@@ -2903,9 +2984,18 @@ def export_graph(
                     memory_budget_bytes=settings.memory_budget,
                     width=render_width,
                     height=render_height,
+                    present_sync_interval=settings.present_sync_interval,
                 )
                 preliminary_player = _build_specialized_player(
-                    template_path, preliminary_source, manifest, profile_id
+                    template_path,
+                    preliminary_source,
+                    manifest,
+                    profile_id,
+                    build_root_override=(
+                        Path(settings.specialized_build_root)
+                        if settings.specialized_build_root
+                        else None
+                    ),
                 )
                 actual_dependencies = _pe_runtime_dependencies(preliminary_player)
                 manifest["retained"]["dependencies"] = actual_dependencies
@@ -2920,9 +3010,18 @@ def export_graph(
                     memory_budget_bytes=settings.memory_budget,
                     width=render_width,
                     height=render_height,
+                    present_sync_interval=settings.present_sync_interval,
                 )
                 specialized_player_bytes = _build_specialized_player(
-                    template_path, final_source, manifest, profile_id
+                    template_path,
+                    final_source,
+                    manifest,
+                    profile_id,
+                    build_root_override=(
+                        Path(settings.specialized_build_root)
+                        if settings.specialized_build_root
+                        else None
+                    ),
                 )
                 final_dependencies = _pe_runtime_dependencies(specialized_player_bytes)
                 if final_dependencies != actual_dependencies:
@@ -2970,6 +3069,7 @@ def export_graph(
                 memory_budget_bytes=settings.memory_budget,
                 width=render_width,
                 height=render_height,
+                present_sync_interval=settings.present_sync_interval,
             ).encode("utf-8")
             aux_files = {
                 f"{_profile_file_stem(profile_id)}.schedule.json": len(schedule_data),
@@ -3099,6 +3199,7 @@ def export_graph(
                     memory_budget_bytes=settings.memory_budget,
                     width=render_width,
                     height=render_height,
+                    present_sync_interval=settings.present_sync_interval,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
             else:
@@ -3109,6 +3210,7 @@ def export_graph(
                     memory_budget_bytes=settings.memory_budget,
                     width=render_width,
                     height=render_height,
+                    present_sync_interval=settings.present_sync_interval,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
 

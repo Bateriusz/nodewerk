@@ -15,9 +15,13 @@
     "cmake/CompileShaders.cmake",
     "cmake/DependencyCheck.cmake",
     "cmake/ToolchainManifest.cmake",
+    "cmake/toolchains/clang-cl-x64.cmake",
+    "cmake/toolchains/msvc-x64.cmake",
     "benchmarks/toolchain-manifest.v1.json",
     "fixtures/nw07/production_loop.nwgraph",
     "fixtures/nw05_procedural_image/main.cpp",
+    "shaders/compute_fixture.hlsl",
+    "shaders/display_fixture.hlsl",
     "shaders/nw06/manifest.json",
     "shaders/nw06/nw06_bloom_cs.hlsl",
     "shaders/nw06/nw06_camera_cs.hlsl",
@@ -29,13 +33,34 @@
     "shaders/nw06/nw06_scene_ps.hlsl",
     "shaders/nw06/nw06_scene_vs.hlsl",
     "shaders/nw06/nw06_tonemap_cs.hlsl",
+    "src/package/nwp_format.cpp",
+    "src/package/nwp_format.h",
+    "src/platform/win32_window.cpp",
+    "src/platform/win32_window.h",
+    "src/player/capability_check.cpp",
+    "src/player/capability_check.h",
+    "src/player/capability_requirements.cpp",
+    "src/player/capability_requirements.h",
+    "src/player/clock_provider.h",
+    "src/player/crt_experiment_obligations.h",
     "src/player/d3d12_bootstrap.cpp",
+    "src/player/d3d12_bootstrap.h",
+    "src/player/diagnostics.cpp",
+    "src/player/diagnostics.h",
     "src/player/embedded_package.cpp",
+    "src/player/embedded_package.h",
+    "src/player/exit_codes.h",
     "src/player/nw07_capture_controls.h",
+    "src/player/package_loader.cpp",
+    "src/player/package_loader.h",
     "src/player/package_player.cpp",
     "src/player/package_player.h",
+    "src/player/player.cpp",
+    "src/player/player.h",
     "src/player/player_instrumentation.cpp",
+    "src/player/player_instrumentation.h",
     "src/player/resource_plan.cpp",
+    "src/player/resource_plan.h",
     "tools/nw03_compiler.py",
     "tools/nw04_fixture.py",
     "tools/nw05_export.py",
@@ -48,7 +73,7 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:27e8162cc0a239c154fe5b709473df483ffcd232437db2cf605c2b1b471fdb30",
+  "build_inputs_digest": "sha256:v1:32de631e5933329be60689014e6b4682abe390c259e9e8891419d8c5b3ea3470",
   "loop": {
     "looping": true,
     "wrap": "modulo",
@@ -102,8 +127,16 @@
     "lighting": {
       "analytic": true,
       "model": "directional",
-      "direction": [-0.4, -1.0, -0.3],
-      "color": [1.0, 1.0, 1.0]
+      "direction": [
+        -0.4,
+        -1.0,
+        -0.3
+      ],
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     "bloom": {
       "enabled": true,
@@ -125,7 +158,10 @@
   "quality": {
     "profile_id": "nw07.quality.v1",
     "settings": {
-      "resolution": {"width": 1920, "height": 1080},
+      "resolution": {
+        "width": 1920,
+        "height": 1080
+      },
       "vsync": false,
       "presentation_mode": "flip_discard",
       "swap_chain_buffer_count": 2,
@@ -150,8 +186,17 @@
     "process_start_to_first_present_ms_ceiling": 2000.0
   },
   "fixed_tick_evaluation": {
-    "ticks": [0, 240000, 480000, 720000, 959999],
-    "loop_boundary_ticks": [0, 960000],
+    "ticks": [
+      0,
+      240000,
+      480000,
+      720000,
+      959999
+    ],
+    "loop_boundary_ticks": [
+      0,
+      960000
+    ],
     "deterministic_replay": true,
     "stateless_scene": true
   },
@@ -172,6 +217,15 @@
     "release_contains_capture_controls": false,
     "diagnostic_build_is_separate_artifact": true,
     "diagnostic_overhead_measured_separately": true
+  },
+  "build_configuration": {
+    "cmake_generator": "Ninja",
+    "build_type": "MinSizeRel",
+    "build_profile": "release",
+    "pinned_toolchain_enforcement": "ON",
+    "present_sync_interval": 0,
+    "specialized_build_requires_empty_directory": true,
+    "codegen": "graph-derived generated player source"
   },
   "image_tolerances": {
     "numeric": {
@@ -216,8 +270,18 @@
     "matched_environment_relative_alert_percent": 10.0,
     "size_percentage_only_failure": false,
     "relative_comparison_requires_matched_environment": true,
-    "per_change_checks": ["cpu", "compiler", "reproducibility", "size"],
-    "nightly_checks": ["gpu_frame_time", "startup", "memory", "visual"]
+    "per_change_checks": [
+      "cpu",
+      "compiler",
+      "reproducibility",
+      "size"
+    ],
+    "nightly_checks": [
+      "gpu_frame_time",
+      "startup",
+      "memory",
+      "visual"
+    ]
   },
   "policy": "The 256 KiB ceiling is a hard gate on the complete runnable distribution.  The 128 KiB stretch value is reported for measurement only and never gates success.  Resolution, quality, and numeric/image tolerances preserve NW-06 semantics and cannot be weakened to pass a gate."
 }

@@ -88,7 +88,18 @@ optional implementation is part of the closure.
   component;
 - two exports from clean directories produce matching artifact, package,
   manifest, executable, and link-manifest hashes;
-- the frozen graph digest and pinned build-input digest match.
+- the frozen graph digest and pinned build-input digest match, including the
+  complete executable-producing source/header, CMake, toolchain-file, shader,
+  and compiler/export closure;
+- each reproducible export configures and compiles in its own empty native
+  build directory instead of inheriting the template's CMake cache;
+- the frozen build configuration requires `-DNW_ENFORCE_PINNED_TOOLCHAIN=ON`,
+  the release `MinSizeRel` profile, and an uncapped DXGI present interval.
+
+The generated player wires the frozen presentation setting into
+`PlayerConfig::present_sync_interval`; the uncapped NW-07 configuration passes
+`0` to `IDXGISwapChain3::Present`, and performance collection probes the final
+release executable for `NW05_PRESENT_SYNC_INTERVAL=0` before recording samples.
 
 ## Startup and memory protocol
 
@@ -116,10 +127,16 @@ Each run is evaluated independently. Raw GPU and CPU samples are retained and
 the p99 values are recomputed by `tools/nw07_evidence.py`. A single failed run
 fails the contract; an aggregate cannot rescue it. Displayed frame intervals
 are reported separately and never substitute for the gate metrics.
-`tools/nw07_capture.py perf` retains each run's `run<N>-timing.json` warm-up and
-measurement start/end timestamps. Validation derives the actual warm-up and run
-durations from those timestamps and rejects short, capped, or reused-process
-runs even when their declared protocol fields claim compliance.
+`tools/nw07_capture.py collect` launches the final release executable as a
+fresh process for a five-second warm-up and each of the three 60-second runs,
+invokes the configured external PresentMon/GPUView-equivalent collector, and
+retains each run's `run<N>-timing.json` warm-up and measurement start/end
+timestamps. Validation derives the actual warm-up and run durations from those
+timestamps and rejects short, capped, or reused-process runs even when their
+declared protocol fields claim compliance.
+Reference bindings are immutable and versioned. Every certifying run must name
+the frozen binding digest and must have started after both `frozen_at_utc` and
+the binding timestamp; retroactive measurements cannot pass v1.
 
 The contract's methodology is frozen, but host/artifact binding is currently
 `pending_reference_capture`. Certification remains pending until a matching
@@ -143,6 +160,12 @@ executable/package/manifest hashes, driver/OS/toolchain identities, queried
 capabilities, cache state, clocks/power/thermal conditions, capture protocol,
 raw RGBA32F artifacts, reference provenance, and validated numeric/image
 comparisons.
+The validator reopens the retained captured and reference RGBA32F files,
+recomputes every per-tick and loop-boundary comparison, requires matching
+reference-execution package/manifest/executable provenance, and compares the
+Ada and Blackwell exported-player captures against each other. Declared
+zero-error summaries, missing reference files, and unrelated reference
+provenance cannot establish equivalence.
 The same physical-or-documented-passthrough rule applies to correctness
 captures; a generic VM is never sufficient for GPU acceptance.
 
@@ -157,6 +180,12 @@ unchanged across the boundary. `tools/nw07_capture.py correctness` performs an
 actual image comparison when `tick_0.rgba32f` and `tick_960000.rgba32f` are
 supplied. Without the boundary capture it records only canonical-graph
 provenance and leaves verification pending. Fixed-tick replay is stateless.
+Retained fixed-tick and reference captures are stored under
+`nw07-captures/<capture_id>/` and `nw07-reference-captures/<capture_id>/`;
+recording a different capture id cannot overwrite earlier evidence, and a
+reused id with different bytes is rejected. Every harness record carries a
+top-level, schema-valid evidence status derived from validation rather than a
+caller assertion.
 
 ## Matched-environment Blackwell development series
 
@@ -221,7 +250,8 @@ python tools/verify_nw07.py --mode BuildChecks \
     --summary-json build/nw07-build-checks.json
 python tools/verify_nw07.py --mode Full \
     --fixture <player.exe> --package <export-dir> --evidence <evidence.json> \
-    --build-report build/nw07-build-checks.json
+    --build-report build/nw07-build-checks.json \
+    --binary-dir <deployment-dir> --clean-report <clean-report.json>
 python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
 ```
 
@@ -239,6 +269,9 @@ python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
   The report must bind the same executable, package, manifest, size, pinned
   build-input digest, and clean-directory reproducibility as the final
   artifact. Without either source the native export gate remains pending.
+  Full also requires the retained clean-system report and deployment
+  directory to verify against the identical final executable; missing
+  clean-system evidence leaves the milestone incomplete.
 - `CleanSystem` requires a physical Windows 11 x64 host and a clean-system
   execution report covering corrupt payloads, missing required features,
   initialization failures, resize, and device removal with actionable exit

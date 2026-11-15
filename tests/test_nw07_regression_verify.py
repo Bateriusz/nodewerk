@@ -17,6 +17,7 @@ import nw07_capture as capture  # noqa: E402
 import nw07_clean_system as clean_system  # noqa: E402
 import nw07_contract as contract  # noqa: E402
 import verify_nw07  # noqa: E402
+from schema_validator import validate_file_against_schema  # noqa: E402
 
 
 ENVIRONMENT = {
@@ -123,6 +124,59 @@ def test_capture_harness_reads_and_hashes_raw_samples(tmp_path: Path) -> None:
     assert section["reported_p99_ms"] == 4
     assert section["sha256"]
     assert section["bytes"] == sample_path.stat().st_size
+
+
+def test_capture_records_always_emit_a_top_level_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = {
+        "artifact_key": "sha256:v1:" + "a" * 64,
+        "package_sha256": "1" * 64,
+        "manifest_sha256": "2" * 64,
+        "executable_sha256": "3" * 64,
+        "executable_bytes": 120000,
+    }
+    monkeypatch.setattr(
+        capture.export, "inspect_artifact_directory", lambda path: identity
+    )
+    measurements = tmp_path / "measurements.json"
+    measurements.write_text("{}", encoding="utf-8")
+    record = capture.record_diagnostic(
+        Namespace(
+            package=str(tmp_path / "package"),
+            measurements=str(measurements),
+            diagnostic_sha256="d" * 64,
+            capture_id="diagnostic-status",
+            evidence=str(tmp_path / "evidence.json"),
+        )
+    )
+    assert record["status"] in {
+        "passed",
+        "failed",
+        "pending_unverified",
+        "unverified",
+        "informational",
+    }
+    evidence_path = tmp_path / "evidence.json"
+    capture._append_record(evidence_path, record)
+    validate_file_against_schema(
+        evidence_path,
+        REPO_ROOT / "schemas" / "nw07-hardware-evidence.schema.json",
+    )
+
+
+def test_retained_capture_namespacing_refuses_to_overwrite_different_bytes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "tick_0.rgba32f"
+    source.write_bytes(b"first")
+    destination_dir = tmp_path / "nw07-captures" / "ada-capture"
+    retained = capture._retain_capture(source, destination_dir)
+    assert retained.parent == destination_dir
+    assert retained.read_bytes() == b"first"
+    source.write_bytes(b"different")
+    with pytest.raises(ValueError):
+        capture._retain_capture(source, destination_dir)
 
 
 def test_perf_capture_derives_run_timing_from_retained_metadata(
@@ -503,6 +557,40 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
     executable.write_bytes(b"MZ" + b"\x00" * 16)
     package_dir = tmp_path / "package"
     package_dir.mkdir()
+    deployment = tmp_path / "deployment"
+    deployment.mkdir()
+    deployed = deployment / "nw_common_d3d12_fl12_0_sm6_0_v1.exe"
+    deployed.write_bytes(b"MZ" + b"\x00" * 16)
+    deployment_report = clean_system.deployment_report(deployed, deployment)
+    clean_report = {
+        "format": "nw07-clean-system-report",
+        "version": 1,
+        "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "profile_id": contract.PROFILE_ID,
+        "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "artifact": {
+            "artifact_key": identity["artifact_key"],
+            "package_sha256": identity["package_sha256"],
+            "manifest_sha256": identity["manifest_sha256"],
+            "executable_sha256": identity["executable_sha256"],
+        },
+        "deployment": deployment_report,
+        "scenarios": [
+            {
+                "scenario": name,
+                "executed": True,
+                "expected_exit_code": expected,
+                "observed_exit_code": expected,
+                "status": "passed",
+            }
+            for name, expected in clean_system.EXPECTED_SCENARIO_EXIT_CODES.items()
+        ],
+        "verification_status": "verified",
+        "policy": "Executed failures remain failed.",
+    }
+    clean_report_path = tmp_path / "clean-report.json"
+    clean_report_path.write_text(json.dumps(clean_report), encoding="utf-8")
     evidence_file = tmp_path / "evidence.json"
     evidence_file.write_text("{}", encoding="utf-8")
     pinned_digest = verify_nw07.export.verify_pinned_inputs(
@@ -586,6 +674,10 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
             str(evidence_file),
             "--build-report",
             str(build_report_path),
+            "--binary-dir",
+            str(deployment),
+            "--clean-report",
+            str(clean_report_path),
             "--summary-json",
             str(summary_path),
         ]
@@ -611,6 +703,10 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
             str(evidence_file),
             "--build-report",
             str(build_report_path),
+            "--binary-dir",
+            str(deployment),
+            "--clean-report",
+            str(clean_report_path),
             "--summary-json",
             str(stale_summary),
         ]
@@ -629,6 +725,10 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
             str(package_dir),
             "--evidence",
             str(evidence_file),
+            "--binary-dir",
+            str(deployment),
+            "--clean-report",
+            str(clean_report_path),
             "--summary-json",
             str(missing_report_summary),
         ]

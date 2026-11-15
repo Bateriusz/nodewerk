@@ -14,8 +14,11 @@ import argparse
 import hashlib
 import json
 import math
-import shutil
+import os
+import shlex
+import subprocess
 import sys
+import time
 from array import array
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +31,8 @@ import nw07_contract as contract  # noqa: E402
 import nw07_evidence as evidence  # noqa: E402
 import nw07_export as export  # noqa: E402
 
+COLLECT_PROTOCOL = "nw07-perf-collect.v1"
+
 
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -35,6 +40,46 @@ def _sha256_bytes(data: bytes) -> str:
 
 def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
+
+
+def _evidence_namespace(capture_id: str) -> str:
+    cleaned = "".join(
+        character if character.isalnum() or character in {"-", "_", "."} else "_"
+        for character in capture_id.strip()
+    )
+    if not cleaned:
+        raise ValueError("capture id must contain at least one safe character")
+    suffix = _sha256_bytes(capture_id.strip().encode("utf-8"))[:12]
+    return f"{cleaned}-{suffix}"
+
+
+def _retain_capture(source: Path, destination_dir: Path) -> Path:
+    """Copy a raw capture without overwriting different prior evidence."""
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / source.name
+    data = source.read_bytes()
+    if destination.is_file():
+        if destination.read_bytes() != data:
+            raise ValueError(
+                f"retained capture '{destination}' already exists with different bytes; "
+                "capture ids must not overwrite prior evidence"
+            )
+        return destination
+    destination.write_bytes(data)
+    return destination
+
+
+def _validation_status(validation: Mapping[str, Any]) -> str:
+    status = str(validation.get("status", "pending_unverified"))
+    if status == "verified":
+        return "passed"
+    if status == "failed":
+        return "failed"
+    if status == "informational":
+        return "informational"
+    if status == "unverified":
+        return "unverified"
+    return "pending_unverified"
 
 
 def _utc_seconds(value: Any) -> float | None:
@@ -195,7 +240,8 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
     captures_dir = Path(args.captures_dir)
     artifact_root = Path(args.artifact_root or package_dir).resolve()
     artifact_root.mkdir(parents=True, exist_ok=True)
-    stored_dir = artifact_root / "nw07-captures"
+    namespace = _evidence_namespace(args.capture_id)
+    stored_dir = artifact_root / "nw07-captures" / namespace
     stored_dir.mkdir(parents=True, exist_ok=True)
     reference_dir = Path(args.reference_captures_dir) if args.reference_captures_dir else None
     capture_artifacts = []
@@ -206,12 +252,8 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
         path = captures_dir / f"tick_{tick}.rgba32f"
         if not path.is_file():
             raise ValueError(f"fixed-tick capture is unavailable: {path}")
-        try:
-            relative = path.resolve().relative_to(artifact_root)
-        except ValueError:
-            stored = stored_dir / path.name
-            shutil.copyfile(path, stored)
-            relative = stored.relative_to(artifact_root)
+        stored = _retain_capture(path, stored_dir)
+        relative = stored.relative_to(artifact_root)
         digest = _sha256_file(artifact_root / relative)
         capture_artifacts.append(
             {
@@ -229,14 +271,11 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
             reference_path = reference_dir / f"tick_{tick}.rgba32f"
             if not reference_path.is_file():
                 raise ValueError(f"reference capture is unavailable: {reference_path}")
-            try:
-                reference_relative = reference_path.resolve().relative_to(artifact_root)
-            except ValueError:
-                reference_stored_dir = artifact_root / "nw07-reference-captures"
-                reference_stored_dir.mkdir(parents=True, exist_ok=True)
-                reference_stored = reference_stored_dir / reference_path.name
-                shutil.copyfile(reference_path, reference_stored)
-                reference_relative = reference_stored.relative_to(artifact_root)
+            reference_stored_dir = (
+                artifact_root / "nw07-reference-captures" / namespace
+            )
+            reference_stored = _retain_capture(reference_path, reference_stored_dir)
+            reference_relative = reference_stored.relative_to(artifact_root)
             image = _compare_images(path, reference_path)
             reference_digest = _sha256_file(reference_path)
             reference_relative_text = str(reference_relative).replace("\\", "/")
@@ -274,12 +313,8 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
     boundary_tick = contract.LOOP_BOUNDARY_TICKS[1]
     boundary_path = captures_dir / f"tick_{boundary_tick}.rgba32f"
     if boundary_path.is_file():
-        try:
-            boundary_relative = boundary_path.resolve().relative_to(artifact_root)
-        except ValueError:
-            boundary_stored = stored_dir / boundary_path.name
-            shutil.copyfile(boundary_path, boundary_stored)
-            boundary_relative = boundary_stored.relative_to(artifact_root)
+        boundary_stored = _retain_capture(boundary_path, stored_dir)
+        boundary_relative = boundary_stored.relative_to(artifact_root)
         capture_artifacts.append(
             {
                 "kind": contract.CAPTURE_KIND,
@@ -355,12 +390,24 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
         "loop_boundary_evidence": graph_evidence["loop_boundary"],
     }
+    validation = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=identity,
+        artifact_root=artifact_root,
+        config=config,
+    )
+    capture["validation"] = validation
+    capture["status"] = _validation_status(validation)
     return capture
 
 
 def record_perf(args: argparse.Namespace) -> dict[str, Any]:
     package_dir = Path(args.package)
     identity = export.inspect_artifact_directory(package_dir)
+    production = export.load_canonical_config()
+    if production.get("quality", {}).get("settings", {}).get("vsync") is not False:
+        raise ValueError("frozen production configuration does not disable vsync")
     contract_record = json.loads(Path(args.contract).read_text(encoding="utf-8"))
     reference = _load_json(args.reference)
     samples_dir = Path(args.samples_dir)
@@ -441,6 +488,10 @@ def record_perf(args: argparse.Namespace) -> dict[str, Any]:
             "fresh_process_per_run": True,
             "application_pipeline_cache": False,
         },
+        "present_sync_interval": 0,
+        "presentation_mode": "flip_discard",
+        "uncapped": True,
+        "presentation_probe": getattr(args, "presentation_probe", None),
         "runs": runs,
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -451,6 +502,7 @@ def record_perf(args: argparse.Namespace) -> dict[str, Any]:
         artifact_root=None,
     )
     capture["validation"] = validation
+    capture["status"] = _validation_status(validation)
     return capture
 
 
@@ -458,7 +510,7 @@ def record_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
     package_dir = Path(args.package)
     identity = export.inspect_artifact_directory(package_dir)
     measurements = _load_json(args.measurements)
-    return {
+    capture = {
         "capture_id": args.capture_id,
         "task": contract.TASK,
         "implementation_base": contract.IMPLEMENTATION_BASE,
@@ -480,6 +532,198 @@ def record_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
         "measurements": measurements,
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
     }
+    validation = evidence.validate_diagnostic_overhead(
+        capture, artifact_identity=identity
+    )
+    capture["validation"] = validation
+    capture["status"] = _validation_status(validation)
+    return capture
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _start_player(executable: Path, player_args: list[str]) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [str(executable), *player_args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=dict(os.environ),
+    )
+
+
+def _stop_player(process: subprocess.Popen[str]) -> tuple[str, str]:
+    try:
+        stdout, stderr = process.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate()
+    return stdout or "", stderr or ""
+
+
+def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
+    """Execute the frozen warm-up/three-run protocol and retain raw samples.
+
+    The release player is launched as a fresh process for every run.  An
+    external measurement collector (PresentMon/GPUView or equivalent) is
+    required to write the raw GPU, CPU-submission, and displayed-interval
+    samples; this harness never fabricates samples when the collector produces
+    nothing.
+    """
+    config = export.load_canonical_config()
+    if (config.get("quality", {}).get("settings", {}).get("vsync")) is not False:
+        raise ValueError("frozen production configuration does not disable vsync")
+    identity = export.inspect_artifact_directory(Path(args.package))
+    executable = Path(args.executable)
+    if not executable.is_file():
+        raise ValueError(f"release executable is unavailable: {executable}")
+    actual_sha = _sha256_file(executable)
+    if actual_sha != identity["executable_sha256"]:
+        raise ValueError(
+            "release executable does not match the published final artifact"
+        )
+    collector = shlex.split(args.collector_command, posix=os.name != "nt")
+    if not collector:
+        raise ValueError("a measurement collector command is required")
+    player_args = shlex.split(args.player_args, posix=os.name != "nt")
+    samples_dir = Path(args.samples_dir)
+    samples_dir.mkdir(parents=True, exist_ok=True)
+    probe = subprocess.run(
+        [str(executable), "--frames", "1"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env=dict(os.environ),
+    )
+    if (
+        probe.returncode != 0
+        or "NW05_PRESENT_SYNC_INTERVAL=0" not in probe.stdout
+    ):
+        raise ValueError(
+            "release executable did not execute with uncapped presentation; "
+            "performance evidence cannot be accepted"
+        )
+    record = {
+        "protocol": COLLECT_PROTOCOL,
+        "artifact_key": identity["artifact_key"],
+        "executable_sha256": identity["executable_sha256"],
+        "package_sha256": identity["package_sha256"],
+        "manifest_sha256": identity["manifest_sha256"],
+        "present_sync_interval": 0,
+        "uncapped": True,
+        "fresh_process_per_run": True,
+        "application_pipeline_cache": False,
+        "presentation_probe": {
+            "exit_code": probe.returncode,
+            "present_sync_interval_line": "NW05_PRESENT_SYNC_INTERVAL=0",
+            "stdout": probe.stdout[-4000:],
+            "stderr": probe.stderr[-4000:],
+        },
+        "warmup_seconds": contract.WARMUP_SECONDS,
+        "runs": [],
+        "collected_at_utc": _utc_now(),
+    }
+    for index in range(1, contract.PERF_RUN_COUNT + 1):
+        warmup_started = _utc_now()
+        warmup = _start_player(executable, player_args)
+        time.sleep(contract.WARMUP_SECONDS)
+        warmup_stdout, warmup_stderr = _stop_player(warmup)
+        run_started = _utc_now()
+        player = _start_player(executable, player_args)
+        run_dir = samples_dir / f"run{index}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env.update(
+            {
+                "NW07_COLLECT_PROTOCOL": COLLECT_PROTOCOL,
+                "NW07_ARTIFACT_SHA256": identity["executable_sha256"],
+                "NW07_RUN_INDEX": str(index),
+                "NW07_PLAYER_PID": str(player.pid),
+                "NW07_RUN_SECONDS": str(contract.PERF_RUN_SECONDS),
+                "NW07_RUN_DIR": str(run_dir),
+                "NW07_GPU_SAMPLES": str(samples_dir / f"run{index}-gpu.txt"),
+                "NW07_CPU_SAMPLES": str(samples_dir / f"run{index}-cpu.txt"),
+                "NW07_DISPLAYED_SAMPLES": str(
+                    samples_dir / f"run{index}-displayed.txt"
+                ),
+            }
+        )
+        try:
+            collector_completed = subprocess.run(
+                collector,
+                capture_output=True,
+                text=True,
+                timeout=contract.PERF_RUN_SECONDS + 30,
+                check=False,
+                env=env,
+            )
+        finally:
+            player_stdout, player_stderr = _stop_player(player)
+        run_ended = _utc_now()
+        timing = {
+            "warmup_started_utc": warmup_started,
+            "run_started_utc": run_started,
+            "run_ended_utc": run_ended,
+            "duration_seconds": contract.PERF_RUN_SECONDS,
+            "warmup_seconds": contract.WARMUP_SECONDS,
+            "uncapped": True,
+            "fresh_process": True,
+            "application_pipeline_cache": False,
+            "collector_protocol": COLLECT_PROTOCOL,
+            "collector_exit_code": collector_completed.returncode,
+            "collector_stdout": collector_completed.stdout[-4000:],
+            "collector_stderr": collector_completed.stderr[-4000:],
+            "player_stdout": player_stdout[-4000:],
+            "player_stderr": player_stderr[-4000:],
+            "warmup_stdout": warmup_stdout[-2000:],
+            "warmup_stderr": warmup_stderr[-2000:],
+        }
+        (samples_dir / f"run{index}-timing.json").write_text(
+            json.dumps(timing, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        record["runs"].append(
+            {
+                "run_index": index,
+                "timing": timing,
+                "collector_exit_code": collector_completed.returncode,
+                "samples_present": {
+                    name: (samples_dir / f"run{index}-{name}.txt").is_file()
+                    for name in ("gpu", "cpu", "displayed")
+                },
+            }
+        )
+        if collector_completed.returncode != 0:
+            raise ValueError(
+                f"measurement collector failed for run {index}: "
+                f"{collector_completed.stderr.strip() or collector_completed.stdout.strip()}"
+            )
+        for name in ("gpu", "cpu", "displayed"):
+            sample_path = samples_dir / f"run{index}-{name}.txt"
+            if not sample_path.is_file() or sample_path.stat().st_size == 0:
+                raise ValueError(
+                    f"measurement collector produced no {name} samples for run {index}"
+                )
+    manifest_path = samples_dir / "collector-record.json"
+    manifest_path.write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    namespace = argparse.Namespace(
+        package=args.package,
+        contract=args.contract,
+        samples_dir=str(samples_dir),
+        reference=args.reference,
+        capture_id=args.capture_id,
+        execution_kind=args.execution_kind,
+        evidence=args.evidence,
+        presentation_probe=record["presentation_probe"],
+    )
+    capture = record_perf(namespace)
+    capture["collection"] = record
+    return capture
 
 
 def _append_record(path: Path, capture: Mapping[str, Any]) -> dict[str, Any]:
@@ -504,7 +748,7 @@ def main(argv: list[str] | None = None) -> int:
     correctness.add_argument("--package", required=True)
     correctness.add_argument("--captures-dir", required=True)
     correctness.add_argument("--artifact-root")
-    correctness.add_argument("--reference-captures-dir")
+    correctness.add_argument("--reference-captures-dir", required=True)
     correctness.add_argument("--capture-id", required=True)
     correctness.add_argument("--tier", choices=("ada", "blackwell"), required=True)
     correctness.add_argument(
@@ -562,13 +806,31 @@ def main(argv: list[str] | None = None) -> int:
     diagnostic.add_argument("--capture-id", default="diagnostic-overhead")
     diagnostic.add_argument("--evidence", required=True)
 
+    collect = subparsers.add_parser("collect")
+    collect.add_argument("--package", required=True)
+    collect.add_argument("--executable", required=True)
+    collect.add_argument("--contract", default=str(REPO_ROOT / "benchmarks" / "nw07" / "perf-ref-v1.json"))
+    collect.add_argument("--samples-dir", required=True)
+    collect.add_argument("--reference", required=True)
+    collect.add_argument("--collector-command", required=True)
+    collect.add_argument("--player-args", default="--frames 0")
+    collect.add_argument("--capture-id", required=True)
+    collect.add_argument(
+        "--execution-kind",
+        choices=("physical", "documented_gpu_passthrough"),
+        default="physical",
+    )
+    collect.add_argument("--evidence", required=True)
+
     args = parser.parse_args(argv)
     if args.command == "correctness":
         capture = record_correctness(args)
     elif args.command == "perf":
         capture = record_perf(args)
-    else:
+    elif args.command == "diagnostic-overhead":
         capture = record_diagnostic(args)
+    else:
+        capture = collect_perf(args)
     updated = _append_record(Path(args.evidence), capture)
     print(json.dumps(capture, indent=2, sort_keys=True))
     return 0

@@ -248,7 +248,7 @@ def _run_record(
     gpu_values: list[float],
     cpu_values: list[float],
 ) -> dict[str, Any]:
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index)
+    base = datetime(2026, 12, 1, tzinfo=timezone.utc) + timedelta(hours=index)
     timing = {
         "warmup_started_utc": base.isoformat(),
         "run_started_utc": (base + timedelta(seconds=contract.WARMUP_SECONDS)).isoformat(),
@@ -307,6 +307,12 @@ def _synthetic_perf_capture(contract_record: Mapping[str, Any], identity: Mappin
         "implementation_base": contract.IMPLEMENTATION_BASE,
         "coverage_target": contract.PERF_CONTRACT_ID,
         "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+        "present_sync_interval": 0,
+        "presentation_probe": {
+            "exit_code": 0,
+            "present_sync_interval_line": "NW05_PRESENT_SYNC_INTERVAL=0",
+            "stdout": "NW05_PRESENT_SYNC_INTERVAL=0\n",
+        },
         "contract_id": contract.PERF_CONTRACT_ID,
         "execution_environment": {"kind": "physical"},
         "reference": reference,
@@ -346,7 +352,9 @@ def check_perf_reference_rules() -> CheckResult:
             return _fail("nw07_perf_reference", "; ".join(validation["reasons"]))
         identity = _synthetic_artifact_identity()
         bound = evidence.fully_bound_reference(
-            contract_record, artifact_identity=identity
+            contract_record,
+            artifact_identity=identity,
+            bound_at_utc="2026-11-30T00:00:00+00:00",
         )
         capture = _synthetic_perf_capture(bound, identity)
         verified = evidence.validate_perf_capture(
@@ -876,46 +884,61 @@ def _native_export_checks(args: argparse.Namespace) -> list[CheckResult]:
             )
         ]
     try:
-        with tempfile.TemporaryDirectory(prefix="nw07-build-") as temporary:
-            root = Path(temporary)
-            report = export.export_production(
-                root / "artifact",
-                player_template=args.player_template,
-                dxc_executable=args.dxc,
-                report_path=root / "report.json",
-                allow_test_payloads=False,
+        # Retain the real distribution and all reproducibility evidence.  The
+        # CI workflow uploads this directory, so a successful native build must
+        # never disappear with a temporary directory.
+        default_root = (
+            REPO_ROOT
+            / "build"
+            / "nw07-verification"
+            / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        )
+        root = Path(args.native_output) if args.native_output else default_root
+        root.mkdir(parents=True, exist_ok=True)
+        artifact_dir = root / "artifact"
+        report_path = root / "report.json"
+        report = export.export_production(
+            artifact_dir,
+            player_template=args.player_template,
+            dxc_executable=args.dxc,
+            report_path=report_path,
+            allow_test_payloads=False,
+            specialized_build_root=root / "clean-build",
+        )
+        reproducibility = export.export_reproducibility(
+            root / "repro",
+            player_template=args.player_template,
+            dxc_executable=args.dxc,
+            allow_test_payloads=False,
+        )
+        return [
+            _ok(
+                "nw07_native_release_export",
+                evidence={
+                    "artifact_key": report["artifact"]["artifact_key"],
+                    "package_sha256": report["artifact"]["package_sha256"],
+                    "manifest_sha256": report["artifact"]["manifest_sha256"],
+                    "complete_distribution_bytes": report["distribution"][
+                        "complete_distribution_bytes"
+                    ],
+                    "within_stretch": report["distribution"]["within_stretch"],
+                    "within_ceiling": report["distribution"]["within_ceiling"],
+                    "release_grade": report.get("release_grade"),
+                    "test_payload": report.get("test_payload"),
+                    "reproducible": reproducibility["matching"],
+                    "executable_sha256": reproducibility["fields"][
+                        "executable_sha256"
+                    ],
+                    "build_inputs_digest": report["build_inputs"]["digest"],
+                    "matches_frozen_digest": report["build_inputs"][
+                        "matches_frozen_digest"
+                    ],
+                    "retained_distribution_directory": str(artifact_dir),
+                    "retained_export_report": str(report_path),
+                    "retained_reproducibility_directory": str(root / "repro"),
+                },
             )
-            reproducibility = export.export_reproducibility(
-                root / "repro",
-                player_template=args.player_template,
-                dxc_executable=args.dxc,
-                allow_test_payloads=False,
-            )
-            return [
-                _ok(
-                    "nw07_native_release_export",
-                    evidence={
-                        "artifact_key": report["artifact"]["artifact_key"],
-                        "package_sha256": report["artifact"]["package_sha256"],
-                        "manifest_sha256": report["artifact"]["manifest_sha256"],
-                        "complete_distribution_bytes": report["distribution"][
-                            "complete_distribution_bytes"
-                        ],
-                        "within_stretch": report["distribution"]["within_stretch"],
-                        "within_ceiling": report["distribution"]["within_ceiling"],
-                        "release_grade": report.get("release_grade"),
-                        "test_payload": report.get("test_payload"),
-                        "reproducible": reproducibility["matching"],
-                        "executable_sha256": reproducibility["fields"][
-                            "executable_sha256"
-                        ],
-                        "build_inputs_digest": report["build_inputs"]["digest"],
-                        "matches_frozen_digest": report["build_inputs"][
-                            "matches_frozen_digest"
-                        ],
-                    },
-                )
-            ]
+        ]
     except Exception as exc:
         return [_fail("nw07_native_release_export", str(exc))]
 
@@ -1162,6 +1185,84 @@ def _validate_build_report(
     )
 
 
+def _full_clean_system_check(
+    args: argparse.Namespace,
+    identity: Mapping[str, Any] | None,
+) -> CheckResult:
+    """Mandatory Full gate: clean deployment bound to the final executable."""
+    if not args.binary_dir:
+        return _pending(
+            "nw07_clean_system",
+            "Full verification requires --binary-dir containing the deployed "
+            "final executable and a clean-system execution report",
+        )
+    binary_dir = Path(args.binary_dir)
+    executable = clean_system.deployment_executable(binary_dir)
+    if executable is None:
+        return _fail(
+            "nw07_clean_system",
+            "deployment directory has no NW-07 executable",
+        )
+    if identity is not None:
+        if evidence.sha256_file(executable) != identity.get("executable_sha256"):
+            return _fail(
+                "nw07_clean_system",
+                "clean-system deployment executable does not match the final artifact",
+            )
+    report_path = Path(args.clean_report) if args.clean_report else (
+        binary_dir / "nw07-clean-system.json"
+    )
+    if not report_path.is_file():
+        return _pending(
+            "nw07_clean_system",
+            "a retained clean-system execution report is required for Full verification",
+        )
+    try:
+        validate_file_against_schema(
+            report_path,
+            REPO_ROOT / "schemas" / "nw07-clean-system-report.schema.json",
+        )
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return _fail("nw07_clean_system", str(exc))
+    if (
+        report.get("implementation_base") != contract.IMPLEMENTATION_BASE
+        or report.get("profile_id") != contract.PROFILE_ID
+        or report.get("requirements_digest") != contract.REQUIREMENTS_DIGEST
+    ):
+        return _fail(
+            "nw07_clean_system",
+            "clean-system report is not bound to the NW-07 implementation/profile",
+        )
+    report_artifact = report.get("artifact")
+    if isinstance(report_artifact, Mapping) and identity is not None:
+        for field in ("artifact_key", "package_sha256", "manifest_sha256", "executable_sha256"):
+            if report_artifact.get(field) != identity.get(field):
+                return _fail(
+                    "nw07_clean_system",
+                    f"clean-system report artifact '{field}' does not match the "
+                    "final artifact",
+                )
+    validation = clean_system.validate_report(
+        report,
+        deployment_directory=binary_dir,
+        exclude_paths=(report_path,),
+    )
+    if validation["status"] == "verified":
+        return _ok(
+            "nw07_clean_system",
+            evidence={
+                "report": str(report_path),
+                "deployment": report.get("deployment"),
+                "scenarios": validation["scenarios"],
+                "required_scenarios": list(clean_system.REQUIRED_SCENARIOS),
+            },
+        )
+    if validation["status"] == "failed":
+        return _fail("nw07_clean_system", "; ".join(validation["reasons"]))
+    return _pending("nw07_clean_system", "; ".join(validation["reasons"]))
+
+
 def build_checks(args: argparse.Namespace) -> list[CheckResult]:
     return contracts_only() + _native_export_checks(args)
 
@@ -1194,16 +1295,19 @@ def full_checks(args: argparse.Namespace) -> list[CheckResult]:
                 "--fixture, --package, and --evidence are required for hardware verification",
             )
         )
+        checks.append(_full_clean_system_check(args, None))
         return checks
     executable = Path(args.fixture)
     package_dir = Path(args.package)
     if not executable.is_file():
         checks.append(_fail("nw07_artifact_identity", f"executable is unavailable: {executable}"))
+        checks.append(_full_clean_system_check(args, None))
         return checks
     try:
         identity = export.inspect_artifact_directory(package_dir)
     except Exception as exc:
         checks.append(_fail("nw07_artifact_identity", str(exc)))
+        checks.append(_full_clean_system_check(args, None))
         return checks
     executable_sha = evidence.sha256_file(executable)
     if executable_sha != identity["executable_sha256"]:
@@ -1213,6 +1317,7 @@ def full_checks(args: argparse.Namespace) -> list[CheckResult]:
                 "supplied executable does not match the published artifact",
             )
         )
+        checks.append(_full_clean_system_check(args, identity))
         return checks
     checks.append(
         _ok(
@@ -1280,6 +1385,7 @@ def full_checks(args: argparse.Namespace) -> list[CheckResult]:
         )
     except Exception as exc:
         checks.append(_fail("nw07_hardware_evidence", str(exc)))
+        checks.append(_full_clean_system_check(args, identity))
         return checks
     if result["status"] == "verified":
         checks.append(_ok("nw07_hardware_evidence", evidence=result))
@@ -1307,6 +1413,7 @@ def full_checks(args: argparse.Namespace) -> list[CheckResult]:
                 },
             )
         )
+    checks.append(_full_clean_system_check(args, identity))
     return checks
 
 
@@ -1422,6 +1529,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--player-template")
     parser.add_argument("--dxc")
     parser.add_argument("--build-report")
+    parser.add_argument("--native-output")
     parser.add_argument("--binary-dir")
     parser.add_argument("--clean-report")
     parser.add_argument("--summary-json")

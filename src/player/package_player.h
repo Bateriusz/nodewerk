@@ -30,6 +30,10 @@ struct PlayerConfig {
     const char* window_title = "Nodewerk NW-04 Player";
     std::uint32_t width = 1280u;
     std::uint32_t height = 720u;
+    // DXGI present sync interval.  Zero is uncapped and is the frozen NW-07
+    // performance setting; one synchronizes presentation to the display.
+    // Generated players set this from the frozen production/quality config.
+    std::uint32_t present_sync_interval = 1u;
     // Small bounded ring.  The implementation clamps this to 1..3.
     std::uint32_t frames_in_flight = 2u;
     bool create_window = true;

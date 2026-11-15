@@ -114,6 +114,7 @@ def _correctness(tier: str) -> dict:
                     "reference_artifact_sha256": hashlib.sha256(
                         f"{tier}-{tick}-ref".encode()
                     ).hexdigest(),
+                    "reference_artifact_path": f"{tier}-{tick}-ref.rgba32f",
                     "renderer": "exported_player",
                     "reference_renderer": "diagnostic_preview",
                     "numeric": {
@@ -123,9 +124,9 @@ def _correctness(tier: str) -> dict:
                         "relative_tolerance": contract.NUMERIC_RELATIVE_TOLERANCE,
                     },
                     "image": {
-                        "maximum_error": 1e-7,
+                        "maximum_error": 0.0,
                         "tolerance": contract.IMAGE_ABSOLUTE_TOLERANCE,
-                        "maximum_relative_error": 1e-7,
+                        "maximum_relative_error": 0.0,
                         "relative_tolerance": contract.IMAGE_RELATIVE_TOLERANCE,
                     },
                 }
@@ -180,14 +181,16 @@ def _perf() -> dict:
     identity = _identity()
     contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
     bound = evidence.fully_bound_reference(
-        contract_record, artifact_identity=identity
+        contract_record,
+        artifact_identity=identity,
+        bound_at_utc="2026-11-30T00:00:00+00:00",
     )
     samples = {
         "samples": [10.0 + (index % 3) * 0.001 for index in range(600)],
         "sample_count": 600,
     }
     samples["reported_p99_ms"] = evidence.nearest_rank_percentile(samples["samples"])
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 12, 1, tzinfo=timezone.utc)
     timing = {
         "warmup_started_utc": base.isoformat(),
         "run_started_utc": (
@@ -207,6 +210,12 @@ def _perf() -> dict:
         "implementation_base": contract.IMPLEMENTATION_BASE,
         "coverage_target": contract.PERF_CONTRACT_ID,
         "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+        "present_sync_interval": 0,
+        "presentation_probe": {
+            "exit_code": 0,
+            "present_sync_interval_line": "NW05_PRESENT_SYNC_INTERVAL=0",
+            "stdout": "NW05_PRESENT_SYNC_INTERVAL=0\n",
+        },
         "contract_id": contract.PERF_CONTRACT_ID,
         "execution_environment": {"kind": "physical"},
         "reference": copy.deepcopy(bound["reference"]),
@@ -282,11 +291,74 @@ def _diagnostic() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _artifact_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def _artifact_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         evidence,
         "_artifact_file_state",
         lambda capture, root, expected_ticks: ("passed", ""),
+    )
+    raw_files: dict[tuple[str, int], Path] = {}
+
+    def fake_artifact(capture, root, tick):
+        key = (str(capture.get("capture_id")), int(tick))
+        path = raw_files.get(key)
+        if path is None:
+            path = tmp_path / f"{key[0]}-{key[1]}.rgba32f"
+            path.write_bytes(b"raw")
+            raw_files[key] = path
+        return path
+
+    monkeypatch.setattr(evidence, "_artifact_file_for_tick", fake_artifact)
+    monkeypatch.setattr(
+        evidence,
+        "_capture_paths_for_tick",
+        lambda capture, root, tick: (
+            fake_artifact(capture, root, tick),
+            fake_artifact(capture, root, tick),
+        ),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "compare_rgba32f_files",
+        lambda captured, reference: {
+            "maximum_error": 0.0,
+            "maximum_relative_error": 0.0,
+        },
+    )
+    real_is_file = Path.is_file
+
+    def fake_is_file(self: Path) -> bool:
+        if self.suffix == ".rgba32f" and str(tmp_path) in str(self):
+            return True
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+    real_sha256_file = evidence.sha256_file
+
+    def fake_sha256_file(path: Path) -> str:
+        if path.suffix == ".rgba32f":
+            return hashlib.sha256(path.stem.encode()).hexdigest()
+        return real_sha256_file(path)
+
+    monkeypatch.setattr(evidence, "sha256_file", fake_sha256_file)
+    real_validate_record = evidence.validate_evidence_record
+    real_validate_correctness = evidence.validate_correctness_capture
+
+    def validate_record_with_raw_root(record, **kwargs):
+        kwargs.setdefault("artifact_root", tmp_path)
+        return real_validate_record(record, **kwargs)
+
+    def validate_correctness_with_raw_root(capture, **kwargs):
+        kwargs.setdefault("artifact_root", tmp_path)
+        return real_validate_correctness(capture, **kwargs)
+
+    monkeypatch.setattr(
+        evidence, "validate_evidence_record", validate_record_with_raw_root
+    )
+    monkeypatch.setattr(
+        evidence, "validate_correctness_capture", validate_correctness_with_raw_root
     )
 
 
@@ -302,7 +374,9 @@ def test_pending_record_is_not_verified() -> None:
 def test_complete_required_coverage_certifies() -> None:
     contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
     bound = evidence.fully_bound_reference(
-        contract_record, artifact_identity=_identity()
+        contract_record,
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
     )
     record = evidence.pending_record()
     record["captures"] = [
@@ -328,7 +402,9 @@ def test_complete_required_coverage_certifies() -> None:
 def test_missing_blackwell_coverage_stays_pending() -> None:
     contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
     bound = evidence.fully_bound_reference(
-        contract_record, artifact_identity=_identity()
+        contract_record,
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
     )
     record = evidence.pending_record()
     record["captures"] = [_correctness("ada"), _perf(), _diagnostic()]
@@ -342,7 +418,9 @@ def test_missing_blackwell_coverage_stays_pending() -> None:
 def test_executed_failure_remains_failed() -> None:
     contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
     bound = evidence.fully_bound_reference(
-        contract_record, artifact_identity=_identity()
+        contract_record,
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
     )
     record = evidence.pending_record()
     ada = _correctness("ada")
@@ -358,7 +436,9 @@ def test_executed_failure_remains_failed() -> None:
 def test_captures_must_bind_the_identical_artifact() -> None:
     contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
     bound = evidence.fully_bound_reference(
-        contract_record, artifact_identity=_identity()
+        contract_record,
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
     )
     record = evidence.pending_record()
     blackwell = _correctness("blackwell")
@@ -379,7 +459,9 @@ def test_captures_must_bind_the_identical_artifact() -> None:
 def test_declared_failure_is_never_upgraded_and_pending_stays_pending() -> None:
     contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
     bound = evidence.fully_bound_reference(
-        contract_record, artifact_identity=_identity()
+        contract_record,
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
     )
     record = evidence.pending_record()
     ada = _correctness("ada")
@@ -403,7 +485,9 @@ def test_declared_failure_is_never_upgraded_and_pending_stays_pending() -> None:
 def test_per_run_and_per_tick_declared_failures_are_retained() -> None:
     contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
     bound = evidence.fully_bound_reference(
-        contract_record, artifact_identity=_identity()
+        contract_record,
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
     )
     perf = _perf()
     perf["runs"][1]["status"] = "failed"
@@ -619,3 +703,101 @@ def test_blackwell_development_series_is_informational_and_has_no_gate() -> None
         )["status"]
         == "failed"
     )
+
+
+def test_desktop_generation_classification_rejects_laptop_and_datacenter_parts() -> None:
+    assert evidence.classify_hardware_tier("NVIDIA GeForce RTX 4060 Ti") == "ada"
+    assert evidence.classify_hardware_tier("NVIDIA GeForce RTX 5070 Ti") == "blackwell"
+    for unsupported in (
+        "NVIDIA GeForce RTX 4090 Laptop GPU",
+        "NVIDIA RTX A6000",
+        "NVIDIA A40",
+        "NVIDIA B200",
+        "NVIDIA GB200",
+    ):
+        assert evidence.classify_hardware_tier(unsupported) == "unknown"
+    assert (
+        evidence.classify_hardware_tier(
+            "NVIDIA GeForce RTX 4060 Ti", device_form_factor="laptop"
+        )
+        == "unknown"
+    )
+
+
+def test_image_comparisons_are_recomputed_from_raw_captures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture = _correctness("ada")
+    monkeypatch.setattr(
+        evidence,
+        "compare_rgba32f_files",
+        lambda captured, reference: {
+            "maximum_error": 1.0,
+            "maximum_relative_error": 1.0,
+        },
+    )
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "failed"
+    assert "does not match the retained raw captures" in " ".join(result["reasons"])
+
+
+def test_explicit_unverified_and_informational_captures_are_not_upgraded() -> None:
+    contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
+    bound = evidence.fully_bound_reference(
+        contract_record,
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
+    )
+    for status in ("unverified", "informational", "pending_unverified"):
+        record = evidence.pending_record()
+        ada = _correctness("ada")
+        ada["status"] = status
+        record["captures"] = [
+            ada,
+            _correctness("blackwell"),
+            _perf(),
+            _diagnostic(),
+        ]
+        result = evidence.validate_evidence_record(
+            record, artifact_identity=_identity(), perf_contract=bound
+        )
+        assert result["status"] != "verified"
+        assert result["milestone_complete"] is False
+
+
+def test_record_level_executed_failure_remains_failed() -> None:
+    contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
+    bound = evidence.fully_bound_reference(
+        contract_record,
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
+    )
+    record = evidence.pending_record()
+    record["verification_status"] = "executed_failure"
+    record["captures"] = [
+        _correctness("ada"),
+        _correctness("blackwell"),
+        _perf(),
+        _diagnostic(),
+    ]
+    result = evidence.validate_evidence_record(
+        record, artifact_identity=_identity(), perf_contract=bound
+    )
+    assert result["status"] == "failed"
+    assert result["milestone_complete"] is False
+
+
+def test_reference_binding_is_immutable() -> None:
+    contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
+    bound = evidence.fully_bound_reference(
+        contract_record, artifact_identity=_identity()
+    )
+    with pytest.raises(ValueError):
+        evidence.bind_reference(
+            bound,
+            board={"subsystem_vendor_id": 1, "subsystem_device_id": 2},
+        )

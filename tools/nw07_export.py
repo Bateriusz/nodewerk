@@ -256,6 +256,28 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
         raise Nw07ExportError("diagnostic build must be a separate artifact")
     if diagnostics.get("diagnostic_overhead_measured_separately") is not True:
         raise Nw07ExportError("diagnostic overhead must be measured separately")
+    build_configuration = section("build_configuration")
+    if build_configuration.get("cmake_generator") != "Ninja":
+        raise Nw07ExportError("canonical production changed the CMake generator")
+    if build_configuration.get("build_type") != "MinSizeRel":
+        raise Nw07ExportError("canonical production changed the release build type")
+    if build_configuration.get("build_profile") != contract.RELEASE_BUILD_PROFILE:
+        raise Nw07ExportError("canonical production changed the release build profile")
+    if build_configuration.get("pinned_toolchain_enforcement") != "ON":
+        raise Nw07ExportError(
+            "canonical production does not enforce the pinned toolchain"
+        )
+    if build_configuration.get("present_sync_interval") != 0:
+        raise Nw07ExportError(
+            "canonical production does not freeze uncapped presentation"
+        )
+    if (
+        build_configuration.get("specialized_build_requires_empty_directory")
+        is not True
+    ):
+        raise Nw07ExportError(
+            "canonical production allows a reused specialized-player build tree"
+        )
     fixed = section("fixed_tick_evaluation")
     if list(fixed.get("ticks") or []) != list(contract.REQUIRED_FIXED_TICKS):
         raise Nw07ExportError("canonical production changed the fixed-tick coverage")
@@ -746,6 +768,7 @@ def export_production(
     optimization: str = "O2",
     allocation_query: Mapping[int, Any] | None = None,
     adapter_identity: str = "unavailable-native-adapter",
+    specialized_build_root: Path | str | None = None,
     validate_schema: bool = True,
 ) -> dict[str, Any]:
     root = Path(repo_root or REPO_ROOT)
@@ -783,6 +806,12 @@ def export_production(
         requirements_digest=contract.REQUIREMENTS_DIGEST,
         frames_in_flight=2,
         player_template=str(template),
+        specialized_build_root=str(
+            Path(specialized_build_root)
+            if specialized_build_root
+            else staging_root / "specialized-native-build"
+        ),
+        present_sync_interval=0,
         include_optional_artifacts=False,
         allow_optional_profiles=False,
     )
@@ -916,6 +945,19 @@ def export_production(
             "optimization": optimization,
             "player_template_sha256": sha256_bytes(template_bytes),
             "player_template_bytes": len(template_bytes),
+            "build_configuration": {
+                "frozen": {
+                    key: value
+                    for key, value in dict(
+                        record.get("build_configuration") or {}
+                    ).items()
+                },
+                "present_sync_interval": settings.present_sync_interval,
+                "presentation_uncapped": settings.present_sync_interval == 0,
+                "specialized_build_root": settings.specialized_build_root,
+                "clean_build_directory": bool(settings.specialized_build_root),
+                "pinned_toolchain_enforced": True,
+            },
             "toolchain": _toolchain_provenance(record, root),
         },
         "artifact": identity,
@@ -1009,6 +1051,7 @@ def export_reproducibility(
         graph_path=graph_path,
         repo_root=repo_root,
         allow_test_payloads=allow_test_payloads,
+        specialized_build_root=root / "clean-a-build",
     )
     second = export_production(
         second_dir,
@@ -1019,6 +1062,7 @@ def export_reproducibility(
         graph_path=graph_path,
         repo_root=repo_root,
         allow_test_payloads=allow_test_payloads,
+        specialized_build_root=root / "clean-b-build",
     )
     fields = (
         "artifact_key",
@@ -1069,6 +1113,10 @@ def export_reproducibility(
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "clean_build_directories": [str(first_dir), str(second_dir)],
+        "specialized_build_directories": [
+            str(root / "clean-a-build"),
+            str(root / "clean-b-build"),
+        ],
         "matching": True,
         "fields": fields_map,
         "build_inputs_digest": first["build_inputs"]["digest"],

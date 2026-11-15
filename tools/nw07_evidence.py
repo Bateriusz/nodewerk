@@ -20,7 +20,9 @@ import hashlib
 import json
 import math
 import re
-from datetime import datetime
+import sys
+from array import array
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -103,6 +105,12 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+
+
 def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -160,14 +168,63 @@ def _execution_environment_state(capture: Mapping[str, Any]) -> tuple[str, list[
     return "passed", []
 
 
-def classify_hardware_tier(adapter_description: str) -> str:
-    """Metadata-only Ada/Blackwell classification; never a target selector."""
-    name = str(adapter_description or "").lower()
-    if any(token in name for token in ("rtx 50", "blackwell", "b100", "b200", "gb200")):
-        return "blackwell"
-    if any(token in name for token in ("rtx 40", "l40", "a40", "a6000", "rtx a")) or re.search(
-        r"(^|[^a-z])ada([^a-z]|$)", name
+_LAPTOP_MARKERS = (
+    "laptop",
+    "notebook",
+    "mobile",
+    "max-q",
+    "max q",
+)
+
+# Deliberately narrow, desktop-generation model names.  Data-centre parts
+# (B100/B200/GB200), Ampere workstation parts (A40/A6000/RTX A*), and mobile
+# SKUs are not representative desktop Ada/Blackwell coverage.
+_ADA_DESKTOP_PATTERN = re.compile(
+    r"\brtx\s+(?:4060(?:\s+ti)?|4070(?:\s+(?:ti|super))?|4080(?:\s+super)?|4090)\b"
+)
+_ADA_PRO_DESKTOP_PATTERN = re.compile(
+    r"\brtx\s+(?:4000|4500|5000|6000)\s+ada\b"
+)
+_BLACKWELL_DESKTOP_PATTERN = re.compile(
+    r"\brtx\s+(?:5060(?:\s+ti)?|5070(?:\s+(?:ti|super))?|5080|5090)\b"
+)
+_BLACKWELL_PRO_DESKTOP_PATTERN = re.compile(
+    r"\brtx\s+pro\s+(?:4500|5000|6000)\s+blackwell\b"
+)
+
+
+def classify_hardware_tier(
+    adapter_description: str,
+    *,
+    device_form_factor: str | None = None,
+) -> str:
+    """Classify only documented representative desktop generations.
+
+    This remains metadata-only and is never a general compatibility predicate.
+    Name substrings such as ``RTX A`` or ``RTX 50`` are insufficient: mobile
+    parts, Ampere workstations, and data-centre Blackwell parts must not be
+    promoted to Ada/Blackwell desktop coverage.
+    """
+    name = " ".join(str(adapter_description or "").lower().split())
+    if not name:
+        return "unknown"
+    if device_form_factor is not None and str(device_form_factor).strip().lower() not in {
+        "",
+        "desktop",
+    }:
+        return "unknown"
+    if any(marker in name for marker in _LAPTOP_MARKERS):
+        return "unknown"
+    if any(
+        token in name
+        for token in ("b100", "b200", "gb200", "h100", "h200", "data center")
     ):
+        return "unknown"
+    if _BLACKWELL_DESKTOP_PATTERN.search(name) or _BLACKWELL_PRO_DESKTOP_PATTERN.search(
+        name
+    ):
+        return "blackwell"
+    if _ADA_DESKTOP_PATTERN.search(name) or _ADA_PRO_DESKTOP_PATTERN.search(name):
         return "ada"
     return "unknown"
 
@@ -348,6 +405,8 @@ def validate_perf_contract(record: Mapping[str, Any]) -> dict[str, Any]:
         reasons.append("contract id changed")
     if record.get("contract_status") != "frozen":
         reasons.append("contract is not frozen")
+    if _parse_utc_timestamp(record.get("frozen_at_utc")) is None:
+        reasons.append("contract has no timezone-aware frozen_at_utc")
     if record.get("task") != contract.TASK:
         reasons.append("contract task is not NW-07")
     if record.get("profile_id") != contract.PROFILE_ID:
@@ -463,6 +522,16 @@ def validate_perf_contract(record: Mapping[str, Any]) -> dict[str, Any]:
         reasons.append("previous results are not preserved across contract changes")
     if change_control.get("unvalidated_normalization_forbidden") is not True:
         reasons.append("unvalidated normalization is not forbidden")
+    if record.get("binding_status") == "bound":
+        if record.get("binding_version") != 1:
+            reasons.append("reference binding version is not 1")
+        digest = record.get("binding_digest")
+        if (
+            not isinstance(digest, str)
+            or not digest.startswith("sha256:v1:")
+            or _parse_utc_timestamp(record.get("bound_at_utc")) is None
+        ):
+            reasons.append("reference binding is not frozen or lacks a timestamp")
     replacement = change_control.get("replacement_reference_requires") or {}
     for key in (
         "new_contract_version",
@@ -543,6 +612,7 @@ def bind_reference(
     toolchain: Mapping[str, Any] | None = None,
     artifact: Mapping[str, Any] | None = None,
     cache: Mapping[str, Any] | None = None,
+    bound_at_utc: str | None = None,
 ) -> dict[str, Any]:
     """Return a bound copy of the frozen contract.
 
@@ -550,6 +620,13 @@ def bind_reference(
     used by the reference-capture workflow and tests; callers cannot use it to
     relax a gate.
     """
+    if record.get("binding_status") == "bound" or (
+        record.get("reference") or {}
+    ).get("binding_digest"):
+        raise ValueError(
+            "nw07_perf_ref_v1 reference binding is immutable; create a new "
+            "contract version to replace a frozen binding"
+        )
     bound = copy.deepcopy(dict(record))
     reference = bound.setdefault("reference", {})
     for name, update in (
@@ -564,7 +641,24 @@ def bind_reference(
             section = reference.setdefault(name, {})
             section.update(dict(update))
             section["binding_status"] = "bound"
+    bound_at = bound_at_utc or datetime.now(timezone.utc).isoformat()
+    if _parse_utc_timestamp(bound_at) is None:
+        raise ValueError("reference binding timestamp must be timezone-aware ISO-8601")
     bound["binding_status"] = "bound"
+    bound["binding_version"] = 1
+    bound["bound_at_utc"] = bound_at
+    payload = {
+        "contract_id": bound.get("contract_id"),
+        "frozen_at_utc": bound.get("frozen_at_utc"),
+        "binding_version": 1,
+        "bound_at_utc": bound_at,
+        "reference": copy.deepcopy(reference),
+    }
+    digest = "sha256:v1:" + sha256_bytes(canonical_json_bytes(payload))
+    bound["binding_digest"] = digest
+    bound["binding_id"] = "nw07_perf_ref_v1@" + digest
+    reference["binding_digest"] = digest
+    reference["binding_id"] = bound["binding_id"]
     return bound
 
 
@@ -573,6 +667,7 @@ def fully_bound_reference(
     *,
     artifact_identity: Mapping[str, Any],
     overrides: Mapping[str, Mapping[str, Any]] | None = None,
+    bound_at_utc: str | None = None,
 ) -> dict[str, Any]:
     """Convenience binding used by tests and the reference-capture workflow.
 
@@ -626,7 +721,7 @@ def fully_bound_reference(
     }
     for name, values in overrides.items():
         base.setdefault(name, {}).update(values)
-    return bind_reference(record, **base)
+    return bind_reference(record, bound_at_utc=bound_at_utc, **base)
 
 
 def _artifact_mismatches(
@@ -699,6 +794,42 @@ def validate_perf_capture(
         result["status"] = "unverified"
         reasons.append("capture is not performance-certification evidence")
         return result
+    if capture.get("present_sync_interval") != 0:
+        result["status"] = "unverified"
+        reasons.append(
+            "capture does not prove uncapped presentation "
+            "(present_sync_interval must be 0)"
+        )
+    presentation_probe = capture.get("presentation_probe")
+    if not isinstance(presentation_probe, Mapping):
+        collection = capture.get("collection")
+        presentation_probe = (
+            collection.get("presentation_probe")
+            if isinstance(collection, Mapping)
+            else None
+        )
+    probe_stdout = (
+        str(presentation_probe.get("stdout", ""))
+        if isinstance(presentation_probe, Mapping)
+        else ""
+    )
+    probe_line = (
+        str(presentation_probe.get("present_sync_interval_line", ""))
+        if isinstance(presentation_probe, Mapping)
+        else ""
+    )
+    if (
+        not isinstance(presentation_probe, Mapping)
+        or presentation_probe.get("exit_code") != 0
+        or (
+            "NW05_PRESENT_SYNC_INTERVAL=0" not in probe_stdout
+            and "NW05_PRESENT_SYNC_INTERVAL=0" not in probe_line
+        )
+    ):
+        result["status"] = "unverified"
+        reasons.append(
+            "capture lacks a successful uncapped-presentation execution probe"
+        )
     if capture.get("task") != contract.TASK:
         result["status"] = "unverified"
         reasons.append("capture task is not NW-07")
@@ -722,6 +853,37 @@ def validate_perf_capture(
         result["status"] = "pending_unverified"
         result["missing_contract_bindings"] = contract_validation["missing_bindings"]
         return result
+    frozen_at = _parse_utc_timestamp(perf_contract.get("frozen_at_utc"))
+    bound_at = _parse_utc_timestamp(perf_contract.get("bound_at_utc"))
+    if frozen_at is None:
+        result["status"] = "unverified"
+        reasons.append("frozen performance contract has no valid freeze timestamp")
+    capture_binding_digest = capture.get("reference_binding_digest")
+    capture_binding_id = capture.get("reference_binding_id")
+    contract_binding_digest = perf_contract.get("binding_digest")
+    contract_binding_id = perf_contract.get("binding_id")
+    reference_binding = (capture.get("reference") or {}).get("binding_digest") if isinstance(
+        capture.get("reference"), Mapping
+    ) else None
+    if contract_binding_digest not in (None, "") and (
+        contract_binding_digest
+        not in {capture_binding_digest, reference_binding}
+    ):
+        result["status"] = "unverified"
+        reasons.append(
+            "capture does not reference the previously frozen reference binding"
+        )
+    if contract_binding_id not in (None, "") and capture_binding_id not in (
+        None,
+        "",
+        contract_binding_id,
+    ):
+        result["status"] = "unverified"
+        reasons.append("capture names a different reference binding id")
+    earliest_run = max(
+        [value for value in (frozen_at, bound_at) if value is not None],
+        default=None,
+    )
     environment_state, environment_reasons = _execution_environment_state(capture)
     if environment_reasons:
         result["status"] = (
@@ -872,6 +1034,12 @@ def validate_perf_capture(
                 run_result["reasons"].append(
                     f"retained warm-up timing covers {derived_warmup:.3f} s, not "
                     f"{contract.WARMUP_SECONDS} seconds"
+                )
+            if earliest_run is not None and warmup_started < earliest_run:
+                run_result["status"] = "failed"
+                run_result["reasons"].append(
+                    "run began before the reference binding was frozen; "
+                    "retroactive runs cannot certify nw07_perf_ref_v1"
                 )
             declared_duration = _number(run.get("duration_seconds"))
             if (
@@ -1090,6 +1258,112 @@ def _artifact_file_state(
     return "passed", ""
 
 
+def _capture_paths_for_tick(
+    capture: Mapping[str, Any], artifact_root: Path, tick: int
+) -> tuple[Path, Path] | None:
+    artifacts = capture.get("capture_artifacts")
+    if not isinstance(artifacts, list):
+        return None
+    captured = next(
+        (
+            item
+            for item in artifacts
+            if isinstance(item, Mapping) and item.get("tick") == tick
+        ),
+        None,
+    )
+    per_tick = (capture.get("comparison") or {}).get("per_tick")
+    row = next(
+        (
+            item
+            for item in (per_tick if isinstance(per_tick, list) else [])
+            if isinstance(item, Mapping) and item.get("tick") == tick
+        ),
+        None,
+    )
+    if not isinstance(captured, Mapping) or not isinstance(row, Mapping):
+        return None
+    captured_path = str(captured.get("path", ""))
+    reference_path = str(row.get("reference_artifact_path", ""))
+    if not captured_path or not reference_path:
+        return None
+    root = artifact_root.resolve()
+    actual = (root / captured_path).resolve()
+    reference = (root / reference_path).resolve()
+    for path in (actual, reference):
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return None
+        if not path.is_file():
+            return None
+    return actual, reference
+
+
+def _artifact_file_for_tick(
+    capture: Mapping[str, Any], artifact_root: Path, tick: int
+) -> Path | None:
+    artifacts = capture.get("capture_artifacts")
+    if not isinstance(artifacts, list):
+        return None
+    item = next(
+        (
+            row
+            for row in artifacts
+            if isinstance(row, Mapping) and row.get("tick") == tick
+        ),
+        None,
+    )
+    if item is None:
+        return None
+    relative = str(item.get("path", ""))
+    if not relative:
+        return None
+    root = artifact_root.resolve()
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+def compare_rgba32f_files(captured: Path, reference: Path) -> dict[str, float]:
+    """Recompute absolute/relative RGBA32F channel errors from raw files."""
+    expected_bytes = (
+        contract.OUTPUT_WIDTH
+        * contract.OUTPUT_HEIGHT
+        * contract.CAPTURE_BYTES_PER_PIXEL
+    )
+    actual_data = Path(captured).read_bytes()
+    reference_data = Path(reference).read_bytes()
+    for label, data in (("captured", actual_data), ("reference", reference_data)):
+        if len(data) != expected_bytes:
+            raise ValueError(
+                f"{label} capture is {len(data)} bytes; expected {expected_bytes}"
+            )
+    actual_values = array("f")
+    actual_values.frombytes(actual_data)
+    expected_values = array("f")
+    expected_values.frombytes(reference_data)
+    if sys.byteorder != "little":
+        actual_values.byteswap()
+        expected_values.byteswap()
+    maximum_absolute = 0.0
+    maximum_relative = 0.0
+    for actual_value, expected_value in zip(actual_values, expected_values):
+        if not math.isfinite(actual_value) or not math.isfinite(expected_value):
+            raise ValueError("capture contains a non-finite channel value")
+        difference = abs(actual_value - expected_value)
+        relative = difference / max(1e-30, abs(expected_value))
+        maximum_absolute = max(maximum_absolute, difference)
+        maximum_relative = max(maximum_relative, relative)
+    return {
+        "maximum_error": maximum_absolute,
+        "maximum_relative_error": maximum_relative,
+    }
+
+
 def _validate_measurements(capture: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     measurements = capture.get("measurements")
     if not isinstance(measurements, Mapping):
@@ -1261,7 +1535,10 @@ def validate_correctness_capture(
         if result["status"] != "failed":
             result["status"] = "pending_unverified"
         result["reasons"].extend(environment_reasons)
-    tier = classify_hardware_tier(str(capture.get("adapter_description", "")))
+    tier = classify_hardware_tier(
+        str(capture.get("adapter_description", "")),
+        device_form_factor=capture.get("device_form_factor"),
+    )
     expected_tier = "ada" if "ada" in coverage_target else "blackwell" if "blackwell" in coverage_target else "unknown"
     if tier != expected_tier:
         if result["status"] != "failed":
@@ -1310,6 +1587,26 @@ def validate_correctness_capture(
                 if result["status"] != "failed":
                     result["status"] = "pending_unverified"
                 result["reasons"].append(f"reference execution {field} is incomplete")
+        for field in ("package_sha256", "executable_sha256", "manifest_sha256"):
+            expected = capture.get(field)
+            if (
+                not _unavailable(reference.get(field))
+                and expected
+                and reference.get(field) != expected
+            ):
+                result["status"] = "failed"
+                result["reasons"].append(
+                    f"reference execution {field} does not match the capture artifact"
+                )
+        if (
+            not _unavailable(reference.get("artifact_key"))
+            and capture.get("artifact_key")
+            and reference.get("artifact_key") != capture.get("artifact_key")
+        ):
+            result["status"] = "failed"
+            result["reasons"].append(
+                "reference execution artifact_key does not match the capture artifact"
+            )
     comparison = capture.get("comparison")
     if not isinstance(comparison, Mapping):
         result["status"] = "failed"
@@ -1415,38 +1712,103 @@ def validate_correctness_capture(
                         f"tick {tick}: reference artifact is not identified"
                     )
                 reference_relative = row.get("reference_artifact_path")
-                if isinstance(reference_relative, str) and reference_relative.strip():
-                    if artifact_root is None:
-                        if result["status"] != "failed":
-                            result["status"] = "pending_unverified"
+                if not isinstance(reference_relative, str) or not reference_relative.strip():
+                    if result["status"] != "failed":
+                        result["status"] = "pending_unverified"
+                    result["reasons"].append(
+                        f"tick {tick}: reference artifact path is not retained"
+                    )
+                elif artifact_root is None:
+                    if result["status"] != "failed":
+                        result["status"] = "pending_unverified"
+                    result["reasons"].append(
+                        f"tick {tick}: reference artifact bytes were not supplied"
+                    )
+                else:
+                    root = Path(artifact_root).resolve()
+                    reference_path = (root / reference_relative).resolve()
+                    try:
+                        reference_path.relative_to(root)
+                    except ValueError:
+                        result["status"] = "failed"
                         result["reasons"].append(
-                            f"tick {tick}: reference artifact bytes were not supplied"
+                            f"tick {tick}: reference artifact path escapes the evidence root"
                         )
                     else:
-                        root = Path(artifact_root).resolve()
-                        reference_path = (root / reference_relative).resolve()
-                        try:
-                            reference_path.relative_to(root)
-                        except ValueError:
+                        if not reference_path.is_file():
+                            if result["status"] != "failed":
+                                result["status"] = "pending_unverified"
+                            result["reasons"].append(
+                                f"tick {tick}: reference artifact is unavailable"
+                            )
+                        elif (
+                            sha256_file(reference_path)
+                            != row.get("reference_artifact_sha256")
+                        ):
                             result["status"] = "failed"
                             result["reasons"].append(
-                                f"tick {tick}: reference artifact path escapes the evidence root"
+                                f"tick {tick}: reference artifact digest mismatch"
                             )
-                        else:
-                            if not reference_path.is_file():
+                        elif "failed" not in (numeric_state, image_state):
+                            paths = _capture_paths_for_tick(capture, root, tick)
+                            if paths is None:
                                 if result["status"] != "failed":
                                     result["status"] = "pending_unverified"
                                 result["reasons"].append(
-                                    f"tick {tick}: reference artifact is unavailable"
+                                    f"tick {tick}: retained capture bytes are unavailable"
                                 )
-                            elif (
-                                sha256_file(reference_path)
-                                != row.get("reference_artifact_sha256")
-                            ):
-                                result["status"] = "failed"
-                                result["reasons"].append(
-                                    f"tick {tick}: reference artifact digest mismatch"
-                                )
+                            else:
+                                try:
+                                    recomputed = compare_rgba32f_files(*paths)
+                                except (OSError, ValueError) as exc:
+                                    result["status"] = "failed"
+                                    result["reasons"].append(
+                                        f"tick {tick}: capture comparison could not be "
+                                        f"recomputed: {exc}"
+                                    )
+                                else:
+                                    declared_image = row.get("image")
+                                    declared_absolute = _number(
+                                        (declared_image or {}).get("maximum_error")
+                                    ) if isinstance(declared_image, Mapping) else None
+                                    declared_relative = _number(
+                                        (declared_image or {}).get(
+                                            "maximum_relative_error"
+                                        )
+                                    ) if isinstance(declared_image, Mapping) else None
+                                    if (
+                                        declared_absolute is None
+                                        or declared_relative is None
+                                        or abs(
+                                            declared_absolute
+                                            - recomputed["maximum_error"]
+                                        )
+                                        > 1e-9
+                                        or abs(
+                                            declared_relative
+                                            - recomputed["maximum_relative_error"]
+                                        )
+                                        > 1e-9
+                                    ):
+                                        result["status"] = "failed"
+                                        result["reasons"].append(
+                                            f"tick {tick}: declared image comparison "
+                                            "does not match the retained raw captures"
+                                        )
+                                    elif (
+                                        recomputed["maximum_error"]
+                                        > image_absolute
+                                    ):
+                                        result["status"] = "failed"
+                                        result["reasons"].append(
+                                            f"tick {tick}: recomputed image error "
+                                            f"{recomputed['maximum_error']} exceeds the "
+                                            "authoritative tolerance"
+                                        )
+                                    else:
+                                        result.setdefault(
+                                            "recomputed_comparisons", {}
+                                        )[str(tick)] = recomputed
                 row_renderer = row.get("renderer")
                 row_reference_renderer = row.get("reference_renderer")
                 if row_renderer is None or row_reference_renderer is None:
@@ -1534,6 +1896,69 @@ def validate_correctness_capture(
                 result["reasons"].append(
                     "loop-boundary comparison does not retain the tick-960,000 capture"
                 )
+            if artifact_root is None:
+                if result["status"] != "failed":
+                    result["status"] = "pending_unverified"
+                result["reasons"].append(
+                    "loop-boundary raw captures were not supplied"
+                )
+            else:
+                start_path = _artifact_file_for_tick(
+                    capture, Path(artifact_root), contract.LOOP_BOUNDARY_TICKS[0]
+                )
+                boundary_path = _artifact_file_for_tick(
+                    capture, Path(artifact_root), contract.LOOP_BOUNDARY_TICKS[1]
+                )
+                if start_path is None or boundary_path is None:
+                    if result["status"] != "failed":
+                        result["status"] = "pending_unverified"
+                    result["reasons"].append(
+                        "loop-boundary raw captures are incomplete"
+                    )
+                else:
+                    try:
+                        recomputed = compare_rgba32f_files(
+                            boundary_path, start_path
+                        )
+                    except (OSError, ValueError) as exc:
+                        result["status"] = "failed"
+                        result["reasons"].append(
+                            f"loop-boundary comparison could not be recomputed: {exc}"
+                        )
+                    else:
+                        declared = loop_boundary.get("numeric") or {}
+                        declared_absolute = _number(
+                            declared.get("maximum_error")
+                        ) if isinstance(declared, Mapping) else None
+                        declared_relative = _number(
+                            declared.get("maximum_relative_error")
+                        ) if isinstance(declared, Mapping) else None
+                        if (
+                            declared_absolute is None
+                            or declared_relative is None
+                            or abs(
+                                declared_absolute - recomputed["maximum_error"]
+                            )
+                            > 1e-9
+                            or abs(
+                                declared_relative
+                                - recomputed["maximum_relative_error"]
+                            )
+                            > 1e-9
+                        ):
+                            result["status"] = "failed"
+                            result["reasons"].append(
+                                "loop-boundary declared comparison does not match "
+                                "the retained raw captures"
+                            )
+                        elif recomputed["maximum_error"] > image_absolute:
+                            result["status"] = "failed"
+                            result["reasons"].append(
+                                "loop-boundary recomputed image error exceeds the "
+                                "authoritative tolerance"
+                            )
+                        else:
+                            result["loop_boundary_recomputed"] = recomputed
     startup_memory = validate_startup_memory(capture)
     result["startup_memory"] = startup_memory
     if startup_memory["status"] == "failed":
@@ -1660,7 +2085,10 @@ def validate_development_series_capture(
         result["status"] = "unverified"
         result["artifact_mismatches"] = differences
         result["reasons"].append("capture does not reference the exact final artifact")
-    if classify_hardware_tier(str(capture.get("adapter_description", ""))) != "blackwell":
+    if classify_hardware_tier(
+        str(capture.get("adapter_description", "")),
+        device_form_factor=capture.get("device_form_factor"),
+    ) != "blackwell":
         result["status"] = "unverified"
         result["reasons"].append("development series is not on Blackwell hardware")
     if _unavailable(capture.get("matched_environment_id")):
@@ -1756,6 +2184,79 @@ def pending_record() -> dict[str, Any]:
     }
 
 
+def _cross_device_capture_equivalence(
+    captures: Sequence[Any],
+    *,
+    artifact_root: Path,
+    config: Mapping[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Compare retained exported-player captures across Ada and Blackwell.
+
+    Both correctness targets execute the identical final common artifact.  The
+    comparison is recomputed from the retained raw files rather than trusting
+    declared zero-error summaries.
+    """
+    tolerances = (config or {}).get("image_tolerances", {})
+    image_absolute = float(
+        (tolerances.get("image") or {}).get(
+            "absolute", contract.IMAGE_ABSOLUTE_TOLERANCE
+        )
+    )
+    by_target: dict[str, Mapping[str, Any]] = {}
+    for capture in captures:
+        if not isinstance(capture, Mapping):
+            continue
+        if capture.get("evidence_role") != contract.FIXED_TICK_CORRECTNESS_ROLE:
+            continue
+        target = capture.get("coverage_target")
+        if target in contract.CORRECTNESS_COVERAGE_TARGETS.values():
+            by_target[str(target)] = capture
+    ada = by_target.get(contract.CORRECTNESS_COVERAGE_TARGETS["ada"])
+    blackwell = by_target.get(contract.CORRECTNESS_COVERAGE_TARGETS["blackwell"])
+    if ada is None or blackwell is None:
+        return "not_evaluated", {
+            "reason": "both representative desktop captures are required"
+        }
+    rows: dict[str, Any] = {}
+    missing: list[int] = []
+    for tick in contract.REQUIRED_FIXED_TICKS:
+        ada_path = _artifact_file_for_tick(ada, artifact_root, int(tick))
+        blackwell_path = _artifact_file_for_tick(
+            blackwell, artifact_root, int(tick)
+        )
+        if ada_path is None or blackwell_path is None:
+            missing.append(int(tick))
+            continue
+        try:
+            comparison = compare_rgba32f_files(blackwell_path, ada_path)
+        except (OSError, ValueError) as exc:
+            return "failed", {
+                "reason": f"cross-device comparison could not be recomputed: {exc}",
+                "rows": rows,
+            }
+        rows[str(tick)] = comparison
+        if comparison["maximum_error"] > image_absolute:
+            return "failed", {
+                "reason": "representative Ada and Blackwell captures diverge "
+                "beyond the authoritative image tolerance",
+                "rows": rows,
+                "tolerance": image_absolute,
+            }
+    if missing:
+        return "pending", {
+            "reason": "retained raw captures are missing for cross-device comparison",
+            "missing_ticks": missing,
+        }
+    return "verified", {
+        "rows": rows,
+        "tolerance": image_absolute,
+        "resolution": {
+            "width": contract.OUTPUT_WIDTH,
+            "height": contract.OUTPUT_HEIGHT,
+        },
+    }
+
+
 def validate_evidence_record(
     record: Mapping[str, Any],
     *,
@@ -1824,12 +2325,20 @@ def validate_evidence_record(
                 "reasons": [f"capture role '{role}' is not certifying evidence"],
             }
         if (
-            declared_status == "pending_unverified"
+            declared_status in {
+                "pending_unverified",
+                "unverified",
+                "informational",
+            }
             and validated_capture.get("status") == "verified"
         ):
-            validated_capture["status"] = "pending_unverified"
+            validated_capture["status"] = (
+                declared_status
+                if declared_status in {"pending_unverified", "unverified"}
+                else "unverified"
+            )
             validated_capture.setdefault("reasons", []).append(
-                "capture explicitly retains a pending/unverified status"
+                "capture explicitly retains a non-certifying declared status"
             )
         validated_capture["capture_id"] = capture.get("capture_id")
         validated.append(validated_capture)
@@ -1951,21 +2460,52 @@ def validate_evidence_record(
         "diagnostic_overhead",
     )
     statuses = {name: qualifications[name]["status"] for name in required_names}
+    record_level_failure = (
+        record.get("verification_status") == "executed_failure"
+        or record.get("verification_status") == "failed"
+        or record.get("executed_failure") is True
+        or record.get("status") == "failed"
+    )
     required_capture_failures = [
         item
         for item in validated
         if item["status"] == "failed"
         and item.get("evidence_role") != contract.DEVELOPMENT_SERIES_ROLE
     ]
+    cross_device: dict[str, Any] = {
+        "status": "not_evaluated",
+        "reason": "raw Ada/Blackwell capture files were not supplied",
+    }
+    if artifact_root is not None:
+        cross_state, cross_detail = _cross_device_capture_equivalence(
+            captures, artifact_root=Path(artifact_root), config=config
+        )
+        cross_device = {"status": cross_state, **cross_detail}
+        if cross_state == "failed":
+            overall_override = "failed"
+        elif cross_state == "pending" and not required_capture_failures:
+            overall_override = "pending_unverified"
+        else:
+            overall_override = None
+    else:
+        overall_override = None
     development_series_failures = [
         item
         for item in validated
         if item["status"] == "failed"
         and item.get("evidence_role") == contract.DEVELOPMENT_SERIES_ROLE
     ]
-    if required_capture_failures or "failed" in statuses.values():
+    if (
+        required_capture_failures
+        or "failed" in statuses.values()
+        or record_level_failure
+        or overall_override == "failed"
+    ):
         overall = "failed"
-    elif all(status == "verified" for status in statuses.values()):
+    elif (
+        all(status == "verified" for status in statuses.values())
+        and overall_override is None
+    ):
         overall = "verified"
     else:
         overall = "pending_unverified"
@@ -2016,6 +2556,7 @@ def validate_evidence_record(
             "records": len(dev_series),
             "failures": len(development_series_failures),
         },
+        "cross_device_equivalence": cross_device,
     }
 
 

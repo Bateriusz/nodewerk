@@ -5102,7 +5102,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         const HRESULT present_hr =
             config_.simulate_presentation_failure
                 ? static_cast<HRESULT>(E_FAIL)
-                : state->swapchain->Present(1u, 0u);
+                : state->swapchain->Present(config_.present_sync_interval, 0u);
 #if NW_PACKAGE_PLAYER_D3D12_VALIDATION
         TraceD3D12ValidationStage(config_.enable_validation,
                                   "frame.swapchain.present.after");

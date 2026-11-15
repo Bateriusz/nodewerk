@@ -34,7 +34,11 @@ def _contract() -> dict:
 
 
 def _bound() -> dict:
-    return evidence.fully_bound_reference(_contract(), artifact_identity=_identity())
+    return evidence.fully_bound_reference(
+        _contract(),
+        artifact_identity=_identity(),
+        bound_at_utc="2026-11-30T00:00:00+00:00",
+    )
 
 
 def _samples(value: float, count: int = 600) -> dict:
@@ -48,7 +52,7 @@ def _samples(value: float, count: int = 600) -> dict:
 
 
 def _timing(index: int) -> dict:
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index)
+    base = datetime(2026, 12, 1, tzinfo=timezone.utc) + timedelta(hours=index)
     return {
         "warmup_started_utc": base.isoformat(),
         "run_started_utc": (base + timedelta(seconds=contract.WARMUP_SECONDS)).isoformat(),
@@ -69,6 +73,12 @@ def _capture() -> dict:
         "implementation_base": contract.IMPLEMENTATION_BASE,
         "coverage_target": contract.PERF_CONTRACT_ID,
         "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+        "present_sync_interval": 0,
+        "presentation_probe": {
+            "exit_code": 0,
+            "present_sync_interval_line": "NW05_PRESENT_SYNC_INTERVAL=0",
+            "stdout": "NW05_PRESENT_SYNC_INTERVAL=0\n",
+        },
         "contract_id": contract.PERF_CONTRACT_ID,
         "execution_environment": {"kind": "physical"},
         "reference": copy.deepcopy(_bound()["reference"]),
@@ -370,6 +380,19 @@ def test_performance_capture_requires_retained_60_second_run_timing() -> None:
         )["status"]
         == "failed"
     )
+
+
+def test_runs_recorded_before_the_frozen_binding_cannot_certify() -> None:
+    capture = _capture()
+    timing = capture["runs"][0]["timing"]
+    timing["warmup_started_utc"] = "2026-11-01T00:00:00+00:00"
+    timing["run_started_utc"] = "2026-11-01T00:00:05+00:00"
+    timing["run_ended_utc"] = "2026-11-01T00:01:05+00:00"
+    result = evidence.validate_perf_capture(
+        capture, _bound(), artifact_identity=_identity()
+    )
+    assert result["status"] == "failed"
+    assert "retroactive" in " ".join(result["runs"][0]["reasons"])
 
     capture = _capture()
     capture["runs"][2].pop("timing")

@@ -31,6 +31,7 @@ REPORT_VERSION = 1
 
 REQUIRED_SCENARIOS = (
     "corrupt_payload",
+    "deployed_startup",
     "missing_required_feature",
     "initialization_failure",
     "resize",
@@ -41,6 +42,7 @@ REQUIRED_SCENARIOS = (
 # expected result to make an unexecuted or different run appear successful.
 EXPECTED_SCENARIO_EXIT_CODES = {
     "corrupt_payload": 70,
+    "deployed_startup": 0,
     "missing_required_feature": 23,
     "initialization_failure": 42,
     "resize": 0,
@@ -56,9 +58,11 @@ def _scenario_row(
     completed: subprocess.CompletedProcess[str] | None,
     stdout_path: Path | None,
     stderr_path: Path | None,
+    timed_out: bool = False,
+    execution_error: str = "",
 ) -> dict[str, Any]:
     observed = completed.returncode if completed is not None else None
-    passed = observed == expected_exit_code
+    passed = observed == expected_exit_code and not timed_out
     return {
         "scenario": name,
         "executed": completed is not None,
@@ -66,6 +70,8 @@ def _scenario_row(
         "expected_exit_code": expected_exit_code,
         "observed_exit_code": observed,
         "status": "passed" if passed else ("not_executed" if completed is None else "failed"),
+        "timed_out": timed_out,
+        "execution_error": execution_error,
         "stdout_path": str(stdout_path) if stdout_path else None,
         "stderr_path": str(stderr_path) if stderr_path else None,
         "stdout": (completed.stdout[-4000:] if completed is not None else ""),
@@ -204,6 +210,8 @@ def run_clean_system(
         stdout_path = evidence_dir / f"{name}.stdout.txt"
         stderr_path = evidence_dir / f"{name}.stderr.txt"
         command = [str(executable_path), *args]
+        timed_out = False
+        execution_error = ""
         try:
             completed = subprocess.run(
                 command,
@@ -212,8 +220,28 @@ def run_clean_system(
                 timeout=120,
                 check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            execution_error = "execution timed out; the player started but did not exit"
+            stdout_value = exc.stdout or ""
+            stderr_value = exc.stderr or ""
+            if isinstance(stdout_value, bytes):
+                stdout_value = stdout_value.decode("utf-8", errors="replace")
+            if isinstance(stderr_value, bytes):
+                stderr_value = stderr_value.decode("utf-8", errors="replace")
+            completed = subprocess.CompletedProcess(
+                command,
+                returncode=None,
+                stdout=stdout_value,
+                stderr=(stderr_value + "\n" + str(exc))[-4000:],
+            )
+            stdout_path.write_text(stdout_value, encoding="utf-8")
+            stderr_path.write_text(
+                (stderr_value + "\n" + str(exc)), encoding="utf-8"
+            )
+        except OSError as exc:
             completed = None
+            execution_error = str(exc)
             stdout_path.write_text("", encoding="utf-8")
             stderr_path.write_text(str(exc), encoding="utf-8")
         if completed is not None:
@@ -226,6 +254,8 @@ def run_clean_system(
             completed=completed,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
+            timed_out=timed_out,
+            execution_error=execution_error,
         )
         row["captured_stdout"] = str(stdout_path)
         row["captured_stderr"] = str(stderr_path)

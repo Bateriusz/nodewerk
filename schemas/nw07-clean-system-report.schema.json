@@ -34,6 +34,7 @@
           "scenario": {
             "enum": [
               "corrupt_payload",
+              "deployed_startup",
               "missing_required_feature",
               "initialization_failure",
               "resize",

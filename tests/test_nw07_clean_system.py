@@ -37,6 +37,7 @@ def _report() -> dict:
             }
             for name, expected in (
                 ("corrupt_payload", 70),
+                ("deployed_startup", 0),
                 ("missing_required_feature", 23),
                 ("initialization_failure", 42),
                 ("resize", 0),
@@ -171,6 +172,7 @@ def test_retained_report_must_bind_the_actual_deployment(tmp_path: Path) -> None
 def test_required_scenarios_and_exit_codes_are_frozen() -> None:
     assert clean_system.REQUIRED_SCENARIOS == (
         "corrupt_payload",
+        "deployed_startup",
         "missing_required_feature",
         "initialization_failure",
         "resize",
@@ -182,6 +184,7 @@ def test_required_scenarios_and_exit_codes_are_frozen() -> None:
     }
     assert expected == {
         "corrupt_payload": 70,
+        "deployed_startup": 0,
         "missing_required_feature": 23,
         "initialization_failure": 42,
         "resize": 0,
@@ -250,3 +253,27 @@ def test_corrupt_deployment_copy_only_changes_the_embedded_package(
     assert corrupted != executable
     with pytest.raises(clean_system.export.nw05_export.ExportError):
         clean_system.export.nw05_export.extract_embedded_package(corrupted)
+
+
+def test_timeout_is_an_executed_failure_not_unavailable_evidence() -> None:
+    row = clean_system._scenario_row(
+        "deployed_startup",
+        command=["player.exe", "--frames", "1"],
+        expected_exit_code=0,
+        completed=clean_system.subprocess.CompletedProcess(
+            ["player.exe"], returncode=None, stdout="partial", stderr="timeout"
+        ),
+        stdout_path=None,
+        stderr_path=None,
+        timed_out=True,
+    )
+    assert row["executed"] is True
+    assert row["status"] == "failed"
+    report = _report()
+    report["scenarios"][1].update(
+        executed=True,
+        observed_exit_code=None,
+        status="failed",
+        timed_out=True,
+    )
+    assert clean_system.validate_report(report)["status"] == "failed"

@@ -82,9 +82,9 @@ jobs:
         shell: pwsh
         run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
       - name: Configure NW-07 release build
-        run: cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
+        run: cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
       - name: Configure NW-07 diagnostic sibling build
-        run: cmake --preset nw07-diagnostics -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
+        run: cmake --preset nw07-diagnostics -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
       - name: Build release player template
         run: cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
       - name: Build diagnostic capture sibling
@@ -106,6 +106,7 @@ jobs:
           python tools/verify_nw07.py --mode BuildChecks `
             --player-template $template `
             --dxc $dxc `
+            --native-output "$PWD/build/nw07-distribution" `
             --summary-json "$env:RUNNER_TEMP\nw07-build-checks.json"
           if ($LASTEXITCODE -ne 0) {
             Write-Error "NW-07 BuildChecks failed with exit code $LASTEXITCODE"
@@ -119,6 +120,7 @@ jobs:
           path: |
             ${{ runner.temp }}/nw07-build-checks.json
             ${{ runner.temp }}/nw07-bootstrap-provenance.json
+            build/nw07-distribution/**
 
   nightly-gpu-check:
     name: Nightly matched-environment GPU regression
@@ -132,18 +134,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Collect nightly GPU measurements before validation
+        env:
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+          NW07_EXECUTABLE: ${{ vars.NW07_FIXTURE }}
+          NW07_COLLECTOR_COMMAND: ${{ vars.NW07_COLLECTOR_COMMAND }}
+          NW07_REFERENCE: ${{ vars.NW07_REFERENCE }}
+          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+        run: >-
+          python tools/nw07_capture.py collect
+          --package "$env:NW07_PACKAGE"
+          --executable "$env:NW07_EXECUTABLE"
+          --samples-dir "$env:RUNNER_TEMP\nw07-nightly-samples"
+          --reference "$env:NW07_REFERENCE"
+          --collector-command "$env:NW07_COLLECTOR_COMMAND"
+          --capture-id "nightly-$env:GITHUB_RUN_ID"
+          --evidence "$env:NW07_EVIDENCE"
       - name: Run NW-07 Full verification on the reference host
         env:
           NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
           NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
           NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
           NW07_BUILD_REPORT: ${{ vars.NW07_BUILD_REPORT }}
+          NW07_BINARY_DIR: ${{ vars.NW07_BINARY_DIR }}
+          NW07_CLEAN_REPORT: ${{ vars.NW07_CLEAN_REPORT }}
         run: >-
           python tools/verify_nw07.py --mode Full
           --fixture "$env:NW07_FIXTURE"
           --package "$env:NW07_PACKAGE"
           --evidence "$env:NW07_EVIDENCE"
           --build-report "$env:NW07_BUILD_REPORT"
+          --binary-dir "$env:NW07_BINARY_DIR"
+          --clean-report "$env:NW07_CLEAN_REPORT"
           --summary-json "$env:RUNNER_TEMP\nw07-full.json"
       - name: Evaluate matched-environment regression policy
         run: |
@@ -160,4 +182,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nw07-nightly-evidence
-          path: ${{ runner.temp }}/nw07-full.json
+          path: |
+            ${{ runner.temp }}/nw07-full.json
+            ${{ runner.temp }}/nw07-nightly-samples/**

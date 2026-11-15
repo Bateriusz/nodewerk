@@ -290,3 +290,44 @@ def test_export_report_contains_pinned_build_inputs_and_toolchain(tmp_path: Path
     assert inputs["toolchain"]["toolchain_manifest_sha256"]
     assert report["graph"]["fixed_tick_samples"]
     assert report["graph"]["loop_boundary"]["seamless_modulo_turn"] is True
+
+
+def test_generated_player_wires_the_frozen_uncapped_presentation_setting() -> None:
+    source = export.nw05_export.generate_player_source(
+        package_sha256="1" * 64,
+        manifest_sha256="2" * 64,
+        present_sync_interval=0,
+    )
+    assert "config.present_sync_interval = 0u;" in source
+    player = (REPO_ROOT / "src" / "player" / "package_player.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "Present(config_.present_sync_interval, 0u)" in player
+
+
+def test_export_reuses_neither_clean_build_directory(tmp_path: Path) -> None:
+    template = _template(tmp_path / "toolchain")
+    report = export.export_reproducibility(
+        tmp_path / "repro",
+        player_template=template,
+        dxc_executable=str(_mock_dxc(tmp_path / "toolchain")),
+        allow_test_payloads=True,
+    )
+    roots = report["specialized_build_directories"]
+    assert len(roots) == 2
+    assert roots[0] != roots[1]
+    assert report["build_inputs"]["build_configuration"]["present_sync_interval"] == 0
+
+
+def test_pinned_build_inputs_cover_executable_sources() -> None:
+    inputs = set(contract.PINNED_BUILD_INPUTS)
+    for required in (
+        "src/package/nwp_format.cpp",
+        "src/platform/win32_window.cpp",
+        "src/player/capability_check.cpp",
+        "src/player/capability_requirements.cpp",
+        "src/player/package_player.h",
+        "src/player/d3d12_bootstrap.h",
+        "cmake/toolchains/msvc-x64.cmake",
+    ):
+        assert required in inputs
