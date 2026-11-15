@@ -1021,6 +1021,14 @@ def export_production(
     # failure above leaves the previous complete artifact directory untouched.
     nw05_export._publish_directory(export_target, output)
     shutil.rmtree(staging_root, ignore_errors=True)
+    reported_build_root = (
+        Path(specialized_build_root)
+        if specialized_build_root is not None
+        else None
+    )
+    build_root_exists = (
+        reported_build_root is not None and reported_build_root.exists()
+    )
 
     report: dict[str, Any] = {
         "format": EXPORT_REPORT_FORMAT,
@@ -1050,8 +1058,19 @@ def export_production(
                 },
                 "present_sync_interval": settings.present_sync_interval,
                 "presentation_uncapped": settings.present_sync_interval == 0,
-                "specialized_build_root": settings.specialized_build_root,
-                "clean_build_directory": bool(settings.specialized_build_root),
+                "specialized_build_root": (
+                    str(reported_build_root)
+                    if reported_build_root is not None
+                    else None
+                ),
+                "specialized_build_root_status": (
+                    "retained"
+                    if build_root_exists
+                    else "requested_path_not_created"
+                    if reported_build_root is not None
+                    else "transient_removed_after_export"
+                ),
+                "clean_build_directory": build_root_exists,
                 "pinned_toolchain_enforced": True,
                 "actual": actual_build_configuration,
             },

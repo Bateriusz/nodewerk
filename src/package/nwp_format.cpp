@@ -3966,15 +3966,19 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     // record from the immutable constants plus the decoded package content so
     // runtime capability evaluation still enforces the full contract.
     package.capability = CapabilityRecord{};
+    package.capability.profile_id =
+        std::string(kCommonProfileId.data(), kCommonProfileId.size());
+    package.capability.requirements_digest = std::string(
+        kCommonRequirementsDigest.data(), kCommonRequirementsDigest.size());
+    package.capability.required_dxgi_formats = {
+        "DXGI_FORMAT_R8G8B8A8_UNORM",
+        "DXGI_FORMAT_R32G32B32A32_FLOAT",
+        "DXGI_FORMAT_R32_UINT",
+        "DXGI_FORMAT_D32_FLOAT"};
     const auto sorted_unique = [](std::vector<std::string>& values) {
         std::sort(values.begin(), values.end());
         values.erase(std::unique(values.begin(), values.end()), values.end());
     };
-    package.capability.required_dxgi_formats.clear();
-    for (const auto& resource : package.resources) {
-        package.capability.required_dxgi_formats.push_back(resource.format);
-    }
-    sorted_unique(package.capability.required_dxgi_formats);
     package.capability.emitted_shader_targets.clear();
     for (const auto& shader : package.shaders) {
         package.capability.emitted_shader_targets.push_back(shader.target);

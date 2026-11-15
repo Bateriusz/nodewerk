@@ -306,6 +306,7 @@ jobs:
           --max-evidence-age-seconds 86400
           --summary-json "$env:RUNNER_TEMP\nw07-full.json"
       - name: Evaluate matched-environment regression policy
+        if: always()
         shell: pwsh
         env:
           NW07_METRICS: ${{ vars.NW07_METRICS }}

@@ -95,6 +95,13 @@ def test_export_is_one_self_contained_release_closure(tmp_path: Path) -> None:
     assert report["distribution"]["runtime_dxc_required"] is False
     assert report["distribution"]["editor_required"] is False
     assert report["distribution"]["developer_runtime_required"] is False
+    build_configuration = report["build_inputs"]["build_configuration"]
+    assert build_configuration["specialized_build_root"] is None
+    assert (
+        build_configuration["specialized_build_root_status"]
+        == "transient_removed_after_export"
+    )
+    assert build_configuration["clean_build_directory"] is False
 
 
 def test_export_reports_stretch_without_gating_it(tmp_path: Path) -> None:
