@@ -589,6 +589,10 @@ def test_generated_playback_uses_checked_clock_and_rational_capture(
     assert "frame_step_numerator" in source
     assert "frame_step_denominator" in source
     assert "frame_step_numerator = 800ULL" in source
+    duration_ticks = common.manifest["timeline"]["duration_ticks"]
+    assert f"{duration_ticks}ULL" in source
+    assert f"tick %= {duration_ticks}ULL;" in source
+    assert "#if NW07_CAPTURE_CONTROLS" in source
     assert "for (std::uint64_t tick = 0;" not in source
     # The legacy NW-05 path remains unchanged and does not pull in the clock.
     legacy = nw05_export.generate_player_source(

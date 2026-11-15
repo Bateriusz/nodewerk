@@ -1222,6 +1222,18 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     last_frame_order_.clear();
     frame_ops_.reserve(package_.frame.size());
     last_frame_order_.reserve(package_.frame.size());
+    timeline_duration_ticks_ = 0u;
+    for (const auto& parameter : package_.parameters) {
+        if (parameter.name == "nw06.timeline.duration_ticks" &&
+            parameter.type == "uint" && parameter.component_count == 1u &&
+            parameter.value.size() == sizeof(std::uint32_t)) {
+            std::uint32_t duration_ticks = 0u;
+            std::memcpy(&duration_ticks, parameter.value.data(),
+                        sizeof(duration_ticks));
+            timeline_duration_ticks_ = duration_ticks;
+            break;
+        }
+    }
     // A timeline selection is only effective if a later root-constant
     // instruction can consume it. Track unresolved selections in frame order.
     std::set<std::uint32_t> pending_timeline_parameters;
@@ -4101,8 +4113,16 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
     return ExitCode::Success;
 }
 
+std::uint64_t PackagePlayer::EffectiveTimelineTick(
+    std::uint64_t tick) const noexcept {
+    if (timeline_duration_ticks_ == 0u) {
+        return tick;
+    }
+    return tick % timeline_duration_ticks_;
+}
+
 ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
-    (void)tick;
+    const std::uint64_t frame_tick = EffectiveTimelineTick(tick);
     // Frame planning was completed during initialization.  This loop performs
     // no graph traversal, reflection, readback, or engine-owned heap allocation.
 #if defined(_WIN32)
@@ -4129,7 +4149,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
         frame.fence_value = 0u;
     }
 #if NW_PLAYER_DIAGNOSTICS
-    instrumentation_.BeginFrame(tick);
+    instrumentation_.BeginFrame(frame_tick);
 #endif
     if (FAILED(frame.allocator->Reset()) ||
         FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
@@ -4300,7 +4320,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     if (!timeline_applied && op.time_byte_offset >= 0 &&
                         static_cast<std::uint32_t>(op.time_byte_offset) + 4u <=
                             op.constant_count * 4u) {
-                        const float time_value = static_cast<float>(tick);
+                        const float time_value = static_cast<float>(frame_tick);
                         std::memcpy(
                             reinterpret_cast<std::uint8_t*>(values.data()) +
                                 op.time_byte_offset,
@@ -4772,9 +4792,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 timeline_parameter = op.parameter_id;
                 timeline_value =
                     op.tick_value >
-                            std::numeric_limits<std::uint64_t>::max() - tick
+                            std::numeric_limits<std::uint64_t>::max() -
+                                frame_tick
                         ? std::numeric_limits<std::uint64_t>::max()
-                        : op.tick_value + tick;
+                        : op.tick_value + frame_tick;
                 timeline_parameter_id_ = timeline_parameter;
                 timeline_tick_ = timeline_value;
                 timeline_override_active_ = true;
@@ -5157,7 +5178,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 #else
     // Host simulation executes the same ordered frame contract without a GPU.
 #if NW_PLAYER_DIAGNOSTICS
-    instrumentation_.BeginFrame(tick);
+    instrumentation_.BeginFrame(EffectiveTimelineTick(tick));
 #endif
     if (!ApplyFramePlanForTesting(tick)) {
         return last_exit_;
@@ -6163,6 +6184,7 @@ bool PackagePlayer::BuildFramePlanForTesting(const package::Package& pkg) {
 }
 
 bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
+    const std::uint64_t frame_tick = EffectiveTimelineTick(tick);
     bool timeline_override = timeline_override_active_;
     std::uint32_t timeline_parameter = timeline_parameter_id_;
     std::uint64_t timeline_value = timeline_tick_;
@@ -6174,9 +6196,10 @@ bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
             timeline_parameter = op.parameter_id;
             timeline_value =
                 op.tick_value >
-                        std::numeric_limits<std::uint64_t>::max() - tick
+                        std::numeric_limits<std::uint64_t>::max() -
+                            frame_tick
                     ? std::numeric_limits<std::uint64_t>::max()
-                    : op.tick_value + tick;
+                    : op.tick_value + frame_tick;
             timeline_parameter_id_ = timeline_parameter;
             timeline_tick_ = timeline_value;
             timeline_override_active_ = true;
@@ -6206,7 +6229,7 @@ bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
             if (!timeline_applied && op.time_byte_offset >= 0 &&
                 static_cast<std::uint32_t>(op.time_byte_offset) + 4u <=
                     op.constant_count * 4u) {
-                const float time_value = static_cast<float>(tick);
+                const float time_value = static_cast<float>(frame_tick);
                 std::memcpy(
                     reinterpret_cast<std::uint8_t*>(values.data()) +
                         op.time_byte_offset,

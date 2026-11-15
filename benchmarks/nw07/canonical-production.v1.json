@@ -17,6 +17,7 @@
     "cmake/ToolchainManifest.cmake",
     "benchmarks/toolchain-manifest.v1.json",
     "fixtures/nw07/production_loop.nwgraph",
+    "fixtures/nw05_procedural_image/main.cpp",
     "shaders/nw06/manifest.json",
     "shaders/nw06/nw06_bloom_cs.hlsl",
     "shaders/nw06/nw06_camera_cs.hlsl",
@@ -30,7 +31,9 @@
     "shaders/nw06/nw06_tonemap_cs.hlsl",
     "src/player/d3d12_bootstrap.cpp",
     "src/player/embedded_package.cpp",
+    "src/player/nw07_capture_controls.h",
     "src/player/package_player.cpp",
+    "src/player/package_player.h",
     "src/player/player_instrumentation.cpp",
     "src/player/resource_plan.cpp",
     "tools/nw03_compiler.py",
@@ -45,7 +48,7 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:14edf75a4d338c69784fff5d1443e78f05fe2b576acea26cd4a2b453d0812e3b",
+  "build_inputs_digest": "sha256:v1:ad50f262428bd8a8b115e20562010475efe064cf2c3dc5c25362ba4f788503d3",
   "loop": {
     "looping": true,
     "wrap": "modulo",

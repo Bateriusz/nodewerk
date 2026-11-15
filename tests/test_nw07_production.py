@@ -63,16 +63,38 @@ def test_fixed_tick_evaluation_is_deterministic_and_stateless() -> None:
     assert start["camera_angle_modulo_turn"] == pytest.approx(
         boundary["camera_angle_modulo_turn"], abs=contract.NUMERIC_ABSOLUTE_TOLERANCE
     )
-    assert boundary["camera_angle_radians"] - start["camera_angle_radians"] == pytest.approx(
-        2.0 * math.pi, abs=contract.NUMERIC_ABSOLUTE_TOLERANCE
+    assert boundary["camera_angle_radians"] == pytest.approx(
+        start["camera_angle_radians"], abs=contract.NUMERIC_ABSOLUTE_TOLERANCE
     )
     assert boundary["wrapped_tick"] == 0
     assert export.evaluate_camera_at_tick(document, contract.LOOP_TICKS + 1234)[
         "wrapped_tick"
     ] == 1234
+    wrapped = export.evaluate_camera_at_tick(
+        document, contract.LOOP_TICKS + 1234
+    )
+    direct = export.evaluate_camera_at_tick(document, 1234)
+    assert wrapped["camera_angle_radians"] == pytest.approx(
+        direct["camera_angle_radians"], abs=contract.NUMERIC_ABSOLUTE_TOLERANCE
+    )
+    assert wrapped["twist_degrees"] == pytest.approx(
+        direct["twist_degrees"], abs=contract.NUMERIC_ABSOLUTE_TOLERANCE
+    )
     assert start["twist_degrees"] == pytest.approx(
         boundary["twist_degrees"], abs=contract.NUMERIC_ABSOLUTE_TOLERANCE
     )
+    assert export.evaluate_camera_at_tick(document, 0)["twist_degrees"] == pytest.approx(
+        0.0, abs=contract.NUMERIC_ABSOLUTE_TOLERANCE
+    )
+    assert export.evaluate_camera_at_tick(document, 240_000)[
+        "twist_degrees"
+    ] == pytest.approx(180.0, abs=contract.NUMERIC_ABSOLUTE_TOLERANCE)
+    assert export.evaluate_camera_at_tick(document, 480_000)[
+        "twist_degrees"
+    ] == pytest.approx(0.0, abs=contract.NUMERIC_ABSOLUTE_TOLERANCE)
+    assert export.evaluate_camera_at_tick(document, 720_000)[
+        "twist_degrees"
+    ] == pytest.approx(-180.0, abs=contract.NUMERIC_ABSOLUTE_TOLERANCE)
 
 
 def test_seeded_procedural_content_is_deterministic() -> None:

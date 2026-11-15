@@ -743,8 +743,10 @@ def generate_player_source(
     frame_step_denominator = int(
         timeline.get("frame_step_denominator", 1)
     )
+    duration_ticks = int(timeline.get("duration_ticks", 0))
     if nw06_runtime and (
         ticks_per_second != 48_000
+        or duration_ticks <= 0
         or frame_step_numerator <= 0
         or frame_step_denominator <= 0
     ):
@@ -769,7 +771,8 @@ def generate_player_source(
             "                return 70;\n"
             "            }\n"
             "            const std::uint64_t tick =\n"
-            "                (frame_step_numerator * frame_index) / frame_step_denominator;\n"
+            "                ((frame_step_numerator * frame_index) / frame_step_denominator) %\n"
+            f"                {duration_ticks}ULL;\n"
             "            const auto frame = player.renderAtTick(tick);\n"
             "            if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
             "            if (player.window_closed()) break;\n"
@@ -790,6 +793,7 @@ def generate_player_source(
             "                std::fprintf(stderr, \"NW06_CLOCK_OVERFLOW\\n\");\n"
             "                return 70;\n"
             "            }\n"
+            f"            tick %= {duration_ticks}ULL;\n"
             "            const auto frame = player.renderAtTick(tick);\n"
             "            if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
             "        }\n"
@@ -816,6 +820,7 @@ def generate_player_source(
         "#include \"player/package_player.h\"\n"
         "#include \"player/embedded_package.h\"\n"
         "#include \"player/exit_codes.h\"\n"
+        "#include \"player/nw07_capture_controls.h\"\n"
         + clock_includes +
         "#include <cstdio>\n"
         "#include <cstdlib>\n"
@@ -864,6 +869,10 @@ def generate_player_source(
         f"    config.memory_budget_bytes = {int(memory_budget_bytes)}ULL;\n"
         "    unsigned long long max_frames = 0;\n"
         "    bool emit_image_hash = false;\n"
+        "#if NW07_CAPTURE_CONTROLS\n"
+        "    std::string capture_directory;\n"
+        "    std::vector<std::uint64_t> capture_ticks;\n"
+        "#endif\n"
         "    for (int index = 1; index < argc; ++index) {\n"
         "        if (std::string(argv[index]) == \"--frames\" && index + 1 < argc) {\n"
         "            max_frames = std::strtoull(argv[++index], nullptr, 10);\n"
@@ -875,11 +884,26 @@ def generate_player_source(
         "            config.enable_validation = true;\n"
         "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
         "            emit_image_hash = true;\n"
+        "#if NW07_CAPTURE_CONTROLS\n"
+        "        } else if (std::string(argv[index]) == \"--capture-dir\" && index + 1 < argc) {\n"
+        "            capture_directory = argv[++index];\n"
+        "        } else if (std::string(argv[index]) == \"--capture-tick\" && index + 1 < argc) {\n"
+        "            capture_ticks.push_back(std::strtoull(argv[++index], nullptr, 10));\n"
+        "#endif\n"
         "        }\n"
         "    }\n"
         "    nw::player::PackagePlayer player(config);\n"
         "    const auto status = player.initialize(embedded.bytes, embedded.size);\n"
         "    if (status != nw::player::ExitCode::Success) return player.Report(true);\n"
+        "#if NW07_CAPTURE_CONTROLS\n"
+        "    if (!capture_ticks.empty()) {\n"
+        "        const int capture_status = nw::player::nw07::WriteFixedTickCaptures(\n"
+        "            &player, capture_directory, capture_ticks);\n"
+        "        const auto capture_shutdown = player.shutdown();\n"
+        "        if (capture_status != 0) return capture_status;\n"
+        "        return capture_shutdown == nw::player::ExitCode::Success ? 0 : player.Report(true);\n"
+        "    }\n"
+        "#endif\n"
         + playback_loop +
         "    if (emit_image_hash) {\n"
         "        std::vector<std::uint8_t> image;\n"

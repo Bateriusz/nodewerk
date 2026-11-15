@@ -14,7 +14,6 @@ import json
 import platform
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -133,6 +132,34 @@ def deployment_executable(directory: Path) -> Path | None:
     )
 
 
+def _write_corrupt_embedded_copy(executable: Path, destination: Path) -> None:
+    """Copy the deployed executable and corrupt only its embedded package."""
+    data = bytearray(executable.read_bytes())
+    footer = export.nw05_export.EMBED_FOOTER
+    if len(data) < footer.size:
+        raise ValueError("deployed executable has no embedded package footer")
+    (
+        magic,
+        version,
+        package_size,
+        manifest_size,
+        _package_sha,
+        _manifest_sha,
+    ) = footer.unpack_from(data, len(data) - footer.size)
+    if (
+        magic != export.nw05_export.EMBED_MAGIC
+        or version != export.nw05_export.EMBED_VERSION
+        or package_size == 0
+    ):
+        raise ValueError("deployed executable embedded footer is invalid")
+    total = package_size + manifest_size + footer.size
+    if total > len(data):
+        raise ValueError("deployed executable embedded package is invalid")
+    start = len(data) - total
+    data[start + package_size // 2] ^= 0xFF
+    destination.write_bytes(bytes(data))
+
+
 def run_clean_system(
     *,
     fixture: Path,
@@ -155,106 +182,137 @@ def run_clean_system(
         executable, deployment_directory, exclude_paths=(output,)
     )
     rows: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="nw07-clean-") as temporary:
-        temp = Path(temporary)
-        package_path = temp / "production.nwp"
-        package_path.write_bytes(embedded_package)
-        corrupt_path = temp / "corrupt.nwp"
-        corrupt_path.write_bytes(embedded_package[:128])
+    evidence_dir = output.parent / f"{output.stem}-artifacts"
+    try:
+        evidence_dir.resolve().relative_to(deployment_directory.resolve())
+    except ValueError:
+        pass
+    else:
+        evidence_dir = deployment_directory.parent / f"{output.stem}-artifacts"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    package_path = evidence_dir / "production.nwp"
+    package_path.write_bytes(embedded_package)
+    corrupt_executable = evidence_dir / f"{executable.stem}-corrupt{executable.suffix}"
+    _write_corrupt_embedded_copy(executable, corrupt_executable)
 
-        def execute(name: str, args: list[str], expected: int) -> dict[str, Any]:
-            stdout_path = temp / f"{name}.stdout.txt"
-            stderr_path = temp / f"{name}.stderr.txt"
-            command = [str(fixture), *args]
-            try:
-                completed = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                completed = None
-                stderr_path.write_text(str(exc), encoding="utf-8")
-            if completed is not None:
-                stdout_path.write_text(completed.stdout, encoding="utf-8")
-                stderr_path.write_text(completed.stderr, encoding="utf-8")
-            row = _scenario_row(
-                name,
-                command=command,
-                expected_exit_code=expected,
-                completed=completed,
-                stdout_path=stdout_path,
-                stderr_path=stderr_path,
+    def execute(
+        name: str,
+        executable_path: Path,
+        args: list[str],
+        expected: int,
+    ) -> dict[str, Any]:
+        stdout_path = evidence_dir / f"{name}.stdout.txt"
+        stderr_path = evidence_dir / f"{name}.stderr.txt"
+        command = [str(executable_path), *args]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
             )
-            row["captured_stdout"] = str(stdout_path)
-            row["captured_stderr"] = str(stderr_path)
-            return row
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            completed = None
+            stdout_path.write_text("", encoding="utf-8")
+            stderr_path.write_text(str(exc), encoding="utf-8")
+        if completed is not None:
+            stdout_path.write_text(completed.stdout, encoding="utf-8")
+            stderr_path.write_text(completed.stderr, encoding="utf-8")
+        row = _scenario_row(
+            name,
+            command=command,
+            expected_exit_code=expected,
+            completed=completed,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+        row["captured_stdout"] = str(stdout_path)
+        row["captured_stderr"] = str(stderr_path)
+        if executable_path == executable:
+            row["executable_role"] = "deployed_release"
+        elif executable_path == corrupt_executable:
+            row["executable_role"] = "deployed_release_corrupted_copy"
+        else:
+            row["executable_role"] = "fixture"
+        return row
 
-        rows.append(
-            execute(
-                "corrupt_payload",
-                ["--package", str(corrupt_path), "--headless", "--frames", "0"],
-                EXPECTED_SCENARIO_EXIT_CODES["corrupt_payload"],
-            )
+    rows.append(
+        execute(
+            "corrupt_payload",
+            corrupt_executable,
+            [],
+            EXPECTED_SCENARIO_EXIT_CODES["corrupt_payload"],
         )
-        rows.append(
-            execute(
-                "missing_required_feature",
-                [
-                    "--package",
-                    str(package_path),
-                    "--headless",
-                    "--frames",
-                    "0",
-                    "--simulate-capability-failure",
-                ],
-                EXPECTED_SCENARIO_EXIT_CODES["missing_required_feature"],
-            )
+    )
+    rows.append(
+        execute(
+            "deployed_startup",
+            executable,
+            ["--frames", "1"],
+            0,
         )
-        rows.append(
-            execute(
-                "initialization_failure",
-                [
-                    "--package",
-                    str(package_path),
-                    "--headless",
-                    "--frames",
-                    "0",
-                    "--simulate-pipeline-failure",
-                ],
-                EXPECTED_SCENARIO_EXIT_CODES["initialization_failure"],
-            )
+    )
+    rows.append(
+        execute(
+            "missing_required_feature",
+            fixture,
+            [
+                "--package",
+                str(package_path),
+                "--headless",
+                "--frames",
+                "0",
+                "--simulate-capability-failure",
+            ],
+            EXPECTED_SCENARIO_EXIT_CODES["missing_required_feature"],
         )
-        rows.append(
-            execute(
-                "resize",
-                [
-                    "--package",
-                    str(package_path),
-                    "--headless",
-                    "--frames",
-                    "5",
-                    "--resize-sequence",
-                ],
-                EXPECTED_SCENARIO_EXIT_CODES["resize"],
-            )
+    )
+    rows.append(
+        execute(
+            "initialization_failure",
+            fixture,
+            [
+                "--package",
+                str(package_path),
+                "--headless",
+                "--frames",
+                "0",
+                "--simulate-pipeline-failure",
+            ],
+            EXPECTED_SCENARIO_EXIT_CODES["initialization_failure"],
         )
-        rows.append(
-            execute(
-                "device_removal",
-                [
-                    "--package",
-                    str(package_path),
-                    "--headless",
-                    "--frames",
-                    "2",
-                    "--simulate-device-removal",
-                ],
-                EXPECTED_SCENARIO_EXIT_CODES["device_removal"],
-            )
+    )
+    rows.append(
+        execute(
+            "resize",
+            fixture,
+            [
+                "--package",
+                str(package_path),
+                "--headless",
+                "--frames",
+                "5",
+                "--resize-sequence",
+            ],
+            EXPECTED_SCENARIO_EXIT_CODES["resize"],
         )
+    )
+    rows.append(
+        execute(
+            "device_removal",
+            fixture,
+            [
+                "--package",
+                str(package_path),
+                "--headless",
+                "--frames",
+                "2",
+                "--simulate-device-removal",
+            ],
+            EXPECTED_SCENARIO_EXIT_CODES["device_removal"],
+        )
+    )
     scenario_failed = any(row["status"] == "failed" for row in rows)
     scenario_missing = any(row["status"] == "not_executed" for row in rows)
     report = {

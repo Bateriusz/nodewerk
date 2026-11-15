@@ -230,3 +230,23 @@ def test_clean_system_cli_does_not_crash_on_windows_without_prerequisites(
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["verification_status"] == "pending_unverified"
     assert "prerequisites" in report["reason"]
+
+
+def test_corrupt_deployment_copy_only_changes_the_embedded_package(
+    tmp_path: Path,
+) -> None:
+    template = b"MZ" + b"\x00" * 64
+    package = b"PK\x03\x04" + b"package-payload" * 4
+    manifest = b"{}"
+    executable = clean_system.export.nw05_export.embed_package(
+        template, package, manifest
+    )
+    source = tmp_path / "nw_common_release.exe"
+    destination = tmp_path / "nw_common_release-corrupt.exe"
+    source.write_bytes(executable)
+    clean_system._write_corrupt_embedded_copy(source, destination)
+    corrupted = destination.read_bytes()
+    assert corrupted[: len(template)] == template
+    assert corrupted != executable
+    with pytest.raises(clean_system.export.nw05_export.ExportError):
+        clean_system.export.nw05_export.extract_embedded_package(corrupted)

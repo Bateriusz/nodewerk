@@ -7,6 +7,7 @@
 
 #include "player/embedded_package.h"
 #include "player/exit_codes.h"
+#include "player/nw07_capture_controls.h"
 #include "player/package_player.h"
 
 #include <cstdint>
@@ -36,6 +37,10 @@ int main(int argc, char** argv) {
     config.memory_budget_bytes = link_metadata.memory_budget_bytes;
     std::uint64_t max_frames = 0;
     bool emit_image_hash = false;
+#if NW07_CAPTURE_CONTROLS
+    std::string capture_directory;
+    std::vector<std::uint64_t> capture_ticks;
+#endif
     for (int index = 1; index < argc; ++index) {
         if (std::string(argv[index]) == "--frames" && index + 1 < argc) {
             max_frames = std::strtoull(argv[++index], nullptr, 10);
@@ -47,6 +52,14 @@ int main(int argc, char** argv) {
             config.enable_validation = true;
         } else if (std::string(argv[index]) == "--emit-image-hash") {
             emit_image_hash = true;
+#if NW07_CAPTURE_CONTROLS
+        } else if (std::string(argv[index]) == "--capture-dir" &&
+                   index + 1 < argc) {
+            capture_directory = argv[++index];
+        } else if (std::string(argv[index]) == "--capture-tick" &&
+                   index + 1 < argc) {
+            capture_ticks.push_back(std::strtoull(argv[++index], nullptr, 10));
+#endif
         }
     }
     nw::player::PackagePlayer player(config);
@@ -56,6 +69,20 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "NW05_INIT_FAILED=%d\n", static_cast<int>(status));
         return static_cast<int>(status);
     }
+
+#if NW07_CAPTURE_CONTROLS
+    if (!capture_ticks.empty()) {
+        const int capture_status = nw::player::nw07::WriteFixedTickCaptures(
+            &player, capture_directory, capture_ticks);
+        const nw::player::ExitCode capture_shutdown = player.shutdown();
+        if (capture_status != 0) {
+            return capture_status;
+        }
+        return capture_shutdown == nw::player::ExitCode::Success
+                   ? 0
+                   : static_cast<int>(capture_shutdown);
+    }
+#endif
 
     for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick) {
         status = player.renderAtTick(tick);

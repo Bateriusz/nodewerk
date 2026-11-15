@@ -247,6 +247,7 @@ private:
     bool BuildFrameInstructionPlan();
     ExitCode RunInitializationInstructions();
     ExitCode ExecuteFrameInstructions(std::uint64_t tick);
+    std::uint64_t EffectiveTimelineTick(std::uint64_t tick) const noexcept;
     ExitCode OpenDeviceAndWindow();
     ExitCode CreateSwapChainAndFrames();
     ExitCode RecreateRenderTargets();
@@ -271,6 +272,7 @@ private:
     std::uint64_t frames_rendered_ = 0u;
     std::uint64_t frames_presented_ = 0u;
     std::uint64_t last_tick_ = 0u;
+    std::uint64_t timeline_duration_ticks_ = 0u;
     std::uint64_t next_fence_value_ = 1u;
     std::uint32_t width_ = 1280u;
     std::uint32_t height_ = 720u;

@@ -177,6 +177,12 @@ release profile. `nw07-diagnostics` builds the dev-profile sibling with
 any non-dev profile. Diagnostic size and frame-time overhead is recorded in a
 separate evidence record bound to the same final release artifact. The release
 artifact never contains capture hooks, timing queries, or diagnostic tooling.
+With capture controls enabled, the diagnostic player accepts repeated
+`--capture-tick <tick>` arguments plus `--capture-dir <directory>`, renders
+each requested absolute tick, reads back the presented RGBA32F output, and
+writes `tick_<tick>.rgba32f`. The generated player source carries the same
+guarded controls, so fixed ticks such as `959999` and `960000` are reachable
+without changing the release build.
 
 ## Continuous regression policy
 
@@ -243,21 +249,24 @@ python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
   a stale or foreign report cannot certify a different executable.
 
 `tools/nw07_clean_system.py` performs the clean-system run on Windows by
-extracting the package embedded in the final executable and driving the
-established package-player fixture through:
+executing the deployed release executable itself for the deployment startup
+and corrupt-payload checks, then driving the established package-player fixture
+through the injected failure scenarios:
 
 | Scenario | Expected exit code |
 | :--- | ---: |
-| Corrupt payload | `70` (`PackageValidationFailed`) |
+| Deployed startup | `0` |
+| Corrupt embedded payload in a copied release executable | `70` (`PackageValidationFailed`) |
 | Missing required feature | `23` (`CapabilityBaselineUnmet`) |
 | Initialization pipeline failure | `42` (`PipelineStateCreationFailed`) |
 | Resize sequence | `0` |
 | Device removal | `51` (`DeviceRemoved`) |
 
-Every scenario retains stdout/stderr captures; an executed mismatch remains
-failed, and a missing execution remains pending. The deployment must contain
-only the self-contained release executable and must not import development or
-authoring dependencies.
+Every scenario retains stdout/stderr captures in a persistent
+`<report-stem>-artifacts` directory outside the deployment tree; an executed
+mismatch remains failed, and a missing execution remains pending. The
+deployment must contain only the self-contained release executable and must not
+import development or authoring dependencies.
 
 Exit codes: `0` success for the mode, `1` executed failure or contract
 violation, `2` required evidence pending/unavailable.

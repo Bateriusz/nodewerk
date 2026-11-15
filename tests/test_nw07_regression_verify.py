@@ -259,6 +259,22 @@ def test_loop_boundary_evidence_is_measured_only_from_boundary_captures(
     )
 
 
+def test_capture_controls_are_diagnostic_only_and_write_fixed_ticks() -> None:
+    header = (REPO_ROOT / "src" / "player" / "nw07_capture_controls.h").read_text(
+        encoding="utf-8"
+    )
+    assert "#if defined(NW07_CAPTURE_CONTROLS) && NW07_CAPTURE_CONTROLS" in header
+    assert "WriteFixedTickCaptures" in header
+    assert "readbackPresentedOutput" in header
+    assert ".rgba32f" in header
+    fixture = (
+        REPO_ROOT / "fixtures" / "nw05_procedural_image" / "main.cpp"
+    ).read_text(encoding="utf-8")
+    assert "nw07_capture_controls.h" in fixture
+    assert "--capture-tick" in fixture
+    assert "--capture-dir" in fixture
+
+
 def test_export_report_with_reproducibility_can_verify_and_malformed_reports_fail_closed(
     tmp_path: Path,
 ) -> None:

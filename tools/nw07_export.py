@@ -377,13 +377,14 @@ def evaluate_camera_at_tick(
         value_min=min(value for _, value in keys),
         value_max=max(value for _, value in keys),
     )
-    angle = curve.sample(tick)
+    wrapped_tick = tick % contract.LOOP_TICKS
+    angle = curve.sample(wrapped_tick)
     max_twist = float(twist_nodes[0].params.get("max_twist_degrees", ["180"])[0])
-    phase = (tick % contract.LOOP_TICKS) / contract.LOOP_TICKS
+    phase = wrapped_tick / contract.LOOP_TICKS
     twist_degrees = max_twist * math.sin(2.0 * math.pi * phase)
     return {
         "tick": int(tick),
-        "wrapped_tick": int(tick % contract.LOOP_TICKS),
+        "wrapped_tick": int(wrapped_tick),
         "camera_angle_radians": angle,
         "camera_angle_modulo_turn": angle % (2.0 * math.pi),
         "twist_degrees": twist_degrees,
