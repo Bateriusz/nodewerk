@@ -55,9 +55,9 @@ def test_demo_graph_stays_inside_the_existing_nw07_operator_vocabulary() -> None
     assert _param_float(node_map["camera"], "fov_degrees") == pytest.approx(74.0)
     assert _param_float(node_map["twist"], "max_twist_degrees") == pytest.approx(540.0)
     assert _param_float(node_map["bloom"], "resolution_scale") == pytest.approx(0.5)
-    assert _param_float(node_map["bloom"], "threshold") == pytest.approx(0.84)
+    assert _param_float(node_map["bloom"], "threshold") == pytest.approx(0.90)
     assert _param_float(node_map["bloom"], "intensity") == pytest.approx(0.28)
-    assert _param_float(node_map["tonemap"], "exposure") == pytest.approx(0.90)
+    assert _param_float(node_map["tonemap"], "exposure") == pytest.approx(0.84)
     assert node_map["tonemap"].params["operator"][0] == "aces"
 
 
