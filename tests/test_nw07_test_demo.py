@@ -55,8 +55,8 @@ def test_demo_graph_stays_inside_the_existing_nw07_operator_vocabulary() -> None
     assert _param_float(node_map["camera"], "fov_degrees") == pytest.approx(74.0)
     assert _param_float(node_map["twist"], "max_twist_degrees") == pytest.approx(540.0)
     assert _param_float(node_map["bloom"], "resolution_scale") == pytest.approx(0.5)
-    assert _param_float(node_map["bloom"], "threshold") == pytest.approx(0.72)
-    assert _param_float(node_map["bloom"], "intensity") == pytest.approx(0.48)
+    assert _param_float(node_map["bloom"], "threshold") == pytest.approx(0.78)
+    assert _param_float(node_map["bloom"], "intensity") == pytest.approx(0.42)
     assert _param_float(node_map["tonemap"], "exposure") == pytest.approx(0.90)
     assert node_map["tonemap"].params["operator"][0] == "aces"
 
@@ -152,5 +152,5 @@ def test_tunnel_specialization_keeps_rings_distinct_and_corridor_open() -> None:
     assert "(InstanceCount * 2u) / 3u" in instances_shader
     assert "lane_u < 0.08" in instances_shader
     assert "lerp(0.56, 0.88" in instances_shader
-    assert "float tube = 0.008;" in vertex_shader
+    assert "float tube = 0.0095;" in vertex_shader
     assert "float sway_x = 0.16" in vertex_shader
