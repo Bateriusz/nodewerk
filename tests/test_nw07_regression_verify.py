@@ -1086,16 +1086,67 @@ def test_fresh_unverified_capture_cannot_borrow_historical_verification() -> Non
     assert excluded and excluded[0]["capture_id"] == "historical-verified"
 
 
+def test_freshness_never_expires_an_executed_failure() -> None:
+    record = {
+        "captures": [
+            {
+                "capture_id": "old-failure",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "coverage_target": contract.PERF_CONTRACT_ID,
+                "captured_at_utc": "2025-01-01T00:00:00+00:00",
+                "status": "failed",
+                "validation": {"status": "failed"},
+            },
+            {
+                "capture_id": "fresh-pass",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "coverage_target": contract.PERF_CONTRACT_ID,
+                "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+                "status": "passed",
+                "validation": {"status": "verified"},
+            },
+        ]
+    }
+    filtered, _ = verify_nw07._filter_fresh_evidence(record, 86400)
+    assert [item["capture_id"] for item in filtered["captures"]] == [
+        "old-failure",
+        "fresh-pass",
+    ]
+
+
+def test_freshness_retains_non_scheduled_diagnostic_overhead() -> None:
+    record = {
+        "captures": [
+            {
+                "capture_id": "retained-overhead",
+                "evidence_role": contract.DIAGNOSTIC_OVERHEAD_ROLE,
+                "coverage_target": "diagnostic_sibling_build",
+                "captured_at_utc": "2025-01-01T00:00:00+00:00",
+                "validation": {"status": "verified"},
+            }
+        ]
+    }
+    filtered, excluded = verify_nw07._filter_fresh_evidence(record, 86400)
+    assert [item["capture_id"] for item in filtered["captures"]] == [
+        "retained-overhead"
+    ]
+    assert excluded == []
+
+
 def test_fresh_evidence_filter_rejects_future_dated_capture() -> None:
     now = datetime.now(timezone.utc)
     record = {
         "captures": [
             {
                 "capture_id": "current",
+                    "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                    "coverage_target": contract.PERF_CONTRACT_ID,
                 "captured_at_utc": now.isoformat(),
             },
             {
                 "capture_id": "future",
+                    "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                    "coverage_target": contract.PERF_CONTRACT_ID,
                 "captured_at_utc": (now + timedelta(hours=1)).isoformat(),
             },
         ]

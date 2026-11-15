@@ -1402,11 +1402,53 @@ def _filter_fresh_evidence(
     if not isinstance(captures, list):
         return dict(record), []
     now = datetime.now(timezone.utc).timestamp()
+    scheduled_roles = {
+        contract.FIXED_TICK_CORRECTNESS_ROLE,
+        contract.PERFORMANCE_CERTIFICATION_ROLE,
+    }
     fresh: list[Any] = []
     excluded: list[dict[str, Any]] = []
     for capture in captures:
         if not isinstance(capture, Mapping):
             excluded.append({"capture_id": None, "reason": "malformed capture"})
+            continue
+        validation = capture.get("validation")
+        executed_failure = (
+            capture.get("status") == "failed"
+            or (
+                isinstance(validation, Mapping)
+                and validation.get("status") == "failed"
+            )
+        )
+        if not executed_failure:
+            runs = capture.get("runs")
+            if isinstance(runs, list) and any(
+                isinstance(run, Mapping) and run.get("status") == "failed"
+                for run in runs
+            ):
+                executed_failure = True
+        if not executed_failure:
+            comparison = capture.get("comparison")
+            if isinstance(comparison, Mapping):
+                if comparison.get("status") == "failed":
+                    executed_failure = True
+                rows = comparison.get("per_tick")
+                if isinstance(rows, list) and any(
+                    isinstance(row, Mapping) and row.get("status") == "failed"
+                    for row in rows
+                ):
+                    executed_failure = True
+        role = capture.get("evidence_role")
+        if role not in scheduled_roles:
+            # Non-scheduled roles (for example diagnostic-overhead evidence)
+            # are retained even when older; the nightly job does not recollect
+            # them. Executed failures in those roles are also always retained.
+            fresh.append(capture)
+            continue
+        if executed_failure:
+            # A retained executed failure must never expire out of
+            # qualification merely because a newer passing capture exists.
+            fresh.append(capture)
             continue
         captured = evidence._parse_utc_timestamp(capture.get("captured_at_utc"))
         age_seconds = None if captured is None else now - captured
@@ -1418,7 +1460,7 @@ def _filter_fresh_evidence(
             excluded.append(
                 {
                     "capture_id": capture.get("capture_id"),
-                    "evidence_role": capture.get("evidence_role"),
+                    "evidence_role": role,
                     "reason": (
                         "capture is outside the nightly freshness window "
                         "(missing, future-dated, or stale timestamp)"
