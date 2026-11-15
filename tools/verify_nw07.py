@@ -1389,65 +1389,88 @@ def _evidence_freshness_reasons(
     return reasons
 
 
+_FRESHNESS_SCHEDULED_ROLES = frozenset(
+    {
+        contract.FIXED_TICK_CORRECTNESS_ROLE,
+        contract.PERFORMANCE_CERTIFICATION_ROLE,
+    }
+)
+_FINAL_ARTIFACT_BINDING_FIELDS = (
+    "artifact_key",
+    "package_sha256",
+    "manifest_sha256",
+    "executable_sha256",
+)
+
+
+def _capture_binds_final_artifact(
+    capture: Mapping[str, Any], artifact_identity: Mapping[str, Any]
+) -> bool:
+    """Return whether a capture is provably bound to the supplied final artifact."""
+    expected = {
+        field: artifact_identity.get(field)
+        for field in _FINAL_ARTIFACT_BINDING_FIELDS
+    }
+    if any(value in (None, "") for value in expected.values()):
+        return False
+    return all(capture.get(field) == value for field, value in expected.items())
+
+
+def _retained_current_artifact_record(
+    record: Mapping[str, Any], artifact_identity: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Scope pre-freshness validation to scheduled captures of this artifact.
+
+    Only failures that can be bound to the exact final artifact may survive a
+    freshness window. Historical captures from older artifacts remain retained
+    in the source evidence file, but they cannot permanently poison a newer
+    artifact merely because their old validation status was failed.
+    """
+    captures = record.get("captures") or record.get("executions") or []
+    if isinstance(captures, list):
+        scoped_captures = [
+            capture
+            for capture in captures
+            if isinstance(capture, Mapping)
+            and capture.get("evidence_role") in _FRESHNESS_SCHEDULED_ROLES
+            and _capture_binds_final_artifact(capture, artifact_identity)
+        ]
+    else:
+        scoped_captures = []
+    scoped = dict(record)
+    scoped["captures"] = scoped_captures
+    scoped["executions"] = list(scoped_captures)
+    # This pre-validation answers only whether retained measurements for the
+    # current artifact contain a failure. A historical aggregate status must
+    # not manufacture such a failure independently of those captures.
+    scoped["verification_status"] = "execution_recorded"
+    scoped.pop("executed_failure", None)
+    scoped.pop("status", None)
+    return scoped
+
+
 def _filter_fresh_evidence(
     record: Mapping[str, Any], max_age_seconds: float
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Keep only captures from the nightly window for qualification.
+    """Keep scheduled captures from the nightly window for qualification.
 
-    Qualification, artifact binding, validation, and freshness must all be
-    satisfied by the same capture.  Historical captures remain in the retained
-    input file but cannot contribute to a fresh nightly qualification.
+    Failure preservation is intentionally handled before this temporal filter
+    and is scoped to the exact final artifact. Non-scheduled roles (notably
+    diagnostic-overhead evidence) are retained because nightly does not
+    recollect them.
     """
     captures = record.get("captures") or record.get("executions") or []
     if not isinstance(captures, list):
         return dict(record), []
     now = datetime.now(timezone.utc).timestamp()
-    scheduled_roles = {
-        contract.FIXED_TICK_CORRECTNESS_ROLE,
-        contract.PERFORMANCE_CERTIFICATION_ROLE,
-    }
     fresh: list[Any] = []
     excluded: list[dict[str, Any]] = []
     for capture in captures:
         if not isinstance(capture, Mapping):
             excluded.append({"capture_id": None, "reason": "malformed capture"})
             continue
-        validation = capture.get("validation")
-        executed_failure = (
-            capture.get("status") == "failed"
-            or (
-                isinstance(validation, Mapping)
-                and validation.get("status") == "failed"
-            )
-        )
-        if not executed_failure:
-            runs = capture.get("runs")
-            if isinstance(runs, list) and any(
-                isinstance(run, Mapping) and run.get("status") == "failed"
-                for run in runs
-            ):
-                executed_failure = True
-        if not executed_failure:
-            comparison = capture.get("comparison")
-            if isinstance(comparison, Mapping):
-                if comparison.get("status") == "failed":
-                    executed_failure = True
-                rows = comparison.get("per_tick")
-                if isinstance(rows, list) and any(
-                    isinstance(row, Mapping) and row.get("status") == "failed"
-                    for row in rows
-                ):
-                    executed_failure = True
         role = capture.get("evidence_role")
-        if role not in scheduled_roles:
-            # Non-scheduled roles (for example diagnostic-overhead evidence)
-            # are retained even when older; the nightly job does not recollect
-            # them. Executed failures in those roles are also always retained.
-            fresh.append(capture)
-            continue
-        if executed_failure:
-            # A retained executed failure must never expire out of
-            # qualification merely because a newer passing capture exists.
+        if role not in _FRESHNESS_SCHEDULED_ROLES:
             fresh.append(capture)
             continue
         captured = evidence._parse_utc_timestamp(capture.get("captured_at_utc"))
@@ -1484,32 +1507,50 @@ def _validate_fresh_evidence(
     perf_contract: Mapping[str, Any],
     config: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Validate retained measurements before freshness can exclude failures.
+    """Preserve derived failures for this artifact before freshness filtering.
 
-    A stale capture can still contain an authoritative executed failure that
-    must remain failed even when newer passing captures exist.  The unfiltered
-    record is therefore validated first; freshness only filters captures for
-    the current qualification after no retained failure has been derived.
+    The authoritative validators first inspect all retained scheduled captures
+    that are provably bound to the exact final artifact. This catches failures
+    derived from raw measurements even when their stored status is unverified.
+    Only after that check may freshness remove stale scheduled captures.
+
+    Captures belonging to older artifacts are deliberately excluded from the
+    pre-freshness failure scope: they stay in retained evidence history, but
+    cannot permanently block qualification of a different final artifact.
     """
-    retained = evidence.validate_evidence_record(
-        record,
+    if max_age_seconds is None:
+        return (
+            evidence.validate_evidence_record(
+                record,
+                artifact_identity=artifact_identity,
+                artifact_root=artifact_root,
+                perf_contract=perf_contract,
+                config=config,
+            ),
+            [],
+        )
+
+    retained_current = _retained_current_artifact_record(
+        record, artifact_identity
+    )
+    retained_validation = evidence.validate_evidence_record(
+        retained_current,
         artifact_identity=artifact_identity,
         artifact_root=artifact_root,
         perf_contract=perf_contract,
         config=config,
     )
-    if max_age_seconds is None:
-        return retained, []
     filtered, excluded = _filter_fresh_evidence(record, max_age_seconds)
-    if retained["status"] == "failed":
+    if retained_validation["status"] == "failed":
         return (
             {
-                **retained,
+                **retained_validation,
                 "freshness_excluded": excluded,
-                "failure_source": "retained_measurements",
+                "failure_source": "retained_current_artifact_measurements",
             },
             excluded,
         )
+
     result = evidence.validate_evidence_record(
         filtered,
         artifact_identity=artifact_identity,

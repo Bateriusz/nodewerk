@@ -1086,7 +1086,7 @@ def test_fresh_unverified_capture_cannot_borrow_historical_verification() -> Non
     assert excluded and excluded[0]["capture_id"] == "historical-verified"
 
 
-def test_freshness_never_expires_an_executed_failure() -> None:
+def test_freshness_filter_alone_expires_stale_failure_labels() -> None:
     record = {
         "captures": [
             {
@@ -1107,11 +1107,9 @@ def test_freshness_never_expires_an_executed_failure() -> None:
             },
         ]
     }
-    filtered, _ = verify_nw07._filter_fresh_evidence(record, 86400)
-    assert [item["capture_id"] for item in filtered["captures"]] == [
-        "old-failure",
-        "fresh-pass",
-    ]
+    filtered, excluded = verify_nw07._filter_fresh_evidence(record, 86400)
+    assert [item["capture_id"] for item in filtered["captures"]] == ["fresh-pass"]
+    assert [item["capture_id"] for item in excluded] == ["old-failure"]
 
 
 def test_freshness_retains_non_scheduled_diagnostic_overhead() -> None:
@@ -1133,23 +1131,31 @@ def test_freshness_retains_non_scheduled_diagnostic_overhead() -> None:
     assert excluded == []
 
 
-def test_freshness_validates_retained_measurements_before_filtering(
+def test_freshness_preserves_derived_failure_for_current_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    identity = {
+        "artifact_key": "sha256:v1:" + "a" * 64,
+        "package_sha256": "1" * 64,
+        "manifest_sha256": "2" * 64,
+        "executable_sha256": "3" * 64,
+    }
+
+    def bound_capture(capture_id: str, captured_at: str) -> dict:
+        return {
+            "capture_id": capture_id,
+            "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+            "coverage_target": contract.PERF_CONTRACT_ID,
+            "captured_at_utc": captured_at,
+            **identity,
+        }
+
     record = {
         "captures": [
-            {
-                "capture_id": "stale-derived-failure",
-                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
-                "captured_at_utc": "2025-01-01T00:00:00+00:00",
-                "runs": [{"status": "passed"}],
-            },
-            {
-                "capture_id": "fresh-pass",
-                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
-                "captured_at_utc": datetime.now(timezone.utc).isoformat(),
-                "validation": {"status": "verified"},
-            },
+            bound_capture("stale-derived-failure", "2025-01-01T00:00:00+00:00"),
+            bound_capture(
+                "fresh-pass", datetime.now(timezone.utc).isoformat()
+            ),
         ]
     }
     seen: list[list[str]] = []
@@ -1162,16 +1168,76 @@ def test_freshness_validates_retained_measurements_before_filtering(
         return {"status": "verified", "milestone_complete": True}
 
     monkeypatch.setattr(verify_nw07.evidence, "validate_evidence_record", fake_validate)
-    result, _ = verify_nw07._validate_fresh_evidence(
+    result, excluded = verify_nw07._validate_fresh_evidence(
         record,
         max_age_seconds=86400,
-        artifact_identity={},
+        artifact_identity=identity,
         artifact_root=Path("."),
         perf_contract={},
         config=None,
     )
     assert seen[0] == ["stale-derived-failure", "fresh-pass"]
     assert result["status"] == "failed"
+    assert result["failure_source"] == "retained_current_artifact_measurements"
+    assert [item["capture_id"] for item in excluded] == ["stale-derived-failure"]
+
+
+def test_stale_failure_from_different_artifact_does_not_poison_current_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = {
+        "artifact_key": "sha256:v1:" + "a" * 64,
+        "package_sha256": "1" * 64,
+        "manifest_sha256": "2" * 64,
+        "executable_sha256": "3" * 64,
+    }
+    old_identity = {
+        "artifact_key": "sha256:v1:" + "b" * 64,
+        "package_sha256": "4" * 64,
+        "manifest_sha256": "5" * 64,
+        "executable_sha256": "6" * 64,
+    }
+    record = {
+        "captures": [
+            {
+                "capture_id": "old-artifact-failure",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "coverage_target": contract.PERF_CONTRACT_ID,
+                "captured_at_utc": "2025-01-01T00:00:00+00:00",
+                "status": "failed",
+                **old_identity,
+            },
+            {
+                "capture_id": "fresh-current-pass",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "coverage_target": contract.PERF_CONTRACT_ID,
+                "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+                "status": "passed",
+                **identity,
+            },
+        ]
+    }
+    seen: list[list[str]] = []
+
+    def fake_validate(candidate, **kwargs):
+        ids = [item["capture_id"] for item in candidate["captures"]]
+        seen.append(ids)
+        if "old-artifact-failure" in ids:
+            return {"status": "failed", "milestone_complete": False}
+        return {"status": "verified", "milestone_complete": True}
+
+    monkeypatch.setattr(verify_nw07.evidence, "validate_evidence_record", fake_validate)
+    result, excluded = verify_nw07._validate_fresh_evidence(
+        record,
+        max_age_seconds=86400,
+        artifact_identity=identity,
+        artifact_root=Path("."),
+        perf_contract={},
+        config=None,
+    )
+    assert seen == [["fresh-current-pass"], ["fresh-current-pass"]]
+    assert result["status"] == "verified"
+    assert [item["capture_id"] for item in excluded] == ["old-artifact-failure"]
 
 
 def test_fresh_evidence_filter_rejects_future_dated_capture() -> None:
