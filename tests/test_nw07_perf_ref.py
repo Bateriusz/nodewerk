@@ -468,3 +468,13 @@ def test_executed_failure_is_not_hidden_by_an_unbound_contract() -> None:
         capture, _contract(), artifact_identity=_identity()
     )
     assert result["status"] == "failed"
+
+
+def test_unverified_label_cannot_hide_over_threshold_raw_samples() -> None:
+    capture = _capture()
+    capture["status"] = "unverified"
+    capture["runs"][1]["gpu_frame_time_ms"] = _samples(16.68)
+    result = evidence.validate_perf_capture(
+        capture, _bound(), artifact_identity=_identity()
+    )
+    assert result["status"] == "failed"

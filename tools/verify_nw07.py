@@ -1474,6 +1474,54 @@ def _filter_fresh_evidence(
     filtered["executions"] = fresh
     return filtered, excluded
 
+
+def _validate_fresh_evidence(
+    record: Mapping[str, Any],
+    *,
+    max_age_seconds: float | None,
+    artifact_identity: Mapping[str, Any],
+    artifact_root: Path,
+    perf_contract: Mapping[str, Any],
+    config: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Validate retained measurements before freshness can exclude failures.
+
+    A stale capture can still contain an authoritative executed failure that
+    must remain failed even when newer passing captures exist.  The unfiltered
+    record is therefore validated first; freshness only filters captures for
+    the current qualification after no retained failure has been derived.
+    """
+    retained = evidence.validate_evidence_record(
+        record,
+        artifact_identity=artifact_identity,
+        artifact_root=artifact_root,
+        perf_contract=perf_contract,
+        config=config,
+    )
+    if max_age_seconds is None:
+        return retained, []
+    filtered, excluded = _filter_fresh_evidence(record, max_age_seconds)
+    if retained["status"] == "failed":
+        return (
+            {
+                **retained,
+                "freshness_excluded": excluded,
+                "failure_source": "retained_measurements",
+            },
+            excluded,
+        )
+    result = evidence.validate_evidence_record(
+        filtered,
+        artifact_identity=artifact_identity,
+        artifact_root=artifact_root,
+        perf_contract=perf_contract,
+        config=config,
+    )
+    if excluded:
+        result = {**result, "freshness_excluded": excluded}
+    return result, excluded
+
+
 def build_checks(args: argparse.Namespace) -> list[CheckResult]:
     return contracts_only() + _native_export_checks(args)
 
@@ -1588,21 +1636,14 @@ def full_checks(args: argparse.Namespace) -> list[CheckResult]:
             Path(args.perf_ref or PERF_REF).read_text(encoding="utf-8")
         )
         max_age = getattr(args, "max_evidence_age_seconds", None)
-        validation_record = record
-        freshness_excluded: list[dict[str, Any]] = []
-        if max_age is not None:
-            validation_record, freshness_excluded = _filter_fresh_evidence(
-                record, float(max_age)
-            )
-        result = evidence.validate_evidence_record(
-            validation_record,
+        result, freshness_excluded = _validate_fresh_evidence(
+            record,
+            max_age_seconds=float(max_age) if max_age is not None else None,
             artifact_identity=identity,
             artifact_root=package_dir,
             perf_contract=perf_contract,
             config=export.load_canonical_config(),
         )
-        if freshness_excluded:
-            result = {**result, "freshness_excluded": freshness_excluded}
     except Exception as exc:
         checks.append(_fail("nw07_hardware_evidence", str(exc)))
         checks.append(_full_clean_system_check(args, identity))

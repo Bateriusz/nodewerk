@@ -979,6 +979,18 @@ def test_missing_metadata_cannot_hide_an_executed_startup_failure() -> None:
     assert "driver_version" in result.get("missing_metadata", [])
 
 
+def test_unverified_label_cannot_hide_a_measured_startup_failure() -> None:
+    capture = _correctness("ada")
+    capture["status"] = "unverified"
+    capture["startup"]["process_start_to_first_present_ms"] = 3000.0
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "failed"
+
+
 def test_required_quality_and_scaling_measurements_must_be_measured() -> None:
     capture = _correctness("ada")
     capture["measurements"]["image_quality_metrics"] = {}

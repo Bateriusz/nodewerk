@@ -1133,6 +1133,47 @@ def test_freshness_retains_non_scheduled_diagnostic_overhead() -> None:
     assert excluded == []
 
 
+def test_freshness_validates_retained_measurements_before_filtering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = {
+        "captures": [
+            {
+                "capture_id": "stale-derived-failure",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "captured_at_utc": "2025-01-01T00:00:00+00:00",
+                "runs": [{"status": "passed"}],
+            },
+            {
+                "capture_id": "fresh-pass",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+                "validation": {"status": "verified"},
+            },
+        ]
+    }
+    seen: list[list[str]] = []
+
+    def fake_validate(candidate, **kwargs):
+        ids = [item["capture_id"] for item in candidate["captures"]]
+        seen.append(ids)
+        if "stale-derived-failure" in ids:
+            return {"status": "failed", "milestone_complete": False}
+        return {"status": "verified", "milestone_complete": True}
+
+    monkeypatch.setattr(verify_nw07.evidence, "validate_evidence_record", fake_validate)
+    result, _ = verify_nw07._validate_fresh_evidence(
+        record,
+        max_age_seconds=86400,
+        artifact_identity={},
+        artifact_root=Path("."),
+        perf_contract={},
+        config=None,
+    )
+    assert seen[0] == ["stale-derived-failure", "fresh-pass"]
+    assert result["status"] == "failed"
+
+
 def test_fresh_evidence_filter_rejects_future_dated_capture() -> None:
     now = datetime.now(timezone.utc)
     record = {
