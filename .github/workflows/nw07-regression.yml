@@ -25,6 +25,7 @@ jobs:
           python-version: "3.12"
       - name: Install pytest
         run: python -m pip install pytest
+      # Fast fail: exercise the same frozen specialization before Python gates.
       # Compile the exact frozen C++ branches before contract tests so
       # preprocessor/syntax regressions cannot be masked by a stale freeze.
       - name: Configure NW-07 frozen host compile gate
