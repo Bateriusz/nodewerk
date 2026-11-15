@@ -522,8 +522,27 @@ def _normalize_fresh_correctness_metrics(
         if not isinstance(value, Mapping) or not value:
             raise ValueError(f"fresh {name} measurement is not an object")
         bound = dict(value)
-        bound["artifact_sha256"] = identity["executable_sha256"]
-        bound["environment"] = dict(environment)
+        declared_artifact = bound.get("artifact_sha256")
+        if declared_artifact is not None and declared_artifact != identity["executable_sha256"]:
+            raise ValueError(
+                f"fresh {name} measurement is bound to a different artifact"
+            )
+        declared_environment = bound.get("environment")
+        if isinstance(declared_environment, Mapping):
+            for field, expected in environment.items():
+                if (
+                    declared_environment.get(field) not in (None, "")
+                    and declared_environment.get(field) != expected
+                ):
+                    raise ValueError(
+                        f"fresh {name} measurement environment mismatch on '{field}'"
+                    )
+        elif declared_environment is not None and not str(declared_environment).strip():
+            raise ValueError(
+                f"fresh {name} measurement has an empty environment binding"
+            )
+        # Never relabel collector-provided provenance. Missing bindings remain
+        # missing and are left to the downstream validator to treat as pending.
         measurements[name] = bound
     expected_ticks = {str(int(tick)) for tick in contract.REQUIRED_FIXED_TICKS}
     numeric_ticks = {str(key) for key in numeric_value.keys()}

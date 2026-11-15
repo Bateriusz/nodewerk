@@ -1261,6 +1261,25 @@ def _full_clean_system_check(
         report = json.loads(report_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return _fail("nw07_clean_system", str(exc))
+    retained_rows = report.get("scenarios")
+    retained_failed = [
+        row.get("scenario")
+        for row in (retained_rows if isinstance(retained_rows, list) else [])
+        if isinstance(row, Mapping) and row.get("status") == "failed"
+    ]
+    if (
+        report.get("verification_status") == "failed"
+        or retained_failed
+    ):
+        return _fail(
+            "nw07_clean_system",
+            "retained clean-system report records an executed failure"
+            + (
+                ": " + ", ".join(str(name) for name in retained_failed)
+                if retained_failed
+                else ""
+            ),
+        )
     max_age = getattr(args, "max_evidence_age_seconds", None)
     if max_age is not None:
         captured = evidence._parse_utc_timestamp(report.get("captured_at_utc"))
@@ -1340,6 +1359,12 @@ def _evidence_freshness_reasons(
         ),
     )
     reasons: list[str] = []
+    def certifying(item: Mapping[str, Any]) -> bool:
+        validation = item.get("validation")
+        if isinstance(validation, Mapping):
+            return validation.get("status") == "verified"
+        return item.get("status") == "passed"
+
     for label, role, target in required:
         matching = [
             capture
@@ -1353,6 +1378,7 @@ def _evidence_freshness_reasons(
                 (captured := evidence._parse_utc_timestamp(item.get("captured_at_utc")))
                 is not None
                 and 0 <= now - captured <= float(max_age_seconds)
+                and certifying(item)
             )
             for item in matching
         ):
@@ -1361,6 +1387,46 @@ def _evidence_freshness_reasons(
                 "(capture is missing or stale)"
             )
     return reasons
+
+
+def _filter_fresh_evidence(
+    record: Mapping[str, Any], max_age_seconds: float
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Keep only captures from the nightly window for qualification.
+
+    Qualification, artifact binding, validation, and freshness must all be
+    satisfied by the same capture.  Historical captures remain in the retained
+    input file but cannot contribute to a fresh nightly qualification.
+    """
+    captures = record.get("captures") or record.get("executions") or []
+    if not isinstance(captures, list):
+        return dict(record), []
+    now = datetime.now(timezone.utc).timestamp()
+    fresh: list[Any] = []
+    excluded: list[dict[str, Any]] = []
+    for capture in captures:
+        if not isinstance(capture, Mapping):
+            excluded.append({"capture_id": None, "reason": "malformed capture"})
+            continue
+        captured = evidence._parse_utc_timestamp(capture.get("captured_at_utc"))
+        if (
+            captured is None
+            or captured < 0
+            or now - captured > float(max_age_seconds)
+        ):
+            excluded.append(
+                {
+                    "capture_id": capture.get("capture_id"),
+                    "evidence_role": capture.get("evidence_role"),
+                    "reason": "capture is outside the nightly freshness window",
+                }
+            )
+            continue
+        fresh.append(capture)
+    filtered = dict(record)
+    filtered["captures"] = fresh
+    filtered["executions"] = fresh
+    return filtered, excluded
 
 def build_checks(args: argparse.Namespace) -> list[CheckResult]:
     return contracts_only() + _native_export_checks(args)
@@ -1475,30 +1541,26 @@ def full_checks(args: argparse.Namespace) -> list[CheckResult]:
         perf_contract = json.loads(
             Path(args.perf_ref or PERF_REF).read_text(encoding="utf-8")
         )
+        max_age = getattr(args, "max_evidence_age_seconds", None)
+        validation_record = record
+        freshness_excluded: list[dict[str, Any]] = []
+        if max_age is not None:
+            validation_record, freshness_excluded = _filter_fresh_evidence(
+                record, float(max_age)
+            )
         result = evidence.validate_evidence_record(
-            record,
+            validation_record,
             artifact_identity=identity,
             artifact_root=package_dir,
             perf_contract=perf_contract,
             config=export.load_canonical_config(),
         )
+        if freshness_excluded:
+            result = {**result, "freshness_excluded": freshness_excluded}
     except Exception as exc:
         checks.append(_fail("nw07_hardware_evidence", str(exc)))
         checks.append(_full_clean_system_check(args, identity))
         return checks
-    max_age = getattr(args, "max_evidence_age_seconds", None)
-    freshness = (
-        _evidence_freshness_reasons(record, float(max_age))
-        if max_age is not None
-        else []
-    )
-    if result["status"] == "verified" and freshness:
-        result = {
-            **result,
-            "status": "pending_unverified",
-            "milestone_complete": False,
-            "freshness_reasons": freshness,
-        }
     if result["status"] == "verified":
         checks.append(_ok("nw07_hardware_evidence", evidence=result))
     elif result["status"] == "failed":
@@ -1577,6 +1639,10 @@ def clean_system_checks(args: argparse.Namespace) -> list[CheckResult]:
                 package_directory=Path(args.package),
                 deployment_directory=binary_dir,
                 output=report_path,
+                execution_kind=getattr(args, "execution_kind", None),
+                passthrough_documentation=getattr(
+                    args, "passthrough_documentation", ""
+                ),
             )
         except Exception as exc:
             return [_fail("nw07_clean_system", str(exc))]
@@ -1644,6 +1710,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-output")
     parser.add_argument("--binary-dir")
     parser.add_argument("--clean-report")
+    parser.add_argument(
+        "--execution-kind",
+        choices=("physical", "documented_gpu_passthrough"),
+    )
+    parser.add_argument("--passthrough-documentation", default="")
     parser.add_argument("--max-evidence-age-seconds", type=float)
     parser.add_argument("--summary-json")
     args = parser.parse_args(argv)

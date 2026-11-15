@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 import time
@@ -200,7 +201,12 @@ def test_nightly_metrics_merge_produces_current_series(tmp_path: Path) -> None:
         "captures": [
             {
                 "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                    "executable_sha256": hashlib.sha256(
+                        artifact.read_bytes()
+                    ).hexdigest(),
+                    "captured_at_utc": "2026-12-02T00:00:00+00:00",
                 "validation": {
+                        "status": "verified",
                     "runs": [
                         {
                             "gpu_frame_time_ms": {"p99_ms": 10.0},
@@ -748,6 +754,52 @@ def test_clean_system_binary_dir_discovers_retained_report(
     assert summary["checks"][-1]["status"] == "passed"
 
 
+def test_clean_system_verifier_forwards_execution_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deployment = tmp_path / "deployment"
+    deployment.mkdir()
+    (deployment / "nw_common_test.exe").write_bytes(b"MZ")
+    package = tmp_path / "package"
+    package.mkdir()
+    fixture = tmp_path / "fixture.exe"
+    fixture.write_bytes(b"fixture")
+    captured: dict = {}
+
+    def fake_run_clean_system(**kwargs):
+        captured.update(kwargs)
+        return {"format": "nw07-clean-system-report"}
+
+    monkeypatch.setattr(verify_nw07.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        clean_system, "run_clean_system", fake_run_clean_system
+    )
+    monkeypatch.setattr(
+        clean_system,
+        "validate_report",
+        lambda *args, **kwargs: {"status": "verified", "reasons": [], "scenarios": []},
+    )
+    code = verify_nw07.main(
+        [
+            "--mode",
+            "CleanSystem",
+            "--binary-dir",
+            str(deployment),
+            "--fixture",
+            str(fixture),
+            "--package",
+            str(package),
+            "--execution-kind",
+            "documented_gpu_passthrough",
+            "--passthrough-documentation",
+            "dossier",
+        ]
+    )
+    assert code == 0
+    assert captured["execution_kind"] == "documented_gpu_passthrough"
+    assert captured["passthrough_documentation"] == "dossier"
+
+
 def test_full_reports_milestone_only_when_every_gate_is_verified(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -965,12 +1017,14 @@ def test_freshness_requires_both_correctness_tiers_and_reference_perf() -> None:
                 "evidence_role": contract.FIXED_TICK_CORRECTNESS_ROLE,
                 "coverage_target": contract.CORRECTNESS_COVERAGE_TARGETS["ada"],
                 "captured_at_utc": now,
+                "validation": {"status": "verified"},
             },
             {
                 "capture_id": "perf",
                 "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
                 "coverage_target": contract.PERF_CONTRACT_ID,
                 "captured_at_utc": now,
+                "validation": {"status": "verified"},
             },
         ]
     }
@@ -982,9 +1036,42 @@ def test_freshness_requires_both_correctness_tiers_and_reference_perf() -> None:
             "evidence_role": contract.FIXED_TICK_CORRECTNESS_ROLE,
             "coverage_target": contract.CORRECTNESS_COVERAGE_TARGETS["blackwell"],
             "captured_at_utc": now,
+            "validation": {"status": "verified"},
         }
     )
     assert verify_nw07._evidence_freshness_reasons(record, 86400) == []
+    record["captures"][0]["validation"] = {"status": "pending_unverified"}
+    assert any(
+        "Ada correctness" in reason
+        for reason in verify_nw07._evidence_freshness_reasons(record, 86400)
+    )
+
+
+def test_fresh_unverified_capture_cannot_borrow_historical_verification() -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "captures": [
+            {
+                "capture_id": "historical-verified",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "coverage_target": contract.PERF_CONTRACT_ID,
+                "captured_at_utc": "2025-01-01T00:00:00+00:00",
+                "validation": {"status": "verified"},
+            },
+            {
+                "capture_id": "fresh-unverified",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "coverage_target": contract.PERF_CONTRACT_ID,
+                "captured_at_utc": now,
+                "validation": {"status": "pending_unverified"},
+            },
+        ]
+    }
+    filtered, excluded = verify_nw07._filter_fresh_evidence(record, 86400)
+    assert [item["capture_id"] for item in filtered["captures"]] == [
+        "fresh-unverified"
+    ]
+    assert excluded and excluded[0]["capture_id"] == "historical-verified"
 
 
 def test_fresh_metrics_cannot_fall_back_to_static_workflow_values() -> None:
@@ -995,3 +1082,109 @@ def test_fresh_metrics_cannot_fall_back_to_static_workflow_values() -> None:
             identity=identity,
             tier="ada",
         )
+
+
+def test_fresh_metrics_preserve_and_reject_foreign_provenance() -> None:
+    identity = {"executable_sha256": "a" * 64}
+    measured = {
+        "metadata": {
+            "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+            "device_form_factor": "desktop",
+            "driver_version": "566.36",
+            "os_version": "10.0.26100.2314",
+            "toolchain_identity": "msvc-ltcg",
+            "queried_capabilities": {"feature_level": "12_0"},
+            "clock_information": {"core_mhz": 2310},
+            "power_information": {"power_limit_w": 160},
+            "thermal_information": {"temperature_c": 62},
+            "cache_state": {"kind": "warm"},
+        },
+        "measurements": {
+            "process_start_to_first_present_ms": 800.0,
+            "peak_engine_committed_gpu_bytes": 1024,
+            "cache_kind": "warm",
+            "cold_driver_cache_preparation": "cleared",
+            "warm_preparation": "pre-run",
+            "memory_source": "driver query",
+            "process_ram_bytes": 2048,
+            "driver_memory_bytes": 1024,
+            "startup_pipeline_ms": 10.0,
+            "generation_ms": 1.0,
+            "image_quality_metrics": {
+                "psnr_db": 52.0,
+                "artifact_sha256": "b" * 64,
+            },
+            "scaling_1440p": {
+                "width": 2560,
+                "height": 1440,
+                "p99_gpu_ms": 10.0,
+            },
+        },
+        "numeric_comparisons": {
+            str(tick): {"maximum_error": 0.0, "maximum_relative_error": 0.0}
+            for tick in contract.REQUIRED_FIXED_TICKS
+        },
+    }
+    with pytest.raises(ValueError, match="different artifact"):
+        capture._normalize_fresh_correctness_metrics(
+            measured, identity=identity, tier="ada"
+        )
+    measured["measurements"]["image_quality_metrics"]["artifact_sha256"] = identity[
+        "executable_sha256"
+    ]
+    measured["measurements"]["image_quality_metrics"]["environment"] = {
+        "driver_version": "999.99"
+    }
+    with pytest.raises(ValueError, match="environment mismatch"):
+        capture._normalize_fresh_correctness_metrics(
+            measured, identity=identity, tier="ada"
+        )
+
+
+def test_regression_uses_the_fresh_bound_performance_capture() -> None:
+    artifact_sha = "a" * 64
+
+    def perf(capture_id: str, timestamp: str, p99: float) -> dict:
+        return {
+            "capture_id": capture_id,
+            "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+            "executable_sha256": artifact_sha,
+            "captured_at_utc": timestamp,
+            "reference": {
+                "board": {"model": "NVIDIA GeForce RTX 4060 Ti"},
+                "environment": {
+                    "driver_version": "566.36",
+                    "os_build": "10.0.26100.2314",
+                },
+                "toolchain": {"toolchain_identity": "msvc-ltcg"},
+                "host": {"cpu_model": "AMD Ryzen 7 7800X3D"},
+            },
+            "validation": {
+                "status": "verified",
+                "runs": [
+                    {
+                        "gpu_frame_time_ms": {"p99_ms": p99},
+                        "cpu_submit_ms": {"p99_ms": p99 / 2},
+                    }
+                ],
+            },
+        }
+
+    evidence_record = {
+        "captures": [
+            perf("historical", "2025-01-01T00:00:00+00:00", 10.0),
+            perf("nightly-current", "2026-12-02T00:00:00+00:00", 15.0),
+        ]
+    }
+    selected = regression._perf_p99_from_evidence(
+        evidence_record,
+        artifact_sha256=artifact_sha,
+        environment={
+            "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+            "driver_version": "566.36",
+            "os_version": "10.0.26100.2314",
+            "toolchain_identity": "msvc-ltcg",
+            "host": "AMD Ryzen 7 7800X3D",
+        },
+    )
+    assert selected["p99_gpu_frame_time_ms"] == 15.0

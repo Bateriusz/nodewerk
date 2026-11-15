@@ -347,6 +347,14 @@ def run_clean_system(
     executable = deployment_executable(deployment_directory)
     if executable is None:
         raise ValueError("deployment directory has no NW-07 executable")
+    try:
+        same_executable = fixture.resolve() == executable.resolve()
+    except OSError:
+        same_executable = False
+    if same_executable:
+        raise ValueError(
+            "the failure-injection fixture must be separate from the final release executable"
+        )
     identity = export.inspect_artifact_directory(package_directory)
     host = clean_host_provenance(
         execution_kind=execution_kind,
@@ -588,6 +596,13 @@ def validate_report(
         reasons.append("report format/version is not the NW-07 clean-system contract")
     if report.get("task") != contract.TASK:
         reasons.append("report task is not NW-07")
+    if report.get("verification_status") == "failed":
+        reasons.append("clean-system report records an executed failure")
+        return {
+            "status": "failed",
+            "reasons": reasons,
+            "scenarios": report.get("scenarios") or [],
+        }
     host_value = report.get("host")
     host = host_value if isinstance(host_value, Mapping) else None
     host_failed = False
@@ -774,10 +789,13 @@ def validate_report(
         elif row.get("status") != "passed":
             failed.append(name)
             reasons.append(f"{name} did not record a passed execution")
-    if deployment_failed or failed or host_failed:
+    report_failed = report.get("verification_status") == "failed"
+    if report_failed or deployment_failed or failed or host_failed:
         status = "failed"
         if failed:
             reasons.append("executed clean-system scenarios failed: " + ", ".join(failed))
+        if report_failed:
+            reasons.append("clean-system report records an executed failure")
     elif missing:
         status = "pending_unverified"
         reasons.append("clean-system scenarios are missing: " + ", ".join(missing))
@@ -789,9 +807,6 @@ def validate_report(
     elif host_pending:
         status = "pending_unverified"
         reasons.append("clean-system host provenance is incomplete or not clean")
-    elif report.get("verification_status") == "failed":
-        status = "failed"
-        reasons.append("clean-system report records an executed failure")
     elif report.get("verification_status") != "verified":
         status = "pending_unverified"
         reasons.append("clean-system report is not verified")

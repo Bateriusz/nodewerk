@@ -10,8 +10,10 @@ magnitude are tracked, but there is no percentage-only size failure rule.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -49,6 +51,21 @@ def _number(value: Any) -> float | None:
         return None
     result = float(value)
     return result if math.isfinite(result) else None
+
+
+def evidence_timestamp(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
 
 
 def _metric(record: Mapping[str, Any], name: str) -> float | None:
@@ -243,19 +260,77 @@ def evaluate_series(
 
 def _perf_p99_from_evidence(
     evidence_record: Mapping[str, Any],
+    *,
+    artifact_sha256: str | None = None,
+    environment: Mapping[str, Any] | None = None,
 ) -> dict[str, float]:
     captures = evidence_record.get("captures")
     if not isinstance(captures, list):
         return {}
+    candidates: list[tuple[float, Mapping[str, Any]]] = []
     for capture in captures:
         if not isinstance(capture, Mapping):
             continue
         if capture.get("evidence_role") != contract.PERFORMANCE_CERTIFICATION_ROLE:
             continue
+        if artifact_sha256 is not None and capture.get(
+            "executable_sha256"
+        ) != artifact_sha256:
+            continue
+        if isinstance(environment, Mapping):
+            reference = capture.get("reference")
+            reference = reference if isinstance(reference, Mapping) else {}
+            board = reference.get("board")
+            board = board if isinstance(board, Mapping) else {}
+            capture_environment = reference.get("environment")
+            capture_environment = (
+                capture_environment
+                if isinstance(capture_environment, Mapping)
+                else {}
+            )
+            toolchain = reference.get("toolchain")
+            toolchain = toolchain if isinstance(toolchain, Mapping) else {}
+            host = reference.get("host")
+            host = host if isinstance(host, Mapping) else {}
+            comparisons = (
+                ("adapter_description", board.get("model")),
+                ("driver_version", capture_environment.get("driver_version")),
+                ("os_version", capture_environment.get("os_build")),
+                (
+                    "toolchain_identity",
+                    toolchain.get("toolchain_identity"),
+                ),
+                ("host", host.get("cpu_model")),
+                ("cpu_model", host.get("cpu_model")),
+            )
+            mismatched = False
+            for key, observed in comparisons:
+                expected = environment.get(key)
+                if expected not in (None, "") and observed not in (
+                    None,
+                    "",
+                    expected,
+                ):
+                    mismatched = True
+                    break
+            if mismatched:
+                continue
+        captured_at = evidence_timestamp(capture.get("captured_at_utc"))
+        if captured_at is None:
+            continue
         validation = capture.get("validation")
+        if not isinstance(validation, Mapping) or validation.get("status") != "verified":
+            continue
         runs = validation.get("runs") if isinstance(validation, Mapping) else None
         if not isinstance(runs, list) or not runs:
             continue
+        candidates.append((captured_at, capture))
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    for _, capture in candidates:
+        validation = capture.get("validation")
+        runs = validation.get("runs") if isinstance(validation, Mapping) else None
         gpu_values: list[float] = []
         cpu_values: list[float] = []
         for run in runs:
@@ -285,6 +360,7 @@ def build_current_metrics(
     tier: str,
     artifact_bytes: int,
     evidence_record: Mapping[str, Any] | None = None,
+    artifact_sha256: str | None = None,
 ) -> dict[str, Any]:
     metadata = metrics.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
@@ -312,7 +388,13 @@ def build_current_metrics(
         if name in measurements:
             current_metrics[name] = measurements[name]
     if tier == "ada" and isinstance(evidence_record, Mapping):
-        current_metrics.update(_perf_p99_from_evidence(evidence_record))
+        current_metrics.update(
+            _perf_p99_from_evidence(
+                evidence_record,
+                artifact_sha256=artifact_sha256,
+                environment=metadata,
+            )
+        )
     return {
         "format": "nw07-current-metrics",
         "version": 1,
@@ -343,6 +425,7 @@ def merge_nightly_metrics(
     if not isinstance(evidence_record, Mapping):
         raise ValueError("merged evidence is not a JSON object")
     artifact_bytes = artifact_path.stat().st_size
+    artifact_sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     output_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for path in metrics_paths:
@@ -358,6 +441,7 @@ def merge_nightly_metrics(
             tier=tier,
             artifact_bytes=artifact_bytes,
             evidence_record=evidence_record,
+            artifact_sha256=artifact_sha256,
         )
         destination = output_dir / f"metrics-current-{tier}.json"
         destination.write_text(

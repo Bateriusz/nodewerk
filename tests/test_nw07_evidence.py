@@ -116,7 +116,8 @@ def _correctness(tier: str) -> dict:
                     "exit_code": 0,
                     "status": "passed",
                 }
-                for tick in contract.REQUIRED_FIXED_TICKS
+                for tick in list(contract.REQUIRED_FIXED_TICKS)
+                + [contract.LOOP_BOUNDARY_TICKS[1]]
             ],
         },
         "comparison": {

@@ -2058,12 +2058,15 @@ def validate_correctness_capture(
                 if isinstance(row, Mapping)
                 and isinstance(row.get("tick"), int)
             }
-            if set(reference_by_tick) != required_ticks:
+            reference_required_ticks = required_ticks | {
+                contract.LOOP_BOUNDARY_TICKS[1]
+            }
+            if set(reference_by_tick) != reference_required_ticks:
                 result["status"] = "failed"
                 result["reasons"].append(
                     "reference execution records do not cover the fixed ticks"
                 )
-            for tick in required_ticks:
+            for tick in sorted(reference_required_ticks):
                 row = reference_by_tick.get(tick)
                 if row is None:
                     continue

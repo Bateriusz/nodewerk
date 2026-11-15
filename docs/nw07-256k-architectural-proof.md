@@ -267,7 +267,9 @@ python tools/verify_nw07.py --mode Full \
     --fixture <player.exe> --package <export-dir> --evidence <evidence.json> \
     --build-report build/nw07-build-checks.json \
     --binary-dir <deployment-dir> --clean-report <clean-report.json>
-python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
+python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir> \
+    --fixture <failure-injection-fixture> --package <export-dir> \
+    --execution-kind physical
 ```
 
 - `ContractsOnly` is GPU-less and never claims hardware acceptance.
@@ -303,6 +305,11 @@ python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
 executing the deployed release executable itself for the deployment startup
 and corrupt-payload checks, then driving the established package-player fixture
 through the injected failure scenarios:
+
+The `--fixture` argument must name the separate diagnostic failure-injection
+fixture; it may not be the final release executable.  The retained host record
+includes the declared `physical` or `documented_gpu_passthrough` execution kind,
+with passthrough documentation required for the latter.
 
 | Scenario | Expected exit code |
 | :--- | ---: |

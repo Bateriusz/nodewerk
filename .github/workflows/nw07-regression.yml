@@ -274,14 +274,14 @@ jobs:
           }
       - name: Re-run clean-system deployment qualification
         env:
-          NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
+          NW07_FAILURE_FIXTURE: ${{ vars.NW07_FAILURE_FIXTURE }}
           NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
           NW07_BINARY_DIR: ${{ vars.NW07_BINARY_DIR }}
           NW07_EXECUTION_KIND: ${{ vars.NW07_EXECUTION_KIND }}
           NW07_PASSTHROUGH_DOCUMENTATION: ${{ vars.NW07_PASSTHROUGH_DOCUMENTATION }}
         run: >-
           python tools/nw07_clean_system.py
-          --fixture "$env:NW07_FIXTURE"
+          --fixture "$env:NW07_FAILURE_FIXTURE"
           --package "$env:NW07_PACKAGE"
           --deployment "$env:NW07_BINARY_DIR"
           --execution-kind "$env:NW07_EXECUTION_KIND"
@@ -346,4 +346,5 @@ jobs:
             ${{ runner.temp }}/nw07-clean-system.json
             ${{ runner.temp }}/nw07-nightly-evidence.json
             ${{ runner.temp }}/nw07-nightly-merged/**
-            ${{ runner.temp }}/w07-regression-*.json
+            ${{ runner.temp }}/nw07-regression-*.json
+            ${{ runner.temp }}/nw07-nightly-regression/**

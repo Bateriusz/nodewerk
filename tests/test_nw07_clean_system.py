@@ -333,6 +333,15 @@ def test_clean_host_provenance_records_os_arch_and_dependency_absence() -> None:
     assert host["development_dependencies_present_on_path"] == []
 
 
+def test_retained_failure_is_not_downgraded_by_missing_host_provenance() -> None:
+    report = _report()
+    report["verification_status"] = "failed"
+    report.pop("host")
+    report["deployment"] = {}
+    result = clean_system.validate_report(report)
+    assert result["status"] == "failed"
+
+
 def test_physical_clean_host_rejects_virtual_machine_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
