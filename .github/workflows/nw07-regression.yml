@@ -1,4 +1,5 @@
 name: NW-07 256 KiB Architectural Proof Regression
+# Final-gate evidence hardening: dual-tier fresh capture and fail-closed provenance.
 
 on:
   workflow_dispatch:
