@@ -681,6 +681,7 @@ def test_studio_native_host_links_player_implementation_and_profile() -> None:
         encoding="utf-8"
     )
     assert "nodewerk-studio-preview" in workflow
+    assert "cmake -S . -B build/nw08-runtime -G Ninja" in workflow
     assert "cmake -S . -B build/nw08-runtime" in workflow
     assert "--target nw_procedural_image_player" in workflow
     assert "cmake -S src/studio -B build/nw08-studio" in workflow
