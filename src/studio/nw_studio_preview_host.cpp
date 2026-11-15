@@ -214,17 +214,26 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
                 bool using_aliased_plan, std::uint32_t width,
                 std::uint32_t height, bool fence_retired,
                 std::uint64_t session_renders,
-                const TimingSnapshot& timing) {
+                const TimingSnapshot& timing,
+                const nw::player::QueriedAdapterCapabilities* adapter_override =
+                    nullptr,
+                const nw::player::AuthoringAdapterIdentity* identity_override =
+                    nullptr,
+                const nw::player::AuthoringReloadResult* reload_override =
+                    nullptr) {
     if (path.empty()) {
         return true;
     }
     const nw::player::PlayerAllocationStats& stats = player.allocation_stats();
-    const nw::player::QueriedAdapterCapabilities& adapter =
-        player.queried_capabilities();
+    const nw::player::QueriedAdapterCapabilities adapter =
+        adapter_override != nullptr ? *adapter_override
+                                    : player.queried_capabilities();
     const nw::player::AuthoringAdapterIdentity identity =
-        player.authoringAdapterIdentity();
+        identity_override != nullptr ? *identity_override
+                                     : player.authoringAdapterIdentity();
     const nw::player::AuthoringReloadResult reload =
-        player.authoring_reload_stats();
+        reload_override != nullptr ? *reload_override
+                                   : player.authoring_reload_stats();
     std::string driver_version;
     AppendJsonEscaped(&driver_version, adapter.driver_version);
     std::FILE* file = std::fopen(path.c_str(), "wb");
@@ -552,10 +561,17 @@ int main(int argc, char** argv) {
     const std::uint32_t width = player.width();
     const std::uint32_t height = player.height();
     const TimingSnapshot timing = CaptureTimings(player);
+    const nw::player::QueriedAdapterCapabilities adapter =
+        player.queried_capabilities();
+    const nw::player::AuthoringAdapterIdentity identity =
+        player.authoringAdapterIdentity();
+    const nw::player::AuthoringReloadResult reload =
+        player.authoring_reload_stats();
     const nw::player::ExitCode shutdown = player.shutdown();
     const bool fence_retired = shutdown == nw::player::ExitCode::Success;
     if (!WriteStats(options.stats_path, player, peak_stats, using_aliased_plan,
-                    width, height, fence_retired, 1u, timing)) {
+                    width, height, fence_retired, 1u, timing, &adapter,
+                    &identity, &reload)) {
         return 1;
     }
     return fence_retired ? 0 : static_cast<int>(shutdown);

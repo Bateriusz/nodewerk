@@ -326,64 +326,67 @@ def _real_preview(
             memory_budget_bytes=512 * 1024 * 1024,
             allow_software_adapter=allow_software_adapter,
         )
-    except preview.PreviewError as exc:
+    except (preview.PreviewError, OSError) as exc:
         return _check(
             "real_preview",
             "pending_unverified" if not capture_controls else "failed",
             {"reason": str(exc)},
         )
-    pipeline = preview.PreviewPipeline(
-        session,
-        backend=backend,
-        toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
-    )
-    results = []
-    for tick in ticks:
-        token = pipeline.submit_preview(tick=tick)
-        decision = pipeline.execute(token)
-        record = pipeline.last_valid_preview
-        if (
-            not decision.accepted
-            or record is None
-            or record.token.job_id != token.job_id
-            or record.frame.tick != tick
-            or not record.frame.image_sha256
-            or record.semantic_digest != session.semantic_digest
-        ):
-            return _check(
-                "real_preview",
-                "failed",
-                {
-                    "tick": tick,
-                    "decision": decision.to_dict(),
-                    "diagnostics": pipeline.last_diagnostics,
-                },
-            )
-        frame = record.frame
-        expected_physical = execution_kind in {
-            "physical",
-            "documented_gpu_passthrough",
-        }
-        if bool(frame.hardware_evidence) != expected_physical:
-            return _check(
-                "real_preview",
-                "failed",
-                {
-                    "tick": tick,
-                    "reason": "hardware_evidence does not match execution kind",
-                    "hardware_evidence": frame.hardware_evidence,
-                    "execution_kind": frame.execution_kind,
-                },
-            )
-        results.append(frame.to_dict())
-    return _check(
-        "real_preview",
-        "passed",
-        {
-            "execution_kind": execution_kind,
-            "frames": results,
-        },
-    )
+    try:
+        pipeline = preview.PreviewPipeline(
+            session,
+            backend=backend,
+            toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
+        )
+        results = []
+        for tick in ticks:
+            token = pipeline.submit_preview(tick=tick)
+            decision = pipeline.execute(token)
+            record = pipeline.last_valid_preview
+            if (
+                not decision.accepted
+                or record is None
+                or record.token.job_id != token.job_id
+                or record.frame.tick != tick
+                or not record.frame.image_sha256
+                or record.semantic_digest != session.semantic_digest
+            ):
+                return _check(
+                    "real_preview",
+                    "failed",
+                    {
+                        "tick": tick,
+                        "decision": decision.to_dict(),
+                        "diagnostics": pipeline.last_diagnostics,
+                    },
+                )
+            frame = record.frame
+            expected_physical = execution_kind in {
+                "physical",
+                "documented_gpu_passthrough",
+            }
+            if bool(frame.hardware_evidence) != expected_physical:
+                return _check(
+                    "real_preview",
+                    "failed",
+                    {
+                        "tick": tick,
+                        "reason": "hardware_evidence does not match execution kind",
+                        "hardware_evidence": frame.hardware_evidence,
+                        "execution_kind": frame.execution_kind,
+                    },
+                )
+            results.append(frame.to_dict())
+        return _check(
+            "real_preview",
+            "passed",
+            {
+                "execution_kind": execution_kind,
+                "frames": results,
+            },
+        )
+    finally:
+        backend.close()
 
 
 def _embedded_preview_compatibility(
@@ -436,45 +439,48 @@ def _embedded_preview_compatibility(
             execution_kind="simulated",
             memory_budget_bytes=512 * 1024 * 1024,
         )
-    except preview.PreviewError as exc:
+    except (preview.PreviewError, OSError) as exc:
         return _check(
             "embedded_preview_compatibility",
             "failed",
             {"reason": str(exc)},
         )
-    pipeline = preview.PreviewPipeline(
-        session,
-        backend=backend,
-        toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
-    )
-    frames = []
-    for tick in ticks:
-        token = pipeline.submit_preview(tick=tick)
-        decision = pipeline.execute(token)
-        record = pipeline.last_valid_preview
-        if (
-            not decision.accepted
-            or record is None
-            or record.token.job_id != token.job_id
-            or record.frame.tick != tick
-            or not record.frame.image_sha256
-            or record.frame.hardware_evidence
-        ):
-            return _check(
-                "embedded_preview_compatibility",
-                "failed",
-                {
-                    "tick": tick,
-                    "decision": decision.to_dict(),
-                    "diagnostics": pipeline.last_diagnostics,
-                },
-            )
-        frames.append(record.frame.to_dict())
-    return _check(
-        "embedded_preview_compatibility",
-        "passed",
-        {"execution_kind": "simulated_runtime", "frames": frames},
-    )
+    try:
+        pipeline = preview.PreviewPipeline(
+            session,
+            backend=backend,
+            toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
+        )
+        frames = []
+        for tick in ticks:
+            token = pipeline.submit_preview(tick=tick)
+            decision = pipeline.execute(token)
+            record = pipeline.last_valid_preview
+            if (
+                not decision.accepted
+                or record is None
+                or record.token.job_id != token.job_id
+                or record.frame.tick != tick
+                or not record.frame.image_sha256
+                or record.frame.hardware_evidence
+            ):
+                return _check(
+                    "embedded_preview_compatibility",
+                    "failed",
+                    {
+                        "tick": tick,
+                        "decision": decision.to_dict(),
+                        "diagnostics": pipeline.last_diagnostics,
+                    },
+                )
+            frames.append(record.frame.to_dict())
+        return _check(
+            "embedded_preview_compatibility",
+            "passed",
+            {"execution_kind": "simulated_runtime", "frames": frames},
+        )
+    finally:
+        backend.close()
 
 
 def _runtime_pipeline(
@@ -503,12 +509,16 @@ def _runtime_pipeline(
         memory_budget_bytes=gpu_budget_bytes,
         allow_software_adapter=allow_software_adapter,
     )
-    pipeline = preview.PreviewPipeline(
-        session,
-        backend=backend,
-        gpu_budget_bytes=gpu_budget_bytes,
-        toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
-    )
+    try:
+        pipeline = preview.PreviewPipeline(
+            session,
+            backend=backend,
+            gpu_budget_bytes=gpu_budget_bytes,
+            toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
+        )
+    except Exception:
+        backend.close()
+        raise
     return backend, pipeline
 
 
@@ -541,15 +551,22 @@ def _runtime_shader_recovery(
     unmet = _runtime_requires_real(player_executable, player_template, dxc)
     if unmet is not None:
         return _check("runtime_shader_error_recovery", "pending_unverified", unmet)
-    backend, pipeline = _runtime_pipeline(
-        str(player_executable),
-        graph=REPO_ROOT / "fixtures" / "nw08" / "shader_edit_probe.nwgraph",
-        player_template=str(player_template),
-        dxc=str(dxc),
-        cache_dir=cache_dir,
-        execution_kind=execution_kind,
-        allow_software_adapter=allow_software_adapter,
-    )
+    try:
+        backend, pipeline = _runtime_pipeline(
+            str(player_executable),
+            graph=REPO_ROOT / "fixtures" / "nw08" / "shader_edit_probe.nwgraph",
+            player_template=str(player_template),
+            dxc=str(dxc),
+            cache_dir=cache_dir,
+            execution_kind=execution_kind,
+            allow_software_adapter=allow_software_adapter,
+        )
+    except (preview.PreviewError, OSError) as exc:
+        return _check(
+            "runtime_shader_error_recovery",
+            "failed",
+            {"reason": str(exc)},
+        )
     try:
         if not pipeline.preview_now(tick=0).accepted:
             return _check(
@@ -619,15 +636,22 @@ def _runtime_device_recreation(
     unmet = _runtime_requires_real(player_executable, player_template, dxc)
     if unmet is not None:
         return _check("runtime_device_recreation", "pending_unverified", unmet)
-    backend, pipeline = _runtime_pipeline(
-        str(player_executable),
-        graph=None,
-        player_template=str(player_template),
-        dxc=str(dxc),
-        cache_dir=cache_dir,
-        execution_kind=execution_kind,
-        allow_software_adapter=allow_software_adapter,
-    )
+    try:
+        backend, pipeline = _runtime_pipeline(
+            str(player_executable),
+            graph=None,
+            player_template=str(player_template),
+            dxc=str(dxc),
+            cache_dir=cache_dir,
+            execution_kind=execution_kind,
+            allow_software_adapter=allow_software_adapter,
+        )
+    except (preview.PreviewError, OSError) as exc:
+        return _check(
+            "runtime_device_recreation",
+            "failed",
+            {"reason": str(exc)},
+        )
     try:
         if not pipeline.preview_now(tick=0).accepted:
             return _check(
@@ -698,16 +722,23 @@ def _runtime_fence_safe_cache(
     if unmet is not None:
         return _check("runtime_fence_safe_cache", "pending_unverified", unmet)
     budget = 256 * 1024 * 1024
-    backend, pipeline = _runtime_pipeline(
-        str(player_executable),
-        graph=None,
-        player_template=str(player_template),
-        dxc=str(dxc),
-        cache_dir=cache_dir,
-        execution_kind=execution_kind,
-        allow_software_adapter=allow_software_adapter,
-        gpu_budget_bytes=budget,
-    )
+    try:
+        backend, pipeline = _runtime_pipeline(
+            str(player_executable),
+            graph=None,
+            player_template=str(player_template),
+            dxc=str(dxc),
+            cache_dir=cache_dir,
+            execution_kind=execution_kind,
+            allow_software_adapter=allow_software_adapter,
+            gpu_budget_bytes=budget,
+        )
+    except (preview.PreviewError, OSError) as exc:
+        return _check(
+            "runtime_fence_safe_cache",
+            "failed",
+            {"reason": str(exc)},
+        )
     try:
         if not pipeline.preview_now(tick=0).accepted:
             return _check(

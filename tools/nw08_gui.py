@@ -997,9 +997,10 @@ class StudioWindow:
         try:
             self.dispatcher.cancel()
             self.actions.close()
+            replacement = self.application.reopen(path)
             if not self.application.explicit_backend:
                 self.application.close()
-            self.application = self.application.reopen(path)
+            self.application = replacement
             self.curve_editor = CurveEditorBinding(self.application)
             self.dispatcher = PreviewDispatcher(self.application)
             self.actions = GuiActions(self.application)

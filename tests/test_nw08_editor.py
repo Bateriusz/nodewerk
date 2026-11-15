@@ -314,6 +314,53 @@ def test_resolution_reconfiguration_invalidates_inflight_jobs() -> None:
     assert application.report()["export_configuration"]["height"] == 720
 
 
+def test_open_graph_failure_keeps_previous_application_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tkinter.filedialog as filedialog
+
+    from nw08_gui import StudioWindow
+
+    class Status:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def configure(self, **kwargs):
+            self.text = kwargs.get("text", "")
+
+    class Application:
+        explicit_backend = False
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def reopen(self, _path):
+            raise editor.EditorError("invalid graph")
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Dispatcher:
+        def cancel(self) -> bool:
+            return False
+
+    class Actions:
+        def close(self) -> None:
+            return None
+
+    window = object.__new__(StudioWindow)
+    window.application = Application()
+    window.dispatcher = Dispatcher()
+    window.actions = Actions()
+    window.status = Status()
+    monkeypatch.setattr(
+        filedialog, "askopenfilename", lambda **_kwargs: "bad.nwgraph"
+    )
+    window.open_graph()
+    assert window.application.closed is False
+    assert "open failed" in window.status.text
+
+
 def test_curve_and_connection_editing_with_undo() -> None:
     proof = editor.GraphEditorSession.create_nw07_proof()
     curve = proof.set_curve_points(

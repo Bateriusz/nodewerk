@@ -801,6 +801,8 @@ class AuthoringRuntimeSession:
         self._stderr_lines: list[str] = []
         self._epoch = -1
         self._package_sha = ""
+        self._width = 0
+        self._height = 0
         self._identity = HostDeviceIdentity.unavailable(
             "runtime session has not started"
         )
@@ -870,6 +872,8 @@ class AuthoringRuntimeSession:
             "retired_bytes": self._retired_bytes,
             "identity": self._identity.to_key_fields(),
             "session_package_sha256": self._package_sha,
+            "width": self._width,
+            "height": self._height,
         }
 
     # -- device lifecycle -------------------------------------------------
@@ -892,7 +896,21 @@ class AuthoringRuntimeSession:
                     and self._process.poll() is None
                     and not self._lost
                 )
+                resolution_known = self._width > 0 and self._height > 0
+                if alive and resolution_known and (
+                    self._width != width or self._height != height
+                ):
+                    # The native host freezes --width/--height at process
+                    # creation.  A resolution change is therefore a real
+                    # device-instance recreation, not a package reload.
+                    self._stop_process()
+                    self._epoch = max(0, self._epoch + 1)
+                    self._package_sha = ""
+                    self._device_running = False
+                    alive = False
                 if alive and self._package_sha == bundle.package_sha256:
+                    self._capture_dir = capture_dir
+                    self._stats_path = stats_path
                     return self.device_epoch
                 if alive:
                     if bundle.package_path is None:
@@ -915,6 +933,8 @@ class AuthoringRuntimeSession:
                         # not change: unchanged physical realizations remain live.
                         self._package_sha = bundle.package_sha256
                         self._hot_reloads += 1
+                        self._capture_dir = capture_dir
+                        self._stats_path = stats_path
                         return self.device_epoch
                     if not response.get("requires_device_recreation", False):
                         raise RuntimeSessionError(
@@ -959,6 +979,8 @@ class AuthoringRuntimeSession:
                 self._epoch += 1
             self._just_reinitialized = False
             self._package_sha = bundle.package_sha256
+            self._width = width
+            self._height = height
             self._lost = False
             return self.device_epoch
 
@@ -996,6 +1018,9 @@ class AuthoringRuntimeSession:
     def close(self) -> None:
         with self._lock:
             self._stop_process()
+            self._reservations.clear()
+            self._device_running = False
+            self._lost = True
 
     # -- fences -----------------------------------------------------------
     def reserve(self, key: str, size_bytes: int) -> tuple[str, int]:
@@ -1166,6 +1191,8 @@ class AuthoringRuntimeSession:
             memory_budget_bytes=memory_budget_bytes,
         )
         self._package_sha = bundle.package_sha256
+        self._width = int(width)
+        self._height = int(height)
         self._stdout = queue.Queue()
         self._stderr_lines = []
         self._process = subprocess.Popen(
@@ -2926,8 +2953,8 @@ class PreviewPipeline:
         hashes = structural_hashes(document)
         sizes = node_size_attribution(
             document,
-            width=job.width,
-            height=job.height,
+            width=frame.width,
+            height=frame.height,
             total_bytes=max(1, int(frame.resident_bytes)),
         )
         profile = CapabilityProfileIdentity(
@@ -2984,8 +3011,8 @@ class PreviewPipeline:
                     "node_id": node_id,
                     "operator_id": node.operator_id,
                     "operator_version": node.version,
-                    "preview_width": job.width,
-                    "preview_height": job.height,
+                    "preview_width": frame.width,
+                    "preview_height": frame.height,
                 },
                 compiler_inputs={
                     "compiler_id": self._toolchain.compiler_id,
@@ -3031,8 +3058,8 @@ class PreviewPipeline:
             job.document,
             job.token.semantic_digest,
             frame,
-            width=job.width,
-            height=job.height,
+            width=frame.width,
+            height=frame.height,
         )
         compiler_key = inputs.compiler_key()
         device_key = inputs.device_realization_key(self.device.generation)

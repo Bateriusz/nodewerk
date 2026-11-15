@@ -5,6 +5,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -269,6 +270,98 @@ def test_embedded_integration_check_is_skipped_unless_enabled() -> None:
     assert result["status"] == "skipped"
 
 
+def test_real_preview_closes_runtime_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    import nw08_windows_integration as integration
+
+    instances: list[Any] = []
+
+    class FakeBackend:
+        def __init__(self, *args, **kwargs):
+            self.closed = False
+            instances.append(self)
+
+        def render(self, document, tick, *, width, height):
+            raise preview.PreviewError("runtime failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(
+        preview, "WindowsRuntimePreviewBackend", FakeBackend
+    )
+    result = integration._real_preview(
+        "host",
+        execution_kind="physical",
+        capture_controls=True,
+        ticks=[0],
+        player_template="template",
+        dxc="dxc",
+        cache_dir=None,
+        preview_mode="package-host",
+    )
+    assert result["status"] == "failed"
+    assert instances and instances[0].closed
+
+
+def test_embedded_preview_closes_runtime_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nw08_windows_integration as integration
+
+    instances: list[Any] = []
+
+    class FakeBackend:
+        def __init__(self, *args, **kwargs):
+            self.closed = False
+            instances.append(self)
+
+        def render(self, document, tick, *, width, height):
+            raise preview.PreviewError("runtime failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(
+        preview, "WindowsRuntimePreviewBackend", FakeBackend
+    )
+    result = integration._embedded_preview_compatibility(
+        player_template="template",
+        dxc="dxc",
+        cache_dir=None,
+        ticks=[0],
+        allow_test_payloads=False,
+        enabled=True,
+    )
+    assert result["status"] == "failed"
+    assert instances and instances[0].closed
+
+
+def test_runtime_checks_report_constructor_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nw08_windows_integration as integration
+
+    def broken_pipeline(*args, **kwargs):
+        raise preview.PreviewError("missing preview host")
+
+    monkeypatch.setattr(integration, "_runtime_pipeline", broken_pipeline)
+    for function, name in (
+        (integration._runtime_shader_recovery, "runtime_shader_error_recovery"),
+        (integration._runtime_device_recreation, "runtime_device_recreation"),
+        (integration._runtime_fence_safe_cache, "runtime_fence_safe_cache"),
+    ):
+        result = function(
+            player_executable="host",
+            player_template="template",
+            dxc="dxc",
+            cache_dir=None,
+            execution_kind="physical",
+        )
+        assert result["name"] == name
+        assert result["status"] == "failed"
+        assert "missing preview host" in result["detail"]["reason"]
+
+
 def test_windows_backend_explicit_physical_with_stub_is_not_evidence(
     tmp_path: Path,
 ) -> None:
@@ -370,6 +463,19 @@ class _IdentityBackend(preview.ReferencePreviewBackend):
             shader_identity=self.shader_identity,
             binding_identity=self.binding_identity,
             node_shader_identities=dict(self.node_shader_identities),
+        )
+
+
+class _CaptureGeometryBackend(preview.ReferencePreviewBackend):
+    name = "capture-geometry-reference"
+
+    def render(self, document, tick, *, width, height):
+        frame = super().render(document, tick, width=width, height=height)
+        return replace(
+            frame,
+            width=256,
+            height=256,
+            resident_bytes=256 * 256 * 16,
         )
 
 
@@ -859,6 +965,67 @@ def test_cache_keys_delegate_to_the_realization_key_inputs() -> None:
     changed_compiler, changed_device = pipeline.cache_keys(frame)
     assert changed_compiler != compiler
     assert changed_device != device
+
+
+def test_realization_keys_use_presented_capture_geometry() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(
+        session,
+        backend=_CaptureGeometryBackend(),
+        width=1920,
+        height=1080,
+    )
+    assert pipeline.preview_now(tick=0).accepted
+    record = pipeline.last_valid_preview
+    assert record is not None
+    assert record.frame.width == 256
+    assert record.frame.height == 256
+    assert (record.compiler_key, record.device_realization_key) == (
+        pipeline.cache_keys(record.frame)
+    )
+
+
+def test_authoring_session_recreates_device_when_resolution_changes() -> None:
+    class _AliveProcess:
+        def poll(self):
+            return None
+
+    session = preview.AuthoringRuntimeSession(
+        "/bin/true", mode="package-host"
+    )
+    session._persistent = True
+    session._process = _AliveProcess()
+    session._device_running = True
+    session._package_sha = "same-package"
+    session._width = 1920
+    session._height = 1080
+    session._epoch = 0
+    started: list[tuple[int, int]] = []
+
+    def fake_stop() -> None:
+        session._process = None
+        session._device_running = False
+
+    def fake_start(bundle, *, width, height, memory_budget_bytes) -> None:
+        started.append((width, height))
+        session._package_sha = bundle.package_sha256
+        session._width = width
+        session._height = height
+
+    session._stop_process = fake_stop
+    session._start_process = fake_start
+    bundle = preview.PreviewExportBundle(
+        package_sha256="same-package",
+        package_path=Path("/tmp/package.nwp"),
+    )
+    assert session.prepare(bundle, width=1280, height=720) == 1
+    assert started == [(1280, 720)]
+
+    # Re-preparing with the same package and resolution reuses the device.
+    session._process = _AliveProcess()
+    session._device_running = True
+    assert session.prepare(bundle, width=1280, height=720) == 1
+    assert started == [(1280, 720)]
 
 
 def test_toolchain_change_during_render_rejects_completion() -> None:
