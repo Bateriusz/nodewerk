@@ -2291,6 +2291,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     }
     return true;
 }
+#endif
 
 ExitCode PackagePlayer::OpenDeviceAndWindow() {
     platform_ = std::unique_ptr<PlatformState>(new PlatformState());
@@ -2667,7 +2668,6 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     }
 #endif
     return ExitCode::Success;
-#endif
 }
 
 ExitCode PackagePlayer::CreateSwapChainAndFrames() {
