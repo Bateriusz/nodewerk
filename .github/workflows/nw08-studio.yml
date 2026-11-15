@@ -91,6 +91,15 @@ jobs:
       - name: Run NW-08 regression coverage
         shell: pwsh
         run: |
+          # Keep frozen nw03_compiler.py unchanged. The hosted image exposes an
+          # unrelated MinGW c++.exe; remove only that directory so discovery
+          # reaches the pinned LLVM clang++ already exported by NW-01.
+          $pathEntries = $env:PATH -split ';' | Where-Object {
+            $_ -and ($_ -notlike '*\mingw64\bin*')
+          }
+          $env:PATH = $pathEntries -join ';'
+          $clang = Get-Command clang++.exe -ErrorAction Stop
+          Write-Host "NW-02 digest helper compiler: $($clang.Source)"
           $tests = Get-ChildItem tests/test_nw08_*.py | Select-Object -ExpandProperty FullName
           if (-not $tests) { throw "no NW-08 regression tests were discovered" }
           python -m pytest -q @tests
