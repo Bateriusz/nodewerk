@@ -121,7 +121,7 @@ void BuildTunnelRib(
 {
     float u = uv.x * TAU;
     float v = uv.y * TAU;
-    float tube = 0.008;
+    float tube = 0.0095;
     float radial = 1.0 + tube * cos(v);
     local_position = float3(radial * cos(u), radial * sin(u), tube * sin(v));
     local_normal = normalize(float3(cos(v) * cos(u), cos(v) * sin(u), sin(v)));
