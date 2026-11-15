@@ -21,6 +21,7 @@ import hashlib
 import json
 import platform
 import shutil
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -894,6 +895,8 @@ def _native_export_checks(args: argparse.Namespace) -> list[CheckResult]:
             / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         )
         root = Path(args.native_output) if args.native_output else default_root
+        if root.exists():
+            shutil.rmtree(root)
         root.mkdir(parents=True, exist_ok=True)
         artifact_dir = root / "artifact"
         report_path = root / "report.json"

@@ -68,6 +68,7 @@ PRODUCTION_PROTOCOL = "nw07-production.v1"
 CORRECTNESS_CAPTURE_PROTOCOL = "nw07-correctness-capture.v1"
 STARTUP_PROTOCOL = "nw07-startup.v1"
 PERF_RUN_PROTOCOL = "nw07-perf-run.v1"
+PERF_COLLECTION_PROTOCOL = "nw07-perf-collect.v1"
 DIAGNOSTIC_OVERHEAD_PROTOCOL = "nw07-diagnostic-overhead.v1"
 
 # Reference performance contract: the exact board name is recorded because
@@ -165,7 +166,9 @@ PINNED_BUILD_INPUTS = (
     "src/player/player_instrumentation.h",
     "src/player/resource_plan.cpp",
     "src/player/resource_plan.h",
+    "tools/dependency_check.py",
     "tools/nw03_compiler.py",
+    "tools/nw03_oracle.py",
     "tools/nw04_fixture.py",
     "tools/nw05_export.py",
     "tools/nw05_optimizer.py",
@@ -174,6 +177,7 @@ PINNED_BUILD_INPUTS = (
     "tools/nw06_procedural.py",
     "tools/nw06_timeline.py",
     "tools/nwp_package.py",
+    "tools/offline_shader_pack.py",
     "tools/nw07_contract.py",
     "tools/nw07_export.py",
 )

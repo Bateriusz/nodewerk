@@ -31,7 +31,7 @@ import nw07_contract as contract  # noqa: E402
 import nw07_evidence as evidence  # noqa: E402
 import nw07_export as export  # noqa: E402
 
-COLLECT_PROTOCOL = "nw07-perf-collect.v1"
+COLLECT_PROTOCOL = contract.PERF_COLLECTION_PROTOCOL
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -342,6 +342,7 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "adapter_description": metadata.get("adapter_description", args.adapter),
+        "device_form_factor": metadata.get("device_form_factor", args.device_form_factor),
         "device": metadata.get("device", args.adapter),
         "driver_version": metadata.get("driver_version", args.driver_version),
         "os_version": metadata.get("os_version", args.os_version),
@@ -424,22 +425,19 @@ def record_perf(args: argparse.Namespace) -> dict[str, Any]:
             timing.get("run_started_utc") or timing.get("warmup_ended_utc")
         )
         run_ended = _utc_seconds(timing.get("run_ended_utc"))
-        warmup_started = _utc_seconds(timing.get("warmup_started_utc"))
         duration_seconds = (
             run_ended - run_started
             if run_started is not None and run_ended is not None
             else None
         )
-        warmup_seconds = (
-            run_started - warmup_started
-            if run_started is not None and warmup_started is not None
-            else None
-        )
         runs.append(
             {
                 "run_index": index,
-                "warmup_seconds": warmup_seconds,
                 "duration_seconds": duration_seconds,
+                "player_pid": timing.get("player_pid"),
+                "collector_protocol": timing.get("collector_protocol"),
+                "artifact_sha256": timing.get("artifact_sha256"),
+                "collector_exit_code": timing.get("collector_exit_code"),
                 "uncapped": timing.get("uncapped"),
                 "fresh_process": timing.get("fresh_process"),
                 "application_pipeline_cache": timing.get(
@@ -492,6 +490,9 @@ def record_perf(args: argparse.Namespace) -> dict[str, Any]:
         "presentation_mode": "flip_discard",
         "uncapped": True,
         "presentation_probe": getattr(args, "presentation_probe", None),
+        "reference_binding_digest": contract_record.get("binding_digest"),
+        "reference_binding_id": contract_record.get("binding_id"),
+        "warmup": getattr(args, "warmup", None),
         "runs": runs,
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -626,13 +627,36 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         "runs": [],
         "collected_at_utc": _utc_now(),
     }
+    # The frozen protocol is one five-second warm-up followed by three
+    # sequential 60-second runs. Each measured run uses a fresh process.
+    warmup_started = _utc_now()
+    warmup_process = _start_player(executable, player_args)
+    warmup_pid = warmup_process.pid
+    time.sleep(contract.WARMUP_SECONDS)
+    warmup_exited_early = warmup_process.poll() is not None
+    warmup_stdout, warmup_stderr = _stop_player(warmup_process)
+    warmup_ended = _utc_now()
+    warmup_duration = (
+        (_utc_seconds(warmup_ended) or 0.0) - (_utc_seconds(warmup_started) or 0.0)
+    )
+    record["warmup"] = {
+        "warmup_started_utc": warmup_started,
+        "warmup_ended_utc": warmup_ended,
+        "duration_seconds": warmup_duration,
+        "player_pid": warmup_pid,
+        "artifact_sha256": identity["executable_sha256"],
+        "completed": not warmup_exited_early,
+        "stdout": warmup_stdout[-2000:],
+        "stderr": warmup_stderr[-2000:],
+    }
+    if warmup_exited_early:
+        raise ValueError(
+            "release executable exited before the five-second warm-up completed"
+        )
+
     for index in range(1, contract.PERF_RUN_COUNT + 1):
-        warmup_started = _utc_now()
-        warmup = _start_player(executable, player_args)
-        time.sleep(contract.WARMUP_SECONDS)
-        warmup_stdout, warmup_stderr = _stop_player(warmup)
-        run_started = _utc_now()
         player = _start_player(executable, player_args)
+        run_started = _utc_now()
         run_dir = samples_dir / f"run{index}"
         run_dir.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ)
@@ -663,23 +687,24 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         finally:
             player_stdout, player_stderr = _stop_player(player)
         run_ended = _utc_now()
+        duration_seconds = (
+            (_utc_seconds(run_ended) or 0.0) - (_utc_seconds(run_started) or 0.0)
+        )
         timing = {
-            "warmup_started_utc": warmup_started,
             "run_started_utc": run_started,
             "run_ended_utc": run_ended,
-            "duration_seconds": contract.PERF_RUN_SECONDS,
-            "warmup_seconds": contract.WARMUP_SECONDS,
+            "duration_seconds": duration_seconds,
             "uncapped": True,
             "fresh_process": True,
             "application_pipeline_cache": False,
+            "player_pid": player.pid,
+            "artifact_sha256": identity["executable_sha256"],
             "collector_protocol": COLLECT_PROTOCOL,
             "collector_exit_code": collector_completed.returncode,
             "collector_stdout": collector_completed.stdout[-4000:],
             "collector_stderr": collector_completed.stderr[-4000:],
             "player_stdout": player_stdout[-4000:],
             "player_stderr": player_stderr[-4000:],
-            "warmup_stdout": warmup_stdout[-2000:],
-            "warmup_stderr": warmup_stderr[-2000:],
         }
         (samples_dir / f"run{index}-timing.json").write_text(
             json.dumps(timing, indent=2, sort_keys=True) + "\n",
@@ -689,6 +714,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "run_index": index,
                 "timing": timing,
+                "player_pid": player.pid,
                 "collector_exit_code": collector_completed.returncode,
                 "samples_present": {
                     name: (samples_dir / f"run{index}-{name}.txt").is_file()
@@ -707,7 +733,8 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
                 raise ValueError(
                     f"measurement collector produced no {name} samples for run {index}"
                 )
-    manifest_path = samples_dir / "collector-record.json"
+
+    manifest_path = samples_dir / "collector-record.json"    manifest_path = samples_dir / "collector-record.json"
     manifest_path.write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -720,6 +747,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         execution_kind=args.execution_kind,
         evidence=args.evidence,
         presentation_probe=record["presentation_probe"],
+        warmup=record["warmup"],
     )
     capture = record_perf(namespace)
     capture["collection"] = record
@@ -769,6 +797,11 @@ def main(argv: list[str] | None = None) -> int:
     correctness.add_argument("--metadata")
     correctness.add_argument("--numeric-comparisons")
     correctness.add_argument("--adapter", default="")
+    correctness.add_argument(
+        "--device-form-factor",
+        choices=("desktop", "laptop", "mobile", "workstation", "data_center", "server", "other"),
+        default="",
+    )
     correctness.add_argument("--driver-version", default="")
     correctness.add_argument("--os-version", default="")
     correctness.add_argument("--toolchain-identity", default="")

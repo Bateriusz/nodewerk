@@ -43,6 +43,7 @@ REQUIRED_CORRECTNESS_METADATA = (
     "profile_id",
     "requirements_digest",
     "adapter_description",
+    "device_form_factor",
     "device",
     "driver_version",
     "os_version",
@@ -208,10 +209,8 @@ def classify_hardware_tier(
     name = " ".join(str(adapter_description or "").lower().split())
     if not name:
         return "unknown"
-    if device_form_factor is not None and str(device_form_factor).strip().lower() not in {
-        "",
-        "desktop",
-    }:
+    form_factor = str(device_form_factor or "").strip().lower()
+    if form_factor != "desktop":
         return "unknown"
     if any(marker in name for marker in _LAPTOP_MARKERS):
         return "unknown"
@@ -396,6 +395,25 @@ def _mismatch_paths(observed: Any, expected: Any, prefix: str = "") -> list[str]
     return []
 
 
+def _reference_binding_payload(record: Mapping[str, Any]) -> dict[str, Any]:
+    reference = copy.deepcopy(dict(record.get("reference") or {}))
+    reference.pop("binding_digest", None)
+    reference.pop("binding_id", None)
+    return {
+        "contract_id": record.get("contract_id"),
+        "frozen_at_utc": record.get("frozen_at_utc"),
+        "binding_version": record.get("binding_version"),
+        "bound_at_utc": record.get("bound_at_utc"),
+        "reference": reference,
+    }
+
+
+def _reference_binding_digest(record: Mapping[str, Any]) -> str:
+    return "sha256:v1:" + sha256_bytes(
+        canonical_json_bytes(_reference_binding_payload(record))
+    )
+
+
 def validate_perf_contract(record: Mapping[str, Any]) -> dict[str, Any]:
     """Validate that the frozen reference contract was not weakened."""
     reasons: list[str] = []
@@ -526,12 +544,27 @@ def validate_perf_contract(record: Mapping[str, Any]) -> dict[str, Any]:
         if record.get("binding_version") != 1:
             reasons.append("reference binding version is not 1")
         digest = record.get("binding_digest")
+        bound_at = _parse_utc_timestamp(record.get("bound_at_utc"))
+        frozen_at = _parse_utc_timestamp(record.get("frozen_at_utc"))
         if (
             not isinstance(digest, str)
             or not digest.startswith("sha256:v1:")
-            or _parse_utc_timestamp(record.get("bound_at_utc")) is None
+            or bound_at is None
         ):
             reasons.append("reference binding is not frozen or lacks a timestamp")
+        else:
+            expected_digest = _reference_binding_digest(record)
+            expected_id = f"{contract.PERF_CONTRACT_ID}@{expected_digest}"
+            if digest != expected_digest:
+                reasons.append("reference binding digest does not match the frozen payload")
+            if record.get("binding_id") != expected_id:
+                reasons.append("reference binding id does not match the frozen payload")
+            if reference.get("binding_digest") != expected_digest:
+                reasons.append("reference payload does not carry the frozen binding digest")
+            if reference.get("binding_id") != expected_id:
+                reasons.append("reference payload does not carry the frozen binding id")
+            if frozen_at is not None and bound_at < frozen_at:
+                reasons.append("reference binding predates the frozen contract")
     replacement = change_control.get("replacement_reference_requires") or {}
     for key in (
         "new_contract_version",
@@ -647,14 +680,7 @@ def bind_reference(
     bound["binding_status"] = "bound"
     bound["binding_version"] = 1
     bound["bound_at_utc"] = bound_at
-    payload = {
-        "contract_id": bound.get("contract_id"),
-        "frozen_at_utc": bound.get("frozen_at_utc"),
-        "binding_version": 1,
-        "bound_at_utc": bound_at,
-        "reference": copy.deepcopy(reference),
-    }
-    digest = "sha256:v1:" + sha256_bytes(canonical_json_bytes(payload))
+    digest = _reference_binding_digest(bound)
     bound["binding_digest"] = digest
     bound["binding_id"] = "nw07_perf_ref_v1@" + digest
     reference["binding_digest"] = digest
@@ -865,21 +891,20 @@ def validate_perf_capture(
     reference_binding = (capture.get("reference") or {}).get("binding_digest") if isinstance(
         capture.get("reference"), Mapping
     ) else None
-    if contract_binding_digest not in (None, "") and (
-        contract_binding_digest
-        not in {capture_binding_digest, reference_binding}
-    ):
-        result["status"] = "unverified"
-        reasons.append(
-            "capture does not reference the previously frozen reference binding"
-        )
-    if contract_binding_id not in (None, "") and capture_binding_id not in (
-        None,
-        "",
-        contract_binding_id,
-    ):
-        result["status"] = "unverified"
-        reasons.append("capture names a different reference binding id")
+    if perf_contract.get("binding_status") == "bound":
+        if capture_binding_digest != contract_binding_digest:
+            result["status"] = "unverified"
+            reasons.append(
+                "capture does not name the exact previously frozen reference binding digest"
+            )
+        if capture_binding_id != contract_binding_id:
+            result["status"] = "unverified"
+            reasons.append("capture does not name the exact frozen reference binding id")
+        if reference_binding != contract_binding_digest:
+            result["status"] = "unverified"
+            reasons.append(
+                "capture reference metadata does not carry the frozen binding digest"
+            )
     earliest_run = max(
         [value for value in (frozen_at, bound_at) if value is not None],
         default=None,
@@ -961,6 +986,49 @@ def validate_perf_capture(
         if tools.get(tool_field) != contract_tools.get(tool_field):
             result["status"] = "unverified"
             reasons.append(f"measurement tool '{tool_field}' does not match the frozen contract")
+    warmup = capture.get("warmup")
+    warmup_ended: float | None = None
+    warmup_pid: int | None = None
+    if not isinstance(warmup, Mapping):
+        result["status"] = "failed"
+        reasons.append("the single five-second warm-up record is missing")
+    else:
+        warmup_started = _parse_utc_timestamp(warmup.get("warmup_started_utc"))
+        warmup_ended = _parse_utc_timestamp(warmup.get("warmup_ended_utc"))
+        declared_warmup = _number(warmup.get("duration_seconds"))
+        candidate_pid = warmup.get("player_pid")
+        if warmup_started is None or warmup_ended is None or warmup_ended < warmup_started:
+            result["status"] = "failed"
+            reasons.append("warm-up start/end timing evidence is missing or malformed")
+        else:
+            derived_warmup = warmup_ended - warmup_started
+            if derived_warmup < contract.WARMUP_SECONDS or derived_warmup > (contract.WARMUP_SECONDS + 1.0):
+                result["status"] = "failed"
+                reasons.append(
+                    f"retained warm-up timing covers {derived_warmup:.3f} s, not "
+                    f"{contract.WARMUP_SECONDS} seconds"
+                )
+            if declared_warmup is None or abs(declared_warmup - derived_warmup) > 0.05:
+                result["status"] = "failed"
+                reasons.append("declared warm-up duration does not match retained timing evidence")
+            if earliest_run is not None and warmup_started < earliest_run:
+                result["status"] = "failed"
+                reasons.append(
+                    "warm-up began before the reference binding was frozen; "
+                    "retroactive measurements cannot certify nw07_perf_ref_v1"
+                )
+        if warmup.get("completed") is not True:
+            result["status"] = "failed"
+            reasons.append("the five-second warm-up did not complete")
+        if warmup.get("artifact_sha256") != artifact_identity.get("executable_sha256"):
+            result["status"] = "failed"
+            reasons.append("warm-up did not execute the final bound release artifact")
+        if isinstance(candidate_pid, int) and not isinstance(candidate_pid, bool) and candidate_pid > 0:
+            warmup_pid = candidate_pid
+        else:
+            result["status"] = "failed"
+            reasons.append("warm-up process identity is missing")
+
     runs = capture.get("runs")
     if not isinstance(runs, list) or len(runs) != contract.PERF_RUN_COUNT:
         result["status"] = "unverified"
@@ -975,6 +1043,7 @@ def validate_perf_capture(
         result["status"] = "unverified"
         reasons.append("run indices must be exactly 1, 2, 3")
     executed_failure = False
+    seen_player_pids: set[int] = set()
     for run in runs:
         if not isinstance(run, Mapping):
             executed_failure = True
@@ -998,68 +1067,59 @@ def validate_perf_capture(
         if not isinstance(timing, Mapping):
             timing = {}
         run_started = _parse_utc_timestamp(
-            run.get("run_started_utc")
-            or timing.get("run_started_utc")
-            or timing.get("warmup_ended_utc")
+            run.get("run_started_utc") or timing.get("run_started_utc")
         )
         run_ended = _parse_utc_timestamp(
             run.get("run_ended_utc") or timing.get("run_ended_utc")
         )
-        warmup_started = _parse_utc_timestamp(
-            run.get("warmup_started_utc")
-            or timing.get("warmup_started_utc")
-        )
-        if run_started is None or run_ended is None or warmup_started is None:
+        if run_started is None or run_ended is None:
             run_result["status"] = "failed"
-            run_result["reasons"].append(
-                "run start/end/warm-up timing evidence is missing or malformed"
-            )
+            run_result["reasons"].append("run start/end timing evidence is missing or malformed")
             derived_duration = None
-            derived_warmup = None
         else:
             derived_duration = run_ended - run_started
-            derived_warmup = run_started - warmup_started
-            if derived_duration < contract.PERF_RUN_SECONDS or derived_duration > (
-                contract.PERF_RUN_SECONDS + 1.0
-            ):
+            if derived_duration < contract.PERF_RUN_SECONDS or derived_duration > (contract.PERF_RUN_SECONDS + 1.0):
                 run_result["status"] = "failed"
                 run_result["reasons"].append(
                     f"retained run timing covers {derived_duration:.3f} s, not a "
                     f"{contract.PERF_RUN_SECONDS}-second run"
                 )
-            if derived_warmup < contract.WARMUP_SECONDS or derived_warmup > (
-                contract.WARMUP_SECONDS + 1.0
-            ):
-                run_result["status"] = "failed"
-                run_result["reasons"].append(
-                    f"retained warm-up timing covers {derived_warmup:.3f} s, not "
-                    f"{contract.WARMUP_SECONDS} seconds"
-                )
-            if earliest_run is not None and warmup_started < earliest_run:
+            if earliest_run is not None and run_started < earliest_run:
                 run_result["status"] = "failed"
                 run_result["reasons"].append(
                     "run began before the reference binding was frozen; "
                     "retroactive runs cannot certify nw07_perf_ref_v1"
                 )
+            if warmup_ended is None or run_started < warmup_ended:
+                run_result["status"] = "failed"
+                run_result["reasons"].append(
+                    "measured run did not begin after the single five-second warm-up"
+                )
             declared_duration = _number(run.get("duration_seconds"))
-            if (
-                declared_duration is None
-                or abs(declared_duration - derived_duration) > 0.05
-            ):
+            if declared_duration is None or abs(declared_duration - derived_duration) > 0.05:
                 run_result["status"] = "failed"
-                run_result["reasons"].append(
-                    "declared run duration does not match retained timing evidence"
-                )
-            declared_warmup = _number(run.get("warmup_seconds"))
-            if (
-                declared_warmup is None
-                or abs(declared_warmup - derived_warmup) > 0.05
-            ):
+                run_result["reasons"].append("declared run duration does not match retained timing evidence")
+
+        run_pid = run.get("player_pid")
+        timing_pid = timing.get("player_pid")
+        if not isinstance(run_pid, int) or isinstance(run_pid, bool) or run_pid <= 0 or timing_pid != run_pid:
+            run_result["status"] = "failed"
+            run_result["reasons"].append("measured run process identity is missing or inconsistent")
+        else:
+            if run_pid == warmup_pid or run_pid in seen_player_pids:
                 run_result["status"] = "failed"
-                run_result["reasons"].append(
-                    "declared warm-up does not match retained timing evidence"
-                )
-        for field, expected in (
+                run_result["reasons"].append("each measured run must use a distinct fresh process")
+            seen_player_pids.add(run_pid)
+        if run.get("collector_protocol") != contract.PERF_COLLECTION_PROTOCOL or timing.get("collector_protocol") != contract.PERF_COLLECTION_PROTOCOL:
+            run_result["status"] = "failed"
+            run_result["reasons"].append("measurement collector protocol is not frozen")
+        if run.get("artifact_sha256") != artifact_identity.get("executable_sha256") or timing.get("artifact_sha256") != artifact_identity.get("executable_sha256"):
+            run_result["status"] = "failed"
+            run_result["reasons"].append("measurement collector is not bound to the final executable")
+        if run.get("collector_exit_code") != 0 or timing.get("collector_exit_code") != 0:
+            run_result["status"] = "failed"
+            run_result["reasons"].append("measurement collector did not complete successfully")
+        for field, expected in (        for field, expected in (
             ("uncapped", True),
             ("fresh_process", True),
             ("application_pipeline_cache", False),
@@ -1075,8 +1135,8 @@ def validate_perf_capture(
                     f"retained run metadata '{field}' is not {expected}"
                 )
         run_result["timing"] = {
-            "warmup_seconds": derived_warmup,
             "duration_seconds": derived_duration,
+            "player_pid": run.get("player_pid"),
             "uncapped": timing.get("uncapped"),
             "fresh_process": timing.get("fresh_process"),
             "application_pipeline_cache": timing.get("application_pipeline_cache"),
@@ -1577,37 +1637,48 @@ def validate_correctness_capture(
         if reference.get("execution_id") == capture.get("capture_id"):
             result["status"] = "failed"
             result["reasons"].append("reference execution identifies the capture under test")
-        if reference.get("renderer") == capture.get("renderer"):
+        reference_renderer = reference.get("renderer")
+        if reference_renderer == capture.get("renderer"):
             result["status"] = "failed"
             result["reasons"].append(
                 "comparison does not cross diagnostic-preview and exported-player rendering"
             )
-        for field in ("execution_id", "package_sha256", "executable_sha256", "manifest_sha256", "capture_protocol"):
+        for field in (
+            "execution_id",
+            "renderer",
+            "artifact_key",
+            "package_sha256",
+            "executable_sha256",
+            "manifest_sha256",
+            "capture_protocol",
+        ):
             if _unavailable(reference.get(field)):
                 if result["status"] != "failed":
                     result["status"] = "pending_unverified"
                 result["reasons"].append(f"reference execution {field} is incomplete")
-        for field in ("package_sha256", "executable_sha256", "manifest_sha256"):
+        for field in ("artifact_key", "package_sha256", "manifest_sha256"):
             expected = capture.get(field)
-            if (
-                not _unavailable(reference.get(field))
-                and expected
-                and reference.get(field) != expected
-            ):
+            if not _unavailable(reference.get(field)) and expected and reference.get(field) != expected:
                 result["status"] = "failed"
                 result["reasons"].append(
-                    f"reference execution {field} does not match the capture artifact"
+                    f"reference execution {field} does not match the final common artifact"
                 )
-        if (
-            not _unavailable(reference.get("artifact_key"))
-            and capture.get("artifact_key")
-            and reference.get("artifact_key") != capture.get("artifact_key")
-        ):
+        reference_executable = reference.get("executable_sha256")
+        if isinstance(reference_executable, str) and not _SHA256_PATTERN.fullmatch(reference_executable):
             result["status"] = "failed"
-            result["reasons"].append(
-                "reference execution artifact_key does not match the capture artifact"
-            )
-    comparison = capture.get("comparison")
+            result["reasons"].append("reference execution executable digest is malformed")
+        elif reference_renderer == "exported_player":
+            if reference_executable != capture.get("executable_sha256"):
+                result["status"] = "failed"
+                result["reasons"].append("exported-player reference does not name the final release executable")
+        elif reference_renderer == "diagnostic_preview":
+            if reference_executable == capture.get("executable_sha256"):
+                result["status"] = "failed"
+                result["reasons"].append("diagnostic-preview reference must be a separate sibling executable")
+        elif not _unavailable(reference_renderer):
+            result["status"] = "failed"
+            result["reasons"].append("reference renderer is unsupported")
+    comparison = capture.get("comparison")    comparison = capture.get("comparison")
     if not isinstance(comparison, Mapping):
         result["status"] = "failed"
         result["reasons"].append("comparison evidence is absent")
@@ -1826,6 +1897,11 @@ def validate_correctness_capture(
                     result["status"] = "failed"
                     result["reasons"].append(
                         f"tick {tick}: comparison renderer does not match the capture"
+                    )
+                elif row_reference_renderer != reference.get("renderer"):
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"tick {tick}: reference renderer does not match reference execution provenance"
                     )
             if set(rows_by_tick) != required_ticks:
                 result["status"] = "failed"

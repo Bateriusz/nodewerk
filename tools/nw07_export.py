@@ -278,6 +278,15 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
         raise Nw07ExportError(
             "canonical production allows a reused specialized-player build tree"
         )
+    for key, expected in (
+        ("toolchain_file", "cmake/toolchains/msvc-x64.cmake"),
+        ("crt_elimination_experiment", "OFF"),
+        ("capture_controls", "OFF"),
+    ):
+        if build_configuration.get(key) != expected:
+            raise Nw07ExportError(
+                f"canonical production changed build configuration '{key}'"
+            )
     fixed = section("fixed_tick_evaluation")
     if list(fixed.get("ticks") or []) != list(contract.REQUIRED_FIXED_TICKS):
         raise Nw07ExportError("canonical production changed the fixed-tick coverage")
@@ -755,6 +764,65 @@ def _toolchain_provenance(
     }
 
 
+def _validate_release_template_build_configuration(
+    template: Path,
+    config: Mapping[str, Any],
+    *,
+    repo_root: Path,
+) -> dict[str, Any]:
+    frozen = dict(config.get("build_configuration") or {})
+    try:
+        observed = nw05_export._template_build_configuration(template)
+    except nw05_export.ExportError as exc:
+        raise Nw07ExportError(str(exc)) from exc
+    expected = {
+        "CMAKE_GENERATOR": frozen.get("cmake_generator"),
+        "CMAKE_BUILD_TYPE": frozen.get("build_type"),
+        "NW_BUILD_PROFILE": frozen.get("build_profile"),
+        "NW_ENFORCE_PINNED_TOOLCHAIN": frozen.get("pinned_toolchain_enforcement"),
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": frozen.get("crt_elimination_experiment"),
+        "NW07_CAPTURE_CONTROLS": frozen.get("capture_controls"),
+    }
+    mismatches = {
+        key: {"expected": value, "observed": observed.get(key)}
+        for key, value in expected.items()
+        if observed.get(key) != value
+    }
+    expected_toolchain = (repo_root / str(frozen.get("toolchain_file", ""))).resolve()
+    observed_toolchain_text = str(observed.get("CMAKE_TOOLCHAIN_FILE", ""))
+    observed_toolchain = Path(observed_toolchain_text).resolve() if observed_toolchain_text else None
+    if observed_toolchain != expected_toolchain:
+        mismatches["CMAKE_TOOLCHAIN_FILE"] = {
+            "expected": str(expected_toolchain),
+            "observed": observed_toolchain_text,
+        }
+    if mismatches:
+        raise Nw07ExportError(
+            "release player template does not match the frozen NW-07 build configuration",
+            details={"mismatches": mismatches},
+        )
+    return {
+        "cmake_generator": observed["CMAKE_GENERATOR"],
+        "build_type": observed["CMAKE_BUILD_TYPE"],
+        "build_profile": observed["NW_BUILD_PROFILE"],
+        "pinned_toolchain_enforcement": observed["NW_ENFORCE_PINNED_TOOLCHAIN"],
+        "toolchain_file": str(expected_toolchain.relative_to(repo_root)).replace("\\", "/"),
+        "crt_elimination_experiment": observed["NW_ENABLE_CRT_ELIMINATION_EXPERIMENT"],
+        "capture_controls": observed["NW07_CAPTURE_CONTROLS"],
+    }
+
+
+def _require_empty_build_root(path: Path) -> None:
+    if path.exists():
+        if not path.is_dir():
+            raise Nw07ExportError(f"specialized build root is not a directory: {path}")
+        if any(path.iterdir()):
+            raise Nw07ExportError(
+                f"specialized build root is not empty: {path}; clean native builds "
+                "must not inherit stale objects or a CMake cache"
+            )
+
+
 def export_production(
     output_directory: Path | str,
     *,
@@ -793,6 +861,13 @@ def export_production(
     if not template.is_file():
         raise Nw07ExportError(f"player template is unavailable: {template}")
     template_bytes = template.read_bytes()
+    actual_build_configuration: dict[str, Any] | None = None
+    if not allow_test_payloads:
+        actual_build_configuration = _validate_release_template_build_configuration(
+            template, record, repo_root=root
+        )
+    if specialized_build_root is not None:
+        _require_empty_build_root(Path(specialized_build_root))
     output = Path(output_directory)
     output.parent.mkdir(parents=True, exist_ok=True)
     staging_root = Path(
@@ -957,6 +1032,7 @@ def export_production(
                 "specialized_build_root": settings.specialized_build_root,
                 "clean_build_directory": bool(settings.specialized_build_root),
                 "pinned_toolchain_enforced": True,
+                "actual": actual_build_configuration,
             },
             "toolchain": _toolchain_provenance(record, root),
         },
@@ -1039,6 +1115,8 @@ def export_reproducibility(
 ) -> dict[str, Any]:
     """Export twice from clean directories and compare every identity byte."""
     root = Path(work_root)
+    if root.exists():
+        shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
     first_dir = root / "clean-a"
     second_dir = root / "clean-b"
