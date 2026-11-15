@@ -167,6 +167,7 @@ struct TimingSnapshot {
     double cpu_submit_ms = 0.0;
     double gpu_ms = 0.0;
     std::string instructions_json;
+    std::string pass_timings_json;
 };
 
 TimingSnapshot CaptureTimings(const nw::player::PackagePlayer& player) {
@@ -189,6 +190,22 @@ TimingSnapshot CaptureTimings(const nw::player::PackagePlayer& player) {
         AppendJsonEscaped(&timing.instructions_json, order[index]);
     }
     timing.instructions_json.append("]");
+    timing.pass_timings_json = "[";
+    const auto& pass_timings = player.authoring_pass_timings();
+    for (std::size_t index = 0u; index < pass_timings.size(); ++index) {
+        if (index != 0u) {
+            timing.pass_timings_json.append(",");
+        }
+        timing.pass_timings_json.append("{\"name\":");
+        AppendJsonEscaped(&timing.pass_timings_json, pass_timings[index].name);
+        char milliseconds[64]{};
+        std::snprintf(milliseconds, sizeof(milliseconds), "%.6f",
+                      pass_timings[index].milliseconds);
+        timing.pass_timings_json.append(",\"milliseconds\":");
+        timing.pass_timings_json.append(milliseconds);
+        timing.pass_timings_json.append("}");
+    }
+    timing.pass_timings_json.append("]");
     return timing;
 }
 
@@ -231,7 +248,7 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
         "\"windows_build_number\":%u,"
         "\"runtime_cpu_submit_ms\":%.6f,\"runtime_cpu_available\":%s,"
         "\"runtime_gpu_ms\":%.6f,\"runtime_gpu_available\":%s,"
-        "\"frame_instructions\":%s,"
+        "\"frame_instructions\":%s,\"runtime_pass_timings\":%s,"
         "\"authoring_reused_resources\":%u,"
         "\"authoring_recreated_resources\":%u,"
         "\"authoring_reused_root_signatures\":%u,"
@@ -269,6 +286,7 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
         timing.gpu_ms,
         timing.gpu_available ? "true" : "false",
         timing.instructions_json.c_str(),
+        timing.pass_timings_json.c_str(),
         reload.reused_resources,
         reload.recreated_resources,
         reload.reused_root_signatures,
