@@ -1013,6 +1013,33 @@ def test_required_quality_and_scaling_measurements_must_be_measured() -> None:
     assert result["status"] == "failed"
 
 
+def test_partial_measurement_environment_is_pending_not_failed() -> None:
+    capture = _correctness("ada")
+    capture["measurements"]["image_quality_metrics"]["environment"] = {
+        "driver_version": "566.36"
+    }
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "pending_unverified"
+
+    capture = _correctness("ada")
+    capture["measurements"]["image_quality_metrics"]["environment"] = {
+        "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+        "driver_version": "999.99",
+        "os_version": "10.0.26100.2314",
+        "toolchain_identity": "msvc-ltcg",
+    }
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "failed"
+
+
 def test_correctness_requires_explicit_desktop_form_factor() -> None:
     capture = _correctness("ada")
     capture["device_form_factor"] = ""

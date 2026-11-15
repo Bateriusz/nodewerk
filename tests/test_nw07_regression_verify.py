@@ -260,6 +260,18 @@ def test_nightly_metrics_merge_produces_current_series(tmp_path: Path) -> None:
     )
 
 
+def test_nightly_regression_reports_and_capture_ids_are_aligned() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "nw07-regression.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "nw07-regression-$name.json" in workflow
+    assert "nw07-regression-*.json" in workflow
+    assert (
+        "nightly-correctness-${{ matrix.tier }}-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+        in workflow
+    )
+
+
 def test_capture_harness_reads_and_hashes_raw_samples(tmp_path: Path) -> None:
     sample_path = tmp_path / "run1-gpu.txt"
     sample_path.write_text("1\n2\n3\n4\n", encoding="utf-8")

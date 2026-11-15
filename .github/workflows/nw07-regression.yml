@@ -198,7 +198,7 @@ jobs:
           --artifact-root "$env:RUNNER_TEMP\nw07-artifact-root-${{ matrix.tier }}"
           --reference-captures-dir "$env:RUNNER_TEMP\nw07-nightly-reference-${{ matrix.tier }}"
           --reference-execution-output "$env:RUNNER_TEMP\nw07-reference-${{ matrix.tier }}.json"
-          --capture-id "nightly-correctness-${{ matrix.tier }}-$env:GITHUB_RUN_ID"
+          --capture-id "nightly-correctness-${{ matrix.tier }}-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           --tier "${{ matrix.tier }}"
           --execution-kind "$env:NW07_EXECUTION_KIND"
           --passthrough-documentation "$env:NW07_PASSTHROUGH_DOCUMENTATION"
@@ -331,7 +331,7 @@ jobs:
             python tools/nw07_regression.py `
               --baseline benchmarks/nw07/metric-baselines.v1.json `
               --current $current `
-              --summary-json "$env:RUNNER_TEMP\nw07-regression-$name.json"
+              --summary-json "$env:RUNNER_TEMP\nnw07-regression-$name.json"
             $code = $LASTEXITCODE
             if ($code -eq 1) { exit 1 }
             if ($code -eq 2) {

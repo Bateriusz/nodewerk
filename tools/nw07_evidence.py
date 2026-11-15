@@ -1586,12 +1586,25 @@ def _validate_measurements(capture: Mapping[str, Any]) -> tuple[str, dict[str, A
             "os_version": capture.get("os_version"),
             "toolchain_identity": capture.get("toolchain_identity"),
         }
+        missing_binding: list[str] = []
         for field, expected in expected_environment.items():
-            if _unavailable(expected) or environment.get(field) != expected:
+            if _unavailable(expected):
+                missing_binding.append(field)
+                continue
+            observed = environment.get(field)
+            if _unavailable(observed):
+                missing_binding.append(field)
+                continue
+            if observed != expected:
                 return "failed", (
                     f"{name} environment does not match correctness capture field "
                     f"{field!r}"
                 )
+        if missing_binding:
+            return "pending", (
+                f"{name} does not identify measurement environment fields: "
+                + ", ".join(sorted(missing_binding))
+            )
         return "passed", ""
 
     quality = measurements.get("image_quality_metrics")

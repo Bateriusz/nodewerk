@@ -3970,6 +3970,15 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     // capability_requirements.cpp. Avoid rebuilding dynamic CAP string lists
     // in the 256 KiB release: doing so links sorting/fingerprint machinery into
     // the player without strengthening the exact-SHA runtime contract.
+    package.capability.profile_id =
+        std::string(kCommonProfileId.data(), kCommonProfileId.size());
+    package.capability.requirements_digest = std::string(
+        kCommonRequirementsDigest.data(), kCommonRequirementsDigest.size());
+    package.capability.required_dxgi_formats = {
+        "DXGI_FORMAT_R8G8B8A8_UNORM",
+        "DXGI_FORMAT_R32G32B32A32_FLOAT",
+        "DXGI_FORMAT_R32_UINT",
+        "DXGI_FORMAT_D32_FLOAT"};
     package.capability.max_cbv_srv_uav_descriptors_per_frame = 17u;
     package.capability.max_sampler_descriptors_per_frame = 0u;
     package.capability.max_root_signature_dword_cost = 14u;
