@@ -11,6 +11,10 @@
 #include <sstream>
 #include <tuple>
 
+#ifndef NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#define NW05_FROZEN_EMBEDDED_SPECIALIZATION 0
+#endif
+
 namespace nw::package {
 
 namespace {
@@ -3917,7 +3921,18 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         }
     }
     package.flags = flags;
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    // The NW-07 generated release main compares the embedded package against
+    // the build-time SHA-256 before calling PackagePlayer. DecodePackage still
+    // performs all bounded header/section/record parsing above. The exporter
+    // already ran the full semantic validator over these exact immutable bytes,
+    // so linking that entire validator into the 256 KiB release would only
+    // repeat an offline proof without changing runtime acceptance.
+    (void)allow_dev;
+    return diagnostics.empty();
+#else
     return ValidatePackage(package, diagnostics, allow_dev);
+#endif
 }
 
 std::vector<std::string> CheckReleaseLeakage(

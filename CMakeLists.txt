@@ -13,6 +13,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DependencyCheck.cmake")
 set(NW05_GENERATED_PLAYER_SOURCE "" CACHE FILEPATH
     "Generated NW-05 player main to compile into the specialized executable")
 option(NW05_COMPILE_WAVE_OPS_QUERY "Compile D3D12_OPTIONS1 wave-ops query support" ON)
+option(NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    "Specialize the generated player for a build-time-hashed embedded .nwp payload" OFF)
 option(NW05_COMPILE_INT64_SHADER_OPS_QUERY "Compile D3D12_OPTIONS1 int64 query support" ON)
 option(NW05_COMPILE_FP16_SHADER_OPS_QUERY "Compile D3D12_OPTIONS4 fp16 query support" ON)
 option(NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD "Compile procedural texture upload implementation" ON)
@@ -221,6 +223,11 @@ target_include_directories(nw_package_player PUBLIC
 )
 target_compile_features(nw_package_player PUBLIC cxx_std_20)
 nw_apply_player_profile(nw_package_player)
+if(NW05_FROZEN_EMBEDDED_SPECIALIZATION)
+    target_compile_definitions(nw_package_player PRIVATE
+        NW05_FROZEN_EMBEDDED_SPECIALIZATION=1
+    )
+endif()
 if(MSVC)
     target_compile_options(nw_package_player PRIVATE /W0)
 else()
@@ -301,6 +308,7 @@ if(NW05_GENERATED_PLAYER_SOURCE)
     nw_apply_player_profile(nw05_player_bootstrap)
     target_compile_definitions(nw05_player_bootstrap PRIVATE
         NW05_SPECIALIZED_VALIDATION=1
+        NW05_FROZEN_EMBEDDED_SPECIALIZATION=$<BOOL:${NW05_FROZEN_EMBEDDED_SPECIALIZATION}>
         NW05_COMPILE_WAVE_OPS_QUERY=$<BOOL:${NW05_COMPILE_WAVE_OPS_QUERY}>
         NW05_COMPILE_INT64_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_INT64_SHADER_OPS_QUERY}>
         NW05_COMPILE_FP16_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_FP16_SHADER_OPS_QUERY}>
@@ -326,6 +334,9 @@ if(NW05_GENERATED_PLAYER_SOURCE)
     endif()
 
     add_executable(nw05_generated_player "${NW05_GENERATED_PLAYER_SOURCE}")
+    target_compile_definitions(nw05_generated_player PRIVATE
+        NW05_FROZEN_EMBEDDED_SPECIALIZATION=$<BOOL:${NW05_FROZEN_EMBEDDED_SPECIALIZATION}>
+    )
     target_link_libraries(nw05_generated_player PRIVATE
         nw05_player_bootstrap
         nw_package_player

@@ -17,6 +17,9 @@
 #include <utility>
 #include <vector>
 
+#ifndef NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#define NW05_FROZEN_EMBEDDED_SPECIALIZATION 0
+#endif
 #ifndef NW05_COMPILE_WAVE_OPS_QUERY
 #define NW05_COMPILE_WAVE_OPS_QUERY 1
 #endif
@@ -5455,6 +5458,7 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
                     std::to_string(package_.flags), "package_contract",
                     "the player executes release .nwp v1 packages only");
     }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     std::vector<package::Diagnostic> package_diagnostics;
     if (!package::ValidatePackage(package_, package_diagnostics,
                                   /*allow_dev=*/false)) {
@@ -5503,6 +5507,7 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     if (!exact.ok()) {
         return FailEvaluation(exact, "package_contract");
     }
+#endif
 
     ExitCode code = OpenDeviceAndWindow();
     if (code != ExitCode::Success) {

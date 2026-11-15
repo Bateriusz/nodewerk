@@ -746,6 +746,8 @@ def test_optional_profile_is_a_separate_budgeted_artifact(tmp_path: Path) -> Non
     assert "config.query_optional_wave_ops = false;" in common_source
     assert "config.query_optional_wave_ops = true;" in optional_source
     assert "NW05_LINK_MANIFEST_VERIFIED=1" in common_source
+    assert "NW05_FROZEN_PACKAGE_MISMATCH" in common_source
+    assert hashlib.sha256(common.package_bytes).hexdigest() in common_source
     assert result.report["budgets"]["optional_independent"] is True
     assert result.report["budgets"]["common_baseline_raised_by_optional"] is False
     for directory in (tmp_path / "out",):

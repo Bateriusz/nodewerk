@@ -134,6 +134,11 @@ class ExportSettings:
     specialized_build_root: str = ""
     # DXGI Present sync interval frozen by the production configuration.
     present_sync_interval: int = 1
+    # NW-07 freezes the exact embedded package hash into the generated main.
+    # This permits the native release build to omit the second, redundant
+    # semantic-validation pass after the bounded .nwp decoder accepted those
+    # exact bytes. Generic NW-05 exports keep the full runtime validator.
+    frozen_embedded_specialization: bool = False
     allow_optional_profiles: bool = False
     include_optional_artifacts: bool = True
     fusion_enabled: bool = True
@@ -154,6 +159,7 @@ class ExportSettings:
             "player_template": self.player_template,
             "specialized_build_root": self.specialized_build_root,
             "present_sync_interval": self.present_sync_interval,
+            "frozen_embedded_specialization": self.frozen_embedded_specialization,
             "allow_optional_profiles": self.allow_optional_profiles,
             "include_optional_artifacts": self.include_optional_artifacts,
             "fusion_enabled": self.fusion_enabled,
@@ -844,6 +850,12 @@ def generate_player_source(
         "        std::fprintf(stderr, \"embedded package invalid\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        f"    if (nw::package::Sha256Hex(embedded.bytes, embedded.size) != \"{package_sha256}\") {{\n"
+        "        std::fprintf(stderr, \"NW05_FROZEN_PACKAGE_MISMATCH\\n\");\n"
+        "        return 70;\n"
+        "    }\n"
+        "#endif\n"
         "    std::uint64_t manifest_hash = 1469598103934665603ULL;\n"
         "    for (std::size_t i = 0; i < embedded.manifest_size; ++i) {\n"
         "        manifest_hash ^= embedded.manifest[i];\n"
@@ -1197,6 +1209,7 @@ def _build_specialized_player(
     profile_id: str,
     *,
     build_root_override: Path | None = None,
+    frozen_embedded_specialization: bool = False,
 ) -> bytes:
     if os.name != "nt":
         raise ExportError(
@@ -1241,6 +1254,8 @@ def _build_specialized_player(
             "-B",
             str(build_root),
             f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
+            "-DNW05_FROZEN_EMBEDDED_SPECIALIZATION:BOOL="
+            + ("ON" if frozen_embedded_specialization else "OFF"),
         ]
     )
     for name in (
@@ -2996,6 +3011,7 @@ def export_graph(
                         if settings.specialized_build_root
                         else None
                     ),
+                    frozen_embedded_specialization=settings.frozen_embedded_specialization,
                 )
                 actual_dependencies = _pe_runtime_dependencies(preliminary_player)
                 manifest["retained"]["dependencies"] = actual_dependencies
@@ -3022,6 +3038,7 @@ def export_graph(
                         if settings.specialized_build_root
                         else None
                     ),
+                    frozen_embedded_specialization=settings.frozen_embedded_specialization,
                 )
                 final_dependencies = _pe_runtime_dependencies(specialized_player_bytes)
                 if final_dependencies != actual_dependencies:

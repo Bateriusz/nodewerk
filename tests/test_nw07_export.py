@@ -349,3 +349,13 @@ def test_specialized_build_root_must_be_empty(tmp_path: Path) -> None:
             allow_test_payloads=True,
             specialized_build_root=build_root,
         )
+
+
+
+def test_nw07_enables_exact_frozen_package_specialization() -> None:
+    config = export.load_canonical_config()
+    assert config["build_configuration"]["build_profile"] == "release"
+    source = Path(export.nw05_export.__file__).read_text(encoding="utf-8")
+    assert "frozen_embedded_specialization: bool = False" in source
+    nw07_source = Path(export.__file__).read_text(encoding="utf-8")
+    assert "frozen_embedded_specialization=True" in nw07_source

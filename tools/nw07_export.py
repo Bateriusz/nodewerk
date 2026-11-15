@@ -887,6 +887,7 @@ def export_production(
             else staging_root / "specialized-native-build"
         ),
         present_sync_interval=0,
+        frozen_embedded_specialization=True,
         include_optional_artifacts=False,
         allow_optional_profiles=False,
     )
