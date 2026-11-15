@@ -14,7 +14,6 @@ cbuffer Nw06InstanceParams : register(b0, space0)
 RWByteAddressBuffer NwInstances : register(u0, space0);
 RWByteAddressBuffer NwArgs : register(u1, space0);
 
-static const float PI = 3.14159265358979323846;
 static const float TAU = 6.28318530717958647692;
 static const float TUNNEL_LENGTH = 96.0;
 
@@ -58,9 +57,10 @@ void GenerateInstancesCS(uint3 dispatch_id : SV_DispatchThreadID)
         return;
     }
 
-    // Roughly one quarter of the instances form repeating structural ribs.
-    // The remainder are asteroid-like obstacles/debris inside the tunnel.
-    uint ring_count = min(384u, max(64u, InstanceCount / 4u));
+    // Two thirds of the table is reserved for the visible tunnel structure.
+    // With the canonical demo count (1536), this gives 1024 evenly spaced
+    // rings and 512 obstacle/debris instances.
+    uint ring_count = min(1024u, max(128u, (InstanceCount * 2u) / 3u));
     uint seed = InstanceSeed + index;
     uint offset = index * 80u;
 
@@ -84,11 +84,23 @@ void GenerateInstancesCS(uint3 dispatch_id : SV_DispatchThreadID)
         float angle_u = HashUnit(seed ^ 0x9e3779b9u);
         float depth_u = HashUnit(seed ^ 0x85ebca6bu);
         float scale_u = HashUnit(seed ^ 0xc2b2ae35u);
+        float lane_u = HashUnit(seed ^ 0x27d4eb2fu);
 
-        // Bias obstacles away from the wall, but allow some to cross close to
-        // the centreline so the flight path has real hazards.
-        float radius = PlacementRadius * 0.72 * sqrt(radial_u);
         float angle = angle_u * TAU;
+
+        // Keep the centre of the tunnel visibly open.  Most hazards live in a
+        // broad band near the walls; only a small deterministic subset enters
+        // the central flight corridor.
+        float radius;
+        if (lane_u < 0.08)
+        {
+            radius = PlacementRadius * lerp(0.18, 0.42, sqrt(radial_u));
+        }
+        else
+        {
+            radius = PlacementRadius * lerp(0.56, 0.88, sqrt(radial_u));
+        }
+
         float tx = cos(angle) * radius;
         float ty = sin(angle) * radius;
         float tz = depth_u * TUNNEL_LENGTH;
