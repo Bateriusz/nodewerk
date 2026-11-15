@@ -79,20 +79,17 @@ float4 ScenePS(PSInput input) : SV_Target
 
     if (input.instance_flags == 1u)
     {
-        // Segmented industrial ribs: dark red structure with hot orange panel
-        // accents.  Values above 1.0 intentionally feed the existing bloom.
-        float segment_phase =
-            input.uv.x * 18.0
-            + input.uv.y * 2.0
-            + HashUnit(input.instance_seed) * 0.35;
-        float panel = smoothstep(0.72, 0.98, 0.5 + 0.5 * sin(segment_phase * TAU));
-        float edge = pow(abs(sin(input.uv.y * TAU)), 5.0);
-
-        float3 dark_red = float3(0.16, 0.008, 0.004);
-        float3 hot_orange = float3(3.2, 0.34, 0.025);
-        float3 lit = dark_red * (0.28 + 0.72 * ndotl) * light_color;
-        float3 emissive = hot_orange * (0.22 + 0.78 * panel) * (0.55 + 0.45 * edge);
-        return float4(lit + emissive + specular_term * 0.15, 1.0);
+        // Every tunnel ring uses the same stable shading. Do not introduce
+        // per-instance phase/noise here: at flight speed that turns into
+        // temporal moire and makes the tunnel look like changing patterns.
+        float cross_section = 0.82 + 0.18 * cos(input.uv.y * TAU);
+        float3 ring_base = float3(0.62, 0.035, 0.004);
+        float3 ring_hot = float3(1.55, 0.19, 0.018);
+        float lighting = 0.38 + 0.62 * ndotl;
+        float3 color =
+            lerp(ring_base, ring_hot, cross_section) * lighting * light_color
+            + specular_term * float3(0.45, 0.10, 0.025);
+        return float4(color, 1.0);
     }
 
     // Asteroid/debris: warm rock, strong faceting and a bright rim so hazards
