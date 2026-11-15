@@ -6,12 +6,14 @@
 # authoring-only PackagePlayer overlay against those generated headers.
 #
 # Example:
-#   cmake -S . -B build/nw08-runtime -DNW_BUILD_PROFILE=dev
-#   cmake --build build/nw08-runtime --target nw_procedural_image_player
+#   cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+#   cmake --build --preset nw07-release --target nw_procedural_image_player
 #   cmake -S src/studio -B build/nw08-studio \
+#     -DCMAKE_BUILD_TYPE=Debug \
+#     -DNW_BUILD_PROFILE=dev \
+#     -DCMAKE_TOOLCHAIN_FILE=<repo-root>/cmake/toolchains/msvc-x64.cmake \
 #     -DNW_STUDIO_ROOT=<repo-root> \
-#     -DNW_STUDIO_RUNTIME_BUILD_DIR=<repo-root>/build/nw08-runtime \
-#     -DNW_BUILD_PROFILE=dev
+#     -DNW_STUDIO_RUNTIME_BUILD_DIR=<repo-root>/build/nw07-release
 #   cmake --build build/nw08-studio --target nodewerk-studio-preview
 #
 # No target from this directory is part of the release dependency closure.

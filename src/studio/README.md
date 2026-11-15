@@ -42,13 +42,15 @@ two-stage: first build the frozen runtime/template normally, then compile the
 standalone studio runtime against the generated shader headers from that build:
 
 ```bash
-cmake -S . -B build/nw08-runtime -DNW_BUILD_PROFILE=dev
-cmake --build build/nw08-runtime --target nw_procedural_image_player
+cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+cmake --build --preset nw07-release --target nw_procedural_image_player
 
 cmake -S src/studio -B build/nw08-studio \
+  -DCMAKE_BUILD_TYPE=Debug \
   -DNW_BUILD_PROFILE=dev \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchains/msvc-x64.cmake" \
   -DNW_STUDIO_ROOT="$PWD" \
-  -DNW_STUDIO_RUNTIME_BUILD_DIR="$PWD/build/nw08-runtime"
+  -DNW_STUDIO_RUNTIME_BUILD_DIR="$PWD/build/nw07-release"
 cmake --build build/nw08-studio --target nodewerk-studio-preview
 ```
 
