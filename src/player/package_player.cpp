@@ -2290,8 +2290,8 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
         return false;
     }
     return true;
-}
 #endif
+}
 
 ExitCode PackagePlayer::OpenDeviceAndWindow() {
     platform_ = std::unique_ptr<PlatformState>(new PlatformState());
