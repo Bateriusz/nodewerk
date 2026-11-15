@@ -241,6 +241,133 @@ def evaluate_series(
     return {**result, "series_summary": series}
 
 
+def _perf_p99_from_evidence(
+    evidence_record: Mapping[str, Any],
+) -> dict[str, float]:
+    captures = evidence_record.get("captures")
+    if not isinstance(captures, list):
+        return {}
+    for capture in captures:
+        if not isinstance(capture, Mapping):
+            continue
+        if capture.get("evidence_role") != contract.PERFORMANCE_CERTIFICATION_ROLE:
+            continue
+        validation = capture.get("validation")
+        runs = validation.get("runs") if isinstance(validation, Mapping) else None
+        if not isinstance(runs, list) or not runs:
+            continue
+        gpu_values: list[float] = []
+        cpu_values: list[float] = []
+        for run in runs:
+            if not isinstance(run, Mapping):
+                continue
+            gpu = run.get("gpu_frame_time_ms")
+            cpu = run.get("cpu_submit_ms")
+            gpu_p99 = _number(gpu.get("p99_ms")) if isinstance(gpu, Mapping) else None
+            cpu_p99 = _number(cpu.get("p99_ms")) if isinstance(cpu, Mapping) else None
+            if gpu_p99 is not None:
+                gpu_values.append(gpu_p99)
+            if cpu_p99 is not None:
+                cpu_values.append(cpu_p99)
+        if gpu_values and cpu_values:
+            # The strict gate is per-run; the regression series uses the worst
+            # observed p99 so one failing run cannot be hidden by averaging.
+            return {
+                "p99_gpu_frame_time_ms": max(gpu_values),
+                "p99_cpu_submit_ms": max(cpu_values),
+            }
+    return {}
+
+
+def build_current_metrics(
+    metrics: Mapping[str, Any],
+    *,
+    tier: str,
+    artifact_bytes: int,
+    evidence_record: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = metrics.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    measurements = metrics.get("measurements")
+    measurements = measurements if isinstance(measurements, Mapping) else {}
+    cache_state = metadata.get("cache_state")
+    cache_kind = (
+        cache_state.get("kind")
+        if isinstance(cache_state, Mapping)
+        else cache_state
+    )
+    current_metrics: dict[str, Any] = {
+        "complete_distribution_bytes": artifact_bytes,
+    }
+    for name in (
+        "process_start_to_first_present_ms",
+        "peak_engine_committed_gpu_bytes",
+        "process_ram_bytes",
+        "driver_memory_bytes",
+        "startup_pipeline_ms",
+        "generation_ms",
+        "image_quality_metrics",
+        "scaling_1440p",
+    ):
+        if name in measurements:
+            current_metrics[name] = measurements[name]
+    if tier == "ada" and isinstance(evidence_record, Mapping):
+        current_metrics.update(_perf_p99_from_evidence(evidence_record))
+    return {
+        "format": "nw07-current-metrics",
+        "version": 1,
+        "task": contract.TASK,
+        "tier": tier,
+        "environment": {
+            "board": metadata.get("adapter_description", ""),
+            "host": metadata.get("host", metadata.get("cpu_model", "")),
+            "driver_version": metadata.get("driver_version", ""),
+            "os_build": metadata.get("os_version", ""),
+            "toolchain_identity": metadata.get("toolchain_identity", ""),
+            "resolution": "1920x1080",
+            "quality_profile": "nw07.quality.v1",
+            "cache_state": cache_kind or "",
+        },
+        "metrics": current_metrics,
+    }
+
+
+def merge_nightly_metrics(
+    metrics_paths: Sequence[Path],
+    *,
+    evidence_path: Path,
+    artifact_path: Path,
+    output_dir: Path,
+) -> list[Path]:
+    evidence_record = json.loads(evidence_path.read_text(encoding="utf-8"))
+    if not isinstance(evidence_record, Mapping):
+        raise ValueError("merged evidence is not a JSON object")
+    artifact_bytes = artifact_path.stat().st_size
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for path in metrics_paths:
+        metrics = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(metrics, Mapping):
+            raise ValueError(f"metrics file is not an object: {path}")
+        stem = path.stem
+        tier = stem.removeprefix("metrics-")
+        if tier not in {"ada", "blackwell"}:
+            raise ValueError(f"metrics file name does not identify a tier: {path}")
+        current = build_current_metrics(
+            metrics,
+            tier=tier,
+            artifact_bytes=artifact_bytes,
+            evidence_record=evidence_record,
+        )
+        destination = output_dir / f"metrics-current-{tier}.json"
+        destination.write_text(
+            json.dumps(current, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        written.append(destination)
+    return written
+
+
 def requires_nightly_gpu_check(config: Mapping[str, Any]) -> bool:
     regression = config.get("regression") or {}
     return "gpu_frame_time" in (regression.get("nightly_checks") or [])
@@ -248,8 +375,12 @@ def requires_nightly_gpu_check(config: Mapping[str, Any]) -> bool:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", required=True)
-    parser.add_argument("--current", required=True)
+    parser.add_argument("--baseline")
+    parser.add_argument("--current")
+    parser.add_argument("--metrics", action="append", default=[])
+    parser.add_argument("--evidence")
+    parser.add_argument("--artifact")
+    parser.add_argument("--output-dir")
     parser.add_argument(
         "--matched-environment",
         choices=("auto", "true", "false"),
@@ -257,6 +388,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--summary-json")
     args = parser.parse_args(argv)
+    if args.metrics:
+        if not args.evidence or not args.artifact or not args.output_dir:
+            parser.error(
+                "--metrics requires --evidence, --artifact, and --output-dir"
+            )
+        written = merge_nightly_metrics(
+            [Path(value) for value in args.metrics],
+            evidence_path=Path(args.evidence),
+            artifact_path=Path(args.artifact),
+            output_dir=Path(args.output_dir),
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "merged",
+                    "current_metrics": [str(path) for path in written],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    if not args.baseline or not args.current:
+        parser.error("--baseline and --current are required unless --metrics is used")
     baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
     current = json.loads(Path(args.current).read_text(encoding="utf-8"))
     matched = (

@@ -181,6 +181,7 @@ def clean_host_provenance(
     physical_evidence = (
         execution_kind == "physical"
         and virtualization.get("available") is True
+        and virtualization.get("hypervisor_present") is False
         and bool(virtualization.get("manufacturer"))
         and bool(virtualization.get("model"))
         and not virtualization_indicators
@@ -608,6 +609,17 @@ def validate_report(
             elif not probe.get("manufacturer") or not probe.get("model"):
                 host_pending = True
                 reasons.append("physical clean-system host manufacturer/model is missing")
+            hypervisor = probe.get("hypervisor_present")
+            if hypervisor is True:
+                host_failed = True
+                reasons.append(
+                    "physical clean-system claim reports a hypervisor-present host"
+                )
+            elif hypervisor is not False:
+                host_pending = True
+                reasons.append(
+                    "physical clean-system host hypervisor status was not probed"
+                )
             if not isinstance(indicators, list):
                 host_pending = True
                 reasons.append("physical clean-system virtualization indicators are missing")

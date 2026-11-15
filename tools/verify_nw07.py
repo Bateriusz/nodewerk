@@ -20,7 +20,6 @@ import copy
 import hashlib
 import json
 import platform
-import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -919,15 +918,18 @@ def _native_export_checks(args: argparse.Namespace) -> list[CheckResult]:
         # Retain the real distribution and all reproducibility evidence.  The
         # CI workflow uploads this directory, so a successful native build must
         # never disappear with a temporary directory.
-        default_root = (
-            REPO_ROOT
-            / "build"
-            / "nw07-verification"
-            / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        verification_parent = REPO_ROOT / "build" / "nw07-verification"
+        verification_parent.mkdir(parents=True, exist_ok=True)
+        default_root = Path(
+            tempfile.mkdtemp(
+                prefix=datetime.now(timezone.utc).strftime(
+                    "nw07-verification-%Y%m%dT%H%M%SZ-"
+                ),
+                dir=verification_parent,
+            )
         )
         root = Path(args.native_output) if args.native_output else default_root
-        if root.exists():
-            shutil.rmtree(root)
+        export.require_empty_output_root(root, "native verification output root")
         root.mkdir(parents=True, exist_ok=True)
         artifact_dir = root / "artifact"
         report_path = root / "report.json"

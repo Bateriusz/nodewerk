@@ -105,6 +105,19 @@ def _correctness(tier: str) -> dict:
             "executable_sha256": "4" * 64,
             "manifest_sha256": identity["manifest_sha256"],
             "capture_protocol": contract.CORRECTNESS_CAPTURE_PROTOCOL,
+            "fixed_tick_executions": [
+                {
+                    "renderer": "diagnostic_preview",
+                    "tick": tick,
+                    "executable_sha256": "4" * 64,
+                    "artifact_sha256": hashlib.sha256(
+                        f"{tier}-{tick}-ref".encode()
+                    ).hexdigest(),
+                    "exit_code": 0,
+                    "status": "passed",
+                }
+                for tick in contract.REQUIRED_FIXED_TICKS
+            ],
         },
         "comparison": {
             "per_tick": [
@@ -204,7 +217,9 @@ def _correctness(tier: str) -> dict:
             "tick": item["tick"],
             "executable_sha256": identity["executable_sha256"],
             "exit_code": 0,
+            "capture_exit_code": 0,
             "artifact_sha256": item["sha256"],
+            "status": "passed",
         }
         for item in capture["capture_artifacts"]
     ]
@@ -353,6 +368,7 @@ def _artifact_state(
         lambda capture, root, expected_ticks: ("passed", ""),
     )
     raw_files: dict[tuple[str, int], Path] = {}
+    reference_files: dict[tuple[str, int], Path] = {}
 
     def fake_artifact(capture, root, tick):
         key = (str(capture.get("capture_id")), int(tick))
@@ -363,13 +379,22 @@ def _artifact_state(
             raw_files[key] = path
         return path
 
+    def fake_reference(capture, root, tick):
+        key = (str(capture.get("capture_id")), int(tick))
+        path = reference_files.get(key)
+        if path is None:
+            path = tmp_path / f"{key[0]}-{key[1]}-ref.rgba32f"
+            path.write_bytes(b"raw")
+            reference_files[key] = path
+        return path
+
     monkeypatch.setattr(evidence, "_artifact_file_for_tick", fake_artifact)
     monkeypatch.setattr(
         evidence,
         "_capture_paths_for_tick",
         lambda capture, root, tick: (
             fake_artifact(capture, root, tick),
-            fake_artifact(capture, root, tick),
+            fake_reference(capture, root, tick),
         ),
     )
     monkeypatch.setattr(
@@ -635,6 +660,79 @@ def test_nonfinite_authoritative_tolerance_fails_closed() -> None:
         )
         assert status == "failed"
         assert "non-finite or negative" in detail
+
+
+def test_reference_protocol_and_execution_status_are_enforced() -> None:
+    capture = _correctness("ada")
+    capture["reference_execution"]["capture_protocol"] = "nw07-wrong.v1"
+    assert (
+        evidence.validate_correctness_capture(
+            capture,
+            coverage_target=capture["coverage_target"],
+            artifact_identity=_identity(),
+        )["status"]
+        == "failed"
+    )
+    capture = _correctness("ada")
+    capture["execution_records"][0]["status"] = "failed"
+    assert (
+        evidence.validate_correctness_capture(
+            capture,
+            coverage_target=capture["coverage_target"],
+            artifact_identity=_identity(),
+        )["status"]
+        == "failed"
+    )
+    capture = _correctness("ada")
+    capture["execution_records"][0]["capture_exit_code"] = 1
+    assert (
+        evidence.validate_correctness_capture(
+            capture,
+            coverage_target=capture["coverage_target"],
+            artifact_identity=_identity(),
+        )["status"]
+        == "failed"
+    )
+
+
+def test_capture_and_reference_raw_files_must_be_distinct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = tmp_path / "tick_0.rgba32f"
+    raw.write_bytes(b"raw")
+    capture = _correctness("ada")
+    monkeypatch.setattr(
+        evidence,
+        "_capture_paths_for_tick",
+        lambda capture, root, tick: (raw, raw),
+    )
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+        artifact_root=tmp_path,
+    )
+    assert result["status"] == "failed"
+    assert any("same file" in reason for reason in result["reasons"])
+
+
+def test_cross_device_capture_paths_must_be_distinct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = tmp_path / "shared.rgba32f"
+    raw.write_bytes(b"raw")
+    monkeypatch.setattr(
+        evidence,
+        "_artifact_file_for_tick",
+        lambda capture, root, tick: raw,
+    )
+    ada = _correctness("ada")
+    blackwell = _correctness("blackwell")
+    status, detail = evidence._cross_device_capture_equivalence(
+        [ada, blackwell], artifact_root=tmp_path
+    )
+    assert status == "failed"
+    assert "same raw file" in detail["reason"]
 
 
 def test_informational_measurements_missing_keep_record_pending() -> None:

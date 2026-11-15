@@ -187,10 +187,11 @@ cannot be silently weakened.
 
 Loop-boundary evidence verifies that tick `960,000` is equivalent to tick `0`
 modulo one camera revolution and that the deterministic scene state is
-unchanged across the boundary. `tools/nw07_capture.py correctness` performs an
-actual image comparison when `tick_0.rgba32f` and `tick_960000.rgba32f` are
-supplied. Without the boundary capture it records only canonical-graph
-provenance and leaves verification pending. Fixed-tick replay is stateless.
+unchanged across the boundary. `tools/nw07_capture.py release-correctness`
+executes every frozen tick against the identical release executable, records
+the release process exit status, and compares the retained release and
+diagnostic-preview images. The legacy non-certifying `correctness` entry point
+is no longer exposed. Fixed-tick replay is stateless.
 Retained fixed-tick and reference captures are stored under
 `nw07-captures/<capture_id>/` and `nw07-reference-captures/<capture_id>/`;
 recording a different capture id cannot overwrite earlier evidence, and a

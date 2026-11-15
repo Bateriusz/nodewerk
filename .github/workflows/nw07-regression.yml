@@ -246,6 +246,16 @@ jobs:
           --input "$env:RUNNER_TEMP\nw07-nightly-merged\evidence-ada.json"
           --input "$env:RUNNER_TEMP\nw07-nightly-merged\evidence-blackwell.json"
           --output "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
+      - name: Merge fresh per-tier regression metrics
+        env:
+          NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
+        run: >-
+          python tools/nw07_regression.py
+          --metrics "$env:RUNNER_TEMP\nw07-nightly-merged\metrics-ada.json"
+          --metrics "$env:RUNNER_TEMP\nw07-nightly-merged\metrics-blackwell.json"
+          --evidence "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
+          --artifact "$env:NW07_FIXTURE"
+          --output-dir "$env:RUNNER_TEMP\nw07-nightly-regression"
       - name: Restore retained raw captures beside the final package
         shell: pwsh
         env:
@@ -296,7 +306,35 @@ jobs:
           --max-evidence-age-seconds 86400
           --summary-json "$env:RUNNER_TEMP\nw07-full.json"
       - name: Evaluate matched-environment regression policy
-        run: python -m pytest -q tests/test_nw07_regression_verify.py
+        shell: pwsh
+        env:
+          NW07_METRICS: ${{ vars.NW07_METRICS }}
+        run: |
+          python -m pytest -q tests/test_nw07_regression_verify.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $currents = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:NW07_METRICS)) {
+            $currents += $env:NW07_METRICS
+          }
+          foreach ($tier in @("ada", "blackwell")) {
+            $currents += "$env:RUNNER_TEMP\nw07-nightly-regression\metrics-current-$tier.json"
+          }
+          foreach ($current in $currents) {
+            if (-not (Test-Path $current -PathType Leaf)) {
+              Write-Error "Missing current regression metrics: $current"
+              exit 1
+            }
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($current)
+            python tools/nw07_regression.py `
+              --baseline benchmarks/nw07/metric-baselines.v1.json `
+              --current $current `
+              --summary-json "$env:RUNNER_TEMP\nw07-regression-$name.json"
+            $code = $LASTEXITCODE
+            if ($code -eq 1) { exit 1 }
+            if ($code -eq 2) {
+              Write-Warning "Regression evidence remains pending for $current (exit 2)"
+            }
+          }
       - name: Upload complete nightly evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -307,3 +345,4 @@ jobs:
             ${{ runner.temp }}/nw07-clean-system.json
             ${{ runner.temp }}/nw07-nightly-evidence.json
             ${{ runner.temp }}/nw07-nightly-merged/**
+            ${{ runner.temp }}/w07-regression-*.json

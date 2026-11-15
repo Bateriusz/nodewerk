@@ -381,3 +381,28 @@ def test_passthrough_clean_host_requires_documentation(
         passthrough_documentation="",
     )
     assert host["clean_environment"] is False
+
+
+def test_physical_clean_host_rejects_hypervisor_without_vm_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(clean_system.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(clean_system.platform, "version", lambda: "10.0.26100")
+    monkeypatch.setattr(
+        clean_system,
+        "_windows_virtualization_probe",
+        lambda: {
+            "available": True,
+            "manufacturer": "Contoso",
+            "model": "Workstation 9000",
+            "hypervisor_present": True,
+            "error": "",
+        },
+    )
+    host = clean_system.clean_host_provenance({"PATH": ""}, execution_kind="physical")
+    assert host["physical_host_evidence"] is False
+    assert host["clean_environment"] is False
+    report = _report()
+    report["host"] = host
+    assert clean_system.validate_report(report)["status"] == "failed"

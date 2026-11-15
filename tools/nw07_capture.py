@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """NW-07 benchmark/capture harness.
 
-Correctness mode records supplied fixed-tick images and provenance. Performance
-collect mode actively launches the final player and an external measurement
-collector for the frozen one-warm-up/three-run protocol. The harness never
-synthesizes reference provenance, never upgrades a missing value to a pass, and
-never writes a certifying status that the evidence validator would not derive
-from retained raw data. Raw fixed-tick RGBA32F captures and raw per-run sample
-files are retained and hashed.
+Release-correctness mode launches the final release executable for every frozen
+fixed tick, retains its process exit status, and captures RGBA32F output for
+comparison against the diagnostic-preview sibling. Performance collect mode
+actively launches the final player and an external measurement collector for
+the frozen one-warm-up/three-run protocol. The harness never synthesizes
+reference provenance, never upgrades a missing value to a pass, and never
+writes a certifying status that the evidence validator would not derive from
+retained raw data. Raw fixed-tick RGBA32F captures and raw per-run sample files
+are retained and hashed.
 """
 
 from __future__ import annotations
@@ -1385,53 +1387,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    correctness = subparsers.add_parser("correctness")
-    correctness.add_argument("--package", required=True)
-    correctness.add_argument("--captures-dir", required=True)
-    correctness.add_argument("--artifact-root")
-    correctness.add_argument("--reference-captures-dir", required=True)
-    correctness.add_argument("--capture-id", required=True)
-    correctness.add_argument("--tier", choices=("ada", "blackwell"), required=True)
-    correctness.add_argument(
-        "--renderer", choices=("exported_player", "diagnostic_preview"), required=True
-    )
-    correctness.add_argument(
-        "--reference-renderer",
-        choices=("exported_player", "diagnostic_preview"),
-        required=True,
-    )
-    correctness.add_argument("--reference-execution", required=True)
-    correctness.add_argument(
-        "--execution-kind",
-        choices=("physical", "documented_gpu_passthrough"),
-        default="physical",
-    )
-    correctness.add_argument("--passthrough-documentation", default="")
-    correctness.add_argument("--metadata")
-    correctness.add_argument("--numeric-comparisons")
-    correctness.add_argument("--adapter", default="")
-    correctness.add_argument(
-        "--device-form-factor",
-        choices=("desktop", "laptop", "mobile", "workstation", "data_center", "server", "other"),
-        default="",
-    )
-    correctness.add_argument("--driver-version", default="")
-    correctness.add_argument("--os-version", default="")
-    correctness.add_argument("--toolchain-identity", default="")
-    correctness.add_argument("--startup-ms", type=float, required=True)
-    correctness.add_argument("--peak-gpu-bytes", type=int, required=True)
-    correctness.add_argument("--cache-kind", choices=("cold_driver_cache", "warm"), required=True)
-    correctness.add_argument("--cold-preparation", required=True)
-    correctness.add_argument("--warm-preparation", required=True)
-    correctness.add_argument("--memory-source", required=True)
-    correctness.add_argument("--process-ram-bytes", type=int)
-    correctness.add_argument("--driver-memory-bytes", type=int)
-    correctness.add_argument("--startup-pipeline-ms", type=float)
-    correctness.add_argument("--generation-ms", type=float)
-    correctness.add_argument("--image-quality")
-    correctness.add_argument("--scaling-1440p")
-    correctness.add_argument("--evidence", required=True)
-
     release_correctness = subparsers.add_parser("release-correctness")
     release_correctness.add_argument("--package", required=True)
     release_correctness.add_argument("--executable", required=True)
@@ -1549,9 +1504,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     try:
-        if args.command == "correctness":
-            capture = record_correctness(args)
-        elif args.command == "release-correctness":
+        if args.command == "release-correctness":
             capture = capture_release_correctness(args)
         elif args.command == "perf":
             capture = record_perf(args)
@@ -1561,7 +1514,6 @@ def main(argv: list[str] | None = None) -> int:
             capture = collect_perf(args)
     except Exception as exc:
         role = {
-            "correctness": contract.FIXED_TICK_CORRECTNESS_ROLE,
             "release-correctness": contract.FIXED_TICK_CORRECTNESS_ROLE,
             "perf": contract.PERFORMANCE_CERTIFICATION_ROLE,
             "collect": contract.PERFORMANCE_CERTIFICATION_ROLE,

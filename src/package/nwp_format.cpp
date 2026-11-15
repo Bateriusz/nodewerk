@@ -3960,6 +3960,42 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         }
     }
 #endif
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    // The frozen release does not decode the CAP section's diagnostic-heavy
+    // field stream.  Reconstruct the canonical common-profile capability
+    // record from the immutable constants plus the decoded package content so
+    // runtime capability evaluation still enforces the full contract.
+    package.capability = CapabilityRecord{};
+    const auto sorted_unique = [](std::vector<std::string>& values) {
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+    };
+    package.capability.required_dxgi_formats.clear();
+    for (const auto& resource : package.resources) {
+        package.capability.required_dxgi_formats.push_back(resource.format);
+    }
+    sorted_unique(package.capability.required_dxgi_formats);
+    package.capability.emitted_shader_targets.clear();
+    for (const auto& shader : package.shaders) {
+        package.capability.emitted_shader_targets.push_back(shader.target);
+    }
+    sorted_unique(package.capability.emitted_shader_targets);
+    package.capability.required_init_instructions.clear();
+    for (const auto& instruction : package.initialization) {
+        package.capability.required_init_instructions.push_back(
+            instruction.opcode);
+    }
+    sorted_unique(package.capability.required_init_instructions);
+    package.capability.required_frame_instructions.clear();
+    for (const auto& instruction : package.frame) {
+        package.capability.required_frame_instructions.push_back(
+            instruction.opcode);
+    }
+    sorted_unique(package.capability.required_frame_instructions);
+    package.capability.compiler_fingerprint = "frozen-nw07-release";
+    package.capability.profile_fingerprint =
+        ComputeProfileFingerprint(package.capability);
+#endif
     package.flags = flags;
 #if NW05_FROZEN_EMBEDDED_SPECIALIZATION
     // The NW-07 generated release main compares the embedded package against

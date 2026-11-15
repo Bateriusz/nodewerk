@@ -1458,6 +1458,8 @@ def _capture_paths_for_tick(
             return None
         if not path.is_file():
             return None
+    if actual == reference:
+        raise ValueError("capture and reference raw artifacts are the same file")
     return actual, reference
 
 
@@ -1900,6 +1902,26 @@ def validate_correctness_capture(
                 "release fixed-tick capture has no retained release execution records"
             )
         else:
+            for index, row in enumerate(execution_rows):
+                if not isinstance(row, Mapping):
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"release execution record {index} is malformed"
+                    )
+                    continue
+                if row.get("status") != "passed":
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"release execution record {index} did not pass"
+                    )
+                if (
+                    row.get("renderer") == "exported_player"
+                    and row.get("capture_exit_code") != 0
+                ):
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"release execution record {index} has a failed capture step"
+                    )
             by_tick = {
                 int(row.get("tick")): row
                 for row in execution_rows
@@ -1920,6 +1942,11 @@ def validate_correctness_capture(
                     result["status"] = "failed"
                     result["reasons"].append(
                         f"release executable failed at fixed tick {tick}"
+                    )
+                if row.get("capture_exit_code") != 0:
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"release capture failed at fixed tick {tick}"
                     )
                 if (
                     row.get("executable_sha256")
@@ -1972,6 +1999,15 @@ def validate_correctness_capture(
                 if result["status"] != "failed":
                     result["status"] = "pending_unverified"
                 result["reasons"].append(f"reference execution {field} is incomplete")
+        if (
+            not _unavailable(reference.get("capture_protocol"))
+            and reference.get("capture_protocol")
+            != contract.CORRECTNESS_CAPTURE_PROTOCOL
+        ):
+            result["status"] = "failed"
+            result["reasons"].append(
+                "reference execution capture protocol does not match the frozen contract"
+            )
         for field in ("artifact_key", "package_sha256", "manifest_sha256"):
             expected = capture.get(field)
             if not _unavailable(reference.get(field)) and expected and reference.get(field) != expected:
@@ -1995,6 +2031,64 @@ def validate_correctness_capture(
         elif not _unavailable(reference_renderer):
             result["status"] = "failed"
             result["reasons"].append("reference renderer is unsupported")
+        reference_executions = reference.get("fixed_tick_executions")
+        if not isinstance(reference_executions, list) or not reference_executions:
+            if result["status"] != "failed":
+                result["status"] = "pending_unverified"
+            result["reasons"].append(
+                "reference execution has no retained per-tick execution records"
+            )
+        else:
+            reference_by_tick = {
+                int(row.get("tick")): row
+                for row in reference_executions
+                if isinstance(row, Mapping)
+                and isinstance(row.get("tick"), int)
+                and row.get("renderer") == "diagnostic_preview"
+            }
+            comparison_value = capture.get("comparison")
+            comparison_rows = (
+                comparison_value.get("per_tick")
+                if isinstance(comparison_value, Mapping)
+                else None
+            )
+            per_tick_rows = {
+                int(row.get("tick")): row
+                for row in (comparison_rows if isinstance(comparison_rows, list) else [])
+                if isinstance(row, Mapping)
+                and isinstance(row.get("tick"), int)
+            }
+            if set(reference_by_tick) != required_ticks:
+                result["status"] = "failed"
+                result["reasons"].append(
+                    "reference execution records do not cover the fixed ticks"
+                )
+            for tick in required_ticks:
+                row = reference_by_tick.get(tick)
+                if row is None:
+                    continue
+                if row.get("status") != "passed" or row.get("exit_code") != 0:
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"reference execution failed at fixed tick {tick}"
+                    )
+                if row.get("executable_sha256") != reference_executable:
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"reference execution at tick {tick} is not bound to the "
+                        "diagnostic-preview executable"
+                    )
+                per_tick_row = per_tick_rows.get(tick)
+                if (
+                    isinstance(per_tick_row, Mapping)
+                    and row.get("artifact_sha256")
+                    != per_tick_row.get("reference_artifact_sha256")
+                ):
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"reference execution at tick {tick} does not bind the "
+                        "retained reference image"
+                    )
     comparison = capture.get("comparison")
     if not isinstance(comparison, Mapping):
         result["status"] = "failed"
@@ -2138,12 +2232,27 @@ def validate_correctness_capture(
                                 f"tick {tick}: reference artifact digest mismatch"
                             )
                         elif "failed" not in (numeric_state, image_state):
-                            paths = _capture_paths_for_tick(capture, root, tick)
+                            try:
+                                paths = _capture_paths_for_tick(
+                                    capture, root, tick
+                                )
+                            except ValueError as exc:
+                                result["status"] = "failed"
+                                result["reasons"].append(
+                                    f"tick {tick}: {exc}"
+                                )
+                                paths = None
                             if paths is None:
                                 if result["status"] != "failed":
                                     result["status"] = "pending_unverified"
                                 result["reasons"].append(
                                     f"tick {tick}: retained capture bytes are unavailable"
+                                )
+                            elif paths[0] == paths[1]:
+                                result["status"] = "failed"
+                                result["reasons"].append(
+                                    f"tick {tick}: capture and reference raw "
+                                    "artifacts are the same file"
                                 )
                             else:
                                 try:
@@ -2623,6 +2732,18 @@ def _cross_device_capture_equivalence(
         if ada_path is None or blackwell_path is None:
             missing.append(int(tick))
             continue
+        try:
+            if ada_path.resolve() == blackwell_path.resolve():
+                return "failed", {
+                    "reason": "representative Ada and Blackwell captures reference "
+                    "the same raw file",
+                    "rows": rows,
+                }
+        except OSError as exc:
+            return "failed", {
+                "reason": f"cross-device comparison paths could not be resolved: {exc}",
+                "rows": rows,
+            }
         try:
             comparison = compare_rgba32f_files(blackwell_path, ada_path)
         except (OSError, ValueError) as exc:

@@ -154,6 +154,21 @@ def test_two_clean_directory_exports_have_matching_hashes(tmp_path: Path) -> Non
     assert report["build_inputs_digest"].startswith("sha256:v1:")
 
 
+def test_reproducibility_root_is_never_deleted(tmp_path: Path) -> None:
+    root = tmp_path / "existing-evidence"
+    root.mkdir()
+    marker = root / "keep.txt"
+    marker.write_text("must survive", encoding="utf-8")
+    with pytest.raises(export.Nw07ExportError, match="refusing to delete"):
+        export.export_reproducibility(
+            root,
+            player_template=_template(tmp_path / "toolchain"),
+            dxc_executable=str(_mock_dxc(tmp_path / "toolchain")),
+            allow_test_payloads=True,
+        )
+    assert marker.read_text(encoding="utf-8") == "must survive"
+
+
 def test_release_export_rejects_unfrozen_or_narrowed_build_inputs(
     tmp_path: Path,
 ) -> None:
@@ -214,6 +229,10 @@ def test_malformed_caller_config_raises_export_error(tmp_path: Path) -> None:
         lambda c: c["content"].__setitem__("bloom", "not-an-object"),
         lambda c: c["content"].__setitem__("tonemapping", []),
         lambda c: c.__setitem__("pinned_inputs", [{}]),
+        lambda c: c["build_configuration"].__setitem__("inbox_ucrt", "OFF"),
+        lambda c: c["build_configuration"].__setitem__(
+            "codegen", "hand-authored player source"
+        ),
     ):
         config = export.load_canonical_config()
         mutation(config)

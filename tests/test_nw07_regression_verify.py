@@ -178,6 +178,70 @@ def test_regression_cli_exit_codes(tmp_path: Path) -> None:
     )
 
 
+def test_nightly_metrics_merge_produces_current_series(tmp_path: Path) -> None:
+    artifact = tmp_path / "final.exe"
+    artifact.write_bytes(b"MZ" + b"\x00" * 120000)
+    metrics = {
+        "metadata": {
+            "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+            "driver_version": "566.36",
+            "os_version": "10.0.26100.2314",
+            "toolchain_identity": "msvc-ltcg",
+            "cache_state": {"kind": "warm"},
+        },
+        "measurements": {
+            "process_start_to_first_present_ms": 800.0,
+            "peak_engine_committed_gpu_bytes": 200 * 1024 * 1024,
+        },
+    }
+    metrics_path = tmp_path / "metrics-ada.json"
+    metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+    evidence = {
+        "captures": [
+            {
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "validation": {
+                    "runs": [
+                        {
+                            "gpu_frame_time_ms": {"p99_ms": 10.0},
+                            "cpu_submit_ms": {"p99_ms": 5.0},
+                        },
+                        {
+                            "gpu_frame_time_ms": {"p99_ms": 11.0},
+                            "cpu_submit_ms": {"p99_ms": 6.0},
+                        },
+                    ]
+                },
+            }
+        ]
+    }
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    written = regression.merge_nightly_metrics(
+        [metrics_path],
+        evidence_path=evidence_path,
+        artifact_path=artifact,
+        output_dir=tmp_path / "current",
+    )
+    current = json.loads(written[0].read_text(encoding="utf-8"))
+    assert current["metrics"]["complete_distribution_bytes"] == artifact.stat().st_size
+    assert current["metrics"]["process_start_to_first_present_ms"] == 800.0
+    assert current["metrics"]["p99_gpu_frame_time_ms"] == 11.0
+    assert current["metrics"]["p99_cpu_submit_ms"] == 6.0
+    assert current["environment"]["board"] == "NVIDIA GeForce RTX 4060 Ti"
+    assert (
+        regression.evaluate_regression(
+            json.loads(
+                (REPO_ROOT / "benchmarks" / "nw07" / "metric-baselines.v1.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+            current,
+        )["status"]
+        in {"passed", "flagged"}
+    )
+
+
 def test_capture_harness_reads_and_hashes_raw_samples(tmp_path: Path) -> None:
     sample_path = tmp_path / "run1-gpu.txt"
     sample_path.write_text("1\n2\n3\n4\n", encoding="utf-8")

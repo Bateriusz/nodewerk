@@ -282,6 +282,8 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
     for key, expected in (
         ("toolchain_file", "cmake/toolchains/msvc-x64.cmake"),
         ("crt_elimination_experiment", "OFF"),
+        ("inbox_ucrt", "ON"),
+        ("codegen", "graph-derived generated player source"),
         ("capture_controls", "OFF"),
     ):
         if build_configuration.get(key) != expected:
@@ -829,6 +831,18 @@ def _require_empty_build_root(path: Path) -> None:
             )
 
 
+def require_empty_output_root(path: Path, description: str) -> None:
+    """Refuse to recursively delete caller-supplied evidence/output roots."""
+    if path.exists():
+        if not path.is_dir():
+            raise Nw07ExportError(f"{description} is not a directory: {path}")
+        if any(path.iterdir()):
+            raise Nw07ExportError(
+                f"{description} is not empty: {path}; refusing to delete existing "
+                "evidence. Supply a new or empty directory."
+            )
+
+
 def export_production(
     output_directory: Path | str,
     *,
@@ -1122,8 +1136,7 @@ def export_reproducibility(
 ) -> dict[str, Any]:
     """Export twice from clean directories and compare every identity byte."""
     root = Path(work_root)
-    if root.exists():
-        shutil.rmtree(root)
+    require_empty_output_root(root, "reproducibility output root")
     root.mkdir(parents=True, exist_ok=True)
     first_dir = root / "clean-a"
     second_dir = root / "clean-b"
