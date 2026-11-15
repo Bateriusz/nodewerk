@@ -6,8 +6,9 @@ existing NW-03 compiler / NW-05 export / NW-06 procedural-scene path.  It does
 not introduce a second graph model, package format, player, or demo runtime.
 
 The NW-07 hard ceiling applies to the complete runnable distribution: the one
-self-contained Windows x64 executable, which already embeds the `.nwp` package
-and the generated link manifest.  Auxiliary build/evidence JSON files are not
+self-contained Windows x64 executable, which embeds the `.nwp` package and a
+SHA-256 binding to the generated link manifest.  The full manifest remains
+auxiliary evidence and is not required at runtime.  Auxiliary build/evidence JSON files are not
 required to execute and are reported separately; they are never counted as
 runtime distribution bytes and can never excuse an over-ceiling executable.
 """
