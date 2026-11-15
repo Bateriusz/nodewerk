@@ -176,3 +176,19 @@ def test_frozen_nw07_material_remains_unmodified() -> None:
     )
     assert evidence["verification_status"] == "pending_unverified"
 
+def test_windows_ci_reuses_pinned_nw07_release_toolchain() -> None:
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "nw08-studio.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON" in workflow
+    assert (
+        "cmake --build --preset nw07-release "
+        "--target nw_procedural_image_player --parallel 2"
+    ) in workflow
+    assert "build/nw07-release" in workflow
+    assert "build/nw08-runtime" not in workflow
+    assert "cmake/toolchains/msvc-x64.cmake" in workflow
+    assert "-DCMAKE_BUILD_TYPE=Debug" in workflow
+    assert "-DNW_BUILD_PROFILE=dev" in workflow
+
