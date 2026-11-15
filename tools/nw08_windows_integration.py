@@ -104,6 +104,10 @@ def _export_equivalence(
     stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
     gui_package = (work / "gui-export" / f"{stem}.nwp").read_bytes()
     cli_package = (work / "cli-export" / f"{stem}.nwp").read_bytes()
+    gui_manifest = (work / "gui-export" / f"{stem}.manifest.json").read_bytes()
+    cli_manifest = (work / "cli-export" / f"{stem}.manifest.json").read_bytes()
+    gui_source = (work / "gui-export" / f"{stem}.player.cpp").read_bytes()
+    cli_source = (work / "cli-export" / f"{stem}.player.cpp").read_bytes()
     gui_exe = (work / "gui-export" / f"{stem}.exe").read_bytes()
     cli_exe = (work / "cli-export" / f"{stem}.exe").read_bytes()
     if gui_package != cli_package or gui_exe != cli_exe:
@@ -113,9 +117,15 @@ def _export_equivalence(
             {
                 "reason": "artifact byte mismatch",
                 "package_match": gui_package == cli_package,
+                "manifest_match": gui_manifest == cli_manifest,
+                "player_source_match": gui_source == cli_source,
                 "executable_match": gui_exe == cli_exe,
                 "gui_package_sha256": hashlib.sha256(gui_package).hexdigest(),
                 "cli_package_sha256": hashlib.sha256(cli_package).hexdigest(),
+                "gui_manifest_sha256": hashlib.sha256(gui_manifest).hexdigest(),
+                "cli_manifest_sha256": hashlib.sha256(cli_manifest).hexdigest(),
+                "gui_player_source_sha256": hashlib.sha256(gui_source).hexdigest(),
+                "cli_player_source_sha256": hashlib.sha256(cli_source).hexdigest(),
                 "gui_executable_sha256": hashlib.sha256(gui_exe).hexdigest(),
                 "cli_executable_sha256": hashlib.sha256(cli_exe).hexdigest(),
                 "gui_package_bytes": len(gui_package),
