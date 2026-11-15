@@ -19,6 +19,7 @@ import nw08_editor as editor  # noqa: E402
 import nw08_gui as gui  # noqa: E402
 import nw08_preview as preview  # noqa: E402
 import nw08_studio as studio  # noqa: E402
+import nwp_package as nwp  # noqa: E402
 
 
 def _rgba(width: int, height: int, value: float = 0.5) -> bytes:
@@ -891,32 +892,38 @@ def test_shader_recovery_fixture_uses_nwp_v1_legal_upload_frequency() -> None:
 
 
 def test_package_capture_dimensions_follow_explicit_present_geometry() -> None:
-    package = SimpleNamespace(
+    package = nwp.NwpPackage(
         frame=[
-            SimpleNamespace(
-                opcode="frame.present",
-                operands=[SimpleNamespace(u32=7)],
+            nwp.Instruction(
+                "frame.present",
+                (nwp.InstructionOperand("resource_ref", 7),),
             )
         ],
         resources=[
-            SimpleNamespace(
+            nwp.ResourceDescriptor(
                 resource_id=7,
+                name="output",
                 kind="buffer",
-                width=0,
-                height=0,
+                format="DXGI_FORMAT_R32_UINT",
+                usage="uav",
+                pass_family="nw.common.procedural_image",
                 size_bytes=256 * 256 * 16,
             )
         ],
         parameters=[
-            SimpleNamespace(
+            nwp.ParameterRecord(
+                parameter_id=1,
                 name="nw05.present.width",
                 type="uint",
+                phase="initialization",
                 component_count=1,
                 value=(256).to_bytes(4, "little"),
             ),
-            SimpleNamespace(
+            nwp.ParameterRecord(
+                parameter_id=2,
                 name="nw05.present.height",
                 type="uint",
+                phase="initialization",
                 component_count=1,
                 value=(256).to_bytes(4, "little"),
             ),

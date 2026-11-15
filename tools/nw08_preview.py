@@ -590,7 +590,9 @@ def _package_capture_dimensions(
             continue
         operands = getattr(instruction, "operands", ()) or ()
         if operands:
-            present_resource_id = int(getattr(operands[0], "u32", 0) or 0)
+            operand = operands[0]
+            if getattr(operand, "type", "") == "resource_ref":
+                present_resource_id = int(getattr(operand, "value", 0) or 0)
             break
 
     present_resource = None
