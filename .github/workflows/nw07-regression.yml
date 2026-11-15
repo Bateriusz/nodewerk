@@ -1,0 +1,108 @@
+name: NW-07 256 KiB Architectural Proof Regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  per-change-checks:
+    name: Per-change CPU, compiler, reproducibility and size checks
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Run NW-07 contract and regression tests
+        run: python -m pytest -q tests/test_nw07_*.py
+      - name: Run NW-07 ContractsOnly verification
+        run: >-
+          python tools/verify_nw07.py --mode ContractsOnly
+          --summary-json "$RUNNER_TEMP/nw07-contracts.json"
+      - name: Run NW-07 BuildChecks verification
+        run: >-
+          python tools/verify_nw07.py --mode BuildChecks
+          --summary-json "$RUNNER_TEMP/nw07-build-checks.json"
+      - name: Upload NW-07 contract summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw07-contract-summary
+          path: |
+            ${{ runner.temp }}/nw07-contracts.json
+            ${{ runner.temp }}/nw07-build-checks.json
+
+  windows-release-build:
+    name: Windows x64 release export and diagnostic sibling build
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Configure NW-07 release build
+        run: cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
+      - name: Configure NW-07 diagnostic sibling build
+        run: cmake --preset nw07-diagnostics -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
+      - name: Build release player template
+        run: cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+      - name: Build diagnostic capture sibling
+        run: cmake --build --preset nw07-diagnostics --target nw_procedural_image_player --parallel 2
+      - name: Run NW-07 BuildChecks
+        run: >-
+          python tools/verify_nw07.py --mode BuildChecks
+          --summary-json "$env:RUNNER_TEMP\nw07-build-checks.json"
+
+  nightly-gpu-check:
+    name: Nightly matched-environment GPU regression
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # These self-hosted labels identify the frozen NW-07 reference and
+    # development-series hosts.  A generic VM is never sufficient for GPU
+    # acceptance.
+    runs-on: [self-hosted, windows, x64, nw07-gpu]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run NW-07 Full verification on the reference host
+        env:
+          NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+        run: >-
+          python tools/verify_nw07.py --mode Full
+          --fixture "$env:NW07_FIXTURE"
+          --package "$env:NW07_PACKAGE"
+          --evidence "$env:NW07_EVIDENCE"
+          --summary-json "$env:RUNNER_TEMP\nw07-full.json"
+      - name: Evaluate matched-environment regression policy
+        run: |
+          python -m pytest -q tests/test_nw07_regression_verify.py
+          if (Test-Path "$env:NW07_METRICS") {
+            python tools/nw07_regression.py `
+              --baseline benchmarks/nw07/metric-baselines.v1.json `
+              --current "$env:NW07_METRICS" `
+              --summary-json "$env:RUNNER_TEMP\nw07-regression.json"
+          }
+        env:
+          NW07_METRICS: ${{ vars.NW07_METRICS }}
+      - name: Upload NW-07 GPU evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw07-nightly-evidence
+          path: ${{ runner.temp }}/nw07-full.json

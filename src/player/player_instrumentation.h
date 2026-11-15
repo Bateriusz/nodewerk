@@ -10,6 +10,10 @@
 #define NW_PLAYER_DIAGNOSTICS 0
 #endif
 
+#if defined(NW07_CAPTURE_CONTROLS) && NW07_CAPTURE_CONTROLS && !NW_PLAYER_DIAGNOSTICS
+#error "NW07_CAPTURE_CONTROLS is only available in the diagnostic sibling build"
+#endif
+
 #include <cstdint>
 
 namespace nw::player {

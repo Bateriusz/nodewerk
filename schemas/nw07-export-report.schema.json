@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw07-export-report.schema.json",
+  "title": "Nodewerk NW-07 production export report",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "success",
+    "release_grade",
+    "test_payload",
+    "profile_id",
+    "requirements_digest",
+    "graph",
+    "build_inputs",
+    "artifact",
+    "distribution"
+  ],
+  "properties": {
+    "format": { "const": "nw07-export-report" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-07" },
+    "implementation_base": { "const": "b7e2d11062d4f7bb123ae97c21839631ffc09b93" },
+    "success": { "type": "boolean" },
+    "release_grade": { "type": "boolean" },
+    "test_payload": { "type": "boolean" },
+    "profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
+    "requirements_digest": {
+      "const": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
+    },
+    "graph": {
+      "type": "object",
+      "required": ["graph_sha256", "ir_sha256", "fixed_tick_samples", "loop_boundary"]
+    },
+    "build_inputs": {
+      "type": "object",
+      "required": ["files", "digest", "frozen_digest", "matches_frozen_digest"]
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_key",
+        "package_sha256",
+        "manifest_sha256",
+        "executable_sha256",
+        "executable_bytes",
+        "size_accounting",
+        "dependency_closure"
+      ],
+      "properties": {
+        "package_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "executable_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size_accounting": {
+          "type": "object",
+          "required": [
+            "complete_distribution_bytes",
+            "within_ceiling",
+            "within_stretch",
+            "all_required_bytes_accounted"
+          ]
+        }
+      }
+    },
+    "distribution": {
+      "type": "object",
+      "required": [
+        "single_executable",
+        "complete_distribution_bytes",
+        "ceiling",
+        "within_ceiling",
+        "stretch_ceiling",
+        "stretch_mandatory_gate",
+        "runtime_dxc_required",
+        "editor_required",
+        "developer_runtime_required",
+        "all_required_non_system_bytes_accounted"
+      ],
+      "properties": {
+        "single_executable": { "const": true },
+        "complete_distribution_bytes": { "type": "integer", "minimum": 1 },
+        "ceiling": { "const": 262144 },
+        "within_ceiling": { "const": true },
+        "stretch_ceiling": { "const": 131072 },
+        "stretch_mandatory_gate": { "const": false },
+        "runtime_dxc_required": { "const": false },
+        "editor_required": { "const": false },
+        "developer_runtime_required": { "const": false },
+        "all_required_non_system_bytes_accounted": { "const": true }
+      }
+    },
+    "startup": { "type": "object" },
+    "memory": { "type": "object" },
+    "diagnostic_sibling_build": { "type": "object" },
+    "pe_dependency_closure": { "type": ["object", "null"] },
+    "policy": { "type": "string" }
+  },
+  "additionalProperties": true
+}

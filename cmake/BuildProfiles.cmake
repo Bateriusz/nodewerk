@@ -26,6 +26,18 @@ option(NW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT
     "Explicit opt-in compact experiment testing /MERGE:.rdata=.text and /ALIGN:16 with /guard:cf and /CETCOMPAT retained"
     OFF)
 
+# NW-07 capture controls are only available in the diagnostic sibling build.
+# The release executable must never contain capture hooks, timing queries, or
+# diagnostic tooling; keeping the option dev-only makes that a configure-time
+# invariant rather than a review convention.
+option(NW07_CAPTURE_CONTROLS
+    "Compile NW-07 diagnostic capture controls (requires NW_BUILD_PROFILE=dev)"
+    OFF)
+if(NW07_CAPTURE_CONTROLS AND NOT NW_BUILD_PROFILE STREQUAL "dev")
+    message(FATAL_ERROR
+        "NW07_CAPTURE_CONTROLS requires NW_BUILD_PROFILE=dev; release players must not contain capture controls")
+endif()
+
 function(nw_apply_player_profile target_name)
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     target_compile_definitions(${target_name} PRIVATE
@@ -39,12 +51,14 @@ function(nw_apply_player_profile target_name)
             NW_PROFILE_DEV=1
             NW_ENABLE_D3D12_VALIDATION=1
             NW_DEPENDENCY_CLOSURE="dev"
+            NW07_CAPTURE_CONTROLS=$<BOOL:${NW07_CAPTURE_CONTROLS}>
         )
     elseif(NW_BUILD_PROFILE STREQUAL "release")
         target_compile_definitions(${target_name} PRIVATE
             NW_PROFILE_RELEASE=1
             NW_ENABLE_D3D12_VALIDATION=0
             NW_DEPENDENCY_CLOSURE="release"
+            NW07_CAPTURE_CONTROLS=0
             NDEBUG
         )
     elseif(NW_BUILD_PROFILE STREQUAL "compact_experiment")
@@ -52,6 +66,7 @@ function(nw_apply_player_profile target_name)
             NW_PROFILE_COMPACT_EXPERIMENT=1
             NW_ENABLE_D3D12_VALIDATION=0
             NW_DEPENDENCY_CLOSURE="compact_experiment"
+            NW07_CAPTURE_CONTROLS=0
             NDEBUG
         )
         if(NW_ENABLE_CRT_ELIMINATION_EXPERIMENT)

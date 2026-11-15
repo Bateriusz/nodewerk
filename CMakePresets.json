@@ -77,6 +77,32 @@
         "NW_BUILD_PROFILE": "compact_experiment",
         "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF"
       }
+    },
+    {
+      "name": "nw07-release",
+      "displayName": "Windows 11 x64 NW-07 release distribution",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/nw07-release",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/msvc-x64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel",
+        "NW_BUILD_PROFILE": "release",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF",
+        "NW07_CAPTURE_CONTROLS": "OFF"
+      }
+    },
+    {
+      "name": "nw07-diagnostics",
+      "displayName": "Windows 11 x64 NW-07 diagnostic capture sibling",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/nw07-diagnostics",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/msvc-x64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NW_BUILD_PROFILE": "dev",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF",
+        "NW07_CAPTURE_CONTROLS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -85,6 +111,8 @@
     { "name": "clang-cl-compact-experiment", "configurePreset": "clang-cl-compact-experiment" },
     { "name": "msvc-dev", "configurePreset": "msvc-dev" },
     { "name": "msvc-release-ltcg", "configurePreset": "msvc-release-ltcg" },
-    { "name": "msvc-compact-experiment", "configurePreset": "msvc-compact-experiment" }
+    { "name": "msvc-compact-experiment", "configurePreset": "msvc-compact-experiment" },
+    { "name": "nw07-release", "configurePreset": "nw07-release" },
+    { "name": "nw07-diagnostics", "configurePreset": "nw07-diagnostics" }
   ]
 }

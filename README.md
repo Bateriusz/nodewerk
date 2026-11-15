@@ -140,3 +140,42 @@ and retain a full-precision escape hatch; event delivery uses ordered IDs over
 fixed-tick evidence remains `pending_unverified` until the identical common
 artifact is executed on both representative hardware tiers. See
 [`docs/nw06-procedural-scene.md`](docs/nw06-procedural-scene.md).
+
+## NW-07 256 KiB Architectural Proof
+
+NW-07 freezes the NW-06 scene as a canonical **20-second looping 1920x1080**
+production with 256 seeded torus instances, generated noise material, an
+animated absolute-tick camera and twist, analytic lighting, half-resolution
+bloom, and ACES tonemapping. The exporter consumes only the frozen graph and
+pinned build inputs through the existing compiler/package/export/specialized
+player path and publishes one self-contained Windows x64 executable that embeds
+the `.nwp` package and offline-compiled shaders.
+
+```bash
+python tools/nw07_export.py --output build/nw07 \
+    --player-template <specialized-player.exe> --dxc <pinned-dxc> \
+    --report build/nw07-export.json
+python tools/verify_nw07.py --mode ContractsOnly --summary-json build/nw07.json
+python tools/verify_nw07.py --mode BuildChecks
+python tools/verify_nw07.py --mode Full \
+    --fixture <player.exe> --package <export-dir> --evidence benchmarks/nw07/hardware-evidence.json
+```
+
+The hard gates are a **262,144-byte** complete runnable distribution
+(131,072 bytes is a reported stretch measurement only), process-start-to-first-
+present within **2 seconds**, peak engine-committed GPU resources at most
+**512 MiB**, and per-run p99 GPU frame time and CPU submission time each
+strictly **below 16.67 ms** in three uncapped 60-second runs after a five-second
+warm-up under `nw07_perf_ref_v1`. The performance contract freezes the exact
+RTX 4060 Ti reference board, host, environment, toolchain, artifact, quality,
+cache, tools, metric definitions, percentile method, and protocol before
+certification.
+
+Correctness coverage (representative desktop Ada and Blackwell) is separate
+from performance certification and binds to the identical final artifact.
+`benchmarks/nw07/hardware-evidence.json` remains `pending_unverified` until the
+physical captures and matching reference-host runs are recorded. The 128 KiB
+stretch value, process RAM, driver memory, startup pipeline time, generation
+time, image-quality metrics, 1440p scaling, and diagnostic sibling-build
+overhead are reported without becoming new absolute gates. See
+[`docs/nw07-256k-architectural-proof.md`](docs/nw07-256k-architectural-proof.md).

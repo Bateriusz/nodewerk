@@ -23,6 +23,7 @@ graph semantics and `.nwgraph` schema.
 14. [NW-04 Package Player Runtime](nw04-player-runtime.md)
 15. [NW-05 Typed-Graph Export and Procedural-Image Path](nw05-typed-graph-export.md)
 16. [NW-06 Procedural Scene, Timeline & Fixed-Tick Evidence](nw06-procedural-scene.md)
+17. [NW-07 256 KiB Architectural Proof — Feasibility Report](nw07-256k-architectural-proof.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -42,4 +43,11 @@ graph semantics and `.nwgraph` schema.
 - NW-05 Link Manifest, Export Report & Size Attribution Schemas: [`schemas/nw05-link-manifest.schema.json`](../schemas/nw05-link-manifest.schema.json), [`schemas/nw05-export-report.schema.json`](../schemas/nw05-export-report.schema.json), [`schemas/nw05-size-report.schema.json`](../schemas/nw05-size-report.schema.json)
 - NW-06 Fixed-Tick Hardware Evidence: [`benchmarks/nw06-hardware-evidence.json`](../benchmarks/nw06-hardware-evidence.json) (validated by [`schemas/nw06-hardware-evidence.schema.json`](../schemas/nw06-hardware-evidence.schema.json)); pending until identical-artifact Ada/Blackwell captures are recorded.
 - NW-06 Operator Contract Schema: [`schemas/nw06-operator-contracts.schema.json`](../schemas/nw06-operator-contracts.schema.json) with [`schemas/nw06-operator-contracts.v1.json`](../schemas/nw06-operator-contracts.v1.json)
+- NW-07 Canonical Production: [`benchmarks/nw07/canonical-production.v1.json`](../benchmarks/nw07/canonical-production.v1.json) (validated by [`schemas/nw07-production-config.schema.json`](../schemas/nw07-production-config.schema.json)); graph [`fixtures/nw07/production_loop.nwgraph`](../fixtures/nw07/production_loop.nwgraph)
+- NW-07 Performance Reference Contract: [`benchmarks/nw07/perf-ref-v1.json`](../benchmarks/nw07/perf-ref-v1.json) (validated by [`schemas/nw07-perf-ref.schema.json`](../schemas/nw07-perf-ref.schema.json)); methodology frozen, reference-host binding pending
+- NW-07 Metric Baselines & Per-Device Tolerances: [`benchmarks/nw07/metric-baselines.v1.json`](../benchmarks/nw07/metric-baselines.v1.json) (validated by [`schemas/nw07-metric-baselines.schema.json`](../schemas/nw07-metric-baselines.schema.json))
+- NW-07 Correctness/Performance Evidence: [`benchmarks/nw07/hardware-evidence.json`](../benchmarks/nw07/hardware-evidence.json) (validated by [`schemas/nw07-hardware-evidence.schema.json`](../schemas/nw07-hardware-evidence.schema.json)); pending until the final artifact is captured on representative Ada/Blackwell hardware and the matching RTX 4060 Ti reference host
+- NW-07 Export Report Schema: [`schemas/nw07-export-report.schema.json`](../schemas/nw07-export-report.schema.json)
+- NW-07 Clean-System Report Schema: [`schemas/nw07-clean-system-report.schema.json`](../schemas/nw07-clean-system-report.schema.json)
+- NW-07 Diagnostic Sibling-Build Overhead: [`benchmarks/nw07/diagnostic-overhead.v1.json`](../benchmarks/nw07/diagnostic-overhead.v1.json) (validated by [`schemas/nw07-diagnostic-overhead.schema.json`](../schemas/nw07-diagnostic-overhead.schema.json)); pending separate diagnostic measurement
 - Upstream Measured-Evidence Status: [`benchmarks/evidence-status.json`](../benchmarks/evidence-status.json) (complete for recorded Windows/RTX captures)

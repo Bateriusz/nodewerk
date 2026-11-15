@@ -1241,6 +1241,26 @@ def _graph_render_dimensions(
     document: nw03.GraphDocument,
     optimized: optimizer.OptimizedGraph,
 ) -> tuple[int, int]:
+    def setting_dimension(name: str, default: int) -> int:
+        raw = str(document.settings.get(name, default)).strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return default
+        if not math.isfinite(value) or not value.is_integer():
+            return default
+        return max(1, min(8192, int(value)))
+
+    # NW-07 production presets decouple presentation dimensions from the
+    # procedural material texture.  The NW-06 proof intentionally derives its
+    # render size from the noise texture; only the explicit NW-07 settings opt
+    # into a distinct presentation size.
+    if "nw07_output_width" in document.settings or "nw07_output_height" in document.settings:
+        return (
+            setting_dimension("nw07_output_width", 1920),
+            setting_dimension("nw07_output_height", 1080),
+        )
+
     reachable = set(optimized.reachable_node_ids) | set(
         optimized.constants_folded
     )
@@ -1256,16 +1276,6 @@ def _graph_render_dimensions(
             _node_int(textures[0], "width", 256),
             _node_int(textures[0], "height", 256),
         )
-
-    def setting_dimension(name: str, default: int) -> int:
-        raw = str(document.settings.get(name, default)).strip()
-        try:
-            value = float(raw)
-        except ValueError:
-            return default
-        if not math.isfinite(value) or not value.is_integer():
-            return default
-        return max(1, min(8192, int(value)))
 
     return (
         setting_dimension("nw05_output_width", 256),

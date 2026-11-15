@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw07-hardware-evidence.schema.json",
+  "title": "Nodewerk NW-07 correctness and performance evidence",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task",
+    "implementation_base",
+    "verification_status",
+    "profile_id",
+    "requirements_digest",
+    "perf_contract_id",
+    "qualifications",
+    "captures",
+    "policy"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "task": { "const": "NW-07" },
+    "implementation_base": { "const": "b7e2d11062d4f7bb123ae97c21839631ffc09b93" },
+    "verification_status": {
+      "enum": ["pending_unverified", "execution_recorded", "executed_failure", "verified"]
+    },
+    "profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
+    "requirements_digest": {
+      "const": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
+    },
+    "perf_contract_id": { "const": "nw07_perf_ref_v1" },
+    "qualifications": {
+      "type": "object",
+      "required": [
+        "ada_correctness",
+        "blackwell_correctness",
+        "startup_memory",
+        "perf_ref_certification",
+        "diagnostic_overhead",
+        "blackwell_development_series"
+      ],
+      "properties": {
+        "ada_correctness": { "$ref": "#/$defs/qualification" },
+        "blackwell_correctness": { "$ref": "#/$defs/qualification" },
+        "startup_memory": { "$ref": "#/$defs/qualification" },
+        "perf_ref_certification": { "$ref": "#/$defs/qualification" },
+        "diagnostic_overhead": { "$ref": "#/$defs/qualification" },
+        "blackwell_development_series": { "$ref": "#/$defs/qualification" }
+      },
+      "additionalProperties": true
+    },
+    "captures": { "type": "array", "items": { "$ref": "#/$defs/capture" } },
+    "executions": { "type": "array", "items": { "$ref": "#/$defs/capture" } },
+    "unavailable_telemetry": { "type": "array", "items": { "type": "string" } },
+    "policy": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "qualification": {
+      "type": "object",
+      "required": ["coverage_target", "evidence_role", "status"],
+      "properties": {
+        "coverage_target": { "type": "string", "minLength": 1 },
+        "evidence_role": { "type": "string", "minLength": 1 },
+        "status": {
+          "enum": ["pending_unverified", "execution_recorded", "verified", "failed", "informational", "unverified"]
+        },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "capture": {
+      "type": "object",
+      "required": ["capture_id", "evidence_role", "status"],
+      "properties": {
+        "capture_id": { "type": "string", "minLength": 1 },
+        "evidence_role": {
+          "enum": [
+            "fixed_tick_correctness",
+            "performance_certification",
+            "diagnostic_overhead",
+            "blackwell_development_series"
+          ]
+        },
+        "status": {
+          "enum": ["passed", "failed", "pending_unverified", "unverified", "informational"]
+        },
+        "coverage_target": { "type": "string" },
+        "implementation_base": { "type": "string" },
+        "profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
+        "requirements_digest": {
+          "const": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
+        },
+        "artifact_key": { "type": "string" },
+        "package_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "executable_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

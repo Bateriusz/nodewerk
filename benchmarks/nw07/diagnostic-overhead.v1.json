@@ -1,0 +1,16 @@
+{
+  "format": "nw07-diagnostic-overhead",
+  "version": 1,
+  "task": "NW-07",
+  "implementation_base": "b7e2d11062d4f7bb123ae97c21839631ffc09b93",
+  "status": "pending_unverified",
+  "protocol": "nw07-diagnostic-overhead.v1",
+  "release_build_profile": "release",
+  "diagnostic_build_profile": "dev",
+  "release_contains_capture_controls": false,
+  "separate_artifact_required": true,
+  "release_artifact": "pending_release_export",
+  "diagnostic_artifact": "pending_diagnostic_sibling_build",
+  "measurements": {},
+  "policy": "Capture controls live only in the dev-profile diagnostic sibling build.  Its size and frame-time overhead is measured separately and bound to the same final release artifact; it never changes the release distribution or its absolute gates."
+}
