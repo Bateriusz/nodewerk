@@ -30,6 +30,10 @@ struct PlayerConfig {
     const char* window_title = "Nodewerk NW-04 Player";
     std::uint32_t width = 1280u;
     std::uint32_t height = 720u;
+    // DXGI present sync interval.  Zero is uncapped and is the frozen NW-07
+    // performance setting; one synchronizes presentation to the display.
+    // Generated players set this from the frozen production/quality config.
+    std::uint32_t present_sync_interval = 1u;
     // Small bounded ring.  The implementation clamps this to 1..3.
     std::uint32_t frames_in_flight = 2u;
     bool create_window = true;
@@ -247,6 +251,7 @@ private:
     bool BuildFrameInstructionPlan();
     ExitCode RunInitializationInstructions();
     ExitCode ExecuteFrameInstructions(std::uint64_t tick);
+    std::uint64_t EffectiveTimelineTick(std::uint64_t tick) const noexcept;
     ExitCode OpenDeviceAndWindow();
     ExitCode CreateSwapChainAndFrames();
     ExitCode RecreateRenderTargets();
@@ -271,6 +276,7 @@ private:
     std::uint64_t frames_rendered_ = 0u;
     std::uint64_t frames_presented_ = 0u;
     std::uint64_t last_tick_ = 0u;
+    std::uint64_t timeline_duration_ticks_ = 0u;
     std::uint64_t next_fence_value_ = 1u;
     std::uint32_t width_ = 1280u;
     std::uint32_t height_ = 720u;

@@ -1,0 +1,61 @@
+{
+  "format": "nw07-metric-baselines",
+  "version": 1,
+  "task": "NW-07",
+  "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+  "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+  "environment": {
+    "matched_environment_status": "pending_matched_environment",
+    "matched_environment_id": null,
+    "comparison_policy": "Relative regression alerts are valid only when the baseline and current measurement identify the same matched environment (board, host, driver, toolchain, resolution, quality, and cache preparation)."
+  },
+  "absolute_gates": {
+    "complete_distribution_bytes": {"operator": "<=", "threshold": 262144},
+    "process_start_to_first_present_ms": {"operator": "<=", "threshold": 2000.0},
+    "peak_engine_committed_gpu_bytes": {"operator": "<=", "threshold": 536870912},
+    "p99_gpu_frame_time_ms": {"operator": "<", "threshold": 16.67, "percentile": 99.0, "percentile_method": "nearest-rank", "independent_per_run": true},
+    "p99_cpu_submit_ms": {"operator": "<", "threshold": 16.67, "percentile": 99.0, "percentile_method": "nearest-rank", "independent_per_run": true}
+  },
+  "stretch_measurements": {
+    "complete_distribution_bytes": {"operator": "<=", "threshold": 131072, "mandatory_gate": false, "reported_as": "stretch"}
+  },
+  "image_tolerances": {
+    "numeric": {"absolute": 1e-05, "relative": 0.0001, "mode": "absolute_or_relative"},
+    "image": {"absolute": 0.0001, "relative": 0.0001, "mode": "absolute_required"},
+    "per_device": {
+      "desktop_ada_representative": {"numeric_absolute": 1e-05, "numeric_relative": 0.0001, "image_absolute": 0.0001, "image_relative": 0.0001},
+      "desktop_blackwell_representative": {"numeric_absolute": 1e-05, "numeric_relative": 0.0001, "image_absolute": 0.0001, "image_relative": 0.0001},
+      "desktop_blackwell_development_series": {"numeric_absolute": 1e-05, "numeric_relative": 0.0001, "image_absolute": 0.0001, "image_relative": 0.0001}
+    },
+    "resolution_requirements": {
+      "proof": {"width": 1920, "height": 1080},
+      "scaling_informational": {"width": 2560, "height": 1440}
+    }
+  },
+  "metrics": {
+    "complete_distribution_bytes": {"kind": "hard_gate", "unit": "bytes", "baseline": null, "baseline_status": "pending_release_export", "stretch_threshold": 131072},
+    "process_start_to_first_present_ms": {"kind": "hard_gate", "unit": "ms", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "peak_engine_committed_gpu_bytes": {"kind": "hard_gate", "unit": "bytes", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "p99_gpu_frame_time_ms": {"kind": "hard_gate", "unit": "ms", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "p99_cpu_submit_ms": {"kind": "hard_gate", "unit": "ms", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "displayed_frame_interval_ms": {"kind": "informational", "unit": "ms", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "process_ram_bytes": {"kind": "informational", "unit": "bytes", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "driver_memory_bytes": {"kind": "informational", "unit": "bytes", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "startup_pipeline_ms": {"kind": "informational", "unit": "ms", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "generation_ms": {"kind": "informational", "unit": "ms", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "image_quality_metrics": {"kind": "informational", "unit": "mixed", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "scaling_1440p": {"kind": "informational", "unit": "mixed", "baseline": null, "baseline_status": "pending_matched_environment"},
+    "diagnostic_overhead": {"kind": "informational_separate_build", "unit": "mixed", "baseline": null, "baseline_status": "pending_diagnostic_build"}
+  },
+  "regression_policy": {
+    "absolute_gate_violation": "fail",
+    "matched_environment_relative_alert_percent": 10.0,
+    "matched_environment_relative_alert_status": "flagged",
+    "unmatched_environment_relative_status": "informational",
+    "size_percentage_only_failure": false,
+    "size_changes_tracked": true,
+    "nightly_gpu_check_interval": "1 day",
+    "per_change_checks": ["cpu", "compiler", "reproducibility", "size"]
+  },
+  "policy": "Metrics may only strengthen these baselines.  Missing baselines never become zero, and a smaller size change is tracked without an arbitrary percentage-only failure rule."
+}

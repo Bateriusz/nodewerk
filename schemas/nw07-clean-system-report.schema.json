@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw07-clean-system-report.schema.json",
+  "title": "Nodewerk NW-07 clean-system deployment and failure-mode report",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "profile_id",
+    "requirements_digest",
+    "host",
+    "deployment",
+    "scenarios",
+    "verification_status",
+    "policy"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw07-clean-system-report"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-07"
+    },
+    "implementation_base": {
+      "const": "b7e2d11062d4f7bb123ae97c21839631ffc09b93"
+    },
+    "profile_id": {
+      "const": "nw.common.d3d12.fl12_0.sm6_0.v1"
+    },
+    "requirements_digest": {
+      "const": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
+    },
+    "host": {
+      "type": "object",
+      "properties": {
+        "execution_kind": {
+          "enum": [
+            "physical",
+            "documented_gpu_passthrough"
+          ]
+        },
+        "platform": {
+          "type": "string"
+        },
+        "os_build": {
+          "type": "string"
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "x64": {
+          "type": "boolean"
+        },
+        "windows_11_or_newer": {
+          "type": "boolean"
+        },
+        "development_dependency_checks": {
+          "type": "object"
+        },
+        "development_dependencies_present_on_path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "environment_cache_variables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "clean_environment": {
+          "type": "boolean"
+        },
+        "passthrough_documentation": {
+          "type": "string"
+        },
+        "virtualization_probe": {
+          "type": "object"
+        },
+        "virtualization_indicators": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "physical_host_evidence": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "deployment": {
+      "type": "object"
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "scenario",
+          "executed",
+          "expected_exit_code",
+          "status"
+        ],
+        "properties": {
+          "scenario": {
+            "enum": [
+              "corrupt_payload",
+              "deployed_startup",
+              "missing_required_feature",
+              "initialization_failure",
+              "resize",
+              "device_removal"
+            ]
+          },
+          "executed": {
+            "type": "boolean"
+          },
+          "expected_exit_code": {
+            "type": "integer"
+          },
+          "observed_exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "failed",
+              "not_executed"
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "verification_status": {
+      "enum": [
+        "pending_unverified",
+        "verified",
+        "failed"
+      ]
+    },
+    "policy": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": true
+}

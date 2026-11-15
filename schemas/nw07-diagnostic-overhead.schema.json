@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw07-diagnostic-overhead.schema.json",
+  "title": "Nodewerk NW-07 diagnostic sibling-build overhead record",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "status",
+    "protocol",
+    "release_build_profile",
+    "diagnostic_build_profile",
+    "release_contains_capture_controls",
+    "separate_artifact_required",
+    "release_artifact",
+    "diagnostic_artifact",
+    "measurements",
+    "policy"
+  ],
+  "properties": {
+    "format": { "const": "nw07-diagnostic-overhead" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-07" },
+    "implementation_base": { "const": "b7e2d11062d4f7bb123ae97c21839631ffc09b93" },
+    "status": {
+      "enum": ["pending_unverified", "verified", "failed"]
+    },
+    "protocol": { "const": "nw07-diagnostic-overhead.v1" },
+    "release_build_profile": { "const": "release" },
+    "diagnostic_build_profile": { "const": "dev" },
+    "release_contains_capture_controls": { "const": false },
+    "separate_artifact_required": { "const": true },
+    "release_artifact": { "type": "string", "minLength": 1 },
+    "diagnostic_artifact": { "type": "string", "minLength": 1 },
+    "measurements": { "type": "object" },
+    "policy": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": true
+}

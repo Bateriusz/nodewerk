@@ -189,6 +189,15 @@ void AddPlanFailure(ResourcePlanResult* result,
     result->failures.push_back(std::move(failure));
 }
 
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+// Preserve fail-closed planning while removing diagnostic payload construction
+// from the exact, build-time-validated NW-07 release.
+#define AddPlanFailure(result, ...)                                            \
+    do {                                                                       \
+        (result)->failures.emplace_back();                                     \
+    } while (false)
+#endif
+
 std::string AliasCandidateGroup(const package::ResourceDescriptor& resource) {
     if (resource.kind == "buffer") {
         return "buffer:" + resource.format + ":" + resource.usage;
@@ -1199,5 +1208,9 @@ void EmitAliasingBarrier(void* command_list,
     (void)after_resource;
 #endif
 }
+
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#undef AddPlanFailure
+#endif
 
 } // namespace nw::player

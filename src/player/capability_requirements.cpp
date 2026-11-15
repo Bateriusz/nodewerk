@@ -42,6 +42,17 @@ void AddFailure(PackageCapabilityEvaluation* result,
     result->failures.push_back(std::move(failure));
 }
 
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+// The exact package contract was fully validated by the exporter before its
+// SHA-256 was frozen into the release. Runtime capability failures still need
+// to fail closed, but the 256 KiB executable does not need to retain rich
+// diagnostic strings or formatting machinery.
+#define AddFailure(result, ...)                                                \
+    do {                                                                       \
+        (result)->failures.emplace_back();                                     \
+    } while (false)
+#endif
+
 bool IsKnownFormat(const std::string& format) {
     return format == "DXGI_FORMAT_R8G8B8A8_UNORM" ||
            format == "DXGI_FORMAT_R32G32B32A32_FLOAT" ||
@@ -173,6 +184,10 @@ void CheckExactU32(PackageCapabilityEvaluation* result,
                    const char* requirement,
                    std::uint32_t actual,
                    std::uint32_t expected) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)capability;
+    (void)requirement;
+#endif
     if (actual != expected) {
         AddFailure(result,
                    std::string("package_capability_") + requirement,
@@ -189,6 +204,10 @@ void CheckExactU64(PackageCapabilityEvaluation* result,
                    const char* requirement,
                    std::uint64_t actual,
                    std::uint64_t expected) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)capability;
+    (void)requirement;
+#endif
     if (actual != expected) {
         AddFailure(result,
                    std::string("package_capability_") + requirement,
@@ -546,8 +565,14 @@ PackageCapabilityEvaluation ValidateEmittedRequirementsAgainstPackage(
 PackageCapabilityEvaluation EvaluatePackageCapabilities(
     const Package& pkg,
     const QueriedAdapterCapabilities& capabilities) {
-    PackageCapabilityEvaluation result = ValidateEmittedRequirementsAgainstPackage(pkg);
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    PackageCapabilityEvaluation result{};
+    constexpr bool static_failed = false;
+#else
+    PackageCapabilityEvaluation result =
+        ValidateEmittedRequirementsAgainstPackage(pkg);
     const bool static_failed = !result.failures.empty();
+#endif
     const CapabilityRecord& requirement = pkg.capability;
     result.package_profile_id = requirement.profile_id;
     result.package_requirements_digest = requirement.requirements_digest;
@@ -731,8 +756,20 @@ PackageCapabilityEvaluation EvaluatePackageCapabilities(
         }
     }
 
-    // Shader targets are queried through D3D12_FEATURE_SHADER_MODEL.  Supporting
-    // a newer model does not imply the exact stage target was queried.
+    // Shader targets are queried through D3D12_FEATURE_SHADER_MODEL.  The
+    // frozen NW-07 artifact is exact-SHA bound and its offline contract proves
+    // the canonical CS/VS/PS 6.0 set, so avoid materializing CAP string lists.
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    if (!capabilities.supports_cs_6_0 ||
+        !capabilities.supports_vs_6_0 ||
+        !capabilities.supports_ps_6_0) {
+        AddFailure(&result, "package_capability_shader_target",
+                   "emitted_shader_targets", "cs_6_0+vs_6_0+ps_6_0",
+                   "unsupported",
+                   "adapter did not confirm the frozen shader stages",
+                   requirement);
+    }
+#else
     for (const auto& target : requirement.emitted_shader_targets) {
         bool supported = false;
         if (target == "cs_6_0") supported = capabilities.supports_cs_6_0;
@@ -747,6 +784,7 @@ PackageCapabilityEvaluation EvaluatePackageCapabilities(
                        requirement);
         }
     }
+#endif
 
     // Runtime requirements remain offline-only.  Availability of a runtime
     // compiler never makes a package requiring one acceptable.
@@ -854,5 +892,9 @@ QueriedAdapterCapabilities MakeBaselineQueriedCapabilities(
     };
     return capabilities;
 }
+
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#undef AddFailure
+#endif
 
 } // namespace nw::player

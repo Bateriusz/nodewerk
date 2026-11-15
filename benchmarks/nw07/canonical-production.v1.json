@@ -1,0 +1,294 @@
+{
+  "format": "nw07-canonical-production",
+  "version": 1,
+  "task": "NW-07",
+  "implementation_base": "b7e2d11062d4f7bb123ae97c21839631ffc09b93",
+  "planning_base_provenance_only": "270d298f1b037548e0ab4808b2c123c12ddcc4e6",
+  "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+  "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+  "graph": "fixtures/nw07/production_loop.nwgraph",
+  "graph_sha256": "093b8429d4e592e643dc2eb307ea751a0c78d6544961beb580ea56a9361b7091",
+  "pinned_inputs": [
+    "CMakeLists.txt",
+    "CMakePresets.json",
+    "cmake/BuildProfiles.cmake",
+    "cmake/CompileShaders.cmake",
+    "cmake/DependencyCheck.cmake",
+    "cmake/ToolchainManifest.cmake",
+    "cmake/toolchains/clang-cl-x64.cmake",
+    "cmake/toolchains/msvc-x64.cmake",
+    "benchmarks/toolchain-manifest.v1.json",
+    "fixtures/nw07/production_loop.nwgraph",
+    "fixtures/nw05_procedural_image/main.cpp",
+    "shaders/compute_fixture.hlsl",
+    "shaders/display_fixture.hlsl",
+    "shaders/nw06/manifest.json",
+    "shaders/nw06/nw06_bloom_cs.hlsl",
+    "shaders/nw06/nw06_camera_cs.hlsl",
+    "shaders/nw06/nw06_generate_cs.hlsl",
+    "shaders/nw06/nw06_instances_cs.hlsl",
+    "shaders/nw06/nw06_light_cs.hlsl",
+    "shaders/nw06/nw06_material_cs.hlsl",
+    "shaders/nw06/nw06_scene_data_cs.hlsl",
+    "shaders/nw06/nw06_scene_ps.hlsl",
+    "shaders/nw06/nw06_scene_vs.hlsl",
+    "shaders/nw06/nw06_tonemap_cs.hlsl",
+    "src/package/nwp_format.cpp",
+    "src/package/nwp_format.h",
+    "src/platform/win32_window.cpp",
+    "src/platform/win32_window.h",
+    "src/player/capability_check.cpp",
+    "src/player/capability_check.h",
+    "src/player/capability_requirements.cpp",
+    "src/player/capability_requirements.h",
+    "src/player/clock_provider.h",
+    "src/player/crt_experiment_obligations.h",
+    "src/player/d3d12_bootstrap.cpp",
+    "src/player/d3d12_bootstrap.h",
+    "src/player/diagnostics.cpp",
+    "src/player/diagnostics.h",
+    "src/player/embedded_package.cpp",
+    "src/player/embedded_package.h",
+    "src/player/exit_codes.h",
+    "src/player/nw07_capture_controls.h",
+    "src/player/package_loader.cpp",
+    "src/player/package_loader.h",
+    "src/player/package_player.cpp",
+    "src/player/package_player.h",
+    "src/player/player.cpp",
+    "src/player/player.h",
+    "src/player/player_instrumentation.cpp",
+    "src/player/player_instrumentation.h",
+    "src/player/resource_plan.cpp",
+    "src/player/resource_plan.h",
+    "tools/dependency_check.py",
+    "tools/nw03_compiler.py",
+    "tools/nw03_oracle.py",
+    "tools/nw04_fixture.py",
+    "tools/nw05_export.py",
+    "tools/nw05_optimizer.py",
+    "tools/nw05_schedule.py",
+    "tools/nw06_export.py",
+    "tools/nw06_procedural.py",
+    "tools/nw06_timeline.py",
+    "tools/nwp_package.py",
+    "tools/offline_shader_pack.py",
+    "tools/nw07_contract.py",
+    "tools/nw07_export.py"
+  ],
+  "build_inputs_digest": "sha256:v1:1983b8f07f267221de78b1a37a56a0b859d9a5b4d00a6326c1a26c0b6b1d6b42",
+  "loop": {
+    "looping": true,
+    "wrap": "modulo",
+    "duration_seconds": 20,
+    "ticks_per_second": 48000,
+    "ticks": 960000,
+    "frame_step_numerator": 800,
+    "frame_step_denominator": 1,
+    "frame_rate_hz": 60
+  },
+  "resolution": {
+    "width": 1920,
+    "height": 1080,
+    "aspect": "16:9"
+  },
+  "content": {
+    "torus_instances": 256,
+    "seeded": true,
+    "instance_seed": 439041101,
+    "torus": {
+      "major_segments": 64,
+      "minor_segments": 32,
+      "major_radius": 0.7,
+      "minor_radius": 0.3
+    },
+    "noise_material": {
+      "operator": "nw.texture.noise2d",
+      "width": 256,
+      "height": 256,
+      "seed": 1297036693,
+      "octaves": 4,
+      "format": "r8g8b8a8_unorm",
+      "generated_on_gpu": true
+    },
+    "camera": {
+      "animated": true,
+      "absolute_tick_sampling": true,
+      "keys": [
+        "0:0",
+        "320000:2.0943951023931953",
+        "640000:4.1887902047863905",
+        "960000:6.283185307179586"
+      ],
+      "interpolation": "linear",
+      "loop_revolutions": 1
+    },
+    "twist": {
+      "animated": true,
+      "max_twist_degrees": 180
+    },
+    "lighting": {
+      "analytic": true,
+      "model": "directional",
+      "direction": [
+        -0.4,
+        -1,
+        -0.3
+      ],
+      "color": [
+        1,
+        1,
+        1
+      ]
+    },
+    "bloom": {
+      "enabled": true,
+      "resolution_scale": 0.5,
+      "threshold": 0.7,
+      "intensity": 0.35,
+      "radius": 1.5
+    },
+    "tonemapping": {
+      "enabled": true,
+      "operator": "aces",
+      "exposure": 1.1,
+      "gamma": 2.2
+    },
+    "present": {
+      "terminal_opcode": "frame.present"
+    }
+  },
+  "quality": {
+    "profile_id": "nw07.quality.v1",
+    "settings": {
+      "resolution": {
+        "width": 1920,
+        "height": 1080
+      },
+      "vsync": false,
+      "presentation_mode": "flip_discard",
+      "swap_chain_buffer_count": 2,
+      "msaa_samples": 1,
+      "filtering": "linear",
+      "anisotropy": 1,
+      "texture_format": "r8g8b8a8_unorm",
+      "intermediate_format": "rgba32f",
+      "bloom_resolution_scale": 0.5,
+      "tonemap_operator": "aces",
+      "tone_exposure": 1.1,
+      "tone_gamma": 2.2,
+      "feature_level": "12_0",
+      "shader_model": "6_0"
+    }
+  },
+  "artifact_budget": {
+    "complete_distribution_bytes_ceiling": 262144,
+    "stretch_distribution_bytes_ceiling": 131072,
+    "stretch_is_mandatory_gate": false,
+    "peak_engine_committed_gpu_bytes_ceiling": 536870912,
+    "process_start_to_first_present_ms_ceiling": 2000.0
+  },
+  "fixed_tick_evaluation": {
+    "ticks": [
+      0,
+      240000,
+      480000,
+      720000,
+      959999
+    ],
+    "loop_boundary_ticks": [
+      0,
+      960000
+    ],
+    "deterministic_replay": true,
+    "stateless_scene": true
+  },
+  "capture": {
+    "protocol": "nw07-correctness-capture.v1",
+    "startup_protocol": "nw07-startup.v1",
+    "perf_run_protocol": "nw07-perf-run.v1",
+    "diagnostic_overhead_protocol": "nw07-diagnostic-overhead.v1",
+    "capture_format": "rgba32f",
+    "capture_kind": "rgba32f_raw",
+    "cold_driver_cache_preparation": "reboot or equivalent driver-cache reset before the clean cold run",
+    "warm_preparation": "execute the identical artifact once to completion before the warm run",
+    "application_pipeline_cache_used_on_clean_start": false
+  },
+  "diagnostics": {
+    "release_build_profile": "release",
+    "diagnostic_sibling_build_profile": "dev",
+    "release_contains_capture_controls": false,
+    "diagnostic_build_is_separate_artifact": true,
+    "diagnostic_overhead_measured_separately": true
+  },
+  "build_configuration": {
+    "cmake_generator": "Ninja",
+    "build_type": "MinSizeRel",
+    "build_profile": "release",
+    "pinned_toolchain_enforcement": "ON",
+    "present_sync_interval": 0,
+    "specialized_build_requires_empty_directory": true,
+    "codegen": "graph-derived generated player source",
+    "toolchain_file": "cmake/toolchains/msvc-x64.cmake",
+    "crt_elimination_experiment": "OFF",
+    "inbox_ucrt": "ON",
+    "capture_controls": "OFF"
+  },
+  "image_tolerances": {
+    "numeric": {
+      "absolute": 1e-05,
+      "relative": 0.0001,
+      "mode": "absolute_or_relative"
+    },
+    "image": {
+      "absolute": 0.0001,
+      "relative": 0.0001,
+      "mode": "absolute_required"
+    },
+    "per_device": {
+      "desktop_ada_representative": {
+        "numeric_absolute": 1e-05,
+        "numeric_relative": 0.0001,
+        "image_absolute": 0.0001,
+        "image_relative": 0.0001
+      },
+      "desktop_blackwell_representative": {
+        "numeric_absolute": 1e-05,
+        "numeric_relative": 0.0001,
+        "image_absolute": 0.0001,
+        "image_relative": 0.0001
+      },
+      "desktop_blackwell_development_series": {
+        "numeric_absolute": 1e-05,
+        "numeric_relative": 0.0001,
+        "image_absolute": 0.0001,
+        "image_relative": 0.0001
+      }
+    }
+  },
+  "regression": {
+    "absolute_gate_metrics": [
+      "complete_distribution_bytes",
+      "process_start_to_first_present_ms",
+      "peak_engine_committed_gpu_bytes",
+      "p99_gpu_frame_time_ms",
+      "p99_cpu_submit_ms"
+    ],
+    "matched_environment_relative_alert_percent": 10,
+    "size_percentage_only_failure": false,
+    "relative_comparison_requires_matched_environment": true,
+    "per_change_checks": [
+      "cpu",
+      "compiler",
+      "reproducibility",
+      "size"
+    ],
+    "nightly_checks": [
+      "gpu_frame_time",
+      "startup",
+      "memory",
+      "visual"
+    ]
+  },
+  "policy": "The 256 KiB ceiling is a hard gate on the complete runnable distribution.  The 128 KiB stretch value is reported for measurement only and never gates success.  Resolution, quality, and numeric/image tolerances preserve NW-06 semantics and cannot be weakened to pass a gate."
+}

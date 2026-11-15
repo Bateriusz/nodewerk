@@ -47,6 +47,21 @@ DEFAULT_BYTE_CEILING = 48 * 1024 * 1024
 DEFAULT_MEMORY_BUDGET = 256 * 1024 * 1024
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Render-target dimension settings.  These are intentionally separate from the
+# procedural material texture dimensions: NW-06 sizes its proof from the
+# material texture, while NW-07 opts into a presentation surface whose size is
+# independent of that texture.  The names are contract keys, not heuristics;
+# renaming or merging them requires updating the canonical graph, the frozen
+# NW-07 configuration, and the dimension-precedence tests.
+NW07_OUTPUT_WIDTH_SETTING = "nw07_output_width"
+NW07_OUTPUT_HEIGHT_SETTING = "nw07_output_height"
+NW07_DEFAULT_OUTPUT_WIDTH = 1920
+NW07_DEFAULT_OUTPUT_HEIGHT = 1080
+NW05_OUTPUT_WIDTH_SETTING = "nw05_output_width"
+NW05_OUTPUT_HEIGHT_SETTING = "nw05_output_height"
+NW05_DEFAULT_OUTPUT_WIDTH = 256
+NW05_DEFAULT_OUTPUT_HEIGHT = 256
+
 
 def _graph_image_oracle_sha256(document: nw03.GraphDocument) -> str:
     """CPU oracle digest of the graph-derived procedural image expression."""
@@ -114,6 +129,16 @@ class ExportSettings:
     bake_overrides: tuple[tuple[str, str], ...] = ()
     frames_in_flight: int = 2
     player_template: str = ""
+    # Empty means "inherit the player template's CMake build directory".
+    # NW-07 clean-directory reproducibility sets an independent empty root.
+    specialized_build_root: str = ""
+    # DXGI Present sync interval frozen by the production configuration.
+    present_sync_interval: int = 1
+    # NW-07 freezes the exact embedded package hash into the generated main.
+    # This permits the native release build to omit the second, redundant
+    # semantic-validation pass after the bounded .nwp decoder accepted those
+    # exact bytes. Generic NW-05 exports keep the full runtime validator.
+    frozen_embedded_specialization: bool = False
     allow_optional_profiles: bool = False
     include_optional_artifacts: bool = True
     fusion_enabled: bool = True
@@ -132,6 +157,9 @@ class ExportSettings:
             "bake_overrides": dict(self.bake_overrides),
             "frames_in_flight": self.frames_in_flight,
             "player_template": self.player_template,
+            "specialized_build_root": self.specialized_build_root,
+            "present_sync_interval": self.present_sync_interval,
+            "frozen_embedded_specialization": self.frozen_embedded_specialization,
             "allow_optional_profiles": self.allow_optional_profiles,
             "include_optional_artifacts": self.include_optional_artifacts,
             "fusion_enabled": self.fusion_enabled,
@@ -700,6 +728,7 @@ def generate_player_source(
     memory_budget_bytes: int = 0,
     width: int = 1280,
     height: int = 720,
+    present_sync_interval: int = 1,
 ) -> str:
     """Generate a specialized-player main with no per-demo content logic.
 
@@ -708,6 +737,10 @@ def generate_player_source(
     runtime checks the embedded manifest hash before initializing the player.
     """
     manifest = manifest or {}
+    if present_sync_interval not in (0, 1):
+        raise ExportError(
+            "generated player present sync interval must be 0 (uncapped) or 1 (vsync)"
+        )
     feature_requirements = manifest.get("feature_requirements", {})
     link_wave_ops = bool(feature_requirements.get("wave_ops", False))
     link_fp16 = bool(feature_requirements.get("fp16_shader_ops", False))
@@ -728,8 +761,10 @@ def generate_player_source(
     frame_step_denominator = int(
         timeline.get("frame_step_denominator", 1)
     )
+    duration_ticks = int(timeline.get("duration_ticks", 0))
     if nw06_runtime and (
         ticks_per_second != 48_000
+        or duration_ticks <= 0
         or frame_step_numerator <= 0
         or frame_step_denominator <= 0
     ):
@@ -754,9 +789,16 @@ def generate_player_source(
             "                return 70;\n"
             "            }\n"
             "            const std::uint64_t tick =\n"
-            "                (frame_step_numerator * frame_index) / frame_step_denominator;\n"
+            "                ((frame_step_numerator * frame_index) / frame_step_denominator) %\n"
+            f"                {duration_ticks}ULL;\n"
             "            const auto frame = player.renderAtTick(tick);\n"
-            "            if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
+            "            if (frame != nw::player::ExitCode::Success) {\n"
+            "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+            "                return static_cast<int>(frame);\n"
+            "#else\n"
+            "                return player.Report(true);\n"
+            "#endif\n"
+            "            }\n"
             "            if (player.window_closed()) break;\n"
             "        }\n"
             "    } else {\n"
@@ -775,8 +817,15 @@ def generate_player_source(
             "                std::fprintf(stderr, \"NW06_CLOCK_OVERFLOW\\n\");\n"
             "                return 70;\n"
             "            }\n"
+            f"            tick %= {duration_ticks}ULL;\n"
             "            const auto frame = player.renderAtTick(tick);\n"
-            "            if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
+            "            if (frame != nw::player::ExitCode::Success) {\n"
+            "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+            "                return static_cast<int>(frame);\n"
+            "#else\n"
+            "                return player.Report(true);\n"
+            "#endif\n"
+            "            }\n"
             "        }\n"
             "    }\n"
         )
@@ -790,10 +839,17 @@ def generate_player_source(
             "    }\n"
         )
     manifest_payload = optimizer.manifest_bytes(manifest) if manifest else b""
-    manifest_fnv = 1469598103934665603
-    for byte in manifest_payload:
-        manifest_fnv ^= byte
-        manifest_fnv = (manifest_fnv * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    frozen_manifest_binding = hashlib.sha256(manifest_payload).digest()
+
+    def _fnv64(payload: bytes) -> int:
+        value = 1469598103934665603
+        for byte in payload:
+            value ^= byte
+            value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+        return value
+
+    manifest_fnv = _fnv64(manifest_payload)
+    frozen_manifest_fnv = _fnv64(frozen_manifest_binding)
     return (
         "// Generated by nodewerkc export NW-05. Do not edit.\n"
         "// The graph is the sole demo source; this main only binds the\n"
@@ -801,26 +857,48 @@ def generate_player_source(
         "#include \"player/package_player.h\"\n"
         "#include \"player/embedded_package.h\"\n"
         "#include \"player/exit_codes.h\"\n"
+        "#include \"player/nw07_capture_controls.h\"\n"
         + clock_includes +
+        "#include <chrono>\n"
+        "#ifdef _WIN32\n"
+        "#include <windows.h>\n"
+        "#else\n"
+        "#include <thread>\n"
+        "#endif\n"
         "#include <cstdio>\n"
         "#include <cstdlib>\n"
+        "#include <cstring>\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION || NW07_CAPTURE_CONTROLS\n"
         "#include <string>\n"
-        "#include <vector>\n\n"
+        "#include <vector>\n"
+        "#endif\n\n"
         "int main(int argc, char** argv) {\n"
         "    nw::player::EmbeddedPackage embedded;\n"
         "    if (!nw::player::LoadEmbeddedPackage(&embedded)) {\n"
         "        std::fprintf(stderr, \"embedded package invalid\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        f"    if (nw::package::Sha256Hex(embedded.bytes, embedded.size) != \"{package_sha256}\") {{\n"
+        "        std::fprintf(stderr, \"NW05_FROZEN_PACKAGE_MISMATCH\\n\");\n"
+        "        return 70;\n"
+        "    }\n"
+        "#endif\n"
         "    std::uint64_t manifest_hash = 1469598103934665603ULL;\n"
         "    for (std::size_t i = 0; i < embedded.manifest_size; ++i) {\n"
         "        manifest_hash ^= embedded.manifest[i];\n"
         "        manifest_hash *= 1099511628211ULL;\n"
         "    }\n"
-        f"    if (manifest_hash != {manifest_fnv}ULL) {{\n"
+        "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        f"    constexpr std::uint64_t expected_manifest_hash = {frozen_manifest_fnv}ULL;\n"
+        "#else\n"
+        f"    constexpr std::uint64_t expected_manifest_hash = {manifest_fnv}ULL;\n"
+        "#endif\n"
+        "    if (manifest_hash != expected_manifest_hash) {\n"
         "        std::fprintf(stderr, \"NW05_LINK_MANIFEST_MISMATCH\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "    nw::player::EmbeddedLinkMetadata link_metadata;\n"
         "    if (!nw::player::ParseEmbeddedLinkMetadata(embedded, &link_metadata)) {\n"
         "        std::fprintf(stderr, \"NW05_LINK_METADATA_INVALID\\n\");\n"
@@ -833,6 +911,7 @@ def generate_player_source(
         "        std::fprintf(stderr, \"NW05_LINK_METADATA_MISMATCH\\n\");\n"
         "        return 70;\n"
         "    }\n"
+        "#endif\n"
         f"    if (nw::player::PackagePlayer::specialized_implementation_mask() != {implementation_mask}u) {{\n"
         "        std::fprintf(stderr, \"NW05_SPECIALIZED_IMPLEMENTATION_MISMATCH\\n\");\n"
         "        return 70;\n"
@@ -843,15 +922,27 @@ def generate_player_source(
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
         f"    config.width = {int(width)}u;\n"
         f"    config.height = {int(height)}u;\n"
+        f"    config.present_sync_interval = {int(present_sync_interval)}u;\n"
         f"    config.query_optional_wave_ops = {'true' if link_wave_ops else 'false'};\n"
         f"    config.query_optional_fp16_shader_ops = {'true' if link_fp16 else 'false'};\n"
         f"    config.query_optional_int64_shader_ops = {'true' if link_int64 else 'false'};\n"
         f"    config.memory_budget_bytes = {int(memory_budget_bytes)}ULL;\n"
         "    unsigned long long max_frames = 0;\n"
+        "    unsigned long long explicit_tick = 0;\n"
+        "    bool has_explicit_tick = false;\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "    bool emit_image_hash = false;\n"
+        "#if NW07_CAPTURE_CONTROLS\n"
+        "    std::string capture_directory;\n"
+        "    std::vector<std::uint64_t> capture_ticks;\n"
+        "#endif\n"
         "    for (int index = 1; index < argc; ++index) {\n"
         "        if (std::string(argv[index]) == \"--frames\" && index + 1 < argc) {\n"
         "            max_frames = std::strtoull(argv[++index], nullptr, 10);\n"
+        "        } else if (std::string(argv[index]) == \"--tick\" && index + 1 < argc) {\n"
+        "            explicit_tick = std::strtoull(argv[++index], nullptr, 10);\n"
+        "            has_explicit_tick = true;\n"
+
         "        } else if (std::string(argv[index]) == \"--allow-software-adapter\") {\n"
         "            config.allow_software_adapter = true;\n"
         "        } else if (std::string(argv[index]) == \"--force-non-aliased-plan\") {\n"
@@ -860,12 +951,62 @@ def generate_player_source(
         "            config.enable_validation = true;\n"
         "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
         "            emit_image_hash = true;\n"
+        "#if NW07_CAPTURE_CONTROLS\n"
+        "        } else if (std::string(argv[index]) == \"--capture-dir\" && index + 1 < argc) {\n"
+        "            capture_directory = argv[++index];\n"
+        "        } else if (std::string(argv[index]) == \"--capture-tick\" && index + 1 < argc) {\n"
+        "            capture_ticks.push_back(std::strtoull(argv[++index], nullptr, 10));\n"
+        "#endif\n"
         "        }\n"
         "    }\n"
+        "#else\n"
+        "    for (int index = 1; index < argc; ++index) {\n"
+        "        if (std::strcmp(argv[index], \"--frames\") == 0 && index + 1 < argc) {\n"
+        "            max_frames = std::strtoull(argv[++index], nullptr, 10);\n"
+        "        } else if (std::strcmp(argv[index], \"--tick\") == 0 && index + 1 < argc) {\n"
+        "            explicit_tick = std::strtoull(argv[++index], nullptr, 10);\n"
+        "            has_explicit_tick = true;\n"
+
+        "        }\n"
+        "    }\n"
+        "#endif\n"
         "    nw::player::PackagePlayer player(config);\n"
         "    const auto status = player.initialize(embedded.bytes, embedded.size);\n"
-        "    if (status != nw::player::ExitCode::Success) return player.Report(true);\n"
+        "    if (status != nw::player::ExitCode::Success) {\n"
+        "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        "        return static_cast<int>(status);\n"
+        "#else\n"
+        "        return player.Report(true);\n"
+        "#endif\n"
+        "    }\n"
+        "#if NW07_CAPTURE_CONTROLS\n"
+        "    if (!capture_ticks.empty()) {\n"
+        "        const int capture_status = nw::player::nw07::WriteFixedTickCaptures(\n"
+        "            &player, capture_directory, capture_ticks);\n"
+        "        const auto capture_shutdown = player.shutdown();\n"
+        "        if (capture_status != 0) return capture_status;\n"
+        "        return capture_shutdown == nw::player::ExitCode::Success ? 0 : player.Report(true);\n"
+        "    }\n"
+        "#endif\n"
+        "    if (has_explicit_tick) {\n"
+        "        const auto frame = player.renderAtTick(static_cast<std::uint64_t>(explicit_tick));\n"
+        "        if (frame != nw::player::ExitCode::Success) {\n"
+        "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        "            return static_cast<int>(frame);\n"
+        "#else\n"
+        "            return player.Report(true);\n"
+        "#endif\n"
+        "        }\n"
+        "        std::printf(\"NW05_EXPLICIT_TICK=%llu\\n\", static_cast<unsigned long long>(explicit_tick));\n"
+        "#ifdef _WIN32\n"
+        "        ::Sleep(1500u);\n"
+        "#else\n"
+        "        std::this_thread::sleep_for(std::chrono::milliseconds(1500));\n"
+        "#endif\n"
+        "    } else {\n"
         + playback_loop +
+        "    }\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "    if (emit_image_hash) {\n"
         "        std::vector<std::uint8_t> image;\n"
         "        const auto readback = player.readbackPresentedOutput(&image);\n"
@@ -886,6 +1027,8 @@ def generate_player_source(
         "        std::printf(\"NW05_IMAGE_NONZERO_BYTES=%llu\\n\", static_cast<unsigned long long>(nonzero_bytes));\n"
         "        std::printf(\"NW05_IMAGE_FNV64=%016llx\\n\", static_cast<unsigned long long>(hash));\n"
         "    }\n"
+        "#endif\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "    std::printf(\"NW05_ADAPTER=%s\\n\", player.queried_capabilities().adapter_description.c_str());\n"
         "    std::printf(\"NW05_DRIVER=%s\\n\", player.queried_capabilities().driver_version.c_str());\n"
         "    std::printf(\"NW05_VENDOR_ID=%u\\n\", player.queried_capabilities().vendor_id);\n"
@@ -895,10 +1038,16 @@ def generate_player_source(
         "    std::printf(\"NW05_ALIAS_ACTIVATIONS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().alias_barrier_count));\n"
         "    std::printf(\"NW05_UAV_BARRIERS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().uav_barrier_count));\n"
         "    std::printf(\"NW05_VALIDATION_ENABLED=%d\\n\", player.validation_enabled() ? 1 : 0);\n"
+        "#endif\n"
+        "    std::printf(\"NW05_PRESENT_SYNC_INTERVAL=%u\\n\", config.present_sync_interval);\n"
         "    const auto shutdown = player.shutdown();\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "    std::printf(\"NW05_FRAMES=%llu\\n\", static_cast<unsigned long long>(player.frames_rendered()));\n"
         "    std::printf(\"NW05_PRESENTS=%llu\\n\", static_cast<unsigned long long>(player.frames_presented()));\n"
         "    return shutdown == nw::player::ExitCode::Success ? 0 : player.Report(true);\n"
+        "#else\n"
+        "    return static_cast<int>(shutdown);\n"
+        "#endif\n"
         "}\n"
         f"// package_sha256={package_sha256}\n"
         f"// link_manifest_sha256={manifest_sha256}\n"
@@ -1101,18 +1250,69 @@ def _pe_runtime_dependencies(executable: bytes) -> list[str]:
     return dependencies
 
 
+def _template_build_configuration(template_path: Path) -> dict[str, str]:
+    """Read the exact toolchain/profile settings from the template build tree.
+
+    Clean reproducibility builds must not inherit a stale CMake cache, but they
+    still have to reproduce the same toolchain and profile decisions as the
+    built template.  Only explicit, known cache entries are carried forward.
+    """
+    build_root = _cmake_build_root_from_template(template_path)
+    cache_path = build_root / "CMakeCache.txt"
+    values: dict[str, str] = {}
+    for line in cache_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line or line.startswith(("#", "//")) or "=" not in line:
+            continue
+        key_type, value = line.split("=", 1)
+        key = key_type.split(":", 1)[0].strip()
+        if key in {
+            "CMAKE_TOOLCHAIN_FILE",
+            "CMAKE_BUILD_TYPE",
+            "CMAKE_GENERATOR",
+            "CMAKE_MAKE_PROGRAM",
+            "NW_BUILD_PROFILE",
+            "NW_ENFORCE_PINNED_TOOLCHAIN",
+            "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
+            "NW_USE_INBOX_UCRT",
+            "NW07_CAPTURE_CONTROLS",
+        }:
+            values[key] = value
+    if values.get("NW_ENFORCE_PINNED_TOOLCHAIN", "").upper() != "ON":
+        raise ExportError(
+            "release player template was configured without "
+            "NW_ENFORCE_PINNED_TOOLCHAIN=ON; the release export cannot prove "
+            "the frozen toolchain",
+            dependency_path=["specialized_player", "toolchain_enforcement"],
+        )
+    return values
+
+
 def _build_specialized_player(
     template_path: Path,
     source_text: str,
     manifest: Mapping[str, Any],
     profile_id: str,
+    *,
+    build_root_override: Path | None = None,
+    frozen_embedded_specialization: bool = False,
 ) -> bytes:
     if os.name != "nt":
         raise ExportError(
             "production specialized-player linking requires the pinned Windows build",
             dependency_path=["specialized_player", "platform"],
         )
-    build_root = _cmake_build_root_from_template(template_path)
+    template_root = _cmake_build_root_from_template(template_path)
+    build_root = (
+        Path(build_root_override)
+        if build_root_override is not None
+        else template_root
+    )
+    build_root.mkdir(parents=True, exist_ok=True)
+    inherited = (
+        _template_build_configuration(template_path)
+        if build_root.resolve() != template_root.resolve()
+        else {}
+    )
     generated_dir = build_root / "nw05-generated-src"
     generated_dir.mkdir(parents=True, exist_ok=True)
     source_path = generated_dir / f"{_profile_file_stem(profile_id)}.cpp"
@@ -1129,14 +1329,35 @@ def _build_specialized_player(
         ),
         **_specialized_implementation_flags(manifest),
     }
-    configure = [
-        "cmake",
-        "-S",
-        str(REPO_ROOT),
-        "-B",
-        str(build_root),
-        f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
-    ]
+    configure = ["cmake"]
+    if inherited.get("CMAKE_GENERATOR"):
+        configure.extend(["-G", inherited["CMAKE_GENERATOR"]])
+    configure.extend(
+        [
+            "-S",
+            str(REPO_ROOT),
+            "-B",
+            str(build_root),
+            f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
+            "-DNW05_FROZEN_EMBEDDED_SPECIALIZATION:BOOL="
+            + ("ON" if frozen_embedded_specialization else "OFF"),
+        ]
+    )
+    for name in (
+        "CMAKE_TOOLCHAIN_FILE",
+        "CMAKE_BUILD_TYPE",
+        "CMAKE_MAKE_PROGRAM",
+        "NW_BUILD_PROFILE",
+        "NW_ENFORCE_PINNED_TOOLCHAIN",
+        "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
+        "NW_USE_INBOX_UCRT",
+        "NW07_CAPTURE_CONTROLS",
+    ):
+        if name in inherited:
+            value = inherited[name]
+            # CMake cache variable names are typed by CMake itself; FILEPATH
+            # and BOOL are accepted as generic -D values.
+            configure.append(f"-D{name}={value}")
     configure.extend(
         f"-D{name}:BOOL={'ON' if enabled else 'OFF'}"
         for name, enabled in sorted(flags.items())
@@ -1241,21 +1462,26 @@ def _graph_render_dimensions(
     document: nw03.GraphDocument,
     optimized: optimizer.OptimizedGraph,
 ) -> tuple[int, int]:
-    reachable = set(optimized.reachable_node_ids) | set(
-        optimized.constants_folded
-    )
-    textures = [
-        document.nodes[node_id]
-        for node_id in sorted(document.nodes)
-        if node_id in reachable
-        and document.nodes[node_id].operator_id
-        in {"nw.texture.procedural", "nw.texture.noise2d"}
-    ]
-    if textures:
-        return (
-            _node_int(textures[0], "width", 256),
-            _node_int(textures[0], "height", 256),
-        )
+    """Resolve presentation dimensions from explicit settings, then the texture.
+
+    The precedence below is part of the NW-06/NW-07 contract and must not be
+    reordered by later graph passes:
+
+    1. NW-07 presentation settings win.  If either ``nw07_output_width`` or
+       ``nw07_output_height`` exists, the graph has explicitly opted into a
+       presentation-sized render target.  The missing axis falls back to the
+       NW-07 default (1920x1080); axes are never mixed with the material
+       texture size.  This is what lets a 256x256 procedural material render
+       into the certified 1920x1080 production surface.
+    2. Otherwise the first reachable NW-06 ``nw.texture.procedural`` or
+       ``nw.texture.noise2d`` texture supplies both dimensions.  This preserves
+       the NW-06 proof's 256x256 output semantics.
+    3. Otherwise explicit NW-05 output settings apply, defaulting to 256x256.
+
+    Keys are matched exactly.  A misspelled or newly introduced dimension key
+    deliberately does not opt into presentation-sized output, so an accidental
+    graph-pass rename cannot silently change the certified artifact size.
+    """
 
     def setting_dimension(name: str, default: int) -> int:
         raw = str(document.settings.get(name, default)).strip()
@@ -1267,9 +1493,36 @@ def _graph_render_dimensions(
             return default
         return max(1, min(8192, int(value)))
 
+    nw07_dimension_keys = (NW07_OUTPUT_WIDTH_SETTING, NW07_OUTPUT_HEIGHT_SETTING)
+    if any(name in document.settings for name in nw07_dimension_keys):
+        # Deliberate precedence: NW-07 presentation dimensions override the
+        # NW-06 material texture dimensions even when only one axis is present.
+        return (
+            setting_dimension(NW07_OUTPUT_WIDTH_SETTING, NW07_DEFAULT_OUTPUT_WIDTH),
+            setting_dimension(NW07_OUTPUT_HEIGHT_SETTING, NW07_DEFAULT_OUTPUT_HEIGHT),
+        )
+
+    reachable = set(optimized.reachable_node_ids) | set(
+        optimized.constants_folded
+    )
+    textures = [
+        document.nodes[node_id]
+        for node_id in sorted(document.nodes)
+        if node_id in reachable
+        and document.nodes[node_id].operator_id
+        in {"nw.texture.procedural", "nw.texture.noise2d"}
+    ]
+    if textures:
+        # NW-06 fallback: the material texture size is the render size unless
+        # the graph opted into the distinct NW-07 presentation namespace above.
+        return (
+            _node_int(textures[0], "width", 256),
+            _node_int(textures[0], "height", 256),
+        )
+
     return (
-        setting_dimension("nw05_output_width", 256),
-        setting_dimension("nw05_output_height", 256),
+        setting_dimension(NW05_OUTPUT_WIDTH_SETTING, NW05_DEFAULT_OUTPUT_WIDTH),
+        setting_dimension(NW05_OUTPUT_HEIGHT_SETTING, NW05_DEFAULT_OUTPUT_HEIGHT),
     )
 
 
@@ -2832,9 +3085,19 @@ def export_graph(
                     memory_budget_bytes=settings.memory_budget,
                     width=render_width,
                     height=render_height,
+                    present_sync_interval=settings.present_sync_interval,
                 )
                 preliminary_player = _build_specialized_player(
-                    template_path, preliminary_source, manifest, profile_id
+                    template_path,
+                    preliminary_source,
+                    manifest,
+                    profile_id,
+                    build_root_override=(
+                        Path(settings.specialized_build_root)
+                        if settings.specialized_build_root
+                        else None
+                    ),
+                    frozen_embedded_specialization=settings.frozen_embedded_specialization,
                 )
                 actual_dependencies = _pe_runtime_dependencies(preliminary_player)
                 manifest["retained"]["dependencies"] = actual_dependencies
@@ -2849,9 +3112,19 @@ def export_graph(
                     memory_budget_bytes=settings.memory_budget,
                     width=render_width,
                     height=render_height,
+                    present_sync_interval=settings.present_sync_interval,
                 )
                 specialized_player_bytes = _build_specialized_player(
-                    template_path, final_source, manifest, profile_id
+                    template_path,
+                    final_source,
+                    manifest,
+                    profile_id,
+                    build_root_override=(
+                        Path(settings.specialized_build_root)
+                        if settings.specialized_build_root
+                        else None
+                    ),
+                    frozen_embedded_specialization=settings.frozen_embedded_specialization,
                 )
                 final_dependencies = _pe_runtime_dependencies(specialized_player_bytes)
                 if final_dependencies != actual_dependencies:
@@ -2881,8 +3154,13 @@ def export_graph(
                         "specialized player image is unavailable",
                         dependency_path=["specialized_player", "output"],
                     )
+                embedded_manifest_payload = (
+                    hashlib.sha256(manifest_data).digest()
+                    if settings.frozen_embedded_specialization
+                    else manifest_data
+                )
                 executable_bytes = embed_package(
-                    player_image, package_bytes, manifest_data
+                    player_image, package_bytes, embedded_manifest_payload
                 )
                 executable_name = f"{_profile_file_stem(profile_id)}.exe"
 
@@ -2899,6 +3177,7 @@ def export_graph(
                 memory_budget_bytes=settings.memory_budget,
                 width=render_width,
                 height=render_height,
+                present_sync_interval=settings.present_sync_interval,
             ).encode("utf-8")
             aux_files = {
                 f"{_profile_file_stem(profile_id)}.schedule.json": len(schedule_data),
@@ -3028,6 +3307,7 @@ def export_graph(
                     memory_budget_bytes=settings.memory_budget,
                     width=render_width,
                     height=render_height,
+                    present_sync_interval=settings.present_sync_interval,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
             else:
@@ -3038,6 +3318,7 @@ def export_graph(
                     memory_budget_bytes=settings.memory_budget,
                     width=render_width,
                     height=render_height,
+                    present_sync_interval=settings.present_sync_interval,
                 )
                 _write_bytes(staging / f"{stem}.player.cpp", source.encode("utf-8"))
 

@@ -53,6 +53,12 @@ float SampleCurve(uint tick, uint interpolation)
     uint tick1 = NwCamera.Load(1u);
     uint tick2 = NwCamera.Load(2u);
     uint tick3 = NwCamera.Load(3u);
+    // The canonical production loops every tick3 ticks.  Wrapping here keeps
+    // direct shader evaluation consistent with the player's looped timeline.
+    if (tick3 != 0u)
+    {
+        tick = tick % tick3;
+    }
     float value0 = asfloat(NwCamera.Load(4u));
     float value1 = asfloat(NwCamera.Load(5u));
     float value2 = asfloat(NwCamera.Load(6u));
@@ -121,7 +127,11 @@ VSOutput SceneVS(VSInput input)
         LoadFloat(offset + 48u), LoadFloat(offset + 52u), LoadFloat(offset + 56u), LoadFloat(offset + 60u));
     uint material_index = LoadUInt(offset + 64u);
 
-    float phase = float(Tick) * (6.283185307179586 / 48000.0);
+    uint loop_ticks = NwCamera.Load(3u);
+    uint wrapped_tick = loop_ticks != 0u ? (Tick % loop_ticks) : Tick;
+    float phase = loop_ticks != 0u
+        ? float(wrapped_tick) * (6.283185307179586 / float(loop_ticks))
+        : 0.0;
     float twist = TwistRadians * sin(phase) * input.position.y;
     float3 local_position = RotateY(input.position, twist);
     float3 local_normal = RotateY(input.normal, twist);
@@ -129,7 +139,7 @@ VSOutput SceneVS(VSInput input)
     float3 world_normal = normalize(mul(float4(local_normal, 0.0), transform).xyz);
 
     uint camera_interpolation = NwCamera.Load(11u);
-    float camera_angle = SampleCurve(Tick, camera_interpolation);
+    float camera_angle = SampleCurve(wrapped_tick, camera_interpolation);
     float radius_min = asfloat(NwCamera.Load(8u));
     float radius_max = asfloat(NwCamera.Load(9u));
     float camera_height = asfloat(NwCamera.Load(10u));

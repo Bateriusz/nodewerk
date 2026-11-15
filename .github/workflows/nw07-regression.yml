@@ -1,0 +1,352 @@
+name: NW-07 256 KiB Architectural Proof Regression
+# Final-gate evidence hardening: dual-tier fresh capture and fail-closed provenance. Direct perf-call compatibility is regression-tested.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  per-change-checks:
+    name: Per-change CPU, compiler, reproducibility and size checks
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      # Fast fail: compile production-shaped frozen specialization before Python gates.
+      # Compile the exact frozen C++ branches before contract tests so
+      # preprocessor/syntax regressions cannot be masked by a stale freeze.
+      - name: Configure NW-07 frozen host compile gate
+        run: >-
+          cmake -S . -B build/nw07-frozen-host -G Ninja
+          -DCMAKE_BUILD_TYPE=MinSizeRel
+          -DNW_BUILD_PROFILE=release
+          -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
+      - name: Compile exact NW-07 frozen host path
+        run: cmake --build build/nw07-frozen-host --target nw07_frozen_host_compile --parallel 2
+      - name: Run NW-07 contract and regression tests
+        run: python -m pytest -q tests/test_nw07_*.py
+      - name: Run NW-07 ContractsOnly verification
+        run: >-
+          python tools/verify_nw07.py --mode ContractsOnly
+          --summary-json "$RUNNER_TEMP/nw07-contracts.json"
+      - name: Run NW-07 BuildChecks verification (native export pending off Windows)
+        # BuildChecks intentionally reports pending_unverified (exit 2) when the
+        # Windows-only release export has no Windows host, DXC, or player
+        # template.  ContractsOnly above already exercises the GPU-less
+        # contracts, reproducibility, and size accounting.  Treat only the
+        # documented pending state as expected on Linux; an executed failure
+        # (exit 1) must still fail the job.
+        shell: bash
+        run: |
+          set +e
+          python tools/verify_nw07.py --mode BuildChecks \
+            --summary-json "$RUNNER_TEMP/nw07-build-checks.json"
+          status=$?
+          set -e
+          if [ "$status" -eq 2 ]; then
+            echo "::notice::NW-07 BuildChecks reported pending native Windows release export on ubuntu-latest; ContractsOnly covered the GPU-less contracts, reproducibility, and size checks."
+            exit 0
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::NW-07 BuildChecks exited with status $status"
+            exit "$status"
+          fi
+      - name: Upload NW-07 contract summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw07-contract-summary
+          path: |
+            ${{ runner.temp }}/nw07-contracts.json
+            ${{ runner.temp }}/nw07-build-checks.json
+
+  windows-release-build:
+    name: Windows x64 release export and diagnostic sibling build
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Bootstrap exact NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh ./tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath "$env:RUNNER_TEMP\nw07-bootstrap-provenance.json"
+      - name: Export exact MSVC/SDK build environment
+        shell: pwsh
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+      - name: Configure NW-07 release build
+        run: cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+      - name: Configure NW-07 diagnostic sibling build
+        run: cmake --preset nw07-diagnostics -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+      - name: Build release player template
+        run: cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+      - name: Build diagnostic capture sibling
+        run: cmake --build --preset nw07-diagnostics --target nw_procedural_image_player --parallel 2
+      - name: Run NW-07 BuildChecks
+        shell: pwsh
+        run: |
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template -PathType Leaf)) {
+            Write-Error "NW-07 release player template was not built: $template"
+            exit 1
+          }
+          $diagnostic = Join-Path $PWD "build/nw07-diagnostics/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $diagnostic -PathType Leaf)) {
+            Write-Error "NW-07 diagnostic sibling player was not built: $diagnostic"
+            exit 1
+          }
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          python tools/verify_nw07.py --mode BuildChecks `
+            --player-template $template `
+            --dxc $dxc `
+            --native-output "$PWD/build/nw07-distribution" `
+            --summary-json "$env:RUNNER_TEMP\nw07-build-checks.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "NW-07 BuildChecks failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+      - name: Upload NW-07 Windows build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw07-windows-build-checks
+          path: |
+            ${{ runner.temp }}/nw07-build-checks.json
+            ${{ runner.temp }}/nw07-bootstrap-provenance.json
+            build/nw07-distribution/**
+
+  nightly-gpu-capture:
+    name: Nightly fresh ${{ matrix.tier }} GPU evidence
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tier: ada
+            runner_label: nw07-ada
+          - tier: blackwell
+            runner_label: nw07-blackwell
+    runs-on: [self-hosted, windows, x64, nw07-gpu, "${{ matrix.runner_label }}"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize isolated nightly evidence fragment
+        shell: pwsh
+        env:
+          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+        run: |
+          Copy-Item "$env:NW07_EVIDENCE" "$env:RUNNER_TEMP\nw07-evidence-${{ matrix.tier }}.json" -Force
+      - name: Collect fresh reference performance samples
+        if: matrix.tier == 'ada'
+        env:
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+          NW07_EXECUTABLE: ${{ vars.NW07_FIXTURE }}
+          NW07_COLLECTOR_COMMAND: ${{ vars.NW07_COLLECTOR_COMMAND }}
+          NW07_REFERENCE: ${{ vars.NW07_REFERENCE }}
+          NW07_PERF_CONTRACT: ${{ vars.NW07_PERF_CONTRACT }}
+          NW07_EXECUTION_KIND: ${{ vars.NW07_EXECUTION_KIND }}
+          NW07_PASSTHROUGH_DOCUMENTATION: ${{ vars.NW07_PASSTHROUGH_DOCUMENTATION }}
+        run: >-
+          python tools/nw07_capture.py collect
+          --package "$env:NW07_PACKAGE"
+          --executable "$env:NW07_EXECUTABLE"
+          --samples-dir "$env:RUNNER_TEMP\nw07-nightly-samples"
+          --contract "$env:NW07_PERF_CONTRACT"
+          --reference "$env:NW07_REFERENCE"
+          --collector-command "$env:NW07_COLLECTOR_COMMAND"
+          --capture-id "nightly-perf-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          --execution-kind "$env:NW07_EXECUTION_KIND"
+          --passthrough-documentation "$env:NW07_PASSTHROUGH_DOCUMENTATION"
+          --evidence "$env:RUNNER_TEMP\nw07-evidence-ada.json"
+      - name: Collect fresh fixed-tick correctness, startup and memory evidence
+        env:
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+          NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
+          NW07_DIAGNOSTIC_EXECUTABLE: ${{ vars.NW07_DIAGNOSTIC_EXECUTABLE }}
+          NW07_RELEASE_CAPTURE_COMMAND: ${{ vars.NW07_RELEASE_CAPTURE_COMMAND }}
+          NW07_METRICS_COMMAND: ${{ vars.NW07_METRICS_COMMAND }}
+          NW07_EXECUTION_KIND: ${{ vars.NW07_EXECUTION_KIND }}
+          NW07_PASSTHROUGH_DOCUMENTATION: ${{ vars.NW07_PASSTHROUGH_DOCUMENTATION }}
+        run: >-
+          python tools/nw07_capture.py release-correctness
+          --package "$env:NW07_PACKAGE"
+          --executable "$env:NW07_FIXTURE"
+          --diagnostic-executable "$env:NW07_DIAGNOSTIC_EXECUTABLE"
+          --capture-command "$env:NW07_RELEASE_CAPTURE_COMMAND"
+          --captures-dir "$env:RUNNER_TEMP\nw07-nightly-captures-${{ matrix.tier }}"
+          --artifact-root "$env:RUNNER_TEMP\nw07-artifact-root-${{ matrix.tier }}"
+          --reference-captures-dir "$env:RUNNER_TEMP\nw07-nightly-reference-${{ matrix.tier }}"
+          --reference-execution-output "$env:RUNNER_TEMP\nw07-reference-${{ matrix.tier }}.json"
+          --capture-id "nightly-correctness-${{ matrix.tier }}-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          --tier "${{ matrix.tier }}"
+          --execution-kind "$env:NW07_EXECUTION_KIND"
+          --passthrough-documentation "$env:NW07_PASSTHROUGH_DOCUMENTATION"
+          --metrics-command "$env:NW07_METRICS_COMMAND"
+          --metrics-output "$env:RUNNER_TEMP\nw07-metrics-${{ matrix.tier }}.json"
+          --evidence "$env:RUNNER_TEMP\nw07-evidence-${{ matrix.tier }}.json"
+      - name: Stage nightly fragment
+        if: always()
+        shell: pwsh
+        run: |
+          $stage = "$env:RUNNER_TEMP\nw07-upload-${{ matrix.tier }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\nw07-evidence-${{ matrix.tier }}.json" "$stage\evidence-${{ matrix.tier }}.json" -Force -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP\nw07-artifact-root-${{ matrix.tier }}" "$stage\artifact-root-${{ matrix.tier }}" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP\nw07-nightly-samples" "$stage\perf-samples" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP\nw07-metrics-${{ matrix.tier }}.json" "$stage\metrics-${{ matrix.tier }}.json" -Force -ErrorAction SilentlyContinue
+      - name: Upload nightly capture fragment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw07-nightly-capture-${{ matrix.tier }}
+          path: ${{ runner.temp }}/nw07-upload-${{ matrix.tier }}/**
+
+  nightly-gpu-verify:
+    name: Nightly aggregate and Full verification
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    needs: [nightly-gpu-capture]
+    runs-on: [self-hosted, windows, x64, nw07-gpu, nw07-ada]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nw07-nightly-capture-*
+          path: ${{ runner.temp }}/nw07-nightly-merged
+          merge-multiple: true
+      - name: Merge fresh Ada and Blackwell evidence
+        env:
+          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+        run: >-
+          python tools/nw07_capture.py merge-evidence
+          --base "$env:NW07_EVIDENCE"
+          --input "$env:RUNNER_TEMP\nw07-nightly-merged\evidence-ada.json"
+          --input "$env:RUNNER_TEMP\nw07-nightly-merged\evidence-blackwell.json"
+          --output "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
+      - name: Merge fresh per-tier regression metrics
+        env:
+          NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
+        run: >-
+          python tools/nw07_regression.py
+          --metrics "$env:RUNNER_TEMP\nw07-nightly-merged\metrics-ada.json"
+          --metrics "$env:RUNNER_TEMP\nw07-nightly-merged\metrics-blackwell.json"
+          --evidence "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
+          --artifact "$env:NW07_FIXTURE"
+          --performance-capture-id "nightly-perf-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          --max-evidence-age-seconds 86400
+          --output-dir "$env:RUNNER_TEMP\nw07-nightly-regression"
+      - name: Restore retained raw captures beside the final package
+        shell: pwsh
+        env:
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+        run: |
+          foreach ($tier in @("ada", "blackwell")) {
+            $root = "$env:RUNNER_TEMP\nw07-nightly-merged\artifact-root-$tier"
+            if (-not (Test-Path $root -PathType Container)) {
+              throw "Missing retained raw evidence root for $tier"
+            }
+            Get-ChildItem $root -Directory | ForEach-Object {
+              $destination = Join-Path $env:NW07_PACKAGE $_.Name
+              New-Item -ItemType Directory -Force -Path $destination | Out-Null
+              Copy-Item (Join-Path $_.FullName "*") $destination -Recurse -Force
+            }
+          }
+      - name: Re-run clean-system deployment qualification
+        env:
+          NW07_FAILURE_FIXTURE: ${{ vars.NW07_FAILURE_FIXTURE }}
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+          NW07_BINARY_DIR: ${{ vars.NW07_BINARY_DIR }}
+          NW07_EXECUTION_KIND: ${{ vars.NW07_EXECUTION_KIND }}
+          NW07_PASSTHROUGH_DOCUMENTATION: ${{ vars.NW07_PASSTHROUGH_DOCUMENTATION }}
+        run: >-
+          python tools/nw07_clean_system.py
+          --fixture "$env:NW07_FAILURE_FIXTURE"
+          --package "$env:NW07_PACKAGE"
+          --deployment "$env:NW07_BINARY_DIR"
+          --execution-kind "$env:NW07_EXECUTION_KIND"
+          --passthrough-documentation "$env:NW07_PASSTHROUGH_DOCUMENTATION"
+          --output "$env:RUNNER_TEMP\nw07-clean-system.json"
+      - name: Run NW-07 Full verification on fresh evidence
+        env:
+          NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+          NW07_BUILD_REPORT: ${{ vars.NW07_BUILD_REPORT }}
+          NW07_PERF_CONTRACT: ${{ vars.NW07_PERF_CONTRACT }}
+          NW07_BINARY_DIR: ${{ vars.NW07_BINARY_DIR }}
+        run: >-
+          python tools/verify_nw07.py --mode Full
+          --fixture "$env:NW07_FIXTURE"
+          --package "$env:NW07_PACKAGE"
+          --evidence "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
+          --build-report "$env:NW07_BUILD_REPORT"
+          --perf-ref "$env:NW07_PERF_CONTRACT"
+          --binary-dir "$env:NW07_BINARY_DIR"
+          --clean-report "$env:RUNNER_TEMP\nw07-clean-system.json"
+          --max-evidence-age-seconds 86400
+          --summary-json "$env:RUNNER_TEMP\nw07-full.json"
+      - name: Evaluate matched-environment regression policy
+        if: always()
+        shell: pwsh
+        env:
+          NW07_METRICS: ${{ vars.NW07_METRICS }}
+        run: |
+          python -m pytest -q tests/test_nw07_regression_verify.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $currents = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:NW07_METRICS)) {
+            $currents += $env:NW07_METRICS
+          }
+          foreach ($tier in @("ada", "blackwell")) {
+            $currents += "$env:RUNNER_TEMP\nw07-nightly-regression\metrics-current-$tier.json"
+          }
+          foreach ($current in $currents) {
+            if (-not (Test-Path $current -PathType Leaf)) {
+              Write-Error "Missing current regression metrics: $current"
+              exit 1
+            }
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($current)
+            python tools/nw07_regression.py `
+              --baseline benchmarks/nw07/metric-baselines.v1.json `
+              --current $current `
+              --summary-json "$env:RUNNER_TEMP\nw07-regression-$name.json"
+            $code = $LASTEXITCODE
+            if ($code -eq 1) { exit 1 }
+            if ($code -eq 2) {
+              Write-Warning "Regression evidence remains pending for $current (exit 2)"
+            }
+          }
+      - name: Upload complete nightly evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw07-nightly-evidence
+          path: |
+            ${{ runner.temp }}/nw07-full.json
+            ${{ runner.temp }}/nw07-clean-system.json
+            ${{ runner.temp }}/nw07-nightly-evidence.json
+            ${{ runner.temp }}/nw07-nightly-merged/**
+            ${{ runner.temp }}/nw07-regression-*.json
+            ${{ runner.temp }}/nw07-nightly-regression/**
