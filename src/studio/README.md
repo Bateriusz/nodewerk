@@ -6,12 +6,14 @@ authoritative editor model and GUI are implemented in
 `tools/nw08_gui.py`.
 
 The optional native `nodewerk-studio-preview` host in this directory drives the
-unchanged `nw::player::PackagePlayer` runtime at an absolute tick and uses the
-existing diagnostic readback seam.  It exists only in the authoring product and
-is never linked into `nodewerk-player`.  The target links both
-`nw_player_bootstrap` (which contains the `PackagePlayer` implementation) and
-`nw_package_player` (the package format), plus the platform libraries and the
-player build profile so the Windows CRT settings match.
+established `nw::player::PackagePlayer` runtime at an absolute tick and uses the
+existing diagnostic readback seam. It exists only in the authoring product and
+is never linked into `nodewerk-player`. The standalone studio build compiles
+`nw08_player_bootstrap` from the same frozen player sources while replacing
+only `package_player.cpp/.h` with a deterministic build-tree overlay that adds
+the authoring hot-reload seam. The immutable `.nwp` implementation is compiled
+as `nw08_package_player`; both use the same player build profile/CRT settings
+as the frozen runtime.
 
 The host accepts `--package <exported.nwp>`, `--memory-budget <bytes>`,
 `--stats-json <path>`, and `--session`. In session mode it keeps one D3D12
@@ -35,20 +37,24 @@ that cannot fit the configured budget never starts.
 
 The repository-root `CMakeLists.txt`, `CMakePresets.json`, and every other file
 in `tools/nw07_contract.py::PINNED_BUILD_INPUTS` are frozen NW-07 build inputs.
-They remain byte-identical.  A complete authoring build keeps the repository
-root as CMake's top-level source directory and injects the optional NW-08 target
-set after the frozen project has defined its player/runtime targets:
+They remain byte-identical. A complete authoring build is intentionally
+two-stage: first build the frozen runtime/template normally, then compile the
+standalone studio runtime against the generated shader headers from that build:
 
 ```bash
-cmake -S . -B build/nw08-authoring \
-  -DCMAKE_PROJECT_INCLUDE="$PWD/tools/nw08_authoring_build/inject-studio.cmake"
-cmake --build build/nw08-authoring --target nodewerk-studio-preview nw_procedural_image_player
+cmake -S . -B build/nw08-runtime -DNW_BUILD_PROFILE=dev
+cmake --build build/nw08-runtime --target nw_procedural_image_player
+
+cmake -S src/studio -B build/nw08-studio \
+  -DNW_BUILD_PROFILE=dev \
+  -DNW_STUDIO_ROOT="$PWD" \
+  -DNW_STUDIO_RUNTIME_BUILD_DIR="$PWD/build/nw08-runtime"
+cmake --build build/nw08-studio --target nodewerk-studio-preview
 ```
 
-Keeping the repository root as `CMAKE_SOURCE_DIR` is required by the frozen
-offline-shader rules.  The injection hook defers `nw_add_studio_authoring_targets()`
-until the end of the root configure, so it adds authoring targets without
-changing the NW-07 build graph or release closure.
+The second build never adds a target to the frozen root graph. It consumes only
+the root build's generated offline shader headers and compiles the authoring-only
+PackagePlayer overlay into `nw08_player_bootstrap`.
 
 The Python GUI is launched with:
 

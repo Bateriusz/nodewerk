@@ -58,22 +58,29 @@ jobs:
       - name: Export the pinned build environment
         shell: pwsh
         run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
-      - name: Build the nodewerk-studio-preview native host
+      - name: Build the frozen runtime inputs and native authoring host
         shell: pwsh
         run: |
-          $hook = (Resolve-Path tools/nw08_authoring_build/inject-studio.cmake).Path
-          cmake -S . -B build/nw08-authoring `
-            -DNW_BUILD_PROFILE=dev `
-            "-DCMAKE_PROJECT_INCLUDE=$hook"
+          cmake -S . -B build/nw08-runtime -DNW_BUILD_PROFILE=dev
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build/nw08-authoring --target nodewerk-studio-preview nw_procedural_image_player --parallel 2
+          cmake --build build/nw08-runtime --target nw_procedural_image_player --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $repoRoot = (Resolve-Path .).Path
+          $runtimeBuild = (Resolve-Path build/nw08-runtime).Path
+          cmake -S src/studio -B build/nw08-studio `
+            -DNW_BUILD_PROFILE=dev `
+            "-DNW_STUDIO_ROOT=$repoRoot" `
+            "-DNW_STUDIO_RUNTIME_BUILD_DIR=$runtimeBuild"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/nw08-studio --target nodewerk-studio-preview --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Locate native runtime inputs
         shell: pwsh
         run: |
-          $preview = Get-ChildItem build/nw08-authoring -Recurse -Filter nodewerk-studio-preview.exe |
+          $preview = Get-ChildItem build/nw08-studio -Recurse -Filter nodewerk-studio-preview.exe |
             Select-Object -First 1
-          $template = Get-ChildItem build/nw08-authoring -Recurse -Filter nw_procedural_image_player.exe |
+          $template = Get-ChildItem build/nw08-runtime -Recurse -Filter nw_procedural_image_player.exe |
             Select-Object -First 1
           $dxc = Get-Command dxc.exe -ErrorAction Stop
           if (-not $preview) { throw "nodewerk-studio-preview.exe was not built" }

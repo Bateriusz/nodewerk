@@ -24,7 +24,7 @@ release player, `.nwp` format, dependency closure, frozen NW-07 graph, and
 | `tools/nw08_preview.py` | Preview pipeline, last-valid retention, source-linked diagnostics, pass timings, size attribution |
 | `tools/nw08_studio.py` | Headless application model, CLI, export facade |
 | `tools/nw08_gui.py` | Minimal Tk GUI: graph, inspector, curves, timeline, preview, diagnostics, timings, size, cache budget |
-| `src/studio/nw_studio_preview_host.cpp` | Optional native authoring preview host over the unchanged `PackagePlayer` |
+| `src/studio/nw_studio_preview_host.cpp` | Native authoring preview host over the NW-04 `PackagePlayer` core plus the build-tree-only hot-reload overlay; release sources remain unchanged |
 | `tools/verify_nw08.py` | Contract/build/full verification entry point |
 | `tools/nw08_windows_integration.py` | Windows integration validation and retained evidence |
 
@@ -112,6 +112,10 @@ into a newer generation.
 - GUI preview work runs on a worker thread; the Tk event thread only drains
   generation-checked results, so edits, timeline scrubbing, and cancellation
   remain responsive. Stale or cancelled completions are discarded.
+- The native authoring host is built separately from the frozen root project:
+  the root build first produces the pinned offline shader headers/template, and
+  `src/studio` then compiles a build-tree-only PackagePlayer overlay. No
+  authoring target or source modification is added to the NW-07 release graph.
 - In `package-host` mode `AuthoringRuntimeSession` keeps the native host
   process and D3D12 device alive across timeline scrubs and layout-compatible
   graph edits. Before an edited package is installed, submitted work is retired;

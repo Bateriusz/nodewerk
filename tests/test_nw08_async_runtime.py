@@ -672,21 +672,19 @@ def test_studio_native_host_links_player_implementation_and_profile() -> None:
     cmake = (REPO_ROOT / "src" / "studio" / "CMakeLists.txt").read_text(
         encoding="utf-8"
     )
-    assert "nw_player_bootstrap" in cmake
-    assert "nw_package_player" in cmake
+    assert "nw08_player_bootstrap" in cmake
+    assert "nw08_package_player" in cmake
     assert "nw_apply_player_profile" in cmake
+    assert "NW_STUDIO_RUNTIME_BUILD_DIR" in cmake
     assert "gdi32" in cmake
     workflow = (REPO_ROOT / ".github" / "workflows" / "nw08-studio.yml").read_text(
         encoding="utf-8"
     )
     assert "nodewerk-studio-preview" in workflow
-    assert "cmake -S . -B build/nw08-authoring" in workflow
-    assert "CMAKE_PROJECT_INCLUDE=$hook" in workflow
-    hook = (
-        REPO_ROOT / "tools" / "nw08_authoring_build" / "inject-studio.cmake"
-    ).read_text(encoding="utf-8")
-    assert "PROJECT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR" in hook
-    assert "cmake_language(DEFER CALL nw_add_studio_authoring_targets)" in hook
+    assert "cmake -S . -B build/nw08-runtime" in workflow
+    assert "--target nw_procedural_image_player" in workflow
+    assert "cmake -S src/studio -B build/nw08-studio" in workflow
+    assert "NW_STUDIO_RUNTIME_BUILD_DIR" in workflow
 
 
 def test_runtime_integration_checks_remain_pending_without_a_real_host() -> None:
