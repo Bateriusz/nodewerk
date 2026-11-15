@@ -52,6 +52,19 @@ def _check(name: str, status: str, detail: Any = None) -> dict[str, Any]:
     return entry
 
 
+def _tk_image_names(tkapp: Any, value: Any) -> tuple[str, ...]:
+    """Normalize Tk/ttk's image option across Tcl object representations."""
+    if not value:
+        return ()
+    if isinstance(value, (tuple, list)):
+        return tuple(str(item) for item in value if str(item))
+    try:
+        items = tkapp.splitlist(value)
+    except Exception:
+        return (str(value),)
+    return tuple(str(item) for item in items if str(item))
+
+
 def _export_equivalence(
     work: Path,
     player_template: str,
@@ -882,15 +895,19 @@ def _gui_window_interaction(
                 )
             root.update_idletasks()
             photo = getattr(window, "_preview_photo", None)
-            widget_image = str(window.preview_label.cget("image") or "")
+            widget_image_value = window.preview_label.cget("image")
+            widget_image = str(widget_image_value or "")
+            widget_image_names = _tk_image_names(root.tk, widget_image_value)
+            photo_name = str(photo) if photo is not None else ""
             details["preview_widget_image"] = widget_image
+            details["preview_widget_image_names"] = list(widget_image_names)
             details["preview_widget_sha256"] = getattr(
                 window, "_preview_image_sha", ""
             )
             if (
                 photo is None
-                or not widget_image
-                or widget_image != str(photo)
+                or not widget_image_names
+                or photo_name not in widget_image_names
                 or details["preview_widget_sha256"] != record.frame.image_sha256
             ):
                 return _check(
@@ -902,7 +919,8 @@ def _gui_window_interaction(
                             "into the actual Tk preview widget"
                         ),
                         "widget_image": widget_image,
-                        "photo": str(photo) if photo is not None else "",
+                        "widget_image_names": list(widget_image_names),
+                        "photo": photo_name,
                         "widget_sha256": details["preview_widget_sha256"],
                         "frame_sha256": record.frame.image_sha256,
                         "decode_error": getattr(window, "_preview_decode_error", ""),

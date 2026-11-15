@@ -858,3 +858,34 @@ def test_authoring_runtime_overlay_preserves_frozen_release_inputs(
         REPO_ROOT / "src" / "studio" / "nw_studio_preview_host.cpp"
     ).read_text(encoding="utf-8")
     assert "runtime_pass_timings" in host_text
+
+
+def test_tk_image_names_normalizes_ttk_singleton_tuple() -> None:
+    import nw08_windows_integration as integration
+
+    class FakeTkApp:
+        @staticmethod
+        def splitlist(value):
+            return tuple(str(value).split())
+
+    tkapp = FakeTkApp()
+    assert integration._tk_image_names(tkapp, ("pyimage1",)) == ("pyimage1",)
+    assert integration._tk_image_names(tkapp, "pyimage1") == ("pyimage1",)
+    assert integration._tk_image_names(tkapp, "") == ()
+
+
+def test_shader_recovery_fixture_uses_nwp_v1_legal_upload_frequency() -> None:
+    source = (
+        REPO_ROOT / "fixtures" / "nw08" / "shader_edit_probe.nwgraph"
+    ).read_text(encoding="utf-8")
+    assert "node shader nw.shader.expr@1.0.0 frequency=frame" in source
+    assert (
+        "node texture_recipe nw.texture.procedural@1.0.0 "
+        "frequency=initialization"
+    ) in source
+    assert (
+        "node texture_gpu nw.residency.upload_texture@1.0.0 "
+        "frequency=initialization residency=gpu"
+    ) in source
+    assert "node fullscreen nw.render.fullscreen@1.0.0 frequency=frame" in source
+
