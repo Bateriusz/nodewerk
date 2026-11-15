@@ -260,6 +260,55 @@ def test_gui_photoimage_receives_raw_ppm_bytes() -> None:
     assert window.preview_label.config["image"] is window._preview_photo
 
 
+def test_gui_photoimage_falls_back_to_binary_ppm_file_on_windows_tk() -> None:
+    frame = preview.PreviewFrame(
+        tick=0,
+        width=2,
+        height=2,
+        image_sha256="preview-file",
+        semantic_digest="sha256:v1:" + "b" * 64,
+        image_data=_rgba(2, 2, 0.5),
+    )
+
+    class FakeTk:
+        def __init__(self):
+            self.calls = []
+            self.file_bytes = b""
+
+        def PhotoImage(self, **kwargs):
+            self.calls.append(kwargs)
+            if "data" in kwargs:
+                raise RuntimeError("binary -data rejected by Tcl")
+            path = Path(kwargs["file"])
+            self.file_bytes = path.read_bytes()
+            return object()
+
+    class FakeLabel:
+        def __init__(self):
+            self.config = {}
+
+        def configure(self, **kwargs):
+            self.config.update(kwargs)
+
+    fake_tk = FakeTk()
+    window = object.__new__(gui.StudioWindow)
+    window.tk = fake_tk
+    window.application = SimpleNamespace(
+        pipeline=SimpleNamespace(last_valid_frame=frame)
+    )
+    window.preview_label = FakeLabel()
+    window._preview_photo = None
+    window._preview_image_sha = ""
+    window.refresh_preview_image()
+
+    assert len(fake_tk.calls) == 2
+    assert "data" in fake_tk.calls[0]
+    assert "file" in fake_tk.calls[1]
+    assert fake_tk.file_bytes.startswith(b"P6\n")
+    assert window._preview_image_sha == frame.image_sha256
+    assert window.preview_label.config["image"] is window._preview_photo
+
+
 class _DummyProcess:
     stdin = None
     stdout = None
