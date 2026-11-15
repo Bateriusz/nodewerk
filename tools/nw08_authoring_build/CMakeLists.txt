@@ -1,21 +1,19 @@
-# NW-08 authoring superbuild wrapper.
+# NW-08 authoring build compatibility guard.
 #
-# The repository-root CMakeLists.txt is a frozen NW-07 build input and must not
-# be edited.  This wrapper adds the same Nodewerk project plus the optional
-# authoring-only studio targets, so CI and local Windows review can build:
+# Do not configure this directory as CMake's top-level source.  Frozen NW-07
+# shader rules resolve repository tools through CMAKE_SOURCE_DIR, so a wrapper
+# top level would point them at tools/nw08_authoring_build instead of the repo.
 #
-#   cmake -S tools/nw08_authoring_build -B build/nw08-authoring
+# Configure the repository root and inject NW-08 instead:
+#
+#   cmake -S . -B build/nw08-authoring \
+#     -DCMAKE_PROJECT_INCLUDE=tools/nw08_authoring_build/inject-studio.cmake
 #   cmake --build build/nw08-authoring --target nodewerk-studio-preview
-#
-# Nothing here is part of the release player closure.
 
 cmake_minimum_required(VERSION 3.28)
-project(nodewerk_authoring LANGUAGES CXX)
+project(nodewerk_authoring_guard LANGUAGES NONE)
 
-add_subdirectory(
-    "${CMAKE_CURRENT_LIST_DIR}/../.."
-    "${CMAKE_BINARY_DIR}/nodewerk"
-)
-
-include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/Nw08Studio.cmake")
-nw_add_studio_authoring_targets()
+message(FATAL_ERROR
+  "NW-08 authoring builds must configure the repository root. "
+  "Use -DCMAKE_PROJECT_INCLUDE="
+  "${CMAKE_CURRENT_LIST_DIR}/inject-studio.cmake")

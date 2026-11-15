@@ -2,10 +2,13 @@
 # frozen NW-07 release closure).
 #
 # The repository-root CMakeLists.txt is a frozen NW-07 build input.  To keep
-# release artifacts byte-identical this project is intentionally separate and
-# is configured only when explicitly requested by an authoring build:
+# release artifacts byte-identical these targets are injected only when an
+# authoring build explicitly opts in.  The repository root must remain the
+# top-level source directory because the frozen NW-07 shader rules intentionally
+# resolve tool paths through CMAKE_SOURCE_DIR:
 #
-#   cmake -S src/studio -B build/studio -DNW_STUDIO_ROOT=<repo-root>
+#   cmake -S . -B build/nw08-authoring \
+#     -DCMAKE_PROJECT_INCLUDE=tools/nw08_authoring_build/inject-studio.cmake
 #
 # It links the existing NW-04 package-player runtime for preview and contains
 # no shader compiler, source-map, profiling, or UI dependency in the player.

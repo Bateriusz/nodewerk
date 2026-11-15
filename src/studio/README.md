@@ -35,22 +35,20 @@ that cannot fit the configured budget never starts.
 
 The repository-root `CMakeLists.txt`, `CMakePresets.json`, and every other file
 in `tools/nw07_contract.py::PINNED_BUILD_INPUTS` are frozen NW-07 build inputs.
-For that reason the studio project is a standalone CMake project rather than a
-default target of the root build.  An authoring build may add it explicitly:
+They remain byte-identical.  A complete authoring build keeps the repository
+root as CMake's top-level source directory and injects the optional NW-08 target
+set after the frozen project has defined its player/runtime targets:
 
 ```bash
-cmake -S src/studio -B build/studio -DNW_STUDIO_ROOT="$PWD"
-cmake --build build/studio
+cmake -S . -B build/nw08-authoring \
+  -DCMAKE_PROJECT_INCLUDE="$PWD/tools/nw08_authoring_build/inject-studio.cmake"
+cmake --build build/nw08-authoring --target nodewerk-studio-preview nw_procedural_image_player
 ```
 
-For a complete authoring build (including the content-free
-`nw_procedural_image_player` template), use the wrapper that adds the unchanged
-root project plus this optional target set:
-
-```bash
-cmake -S tools/nw08_authoring_build -B build/nw08-authoring
-cmake --build build/nw08-authoring --target nodewerk-studio-preview
-```
+Keeping the repository root as `CMAKE_SOURCE_DIR` is required by the frozen
+offline-shader rules.  The injection hook defers `nw_add_studio_authoring_targets()`
+until the end of the root configure, so it adds authoring targets without
+changing the NW-07 build graph or release closure.
 
 The Python GUI is launched with:
 

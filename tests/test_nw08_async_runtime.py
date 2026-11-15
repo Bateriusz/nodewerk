@@ -415,6 +415,12 @@ def test_studio_native_host_links_player_implementation_and_profile() -> None:
         encoding="utf-8"
     )
     assert "nodewerk-studio-preview" in workflow
+    assert "cmake -S . -B build/nw08-authoring" in workflow
+    assert "CMAKE_PROJECT_INCLUDE=$hook" in workflow
+    hook = (
+        REPO_ROOT / "tools" / "nw08_authoring_build" / "inject-studio.cmake"
+    ).read_text(encoding="utf-8")
+    assert "cmake_language(DEFER CALL nw_add_studio_authoring_targets)" in hook
 
 
 def test_runtime_integration_checks_remain_pending_without_a_real_host() -> None:

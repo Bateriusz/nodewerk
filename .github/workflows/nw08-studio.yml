@@ -61,8 +61,10 @@ jobs:
       - name: Build the nodewerk-studio-preview native host
         shell: pwsh
         run: |
-          cmake -S tools/nw08_authoring_build -B build/nw08-authoring `
-            -DNW_BUILD_PROFILE=dev
+          $hook = (Resolve-Path tools/nw08_authoring_build/inject-studio.cmake).Path
+          cmake -S . -B build/nw08-authoring `
+            -DNW_BUILD_PROFILE=dev `
+            "-DCMAKE_PROJECT_INCLUDE=$hook"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/nw08-authoring --target nodewerk-studio-preview nw_procedural_image_player --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
