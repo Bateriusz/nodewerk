@@ -161,9 +161,12 @@ capabilities, cache state, clocks/power/thermal conditions, capture protocol,
 raw RGBA32F artifacts, reference provenance, and validated numeric/image
 comparisons.
 The validator reopens the retained captured and reference RGBA32F files,
-recomputes every per-tick and loop-boundary comparison, requires matching
-reference-execution package/manifest/executable provenance, and compares the
-Ada and Blackwell exported-player captures against each other. Declared
+recomputes every per-tick and loop-boundary comparison, and requires the
+reference execution to identify the same artifact key, package, manifest, and
+capture protocol. An exported-player reference must name the final release
+executable; a diagnostic-preview reference must instead name its separately
+hashed sibling executable. It also compares the Ada and Blackwell
+exported-player captures against each other. Declared
 zero-error summaries, missing reference files, and unrelated reference
 provenance cannot establish equivalence.
 The same physical-or-documented-passthrough rule applies to correctness
