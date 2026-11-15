@@ -315,21 +315,19 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
         return nullptr;
     };
 
-    const bool compute_only_packages =
-        std::all_of(old_package.shaders.begin(), old_package.shaders.end(),
-                    [](const package::ShaderRecord& shader) {
-                        return shader.target == "cs_6_0";
-                    }) &&
-        std::all_of(loaded.package.shaders.begin(), loaded.package.shaders.end(),
-                    [](const package::ShaderRecord& shader) {
-                        return shader.target == "cs_6_0";
-                    });
-
     for (auto it = state->pipelines.begin(); it != state->pipelines.end();) {
         const auto* old_shader = find_shader(old_package, it->shader_id);
         const auto* new_shader = find_shader(loaded.package, it->shader_id);
-        bool keep = compute_only_packages && capability_same &&
+        // PipelineSlot stores one shader id.  That is a complete identity for
+        // compute PSOs, but not for a graphics PSO (which also depends on the
+        // pixel shader and fixed-function state).  Reuse unchanged compute PSOs
+        // even when the package also contains raster passes; graphics PSOs are
+        // conservatively rebuilt until the slot carries their full dependency
+        // identity.
+        bool keep = capability_same &&
                     old_shader != nullptr && new_shader != nullptr &&
+                    old_shader->target == "cs_6_0" &&
+                    new_shader->target == "cs_6_0" &&
                     shader_equal(*old_shader, *new_shader);
         if (keep) {
             const auto* old_root =
