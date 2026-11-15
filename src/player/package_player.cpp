@@ -4122,10 +4122,10 @@ std::uint64_t PackagePlayer::EffectiveTimelineTick(
 }
 
 ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
-    const std::uint64_t frame_tick = EffectiveTimelineTick(tick);
     // Frame planning was completed during initialization.  This loop performs
     // no graph traversal, reflection, readback, or engine-owned heap allocation.
 #if defined(_WIN32)
+    const std::uint64_t frame_tick = EffectiveTimelineTick(tick);
     PlatformState* state = platform_.get();
     if (state == nullptr || state->queue == nullptr) {
         return Fail(ExitCode::CommandListRecordingFailed, "command_list",
