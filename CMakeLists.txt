@@ -123,6 +123,7 @@ if(NOT WIN32)
     # export uses. This catches dead-code/warning regressions in implementations
     # that are intentionally removed from the specialized runtime.
     target_compile_definitions(nw_package_player_host_compile PRIVATE
+        NW05_FROZEN_EMBEDDED_SPECIALIZATION=1
         NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=0
         NW05_COMPILE_PROCEDURAL_TEXTURE_R8=0
         NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=0
@@ -132,6 +133,25 @@ if(NOT WIN32)
         NW06_COMPILE_ABSOLUTE_TICK_CAMERA=0
         NW06_COMPILE_HALF_RESOLUTION_BLOOM=0
         NW06_COMPILE_TONEMAP=0
+    )
+
+    add_library(nw_package_format_frozen_host_compile OBJECT
+        src/package/nwp_format.cpp
+    )
+    target_include_directories(nw_package_format_frozen_host_compile PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+    )
+    nw_apply_player_profile(nw_package_format_frozen_host_compile)
+    target_compile_definitions(nw_package_format_frozen_host_compile PRIVATE
+        NW05_FROZEN_EMBEDDED_SPECIALIZATION=1
+    )
+    target_compile_options(nw_package_format_frozen_host_compile PRIVATE -w)
+
+    add_custom_target(nw07_frozen_host_compile
+        DEPENDS
+            nw_package_player_host_compile
+            nw_package_format_frozen_host_compile
     )
 endif()
 target_include_directories(nw_player_bootstrap PUBLIC

@@ -313,11 +313,13 @@ struct Reader {
 
     bool Take(std::size_t count, const std::uint8_t*& out) {
         if (count > Remaining()) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             AddDiagnostic(*diagnostics, "package_truncated",
                           "section " + section + " needs " +
                               std::to_string(count) + " bytes but only " +
                               std::to_string(Remaining()) + " remain",
                           section, base_offset + position, true);
+#endif
             failed = true;
             return false;
         }
@@ -365,9 +367,11 @@ struct Reader {
         std::uint8_t raw = 0;
         if (!U8(raw)) return false;
         if (raw > 1u) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             AddDiagnostic(*diagnostics, "package_malformed_value",
                           "non-boolean byte in section " + section, section,
                           base_offset + position - 1u, true);
+#endif
             failed = true;
             return false;
         }
@@ -379,9 +383,11 @@ struct Reader {
         std::uint16_t length = 0;
         if (!U16(length)) return false;
         if (length > kMaxStringBytes) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             AddDiagnostic(*diagnostics, "package_decode_limit",
                           "string length exceeds limit in section " + section,
                           section, base_offset + position, true);
+#endif
             failed = true;
             return false;
         }
@@ -396,10 +402,12 @@ struct Reader {
         std::uint32_t length = 0;
         if (!U32(length)) return false;
         if (length > limit) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             AddDiagnostic(*diagnostics, "package_decode_limit",
                           "blob length " + std::to_string(length) +
                               " exceeds limit in section " + section,
                           section, base_offset + position, true);
+#endif
             failed = true;
             return false;
         }
@@ -413,9 +421,11 @@ struct Reader {
         std::uint16_t count = 0;
         if (!U16(count)) return false;
         if (count > kMaxRecordCount) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             AddDiagnostic(*diagnostics, "package_decode_limit",
                           "string list count exceeds limit in section " + section,
                           section, base_offset + position, true);
+#endif
             failed = true;
             return false;
         }
@@ -3172,23 +3182,29 @@ std::vector<std::uint8_t> EncodePackage(
     return writer.bytes;
 }
 
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#define NW_NWP_DECODE_DIAGNOSTIC(...) ((void)0)
+#else
+#define NW_NWP_DECODE_DIAGNOSTIC(...) AddDiagnostic(__VA_ARGS__)
+#endif
+
 bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                    Package& package, std::vector<Diagnostic>& diagnostics,
                    bool allow_dev, std::size_t max_total_bytes,
                    std::size_t max_section_bytes, bool verify_integrity) {
     package = Package{};
     if (size_bytes < kHeaderSize + kChecksumSize) {
-        AddDiagnostic(diagnostics, "package_truncated",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_truncated",
                       "package is smaller than header and checksum");
         return false;
     }
     if (size_bytes > max_total_bytes) {
-        AddDiagnostic(diagnostics, "package_decode_limit",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                       "package exceeds configured size limit");
         return false;
     }
     if (std::memcmp(data, kMagic.data(), kMagic.size()) != 0) {
-        AddDiagnostic(diagnostics, "package_header_magic", "bad package magic", {},
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_header_magic", "bad package magic", {},
                       0, true);
         return false;
     }
@@ -3204,63 +3220,67 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     const std::uint64_t checksum_offset = ReadU64(data + 48);
     const std::uint64_t reserved2 = ReadU64(data + 56);
     if (major != kVersionMajor || minor != kVersionMinor) {
-        AddDiagnostic(diagnostics, "package_version_unknown",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_version_unknown",
                       "unknown .nwp version", {}, 8, true);
         return false;
     }
     if (header_size != kHeaderSize) {
-        AddDiagnostic(diagnostics, "package_header_size",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_header_size",
                       "header_size is not 64", {}, 12, true);
         return false;
     }
     if (reserved != 0u || reserved2 != 0u) {
-        AddDiagnostic(diagnostics, "package_header_reserved",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_header_reserved",
                       "reserved header fields must be zero", {}, 16, true);
         return false;
     }
     if (directory_offset != kHeaderSize) {
-        AddDiagnostic(diagnostics, "package_directory_offset",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_directory_offset",
                       "section directory offset is not 64", {}, 24, true);
         return false;
     }
     if (total_size != size_bytes) {
-        AddDiagnostic(diagnostics, "package_size_mismatch",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_size_mismatch",
                       "header total_size does not match actual size", {}, 32,
                       true);
         return false;
     }
     if (entry_size != kSectionEntrySize) {
-        AddDiagnostic(diagnostics, "package_directory_entry_size",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_directory_entry_size",
                       "section directory entry size is not 32", {}, 44, true);
         return false;
     }
     if (section_count == 0u || section_count > kMaxSectionCount) {
-        AddDiagnostic(diagnostics, "package_section_count",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_count",
                       "section count is out of range", {}, 40, true);
         return false;
     }
     const std::uint64_t directory_end =
         kHeaderSize + static_cast<std::uint64_t>(section_count) * kSectionEntrySize;
     if (directory_end > size_bytes - kChecksumSize) {
-        AddDiagnostic(diagnostics, "package_truncated",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_truncated",
                       "section directory exceeds package bounds");
         return false;
     }
     if (checksum_offset != size_bytes - kChecksumSize) {
-        AddDiagnostic(diagnostics, "package_checksum_offset",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_checksum_offset",
                       "checksum offset is not total_size - 32", {}, 48, true);
         return false;
     }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (verify_integrity) {
         const std::string expected = Sha256Hex(data, checksum_offset);
         const std::string actual = Hex(data + checksum_offset, kChecksumSize);
         if (expected != actual) {
-            AddDiagnostic(diagnostics, "package_checksum_mismatch",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_checksum_mismatch",
                           "package integrity checksum does not match",
                           {}, checksum_offset, true);
             return false;
         }
     }
+#else
+    (void)verify_integrity;
+#endif
     struct Entry {
         std::string name;
         std::uint64_t offset;
@@ -3289,46 +3309,46 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             name != std::string(kSectionShaders) &&
             name != std::string(kSectionRootSignatures) &&
             name != std::string(kSectionDev)) {
-            AddDiagnostic(diagnostics, "package_section_unknown",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_unknown",
                           "unknown section '" + name + "'", name, entry_offset,
                           true);
             return false;
         }
         if (name == std::string(kSectionDev) && !allow_dev) {
-            AddDiagnostic(diagnostics, "package_section_forbidden",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_forbidden",
                           "development metadata section is not allowed in release",
                           name, entry_offset, true);
             return false;
         }
         if (!names.insert(name).second) {
-            AddDiagnostic(diagnostics, "package_section_duplicate",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_duplicate",
                           "duplicate section '" + name + "'", name,
                           entry_offset, true);
             return false;
         }
         if (!previous_section_name.empty() &&
             name <= previous_section_name) {
-            AddDiagnostic(diagnostics, "package_section_order",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_order",
                           "section directory is not in canonical ascending order",
                           name, entry_offset, true);
             return false;
         }
         previous_section_name = name;
         if (entry_flags != 0u || entry_reserved != 0u) {
-            AddDiagnostic(diagnostics, "package_section_flags",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_flags",
                           "section flags/reserved bits are unsupported", name,
                           entry_offset, true);
             return false;
         }
         if (section_size > max_section_bytes) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "section size exceeds configured limit", name,
                           entry_offset, true);
             return false;
         }
         if (offset < directory_end || offset > checksum_offset ||
             section_size > checksum_offset - offset) {
-            AddDiagnostic(diagnostics, "package_section_range",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_range",
                           "section range is outside the payload region", name,
                           entry_offset, true);
             return false;
@@ -3343,7 +3363,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         std::string(kSectionRootSignatures), std::string(kSectionShaders)};
     for (const auto& name : required) {
         if (names.count(name) == 0u) {
-            AddDiagnostic(diagnostics, "package_section_missing",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_missing",
                           "missing required section '" + name + "'");
             return false;
         }
@@ -3354,13 +3374,13 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     std::uint64_t previous_end = directory_end;
     for (const auto& entry : entries) {
         if (entry.offset < previous_end) {
-            AddDiagnostic(diagnostics, "package_section_overlap",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_overlap",
                           "section '" + entry.name + "' overlaps another", entry.name,
                           entry.entry_offset, true);
             return false;
         }
         if (entry.offset > previous_end) {
-            AddDiagnostic(diagnostics, "package_section_gap",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_gap",
                           "section '" + entry.name +
                               "' is not contiguous with the previous payload",
                           entry.name, entry.entry_offset, true);
@@ -3369,7 +3389,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         previous_end = entry.offset + entry.size;
     }
     if (previous_end != checksum_offset) {
-        AddDiagnostic(diagnostics, "package_section_gap",
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_gap",
                       "section payloads do not end at the checksum");
         return false;
     }
@@ -3379,6 +3399,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         payloads[entry.name] = data + entry.offset;
         payload_sizes[entry.name] = static_cast<std::size_t>(entry.size);
     }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     // Decode CAP.
     {
         Reader reader{payloads[std::string(kSectionCapability)],
@@ -3388,7 +3409,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         std::uint32_t count = 0;
         if (!reader.U16(version)) return false;
         if (version != 1u) {
-            AddDiagnostic(diagnostics, "package_unknown_section_version",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_unknown_section_version",
                           "CAP section version is not supported",
                           std::string(kSectionCapability));
             return false;
@@ -3396,14 +3417,14 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         std::uint16_t section_flags = 0;
         if (!reader.U16(section_flags)) return false;
         if (section_flags != 0u) {
-            AddDiagnostic(diagnostics, "package_capability_flags",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_capability_flags",
                           "CAP section flags must be zero in v1",
                           std::string(kSectionCapability));
             return false;
         }
         if (!reader.U32(count)) return false;
         if (count > kMaxFieldCount) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "CAP field count exceeds limit",
                           std::string(kSectionCapability));
             return false;
@@ -3416,19 +3437,19 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             if (!reader.String(name) || !reader.U8(type_code)) return false;
             auto found = fields.find(name);
             if (found == fields.end()) {
-                AddDiagnostic(diagnostics, "package_capability_unknown_field",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_capability_unknown_field",
                               "unknown CAP field '" + name + "'",
                               std::string(kSectionCapability));
                 return false;
             }
             if (static_cast<FieldType>(type_code) != found->second) {
-                AddDiagnostic(diagnostics, "package_capability_field_type",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_capability_field_type",
                               "CAP field type mismatch for '" + name + "'",
                               std::string(kSectionCapability));
                 return false;
             }
             if (!seen_fields.insert(name).second) {
-                AddDiagnostic(diagnostics, "package_capability_duplicate_field",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_capability_duplicate_field",
                               "duplicate CAP field '" + name + "'",
                               std::string(kSectionCapability));
                 return false;
@@ -3497,7 +3518,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             }
         }
         if (!reader.AtEnd()) {
-            AddDiagnostic(diagnostics, "package_trailing_data",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_trailing_data",
                           "CAP section has trailing bytes",
                           std::string(kSectionCapability));
             return false;
@@ -3505,7 +3526,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         for (const auto& field_entry : fields) {
             const std::string& name = field_entry.first;
             if (seen_fields.count(name) == 0u) {
-                AddDiagnostic(diagnostics, "package_capability_missing_field",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_capability_missing_field",
                               "CAP section is missing required field '" + name + "'",
                               std::string(kSectionCapability));
                 return false;
@@ -3518,6 +3539,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             package.capability, diagnostics, (flags & 1u) != 0u)) {
         return false;
     }
+#endif
     // Decode RES.
     {
         Reader reader{payloads[std::string(kSectionResources)],
@@ -3527,14 +3549,14 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         std::uint32_t count = 0;
         if (!reader.U16(version)) return false;
         if (version != 1u) {
-            AddDiagnostic(diagnostics, "package_unknown_section_version",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_unknown_section_version",
                           "RES section version is not supported",
                           std::string(kSectionResources));
             return false;
         }
         if (!reader.U32(count)) return false;
         if (count > kMaxRecordCount) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "RES record count exceeds limit",
                           std::string(kSectionResources));
             return false;
@@ -3557,15 +3579,17 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             package.resources.push_back(std::move(resource));
         }
         if (!reader.AtEnd()) {
-            AddDiagnostic(diagnostics, "package_trailing_data",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_trailing_data",
                           "RES section has trailing bytes",
                           std::string(kSectionResources));
             return false;
         }
     }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (!ValidateResources(package.resources, diagnostics)) {
         return false;
     }
+#endif
     const auto decode_instructions = [&](std::string_view section,
                                          std::vector<Instruction>& output) {
         Reader reader{payloads[std::string(section)],
@@ -3575,13 +3599,13 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         std::uint32_t count = 0;
         if (!reader.U16(version) || !reader.U32(count)) return false;
         if (version != 1u) {
-            AddDiagnostic(diagnostics, "package_unknown_section_version",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_unknown_section_version",
                           "instruction section version is not supported",
                           std::string(section));
             return false;
         }
         if (count > kMaxRecordCount) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "instruction record count exceeds limit",
                           std::string(section));
             return false;
@@ -3594,7 +3618,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                 return false;
             }
             if (operand_count > kMaxInstructionOperands) {
-                AddDiagnostic(diagnostics, "package_decode_limit",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                               "instruction operand count exceeds limit",
                               std::string(section));
                 return false;
@@ -3635,7 +3659,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                     break;
                 }
                 default:
-                    AddDiagnostic(diagnostics, "package_instruction_operand",
+                    NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_instruction_operand",
                                   "unknown instruction operand type",
                                   std::string(section));
                     return false;
@@ -3646,7 +3670,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             output.push_back(std::move(instruction));
         }
         if (!reader.AtEnd()) {
-            AddDiagnostic(diagnostics, "package_trailing_data",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_trailing_data",
                           "instruction section has trailing bytes",
                           std::string(section));
             return false;
@@ -3666,13 +3690,13 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         std::uint32_t count = 0;
         if (!reader.U16(version) || !reader.U32(count)) return false;
         if (version != 1u) {
-            AddDiagnostic(diagnostics, "package_unknown_section_version",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_unknown_section_version",
                           "PARM section version is not supported",
                           std::string(kSectionParameters));
             return false;
         }
         if (count > kMaxRecordCount) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "PARM record count exceeds limit",
                           std::string(kSectionParameters));
             return false;
@@ -3694,12 +3718,17 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             package.parameters.push_back(std::move(parameter));
         }
         if (!reader.AtEnd()) {
-            AddDiagnostic(diagnostics, "package_trailing_data",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_trailing_data",
                           "PARM section has trailing bytes",
                           std::string(kSectionParameters));
             return false;
         }
     }
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    const auto charge_decoded = [](std::uint64_t, std::string_view) {
+        return true;
+    };
+#else
     std::uint64_t decoded_bytes = 0u;
     const std::uint64_t decoded_limit =
         max_total_bytes > UINT64_MAX / 4u
@@ -3711,7 +3740,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                               std::string_view section) -> bool {
         if (decoded_bytes > decoded_limit ||
             bytes > decoded_limit - decoded_bytes) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "aggregate decoded payload exceeds the v1 memory budget",
                           std::string(section));
             return false;
@@ -3719,6 +3748,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         decoded_bytes += bytes;
         return true;
     };
+#endif
     const auto decode_root_signatures = [&]() {
         Reader reader{payloads[std::string(kSectionRootSignatures)],
                       payload_sizes[std::string(kSectionRootSignatures)], 0, &diagnostics,
@@ -3727,38 +3757,42 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         std::uint32_t blob_count = 0;
         if (!reader.U16(version) || !reader.U32(blob_count)) return false;
         if (version != 1u) {
-            AddDiagnostic(diagnostics, "package_unknown_section_version",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_unknown_section_version",
                           "RSIG section version is not supported",
                           std::string(kSectionRootSignatures));
             return false;
         }
         if (blob_count > kMaxRecordCount) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "RSIG blob count exceeds limit",
                           std::string(kSectionRootSignatures));
             return false;
         }
         std::vector<std::vector<std::uint8_t>> blobs;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
         std::set<std::string> blob_digests;
+#endif
         for (std::uint32_t i = 0; i < blob_count; ++i) {
             std::vector<std::uint8_t> blob;
             if (!reader.Blob(blob)) return false;
             if (!charge_decoded(blob.size(), kSectionRootSignatures)) {
                 return false;
             }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             if (!blob_digests.insert(Sha256Hex(blob)).second) {
-                AddDiagnostic(diagnostics,
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics,
                               "package_root_signature_not_deduplicated",
                               "RSIG blob table contains duplicates",
                               std::string(kSectionRootSignatures));
                 return false;
             }
+#endif
             blobs.push_back(std::move(blob));
         }
         std::uint32_t count = 0;
         if (!reader.U32(count)) return false;
         if (count > kMaxRecordCount) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "RSIG record count exceeds limit",
                           std::string(kSectionRootSignatures));
             return false;
@@ -3775,7 +3809,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                 return false;
             }
             if (blob_index >= blobs.size()) {
-                AddDiagnostic(diagnostics, "package_reference_out_of_range",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_reference_out_of_range",
                               "RSIG record references a missing blob",
                               std::string(kSectionRootSignatures));
                 return false;
@@ -3785,7 +3819,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                 return false;
             }
             if (binding_count > kMaxRecordCount) {
-                AddDiagnostic(diagnostics, "package_decode_limit",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                               "RSIG binding count exceeds limit",
                               std::string(kSectionRootSignatures));
                 return false;
@@ -3805,7 +3839,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             package.root_signatures.push_back(std::move(record));
         }
         if (!reader.AtEnd()) {
-            AddDiagnostic(diagnostics, "package_trailing_data",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_trailing_data",
                           "RSIG section has trailing bytes",
                           std::string(kSectionRootSignatures));
             return false;
@@ -3820,37 +3854,41 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         std::uint32_t blob_count = 0;
         if (!reader.U16(version) || !reader.U32(blob_count)) return false;
         if (version != 1u) {
-            AddDiagnostic(diagnostics, "package_unknown_section_version",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_unknown_section_version",
                           "SHDR section version is not supported",
                           std::string(kSectionShaders));
             return false;
         }
         if (blob_count > kMaxRecordCount) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "SHDR blob count exceeds limit",
                           std::string(kSectionShaders));
             return false;
         }
         std::vector<std::vector<std::uint8_t>> blobs;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
         std::set<std::string> blob_digests;
+#endif
         for (std::uint32_t i = 0; i < blob_count; ++i) {
             std::vector<std::uint8_t> blob;
             if (!reader.Blob(blob)) return false;
             if (!charge_decoded(blob.size(), kSectionShaders)) {
                 return false;
             }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             if (!blob_digests.insert(Sha256Hex(blob)).second) {
-                AddDiagnostic(diagnostics, "package_shader_blob_not_deduplicated",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_shader_blob_not_deduplicated",
                               "SHDR blob table contains duplicates",
                               std::string(kSectionShaders));
                 return false;
             }
+#endif
             blobs.push_back(std::move(blob));
         }
         std::uint32_t count = 0;
         if (!reader.U32(count)) return false;
         if (count > kMaxRecordCount) {
-            AddDiagnostic(diagnostics, "package_decode_limit",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_decode_limit",
                           "SHDR record count exceeds limit",
                           std::string(kSectionShaders));
             return false;
@@ -3869,7 +3907,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                 return false;
             }
             if (blob_index >= blobs.size()) {
-                AddDiagnostic(diagnostics, "package_reference_out_of_range",
+                NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_reference_out_of_range",
                               "SHDR record references a missing blob",
                               std::string(kSectionShaders));
                 return false;
@@ -3881,7 +3919,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             package.shaders.push_back(std::move(shader));
         }
         if (!reader.AtEnd()) {
-            AddDiagnostic(diagnostics, "package_trailing_data",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_trailing_data",
                           "SHDR section has trailing bytes",
                           std::string(kSectionShaders));
             return false;
@@ -3894,6 +3932,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             payloads[std::string(kSectionDev)],
             payloads[std::string(kSectionDev)] + payload_sizes[std::string(kSectionDev)]);
     }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     std::map<std::string, std::uint32_t> actual_counts;
     actual_counts[std::string(kSectionCapability)] = 1u;
     actual_counts[std::string(kSectionResources)] =
@@ -3913,13 +3952,14 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     }
     for (const auto& entry : entries) {
         if (entry.record_count != actual_counts[entry.name]) {
-            AddDiagnostic(diagnostics, "package_section_record_count",
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_record_count",
                           "section '" + entry.name +
                               "' directory count does not match decoded count",
                           entry.name, entry.entry_offset, true);
             return false;
         }
     }
+#endif
     package.flags = flags;
 #if NW05_FROZEN_EMBEDDED_SPECIALIZATION
     // The NW-07 generated release main compares the embedded package against
@@ -3934,6 +3974,8 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     return ValidatePackage(package, diagnostics, allow_dev);
 #endif
 }
+
+#undef NW_NWP_DECODE_DIAGNOSTIC
 
 std::vector<std::string> CheckReleaseLeakage(
     const std::vector<std::uint8_t>& package_bytes) {

@@ -756,8 +756,20 @@ PackageCapabilityEvaluation EvaluatePackageCapabilities(
         }
     }
 
-    // Shader targets are queried through D3D12_FEATURE_SHADER_MODEL.  Supporting
-    // a newer model does not imply the exact stage target was queried.
+    // Shader targets are queried through D3D12_FEATURE_SHADER_MODEL.  The
+    // frozen NW-07 artifact is exact-SHA bound and its offline contract proves
+    // the canonical CS/VS/PS 6.0 set, so avoid materializing CAP string lists.
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    if (!capabilities.supports_cs_6_0 ||
+        !capabilities.supports_vs_6_0 ||
+        !capabilities.supports_ps_6_0) {
+        AddFailure(&result, "package_capability_shader_target",
+                   "emitted_shader_targets", "cs_6_0+vs_6_0+ps_6_0",
+                   "unsupported",
+                   "adapter did not confirm the frozen shader stages",
+                   requirement);
+    }
+#else
     for (const auto& target : requirement.emitted_shader_targets) {
         bool supported = false;
         if (target == "cs_6_0") supported = capabilities.supports_cs_6_0;
@@ -772,6 +784,7 @@ PackageCapabilityEvaluation EvaluatePackageCapabilities(
                        requirement);
         }
     }
+#endif
 
     // Runtime requirements remain offline-only.  Availability of a runtime
     // compiler never makes a package requiring one acceptable.

@@ -27,6 +27,13 @@ jobs:
         run: python -m pip install pytest
       - name: Run NW-07 contract and regression tests
         run: python -m pytest -q tests/test_nw07_*.py
+      - name: Configure NW-07 frozen host compile gate
+        run: >-
+          cmake -S . -B build/nw07-frozen-host -G Ninja
+          -DCMAKE_BUILD_TYPE=MinSizeRel
+          -DNW_BUILD_PROFILE=release
+      - name: Compile exact NW-07 frozen host path
+        run: cmake --build build/nw07-frozen-host --target nw07_frozen_host_compile --parallel 2
       - name: Run NW-07 ContractsOnly verification
         run: >-
           python tools/verify_nw07.py --mode ContractsOnly
