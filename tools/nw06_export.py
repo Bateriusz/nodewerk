@@ -1220,6 +1220,36 @@ def compile_profile_package(
             package,
             parameters=list(package.parameters) + quantized_parameters,
         )
+
+    # The shared NW-05 player consumes explicit presentation geometry when it
+    # builds the final display plan. NW-06/NW-07 packages must publish the same
+    # contract instead of forcing the player to infer dimensions from RGBA32F
+    # buffer byte size (which is ambiguous for rectangular outputs).
+    presentation_parameters: list[nwp.ParameterRecord] = []
+    for name, value in (
+        ("nw05.present.width", width),
+        ("nw05.present.height", height),
+    ):
+        presentation_parameters.append(
+            nwp.ParameterRecord(
+                parameter_id=next_parameter_id,
+                name=name,
+                type="uint",
+                phase="initialization",
+                component_count=1,
+                value=struct.pack("<I", int(value)),
+                timeline_start_frame=0,
+                timeline_end_frame=0,
+                timeline_step=0,
+                timeline_interpolation="none",
+            )
+        )
+        next_parameter_id += 1
+    package = replace(
+        package,
+        parameters=list(package.parameters) + presentation_parameters,
+    )
+
     package_bytes = nwp.encode_package(package)
     valid, diagnostics = nwp.validate_package_bytes(package_bytes)
     if not valid:

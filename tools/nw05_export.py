@@ -1287,6 +1287,28 @@ def _template_build_configuration(template_path: Path) -> dict[str, str]:
     return values
 
 
+def _run_specialized_player_command(
+    command: Sequence[str],
+) -> subprocess.CompletedProcess[str]:
+    """Run CMake/MSVC with deterministic, code-page-independent decoding.
+
+    Windows runners and developer machines may use a legacy ANSI code page.
+    CMake or MSVC can still emit UTF-8/non-ANSI bytes, so relying on Python's
+    locale-derived decoder can raise UnicodeDecodeError in background reader
+    threads. Decode explicitly as UTF-8 and preserve diagnostics with
+    replacement characters for malformed byte sequences.
+    """
+    return subprocess.run(
+        command,
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
 def _build_specialized_player(
     template_path: Path,
     source_text: str,
@@ -1366,13 +1388,7 @@ def _build_specialized_player(
         configure,
         ["cmake", "--build", str(build_root), "--target", "nw05_generated_player"],
     ):
-        completed = subprocess.run(
-            command,
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        completed = _run_specialized_player_command(command)
         if completed.returncode != 0:
             raise ExportError(
                 "specialized player configure/build failed: "
@@ -1500,6 +1516,22 @@ def _graph_render_dimensions(
         return (
             setting_dimension(NW07_OUTPUT_WIDTH_SETTING, NW07_DEFAULT_OUTPUT_WIDTH),
             setting_dimension(NW07_OUTPUT_HEIGHT_SETTING, NW07_DEFAULT_OUTPUT_HEIGHT),
+        )
+
+    nw06_dimension_keys = ("nw06_output_width", "nw06_output_height")
+    is_nw07_graph = any(name.startswith("nw07_") for name in document.settings)
+    if (
+        not is_nw07_graph
+        and any(name in document.settings for name in nw06_dimension_keys)
+    ):
+        # Pure NW-06 graphs may declare explicit presentation dimensions.
+        # NW-07 graphs also carry nw06_output_* compatibility settings, but
+        # those must not become an implicit fallback when nw07_output_* is
+        # absent: NW-07's contract intentionally falls back to the material
+        # texture in that case.
+        return (
+            setting_dimension("nw06_output_width", 256),
+            setting_dimension("nw06_output_height", 256),
         )
 
     reachable = set(optimized.reachable_node_ids) | set(

@@ -109,6 +109,60 @@ def test_export_generates_gpu_initialization_and_one_indirect_raster_draw(
     assert all(resource.usage != "readback" for resource in package.resources)
 
 
+def _uint_parameter_value(package: nwp.NwpPackage, name: str) -> int:
+    parameter = next(item for item in package.parameters if item.name == name)
+    assert parameter.type == "uint"
+    assert parameter.phase == "initialization"
+    assert parameter.component_count == 1
+    assert len(parameter.value) == 4
+    return struct.unpack("<I", parameter.value)[0]
+
+
+def test_nw06_export_serializes_explicit_square_present_geometry(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path)
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    decoded = nwp.decode_package(artifact.package_bytes)
+    assert _uint_parameter_value(decoded, "nw05.present.width") == 256
+    assert _uint_parameter_value(decoded, "nw05.present.height") == 256
+
+
+def test_nw06_export_serializes_explicit_rectangular_present_geometry(
+    tmp_path: Path,
+) -> None:
+    source = PROCEDURAL.read_text(encoding="utf-8")
+    source = source.replace(
+        "setting nw06_output_height 256",
+        "setting nw06_output_height 144",
+    ).replace(
+        "  param aspect 1",
+        "  param aspect 1.7777777777777777",
+    )
+    graph = tmp_path / "rectangular.nwgraph"
+    graph.write_text(source, encoding="utf-8")
+
+    result = _export_graph(tmp_path, graph, "rectangular-artifact")
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    decoded = nwp.decode_package(artifact.package_bytes)
+
+    assert _uint_parameter_value(decoded, "nw05.present.width") == 256
+    assert _uint_parameter_value(decoded, "nw05.present.height") == 144
+
+    present = next(
+        instruction
+        for instruction in reversed(decoded.frame)
+        if instruction.opcode == "frame.present"
+    )
+    presented_resource_id = present.operands[0].value
+    presented = next(
+        resource
+        for resource in decoded.resources
+        if resource.resource_id == presented_resource_id
+    )
+    assert presented.size_bytes == 256 * 144 * 16
+
+
 def test_export_resources_and_capabilities_are_exact(tmp_path: Path) -> None:
     result = _export(tmp_path)
     package = result.artifacts[nwp.COMMON_PROFILE_ID].package
