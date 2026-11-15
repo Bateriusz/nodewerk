@@ -255,6 +255,20 @@ def test_embedded_preview_backend_is_selected_without_a_host_executable() -> Non
     assert backend.executable is None
 
 
+def test_embedded_integration_check_is_skipped_unless_enabled() -> None:
+    import nw08_windows_integration as integration
+
+    result = integration._embedded_preview_compatibility(
+        player_template="/tmp/template.exe",
+        dxc="/tmp/dxc.exe",
+        cache_dir=None,
+        ticks=[0],
+        allow_test_payloads=False,
+        enabled=False,
+    )
+    assert result["status"] == "skipped"
+
+
 def test_windows_backend_explicit_physical_with_stub_is_not_evidence(
     tmp_path: Path,
 ) -> None:
@@ -347,6 +361,7 @@ class _IdentityBackend(preview.ReferencePreviewBackend):
     def __init__(self) -> None:
         self.shader_identity = "sha256:v1:" + "1" * 64
         self.binding_identity = "sha256:v1:" + "2" * 64
+        self.node_shader_identities: dict[str, str] = {}
 
     def render(self, document, tick, *, width, height):
         frame = super().render(document, tick, width=width, height=height)
@@ -354,6 +369,7 @@ class _IdentityBackend(preview.ReferencePreviewBackend):
             frame,
             shader_identity=self.shader_identity,
             binding_identity=self.binding_identity,
+            node_shader_identities=dict(self.node_shader_identities),
         )
 
 
@@ -576,7 +592,7 @@ def test_parameter_edit_reuses_unchanged_per_node_realizations() -> None:
     assert pipeline.cache.stats["hits"] >= len(second.cached_nodes)
 
 
-def test_shader_or_binding_identity_change_invalidates_all_realizations() -> None:
+def test_global_shader_set_does_not_invalidate_no_shader_nodes() -> None:
     session = editor.GraphEditorSession.create_nw07_proof()
     backend = _IdentityBackend()
     pipeline = preview.PreviewPipeline(session, backend=backend)
@@ -587,27 +603,65 @@ def test_shader_or_binding_identity_change_invalidates_all_realizations() -> Non
     assert first.frame.shader_identity == backend.shader_identity
     assert first.frame.binding_identity == backend.binding_identity
 
-    pipeline.apply_parameter_edit("texture", "seed", "1297036694")
+    # A change to the aggregate shader set must not invalidate nodes that have
+    # no node-specific compiled shader; those nodes use the stable no-shader
+    # identity rather than the global set identity.
+    backend.shader_identity = "sha256:v1:" + "3" * 64
     assert pipeline.preview_now(tick=0).accepted
-    stable = pipeline.last_valid_preview
-    assert stable is not None
-    assert set(stable.cached_nodes) == {
+    second = pipeline.last_valid_preview
+    assert second is not None
+    second_keys = dict(second.node_realization_keys)
+    assert second.cached_nodes == tuple(sorted(first_keys))
+    assert all(first_keys[node_id] == second_keys[node_id] for node_id in first_keys)
+
+
+def test_binding_identity_change_invalidates_all_realizations() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    backend = _IdentityBackend()
+    pipeline = preview.PreviewPipeline(session, backend=backend)
+    assert pipeline.preview_now(tick=0).accepted
+    first = pipeline.last_valid_preview
+    assert first is not None
+    first_keys = dict(first.node_realization_keys)
+
+    backend.binding_identity = "sha256:v1:" + "4" * 64
+    assert pipeline.preview_now(tick=0).accepted
+    second = pipeline.last_valid_preview
+    assert second is not None
+    assert second.cached_nodes == ()
+    second_keys = dict(second.node_realization_keys)
+    assert all(first_keys[node_id] != second_keys[node_id] for node_id in first_keys)
+
+
+def test_node_shader_identity_change_invalidates_only_that_branch() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    backend = _IdentityBackend()
+    backend.node_shader_identities["material"] = "sha256:v1:" + "5" * 64
+    pipeline = preview.PreviewPipeline(session, backend=backend)
+    assert pipeline.preview_now(tick=0).accepted
+
+    backend.node_shader_identities["material"] = "sha256:v1:" + "6" * 64
+    assert pipeline.preview_now(tick=0).accepted
+    record = pipeline.last_valid_preview
+    assert record is not None
+    assert set(record.recomputed_nodes) == {
+        "bloom",
+        "material",
+        "render",
+        "screen",
+        "tonemap",
+    }
+    assert set(record.cached_nodes) == {
         "camera",
         "instances",
         "mesh_gpu",
         "scene_gpu",
         "sun",
+        "texture",
+        "texture_gpu",
         "torus",
         "twist",
     }
-
-    backend.shader_identity = "sha256:v1:" + "3" * 64
-    assert pipeline.preview_now(tick=0).accepted
-    changed = pipeline.last_valid_preview
-    assert changed is not None
-    assert changed.cached_nodes == ()
-    changed_keys = dict(changed.node_realization_keys)
-    assert all(first_keys[node_id] != changed_keys[node_id] for node_id in first_keys)
 
 
 def test_runtime_preview_reservation_bounds_real_gpu_budget() -> None:
@@ -759,6 +813,34 @@ def test_toolchain_change_cancels_inflight_jobs() -> None:
     assert decision.reason == "canceled"
 
 
+def test_cache_keys_delegate_to_the_realization_key_inputs() -> None:
+    import nw08_cache
+
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(session)
+    assert pipeline.preview_now(tick=0).accepted
+    frame = pipeline.last_valid_frame
+    assert frame is not None
+    compiler, device = pipeline.cache_keys()
+    assert (compiler, device) == pipeline.cache_keys(frame)
+
+    pipeline.set_toolchain(
+        nw08_cache.ToolchainIdentity(
+            dxc_version="9.9.9-test",
+            os_build=pipeline.toolchain.os_build,
+        )
+    )
+    changed_compiler, changed_device = pipeline.cache_keys(frame)
+    assert changed_compiler != compiler
+    assert changed_device != device
+
+    pipeline.width = 1280
+    pipeline.height = 720
+    resized_compiler, resized_device = pipeline.cache_keys(frame)
+    assert resized_compiler != changed_compiler
+    assert resized_device != changed_device
+
+
 def test_toolchain_change_during_render_rejects_completion() -> None:
     import nw08_cache
 
@@ -838,4 +920,29 @@ def test_export_bundle_carries_compiled_shader_and_binding_identities(
     assert bundle.shader_identity.startswith("sha256:v1:")
     assert bundle.binding_identity.startswith("sha256:v1:")
     assert isinstance(bundle.node_shader_identities, dict)
+
+
+def test_test_payload_export_keeps_settings_supplied_player_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    import nw08_test_toolchain
+    import nw05_export
+
+    toolchain = nw08_test_toolchain.create_toolchain(tmp_path / "toolchain")
+    session = editor.GraphEditorSession.create_nw07_proof()
+    exporter = preview.RuntimePackageExporter(
+        mode="embedded-player",
+        dxc_executable=toolchain["dxc"],
+        player_template=None,
+        settings=nw05_export.ExportSettings(
+            player_template=toolchain["player_template"]
+        ),
+        allow_test_payloads=True,
+    )
+    bundle = exporter.export(
+        session.document, tmp_path / "work", width=1920, height=1080
+    )
+    assert bundle.executable_path is not None
+    assert bundle.executable_path.is_file()
 

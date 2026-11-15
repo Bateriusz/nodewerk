@@ -63,6 +63,27 @@ from nw08_editor import (  # noqa: E402
     structural_hashes,
 )
 
+NO_SHADER_IDENTITY = sha256_value(
+    {"domain": "nw08.preview.no-shader.v1"}
+)
+
+_OPERATOR_SHADER_MAP: dict[str, tuple[str, ...]] = {
+    "nw.texture.noise2d": ("nw06_generate_cs",),
+    "nw.texture.procedural": ("nw06_generate_cs",),
+    "nw.residency.generate_texture": ("nw06_generate_cs",),
+    "nw.mesh.torus": ("nw06_generate_cs",),
+    "nw.residency.generate_mesh": ("nw06_generate_cs",),
+    "nw.scene.instances": ("nw06_instances_cs",),
+    "nw.residency.generate_instances": ("nw06_instances_cs",),
+    "nw.material.standard": ("nw06_material_cs",),
+    "nw.camera.curve": ("nw06_camera_cs",),
+    "nw.light.directional": ("nw06_light_cs",),
+    "nw.animation.twist": ("nw06_scene_vs", "nw06_scene_ps"),
+    "nw.render.instanced": ("nw06_scene_vs", "nw06_scene_ps"),
+    "nw.post.bloom": ("nw06_bloom_cs",),
+    "nw.post.tonemap": ("nw06_tonemap_cs",),
+}
+
 
 class PreviewError(RuntimeError):
     """Raised when preview execution cannot produce a valid frame."""
@@ -426,6 +447,7 @@ class PreviewExportBundle:
 
 def _export_preview_identities(
     artifact: Any,
+    document: nw03_compiler.GraphDocument | None = None,
 ) -> tuple[str, str, dict[str, str]]:
     """Derive the actual generated shader/binding identities of an export.
 
@@ -437,6 +459,7 @@ def _export_preview_identities(
     shader_rows = manifest.get("shaders") or []
     canonical_shaders: list[dict[str, Any]] = []
     node_entries: dict[str, list[str]] = {}
+    signature_by_name: dict[str, str] = {}
     for row in shader_rows:
         normalized = {
             "specialization_id": str(row.get("specialization_id", "")),
@@ -459,6 +482,10 @@ def _export_preview_identities(
                 "shader": normalized,
             }
         )
+        if normalized["specialization_id"]:
+            signature_by_name[normalized["specialization_id"]] = signature
+        if normalized["execution_root"]:
+            signature_by_name[normalized["execution_root"]] = signature
         for node_id in normalized["root_node_ids"]:
             node_entries.setdefault(node_id, []).append(signature)
     shader_identity = sha256_value(
@@ -532,6 +559,26 @@ def _export_preview_identities(
         )
         for node_id, signatures in node_entries.items()
     }
+    if document is not None:
+        for node_id, node in document.nodes.items():
+            if node_id in node_shader_identities:
+                continue
+            mapped = [
+                signature_by_name[name]
+                for name in _OPERATOR_SHADER_MAP.get(node.operator_id, ())
+                if name in signature_by_name
+            ]
+            node_shader_identities[node_id] = (
+                sha256_value(
+                    {
+                        "domain": "nw08.preview.node-shader.v1",
+                        "node_id": node_id,
+                        "shaders": sorted(set(mapped)),
+                    }
+                )
+                if mapped
+                else NO_SHADER_IDENTITY
+            )
     return shader_identity, binding_identity, node_shader_identities
 
 
@@ -603,7 +650,7 @@ class RuntimePackageExporter:
         settings = self.settings
         if self.player_template and not settings.player_template:
             settings = replace(settings, player_template=self.player_template)
-        if self.allow_test_payloads:
+        if self.allow_test_payloads and self.player_template:
             settings = replace(settings, player_template=str(self.player_template))
         result = self._export_function(
             graph_path,
@@ -617,7 +664,7 @@ class RuntimePackageExporter:
         artifact = result.artifacts[nwp_package.COMMON_PROFILE_ID]
         package_sha = hashlib.sha256(artifact.package_bytes).hexdigest()
         shader_identity, binding_identity, node_shader_identities = (
-            _export_preview_identities(artifact)
+            _export_preview_identities(artifact, document)
         )
         if self.mode == "package-host":
             package_path = work_directory / "edited-preview.nwp"
@@ -1462,14 +1509,37 @@ class PreviewPipeline:
         with self._state_lock:
             self._cancel_pending_locked(advance_generation=True)
 
-    def cache_keys(self) -> tuple[str, str]:
-        inputs = self.session.cache_key_inputs(
-            toolchain=self._toolchain,
-            compiler_settings=self.session.document.settings,
-        )
-        compiler = inputs.compiler_key()
-        device = inputs.device_realization_key(self.device.generation)
-        return compiler.key, device.key
+    def cache_keys(
+        self, frame: PreviewFrame | None = None
+    ) -> tuple[str, str]:
+        """Return the same compiler/device keys used by realization install.
+
+        ``frame`` supplies the generated shader/binding identities.  When it is
+        omitted, the last valid frame is used if available; otherwise the key
+        explicitly carries empty shader/binding identities plus the current
+        measured toolchain, preview resolution, capability profile, and device
+        generation.
+        """
+        with self._state_lock:
+            selected = frame or self.last_valid_frame
+            if selected is None:
+                selected = PreviewFrame(
+                    tick=self.session.timeline_tick,
+                    width=self.width,
+                    height=self.height,
+                    image_sha256="",
+                    semantic_digest="",
+                )
+            inputs = self._cache_inputs_for(
+                self.session.document,
+                self.session.semantic_digest,
+                selected,
+                width=self.width,
+                height=self.height,
+            )
+            compiler = inputs.compiler_key()
+            device = inputs.device_realization_key(self.device.generation)
+            return compiler.key, device.key
 
     def set_gpu_budget(self, budget_bytes: int) -> None:
         with self._state_lock:
@@ -1598,9 +1668,46 @@ class PreviewPipeline:
         profile = CapabilityProfileIdentity(
             document.profile_id, document.requirements_digest
         )
+        node_shader_ids = {
+            node_id: frame.node_shader_identities.get(
+                node_id, NO_SHADER_IDENTITY
+            )
+            for node_id in document.nodes
+        }
+        shader_closure_cache: dict[str, frozenset[str]] = {}
+
+        def shader_closure(node_id: str) -> frozenset[str]:
+            cached = shader_closure_cache.get(node_id)
+            if cached is not None:
+                return cached
+            values: set[str] = set()
+            own = node_shader_ids.get(node_id, NO_SHADER_IDENTITY)
+            if own != NO_SHADER_IDENTITY:
+                values.add(own)
+            for source_node, _source_port in document.nodes[
+                node_id
+            ].inputs.values():
+                if source_node in document.nodes:
+                    values.update(shader_closure(source_node))
+            result = frozenset(values)
+            shader_closure_cache[node_id] = result
+            return result
+
         rows: list[_NodeRealization] = []
         for node_id in sorted(document.nodes):
             node = document.nodes[node_id]
+            shader_values = shader_closure(node_id)
+            shader_identity = (
+                sha256_value(
+                    {
+                        "domain": "nw08.preview.node-shader-closure.v1",
+                        "node_id": node_id,
+                        "shaders": sorted(shader_values),
+                    }
+                )
+                if shader_values
+                else NO_SHADER_IDENTITY
+            )
             node_inputs = CacheKeyInputs(
                 semantic_digest=hashes.get(node_id, ""),
                 capability_profile=profile,
@@ -1623,9 +1730,7 @@ class PreviewPipeline:
                     "binding_identity": frame.binding_identity,
                 },
                 observed_hardware={},
-                shader_identity=frame.node_shader_identities.get(
-                    node_id, frame.shader_identity
-                ),
+                shader_identity=shader_identity,
                 entry_point=f"node:{node.operator_id}",
             )
             key = node_inputs.device_realization_key(
@@ -1880,6 +1985,7 @@ PreviewController = PreviewPipeline
 
 
 __all__ = [
+    "NO_SHADER_IDENTITY",
     "PassTiming",
     "PassTimings",
     "PreviewBackend",

@@ -343,8 +343,20 @@ def _embedded_preview_compatibility(
     cache_dir: str | None,
     ticks: Sequence[int],
     allow_test_payloads: bool,
+    enabled: bool,
 ) -> dict[str, Any]:
     """Exercise the generated-player path without claiming hardware evidence."""
+    if not enabled:
+        return _check(
+            "embedded_preview_compatibility",
+            "skipped",
+            {
+                "reason": (
+                    "pass --embedded-preview with a diagnostic capture-control "
+                    "player template to exercise the generated-player path"
+                )
+            },
+        )
     if not (player_template and dxc):
         return _check(
             "embedded_preview_compatibility",
@@ -456,6 +468,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cache-dir")
     parser.add_argument("--allow-test-payloads", action="store_true")
     parser.add_argument(
+        "--embedded-preview",
+        action="store_true",
+        help=(
+            "exercise the generated-player path; requires a diagnostic player "
+            "template built with capture controls"
+        ),
+    )
+    parser.add_argument(
         "--execution-kind",
         choices=["physical", "documented_gpu_passthrough"],
         default="physical",
@@ -549,6 +569,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cache_dir=args.cache_dir,
                 ticks=ticks,
                 allow_test_payloads=args.allow_test_payloads,
+                enabled=args.embedded_preview,
             )
         )
 

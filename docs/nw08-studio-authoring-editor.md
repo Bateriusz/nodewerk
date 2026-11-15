@@ -218,6 +218,11 @@ toolchain. Real preview remains `pending_unverified` unless the opt-in
 `windows-real-preview` job is enabled with a physical preview host. Simulated
 or contract execution is never relabeled as hardware evidence.
 
+The generated-player compatibility check is skipped unless
+`nw08_windows_integration.py --embedded-preview` is explicitly supplied with a
+diagnostic player template built with capture controls. It never gates
+package-host real-preview evidence.
+
 Outstanding NW-07 hardware captures remain `pending_unverified`. They are not
 an implementation prerequisite for the editor and are never relabeled as
 verified by NW-08 contract tests.
