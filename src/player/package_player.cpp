@@ -1091,6 +1091,17 @@ ExitCode PackagePlayer::Fail(ExitCode code,
                              const std::string& observed_value,
                              const char* stage,
                              const std::string& message) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)category;
+    (void)diagnostic_code;
+    (void)requirement;
+    (void)required_value;
+    (void)observed_value;
+    (void)stage;
+    (void)message;
+    last_exit_ = code;
+    return code;
+#else
     PlayerDiagnostic diagnostic{};
     (void)category;
     diagnostic.category = ExitCodeCategory(code);
@@ -1106,6 +1117,7 @@ ExitCode PackagePlayer::Fail(ExitCode code,
     diagnostics_.push_back(std::move(diagnostic));
     last_exit_ = code;
     return code;
+#endif
 }
 
 void PackagePlayer::AddFailureDiagnostics(
@@ -1136,6 +1148,9 @@ void PackagePlayer::AddFailureDiagnostics(
 ExitCode PackagePlayer::FailEvaluation(
     const PackageCapabilityEvaluation& evaluation,
     const char* stage) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)stage;
+#else
     const bool capability_only =
         evaluation.exit_code == ExitCode::CapabilityBaselineUnmet;
     AddFailureDiagnostics(evaluation.failures,
@@ -1143,14 +1158,17 @@ ExitCode PackagePlayer::FailEvaluation(
                               ? ExitCodeCategory(evaluation.exit_code)
                               : "package_validation",
                           stage);
+#endif
     last_exit_ = evaluation.exit_code;
     return evaluation.exit_code;
 }
 
 ExitCode PackagePlayer::FailPlan(const ResourcePlanResult& plan_result) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     AddFailureDiagnostics(plan_result.failures,
                           ExitCodeCategory(plan_result.exit_code),
                           "resource_realization");
+#endif
     last_exit_ = plan_result.exit_code;
     return plan_result.exit_code;
 }
@@ -5669,6 +5687,25 @@ ExitCode PackagePlayer::initialize(const std::uint8_t* package_bytes,
                     "exactly once", "already performed", "initialize",
                     "initialize(package) may run only once per player instance");
     }
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    package::Package decoded;
+    std::vector<package::Diagnostic> package_diagnostics;
+    if (package_bytes == nullptr || size_bytes == 0u ||
+        size_bytes > package::kMaxPackageBytes ||
+        !package::DecodePackage(
+            package_bytes, size_bytes, decoded, package_diagnostics,
+            /*allow_dev=*/false, package::kMaxPackageBytes,
+            package::kMaxSectionBytes, /*verify_integrity=*/true)) {
+        package_ = std::move(decoded);
+        last_exit_ = ExitCode::PackageValidationFailed;
+        return last_exit_;
+    }
+    const ExitCode code = initialize(decoded);
+    if (code == ExitCode::Success) {
+        package_sha256_ = package::Sha256Hex(package_bytes, size_bytes);
+    }
+    return code;
+#else
     const PackageLoadResult loaded =
         LoadPackageFromBytes(package_bytes, size_bytes);
     if (loaded.exit_code != ExitCode::Success) {
@@ -5684,6 +5721,7 @@ ExitCode PackagePlayer::initialize(const std::uint8_t* package_bytes,
         package_sha256_ = loaded.package_sha256;
     }
     return code;
+#endif
 }
 
 ExitCode PackagePlayer::initializeFromFile(const char* package_path) {
