@@ -583,7 +583,7 @@ def _export_preview_identities(
 def _package_capture_dimensions(
     package: Any, *, fallback_width: int, fallback_height: int
 ) -> tuple[int, int]:
-    """Return the dimensions of the resource consumed by frame.present."""
+    """Return the presentation dimensions the package player will read back."""
     present_resource_id = 0
     for instruction in getattr(package, "frame", ()) or ():
         if getattr(instruction, "opcode", "") != "frame.present":
@@ -592,13 +592,49 @@ def _package_capture_dimensions(
         if operands:
             present_resource_id = int(getattr(operands[0], "u32", 0) or 0)
             break
+
+    present_resource = None
     for resource in getattr(package, "resources", ()) or ():
-        if int(getattr(resource, "resource_id", 0) or 0) != present_resource_id:
+        if int(getattr(resource, "resource_id", 0) or 0) == present_resource_id:
+            present_resource = resource
+            break
+
+    # PackagePlayer resolves buffer-backed presentation geometry from these
+    # explicit package parameters before it falls back to shape inference.
+    # Mirror that contract here so the Python side validates the same byte
+    # count the native runtime actually writes.
+    explicit: dict[str, int] = {}
+    for parameter in getattr(package, "parameters", ()) or ():
+        name = str(getattr(parameter, "name", "") or "")
+        if name not in {"nw05.present.width", "nw05.present.height"}:
             continue
-        width = int(getattr(resource, "width", 0) or 0)
-        height = int(getattr(resource, "height", 0) or 0)
+        if str(getattr(parameter, "type", "") or "") != "uint":
+            continue
+        if int(getattr(parameter, "component_count", 0) or 0) != 1:
+            continue
+        value = bytes(getattr(parameter, "value", b"") or b"")
+        if len(value) < 4:
+            continue
+        explicit[name] = int.from_bytes(value[:4], "little", signed=False)
+
+    if present_resource is not None:
+        size_bytes = int(getattr(present_resource, "size_bytes", 0) or 0)
+        pixel_count = size_bytes // 16 if size_bytes >= 16 else 0
+        explicit_width = explicit.get("nw05.present.width", 0)
+        explicit_height = explicit.get("nw05.present.height", 0)
+        if (
+            explicit_width > 0
+            and explicit_height > 0
+            and pixel_count > 0
+            and explicit_width * explicit_height <= pixel_count
+        ):
+            return explicit_width, explicit_height
+
+        width = int(getattr(present_resource, "width", 0) or 0)
+        height = int(getattr(present_resource, "height", 0) or 0)
         if width > 0 and height > 0:
             return width, height
+
     return max(1, int(fallback_width)), max(1, int(fallback_height))
 
 

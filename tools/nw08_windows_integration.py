@@ -870,8 +870,21 @@ def _gui_window_interaction(
         if player_executable and player_template and dxc:
             window.preview()
             deadline = time.monotonic() + 180.0
-            while window.dispatcher.busy and time.monotonic() < deadline:
+            while time.monotonic() < deadline:
                 root.update()
+                record = application.pipeline.last_valid_preview
+                status_text = str(window.status.cget("text") or "")
+                photo = getattr(window, "_preview_photo", None)
+                installed_sha = getattr(window, "_preview_image_sha", "")
+                installed = (
+                    record is not None
+                    and photo is not None
+                    and installed_sha == record.frame.image_sha256
+                )
+                if not window.dispatcher.busy and (
+                    installed or "compiling/rendering" not in status_text
+                ):
+                    break
                 time.sleep(0.05)
             root.update()
             record = application.pipeline.last_valid_preview

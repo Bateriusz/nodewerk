@@ -889,3 +889,40 @@ def test_shader_recovery_fixture_uses_nwp_v1_legal_upload_frequency() -> None:
     ) in source
     assert "node fullscreen nw.render.fullscreen@1.0.0 frequency=frame" in source
 
+
+def test_package_capture_dimensions_follow_explicit_present_geometry() -> None:
+    package = SimpleNamespace(
+        frame=[
+            SimpleNamespace(
+                opcode="frame.present",
+                operands=[SimpleNamespace(u32=7)],
+            )
+        ],
+        resources=[
+            SimpleNamespace(
+                resource_id=7,
+                kind="buffer",
+                width=0,
+                height=0,
+                size_bytes=256 * 256 * 16,
+            )
+        ],
+        parameters=[
+            SimpleNamespace(
+                name="nw05.present.width",
+                type="uint",
+                component_count=1,
+                value=(256).to_bytes(4, "little"),
+            ),
+            SimpleNamespace(
+                name="nw05.present.height",
+                type="uint",
+                component_count=1,
+                value=(256).to_bytes(4, "little"),
+            ),
+        ],
+    )
+    assert preview._package_capture_dimensions(
+        package, fallback_width=1920, fallback_height=1080
+    ) == (256, 256)
+
