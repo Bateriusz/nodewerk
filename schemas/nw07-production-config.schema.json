@@ -22,6 +22,7 @@
     "fixed_tick_evaluation",
     "capture",
     "diagnostics",
+    "build_configuration",
     "image_tolerances",
     "regression",
     "policy"
@@ -95,6 +96,28 @@
     "fixed_tick_evaluation": { "type": "object" },
     "capture": { "type": "object" },
     "diagnostics": { "type": "object" },
+    "build_configuration": {
+      "type": "object",
+      "required": [
+        "cmake_generator", "build_type", "build_profile",
+        "pinned_toolchain_enforcement", "toolchain_file",
+        "crt_elimination_experiment", "capture_controls",
+        "present_sync_interval", "specialized_build_requires_empty_directory", "codegen"
+      ],
+      "properties": {
+        "cmake_generator": { "const": "Ninja" },
+        "build_type": { "const": "MinSizeRel" },
+        "build_profile": { "const": "release" },
+        "pinned_toolchain_enforcement": { "const": "ON" },
+        "toolchain_file": { "const": "cmake/toolchains/msvc-x64.cmake" },
+        "crt_elimination_experiment": { "const": "OFF" },
+        "capture_controls": { "const": "OFF" },
+        "present_sync_interval": { "const": 0 },
+        "specialized_build_requires_empty_directory": { "const": true },
+        "codegen": { "const": "graph-derived generated player source" }
+      },
+      "additionalProperties": false
+    },
     "image_tolerances": { "type": "object" },
     "regression": { "type": "object" },
     "policy": { "type": "string", "minLength": 1 }

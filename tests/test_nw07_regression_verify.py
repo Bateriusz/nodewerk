@@ -190,24 +190,21 @@ def test_perf_capture_derives_run_timing_from_retained_metadata(
                 "\n".join(["10.0"] * contract.MIN_RAW_SAMPLES_PER_RUN),
                 encoding="utf-8",
             )
-        base = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index)
+        base = datetime(2026, 12, 1, tzinfo=timezone.utc) + timedelta(minutes=index)
         (samples_dir / f"run{index}-timing.json").write_text(
             json.dumps(
                 {
-                    "warmup_started_utc": base.isoformat(),
-                    "run_started_utc": (
-                        base + timedelta(seconds=contract.WARMUP_SECONDS)
-                    ).isoformat(),
+                    "run_started_utc": base.isoformat(),
                     "run_ended_utc": (
-                        base
-                        + timedelta(
-                            seconds=contract.WARMUP_SECONDS
-                            + contract.PERF_RUN_SECONDS
-                        )
+                        base + timedelta(seconds=contract.PERF_RUN_SECONDS)
                     ).isoformat(),
                     "uncapped": True,
                     "fresh_process": True,
                     "application_pipeline_cache": False,
+                    "player_pid": 1000 + index,
+                    "artifact_sha256": "3" * 64,
+                    "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
+                    "collector_exit_code": 0,
                 }
             ),
             encoding="utf-8",
@@ -233,10 +230,17 @@ def test_perf_capture_derives_run_timing_from_retained_metadata(
             capture_id="perf-timing",
             execution_kind="physical",
             evidence=str(tmp_path / "evidence.json"),
+            warmup={
+                "warmup_started_utc": "2026-12-01T00:00:00+00:00",
+                "warmup_ended_utc": "2026-12-01T00:00:05+00:00",
+                "duration_seconds": contract.WARMUP_SECONDS,
+                "player_pid": 999,
+                "artifact_sha256": "3" * 64,
+                "completed": True,
+            },
         )
     )
     for run in record["runs"]:
-        assert run["warmup_seconds"] == pytest.approx(contract.WARMUP_SECONDS)
         assert run["duration_seconds"] == pytest.approx(contract.PERF_RUN_SECONDS)
         assert run["uncapped"] is True
         assert run["fresh_process"] is True
@@ -278,7 +282,6 @@ def test_perf_capture_does_not_fabricate_run_timing_without_metadata(
         )
     )
     for run in record["runs"]:
-        assert run["warmup_seconds"] is None
         assert run["duration_seconds"] is None
         assert run["uncapped"] is None
         assert run["fresh_process"] is None

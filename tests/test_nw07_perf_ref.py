@@ -52,21 +52,34 @@ def _samples(value: float, count: int = 600) -> dict:
 
 
 def _timing(index: int) -> dict:
-    base = datetime(2026, 12, 1, tzinfo=timezone.utc) + timedelta(hours=index)
+    base = datetime(2026, 12, 1, tzinfo=timezone.utc) + timedelta(minutes=index)
     return {
-        "warmup_started_utc": base.isoformat(),
-        "run_started_utc": (base + timedelta(seconds=contract.WARMUP_SECONDS)).isoformat(),
-        "run_ended_utc": (
-            base
-            + timedelta(seconds=contract.WARMUP_SECONDS + contract.PERF_RUN_SECONDS)
-        ).isoformat(),
+        "run_started_utc": base.isoformat(),
+        "run_ended_utc": (base + timedelta(seconds=contract.PERF_RUN_SECONDS)).isoformat(),
         "uncapped": True,
         "fresh_process": True,
         "application_pipeline_cache": False,
+        "player_pid": 1000 + index,
+        "artifact_sha256": _identity()["executable_sha256"],
+        "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
+        "collector_exit_code": 0,
+    }
+
+
+def _warmup() -> dict:
+    base = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    return {
+        "warmup_started_utc": base.isoformat(),
+        "warmup_ended_utc": (base + timedelta(seconds=contract.WARMUP_SECONDS)).isoformat(),
+        "duration_seconds": contract.WARMUP_SECONDS,
+        "player_pid": 999,
+        "artifact_sha256": _identity()["executable_sha256"],
+        "completed": True,
     }
 
 
 def _capture() -> dict:
+    bound = _bound()
     return {
         "capture_id": "perf-1",
         "task": contract.TASK,
@@ -81,7 +94,9 @@ def _capture() -> dict:
         },
         "contract_id": contract.PERF_CONTRACT_ID,
         "execution_environment": {"kind": "physical"},
-        "reference": copy.deepcopy(_bound()["reference"]),
+        "reference": copy.deepcopy(bound["reference"]),
+        "reference_binding_digest": bound["binding_digest"],
+        "reference_binding_id": bound["binding_id"],
         "artifact_key": _identity()["artifact_key"],
         "package_sha256": _identity()["package_sha256"],
         "manifest_sha256": _identity()["manifest_sha256"],
@@ -99,14 +114,18 @@ def _capture() -> dict:
             "fresh_process_per_run": True,
             "application_pipeline_cache": False,
         },
+        "warmup": _warmup(),
         "runs": [
             {
                 "run_index": index,
-                "warmup_seconds": contract.WARMUP_SECONDS,
                 "duration_seconds": contract.PERF_RUN_SECONDS,
                 "uncapped": True,
                 "fresh_process": True,
                 "application_pipeline_cache": False,
+                "player_pid": 1000 + index,
+                "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
+                "artifact_sha256": _identity()["executable_sha256"],
+                "collector_exit_code": 0,
                 "timing": _timing(index),
                 "sample_density_hz": 10.0,
                 "gpu_frame_time_ms": _samples(10.0),
@@ -117,6 +136,8 @@ def _capture() -> dict:
         ],
     }
 
+
+def test_nearest_rank_percentile_is_exact()
 
 def test_nearest_rank_percentile_is_exact() -> None:
     assert evidence.nearest_rank_percentile([1, 2, 3, 4, 5], 99.0) == 5
@@ -384,10 +405,8 @@ def test_performance_capture_requires_retained_60_second_run_timing() -> None:
 
 def test_runs_recorded_before_the_frozen_binding_cannot_certify() -> None:
     capture = _capture()
-    timing = capture["runs"][0]["timing"]
-    timing["warmup_started_utc"] = "2026-11-01T00:00:00+00:00"
-    timing["run_started_utc"] = "2026-11-01T00:00:05+00:00"
-    timing["run_ended_utc"] = "2026-11-01T00:01:05+00:00"
+    capture["warmup"]["warmup_started_utc"] = "2026-11-01T00:00:00+00:00"
+    capture["warmup"]["warmup_ended_utc"] = "2026-11-01T00:00:05+00:00"
     result = evidence.validate_perf_capture(
         capture, _bound(), artifact_identity=_identity()
     )
@@ -401,4 +420,26 @@ def test_runs_recorded_before_the_frozen_binding_cannot_certify() -> None:
             capture, _bound(), artifact_identity=_identity()
         )["status"]
         == "failed"
+    )
+
+
+def test_bound_reference_payload_is_cryptographically_immutable() -> None:
+    bound = _bound()
+    bound["reference"]["host"]["cpu_model"] = "tampered host"
+    result = evidence.validate_perf_contract(bound)
+    assert result["status"] == "invalid"
+    assert any("binding digest" in reason for reason in result["reasons"])
+
+
+def test_perf_protocol_uses_one_warmup_and_distinct_measured_processes() -> None:
+    capture = _capture()
+    capture["runs"][1]["player_pid"] = capture["runs"][0]["player_pid"]
+    capture["runs"][1]["timing"]["player_pid"] = capture["runs"][0]["player_pid"]
+    result = evidence.validate_perf_capture(
+        capture, _bound(), artifact_identity=_identity()
+    )
+    assert result["status"] == "failed"
+    assert any(
+        "distinct fresh process" in reason
+        for reason in result["runs"][1]["reasons"]
     )

@@ -140,12 +140,14 @@ jobs:
           NW07_EXECUTABLE: ${{ vars.NW07_FIXTURE }}
           NW07_COLLECTOR_COMMAND: ${{ vars.NW07_COLLECTOR_COMMAND }}
           NW07_REFERENCE: ${{ vars.NW07_REFERENCE }}
+          NW07_PERF_CONTRACT: ${{ vars.NW07_PERF_CONTRACT }}
           NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
         run: >-
           python tools/nw07_capture.py collect
           --package "$env:NW07_PACKAGE"
           --executable "$env:NW07_EXECUTABLE"
           --samples-dir "$env:RUNNER_TEMP\nw07-nightly-samples"
+          --contract "$env:NW07_PERF_CONTRACT"
           --reference "$env:NW07_REFERENCE"
           --collector-command "$env:NW07_COLLECTOR_COMMAND"
           --capture-id "nightly-$env:GITHUB_RUN_ID"
@@ -156,6 +158,7 @@ jobs:
           NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
           NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
           NW07_BUILD_REPORT: ${{ vars.NW07_BUILD_REPORT }}
+          NW07_PERF_CONTRACT: ${{ vars.NW07_PERF_CONTRACT }}
           NW07_BINARY_DIR: ${{ vars.NW07_BINARY_DIR }}
           NW07_CLEAN_REPORT: ${{ vars.NW07_CLEAN_REPORT }}
         run: >-
@@ -164,6 +167,7 @@ jobs:
           --package "$env:NW07_PACKAGE"
           --evidence "$env:NW07_EVIDENCE"
           --build-report "$env:NW07_BUILD_REPORT"
+          --perf-ref "$env:NW07_PERF_CONTRACT"
           --binary-dir "$env:NW07_BINARY_DIR"
           --clean-report "$env:NW07_CLEAN_REPORT"
           --summary-json "$env:RUNNER_TEMP\nw07-full.json"

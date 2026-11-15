@@ -52,6 +52,7 @@ def _correctness(tier: str) -> dict:
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "adapter_description": adapter,
+        "device_form_factor": "desktop",
         "device": adapter,
         "driver_version": "566.36",
         "os_version": "10.0.26100.2314",
@@ -99,8 +100,9 @@ def _correctness(tier: str) -> dict:
         "reference_execution": {
             "execution_id": f"{tier}-preview",
             "renderer": "diagnostic_preview",
+            "artifact_key": identity["artifact_key"],
             "package_sha256": identity["package_sha256"],
-            "executable_sha256": identity["executable_sha256"],
+            "executable_sha256": "4" * 64,
             "manifest_sha256": identity["manifest_sha256"],
             "capture_protocol": contract.CORRECTNESS_CAPTURE_PROTOCOL,
         },
@@ -801,3 +803,29 @@ def test_reference_binding_is_immutable() -> None:
             bound,
             board={"subsystem_vendor_id": 1, "subsystem_device_id": 2},
         )
+
+
+def test_correctness_requires_explicit_desktop_form_factor() -> None:
+    capture = _correctness("ada")
+    capture["device_form_factor"] = ""
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=contract.CORRECTNESS_COVERAGE_TARGETS["ada"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] != "verified"
+    assert evidence.classify_hardware_tier(
+        "NVIDIA GeForce RTX 4060 Ti", device_form_factor=None
+    ) == "unknown"
+
+
+def test_diagnostic_reference_must_be_a_separate_sibling_executable() -> None:
+    capture = _correctness("ada")
+    capture["reference_execution"]["executable_sha256"] = capture["executable_sha256"]
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=contract.CORRECTNESS_COVERAGE_TARGETS["ada"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "failed"
+    assert any("separate sibling executable" in reason for reason in result["reasons"])

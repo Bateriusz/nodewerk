@@ -329,5 +329,23 @@ def test_pinned_build_inputs_cover_executable_sources() -> None:
         "src/player/package_player.h",
         "src/player/d3d12_bootstrap.h",
         "cmake/toolchains/msvc-x64.cmake",
+        "tools/dependency_check.py",
+        "tools/nw03_oracle.py",
+        "tools/offline_shader_pack.py",
     ):
         assert required in inputs
+
+
+
+def test_specialized_build_root_must_be_empty(tmp_path: Path) -> None:
+    build_root = tmp_path / "stale-build"
+    build_root.mkdir()
+    (build_root / "CMakeCache.txt").write_text("stale", encoding="utf-8")
+    with pytest.raises(export.Nw07ExportError, match="not empty"):
+        export.export_production(
+            tmp_path / "artifact-stale",
+            player_template=_template(tmp_path / "toolchain-stale"),
+            dxc_executable=str(_mock_dxc(tmp_path / "toolchain-stale")),
+            allow_test_payloads=True,
+            specialized_build_root=build_root,
+        )
