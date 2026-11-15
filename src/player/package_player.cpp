@@ -298,6 +298,7 @@ const package::ResourceDescriptor* FindPackageResource(
     return nullptr;
 }
 
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 // Platform-neutral validation of the stable `frame.barrier` state codes.  The
 // numeric convention is shared with the NW-03 instruction contract; unknown
 // codes are rejected instead of silently degenerating to COMMON.
@@ -349,6 +350,7 @@ bool BarrierStateCodeCompatibleWithUsage(std::uint32_t code,
     }
     return true;
 }
+#endif  // !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 
 bool TryParameterTickLayout(const package::ParameterRecord& parameter,
                             std::uint8_t* tick_kind,
@@ -412,6 +414,7 @@ void WriteTimelineTick(std::uint32_t* words,
     }
 }
 
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 // Read one serialized D3D12 root parameter out of an RTS0 payload.  The
 // package planner needs the *actual* root-constant width of the referenced
 // parameter instead of accepting the package-wide 16-DWORD ceiling.
@@ -501,6 +504,7 @@ bool ReadRootSignatureParameterType(
     }
     return false;
 }
+#endif  // !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 
 const package::RootSignatureRecord* FindRootSignatureRecord(
     const package::Package& pkg, std::uint32_t root_signature_id) noexcept {
