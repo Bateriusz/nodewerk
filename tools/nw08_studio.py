@@ -17,7 +17,7 @@ import hashlib
 import json
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -29,8 +29,11 @@ if str(TOOLS_DIR) not in sys.path:
 import nw05_export  # noqa: E402
 import nwp_package  # noqa: E402
 from nw08_cache import (  # noqa: E402
+    AdapterDeviceIdentity,
     DeviceGeneration,
+    DeviceLostError,
     GenerationToken,
+    ToolchainIdentity,
 )
 from nw08_editor import (  # noqa: E402
     CurvePoint,
@@ -58,6 +61,11 @@ class StudioApplication:
     pipeline: PreviewPipeline
     export_settings: dict[str, Any] = field(default_factory=dict)
     gpu_cache_budget_bytes: int = DEFAULT_GPU_CACHE_BUDGET
+    dxc_executable: str = ""
+    player_template: str = ""
+    cache_dir: str = ""
+    optimization: str = "O2"
+    allow_test_payloads: bool = False
 
     @classmethod
     def create(
@@ -71,6 +79,17 @@ class StudioApplication:
         width: int = 1920,
         height: int = 1080,
         export_settings: Mapping[str, Any] | None = None,
+        adapter: AdapterDeviceIdentity | None = None,
+        driver_version: str = "",
+        os_build: str = "",
+        toolchain: ToolchainIdentity | None = None,
+        preview_mode: str = "package-host",
+        dxc_executable: str | None = None,
+        player_template: str | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
+        optimization: str = "O2",
+        allow_test_payloads: bool = False,
+        execution_kind: str = "simulated",
     ) -> "StudioApplication":
         session = (
             GraphEditorSession.create_nw07_proof(graph)
@@ -78,12 +97,26 @@ class StudioApplication:
             else GraphEditorSession.create_nw07_proof()
         )
         selected_backend = backend or create_preview_backend(
-            player_executable, capture_controls=capture_controls
+            player_executable,
+            capture_controls=capture_controls,
+            mode=preview_mode,
+            dxc_executable=dxc_executable,
+            player_template=player_template,
+            cache_dir=cache_dir,
+            export_settings=export_settings,
+            allow_test_payloads=allow_test_payloads,
+            optimization=optimization,
+            execution_kind=execution_kind,
+            memory_budget_bytes=gpu_cache_budget_bytes,
         )
         pipeline = PreviewPipeline(
             session,
             backend=selected_backend,
             gpu_budget_bytes=gpu_cache_budget_bytes,
+            adapter=adapter,
+            driver_version=driver_version,
+            os_build=os_build,
+            toolchain=toolchain,
             width=width,
             height=height,
         )
@@ -92,6 +125,11 @@ class StudioApplication:
             pipeline=pipeline,
             export_settings=dict(export_settings or {}),
             gpu_cache_budget_bytes=gpu_cache_budget_bytes,
+            dxc_executable=str(dxc_executable or ""),
+            player_template=str(player_template or ""),
+            cache_dir=str(cache_dir or ""),
+            optimization=optimization,
+            allow_test_payloads=allow_test_payloads,
         )
 
     # -- editing ----------------------------------------------------------
@@ -119,6 +157,29 @@ class StudioApplication:
             self.session.set_curve_points(node_id, points)
         )
 
+    def add_curve_key(
+        self, node_id: str, tick: int, value: float
+    ) -> EditResult:
+        return self.pipeline.apply_edit(
+            self.session.add_curve_key(node_id, tick, value)
+        )
+
+    def remove_curve_key(self, node_id: str, tick: int) -> EditResult:
+        return self.pipeline.apply_edit(
+            self.session.remove_curve_key(node_id, tick)
+        )
+
+    def move_curve_key(
+        self,
+        node_id: str,
+        old_tick: int,
+        new_tick: int,
+        value: float | None = None,
+    ) -> EditResult:
+        return self.pipeline.apply_edit(
+            self.session.move_curve_key(node_id, old_tick, new_tick, value)
+        )
+
     def scrub(self, tick: int) -> EditResult:
         return self.session.set_timeline_tick(tick)
 
@@ -136,8 +197,17 @@ class StudioApplication:
 
     # -- preview / async --------------------------------------------------
     def preview(self, tick: int | None = None) -> bool:
-        decision = self.pipeline.preview_now(tick=tick)
-        return decision.accepted and self.pipeline.last_valid_preview is not None
+        try:
+            token = self.pipeline.submit_preview(tick=tick)
+        except DeviceLostError:
+            return False
+        decision = self.pipeline.execute(token)
+        record = self.pipeline.last_valid_preview
+        return bool(
+            decision.accepted
+            and record is not None
+            and record.token.job_id == token.job_id
+        )
 
     def submit_preview(self, tick: int | None = None) -> GenerationToken:
         return self.pipeline.submit_preview(tick=tick)
@@ -157,6 +227,8 @@ class StudioApplication:
     def configure_gpu_cache_budget(self, budget_bytes: int) -> None:
         self.pipeline.set_gpu_budget(budget_bytes)
         self.gpu_cache_budget_bytes = budget_bytes
+        if hasattr(self.pipeline.backend, "memory_budget_bytes"):
+            self.pipeline.backend.memory_budget_bytes = budget_bytes
 
     @property
     def budget_bytes(self) -> int:
@@ -176,6 +248,27 @@ class StudioApplication:
             merged = supplied
         else:
             merged = dict(self.export_settings)
+        if (
+            isinstance(merged, Mapping)
+            and not merged.get("player_template")
+            and self.player_template
+        ):
+            merged = dict(merged)
+            merged["player_template"] = self.player_template
+        elif (
+            isinstance(merged, nw05_export.ExportSettings)
+            and not merged.player_template
+            and self.player_template
+        ):
+            merged = replace(merged, player_template=self.player_template)
+        if "dxc_executable" not in kwargs and self.dxc_executable:
+            kwargs["dxc_executable"] = self.dxc_executable
+        if "cache_dir" not in kwargs and self.cache_dir:
+            kwargs["cache_dir"] = self.cache_dir
+        if "optimization" not in kwargs and self.optimization:
+            kwargs["optimization"] = self.optimization
+        if "allow_test_payloads" not in kwargs:
+            kwargs["allow_test_payloads"] = self.allow_test_payloads
         return self.session.export(output_directory, settings=merged, **kwargs)
 
     def export_report(
@@ -191,6 +284,10 @@ class StudioApplication:
             "task": "NW-08",
             "semantic_digest": self.session.semantic_digest,
             "semantic_digest_provenance": self.session.semantic_digest_provenance,
+            "semantic_digest_canonical": self.session.semantic_digest_canonical,
+            "semantic_digest_fallback_reason": (
+                self.session.semantic_digest_status.reason
+            ),
             "profile_id": self.session.document.profile_id,
             "requirements_digest": self.session.document.requirements_digest,
             "package_bytes": len(common.package_bytes),
@@ -206,6 +303,31 @@ class StudioApplication:
             "preview": self.pipeline.report(),
         }
 
+    def configure_export(
+        self,
+        *,
+        dxc_executable: str | os.PathLike[str] | None = None,
+        player_template: str | os.PathLike[str] | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
+        optimization: str | None = None,
+        allow_test_payloads: bool | None = None,
+        settings: Mapping[str, Any] | None = None,
+    ) -> None:
+        if dxc_executable is not None:
+            self.dxc_executable = str(dxc_executable)
+        if player_template is not None:
+            self.player_template = str(player_template)
+        if cache_dir is not None:
+            self.cache_dir = str(cache_dir)
+        if optimization is not None:
+            if optimization not in {"O0", "O1", "O2", "O3"}:
+                raise EditorError(f"unsupported optimization level '{optimization}'")
+            self.optimization = optimization
+        if allow_test_payloads is not None:
+            self.allow_test_payloads = bool(allow_test_payloads)
+        if settings is not None:
+            self.export_settings = dict(settings)
+
     # -- reporting --------------------------------------------------------
     def report(self) -> dict[str, Any]:
         return {
@@ -217,6 +339,13 @@ class StudioApplication:
             "size_attribution": estimate_size_attribution(self.session.document),
             "gpu_cache_budget_bytes": self.gpu_cache_budget_bytes,
             "export_settings": dict(self.export_settings),
+            "export_configuration": {
+                "dxc_executable": self.dxc_executable,
+                "player_template": self.player_template,
+                "cache_dir": self.cache_dir,
+                "optimization": self.optimization,
+                "allow_test_payloads": self.allow_test_payloads,
+            },
             "hardware_evidence": bool(
                 self.pipeline.last_valid_frame
                 and self.pipeline.last_valid_frame.hardware_evidence
@@ -348,6 +477,12 @@ def command_gui(args: argparse.Namespace) -> int:
         player_executable=args.player_executable,
         capture_controls=args.capture_controls,
         gpu_cache_budget=args.gpu_cache_budget,
+        preview_mode=args.preview_mode,
+        dxc_executable=args.dxc,
+        player_template=args.player_template,
+        cache_dir=args.cache_dir,
+        optimization=args.optimization,
+        allow_test_payloads=args.allow_test_payloads,
     )
 
 
@@ -360,7 +495,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui = subparsers.add_parser("gui", help="launch the interactive editor")
     gui.add_argument("--graph", help="graph to open (defaults to NW-07 proof)")
-    gui.add_argument("--player-executable", help="diagnostic package player for real preview")
+    gui.add_argument(
+        "--player-executable",
+        help="native studio preview host (or generated diagnostic player)",
+    )
     gui.add_argument(
         "--capture-controls",
         dest="capture_controls",
@@ -375,6 +513,16 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument(
         "--gpu-cache-budget", type=int, default=DEFAULT_GPU_CACHE_BUDGET
     )
+    gui.add_argument(
+        "--preview-mode",
+        choices=["package-host", "embedded-player"],
+        default="package-host",
+    )
+    gui.add_argument("--dxc")
+    gui.add_argument("--player-template")
+    gui.add_argument("--cache-dir")
+    gui.add_argument("--optimization", default="O2", choices=["O0", "O1", "O2", "O3"])
+    gui.add_argument("--allow-test-payloads", action="store_true")
     gui.set_defaults(handler=command_gui)
 
     new_proof = subparsers.add_parser(

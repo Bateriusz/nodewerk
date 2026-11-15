@@ -352,11 +352,13 @@ def semantic_digest(
     Python fingerprint and labels it honestly; the CLI export path still refuses
     to substitute an incompatible package identity.
     """
-    try:
-        native = nw03_compiler._native_nw02_digest(document)  # type: ignore[attr-defined]
-    except Exception:
-        native = None
+    # Only the helper's explicit "unavailable" result (None) may fall back.
+    # Unexpected exceptions are a programming/runtime defect and must surface
+    # instead of silently replacing canonical NW-02 identity.
+    native = nw03_compiler._native_nw02_digest(document)  # type: ignore[attr-defined]
     if native:
+        if not native.startswith("sha256:v1:"):
+            raise EditorError("NW-02 canonical helper returned a malformed digest")
         return native, "nw02"
     payload = {
         "domain": "nw08.editor.semantic.v1",
@@ -367,6 +369,31 @@ def semantic_digest(
         "structural_hashes": structural_hashes(document),
     }
     return sha256_value(payload), "python-fallback"
+
+
+@dataclass(frozen=True)
+class DigestStatus:
+    digest: str
+    provenance: str
+    canonical: bool
+    reason: str = ""
+
+
+def semantic_digest_status(
+    document: nw03_compiler.GraphDocument,
+) -> DigestStatus:
+    """Return the digest plus explicit provenance for reports and tests."""
+    digest, provenance = semantic_digest(document)
+    if provenance == "nw02":
+        return DigestStatus(digest, provenance, True, "")
+    return DigestStatus(
+        digest,
+        provenance,
+        False,
+        "NW-02 canonical semantic helper is unavailable; authoring-only "
+        "fallback identity is in use and the export path will refuse to "
+        "substitute it for a package identity",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +546,65 @@ def estimate_size_attribution(
     return resources
 
 
+_NODE_SIZE_WEIGHTS: dict[str, tuple[str, ...]] = {
+    "nw.texture.noise2d": ("texture",),
+    "nw.texture.procedural": ("texture",),
+    "nw.mesh.torus": ("vertices", "indices"),
+    "nw.scene.instances": ("instances", "indirect_args_bytes"),
+    "nw.material.standard": ("materials",),
+    "nw.render.instanced": ("scene_color_bytes", "depth_bytes"),
+    "nw.post.bloom": ("bloom",),
+    "nw.post.tonemap": ("final_color_bytes",),
+}
+
+
+def node_size_attribution(
+    document: nw03_compiler.GraphDocument,
+    *,
+    width: int = 1920,
+    height: int = 1080,
+    total_bytes: int | None = None,
+) -> dict[str, int]:
+    """Distribute the frame's resident payload across graph nodes.
+
+    The distribution is deterministic and derived only from canonical node
+    fields.  It is used as the per-node GPU-realization size so a bounded cache
+    can invalidate and retain independent graph branches.
+    """
+    resources = estimate_size_attribution(document, width=width, height=height)
+    target_total = (
+        int(resources.get("resident_payload_bytes", 0))
+        if total_bytes is None
+        else int(total_bytes)
+    )
+    weights: dict[str, int] = {}
+    for node_id, node in document.nodes.items():
+        weight = 1
+        fields = _NODE_SIZE_WEIGHTS.get(node.operator_id, ())
+        for field in fields:
+            value = resources.get(field)
+            if isinstance(value, Mapping):
+                weight += int(value.get("bytes", 0))
+            elif isinstance(value, (int, float)):
+                weight += int(value)
+        weights[node_id] = max(1, weight)
+    if not weights:
+        return {}
+    weight_total = sum(weights.values())
+    target_total = max(len(weights), target_total)
+    sizes: dict[str, int] = {}
+    allotted = 0
+    ordered = sorted(weights)
+    for index, node_id in enumerate(ordered):
+        if index == len(ordered) - 1:
+            sizes[node_id] = max(1, target_total - allotted)
+        else:
+            size = max(1, int(target_total * weights[node_id] / weight_total))
+            sizes[node_id] = size
+            allotted += size
+    return sizes
+
+
 # ---------------------------------------------------------------------------
 # Export settings plumbing (single existing export path)
 # ---------------------------------------------------------------------------
@@ -589,7 +675,10 @@ class GraphEditorSession:
         self._draft_text: str | None = None
         self._draft_diagnostics: list[dict[str, Any]] = []
         self._snapshot_generation = 0
-        self._digest, self._digest_provenance = semantic_digest(self._document)
+        status = semantic_digest_status(self._document)
+        self._digest = status.digest
+        self._digest_provenance = status.provenance
+        self._digest_status = status
         self._hashes = structural_hashes(self._document)
         self._selection_history: list[tuple[str, ...]] = []
 
@@ -642,6 +731,14 @@ class GraphEditorSession:
     @property
     def semantic_digest_provenance(self) -> str:
         return self._digest_provenance
+
+    @property
+    def semantic_digest_status(self) -> DigestStatus:
+        return self._digest_status
+
+    @property
+    def semantic_digest_canonical(self) -> bool:
+        return self._digest_status.canonical
 
     @property
     def snapshot_generation(self) -> int:
@@ -824,6 +921,68 @@ class GraphEditorSession:
             tick_text, value_text = entry.split(":", 1)
             points.append(CurvePoint(int(tick_text), float(value_text)))
         return tuple(points)
+
+    def add_curve_key(
+        self, node_id: str, tick: int, value: float
+    ) -> EditResult:
+        """Add or replace a keyframe through the normal ``keys`` parameter."""
+        if isinstance(tick, bool) or not isinstance(tick, int):
+            raise EditorError("curve tick must be an integer")
+        if tick < 0:
+            raise EditorError("curve tick must be non-negative")
+        value = float(value)
+        if not math.isfinite(value):
+            raise EditorError("curve value must be finite")
+        points = [point for point in self.curve_points(node_id) if point.tick != tick]
+        points.append(CurvePoint(tick, value))
+        return self._commit_curve(node_id, points)
+
+    def remove_curve_key(self, node_id: str, tick: int) -> EditResult:
+        points = self.curve_points(node_id)
+        remaining = [point for point in points if point.tick != tick]
+        if len(remaining) == len(points):
+            raise EditorError(f"curve has no key at tick {tick}")
+        if not remaining:
+            raise EditorError("curve must keep at least one key")
+        return self._commit_curve(node_id, remaining)
+
+    def move_curve_key(
+        self,
+        node_id: str,
+        old_tick: int,
+        new_tick: int,
+        value: float | None = None,
+    ) -> EditResult:
+        if isinstance(new_tick, bool) or not isinstance(new_tick, int):
+            raise EditorError("curve tick must be an integer")
+        if new_tick < 0:
+            raise EditorError("curve tick must be non-negative")
+        points = list(self.curve_points(node_id))
+        replacing = [point for point in points if point.tick == old_tick]
+        if not replacing:
+            raise EditorError(f"curve has no key at tick {old_tick}")
+        if new_tick != old_tick and any(
+            point.tick == new_tick for point in points if point.tick != old_tick
+        ):
+            raise EditorError(f"curve already has a key at tick {new_tick}")
+        new_value = float(replacing[0].value if value is None else value)
+        if not math.isfinite(new_value):
+            raise EditorError("curve value must be finite")
+        updated = [
+            CurvePoint(new_tick, new_value)
+            if point.tick == old_tick
+            else point
+            for point in points
+        ]
+        return self._commit_curve(node_id, updated)
+
+    def _commit_curve(
+        self, node_id: str, points: Sequence[CurvePoint]
+    ) -> EditResult:
+        ordered = sorted(points, key=lambda point: point.tick)
+        if len({point.tick for point in ordered}) != len(ordered):
+            raise EditorError("curve key ticks must be unique")
+        return self.set_curve_points(node_id, ordered)
 
     def connect(
         self,
@@ -1193,24 +1352,41 @@ class GraphEditorSession:
             for node_id in set(self._hashes) | set(new_hashes)
             if self._hashes.get(node_id) != new_hashes.get(node_id)
         )
+        previous_digest = self._digest
+        status = semantic_digest_status(parsed)
+        new_digest = status.digest
+        changed_semantics = new_digest != previous_digest
+        if not changed_semantics:
+            # Assigning an identical value or reconnecting the same edge is a
+            # no-op.  It must not push undo history or report invalidation.
+            self._draft_text = None
+            self._draft_diagnostics = []
+            return EditResult(
+                valid=True,
+                message="no change",
+                semantic_digest=self._digest,
+                previous_semantic_digest=self._digest,
+                snapshot_generation=self._snapshot_generation,
+                changed_nodes=(),
+                recomputed_nodes=(),
+                cached_nodes=tuple(sorted(parsed.nodes)),
+                editor_metadata_changed=False,
+            )
         if not changed and changed_hint:
-            # A connection that is not semantically meaningful may not change
-            # any structural hash; keep the hint for UI feedback but do not
-            # invent invalidation.
+            # A semantically meaningful mutation whose structural hash cannot
+            # be localized (for example one the native NW-02 helper rejects)
+            # conservatively invalidates the affected hint and its closure.
             changed = sorted(set(changed_hint) & set(parsed.nodes))
         closure = invalidated_closure(parsed, changed)
-        previous_digest = self._digest
-        new_digest, provenance = semantic_digest(parsed)
-        changed_semantics = new_digest != previous_digest
         self._push_undo()
         self._document = parsed
         self._hashes = new_hashes
         self._digest = new_digest
-        self._digest_provenance = provenance
+        self._digest_provenance = status.provenance
+        self._digest_status = status
         self._draft_text = None
         self._draft_diagnostics = []
-        if changed_semantics:
-            self._snapshot_generation += 1
+        self._snapshot_generation += 1
         recomputed = sorted(closure)
         cached = sorted(set(parsed.nodes) - closure)
         return EditResult(
@@ -1242,7 +1418,10 @@ class GraphEditorSession:
         self._timeline_tick = snapshot.timeline_tick
         self._hashes = structural_hashes(self._document)
         previous_digest = self._digest
-        self._digest, self._digest_provenance = semantic_digest(self._document)
+        status = semantic_digest_status(self._document)
+        self._digest = status.digest
+        self._digest_provenance = status.provenance
+        self._digest_status = status
         changed = self._digest != previous_digest
         if changed:
             self._snapshot_generation += 1
@@ -1266,6 +1445,8 @@ class GraphEditorSession:
             "version": 1,
             "semantic_digest": self._digest,
             "semantic_digest_provenance": self._digest_provenance,
+            "semantic_digest_canonical": self._digest_status.canonical,
+            "semantic_digest_fallback_reason": self._digest_status.reason,
             "snapshot_generation": self._snapshot_generation,
             "profile_id": self._document.profile_id,
             "requirements_digest": self._document.requirements_digest,
@@ -1337,6 +1518,7 @@ __all__ = [
     "COMMON_PROFILE_ID",
     "COMMON_REQUIREMENTS_DIGEST",
     "CurvePoint",
+    "DigestStatus",
     "EditResult",
     "EditorError",
     "EditorSession",
@@ -1350,8 +1532,10 @@ __all__ = [
     "invalidated_closure",
     "link_source_diagnostics",
     "load_proof_graph",
+    "node_size_attribution",
     "parse_graph_text",
     "semantic_digest",
+    "semantic_digest_status",
     "structural_hashes",
     "StudioSession",
 ]

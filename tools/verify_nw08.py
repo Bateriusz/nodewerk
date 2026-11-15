@@ -190,6 +190,47 @@ def _preview_recovery() -> dict[str, Any]:
     }
 
 
+def _preview_incremental_cache() -> dict[str, Any]:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(session, gpu_budget_bytes=512 * 1024 * 1024)
+    if not pipeline.preview_now(tick=0).accepted:
+        raise VerificationFailure("initial incremental-cache preview failed")
+    first = pipeline.last_valid_preview
+    if first is None or not first.recomputed_nodes:
+        raise VerificationFailure("first preview did not admit realizations")
+    pipeline.apply_parameter_edit("texture", "seed", "1297036694")
+    if not pipeline.preview_now(tick=0).accepted:
+        raise VerificationFailure("second incremental-cache preview failed")
+    second = pipeline.last_valid_preview
+    if second is None:
+        raise VerificationFailure("second preview was not installed")
+    expected_cached = {
+        "camera",
+        "instances",
+        "mesh_gpu",
+        "scene_gpu",
+        "sun",
+        "torus",
+        "twist",
+    }
+    if not expected_cached <= set(second.cached_nodes):
+        raise VerificationFailure(
+            "unchanged branches did not reuse per-node realizations"
+        )
+    first_keys = dict(first.node_realization_keys)
+    second_keys = dict(second.node_realization_keys)
+    for node_id in expected_cached:
+        if first_keys.get(node_id) != second_keys.get(node_id):
+            raise VerificationFailure(
+                f"cached node '{node_id}' changed its realization key"
+            )
+    return {
+        "cached_nodes": list(second.cached_nodes),
+        "recomputed_nodes": list(second.recomputed_nodes),
+        "cache_stats": pipeline.cache.stats,
+    }
+
+
 def _key_identity() -> dict[str, Any]:
     semantic = "sha256:v1:" + "a" * 64
     base = cache.CacheKeyInputs(semantic_digest=semantic)
@@ -259,6 +300,7 @@ def run_contracts() -> tuple[list[dict[str, Any]], bool]:
         ("editor_semantics_and_invalidation", _editor_semantics),
         ("async_cache_and_fence_retirement", _async_and_cache_contracts),
         ("preview_error_recovery", _preview_recovery),
+        ("preview_incremental_cache", _preview_incremental_cache),
         ("cache_key_identity", _key_identity),
         ("frozen_release_inputs", _release_inputs),
         ("studio_report_schema", _report_schema),

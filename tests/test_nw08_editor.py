@@ -107,6 +107,143 @@ def test_parameter_edit_recomputes_only_affected_branch() -> None:
     assert "torus" in camera_edit.cached_nodes
 
 
+def test_identical_assignment_is_a_noop_not_an_edit() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    baseline = session.semantic_digest
+    assert session.can_undo is False
+    result = session.set_parameter("texture", "seed", "1297036693")
+    assert result.valid is True
+    assert result.message == "no change"
+    assert result.semantic_digest == baseline
+    assert result.previous_semantic_digest == baseline
+    assert result.changed_nodes == ()
+    assert result.recomputed_nodes == ()
+    assert session.semantic_digest == baseline
+    assert session.can_undo is False
+
+    # Reconnecting an identical edge is likewise a no-op.
+    same = session.connect("texture_gpu", "texture", "texture", "out")
+    assert same.valid is True
+    assert same.message == "no change"
+    assert same.recomputed_nodes == ()
+    assert session.can_undo is False
+
+
+def test_gui_curve_keyframe_binding_edits_canonical_keys_parameter() -> None:
+    from nw08_gui import CurveEditorBinding
+
+    application = studio.StudioApplication.create()
+    binding = CurveEditorBinding(application)
+    node_id = "camera"
+    baseline = application.session.semantic_digest
+    assert binding.supports(node_id)
+
+    added = binding.add(node_id, 120_000, 0.75)
+    assert added.valid
+    assert application.session.semantic_digest != baseline
+    points = binding.points(node_id)
+    assert editor.CurvePoint(120_000, 0.75) in points
+
+    moved = binding.update(node_id, 120_000, 180_000, 1.25)
+    assert moved.valid
+    points = binding.points(node_id)
+    assert editor.CurvePoint(180_000, 1.25) in points
+    assert editor.CurvePoint(120_000, 0.75) not in points
+
+    removed = binding.remove(node_id, 180_000)
+    assert removed.valid
+    assert editor.CurvePoint(180_000, 1.25) not in binding.points(node_id)
+    assert "keys" in application.session.parameter_names(node_id)
+
+
+def test_semantic_digest_uses_nw02_identity_when_helper_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nw03_compiler
+
+    native = "sha256:v1:" + "a" * 64
+    monkeypatch.setattr(nw03_compiler, "_native_nw02_digest", lambda _doc: native)
+    session = editor.GraphEditorSession.create_nw07_proof()
+    assert session.semantic_digest == native
+    assert session.semantic_digest_provenance == "nw02"
+    assert session.semantic_digest_canonical is True
+
+
+def test_semantic_digest_fallback_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nw03_compiler
+
+    monkeypatch.setattr(nw03_compiler, "_native_nw02_digest", lambda _doc: None)
+    session = editor.GraphEditorSession.create_nw07_proof()
+    assert session.semantic_digest_provenance == "python-fallback"
+    assert session.semantic_digest_canonical is False
+    assert session.semantic_digest_status.reason
+
+
+def test_semantic_digest_does_not_swallow_helper_defects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nw03_compiler
+
+    def _broken(_document):
+        raise RuntimeError("native helper crashed")
+
+    monkeypatch.setattr(nw03_compiler, "_native_nw02_digest", _broken)
+    with pytest.raises(RuntimeError):
+        editor.GraphEditorSession.create_nw07_proof()
+
+
+def test_studio_application_uses_actual_or_unavailable_host_identity() -> None:
+    import nw08_cache
+
+    application = studio.StudioApplication.create()
+    generation = application.report()["preview"]["device"]["generation"]
+    if os.name != "nt":
+        assert generation["adapter"]["vendor_id"] == 0
+        assert generation["adapter"]["device_id"] == 0
+        assert application.report()["preview"]["device"]["adapter_available"] is False
+
+    explicit = studio.StudioApplication.create(
+        adapter=nw08_cache.AdapterDeviceIdentity(
+            vendor_id=0x1002,
+            device_id=0x744C,
+            subsystem_id=7,
+            adapter_luid="explicit-luid",
+        ),
+        driver_version="31.0.1234.5",
+        os_build="10.0.26100.1",
+        toolchain=nw08_cache.ToolchainIdentity(os_build="10.0.26100.1"),
+    )
+    explicit_generation = explicit.report()["preview"]["device"]["generation"]
+    assert explicit_generation["adapter"]["vendor_id"] == 0x1002
+    assert explicit_generation["adapter"]["device_id"] == 0x744C
+    assert explicit_generation["driver_version"] == "31.0.1234.5"
+    assert explicit_generation["os_build"] == "10.0.26100.1"
+    assert explicit.report()["preview"]["device"]["adapter_available"] is True
+
+
+def test_studio_configure_export_drives_the_existing_export_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    dxc = _mock_dxc(tmp_path / "toolchain")
+    template = _template(tmp_path / "toolchain")
+    application = studio.StudioApplication.create(allow_test_payloads=True)
+    application.configure_export(
+        dxc_executable=str(dxc),
+        player_template=str(template),
+        cache_dir=str(tmp_path / "compiler-cache"),
+        optimization="O2",
+    )
+    report = application.export_report(tmp_path / "configured-export")
+    assert report["package_bytes"] > 0
+    assert (tmp_path / "configured-export" / "nw_common_d3d12_fl12_0_sm6_0_v1.nwp").is_file()
+    assert (
+        application.report()["export_configuration"]["dxc_executable"] == str(dxc)
+    )
+
+
 def test_curve_and_connection_editing_with_undo() -> None:
     proof = editor.GraphEditorSession.create_nw07_proof()
     curve = proof.set_curve_points(

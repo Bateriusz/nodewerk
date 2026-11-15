@@ -51,24 +51,95 @@ jobs:
         run: python -m pip install pytest
       - name: Run NW-08 regression coverage
         run: python -m pytest -q tests/test_nw08_*.py
-      - name: Run Windows integration validation
+      - name: Create deterministic contract-test toolchain
+        shell: bash
+        run: |
+          python tools/nw08_test_toolchain.py \
+            --directory "$RUNNER_TEMP/nw08-test-toolchain" \
+            --report "$RUNNER_TEMP/nw08-test-toolchain.json"
+      - name: Run Windows integration validation (real export path)
         shell: bash
         run: |
           set +e
           python tools/nw08_windows_integration.py \
+            --dxc "$RUNNER_TEMP/nw08-test-toolchain/mock_dxc.py" \
+            --player-template "$RUNNER_TEMP/nw08-test-toolchain/template.exe" \
+            --allow-test-payloads \
             --report "$RUNNER_TEMP/nw08-windows-integration.json"
           status=$?
           set -e
+          python - "$RUNNER_TEMP/nw08-windows-integration.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          checks = {entry["name"]: entry["status"] for entry in report["checks"]}
+          required = {
+              "gui_cli_export_equivalence",
+              "shader_error_recovery",
+              "device_recreation",
+              "fence_safe_cache",
+          }
+          failed = sorted(name for name in required if checks.get(name) != "passed")
+          if failed:
+              raise SystemExit("NW-08 integration checks failed: " + ", ".join(failed))
+          if report["hardware_evidence"]:
+              raise SystemExit(
+                  "contract-test integration must not claim hardware evidence"
+              )
+          if checks.get("real_preview") != "pending_unverified":
+              raise SystemExit(
+                  "real preview must remain pending without a real preview executable"
+              )
+          print("NW-08 export/recovery/cache checks passed; real preview pending.")
+          PY
           if [ "$status" -eq 2 ]; then
-            echo "::notice::NW-08 Windows integration is pending an explicit diagnostic player/preview executable; contract simulations are not hardware evidence."
+            echo "::notice::NW-08 real preview remains pending_unverified; GUI/CLI export, shader recovery, device recreation, and fence cache were exercised."
             exit 0
           fi
           if [ "$status" -ne 0 ]; then
             echo "::error::NW-08 Windows integration exited with status $status"
             exit "$status"
           fi
+      - name: Upload NW-08 test toolchain
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw08-test-toolchain
+          path: ${{ runner.temp }}/nw08-test-toolchain.json
       - name: Upload NW-08 integration report
         uses: actions/upload-artifact@v4
         with:
           name: nw08-windows-integration
           path: ${{ runner.temp }}/nw08-windows-integration.json
+
+  windows-real-preview:
+    name: Windows 11 x64 real preview (opt-in hardware host)
+    if: ${{ vars.NW08_REAL_PREVIEW == '1' }}
+    runs-on: windows-latest
+    env:
+      NW08_PREVIEW_EXECUTABLE: ${{ vars.NW08_PREVIEW_EXECUTABLE }}
+      NW08_PLAYER_TEMPLATE: ${{ vars.NW08_PLAYER_TEMPLATE }}
+      NW08_DXC: ${{ vars.NW08_DXC }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Run real preview integration
+        shell: bash
+        run: |
+          python tools/nw08_windows_integration.py \
+            --player-template "$NW08_PLAYER_TEMPLATE" \
+            --dxc "$NW08_DXC" \
+            --preview-executable "$NW08_PREVIEW_EXECUTABLE" \
+            --preview-mode package-host \
+            --execution-kind physical \
+            --report "$RUNNER_TEMP/nw08-windows-real-preview.json"
+      - name: Upload NW-08 real preview report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw08-windows-real-preview
+          path: ${{ runner.temp }}/nw08-windows-real-preview.json

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -8,6 +9,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw07_contract  # noqa: E402
+import nw04_fixture  # noqa: E402
+import nw05_export  # noqa: E402
 import nw08_editor  # noqa: E402
 import nw08_studio  # noqa: E402
 import nwp_package  # noqa: E402
@@ -65,17 +68,75 @@ def test_release_pinned_input_digest_is_unchanged_by_editor_additions() -> None:
 
 
 def test_authoring_infrastructure_is_excluded_from_release_closure() -> None:
-    import nw03_compiler
-    import nw05_export
+    import tempfile
+
     import nw05_optimizer
 
-    # The manifest/exclusion vocabulary is the established NW-05 contract.
-    source = Path(nw05_export.__file__).read_text(encoding="utf-8")
-    assert "nodewerk-studio-authoring" in source
-    assert "excluded_authoring" in source
-    assert callable(nw05_optimizer.build_link_manifest)
-    # Source maps and diagnostics remain authoring-side.
-    assert "source_map" in Path(nw03_compiler.__file__).read_text(encoding="utf-8")
+    graph = REPO_ROOT / "fixtures" / "nw05" / "procedural_image.nwgraph"
+    container = nw04_fixture.make_dxil_container()
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        dxc = root / "mock_dxc.py"
+        dxc.write_text(
+            "import sys\n"
+            "from pathlib import Path\n"
+            "if '--version' in sys.argv:\n"
+            "    print('dxcompiler.dll: 1.8 - 1.8.2407.12')\n"
+            "    sys.exit(0)\n"
+            "fo = Path(sys.argv[sys.argv.index('-Fo') + 1])\n"
+            "fo.parent.mkdir(parents=True, exist_ok=True)\n"
+            f"fo.write_bytes(bytes.fromhex({container.hex()!r}))\n",
+            encoding="utf-8",
+        )
+        template = root / "template.exe"
+        template.write_bytes(b"MZ" + b"\x00" * 256)
+        output = root / "out"
+        os.environ["NODEWERK_NW03_TEST_DIGEST"] = "1"
+        try:
+            result = nw05_export.export_graph(
+                graph,
+                output,
+                dxc_executable=str(dxc),
+                settings=nw05_export.ExportSettings(
+                    player_template=str(template)
+                ),
+                allow_test_payloads=True,
+            )
+        finally:
+            os.environ.pop("NODEWERK_NW03_TEST_DIGEST", None)
+
+        manifest_path = output / "link-manifest.json"
+        assert manifest_path.is_file()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        excluded = set(manifest["excluded"]["authoring_infrastructure"])
+        assert {
+            "nodewerk-studio",
+            "nw02-graph-parser",
+            "nw03-source-maps",
+            "nw03-reflection-tables",
+        } <= excluded
+        retained = manifest["retained"]
+        retained_text = json.dumps(retained, sort_keys=True).lower()
+        for token in (
+            "studio",
+            "tkinter",
+            "dxcompiler",
+            "dxc",
+            "source_map",
+            "source-map",
+            "profiling",
+            "nw08",
+        ):
+            assert token not in retained_text
+        assert "nodewerkc" not in retained["code"]
+        # The package-link builder is still the single NW-05 implementation.
+        assert callable(nw05_optimizer.build_link_manifest)
+        assert (
+            result.artifacts[nwp_package.COMMON_PROFILE_ID].manifest[
+                "manifest_sha256"
+            ]
+            == manifest["manifest_sha256"]
+        )
 
 
 def test_studio_report_schema_validates() -> None:

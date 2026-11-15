@@ -14,6 +14,6 @@ function(nw_add_studio_authoring_targets)
     message(STATUS "NW-08 studio authoring targets require nw_package_player")
     return()
   endif()
-  add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../src/studio"
+  add_subdirectory("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src/studio"
                    "${CMAKE_BINARY_DIR}/nw08-studio")
 endfunction()

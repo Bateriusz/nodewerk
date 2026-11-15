@@ -96,14 +96,27 @@ into a newer generation.
 
 - `ReferencePreviewBackend` is a deterministic contract test backend and is
   never reported as hardware evidence.
-- `WindowsRuntimePreviewBackend` launches the existing package player at an
-  absolute tick (using the established diagnostic `--capture-tick` protocol
-  when available) and reads back the presented RGBA32F image.
+- `WindowsRuntimePreviewBackend` first exports the document it was given through
+  `nw05_export.export_graph` (the same path used by `nodewerkc export`) and then
+  launches the existing runtime on those exact bytes: the native
+  `nodewerk-studio-preview` host with `--package`, or the generated player in
+  `embedded-player` mode. A preview never renders an unrelated frozen embedded
+  package.
+- Preview requires an actual presented-output readback. A zero process exit
+  without a `tick_<tick>.rgba32f` file is a failure and is never reported as
+  hardware evidence. Physical evidence additionally requires a real,
+  un-injected Windows process and an explicit physical/passthrough execution
+  declaration.
 - Export calls `nw05_export.export_graph`; the CLI calls the same function.
   GUI and CLI exports of the same semantic graph, settings, pinned toolchain,
   and player inputs are byte-identical.
 
 Preview reports include per-pass timings and deterministic size attribution.
+The native host accepts the configured GPU budget (`--memory-budget`) and
+emits actual `PackagePlayer` allocation statistics plus an explicit
+`fence_retired` flag after `shutdown()` waits for submitted work. The pipeline
+reserves the estimated realization before launch, so a preview that cannot fit
+the budget fails closed instead of launching.
 No hard real-time editor latency claim is made without a representative graph
 benchmark.
 
@@ -118,7 +131,8 @@ Compiler/semantic keys include:
 - compiler id/version, DXC pin, target, optimization, OS/toolchain identity;
 - generated shader/entry-point identity and bindings.
 
-Device-resident realization keys additionally include:
+Per-node device-resident realization keys use the node's canonical structural
+hash plus the same compiler/target inputs, and additionally include:
 
 - the full compiler key;
 - the D3D12 device-instance recreation epoch;
@@ -126,6 +140,11 @@ Device-resident realization keys additionally include:
 - driver version, OS build, and toolchain identity;
 - actual adapter/device identity (`vendor_id`, `device_id`, `subsystem_id`,
   adapter LUID).
+
+The host adapter/driver/OS identity is observed through the established Windows
+CIM video-controller inventory. On hosts where observation is unavailable the
+keys use an explicit all-zero `AdapterDeviceIdentity.unavailable()` sentinel;
+production code never substitutes a fabricated NVIDIA/AMD PCI identity.
 
 GPU marketing names, RTX generation labels, and adapter descriptions are
 observed metadata only. They never define a cache predicate, compiler target,
@@ -149,6 +168,11 @@ The device generation is a D3D12 device-instance recreation epoch:
 - explicit preview reinitialization increments the epoch;
 - recovery never bypasses or changes operators and is independent of the
   release-player failure policy.
+
+An in-flight render is revalidated twice: before work starts and after the
+backend returns. Device loss or a semantic edit during rendering causes the
+completion to be rejected, the last valid preview is retained only when the
+device is still live, and reinitialization increments the epoch.
 
 ## Disk cache corruption
 
@@ -179,6 +203,12 @@ python tools/verify_nw08.py --mode Full \
   DXC and player template are available; otherwise it reports pending.
 - `Full` requires the retained Windows integration report, including a real
   preview execution for hardware evidence.
+
+The Windows CI job exercises GUI/CLI export equivalence, shader-error recovery,
+device recreation, and fence-safe caching with the deterministic NW-04 fixture
+toolchain. Real preview remains `pending_unverified` unless the opt-in
+`windows-real-preview` job is enabled with a physical preview host. Simulated
+or contract execution is never relabeled as hardware evidence.
 
 Outstanding NW-07 hardware captures remain `pending_unverified`. They are not
 an implementation prerequisite for the editor and are never relabeled as

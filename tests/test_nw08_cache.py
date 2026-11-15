@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -246,4 +247,21 @@ def test_gpu_cache_invalidates_old_device_epoch_without_reuse() -> None:
     assert "old" in gpu.retiring_keys()
     gpu.signal_fence(3)
     assert "old" not in gpu.retiring_keys()
+
+
+def test_host_identity_is_observed_or_explicitly_unavailable() -> None:
+    identity = cache.discover_host_device_identity()
+    if identity.available:
+        assert identity.adapter.available
+        assert identity.adapter.vendor_id or identity.adapter.device_id
+        assert identity.driver_version
+    else:
+        assert identity.adapter == cache.AdapterDeviceIdentity.unavailable()
+        assert identity.adapter.vendor_id == 0
+        assert identity.adapter.device_id == 0
+        assert identity.adapter.adapter_luid == ""
+        assert identity.detail
+    # The unavailable sentinel must never masquerade as a real NVIDIA adapter.
+    if os.name != "nt":
+        assert identity.adapter.vendor_id != 0x10DE
 

@@ -23,8 +23,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import platform
+import re
+import subprocess
 import sys
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
@@ -139,6 +144,22 @@ class AdapterDeviceIdentity:
     def pci_device_id(self) -> int:
         return self.device_id
 
+    @property
+    def available(self) -> bool:
+        """True only when a non-sentinel adapter identity was observed."""
+        return bool(self.vendor_id or self.device_id or self.adapter_luid)
+
+    @classmethod
+    def unavailable(cls) -> "AdapterDeviceIdentity":
+        """Explicit sentinel used when no adapter identity can be observed.
+
+        This is deliberately *not* a plausible fabricated PCI identity.  The
+        sentinel is still part of the device-generation key, so a host that
+        later observes a real adapter invalidates every device-resident
+        realization.
+        """
+        return cls(vendor_id=0, device_id=0, subsystem_id=0, adapter_luid="")
+
     @classmethod
     def from_observed_hardware(
         cls, observed: Mapping[str, Any]
@@ -167,6 +188,128 @@ class AdapterDeviceIdentity:
             adapter_luid=str(observed.get("adapter_luid", "")),
             device_removed=bool(observed.get("device_removed", False)),
         )
+
+
+@dataclass(frozen=True)
+class HostDeviceIdentity:
+    """Observed host adapter/driver/OS identity for device-resident keys.
+
+    Marketing names are intentionally never captured here.  When discovery is
+    unavailable the adapter is the explicit :meth:`AdapterDeviceIdentity.unavailable`
+    sentinel and ``available`` is false; production code must not substitute a
+    fabricated NVIDIA/AMD PCI identity.
+    """
+
+    adapter: AdapterDeviceIdentity
+    driver_version: str = "unavailable"
+    os_build: str = ""
+    available: bool = False
+    detail: str = ""
+
+    @classmethod
+    def unavailable(cls, detail: str = "") -> "HostDeviceIdentity":
+        return cls(
+            adapter=AdapterDeviceIdentity.unavailable(),
+            driver_version="unavailable",
+            os_build=platform.version() or "unavailable",
+            available=False,
+            detail=detail or "adapter identity unavailable on this host",
+        )
+
+    def to_key_fields(self) -> dict[str, Any]:
+        return {
+            "adapter": self.adapter.to_key_fields(),
+            "driver_version": self.driver_version,
+            "os_build": self.os_build,
+            "available": self.available,
+        }
+
+
+_PCIPNP_RE = re.compile(
+    r"VEN_([0-9A-Fa-f]{4}).*?DEV_([0-9A-Fa-f]{4})"
+    r"(?:.*?SUBSYS_([0-9A-Fa-f]{8}))?",
+    re.DOTALL,
+)
+
+
+def _adapter_from_pnp(pnp_device_id: str) -> AdapterDeviceIdentity | None:
+    match = _PCIPNP_RE.search(pnp_device_id or "")
+    if match is None:
+        return None
+    subsystem = int(match.group(3), 16) if match.group(3) else 0
+    return AdapterDeviceIdentity(
+        vendor_id=int(match.group(1), 16),
+        device_id=int(match.group(2), 16),
+        subsystem_id=subsystem,
+        # The PNP instance id is a stable device identity, but it is not a
+        # DXGI LUID.  Keep a deterministic observation digest instead of
+        # mislabelling it as a LUID.
+        adapter_luid="pnp:"
+        + hashlib.sha256(pnp_device_id.encode("utf-8")).hexdigest()[:16],
+    )
+
+
+@lru_cache(maxsize=1)
+def discover_host_device_identity() -> HostDeviceIdentity:
+    """Observe the host adapter/driver/OS identity without marketing labels.
+
+    Windows uses the established CIM video-controller inventory.  Other hosts
+    return the explicit unavailable sentinel.  Discovery failure is never
+    converted into a fabricated adapter identity.
+    """
+    os_build = platform.version() or "unavailable"
+    if os.name != "nt":
+        return HostDeviceIdentity(
+            adapter=AdapterDeviceIdentity.unavailable(),
+            driver_version="unavailable",
+            os_build=os_build,
+            available=False,
+            detail=f"host adapter discovery is Windows-only (os={os.name})",
+        )
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$a=Get-CimInstance Win32_VideoController | "
+        "Where-Object {$_.PNPDeviceID -like 'PCI\\*'} | "
+        "Select-Object -First 1 PNPDeviceID,DriverVersion;"
+        "if($a){$a|ConvertTo-Json -Compress}"
+    )
+    detail = "no PCI video controller was reported"
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        if completed.returncode == 0 and completed.stdout.strip():
+            record = json.loads(completed.stdout)
+            adapter = _adapter_from_pnp(str(record.get("PNPDeviceID", "")))
+            if adapter is not None:
+                return HostDeviceIdentity(
+                    adapter=adapter,
+                    driver_version=str(
+                        record.get("DriverVersion") or "unavailable"
+                    ),
+                    os_build=os_build,
+                    available=True,
+                    detail="Win32_VideoController PNP device identity",
+                )
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        detail = f"host adapter discovery failed: {exc}"
+    return HostDeviceIdentity(
+        adapter=AdapterDeviceIdentity.unavailable(),
+        driver_version="unavailable",
+        os_build=os_build,
+        available=False,
+        detail=detail,
+    )
 
 
 @dataclass(frozen=True)
@@ -631,6 +774,26 @@ class AsyncJobQueue:
         self._completed.add(token.job_id)
         return CompletionDecision(True, "accepted", token)
 
+    def is_current(self, token: GenerationToken) -> tuple[bool, str]:
+        """Revalidate a token without mutating queue state.
+
+        This is used after a backend has finished rendering and again at
+        installation time.  A device-loss or semantic edit that happened while
+        the job was executing must reject the completion even though the token
+        was already claimed by :meth:`complete`.
+        """
+        if not isinstance(token, GenerationToken):
+            raise CacheIdentityError("is_current requires a GenerationToken")
+        if self._device_lost:
+            return False, "device_lost"
+        if token.device_epoch != self._device_epoch:
+            return False, "obsolete_device_epoch"
+        if token.snapshot_generation != self._snapshot_generation:
+            return False, "obsolete_snapshot_generation"
+        if self._latest_by_snapshot.get(token.snapshot_generation) != token.job_id:
+            return False, "superseded_by_newer_job"
+        return True, "current"
+
     def handle_device_loss(self) -> None:
         """Invalidate every pending job and refuse submissions until reinit."""
         self._device_lost = True
@@ -947,11 +1110,13 @@ __all__ = [
     "GpuCache",
     "GpuRealization",
     "GpuRealizationCache",
+    "HostDeviceIdentity",
     "PreviewJobQueue",
     "SemanticCacheKey",
     "SemanticCompilerKey",
     "ToolchainIdentity",
     "canonical_json_bytes",
+    "discover_host_device_identity",
     "make_compiler_cache_key",
     "make_device_realization_key",
     "sha256_value",

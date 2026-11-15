@@ -51,7 +51,11 @@ def _check(name: str, status: str, detail: Any = None) -> dict[str, Any]:
 
 
 def _export_equivalence(
-    work: Path, player_template: str, dxc: str
+    work: Path,
+    player_template: str,
+    dxc: str,
+    *,
+    allow_test_payloads: bool = False,
 ) -> dict[str, Any]:
     session = editor.GraphEditorSession.create_nw07_proof()
     session.set_parameter("camera", "fov_degrees", "55")
@@ -61,19 +65,23 @@ def _export_equivalence(
         work / "gui-export",
         settings={"player_template": player_template},
         dxc_executable=dxc,
+        allow_test_payloads=allow_test_payloads,
     )
+    cli_command = [
+        sys.executable,
+        str(TOOLS_DIR / "nodewerkc.py"),
+        "export",
+        str(source),
+        str(work / "cli-export"),
+        "--dxc",
+        dxc,
+        "--player-template",
+        player_template,
+    ]
+    if allow_test_payloads:
+        cli_command.append("--allow-test-payloads")
     cli = subprocess.run(
-        [
-            sys.executable,
-            str(TOOLS_DIR / "nodewerkc.py"),
-            "export",
-            str(source),
-            str(work / "cli-export"),
-            "--dxc",
-            dxc,
-            "--player-template",
-            player_template,
-        ],
+        cli_command,
         capture_output=True,
         text=True,
         check=False,
@@ -213,6 +221,10 @@ def _real_preview(
     execution_kind: str,
     capture_controls: bool,
     ticks: Sequence[int],
+    player_template: str | None,
+    dxc: str | None,
+    cache_dir: str | None,
+    preview_mode: str,
 ) -> dict[str, Any]:
     if not player_executable:
         return _check(
@@ -226,23 +238,78 @@ def _real_preview(
             "failed",
             {"reason": f"unsupported execution kind '{execution_kind}'"},
         )
+    if preview_mode == "package-host" and not (player_template and dxc):
+        return _check(
+            "real_preview",
+            "pending_unverified",
+            {
+                "reason": (
+                    "package-host preview requires both --player-template and "
+                    "--dxc so the edited graph can be compiled before display"
+                )
+            },
+        )
     session = editor.GraphEditorSession.create_nw07_proof()
-    pipeline = preview.PreviewPipeline(
-        session,
-        backend=preview.WindowsRuntimePreviewBackend(
-            player_executable, capture_controls=capture_controls
-        ),
-    )
+    # Make the preview explicitly consume an edited graph, not merely the
+    # frozen proof defaults.
+    session.set_parameter("camera", "fov_degrees", "55")
+    try:
+        backend = preview.WindowsRuntimePreviewBackend(
+            player_executable,
+            capture_controls=capture_controls,
+            mode=preview_mode,
+            dxc_executable=dxc,
+            player_template=player_template,
+            cache_dir=cache_dir,
+            execution_kind=execution_kind,
+            memory_budget_bytes=512 * 1024 * 1024,
+        )
+    except preview.PreviewError as exc:
+        return _check(
+            "real_preview",
+            "pending_unverified" if not capture_controls else "failed",
+            {"reason": str(exc)},
+        )
+    pipeline = preview.PreviewPipeline(session, backend=backend)
     results = []
     for tick in ticks:
-        decision = pipeline.preview_now(tick=tick)
-        if not decision.accepted or pipeline.last_valid_preview is None:
+        token = pipeline.submit_preview(tick=tick)
+        decision = pipeline.execute(token)
+        record = pipeline.last_valid_preview
+        if (
+            not decision.accepted
+            or record is None
+            or record.token.job_id != token.job_id
+            or record.frame.tick != tick
+            or not record.frame.image_sha256
+            or record.semantic_digest != session.semantic_digest
+        ):
             return _check(
                 "real_preview",
                 "failed",
-                {"tick": tick, "diagnostics": pipeline.last_diagnostics},
+                {
+                    "tick": tick,
+                    "decision": decision.to_dict(),
+                    "diagnostics": pipeline.last_diagnostics,
+                },
             )
-        results.append(pipeline.last_valid_preview.frame.to_dict())
+        frame = record.frame
+        expected_physical = execution_kind in {
+            "physical",
+            "documented_gpu_passthrough",
+        }
+        if bool(frame.hardware_evidence) != expected_physical:
+            return _check(
+                "real_preview",
+                "failed",
+                {
+                    "tick": tick,
+                    "reason": "hardware_evidence does not match execution kind",
+                    "hardware_evidence": frame.hardware_evidence,
+                    "execution_kind": frame.execution_kind,
+                },
+            )
+        results.append(frame.to_dict())
     return _check(
         "real_preview",
         "passed",
@@ -286,6 +353,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--player-template")
     parser.add_argument("--dxc")
     parser.add_argument("--preview-executable")
+    parser.add_argument(
+        "--preview-mode",
+        choices=["package-host", "embedded-player"],
+        default="package-host",
+    )
+    parser.add_argument("--cache-dir")
+    parser.add_argument("--allow-test-payloads", action="store_true")
     parser.add_argument(
         "--execution-kind",
         choices=["physical", "documented_gpu_passthrough"],
@@ -341,7 +415,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="nw08-integration-") as raw:
         work = Path(raw)
         if args.player_template and args.dxc:
-            checks.append(_export_equivalence(work, args.player_template, args.dxc))
+            checks.append(
+                _export_equivalence(
+                    work,
+                    args.player_template,
+                    args.dxc,
+                    allow_test_payloads=args.allow_test_payloads,
+                )
+            )
         else:
             checks.append(
                 _check(
@@ -360,6 +441,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 execution_kind=args.execution_kind,
                 capture_controls=args.capture_controls,
                 ticks=ticks,
+                player_template=args.player_template,
+                dxc=args.dxc,
+                cache_dir=args.cache_dir,
+                preview_mode=args.preview_mode,
             )
         )
 

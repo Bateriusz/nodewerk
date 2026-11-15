@@ -27,6 +27,44 @@ from nw08_editor import CurvePoint, EditorError, GraphEditorSession  # noqa: E40
 from nw08_studio import DEFAULT_GPU_CACHE_BUDGET, StudioApplication  # noqa: E402
 
 
+class CurveEditorBinding:
+    """Headless curve-keyframe controller used by the GUI.
+
+    Keeping this binding outside the Tk widgets makes the exact GUI editing
+    path testable without a display: every operation delegates to
+    :class:`StudioApplication`, which in turn uses the canonical
+    ``GraphEditorSession.set_curve_points`` / ``keys`` parameter path.
+    """
+
+    def __init__(self, application: StudioApplication):
+        self.application = application
+
+    def supports(self, node_id: str | None) -> bool:
+        if not node_id or node_id not in self.application.session.node_ids:
+            return False
+        return "keys" in self.application.session.parameter_names(node_id)
+
+    def points(self, node_id: str) -> tuple[CurvePoint, ...]:
+        return self.application.session.curve_points(node_id)
+
+    def add(self, node_id: str, tick: int, value: float):
+        return self.application.add_curve_key(node_id, int(tick), float(value))
+
+    def update(
+        self,
+        node_id: str,
+        old_tick: int,
+        new_tick: int,
+        value: float | None = None,
+    ):
+        return self.application.move_curve_key(
+            node_id, int(old_tick), int(new_tick), value
+        )
+
+    def remove(self, node_id: str, tick: int):
+        return self.application.remove_curve_key(node_id, int(tick))
+
+
 class StudioWindow:
     """Interactive editor window over :class:`StudioApplication`."""
 
@@ -39,6 +77,7 @@ class StudioWindow:
         self.root = root
         self.application = application
         self._dragged: str | None = None
+        self.curve_editor = CurveEditorBinding(application)
         self._build()
         self.refresh()
 
@@ -52,6 +91,7 @@ class StudioWindow:
         file_menu.add_command(label="New NW-07 Proof", command=self.new_proof)
         file_menu.add_command(label="Open…", command=self.open_graph)
         file_menu.add_command(label="Save As…", command=self.save_graph)
+        file_menu.add_command(label="Export Settings…", command=self.edit_export_settings)
         file_menu.add_command(label="Export…", command=self.export)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.destroy)
@@ -116,6 +156,31 @@ class StudioWindow:
         self.parameter_list = tk.Listbox(self.inspector_tab, height=10)
         self.parameter_list.pack(fill=tk.BOTH, expand=True)
         self.parameter_list.bind("<Double-Button-1>", self._edit_parameter)
+
+        curve_frame = ttk.LabelFrame(
+            self.inspector_tab, text="Curve keyframes (keys parameter)"
+        )
+        curve_frame.pack(fill=tk.X, pady=4)
+        self.curve_list = tk.Listbox(curve_frame, height=5, exportselection=False)
+        self.curve_list.pack(fill=tk.X)
+        self.curve_list.bind("<<ListboxSelect>>", self._on_curve_select)
+        curve_form = ttk.Frame(curve_frame)
+        curve_form.pack(fill=tk.X)
+        self.curve_tick_entry = ttk.Entry(curve_form, width=12)
+        self.curve_value_entry = ttk.Entry(curve_form, width=12)
+        ttk.Label(curve_form, text="tick").pack(side=tk.LEFT)
+        self.curve_tick_entry.pack(side=tk.LEFT)
+        ttk.Label(curve_form, text="value").pack(side=tk.LEFT)
+        self.curve_value_entry.pack(side=tk.LEFT)
+        ttk.Button(curve_form, text="Add", command=self.add_curve_key).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(curve_form, text="Update", command=self.update_curve_key).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(curve_form, text="Delete", command=self.delete_curve_key).pack(
+            side=tk.LEFT
+        )
 
         connection = ttk.LabelFrame(self.inspector_tab, text="Connection")
         connection.pack(fill=tk.X, pady=4)
@@ -191,6 +256,7 @@ class StudioWindow:
     def refresh(self) -> None:
         self._sync_node_list()
         self.refresh_parameters()
+        self.refresh_curve()
         self.refresh_graph()
         self.refresh_diagnostics()
         self.refresh_timings()
@@ -214,6 +280,82 @@ class StudioWindow:
         for name in self.application.session.parameter_names(node_id):
             value = " ".join(self.application.session.parameter(node_id, name))
             self.parameter_list.insert(self.tk.END, f"{name} = {value}")
+
+    def refresh_curve(self) -> None:
+        self.curve_list.delete(0, self.tk.END)
+        node_id = self._selected_node()
+        if not self.curve_editor.supports(node_id):
+            return
+        for point in self.curve_editor.points(node_id):
+            self.curve_list.insert(self.tk.END, f"{point.tick}: {point.value:g}")
+
+    def _on_curve_select(self, _event: Any = None) -> None:
+        selection = self.curve_list.curselection()
+        node_id = self._selected_node()
+        if not selection or not self.curve_editor.supports(node_id):
+            return
+        point = self.curve_editor.points(node_id)[selection[0]]
+        self.curve_tick_entry.delete(0, self.tk.END)
+        self.curve_tick_entry.insert(0, str(point.tick))
+        self.curve_value_entry.delete(0, self.tk.END)
+        self.curve_value_entry.insert(0, format(point.value, ".17g"))
+
+    def _curve_selection_point(self) -> CurvePoint | None:
+        selection = self.curve_list.curselection()
+        node_id = self._selected_node()
+        if not selection or not self.curve_editor.supports(node_id):
+            return None
+        points = self.curve_editor.points(node_id)
+        if selection[0] >= len(points):
+            return None
+        return points[selection[0]]
+
+    def add_curve_key(self) -> None:
+        node_id = self._selected_node()
+        if not self.curve_editor.supports(node_id):
+            self.status.configure(text="select a node with a keys curve")
+            return
+        try:
+            result = self.curve_editor.add(
+                node_id,
+                int(self.curve_tick_entry.get()),
+                float(self.curve_value_entry.get()),
+            )
+        except (EditorError, ValueError) as exc:
+            self.status.configure(text=str(exc))
+            return
+        self._after_edit(result)
+
+    def update_curve_key(self) -> None:
+        node_id = self._selected_node()
+        point = self._curve_selection_point()
+        if not node_id or point is None:
+            self.status.configure(text="select a curve key to update")
+            return
+        try:
+            result = self.curve_editor.update(
+                node_id,
+                point.tick,
+                int(self.curve_tick_entry.get()),
+                float(self.curve_value_entry.get()),
+            )
+        except (EditorError, ValueError) as exc:
+            self.status.configure(text=str(exc))
+            return
+        self._after_edit(result)
+
+    def delete_curve_key(self) -> None:
+        node_id = self._selected_node()
+        point = self._curve_selection_point()
+        if not node_id or point is None:
+            self.status.configure(text="select a curve key to delete")
+            return
+        try:
+            result = self.curve_editor.remove(node_id, point.tick)
+        except EditorError as exc:
+            self.status.configure(text=str(exc))
+            return
+        self._after_edit(result)
 
     def refresh_graph(self) -> None:
         self.canvas.delete("all")
@@ -328,6 +470,7 @@ class StudioWindow:
         if node_id:
             self.application.select(node_id)
             self.refresh_parameters()
+            self.refresh_curve()
             self.refresh_graph()
 
     def _edit_parameter(self, _event: Any = None) -> None:
@@ -412,16 +555,22 @@ class StudioWindow:
     def apply_budget(self) -> None:
         try:
             self.application.configure_gpu_cache_budget(int(self.budget_entry.get()))
-        except ValueError:
-            self.status.configure(text="budget must be an integer")
+        except (ValueError, RuntimeError) as exc:
+            self.status.configure(text=f"budget rejected: {exc}")
             return
         self.refresh_state()
         self.status.configure(text="GPU cache budget updated")
 
     def new_proof(self) -> None:
         self.application = StudioApplication.create(
-            gpu_cache_budget_bytes=self.application.gpu_cache_budget_bytes
+            gpu_cache_budget_bytes=self.application.gpu_cache_budget_bytes,
+            dxc_executable=self.application.dxc_executable or None,
+            player_template=self.application.player_template or None,
+            cache_dir=self.application.cache_dir or None,
+            optimization=self.application.optimization,
+            allow_test_payloads=self.application.allow_test_payloads,
         )
+        self.curve_editor = CurveEditorBinding(self.application)
         self.refresh()
 
     def open_graph(self) -> None:
@@ -439,7 +588,13 @@ class StudioWindow:
             self.application = StudioApplication.create(
                 path,
                 gpu_cache_budget_bytes=self.application.gpu_cache_budget_bytes,
+                dxc_executable=self.application.dxc_executable or None,
+                player_template=self.application.player_template or None,
+                cache_dir=self.application.cache_dir or None,
+                optimization=self.application.optimization,
+                allow_test_payloads=self.application.allow_test_payloads,
             )
+            self.curve_editor = CurveEditorBinding(self.application)
         except (EditorError, OSError) as exc:
             self.status.configure(text=f"open failed: {exc}")
             return
@@ -462,6 +617,36 @@ class StudioWindow:
             return
         self.status.configure(text=f"saved {path}")
 
+    def edit_export_settings(self) -> None:
+        from tkinter import simpledialog
+
+        values: dict[str, str] = {}
+        prompts = (
+            ("dxc", "DXC executable", self.application.dxc_executable),
+            ("player_template", "Player template", self.application.player_template),
+            ("cache_dir", "Compiler cache directory", self.application.cache_dir),
+            ("optimization", "Optimization (O0..O3)", self.application.optimization),
+        )
+        for key, label, current in prompts:
+            value = simpledialog.askstring(
+                "Export settings", label, initialvalue=current, parent=self.root
+            )
+            if value is None:
+                return
+            values[key] = value
+        try:
+            self.application.configure_export(
+                dxc_executable=values["dxc"],
+                player_template=values["player_template"],
+                cache_dir=values["cache_dir"],
+                optimization=values["optimization"],
+            )
+        except EditorError as exc:
+            self.status.configure(text=str(exc))
+            return
+        self.status.configure(text="export settings updated")
+        self.refresh_state()
+
     def export(self) -> None:
         from tkinter import filedialog
 
@@ -469,7 +654,12 @@ class StudioWindow:
         if not directory:
             return
         try:
-            report = self.application.export_report(directory)
+            report = self.application.export_report(
+                directory,
+                dxc_executable=self.application.dxc_executable or None,
+                cache_dir=self.application.cache_dir or None,
+                optimization=self.application.optimization,
+            )
         except Exception as exc:  # pragma: no cover - export backend boundary
             self.status.configure(text=f"export failed: {exc}")
             return
@@ -532,18 +722,34 @@ def run_gui(
     player_executable: str | os.PathLike[str] | None = None,
     capture_controls: bool = True,
     gpu_cache_budget: int = DEFAULT_GPU_CACHE_BUDGET,
+    preview_mode: str = "package-host",
+    dxc_executable: str | os.PathLike[str] | None = None,
+    player_template: str | os.PathLike[str] | None = None,
+    cache_dir: str | os.PathLike[str] | None = None,
+    optimization: str = "O2",
+    allow_test_payloads: bool = False,
 ) -> int:
     try:
         import tkinter as tk
     except Exception as exc:  # pragma: no cover - platform-dependent
         print(f"nodewerk-studio GUI unavailable: {exc}", file=sys.stderr)
         return 1
-    application = StudioApplication.create(
-        graph,
-        player_executable=player_executable,
-        capture_controls=capture_controls,
-        gpu_cache_budget_bytes=gpu_cache_budget,
-    )
+    try:
+        application = StudioApplication.create(
+            graph,
+            player_executable=player_executable,
+            capture_controls=capture_controls,
+            gpu_cache_budget_bytes=gpu_cache_budget,
+            preview_mode=preview_mode,
+            dxc_executable=dxc_executable,
+            player_template=player_template,
+            cache_dir=cache_dir,
+            optimization=optimization,
+            allow_test_payloads=allow_test_payloads,
+        )
+    except (EditorError, RuntimeError) as exc:
+        print(f"cannot create studio application: {exc}", file=sys.stderr)
+        return 1
     try:
         root = tk.Tk()
     except Exception as exc:  # pragma: no cover - headless display
@@ -554,4 +760,4 @@ def run_gui(
     return 0
 
 
-__all__ = ["StudioWindow", "run_gui"]
+__all__ = ["CurveEditorBinding", "StudioWindow", "run_gui"]
