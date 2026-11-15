@@ -661,12 +661,15 @@ def inspect_artifact_directory(
     )
     if embedded_package != package_bytes:
         raise Nw07ExportError("executable does not embed the published package")
-    if embedded_manifest != manifest_bytes:
-        raise Nw07ExportError("executable does not embed the published manifest")
+    expected_manifest_binding = hashlib.sha256(manifest_bytes).digest()
+    if embedded_manifest != expected_manifest_binding:
+        raise Nw07ExportError(
+            "executable manifest binding does not match the published manifest"
+        )
     manifest = json.loads(manifest_bytes.decode("utf-8"))
     dependency = _runtime_dependency_check(manifest)
     embedded_bytes = (
-        len(package_bytes) + len(manifest_bytes) + nw05_export.EMBED_FOOTER_SIZE
+        len(package_bytes) + len(embedded_manifest) + nw05_export.EMBED_FOOTER_SIZE
     )
     player_image_bytes = len(executable_bytes) - embedded_bytes
     if player_image_bytes < 0:

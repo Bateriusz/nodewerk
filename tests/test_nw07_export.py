@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -86,7 +87,8 @@ def test_export_is_one_self_contained_release_closure(tmp_path: Path) -> None:
     assert size["required_non_system_bytes"] == artifact["executable_bytes"]
     assert size["system_dependency_bytes"] == 0
     assert size["embedded_package_bytes"] == artifact["package_bytes"]
-    assert size["embedded_manifest_bytes"] == artifact["manifest_bytes"]
+    assert size["embedded_manifest_bytes"] == hashlib.sha256(b"").digest_size
+    assert artifact["manifest_bytes"] > size["embedded_manifest_bytes"]
     assert size["within_ceiling"] is True
     assert size["stretch_mandatory_gate"] is False
     assert report["distribution"]["single_executable"] is True
@@ -267,6 +269,30 @@ def test_published_artifact_identity_rejects_modified_package(tmp_path: Path) ->
     data[-1] ^= 0xFF
     package.write_bytes(bytes(data))
     with pytest.raises(export.Nw07ExportError):
+        export.inspect_artifact_directory(artifact_dir)
+
+
+def test_frozen_executable_uses_compact_manifest_binding(tmp_path: Path) -> None:
+    _export(tmp_path)
+    artifact_dir = tmp_path / "artifact"
+    stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+    executable = (artifact_dir / f"{stem}.exe").read_bytes()
+    manifest = (artifact_dir / f"{stem}.manifest.json").read_bytes()
+    _, embedded_manifest = export.nw05_export.extract_embedded_package(executable)
+    assert embedded_manifest == hashlib.sha256(manifest).digest()
+    assert len(embedded_manifest) == 32
+    assert len(embedded_manifest) < len(manifest)
+
+
+def test_manifest_binding_rejects_modified_sidecar(tmp_path: Path) -> None:
+    _export(tmp_path)
+    artifact_dir = tmp_path / "artifact"
+    stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+    manifest = artifact_dir / f"{stem}.manifest.json"
+    data = bytearray(manifest.read_bytes())
+    data[-2] ^= 0x01
+    manifest.write_bytes(bytes(data))
+    with pytest.raises(export.Nw07ExportError, match="manifest binding"):
         export.inspect_artifact_directory(artifact_dir)
 
 
