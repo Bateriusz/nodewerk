@@ -76,7 +76,7 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:b24527c0376e1885a34412edb7acadec93ac92dceb02b6dc329064b9250ec7ed",
+  "build_inputs_digest": "sha256:v1:80d7ff0dac4f44b42371654d990cd101676edca3e9da844a066b31703776e7c3",
   "loop": {
     "looping": true,
     "wrap": "modulo",
@@ -186,7 +186,7 @@
     "stretch_distribution_bytes_ceiling": 131072,
     "stretch_is_mandatory_gate": false,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000.0
+    "process_start_to_first_present_ms_ceiling": 2000
   },
   "fixed_tick_evaluation": {
     "ticks": [
