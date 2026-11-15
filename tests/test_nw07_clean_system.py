@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -47,8 +48,26 @@ def _report() -> dict:
     }
 
 
-def test_complete_clean_system_report_is_verified() -> None:
-    result = clean_system.validate_report(_report())
+def test_complete_clean_system_report_is_verified(tmp_path: Path) -> None:
+    deployment = tmp_path / "deployment"
+    deployment.mkdir()
+    executable = deployment / "nw_common_release.exe"
+    executable.write_bytes(b"MZ")
+    report = _report()
+    report["deployment"] = {
+        "executable": executable.name,
+        "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        "executable_bytes": executable.stat().st_size,
+        "deployment_files": [executable.name],
+        "sidecars": [],
+        "only_runtime_executable": True,
+        "development_dependencies_present": False,
+        "pe_imports": [],
+        "forbidden_runtime_dependencies": [],
+    }
+    result = clean_system.validate_report(
+        report, deployment_directory=deployment
+    )
     assert result["status"] == "verified"
 
 
@@ -99,6 +118,54 @@ def test_deployment_sidecar_or_dev_dependency_fails() -> None:
 def test_pending_report_is_not_verified() -> None:
     report = clean_system.pending_report("not on Windows")
     assert clean_system.validate_report(report)["status"] == "pending_unverified"
+
+
+def test_report_without_actual_deployment_cannot_verify() -> None:
+    assert (
+        clean_system.validate_report(_report())["status"]
+        == "pending_unverified"
+    )
+
+
+def test_retained_report_must_bind_the_actual_deployment(tmp_path: Path) -> None:
+    deployment = tmp_path / "deployment"
+    deployment.mkdir()
+    executable = deployment / "nw_common_release.exe"
+    executable.write_bytes(b"MZ")
+    identity = {
+        "executable": executable.name,
+        "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        "executable_bytes": executable.stat().st_size,
+        "deployment_files": [executable.name],
+        "sidecars": [],
+        "only_runtime_executable": True,
+        "development_dependencies_present": False,
+        "pe_imports": [],
+        "forbidden_runtime_dependencies": [],
+    }
+    report = _report()
+    report["deployment"] = dict(identity)
+    assert (
+        clean_system.validate_report(
+            report, deployment_directory=deployment
+        )["status"]
+        == "verified"
+    )
+    executable.write_bytes(b"MZ-stale")
+    assert (
+        clean_system.validate_report(
+            report, deployment_directory=deployment
+        )["status"]
+        == "failed"
+    )
+    executable.write_bytes(b"MZ")
+    (deployment / "unexpected.dll").write_bytes(b"sidecar")
+    assert (
+        clean_system.validate_report(
+            report, deployment_directory=deployment
+        )["status"]
+        == "failed"
+    )
 
 
 def test_required_scenarios_and_exit_codes_are_frozen() -> None:

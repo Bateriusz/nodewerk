@@ -81,11 +81,11 @@ def deployment_report(
     exclude_paths: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     excluded = {path.resolve() for path in exclude_paths}
-    files = [
+    files = sorted(
         path
         for path in deployment_directory.rglob("*")
         if path.is_file() and path.resolve() not in excluded
-    ]
+    )
     sidecars = [
         str(path.relative_to(deployment_directory))
         for path in files
@@ -122,6 +122,17 @@ def deployment_report(
     }
 
 
+def deployment_executable(directory: Path) -> Path | None:
+    return next(
+        (
+            path
+            for path in sorted(directory.glob("*.exe"))
+            if "nw_common_" in path.name
+        ),
+        None,
+    )
+
+
 def run_clean_system(
     *,
     fixture: Path,
@@ -130,14 +141,7 @@ def run_clean_system(
     output: Path,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
-    executable = next(
-        (
-            path
-            for path in sorted(deployment_directory.glob("*.exe"))
-            if "nw_common_" in path.name
-        ),
-        None,
-    )
+    executable = deployment_executable(deployment_directory)
     if executable is None:
         raise ValueError("deployment directory has no NW-07 executable")
     identity = export.inspect_artifact_directory(package_directory)
@@ -301,13 +305,33 @@ def pending_report(reason: str) -> dict[str, Any]:
     }
 
 
-def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
+def validate_report(
+    report: Mapping[str, Any],
+    *,
+    deployment_directory: Path | None = None,
+    exclude_paths: tuple[Path, ...] = (),
+) -> dict[str, Any]:
     reasons: list[str] = []
     if report.get("format") != REPORT_FORMAT or report.get("version") != REPORT_VERSION:
         reasons.append("report format/version is not the NW-07 clean-system contract")
     if report.get("task") != contract.TASK:
         reasons.append("report task is not NW-07")
-    deployment = report.get("deployment") or {}
+    deployment_value = report.get("deployment")
+    deployment = (
+        deployment_value if isinstance(deployment_value, Mapping) else None
+    )
+    if deployment is None:
+        if deployment_value not in (None, {}):
+            return {
+                "status": "failed",
+                "reasons": reasons + ["clean-system deployment record is malformed"],
+                "scenarios": report.get("scenarios") or [],
+            }
+        return {
+            "status": "pending_unverified",
+            "reasons": reasons + ["clean-system deployment was not inspected"],
+            "scenarios": report.get("scenarios") or [],
+        }
     if not deployment:
         return {
             "status": "pending_unverified",
@@ -315,6 +339,34 @@ def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
             "scenarios": report.get("scenarios") or [],
         }
     deployment_failed = False
+    if deployment_directory is not None:
+        actual_executable = deployment_executable(Path(deployment_directory))
+        if actual_executable is None:
+            deployment_failed = True
+            reasons.append("deployment directory has no NW-07 executable")
+        else:
+            actual = deployment_report(
+                actual_executable,
+                Path(deployment_directory),
+                exclude_paths=exclude_paths,
+            )
+            for field in (
+                "executable",
+                "executable_sha256",
+                "executable_bytes",
+                "deployment_files",
+                "sidecars",
+                "only_runtime_executable",
+                "development_dependencies_present",
+                "pe_imports",
+                "forbidden_runtime_dependencies",
+            ):
+                if deployment.get(field) != actual.get(field):
+                    deployment_failed = True
+                    reasons.append(
+                        f"clean-system deployment field '{field}' does not match "
+                        "the actual deployment"
+                    )
     if deployment.get("only_runtime_executable") is not True:
         reasons.append("deployment contains sidecars or development dependencies")
         deployment_failed = True
@@ -377,7 +429,13 @@ def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
         status = "pending_unverified"
         reasons.append("clean-system report is not verified")
     else:
-        status = "verified"
+        if deployment_directory is None:
+            status = "pending_unverified"
+            reasons.append(
+                "actual deployment was not supplied for executable and sidecar binding"
+            )
+        else:
+            status = "verified"
     return {"status": status, "reasons": reasons, "scenarios": rows}
 
 

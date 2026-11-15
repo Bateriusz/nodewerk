@@ -159,6 +159,7 @@ def test_unknown_nw07_dimension_keys_do_not_override_the_material_texture() -> N
         lambda c: c["image_tolerances"]["numeric"].__setitem__("absolute", 0.01),
         lambda c: c.__setitem__("requirements_digest", "sha256:v1:" + "0" * 64),
         lambda c: c["pinned_inputs"].pop(),
+        lambda c: c.__setitem__("build_inputs_digest", ""),
     ),
 )
 def test_canonical_configuration_rejects_weakening(mutation) -> None:

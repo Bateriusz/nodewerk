@@ -4,7 +4,8 @@
 Usage:
     python tools/verify_nw07.py --mode ContractsOnly [--summary-json out.json]
     python tools/verify_nw07.py --mode BuildChecks [--player-template ... --dxc ...]
-    python tools/verify_nw07.py --mode Full --fixture ... --package ... --evidence ...
+    python tools/verify_nw07.py --mode Full --fixture ... --package ... --evidence ... \
+        [--build-report ... | --player-template ... --dxc ...]
     python tools/verify_nw07.py --mode CleanSystem --binary-dir ...
 
 ContractsOnly and BuildChecks never claim hardware certification.  Full
@@ -894,13 +895,23 @@ def _native_export_checks(args: argparse.Namespace) -> list[CheckResult]:
                 _ok(
                     "nw07_native_release_export",
                     evidence={
+                        "artifact_key": report["artifact"]["artifact_key"],
+                        "package_sha256": report["artifact"]["package_sha256"],
+                        "manifest_sha256": report["artifact"]["manifest_sha256"],
                         "complete_distribution_bytes": report["distribution"][
                             "complete_distribution_bytes"
                         ],
                         "within_stretch": report["distribution"]["within_stretch"],
+                        "within_ceiling": report["distribution"]["within_ceiling"],
+                        "release_grade": report.get("release_grade"),
+                        "test_payload": report.get("test_payload"),
                         "reproducible": reproducibility["matching"],
                         "executable_sha256": reproducibility["fields"][
                             "executable_sha256"
+                        ],
+                        "build_inputs_digest": report["build_inputs"]["digest"],
+                        "matches_frozen_digest": report["build_inputs"][
+                            "matches_frozen_digest"
                         ],
                     },
                 )
@@ -909,23 +920,213 @@ def _native_export_checks(args: argparse.Namespace) -> list[CheckResult]:
         return [_fail("nw07_native_release_export", str(exc))]
 
 
+def _native_evidence_mismatches(
+    evidence: Mapping[str, Any],
+    identity: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    *,
+    require_reproducible: bool,
+) -> list[str]:
+    mismatches: list[str] = []
+    expected = {
+        "artifact_key": identity.get("artifact_key"),
+        "package_sha256": identity.get("package_sha256"),
+        "manifest_sha256": identity.get("manifest_sha256"),
+        "executable_sha256": identity.get("executable_sha256"),
+        "complete_distribution_bytes": identity["size_accounting"][
+            "complete_distribution_bytes"
+        ],
+        "build_inputs_digest": inputs["digest"],
+    }
+    for field, value in expected.items():
+        if evidence.get(field) != value:
+            mismatches.append(
+                f"{field}: expected {value!r}, observed {evidence.get(field)!r}"
+            )
+    if evidence.get("matches_frozen_digest") is not True:
+        mismatches.append("build inputs do not match the frozen digest")
+    if evidence.get("within_ceiling") is not True:
+        mismatches.append("complete distribution is not within the hard ceiling")
+    if evidence.get("release_grade") is not True or evidence.get("test_payload") is not False:
+        mismatches.append("export is not a release-grade non-test payload")
+    if require_reproducible and evidence.get("reproducible") is not True:
+        mismatches.append("clean-directory exports were not reproducible")
+    return mismatches
+
+
+def _validate_build_report(
+    path: Path,
+    *,
+    identity: Mapping[str, Any],
+    config: Mapping[str, Any] | None = None,
+) -> CheckResult:
+    try:
+        if config is None:
+            config = export.load_canonical_config()
+        report = json.loads(path.read_text(encoding="utf-8"))
+        inputs = export.verify_pinned_inputs(config)
+    except Exception as exc:
+        return _fail("nw07_native_release_export", str(exc))
+    if not inputs["frozen"] or not inputs["matches_frozen_digest"]:
+        return _fail(
+            "nw07_native_release_export",
+            "pinned build inputs are not anchored to a frozen digest",
+        )
+    if report.get("format") == "nw07-verification-summary":
+        if (
+            report.get("mode") != "BuildChecks"
+            or report.get("implementation_base") != contract.IMPLEMENTATION_BASE
+            or report.get("profile_id") != contract.PROFILE_ID
+            or report.get("requirements_digest") != contract.REQUIREMENTS_DIGEST
+        ):
+            return _fail(
+                "nw07_native_release_export",
+                "BuildChecks summary is not bound to the NW-07 implementation and profile",
+            )
+        native = next(
+            (
+                check
+                for check in report.get("checks") or []
+                if isinstance(check, Mapping)
+                and check.get("name") == "nw07_native_release_export"
+            ),
+            None,
+        )
+        if native is None:
+            return _fail(
+                "nw07_native_release_export",
+                "BuildChecks summary has no native release export result",
+            )
+        if native.get("status") == "failed":
+            return _fail(
+                "nw07_native_release_export",
+                "BuildChecks summary records an executed export failure",
+            )
+        if native.get("status") != "passed":
+            return _pending(
+                "nw07_native_release_export",
+                "BuildChecks summary does not contain a passed native release export",
+            )
+        if report.get("success") is not True:
+            return _fail(
+                "nw07_native_release_export",
+                "BuildChecks summary is not successful",
+            )
+        evidence_payload = native.get("evidence") or {}
+        mismatches = _native_evidence_mismatches(
+            evidence_payload,
+            identity,
+            inputs,
+            require_reproducible=True,
+        )
+        if mismatches:
+            return _fail(
+                "nw07_native_release_export",
+                "BuildChecks summary is not bound to the final artifact: "
+                + "; ".join(mismatches),
+            )
+        return _ok(
+            "nw07_native_release_export",
+            "verified from a passed BuildChecks summary",
+            evidence={
+                "source": "build_checks_summary",
+                "report": str(path),
+                **{
+                    key: value
+                    for key, value in evidence_payload.items()
+                    if key
+                    in {
+                        "artifact_key",
+                        "package_sha256",
+                        "manifest_sha256",
+                        "executable_sha256",
+                        "complete_distribution_bytes",
+                        "build_inputs_digest",
+                        "release_grade",
+                        "test_payload",
+                        "reproducible",
+                    }
+                },
+            },
+        )
+    if report.get("format") == "nw07-export-report":
+        if (
+            report.get("success") is not True
+            or report.get("implementation_base") != contract.IMPLEMENTATION_BASE
+            or report.get("profile_id") != contract.PROFILE_ID
+            or report.get("requirements_digest") != contract.REQUIREMENTS_DIGEST
+        ):
+            return _fail(
+                "nw07_native_release_export",
+                "export report is not a successful NW-07 release export",
+            )
+        artifact = report.get("artifact") or {}
+        evidence_payload = {
+            "artifact_key": artifact.get("artifact_key"),
+            "package_sha256": artifact.get("package_sha256"),
+            "manifest_sha256": artifact.get("manifest_sha256"),
+            "executable_sha256": artifact.get("executable_sha256"),
+            "complete_distribution_bytes": (report.get("distribution") or {}).get(
+                "complete_distribution_bytes"
+            ),
+            "within_ceiling": (report.get("distribution") or {}).get(
+                "within_ceiling"
+            ),
+            "build_inputs_digest": (report.get("build_inputs") or {}).get("digest"),
+            "matches_frozen_digest": (report.get("build_inputs") or {}).get(
+                "matches_frozen_digest"
+            ),
+            "release_grade": report.get("release_grade"),
+            "test_payload": report.get("test_payload"),
+            "reproducible": (report.get("reproducibility") or {}).get("matching"),
+        }
+        mismatches = _native_evidence_mismatches(
+            evidence_payload,
+            identity,
+            inputs,
+            require_reproducible=True,
+        )
+        if mismatches:
+            return _fail(
+                "nw07_native_release_export",
+                "export report is not bound to the final artifact or lacks "
+                "clean-directory reproducibility: "
+                + "; ".join(mismatches),
+            )
+        return _ok(
+            "nw07_native_release_export",
+            "verified from a reproducible export report",
+            evidence={"source": "export_report", "report": str(path)},
+        )
+    return _fail(
+        "nw07_native_release_export",
+        "unrecognized build/export report format",
+    )
+
+
 def build_checks(args: argparse.Namespace) -> list[CheckResult]:
     return contracts_only() + _native_export_checks(args)
 
 
 def full_checks(args: argparse.Namespace) -> list[CheckResult]:
-    # Full verification is driven by the supplied final artifact and hardware
-    # evidence.  BuildChecks' native Windows export is only added when the
-    # pinned player template and DXC were explicitly supplied; otherwise the
-    # artifact identity and evidence bindings provide the release provenance.
+    # Full verification requires release-export provenance bound to the same
+    # final artifact, either by running the native export now or by validating
+    # a retained BuildChecks/export report.
     checks = contracts_only()
-    if args.player_template and args.dxc:
-        checks.extend(_native_export_checks(args))
-    elif args.player_template or args.dxc:
+    native_requested = bool(args.player_template and args.dxc)
+    if args.player_template and not args.dxc or args.dxc and not args.player_template:
         checks.append(
             _pending(
                 "nw07_native_release_export",
                 "both --player-template and --dxc are required for native export checks",
+            )
+        )
+    elif not native_requested and not args.build_report:
+        checks.append(
+            _pending(
+                "nw07_native_release_export",
+                "a passed BuildChecks/export report or --player-template plus --dxc "
+                "is required for release-export provenance",
             )
         )
     if not args.fixture or not args.package or not args.evidence:
@@ -970,6 +1171,40 @@ def full_checks(args: argparse.Namespace) -> list[CheckResult]:
             },
         )
     )
+    if native_requested:
+        for result in _native_export_checks(args):
+            if result.status == "passed":
+                try:
+                    inputs = export.verify_pinned_inputs(
+                        export.load_canonical_config()
+                    )
+                    mismatches = _native_evidence_mismatches(
+                        result.evidence,
+                        identity,
+                        inputs,
+                        require_reproducible=True,
+                    )
+                except Exception as exc:
+                    result = _fail(
+                        "nw07_native_release_export",
+                        f"native release export binding failed: {exc}",
+                    )
+                else:
+                    if mismatches:
+                        result = _fail(
+                            "nw07_native_release_export",
+                            "native release export is not bound to the supplied final "
+                            "artifact: " + "; ".join(mismatches),
+                        )
+            checks.append(result)
+    elif args.build_report:
+        checks.append(
+            _validate_build_report(
+                Path(args.build_report),
+                identity=identity,
+                config=None,
+            )
+        )
     try:
         validate_file_against_schema(
             Path(args.evidence), REPO_ROOT / "schemas" / "nw07-hardware-evidence.schema.json"
@@ -1028,14 +1263,7 @@ def clean_system_checks(args: argparse.Namespace) -> list[CheckResult]:
     if not args.binary_dir:
         return [_pending("nw07_clean_system", "--binary-dir is required")]
     binary_dir = Path(args.binary_dir)
-    exe = next(
-        (
-            path
-            for path in sorted(binary_dir.glob("*.exe"))
-            if "nw_common_" in path.name
-        ),
-        None,
-    )
+    exe = clean_system.deployment_executable(binary_dir)
     if exe is None:
         return [_fail("nw07_clean_system", "deployment directory has no NW-07 executable")]
     if not args.clean_report:
@@ -1075,7 +1303,11 @@ def clean_system_checks(args: argparse.Namespace) -> list[CheckResult]:
             )
         except Exception as exc:
             return [_fail("nw07_clean_system", str(exc))]
-        validation = clean_system.validate_report(report)
+        validation = clean_system.validate_report(
+            report,
+            deployment_directory=binary_dir,
+            exclude_paths=(report_path,),
+        )
         if validation["status"] == "verified":
             return [
                 _ok(
@@ -1099,7 +1331,11 @@ def clean_system_checks(args: argparse.Namespace) -> list[CheckResult]:
             report = json.loads(Path(args.clean_report).read_text(encoding="utf-8"))
         except Exception as exc:
             return [_fail("nw07_clean_system", str(exc))]
-        validation = clean_system.validate_report(report)
+        validation = clean_system.validate_report(
+            report,
+            deployment_directory=binary_dir,
+            exclude_paths=(Path(args.clean_report),),
+        )
         if validation["status"] == "verified":
             return [_ok("nw07_clean_system", evidence=report)]
         if validation["status"] == "failed":
@@ -1127,6 +1363,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--perf-ref")
     parser.add_argument("--player-template")
     parser.add_argument("--dxc")
+    parser.add_argument("--build-report")
     parser.add_argument("--binary-dir")
     parser.add_argument("--clean-report")
     parser.add_argument("--summary-json")

@@ -104,6 +104,11 @@ def canonical_json_bytes(value: Any) -> bytes:
 def load_canonical_config(path: Path | None = None) -> dict[str, Any]:
     config_path = Path(path or CANONICAL_CONFIG)
     record = json.loads(config_path.read_text(encoding="utf-8"))
+    return validate_canonical_config_record(record)
+
+
+def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply the canonical NW-07 contract to a file-backed or caller-supplied config."""
     if record.get("format") != "nw07-canonical-production":
         raise Nw07ExportError("canonical production config has the wrong format")
     if record.get("version") != 1:
@@ -224,6 +229,15 @@ def load_canonical_config(path: Path | None = None) -> dict[str, Any]:
             "canonical production pinned_inputs do not match the authoritative "
             "pinned build-input contract"
         )
+    pinned_digest = record.get("build_inputs_digest")
+    if (
+        not isinstance(pinned_digest, str)
+        or not pinned_digest.strip()
+        or pinned_digest.strip() in {"pending", "sha256:v1:pending-final-freeze"}
+    ):
+        raise Nw07ExportError(
+            "canonical production has no frozen build-input digest"
+        )
     return record
 
 
@@ -274,7 +288,7 @@ def verify_pinned_inputs(
         "digest": digest,
         "frozen_digest": pinned,
         "frozen": frozen,
-        "matches_frozen_digest": (not frozen) or digest == pinned,
+        "matches_frozen_digest": frozen and digest == pinned,
     }
 
 
@@ -330,7 +344,11 @@ def verify_canonical_graph(
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
     root = Path(repo_root or REPO_ROOT)
-    record = dict(config or load_canonical_config())
+    record = (
+        validate_canonical_config_record(dict(config))
+        if config is not None
+        else load_canonical_config()
+    )
     path = Path(graph_path or (root / str(record["graph"])))
     if not path.is_file():
         raise Nw07ExportError(f"canonical production graph is unavailable: {path}")
@@ -677,7 +695,11 @@ def export_production(
     validate_schema: bool = True,
 ) -> dict[str, Any]:
     root = Path(repo_root or REPO_ROOT)
-    record = dict(config or load_canonical_config())
+    record = (
+        validate_canonical_config_record(dict(config))
+        if config is not None
+        else load_canonical_config()
+    )
     graph_evidence = verify_canonical_graph(
         record, graph_path=Path(graph_path) if graph_path else None, repo_root=root
     )

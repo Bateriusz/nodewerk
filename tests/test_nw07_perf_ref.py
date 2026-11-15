@@ -340,6 +340,16 @@ def test_performance_capture_rejects_generic_vm_and_undocumented_passthrough() -
     )
 
 
+def test_malformed_execution_environment_returns_unverified_not_exception() -> None:
+    capture = _capture()
+    capture["execution_environment"] = "physical"
+    result = evidence.validate_perf_capture(
+        capture, _bound(), artifact_identity=_identity()
+    )
+    assert result["status"] != "verified"
+    assert result["execution_environment"] == {"invalid_type": "str"}
+
+
 def test_performance_capture_requires_retained_60_second_run_timing() -> None:
     capture = _capture()
     capture["runs"][0]["timing"]["run_ended_utc"] = (

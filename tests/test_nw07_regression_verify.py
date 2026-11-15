@@ -283,8 +283,9 @@ def test_verify_full_without_evidence_is_pending(tmp_path: Path) -> None:
     assert summary["milestone_complete"] is False
     assert summary["hardware_certification"] == "pending_unverified"
     assert summary["pending_checks"] >= 1
-    assert all(
-        check["name"] != "nw07_native_release_export"
+    assert any(
+        check["name"] == "nw07_native_release_export"
+        and check["status"] == "pending_unverified"
         for check in summary["checks"]
     )
 
@@ -306,7 +307,11 @@ def test_clean_system_binary_dir_discovers_retained_report(
 ) -> None:
     deployment = tmp_path / "deployment"
     deployment.mkdir()
-    (deployment / "nw_common_test.exe").write_bytes(b"MZ")
+    executable = deployment / "nw_common_test.exe"
+    executable.write_bytes(b"MZ")
+    import hashlib
+
+    executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
     report = {
         "format": "nw07-clean-system-report",
         "version": 1,
@@ -315,8 +320,15 @@ def test_clean_system_binary_dir_discovers_retained_report(
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "deployment": {
+            "executable": executable.name,
+            "executable_sha256": executable_sha256,
+            "executable_bytes": executable.stat().st_size,
+            "deployment_files": [executable.name],
+            "sidecars": [],
             "only_runtime_executable": True,
             "development_dependencies_present": False,
+            "pe_imports": [],
+            "forbidden_runtime_dependencies": [],
         },
         "scenarios": [
             {
@@ -373,6 +385,46 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
     package_dir.mkdir()
     evidence_file = tmp_path / "evidence.json"
     evidence_file.write_text("{}", encoding="utf-8")
+    pinned_digest = verify_nw07.export.verify_pinned_inputs(
+        verify_nw07.export.load_canonical_config()
+    )["digest"]
+    build_report = {
+        "format": "nw07-verification-summary",
+        "version": 1,
+        "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "mode": "BuildChecks",
+        "success": True,
+        "profile_id": contract.PROFILE_ID,
+        "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "checks": [
+            {
+                "name": "nw07_native_release_export",
+                "required": True,
+                "passed": True,
+                "status": "passed",
+                "detail": "",
+                "unavailable": False,
+                "evidence": {
+                    "artifact_key": identity["artifact_key"],
+                    "package_sha256": identity["package_sha256"],
+                    "manifest_sha256": identity["manifest_sha256"],
+                    "executable_sha256": identity["executable_sha256"],
+                    "complete_distribution_bytes": identity["size_accounting"][
+                        "complete_distribution_bytes"
+                    ],
+                    "within_ceiling": True,
+                    "release_grade": True,
+                    "test_payload": False,
+                    "reproducible": True,
+                    "build_inputs_digest": pinned_digest,
+                    "matches_frozen_digest": True,
+                },
+            }
+        ],
+    }
+    build_report_path = tmp_path / "build-report.json"
+    build_report_path.write_text(json.dumps(build_report), encoding="utf-8")
     monkeypatch.setattr(verify_nw07, "contracts_only", lambda: [])
     monkeypatch.setattr(
         verify_nw07,
@@ -412,6 +464,8 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
             str(package_dir),
             "--evidence",
             str(evidence_file),
+            "--build-report",
+            str(build_report_path),
             "--summary-json",
             str(summary_path),
         ]
@@ -421,3 +475,51 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
     assert summary["success"] is True
     assert summary["milestone_complete"] is True
     assert summary["hardware_certification"] == "verified"
+
+    build_report["checks"][0]["evidence"]["executable_sha256"] = "9" * 64
+    build_report_path.write_text(json.dumps(build_report), encoding="utf-8")
+    stale_summary = tmp_path / "full-stale.json"
+    stale_code = verify_nw07.main(
+        [
+            "--mode",
+            "Full",
+            "--fixture",
+            str(executable),
+            "--package",
+            str(package_dir),
+            "--evidence",
+            str(evidence_file),
+            "--build-report",
+            str(build_report_path),
+            "--summary-json",
+            str(stale_summary),
+        ]
+    )
+    assert stale_code == 1
+    assert json.loads(stale_summary.read_text(encoding="utf-8"))["success"] is False
+
+    missing_report_summary = tmp_path / "full-missing-report.json"
+    missing_code = verify_nw07.main(
+        [
+            "--mode",
+            "Full",
+            "--fixture",
+            str(executable),
+            "--package",
+            str(package_dir),
+            "--evidence",
+            str(evidence_file),
+            "--summary-json",
+            str(missing_report_summary),
+        ]
+    )
+    assert missing_code == 2
+    missing_summary = json.loads(
+        missing_report_summary.read_text(encoding="utf-8")
+    )
+    assert missing_summary["milestone_complete"] is False
+    assert any(
+        check["name"] == "nw07_native_release_export"
+        and check["status"] == "pending_unverified"
+        for check in missing_summary["checks"]
+    )

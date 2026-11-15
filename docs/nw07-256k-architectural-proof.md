@@ -207,9 +207,11 @@ record pending rather than being fabricated.
 ```bash
 python tools/verify_nw07.py --mode ContractsOnly --summary-json build/nw07.json
 python tools/verify_nw07.py --mode BuildChecks \
-    --player-template <specialized-player.exe> --dxc <pinned-dxc>
+    --player-template <specialized-player.exe> --dxc <pinned-dxc> \
+    --summary-json build/nw07-build-checks.json
 python tools/verify_nw07.py --mode Full \
-    --fixture <player.exe> --package <export-dir> --evidence <evidence.json>
+    --fixture <player.exe> --package <export-dir> --evidence <evidence.json> \
+    --build-report build/nw07-build-checks.json
 python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
 ```
 
@@ -219,15 +221,20 @@ python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
   exits `2`.
 - `Full` distinguishes an executed failure from pending evidence. It reports
   milestone success only when every hard gate and required coverage target is
-  verified. When `--player-template` and `--dxc` are supplied it also performs
-  the native BuildChecks export; otherwise the supplied final artifact and
-  hardware evidence provide the release binding.
+  verified. Release-export provenance is mandatory: Full either performs the
+  native BuildChecks export when `--player-template` and `--dxc` are supplied,
+  or validates a passed BuildChecks summary supplied with `--build-report`.
+  The report must bind the same executable, package, manifest, size, pinned
+  build-input digest, and clean-directory reproducibility as the final
+  artifact. Without either source the native export gate remains pending.
 - `CleanSystem` requires a physical Windows 11 x64 host and a clean-system
   execution report covering corrupt payloads, missing required features,
   initialization failures, resize, and device removal with actionable exit
   codes and retained failing captures. `--binary-dir` discovers a retained
   `nw07-clean-system.json` in the deployment directory, or `--clean-report`
-  names it explicitly.
+  names it explicitly. The report's executable name/hash, byte size, file set,
+  sidecars, and dependency state are recomputed from the actual deployment;
+  a stale or foreign report cannot certify a different executable.
 
 `tools/nw07_clean_system.py` performs the clean-system run on Windows by
 extracting the package embedded in the final executable and driving the

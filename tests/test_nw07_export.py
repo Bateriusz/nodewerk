@@ -152,6 +152,40 @@ def test_two_clean_directory_exports_have_matching_hashes(tmp_path: Path) -> Non
     assert report["build_inputs_digest"].startswith("sha256:v1:")
 
 
+def test_release_export_rejects_unfrozen_or_narrowed_build_inputs(
+    tmp_path: Path,
+) -> None:
+    template = _template(tmp_path / "toolchain")
+    config = export.load_canonical_config()
+    config["build_inputs_digest"] = ""
+    with pytest.raises(export.Nw07ExportError):
+        export.export_production(
+            tmp_path / "artifact-a",
+            player_template=template,
+            dxc_executable=str(_mock_dxc(tmp_path / "toolchain")),
+            config=config,
+            allow_test_payloads=True,
+        )
+    config = export.load_canonical_config()
+    config["pinned_inputs"] = config["pinned_inputs"][:-1]
+    with pytest.raises(export.Nw07ExportError):
+        export.export_production(
+            tmp_path / "artifact-b",
+            player_template=template,
+            dxc_executable=str(_mock_dxc(tmp_path / "toolchain")),
+            config=config,
+            allow_test_payloads=True,
+        )
+
+
+def test_unfrozen_build_inputs_never_match_a_frozen_digest() -> None:
+    config = export.load_canonical_config()
+    config["build_inputs_digest"] = ""
+    result = export.verify_pinned_inputs(config)
+    assert result["frozen"] is False
+    assert result["matches_frozen_digest"] is False
+
+
 def test_published_artifact_identity_tracks_modified_executable(tmp_path: Path) -> None:
     _export(tmp_path)
     artifact_dir = tmp_path / "artifact"

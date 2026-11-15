@@ -137,11 +137,13 @@ jobs:
           NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
           NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
           NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+          NW07_BUILD_REPORT: ${{ vars.NW07_BUILD_REPORT }}
         run: >-
           python tools/verify_nw07.py --mode Full
           --fixture "$env:NW07_FIXTURE"
           --package "$env:NW07_PACKAGE"
           --evidence "$env:NW07_EVIDENCE"
+          --build-report "$env:NW07_BUILD_REPORT"
           --summary-json "$env:RUNNER_TEMP\nw07-full.json"
       - name: Evaluate matched-environment regression policy
         run: |

@@ -727,8 +727,11 @@ def validate_perf_capture(
         result["status"] = (
             "failed" if environment_state == "failed" else "unverified"
         )
-        result["execution_environment"] = dict(
-            capture.get("execution_environment") or {}
+        observed_environment = capture.get("execution_environment")
+        result["execution_environment"] = (
+            dict(observed_environment)
+            if isinstance(observed_environment, Mapping)
+            else {"invalid_type": type(observed_environment).__name__}
         )
         reasons.extend(environment_reasons)
     differences = _artifact_mismatches(capture, artifact_identity)

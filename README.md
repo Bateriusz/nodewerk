@@ -156,9 +156,13 @@ python tools/nw07_export.py --output build/nw07 \
     --player-template <specialized-player.exe> --dxc <pinned-dxc> \
     --report build/nw07-export.json
 python tools/verify_nw07.py --mode ContractsOnly --summary-json build/nw07.json
-python tools/verify_nw07.py --mode BuildChecks
+python tools/verify_nw07.py --mode BuildChecks \
+    --player-template <specialized-player.exe> --dxc <pinned-dxc> \
+    --summary-json build/nw07-build-checks.json
 python tools/verify_nw07.py --mode Full \
-    --fixture <player.exe> --package <export-dir> --evidence benchmarks/nw07/hardware-evidence.json
+    --fixture <player.exe> --package <export-dir> \
+    --evidence benchmarks/nw07/hardware-evidence.json \
+    --build-report build/nw07-build-checks.json
 ```
 
 The hard gates are a **262,144-byte** complete runnable distribution
