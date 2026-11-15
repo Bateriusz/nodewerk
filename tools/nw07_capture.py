@@ -733,7 +733,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             )
         if collector_completed.returncode != 0:
             raise ValueError(
-                f"measurement collector failed for run {index}: 
+                f"measurement collector failed for run {index}: "
                 f"{collector_completed.stderr.strip() or collector_completed.stdout.strip()}"
             )
         for name in ("gpu", "cpu", "displayed"):
