@@ -47,8 +47,34 @@ foreach(_nw08_source IN LISTS _nw08_bootstrap_sources)
     list(APPEND _nw08_authoring_sources "${NW_STUDIO_ROOT}/${_nw08_source}")
   endif()
 endforeach()
+
+# package_player.{h,cpp} are frozen NW-07 release inputs.  Generate an exact
+# authoring-only overlay in the build tree instead of editing or recompiling a
+# modified source-tree copy into the release closure.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(_nw08_generated_runtime_dir
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/nw08-authoring-runtime")
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}"
+          "${NW_STUDIO_ROOT}/tools/nw08_authoring_runtime_overlay.py"
+          --repo-root "${NW_STUDIO_ROOT}"
+          --output-dir "${_nw08_generated_runtime_dir}"
+  RESULT_VARIABLE _nw08_overlay_result
+  OUTPUT_VARIABLE _nw08_overlay_stdout
+  ERROR_VARIABLE _nw08_overlay_stderr)
+if(NOT _nw08_overlay_result EQUAL 0)
+  message(FATAL_ERROR
+    "failed to generate NW-08 authoring PackagePlayer overlay: "
+    "${_nw08_overlay_stderr}")
+endif()
+list(FILTER _nw08_authoring_sources EXCLUDE
+  REGEX "[/\\]src[/\\]player[/\\]package_player\\.cpp$")
+list(APPEND _nw08_authoring_sources
+  "${_nw08_generated_runtime_dir}/package_player.cpp")
+
 add_library(nw08_player_bootstrap STATIC ${_nw08_authoring_sources})
 target_include_directories(nw08_player_bootstrap PUBLIC
+  "${_nw08_generated_runtime_dir}"
   ${_nw08_bootstrap_includes})
 target_compile_definitions(nw08_player_bootstrap PRIVATE
   NW08_AUTHORING_RUNTIME=1)
@@ -66,6 +92,7 @@ target_link_libraries(nw08_player_bootstrap PUBLIC
 
 add_executable(nodewerk-studio-preview nw_studio_preview_host.cpp)
 target_include_directories(nodewerk-studio-preview PRIVATE
+  "${_nw08_generated_runtime_dir}"
   "${NW_STUDIO_ROOT}/src/player"
   "${NW_STUDIO_ROOT}/src/package"
   "${NW_STUDIO_ROOT}/src")

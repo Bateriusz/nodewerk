@@ -486,16 +486,46 @@ def test_full_verification_requires_gui_and_runtime_evidence(
     assert status == "pending_unverified"
 
 
-def test_authoring_runtime_is_compile_time_isolated_from_release_player() -> None:
+def test_authoring_runtime_overlay_preserves_frozen_release_inputs(
+    tmp_path: Path,
+) -> None:
     studio_cmake = (REPO_ROOT / "src" / "studio" / "CMakeLists.txt").read_text(
         encoding="utf-8"
     )
     root_cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    header = (REPO_ROOT / "src" / "player" / "package_player.h").read_text(
+    frozen_header = (REPO_ROOT / "src" / "player" / "package_player.h").read_text(
         encoding="utf-8"
     )
-    assert "add_library(nw08_player_bootstrap STATIC" in studio_cmake
-    assert "NW08_AUTHORING_RUNTIME=1" in studio_cmake
-    assert "target_link_libraries(nodewerk-studio-preview PRIVATE\n  nw08_player_bootstrap" in studio_cmake
+    frozen_cpp = (REPO_ROOT / "src" / "player" / "package_player.cpp").read_text(
+        encoding="utf-8"
+    )
+    overlay = REPO_ROOT / "tools" / "nw08_authoring_runtime_overlay.py"
+
+    # The release sources remain exactly the NW-07 inputs; authoring changes are
+    # generated into the build tree and compiled only into nw08_player_bootstrap.
+    assert "NW08_AUTHORING_RUNTIME" not in frozen_header
+    assert "reloadForAuthoringFromFile" not in frozen_cpp
     assert "NW08_AUTHORING_RUNTIME=1" not in root_cmake
-    assert "#if NW08_AUTHORING_RUNTIME" in header
+    assert "nw08_authoring_runtime_overlay.py" in studio_cmake
+    assert "add_library(nw08_player_bootstrap STATIC" in studio_cmake
+
+    generated = tmp_path / "overlay"
+    subprocess.run(
+        [
+            sys.executable,
+            str(overlay),
+            "--repo-root",
+            str(REPO_ROOT),
+            "--output-dir",
+            str(generated),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    generated_header = (generated / "package_player.h").read_text(encoding="utf-8")
+    generated_cpp = (generated / "package_player.cpp").read_text(encoding="utf-8")
+    assert "#if NW08_AUTHORING_RUNTIME" in generated_header
+    assert "reloadForAuthoringFromFile" in generated_cpp
+    assert "AdapterLuid.LowPart" in generated_cpp
+    assert "authoring_retained_resource_ids_" in generated_cpp
