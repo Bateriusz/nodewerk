@@ -55,11 +55,11 @@ node mesh_gpu nw.residency.generate_mesh@1.0.0 frequency=initialization residenc
   input mesh torus.out
 
 # placement_radius is interpreted by the branch-local instance shader as the
-# tunnel radius.  Two thirds of the instances become a dense sequence of
-# distinct tunnel rings; the remaining third becomes small deterministic
-# hazards, mostly biased toward the walls so the flight corridor stays open.
+# tunnel radius. Half of the instances form a regular sequence of identical
+# tunnel rings; the other half remains deterministic asteroid/debris hazards.
+# The lower ring density avoids temporal moire while keeping the tunnel readable.
 node instances nw.scene.instances@1.0.0 frequency=initialization
-  param count 1536
+  param count 1024
   param seed 3237998146
   param placement_radius 4.6
   param scale_min 0.06
@@ -114,14 +114,14 @@ node render nw.render.instanced@1.0.0 frequency=frame residency=gpu
 
 node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu
   input image render.image
-  param threshold 0.78
-  param intensity 0.42
+  param threshold 0.90
+  param intensity 0.28
   param radius 1.6
   param resolution_scale 0.5
 
 node tonemap nw.post.tonemap@1.0.0 frequency=frame residency=gpu
   input image bloom.out
-  param exposure 0.90
+  param exposure 0.84
   param gamma 2.2
   param operator aces
 
