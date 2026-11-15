@@ -184,6 +184,10 @@ void CheckExactU32(PackageCapabilityEvaluation* result,
                    const char* requirement,
                    std::uint32_t actual,
                    std::uint32_t expected) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)capability;
+    (void)requirement;
+#endif
     if (actual != expected) {
         AddFailure(result,
                    std::string("package_capability_") + requirement,
@@ -200,6 +204,10 @@ void CheckExactU64(PackageCapabilityEvaluation* result,
                    const char* requirement,
                    std::uint64_t actual,
                    std::uint64_t expected) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)capability;
+    (void)requirement;
+#endif
     if (actual != expected) {
         AddFailure(result,
                    std::string("package_capability_") + requirement,

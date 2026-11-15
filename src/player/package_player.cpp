@@ -1215,6 +1215,9 @@ void PackagePlayer::RemoveEngineResourceAllocation(
 }
 
 ExitCode PackagePlayer::CheckMemoryBudget(const char* stage) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)stage;
+#endif
     if (config_.memory_budget_bytes == 0u) return ExitCode::Success;
     const std::uint64_t package_descriptors =
         static_cast<std::uint64_t>(CountCbvSrvUavDescriptors(package_)) +
@@ -3177,6 +3180,9 @@ ExitCode PackagePlayer::RecreateRenderTargets() {
 }
 
 ExitCode PackagePlayer::WaitForAllFrames(const char* stage) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)stage;
+#endif
 #if defined(_WIN32)
     PlatformState* state = platform_.get();
     if (state == nullptr || state->fence == nullptr ||
@@ -3203,6 +3209,9 @@ ExitCode PackagePlayer::WaitForAllFrames(const char* stage) {
 }
 
 bool PackagePlayer::CheckDeviceRemoved(const char* stage) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)stage;
+#endif
     if (force_device_removed_) {
         Fail(ExitCode::DeviceRemoved, "device", "device_removed", "device",
              "available", "removed", stage,
@@ -3226,6 +3235,9 @@ bool PackagePlayer::CheckDeviceRemoved(const char* stage) {
 }
 
 bool PackagePlayer::CheckD3D12Validation(const char* stage) {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    (void)stage;
+#endif
 #if defined(_WIN32) && NW_PACKAGE_PLAYER_D3D12_VALIDATION
     PlatformState* state = platform_.get();
     if (state != nullptr && state->info_queue != nullptr &&
