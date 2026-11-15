@@ -420,6 +420,7 @@ def test_studio_native_host_links_player_implementation_and_profile() -> None:
     hook = (
         REPO_ROOT / "tools" / "nw08_authoring_build" / "inject-studio.cmake"
     ).read_text(encoding="utf-8")
+    assert "PROJECT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR" in hook
     assert "cmake_language(DEFER CALL nw_add_studio_authoring_targets)" in hook
 
 
