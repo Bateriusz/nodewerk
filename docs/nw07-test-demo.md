@@ -46,8 +46,10 @@ The graph uses:
 
 The source torus is deliberately almost closed (`major_radius=0.75`,
 `minor_radius=0.68`). Tunnel rings are reconstructed analytically from the
-mesh UVs with a very thin cross-section so consecutive rings remain visibly
-separate instead of merging into a continuous sheet. Hazards keep the chunky
+mesh UVs with a slightly thicker 0.0095 local tube cross-section. At the 4.6
+world scale this nearly fills the 96/1024 ring spacing without fully collapsing
+adjacent rings into one sheet, giving the tunnel more visual mass while keeping
+the repeating torus rhythm readable. Hazards keep the chunky
 low-poly topology and receive seeded multi-frequency deformation and rotation.
 
 The hazard scale is limited to 0.06–0.22. About 92% of hazards are biased into
