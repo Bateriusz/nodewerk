@@ -1519,11 +1519,16 @@ def _graph_render_dimensions(
         )
 
     nw06_dimension_keys = ("nw06_output_width", "nw06_output_height")
-    if any(name in document.settings for name in nw06_dimension_keys):
-        # NW-06 has its own explicit presentation dimensions.  They describe
-        # the render target, independently of the procedural material texture
-        # dimensions below.  Keep both axes in the NW-06 namespace so a
-        # rectangular output cannot silently fall back to a square texture.
+    is_nw07_graph = any(name.startswith("nw07_") for name in document.settings)
+    if (
+        not is_nw07_graph
+        and any(name in document.settings for name in nw06_dimension_keys)
+    ):
+        # Pure NW-06 graphs may declare explicit presentation dimensions.
+        # NW-07 graphs also carry nw06_output_* compatibility settings, but
+        # those must not become an implicit fallback when nw07_output_* is
+        # absent: NW-07's contract intentionally falls back to the material
+        # texture in that case.
         return (
             setting_dimension("nw06_output_width", 256),
             setting_dimension("nw06_output_height", 256),
