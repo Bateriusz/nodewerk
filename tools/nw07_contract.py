@@ -67,6 +67,7 @@ PERF_CONTRACT_ID = "nw07_perf_ref_v1"
 PRODUCTION_PROTOCOL = "nw07-production.v1"
 CORRECTNESS_CAPTURE_PROTOCOL = "nw07-correctness-capture.v1"
 RELEASE_CAPTURE_PROTOCOL = "nw07-release-fixed-tick-capture.v1"
+RELEASE_CAPTURE_HOLD_MS = 1500
 STARTUP_PROTOCOL = "nw07-startup.v1"
 PERF_RUN_PROTOCOL = "nw07-perf-run.v1"
 PERF_COLLECTION_PROTOCOL = "nw07-perf-collect.v1"

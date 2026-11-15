@@ -256,7 +256,7 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
     reference_dir = Path(args.reference_captures_dir) if args.reference_captures_dir else None
     capture_artifacts = []
     per_tick = []
-    numeric = _load_json(args.numeric_comparisons)
+    numeric = _json_value_or_path(args.numeric_comparisons) or {}
     config = export.load_canonical_config()
     for tick in contract.REQUIRED_FIXED_TICKS:
         path = captures_dir / f"tick_{tick}.rgba32f"
@@ -337,7 +337,7 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
                 "height": contract.OUTPUT_HEIGHT,
             }
         )
-    metadata = _load_json(args.metadata)
+    metadata = _json_value_or_path(args.metadata) or {}
     capture = {
         "capture_id": args.capture_id,
         "task": contract.TASK,
@@ -437,115 +437,261 @@ def _run_external_capture(
     )
 
 
-def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
-    """Drive the final release executable at every required fixed tick.
 
-    Release playback exposes `--tick` (a deterministic playback input, not a
-    capture control).  A supplied external capture command observes the live
-    release window and writes RGBA32F; the diagnostic sibling remains the only
-    artifact with internal readback capture controls and provides the
-    reference renderer captures.
-    """
+def _normalize_fresh_correctness_metrics(
+    measured: Mapping[str, Any],
+    *,
+    identity: Mapping[str, Any],
+    tier: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Validate fresh nightly metadata/measurements without static fallbacks."""
+    metadata_value = measured.get("metadata")
+    measurements_value = measured.get("measurements")
+    numeric_value = measured.get("numeric_comparisons")
+    if not isinstance(metadata_value, Mapping) or not metadata_value:
+        raise ValueError("fresh metrics output has no metadata object")
+    if not isinstance(measurements_value, Mapping) or not measurements_value:
+        raise ValueError("fresh metrics output has no measurements object")
+    if not isinstance(numeric_value, Mapping) or not numeric_value:
+        raise ValueError("fresh metrics output has no numeric_comparisons object")
+    metadata = dict(metadata_value)
+    measurements = dict(measurements_value)
+    required_metadata = (
+        "adapter_description",
+        "device_form_factor",
+        "driver_version",
+        "os_version",
+        "toolchain_identity",
+        "queried_capabilities",
+        "clock_information",
+        "power_information",
+        "thermal_information",
+        "cache_state",
+    )
+    missing_metadata = [
+        name for name in required_metadata
+        if metadata.get(name) in (None, "", {})
+    ]
+    if missing_metadata:
+        raise ValueError(
+            "fresh metrics metadata is incomplete: " + ", ".join(missing_metadata)
+        )
+    if metadata.get("device_form_factor") != "desktop":
+        raise ValueError("fresh correctness metrics are not from a desktop device")
+    observed_tier = evidence.classify_hardware_tier(
+        str(metadata.get("adapter_description", "")),
+        device_form_factor=str(metadata.get("device_form_factor", "")),
+    )
+    if observed_tier != tier:
+        raise ValueError(
+            f"fresh metrics report {observed_tier!r} hardware, expected {tier!r}"
+        )
+    required_measurements = (
+        "process_start_to_first_present_ms",
+        "peak_engine_committed_gpu_bytes",
+        "cache_kind",
+        "cold_driver_cache_preparation",
+        "warm_preparation",
+        "memory_source",
+        "process_ram_bytes",
+        "driver_memory_bytes",
+        "startup_pipeline_ms",
+        "generation_ms",
+        "image_quality_metrics",
+        "scaling_1440p",
+    )
+    missing_measurements = [
+        name for name in required_measurements
+        if measurements.get(name) in (None, "", {})
+    ]
+    if missing_measurements:
+        raise ValueError(
+            "fresh metrics measurements are incomplete: "
+            + ", ".join(missing_measurements)
+        )
+    environment = {
+        "adapter_description": metadata["adapter_description"],
+        "driver_version": metadata["driver_version"],
+        "os_version": metadata["os_version"],
+        "toolchain_identity": metadata["toolchain_identity"],
+    }
+    for name in ("image_quality_metrics", "scaling_1440p"):
+        value = measurements.get(name)
+        if not isinstance(value, Mapping) or not value:
+            raise ValueError(f"fresh {name} measurement is not an object")
+        bound = dict(value)
+        bound["artifact_sha256"] = identity["executable_sha256"]
+        bound["environment"] = dict(environment)
+        measurements[name] = bound
+    expected_ticks = {str(int(tick)) for tick in contract.REQUIRED_FIXED_TICKS}
+    numeric_ticks = {str(key) for key in numeric_value.keys()}
+    if not expected_ticks.issubset(numeric_ticks):
+        missing = sorted(expected_ticks - numeric_ticks)
+        raise ValueError(
+            "fresh numeric comparisons do not cover required ticks: "
+            + ", ".join(missing)
+        )
+    return metadata, measurements, dict(numeric_value)
+
+
+def _failed_release_correctness_capture(
+    args: argparse.Namespace,
+    identity: Mapping[str, Any],
+    *,
+    failure: str,
+    executions: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "capture_id": args.capture_id,
+        "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "coverage_target": contract.CORRECTNESS_COVERAGE_TARGETS[args.tier],
+        "evidence_role": contract.FIXED_TICK_CORRECTNESS_ROLE,
+        "status": "failed",
+        "artifact_key": identity.get("artifact_key"),
+        "package_sha256": identity.get("package_sha256"),
+        "manifest_sha256": identity.get("manifest_sha256"),
+        "executable_sha256": identity.get("executable_sha256"),
+        "profile_id": contract.PROFILE_ID,
+        "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "release_capture_protocol": contract.RELEASE_CAPTURE_PROTOCOL,
+        "execution_records": [dict(row) for row in executions],
+        "failure": failure,
+        "validation": {"status": "failed", "reasons": [failure]},
+        "captured_at_utc": _utc_now(),
+    }
+
+
+def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
+    """Capture every frozen tick from the identical final release executable."""
     package_dir = Path(args.package)
     identity = export.inspect_artifact_directory(package_dir)
     release = Path(args.executable)
+    diagnostic = Path(args.diagnostic_executable)
     if not release.is_file():
         raise ValueError(f"release executable is unavailable: {release}")
     if _sha256_file(release) != identity["executable_sha256"]:
-        raise ValueError(
-            "release executable does not match the published final artifact"
-        )
-    diagnostic = Path(args.diagnostic_executable)
+        raise ValueError("release executable does not match the published final artifact")
     if not diagnostic.is_file():
         raise ValueError(f"diagnostic sibling executable is unavailable: {diagnostic}")
     diagnostic_sha = _sha256_file(diagnostic)
     if diagnostic_sha == identity["executable_sha256"]:
         raise ValueError("diagnostic reference must be a separate sibling executable")
+
     capture_command = shlex.split(args.capture_command, posix=os.name != "nt")
+    metrics_command = shlex.split(args.metrics_command, posix=os.name != "nt")
     if not capture_command:
         raise ValueError("an external release capture command is required")
-    measured: dict[str, Any] = {}
-    if args.metrics_command:
-        if not args.metrics_output:
-            raise ValueError("--metrics-command requires --metrics-output")
-        metrics_output = Path(args.metrics_output)
-        metrics_output.parent.mkdir(parents=True, exist_ok=True)
-        metrics_environment = dict(os.environ)
-        metrics_environment.update(
-            {
-                "NW07_PACKAGE": str(package_dir),
-                "NW07_EXECUTABLE": str(release),
-                "NW07_ARTIFACT_SHA256": identity["executable_sha256"],
-                "NW07_METRICS_OUTPUT": str(metrics_output),
-            }
+    if not metrics_command:
+        raise ValueError("a fresh metrics command is required")
+    metrics_output = Path(args.metrics_output)
+    metrics_output.parent.mkdir(parents=True, exist_ok=True)
+    metrics_environment = dict(os.environ)
+    metrics_environment.update(
+        {
+            "NW07_PACKAGE": str(package_dir),
+            "NW07_EXECUTABLE": str(release),
+            "NW07_ARTIFACT_SHA256": identity["executable_sha256"],
+            "NW07_METRICS_OUTPUT": str(metrics_output),
+            "NW07_TIER": str(args.tier),
+            "NW07_CAPTURE_ID": str(args.capture_id),
+        }
+    )
+    metrics_completed = _run_external_capture(
+        metrics_command, environment=metrics_environment, timeout=300.0
+    )
+    if metrics_completed.returncode != 0 or not metrics_output.is_file():
+        raise ValueError(
+            "fresh startup/memory/quality measurement command failed: "
+            + (metrics_completed.stderr.strip() or metrics_completed.stdout.strip())
         )
-        metrics_completed = _run_external_capture(
-            shlex.split(args.metrics_command, posix=os.name != "nt"),
-            environment=metrics_environment,
-            timeout=300.0,
-        )
-        if metrics_completed.returncode != 0 or not metrics_output.is_file():
-            raise ValueError("nightly startup/memory/visual measurement command failed")
-        measured = json.loads(metrics_output.read_text(encoding="utf-8"))
-        if not isinstance(measured, Mapping):
-            raise ValueError("nightly measurement output is not a JSON object")
+    measured = json.loads(metrics_output.read_text(encoding="utf-8"))
+    if not isinstance(measured, Mapping):
+        raise ValueError("fresh metrics output is not a JSON object")
+    metadata, measurements, numeric_comparisons = _normalize_fresh_correctness_metrics(
+        measured, identity=identity, tier=args.tier
+    )
+
     captures_dir = Path(args.captures_dir)
     reference_dir = Path(args.reference_captures_dir)
     captures_dir.mkdir(parents=True, exist_ok=True)
     reference_dir.mkdir(parents=True, exist_ok=True)
     ticks = list(contract.REQUIRED_FIXED_TICKS) + [contract.LOOP_BOUNDARY_TICKS[1]]
     executions: list[dict[str, Any]] = []
+
     for tick in ticks:
         output = captures_dir / f"tick_{tick}.rgba32f"
         started = _utc_now()
-        player = _start_player(
-            release,
-            [
-                "--tick",
-                str(tick),
-                "--frames",
-                "1",
-                "--hold-ms",
-                str(args.hold_ms),
-            ],
-        )
-        time.sleep(args.capture_delay_ms / 1000.0)
-        env = dict(os.environ)
-        env.update(
-            {
-                "NW07_TICK": str(tick),
-                "NW07_OUTPUT": str(output),
-                "NW07_PLAYER_PID": str(player.pid),
-                "NW07_EXECUTABLE": str(release),
-                "NW07_ARTIFACT_SHA256": identity["executable_sha256"],
-            }
-        )
-        capture_completed = _run_external_capture(
-            capture_command,
-            environment=env,
-            timeout=max(30.0, args.hold_ms / 1000.0 + 20.0),
-        )
+        player: subprocess.Popen[str] | None = None
+        capture_completed: subprocess.CompletedProcess[str] | None = None
+        stdout = ""
+        stderr = ""
         try:
-            stdout, stderr = player.communicate(
-                timeout=max(30.0, args.hold_ms / 1000.0 + 20.0)
+            player = _start_player(release, ["--tick", str(tick), "--frames", "1"])
+            time.sleep(args.capture_delay_ms / 1000.0)
+            env = dict(os.environ)
+            env.update(
+                {
+                    "NW07_TICK": str(tick),
+                    "NW07_OUTPUT": str(output),
+                    "NW07_PLAYER_PID": str(player.pid),
+                    "NW07_EXECUTABLE": str(release),
+                    "NW07_ARTIFACT_SHA256": identity["executable_sha256"],
+                }
             )
-        except subprocess.TimeoutExpired:
-            player.kill()
-            stdout, stderr = player.communicate()
-        ended = _utc_now()
-        if not output.is_file() or output.stat().st_size != _expected_capture_bytes():
-            raise ValueError(
-                f"external capture did not produce a complete RGBA32F image for tick {tick}"
+            capture_completed = _run_external_capture(
+                capture_command,
+                environment=env,
+                timeout=max(30.0, contract.RELEASE_CAPTURE_HOLD_MS / 1000.0 + 20.0),
             )
-        if player.returncode != 0:
-            raise ValueError(
-                f"release executable failed at fixed tick {tick}: exit {player.returncode}"
+            try:
+                stdout, stderr = player.communicate(
+                    timeout=max(30.0, contract.RELEASE_CAPTURE_HOLD_MS / 1000.0 + 20.0)
+                )
+            except subprocess.TimeoutExpired:
+                stdout, stderr = _stop_player(player)
+            if not output.is_file() or output.stat().st_size != _expected_capture_bytes():
+                raise ValueError(
+                    f"external capture did not produce a complete RGBA32F image for tick {tick}"
+                )
+            if player.returncode != 0:
+                raise ValueError(
+                    f"release executable failed at fixed tick {tick}: exit {player.returncode}"
+                )
+            if capture_completed.returncode != 0:
+                raise ValueError(
+                    f"external capture process failed at tick {tick}: "
+                    f"{capture_completed.stderr.strip() or capture_completed.stdout.strip()}"
+                )
+        except Exception as exc:
+            if player is not None and player.poll() is None:
+                more_stdout, more_stderr = _stop_player(player)
+                stdout += more_stdout
+                stderr += more_stderr
+            executions.append(
+                {
+                    "renderer": "exported_player",
+                    "tick": tick,
+                    "executable_sha256": identity["executable_sha256"],
+                    "player_pid": player.pid if player is not None else None,
+                    "started_utc": started,
+                    "ended_utc": _utc_now(),
+                    "exit_code": player.returncode if player is not None else None,
+                    "capture_exit_code": (
+                        capture_completed.returncode
+                        if capture_completed is not None
+                        else None
+                    ),
+                    "player_stdout": stdout[-2000:],
+                    "player_stderr": stderr[-2000:],
+                    "status": "failed",
+                    "failure": str(exc),
+                }
             )
-        if capture_completed.returncode != 0:
-            raise ValueError(
-                f"external capture process failed at tick {tick}: "
-                f"{capture_completed.stderr.strip() or capture_completed.stdout.strip()}"
+            return _failed_release_correctness_capture(
+                args, identity, failure=str(exc), executions=executions
             )
+
         executions.append(
             {
                 "renderer": "exported_player",
@@ -553,7 +699,7 @@ def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
                 "executable_sha256": identity["executable_sha256"],
                 "player_pid": player.pid,
                 "started_utc": started,
-                "ended_utc": ended,
+                "ended_utc": _utc_now(),
                 "exit_code": player.returncode,
                 "capture_command": capture_command,
                 "capture_exit_code": capture_completed.returncode,
@@ -563,10 +709,10 @@ def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
                 "player_stderr": (stderr or "")[-2000:],
                 "artifact_sha256": _sha256_file(output),
                 "bytes": output.stat().st_size,
+                "status": "passed",
             }
         )
-        # The diagnostic sibling remains the only artifact with internal
-        # fixed-tick readback controls.
+
         diagnostic_completed = subprocess.run(
             [
                 str(diagnostic),
@@ -587,8 +733,21 @@ def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
             or not reference_output.is_file()
             or reference_output.stat().st_size != _expected_capture_bytes()
         ):
-            raise ValueError(
-                f"diagnostic reference capture failed at fixed tick {tick}"
+            failure = f"diagnostic reference capture failed at fixed tick {tick}"
+            executions.append(
+                {
+                    "renderer": "diagnostic_preview",
+                    "tick": tick,
+                    "executable_sha256": diagnostic_sha,
+                    "exit_code": diagnostic_completed.returncode,
+                    "stdout": diagnostic_completed.stdout[-2000:],
+                    "stderr": diagnostic_completed.stderr[-2000:],
+                    "status": "failed",
+                    "failure": failure,
+                }
+            )
+            return _failed_release_correctness_capture(
+                args, identity, failure=failure, executions=executions
             )
         executions.append(
             {
@@ -598,8 +757,10 @@ def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
                 "exit_code": diagnostic_completed.returncode,
                 "artifact_sha256": _sha256_file(reference_output),
                 "bytes": reference_output.stat().st_size,
+                "status": "passed",
             }
         )
+
     reference_execution = {
         "execution_id": f"diagnostic-preview-{args.capture_id}",
         "renderer": "diagnostic_preview",
@@ -618,10 +779,6 @@ def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
         json.dumps(reference_execution, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    def metric(name: str, fallback: Any) -> Any:
-        value = measured.get(name)
-        return value if value is not None else fallback
-
     names = {
         "package": args.package,
         "captures_dir": str(captures_dir),
@@ -634,37 +791,25 @@ def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "reference_execution": str(reference_path),
         "execution_kind": args.execution_kind,
         "passthrough_documentation": args.passthrough_documentation,
-        "metadata": args.metadata,
-        "numeric_comparisons": args.numeric_comparisons,
-        "adapter": args.adapter,
-        "device_form_factor": args.device_form_factor,
-        "driver_version": args.driver_version,
-        "os_version": args.os_version,
-        "toolchain_identity": args.toolchain_identity,
-        "startup_ms": metric(
-            "process_start_to_first_present_ms", args.startup_ms
-        ),
-        "peak_gpu_bytes": metric(
-            "peak_engine_committed_gpu_bytes", args.peak_gpu_bytes
-        ),
-        "cache_kind": metric("cache_kind", args.cache_kind),
-        "cold_preparation": metric(
-            "cold_driver_cache_preparation", args.cold_preparation
-        ),
-        "warm_preparation": metric("warm_preparation", args.warm_preparation),
-        "memory_source": metric("memory_source", args.memory_source),
-        "process_ram_bytes": metric("process_ram_bytes", args.process_ram_bytes),
-        "driver_memory_bytes": metric(
-            "driver_memory_bytes", args.driver_memory_bytes
-        ),
-        "startup_pipeline_ms": metric(
-            "startup_pipeline_ms", args.startup_pipeline_ms
-        ),
-        "generation_ms": metric("generation_ms", args.generation_ms),
-        "image_quality": metric(
-            "image_quality_metrics", args.image_quality
-        ),
-        "scaling_1440p": metric("scaling_1440p", args.scaling_1440p),
+        "metadata": metadata,
+        "numeric_comparisons": numeric_comparisons,
+        "adapter": metadata["adapter_description"],
+        "device_form_factor": metadata["device_form_factor"],
+        "driver_version": metadata["driver_version"],
+        "os_version": metadata["os_version"],
+        "toolchain_identity": metadata["toolchain_identity"],
+        "startup_ms": measurements["process_start_to_first_present_ms"],
+        "peak_gpu_bytes": measurements["peak_engine_committed_gpu_bytes"],
+        "cache_kind": measurements["cache_kind"],
+        "cold_preparation": measurements["cold_driver_cache_preparation"],
+        "warm_preparation": measurements["warm_preparation"],
+        "memory_source": measurements["memory_source"],
+        "process_ram_bytes": measurements["process_ram_bytes"],
+        "driver_memory_bytes": measurements["driver_memory_bytes"],
+        "startup_pipeline_ms": measurements["startup_pipeline_ms"],
+        "generation_ms": measurements["generation_ms"],
+        "image_quality": measurements["image_quality_metrics"],
+        "scaling_1440p": measurements["scaling_1440p"],
     }
     capture = record_correctness(argparse.Namespace(**names))
     capture["execution_records"] = executions
@@ -679,7 +824,6 @@ def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
     capture["validation"] = validation
     capture["status"] = _validation_status(validation)
     return capture
-
 
 def record_perf(args: argparse.Namespace) -> dict[str, Any]:
     package_dir = Path(args.package)
@@ -1020,7 +1164,16 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         try:
             player = _start_player(executable, player_args)
         except OSError as exc:
-            record["failure"] = f"release executable could not be launched: {exc}"
+            failure = f"release executable could not be launched for run {index}: {exc}"
+            record["failure"] = failure
+            record["runs"].append(
+                {
+                    "run_index": index,
+                    "status": "failed",
+                    "failure": failure,
+                    "player_pid": None,
+                }
+            )
             break
         run_started = _utc_now()
         run_dir = samples_dir / f"run{index}"
@@ -1179,6 +1332,51 @@ def _append_record(path: Path, capture: Mapping[str, Any]) -> dict[str, Any]:
     return updated
 
 
+
+def merge_evidence_files(
+    base_path: Path,
+    input_paths: list[Path],
+    output_path: Path,
+) -> dict[str, Any]:
+    """Merge independently collected nightly fragments without status laundering."""
+    if not base_path.is_file():
+        raise ValueError(f"base evidence is unavailable: {base_path}")
+    merged_value = json.loads(base_path.read_text(encoding="utf-8"))
+    if not isinstance(merged_value, Mapping):
+        raise ValueError("base evidence is not a JSON object")
+    merged = dict(merged_value)
+    merged.setdefault("captures", [])
+    existing = {
+        str(item.get("capture_id")): item
+        for item in merged["captures"]
+        if isinstance(item, Mapping) and item.get("capture_id")
+    }
+    for input_path in input_paths:
+        fragment = json.loads(input_path.read_text(encoding="utf-8"))
+        if not isinstance(fragment, Mapping):
+            raise ValueError(f"evidence fragment is not a JSON object: {input_path}")
+        for item in fragment.get("captures", []):
+            if not isinstance(item, Mapping) or not item.get("capture_id"):
+                raise ValueError(f"evidence fragment has an invalid capture: {input_path}")
+            capture_id = str(item["capture_id"])
+            prior = existing.get(capture_id)
+            if prior is not None:
+                if prior != item:
+                    raise ValueError(
+                        f"capture id {capture_id!r} has conflicting evidence fragments"
+                    )
+                continue
+            copied = dict(item)
+            merged["captures"].append(copied)
+            existing[capture_id] = copied
+    merged["executions"] = list(merged["captures"])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(merged, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return merged
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1270,10 +1468,9 @@ def main(argv: list[str] | None = None) -> int:
     release_correctness.add_argument("--generation-ms", type=float)
     release_correctness.add_argument("--image-quality")
     release_correctness.add_argument("--scaling-1440p")
-    release_correctness.add_argument("--hold-ms", type=int, default=1500)
     release_correctness.add_argument("--capture-delay-ms", type=int, default=750)
-    release_correctness.add_argument("--metrics-command")
-    release_correctness.add_argument("--metrics-output")
+    release_correctness.add_argument("--metrics-command", required=True)
+    release_correctness.add_argument("--metrics-output", required=True)
     release_correctness.add_argument("--evidence", required=True)
 
     perf = subparsers.add_parser("perf")
@@ -1312,7 +1509,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     collect.add_argument("--evidence", required=True)
 
+    merge = subparsers.add_parser("merge-evidence")
+    merge.add_argument("--base", required=True)
+    merge.add_argument("--input", action="append", required=True)
+    merge.add_argument("--output", required=True)
+
     args = parser.parse_args(argv)
+    if args.command == "merge-evidence":
+        try:
+            merged = merge_evidence_files(
+                Path(args.base),
+                [Path(value) for value in args.input],
+                Path(args.output),
+            )
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "format": "nw07-evidence-merge-failure",
+                        "status": "failed",
+                        "error": str(exc),
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            json.dumps(
+                {"status": "merged", "captures": len(merged.get("captures", []))},
+                sort_keys=True,
+            )
+        )
+        return 0
     try:
         if args.command == "correctness":
             capture = record_correctness(args)

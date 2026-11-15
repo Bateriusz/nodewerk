@@ -71,8 +71,73 @@ def _windows_build() -> str:
     return version
 
 
-def clean_host_provenance(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Retain host identity and prove the deployment host is a clean runtime."""
+
+def _windows_virtualization_probe() -> dict[str, Any]:
+    if platform.system() != "Windows":
+        return {
+            "available": False,
+            "manufacturer": "",
+            "model": "",
+            "hypervisor_present": None,
+            "error": "not_windows",
+        }
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        (
+            "$c=Get-CimInstance Win32_ComputerSystem;"
+            "[pscustomobject]@{Manufacturer=$c.Manufacturer;Model=$c.Model;"
+            "HypervisorPresent=$c.HypervisorPresent}|ConvertTo-Json -Compress"
+        ),
+    ]
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, text=True, timeout=15, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "available": False,
+            "manufacturer": "",
+            "model": "",
+            "hypervisor_present": None,
+            "error": str(exc),
+        }
+    if completed.returncode != 0:
+        return {
+            "available": False,
+            "manufacturer": "",
+            "model": "",
+            "hypervisor_present": None,
+            "error": completed.stderr.strip() or completed.stdout.strip(),
+        }
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        return {
+            "available": False,
+            "manufacturer": "",
+            "model": "",
+            "hypervisor_present": None,
+            "error": str(exc),
+        }
+    return {
+        "available": True,
+        "manufacturer": str(value.get("Manufacturer", "")),
+        "model": str(value.get("Model", "")),
+        "hypervisor_present": bool(value.get("HypervisorPresent", False)),
+        "error": "",
+    }
+
+
+def clean_host_provenance(
+    environ: Mapping[str, str] | None = None,
+    *,
+    execution_kind: str | None = None,
+    passthrough_documentation: str = "",
+) -> dict[str, Any]:
+    """Retain host identity without inventing a physical-host classification."""
     environment = dict(environ or os.environ)
     probes = {
         name: shutil.which(name, path=environment.get("PATH"))
@@ -91,15 +156,51 @@ def clean_host_provenance(environ: Mapping[str, str] | None = None) -> dict[str,
     if os_build:
         tail = os_build.rsplit(".", 1)[-1]
         build_number = int(tail) if tail.isdigit() else 0
+    virtualization = _windows_virtualization_probe()
+    identity_text = " ".join(
+        (
+            str(virtualization.get("manufacturer", "")),
+            str(virtualization.get("model", "")),
+        )
+    ).lower()
+    vm_markers = (
+        "virtual machine",
+        "vmware",
+        "virtualbox",
+        "kvm",
+        "qemu",
+        "xen",
+        "parallels",
+        "bochs",
+        "openstack",
+    )
+    virtualization_indicators = sorted(
+        marker for marker in vm_markers if marker in identity_text
+    )
+    kind_valid = execution_kind in {"physical", "documented_gpu_passthrough"}
+    physical_evidence = (
+        execution_kind == "physical"
+        and virtualization.get("available") is True
+        and bool(virtualization.get("manufacturer"))
+        and bool(virtualization.get("model"))
+        and not virtualization_indicators
+    )
+    passthrough_evidence = (
+        execution_kind == "documented_gpu_passthrough"
+        and bool(str(passthrough_documentation or "").strip())
+    )
     clean_environment = (
         system == "Windows"
         and machine.lower() in {"amd64", "x86_64"}
         and build_number >= 22000
         and not detected
         and not cache_variables
+        and kind_valid
+        and (physical_evidence or passthrough_evidence)
     )
     return {
-        "execution_kind": "physical",
+        "execution_kind": execution_kind or "unspecified",
+        "passthrough_documentation": str(passthrough_documentation or ""),
         "platform": system,
         "release": platform.release(),
         "os_build": os_build,
@@ -109,12 +210,12 @@ def clean_host_provenance(environ: Mapping[str, str] | None = None) -> dict[str,
         "development_dependency_checks": probes,
         "development_dependencies_present_on_path": detected,
         "environment_cache_variables": cache_variables,
+        "virtualization_probe": virtualization,
+        "virtualization_indicators": virtualization_indicators,
+        "physical_host_evidence": physical_evidence,
         "clean_environment": clean_environment,
-        "application_pipeline_cache_present": any(
-            name in environment for name in cache_variables
-        ),
+        "application_pipeline_cache_present": bool(cache_variables),
     }
-
 
 def _scenario_row(
     name: str,
@@ -238,13 +339,18 @@ def run_clean_system(
     package_directory: Path,
     deployment_directory: Path,
     output: Path,
+    execution_kind: str | None = None,
+    passthrough_documentation: str = "",
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     executable = deployment_executable(deployment_directory)
     if executable is None:
         raise ValueError("deployment directory has no NW-07 executable")
     identity = export.inspect_artifact_directory(package_directory)
-    host = clean_host_provenance()
+    host = clean_host_provenance(
+        execution_kind=execution_kind,
+        passthrough_documentation=passthrough_documentation,
+    )
     embedded_package, _ = export.nw05_export.extract_embedded_package(
         executable.read_bytes()
     )
@@ -489,11 +595,35 @@ def validate_report(
         host_pending = True
         reasons.append("clean-system host provenance is missing")
     else:
-        if (
-            host.get("execution_kind") not in {"physical", "documented_gpu_passthrough"}
-        ):
-            host_failed = True
-            reasons.append("clean-system execution kind is not physical/passthrough")
+        execution_kind = host.get("execution_kind")
+        if execution_kind not in {"physical", "documented_gpu_passthrough"}:
+            host_pending = True
+            reasons.append("clean-system execution kind is not attested")
+        if execution_kind == "physical":
+            probe = host.get("virtualization_probe")
+            indicators = host.get("virtualization_indicators")
+            if not isinstance(probe, Mapping) or probe.get("available") is not True:
+                host_pending = True
+                reasons.append("physical clean-system host identity was not probed")
+            elif not probe.get("manufacturer") or not probe.get("model"):
+                host_pending = True
+                reasons.append("physical clean-system host manufacturer/model is missing")
+            if not isinstance(indicators, list):
+                host_pending = True
+                reasons.append("physical clean-system virtualization indicators are missing")
+            elif indicators:
+                host_failed = True
+                reasons.append(
+                    "physical clean-system claim conflicts with virtualization indicators: "
+                    + ", ".join(str(item) for item in indicators)
+                )
+            if host.get("physical_host_evidence") is not True:
+                host_pending = True
+                reasons.append("physical clean-system host evidence is incomplete")
+        elif execution_kind == "documented_gpu_passthrough":
+            if not str(host.get("passthrough_documentation") or "").strip():
+                host_pending = True
+                reasons.append("GPU-passthrough clean-system documentation is missing")
         if host.get("platform") != "Windows":
             host_failed = True
             reasons.append("clean-system execution host is not Windows")
@@ -670,6 +800,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--package", required=True)
     parser.add_argument("--deployment", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--execution-kind",
+        choices=("physical", "documented_gpu_passthrough"),
+        required=True,
+    )
+    parser.add_argument("--passthrough-documentation", default="")
     args = parser.parse_args(argv)
     if platform.system().lower() != "windows":
         report = pending_report("clean-system execution requires a physical Windows 11 x64 host")
@@ -684,6 +820,8 @@ def main(argv: list[str] | None = None) -> int:
             package_directory=Path(args.package),
             deployment_directory=Path(args.deployment),
             output=Path(args.output),
+            execution_kind=args.execution_kind,
+            passthrough_documentation=args.passthrough_documentation,
         )
     except (OSError, ValueError, export.Nw07ExportError) as exc:
         report = pending_report(

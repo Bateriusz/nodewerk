@@ -1576,10 +1576,20 @@ def _validate_measurements(capture: Mapping[str, Any]) -> tuple[str, dict[str, A
         if artifact_sha != capture.get("executable_sha256"):
             return "failed", f"{name} does not bind the final release artifact"
         environment = value.get("environment")
-        if _unavailable(environment) and _unavailable(
-            value.get("environment_id")
-        ):
+        if not isinstance(environment, Mapping) or not environment:
             return "pending", f"{name} does not identify the measurement environment"
+        expected_environment = {
+            "adapter_description": capture.get("adapter_description"),
+            "driver_version": capture.get("driver_version"),
+            "os_version": capture.get("os_version"),
+            "toolchain_identity": capture.get("toolchain_identity"),
+        }
+        for field, expected in expected_environment.items():
+            if _unavailable(expected) or environment.get(field) != expected:
+                return "failed", (
+                    f"{name} environment does not match correctness capture field "
+                    f"{field!r}"
+                )
         return "passed", ""
 
     quality = measurements.get("image_quality_metrics")
@@ -1795,7 +1805,11 @@ def validate_correctness_capture(
     ]
     if missing:
         result["missing_metadata"] = missing
-        return result
+        if result["status"] != "failed":
+            result["status"] = "pending_unverified"
+        result["reasons"].append(
+            "required correctness metadata is missing: " + ", ".join(missing)
+        )
     if capture.get("evidence_role") != contract.FIXED_TICK_CORRECTNESS_ROLE:
         result["status"] = "failed"
         result["reasons"].append("evidence role is not fixed_tick_correctness")

@@ -1311,34 +1311,53 @@ def _full_clean_system_check(
     return _pending("nw07_clean_system", "; ".join(validation["reasons"]))
 
 
+
 def _evidence_freshness_reasons(
     record: Mapping[str, Any], max_age_seconds: float
 ) -> list[str]:
-    reasons: list[str] = []
+    """Require fresh certifying captures for every nightly acceptance target."""
     captures = record.get("captures") or record.get("executions") or []
     if not isinstance(captures, list):
         return ["evidence captures are malformed"]
     now = datetime.now(timezone.utc).timestamp()
-    for capture in captures:
-        if not isinstance(capture, Mapping):
-            reasons.append("capture is malformed")
-            continue
-        role = capture.get("evidence_role")
-        if role == contract.DEVELOPMENT_SERIES_ROLE:
-            continue
-        captured = evidence._parse_utc_timestamp(capture.get("captured_at_utc"))
-        if captured is None:
-            reasons.append(
-                f"capture {capture.get('capture_id')!r} has no timezone-aware timestamp"
+    required = (
+        (
+            "Ada correctness",
+            contract.FIXED_TICK_CORRECTNESS_ROLE,
+            contract.CORRECTNESS_COVERAGE_TARGETS["ada"],
+        ),
+        (
+            "Blackwell correctness",
+            contract.FIXED_TICK_CORRECTNESS_ROLE,
+            contract.CORRECTNESS_COVERAGE_TARGETS["blackwell"],
+        ),
+        (
+            "reference performance",
+            contract.PERFORMANCE_CERTIFICATION_ROLE,
+            contract.PERF_CONTRACT_ID,
+        ),
+    )
+    reasons: list[str] = []
+    for label, role, target in required:
+        matching = [
+            capture
+            for capture in captures
+            if isinstance(capture, Mapping)
+            and capture.get("evidence_role") == role
+            and capture.get("coverage_target") == target
+        ]
+        if not any(
+            (
+                (captured := evidence._parse_utc_timestamp(item.get("captured_at_utc")))
+                is not None
+                and 0 <= now - captured <= float(max_age_seconds)
             )
-            continue
-        age = now - captured
-        if age < 0 or age > float(max_age_seconds):
+            for item in matching
+        ):
             reasons.append(
-                f"capture {capture.get('capture_id')!r} is stale for the nightly window"
+                f"no fresh {label} capture exists inside the nightly window"
             )
     return reasons
-
 
 def build_checks(args: argparse.Namespace) -> list[CheckResult]:
     return contracts_only() + _native_export_checks(args)
