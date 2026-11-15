@@ -33,7 +33,7 @@ def _param_float(node: nw03.GraphNode, name: str) -> float:
 def test_demo_graph_stays_inside_the_existing_nw07_operator_vocabulary() -> None:
     report = demo.validate_demo_graph(GRAPH)
     assert report["branch_only"] is True
-    assert report["instance_count"] == 1536
+    assert report["instance_count"] == 1024
     assert report["tunnel_radius"] == pytest.approx(4.6)
     assert report["loop_ticks"] == 1_152_000
     assert report["loop_seconds"] == 24
@@ -55,8 +55,8 @@ def test_demo_graph_stays_inside_the_existing_nw07_operator_vocabulary() -> None
     assert _param_float(node_map["camera"], "fov_degrees") == pytest.approx(74.0)
     assert _param_float(node_map["twist"], "max_twist_degrees") == pytest.approx(540.0)
     assert _param_float(node_map["bloom"], "resolution_scale") == pytest.approx(0.5)
-    assert _param_float(node_map["bloom"], "threshold") == pytest.approx(0.78)
-    assert _param_float(node_map["bloom"], "intensity") == pytest.approx(0.42)
+    assert _param_float(node_map["bloom"], "threshold") == pytest.approx(0.84)
+    assert _param_float(node_map["bloom"], "intensity") == pytest.approx(0.28)
     assert _param_float(node_map["tonemap"], "exposure") == pytest.approx(0.90)
     assert node_map["tonemap"].params["operator"][0] == "aces"
 
@@ -119,7 +119,7 @@ def test_demo_does_not_replace_the_canonical_nw07_proof() -> None:
 
     assert CANONICAL_NW07 != GRAPH
     assert _param_float(canonical_optimized.node_map()["instances"], "count") == pytest.approx(256.0)
-    assert _param_float(experimental_optimized.node_map()["instances"], "count") == pytest.approx(1536.0)
+    assert _param_float(experimental_optimized.node_map()["instances"], "count") == pytest.approx(1024.0)
     assert canonical.settings["nw07_loop_ticks"] == "960000"
     assert experimental.settings["nw07_loop_ticks"] == "1152000"
 
@@ -148,9 +148,13 @@ def test_tunnel_specialization_keeps_rings_distinct_and_corridor_open() -> None:
     instances_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_instances_cs.hlsl").read_text(encoding="utf-8")
     vertex_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_scene_vs.hlsl").read_text(encoding="utf-8")
 
-    assert "min(1024u" in instances_shader
-    assert "(InstanceCount * 2u) / 3u" in instances_shader
+    assert "min(512u" in instances_shader
+    assert "InstanceCount / 2u" in instances_shader
     assert "lane_u < 0.08" in instances_shader
     assert "lerp(0.56, 0.88" in instances_shader
-    assert "float tube = 0.0095;" in vertex_shader
+    assert "float tube = 0.015;" in vertex_shader
     assert "float sway_x = 0.16" in vertex_shader
+
+    pixel_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_scene_ps.hlsl").read_text(encoding="utf-8")
+    assert "HashUnit(input.instance_seed) * 0.35" not in pixel_shader
+    assert "Every tunnel ring uses the same stable shading" in pixel_shader
