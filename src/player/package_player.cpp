@@ -2290,7 +2290,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
         return false;
     }
     return true;
-#endif
+#endif  // NW05_FROZEN_EMBEDDED_SPECIALIZATION
 }
 
 ExitCode PackagePlayer::OpenDeviceAndWindow() {
