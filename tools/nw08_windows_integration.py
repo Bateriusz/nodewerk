@@ -110,7 +110,19 @@ def _export_equivalence(
         return _check(
             "gui_cli_export_equivalence",
             "failed",
-            {"reason": "artifact byte mismatch"},
+            {
+                "reason": "artifact byte mismatch",
+                "package_match": gui_package == cli_package,
+                "executable_match": gui_exe == cli_exe,
+                "gui_package_sha256": hashlib.sha256(gui_package).hexdigest(),
+                "cli_package_sha256": hashlib.sha256(cli_package).hexdigest(),
+                "gui_executable_sha256": hashlib.sha256(gui_exe).hexdigest(),
+                "cli_executable_sha256": hashlib.sha256(cli_exe).hexdigest(),
+                "gui_package_bytes": len(gui_package),
+                "cli_package_bytes": len(cli_package),
+                "gui_executable_bytes": len(gui_exe),
+                "cli_executable_bytes": len(cli_exe),
+            },
         )
     return _check(
         "gui_cli_export_equivalence",
