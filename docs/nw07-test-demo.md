@@ -1,126 +1,138 @@
-# NW-07-test-demo — Orbital Vortex
+# NW-07-test-demo — Asteroid Tunnel
 
 > **Branch-only experiment — DO NOT MERGE INTO `main`.**
 >
-> This production exists to probe the expressive range of nodewerk exactly as
-> it stood after NW-07.  It is not a prerequisite for NW-08 or later work and
-> must not change the authoritative NW-07 proof.
+> This production is a visual showcase built on the post-NW-07 graph/package/player
+> path.  It is intentionally isolated from the canonical NW-07 proof.
 
 ## Concept
 
-**Orbital Vortex** is a 24-second seamless 1920x1080 loop built only from the
-operator/runtime path already available in NW-07.
+**Asteroid Tunnel** is a 24-second seamless 1920x1080 loop inspired by the feel
+of classic Amiga bonus-tunnel sequences: fast forward motion, dark red/orange
+industrial ribs, bright segmented panels, strong bloom, and asteroid-like
+hazards crossing the flight path.
 
-The scene uses 4,096 very thin procedural torus instances distributed by the
-existing seeded radial instance generator.  The current camera operator cannot
-author an arbitrary translation path: it always looks at the origin while
-moving on an orbit.  The demo therefore puts the camera **inside** the radial
-field at radius 5.2 while the field extends to radius 7.5.  Nearby rings pass
-close to the camera during the orbit, producing an abstract orbital fly-through
-without adding a camera, placement, or rendering feature.
+The scene keeps the NW-07 operator vocabulary and normal `.nwgraph` authoring
+surface, but the branch-only export helper installs three **demo-specific shader
+specializations** during this export only:
 
-The visual treatment intentionally pushes the existing stack:
+- `nw07_test_demo_instances_cs.hlsl` — divides 1,536 instances into repeating
+  tunnel ribs and deterministic asteroid/debris hazards;
+- `nw07_test_demo_scene_vs.hlsl` — converts the absolute-tick loop into true
+  forward travel through a 96-unit repeating tunnel segment, with periodic
+  weave and bank;
+- `nw07_test_demo_scene_ps.hlsl` — gives the tunnel hot red/orange segmented
+  lighting and the obstacles warm faceted rock shading.
 
-- 32x8 low-poly thin torus geometry;
-- 4,096 deterministic instances;
+The normal NW-06/NW-07 shader files are not modified or replaced.  The helper
+temporarily swaps the three fixed shader records only while exporting this demo
+and restores the canonical tuple in a `finally` block.
+
+## Scene structure
+
+The graph uses:
+
+- 1,536 deterministic instances;
+- a 4.6-unit tunnel radius;
+- 384 repeating structural ribs;
+- 1,152 asteroid-like hazards/debris pieces;
+- a low-poly near-closed 24x8 torus as the legal NW-07 source topology;
 - five-octave seeded value noise;
-- cool blue material with low roughness and strong specular response;
-- saturated directional light bright enough to feed the existing bloom stage;
-- a 720-degree maximum analytic twist;
+- a warm directional light;
+- deterministic asteroid rotation driven by the existing twist parameter;
 - half-resolution bloom;
 - ACES tonemapping;
-- one exact camera revolution over 1,152,000 ticks at 48 kHz.
+- a 24-second / 1,152,000-tick stateless loop.
 
-The first and last camera keys are 0 and 2*pi, and the established twist
-function is sinusoidal over the same loop duration.  Playback therefore returns
-to the same stateless scene state at the boundary.
+The source torus is deliberately almost closed (`major_radius=0.75`,
+`minor_radius=0.68`).  Tunnel ribs are reconstructed analytically from the
+mesh UVs, while hazards keep the chunky low-poly topology and receive seeded
+multi-frequency deformation and rotation.
+
+## Loop model
+
+The static generated content occupies one 96-unit segment.  The specialized
+vertex shader advances the camera phase by one complete segment over exactly
+1,152,000 ticks, then wraps object depth around the camera.
+
+At tick 1,152,000 the shader evaluates the same wrapped phase as tick 0.  Camera
+weave, banking, obstacle rotation and segment placement are all functions of
+the same absolute tick, so no frame-delta state is required.
 
 ## Files
 
-- `fixtures/nw07-test-demo/orbital_vortex.nwgraph` — the production graph.
-- `tools/nw07_test_demo.py` — validation and export wrapper around the existing
-  NW-03/NW-05/NW-06 path.
-- `tests/test_nw07_test_demo.py` — branch-local regression coverage.
+- `fixtures/nw07-test-demo/orbital_vortex.nwgraph` — production graph; the
+  historical path is retained even though the visual concept is now Asteroid
+  Tunnel.
+- `shaders/nw07_test_demo/nw07_test_demo_instances_cs.hlsl`
+- `shaders/nw07_test_demo/nw07_test_demo_scene_vs.hlsl`
+- `shaders/nw07_test_demo/nw07_test_demo_scene_ps.hlsl`
+- `tools/nw07_test_demo.py` — validation and export wrapper.
+- `tests/test_nw07_test_demo.py` — isolation and export regression coverage.
 
-The canonical `fixtures/nw07/production_loop.nwgraph` remains untouched.
+The canonical `fixtures/nw07/production_loop.nwgraph` and
+`shaders/nw06/*` remain untouched.
 
-## Validate without a GPU or DXC
+## Validate
 
 From the repository root:
 
-```bash
-python tools/nw07_test_demo.py --validate-only
-python tools/nw07_test_demo.py \
-  --contracts-only \
-  --output build/nw07-test-demo/contracts \
-  --report build/nw07-test-demo/contracts-report.json
-
-python -m pytest -q tests/test_nw07_test_demo.py
+```powershell
+python .\tools\nw07_test_demo.py --validate-only
 ```
 
-The contracts-only export uses the existing structural test shader payload
-path.  It is useful for proving graph lowering, package structure, scheduling,
-resource accounting, deterministic timeline parameters, and the one-draw +
-bloom + tonemap + present frame plan.  It is not visual/hardware evidence.
-
-## Export the standalone Windows executable
-
-Use the same pinned DXC and specialized player template already used by the
-post-NW-07 export path:
+Contracts-only export:
 
 ```powershell
-python tools/nw07_test_demo.py `
-  --output build\nw07-test-demo\artifact `
-  --report build\nw07-test-demo\export-report.json `
-  --player-template build\nw07-release\staging\procedural_image_player\nw_procedural_image_player.exe `
-  --dxc C:\Tools\dxc-1.8.2407\bin\x64\dxc.exe `
-  --build-root build\nw07-test-demo\specialized-build
+python .\tools\nw07_test_demo.py --contracts-only --output .\build\nw07-test-demo\contracts --report .\build\nw07-test-demo\contracts-report.json
 ```
 
-The helper uses the existing `nw05_export.export_graph` path, the existing
-NW-06 procedural lowering and shaders, the common capability profile, an
-uncapped present interval, and frozen embedded specialization.  No demo-specific
-runtime is generated.
+Tests:
 
-The experiment uses a generous 64 MiB export-accounting guard because this task
-is an artistic capability probe, not a new size-certification milestone.  It
-retains the existing 512 MiB resource guard.  NW-07's canonical 256 KiB proof
-and its evidence contract are not modified or redefined here.
+```powershell
+python -m pytest -q .\tests\test_nw07_test_demo.py
+```
 
-## Fixed-tick visual checks
+## Local Windows release export
 
-After producing the release executable, inspect at least these absolute ticks:
+Enter the pinned build environment and build the existing release player
+template first:
 
-- `0`
-- `288000` — quarter loop
-- `576000` — half loop
-- `864000` — three-quarter loop
-- `1151999` — last tick before wrap
-- `1152000` — loop boundary, equivalent to tick 0
+```powershell
+pwsh .\tools\nw01\enter-build-env.ps1 -InteractiveShell
+```
 
-The established release player supports deterministic `--tick
-<absolute-tick>` playback.  Repeated runs at the same tick should produce the
-same scene state.  Tick 1,152,000 wraps to the same camera/deformation state as
-tick 0.
+Inside that shell:
 
-## Deliberate limitations
+```powershell
+cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON; cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+```
 
-This branch does **not** add:
+Then export the demo:
 
-- arbitrary camera translation or spline position paths;
-- a tunnel-specific instance generator;
-- additional geometry primitives;
-- particles, SDF/CSG, feedback, temporal simulation, or audio;
-- an emissive material model;
-- another post-processing stage;
-- another package format or player.
+```powershell
+python .\tools\nw07_test_demo.py --output .\build\nw07-test-demo\artifact --report .\build\nw07-test-demo\export-report.json --player-template .\build\nw07-release\staging\procedural_image_player\nw_procedural_image_player.exe --dxc C:\Tools\dxc-1.8.2407\bin\x64\dxc.exe --build-root .\build\nw07-test-demo\specialized-build
+```
 
-If the production needs one of those capabilities to become better art, that is
-evidence for future nodewerk work — not justification to expand this
-experiment's scope.
+Run:
+
+```powershell
+.\build\nw07-test-demo\artifact\nw_common_d3d12_fl12_0_sm6_0_v1.exe
+```
+
+## Scope
+
+This is deliberately not a general nodewerk feature.  It does not add a new
+operator, graph format, package format, player, or mergeable runtime API.
+Instead, it demonstrates a branch-local production specialization needed
+because the current NW-07 camera and instance generator cannot express a true
+forward tunnel flight by graph parameters alone.
+
+If this visual direction later becomes a supported nodewerk authoring feature,
+the correct follow-up is a separate architectural task with explicit operator
+contracts — not merging these demo shaders into `main`.
 
 ## Branch policy
 
-Keep this implementation on `experiment/NW-07-test-demo`.  A pull request may
-exist as a review/CI surface, but it is intentionally non-mergeable work:
-**do not merge it into `main`**.
+Keep this implementation on `experiment/NW-07-test-demo`.  The pull request is
+only a review/CI surface.  **Do not merge it into `main`.**
