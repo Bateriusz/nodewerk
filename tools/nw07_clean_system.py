@@ -350,12 +350,22 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         return 2
-    report = run_clean_system(
-        fixture=Path(args.fixture),
-        package_directory=Path(args.package),
-        deployment_directory=Path(args.deployment),
-        output=Path(args.output),
-    )
+    try:
+        report = run_clean_system(
+            fixture=Path(args.fixture),
+            package_directory=Path(args.package),
+            deployment_directory=Path(args.deployment),
+            output=Path(args.output),
+        )
+    except (OSError, ValueError, export.Nw07ExportError) as exc:
+        report = pending_report(
+            f"clean-system prerequisites are unavailable: {exc}"
+        )
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return 2
     return 0 if report["verification_status"] == "verified" else 1
 
 

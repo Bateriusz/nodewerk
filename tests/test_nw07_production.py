@@ -156,3 +156,27 @@ def test_pinned_input_digest_tracks_build_inputs() -> None:
     assert first["inputs"]["fixtures/nw07/production_loop.nwgraph"] == config["graph_sha256"]
     assert first["frozen"] is True
     assert first["matches_frozen_digest"] is True
+
+
+def test_pinned_input_hash_is_line_ending_stable(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.txt"
+    crlf = tmp_path / "crlf.txt"
+    lf.write_bytes(b"alpha\nbeta\ngamma\n")
+    crlf.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
+    assert export.sha256_canonical_text_file(lf) == export.sha256_canonical_text_file(
+        crlf
+    )
+    assert export.sha256_file(lf) != export.sha256_file(crlf)
+
+
+def test_frozen_digest_matches_a_crlf_checkout(tmp_path: Path) -> None:
+    config = export.load_canonical_config(CONFIG)
+    for relative in config["pinned_inputs"]:
+        source = REPO_ROOT / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(
+            source.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        )
+    inputs = export.compute_pinned_inputs(config, repo_root=tmp_path)
+    assert export.build_inputs_digest(inputs) == config["build_inputs_digest"]

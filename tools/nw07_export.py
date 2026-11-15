@@ -84,6 +84,17 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def sha256_canonical_text_file(path: Path) -> str:
+    """Hash a pinned text input independently of checkout line endings.
+
+    The frozen build-input digest must be identical on Windows and POSIX
+    checkouts.  Git may materialize text files as CRLF on Windows unless an
+    explicit attribute says otherwise; normalizing line endings here keeps the
+    digest deterministic without weakening the file-content identity.
+    """
+    return sha256_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+
+
 def canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -218,7 +229,7 @@ def compute_pinned_inputs(
         path = root / relative
         if not path.is_file():
             raise Nw07ExportError(f"pinned build input is unavailable: {relative}")
-        result[relative] = sha256_file(path)
+        result[relative] = sha256_canonical_text_file(path)
     return dict(sorted(result.items()))
 
 

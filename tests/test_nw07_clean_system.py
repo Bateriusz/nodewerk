@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sys
 from pathlib import Path
 
@@ -99,7 +100,7 @@ def test_required_scenarios_and_exit_codes_are_frozen() -> None:
     }
 
 
-def test_clean_system_cli_records_pending_off_windows(tmp_path: Path) -> None:
+def test_clean_system_cli_records_pending_without_prerequisites(tmp_path: Path) -> None:
     output = tmp_path / "report.json"
     code = clean_system.main(
         [
@@ -113,8 +114,30 @@ def test_clean_system_cli_records_pending_off_windows(tmp_path: Path) -> None:
             str(output),
         ]
     )
-    if sys.platform.startswith("win"):
-        assert code in {0, 1}
-    else:
-        assert code == 2
-        assert output.is_file()
+    # Missing prerequisites (dummy paths on any host) must remain pending, not
+    # crash and not become passing evidence.
+    assert code == 2
+    assert output.is_file()
+
+
+def test_clean_system_cli_does_not_crash_on_windows_without_prerequisites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    output = tmp_path / "report.json"
+    code = clean_system.main(
+        [
+            "--fixture",
+            str(tmp_path / "fixture.exe"),
+            "--package",
+            str(tmp_path / "package"),
+            "--deployment",
+            str(tmp_path / "deployment"),
+            "--output",
+            str(output),
+        ]
+    )
+    assert code == 2
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["verification_status"] == "pending_unverified"
+    assert "prerequisites" in report["reason"]
