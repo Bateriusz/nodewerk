@@ -331,7 +331,7 @@ jobs:
             python tools/nw07_regression.py `
               --baseline benchmarks/nw07/metric-baselines.v1.json `
               --current $current `
-              --summary-json "$env:RUNNER_TEMP\nnw07-regression-$name.json"
+              --summary-json "$env:RUNNER_TEMP\nw07-regression-$name.json"
             $code = $LASTEXITCODE
             if ($code -eq 1) { exit 1 }
             if ($code -eq 2) {
