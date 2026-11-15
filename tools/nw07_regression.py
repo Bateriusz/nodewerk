@@ -52,13 +52,20 @@ def _number(value: Any) -> float | None:
 
 
 def _metric(record: Mapping[str, Any], name: str) -> float | None:
-    for section_name in ("metrics", "measurements"):
+    for section_name in ("metrics", "measurements", "baseline", "current"):
         section = record.get(section_name)
         if isinstance(section, Mapping) and name in section:
             value = section[name]
             if isinstance(value, Mapping):
-                value = value.get("value")
-            return _number(value)
+                for key in ("value", "current", "measured", "baseline"):
+                    if key in value:
+                        number = _number(value[key])
+                        if number is not None:
+                            return number
+                return None
+            number = _number(value)
+            if number is not None:
+                return number
     return None
 
 

@@ -76,7 +76,7 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:42c3f680f5eaf27081f216e9dfff1d76589b8c7e825a8568e9cc931388499110",
+  "build_inputs_digest": "sha256:v1:31df0aa0bea17167001b650267a36dc99e012a57ab6deca4014428a7e31744fa",
   "loop": {
     "looping": true,
     "wrap": "modulo",
@@ -236,7 +236,7 @@
   },
   "image_tolerances": {
     "numeric": {
-      "absolute": 0.00001,
+      "absolute": 1e-05,
       "relative": 0.0001,
       "mode": "absolute_or_relative"
     },
@@ -247,19 +247,19 @@
     },
     "per_device": {
       "desktop_ada_representative": {
-        "numeric_absolute": 0.00001,
+        "numeric_absolute": 1e-05,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_representative": {
-        "numeric_absolute": 0.00001,
+        "numeric_absolute": 1e-05,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_development_series": {
-        "numeric_absolute": 0.00001,
+        "numeric_absolute": 1e-05,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001

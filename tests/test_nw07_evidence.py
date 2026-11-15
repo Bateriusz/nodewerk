@@ -38,7 +38,7 @@ def _correctness(tier: str) -> dict:
         else "NVIDIA GeForce RTX 5070 Ti"
     )
     identity = _identity()
-    return {
+    capture = {
         "capture_id": f"{tier}-capture",
         "task": contract.TASK,
         "implementation_base": contract.IMPLEMENTATION_BASE,
@@ -172,11 +172,33 @@ def _correctness(tier: str) -> dict:
             "driver_memory_bytes": 220 * 1024 * 1024,
             "startup_pipeline_ms": 400.0,
             "generation_ms": 10.0,
-            "image_quality_metrics": {"psnr_db": 52.0},
-            "scaling_1440p": {"p99_gpu_ms": 12.0},
+            "image_quality_metrics": {
+                "psnr_db": 52.0,
+                "artifact_sha256": identity["executable_sha256"],
+                "environment": {"adapter_description": adapter},
+            },
+            "scaling_1440p": {
+                "width": 2560,
+                "height": 1440,
+                "p99_gpu_ms": 12.0,
+                "artifact_sha256": identity["executable_sha256"],
+                "environment": {"adapter_description": adapter},
+            },
         },
         "unavailable_telemetry": [],
+        "release_capture_protocol": contract.RELEASE_CAPTURE_PROTOCOL,
     }
+    capture["execution_records"] = [
+        {
+            "renderer": "exported_player",
+            "tick": item["tick"],
+            "executable_sha256": identity["executable_sha256"],
+            "exit_code": 0,
+            "artifact_sha256": item["sha256"],
+        }
+        for item in capture["capture_artifacts"]
+    ]
+    return capture
 
 
 def _perf() -> dict:
@@ -833,6 +855,41 @@ def test_reference_binding_is_immutable() -> None:
             bound,
             board={"subsystem_vendor_id": 1, "subsystem_device_id": 2},
         )
+
+
+def test_missing_metadata_cannot_hide_an_executed_startup_failure() -> None:
+    capture = _correctness("ada")
+    capture["startup"]["process_start_to_first_present_ms"] = 3000.0
+    del capture["driver_version"]
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "failed"
+    assert "driver_version" in result.get("missing_metadata", [])
+
+
+def test_required_quality_and_scaling_measurements_must_be_measured() -> None:
+    capture = _correctness("ada")
+    capture["measurements"]["image_quality_metrics"] = {}
+    capture["measurements"]["scaling_1440p"] = {}
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "pending_unverified"
+
+    capture = _correctness("ada")
+    capture["measurements"]["scaling_1440p"]["width"] = 1280
+    capture["measurements"]["scaling_1440p"]["height"] = 720
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "failed"
 
 
 def test_correctness_requires_explicit_desktop_form_factor() -> None:

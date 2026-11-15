@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -48,6 +50,70 @@ EXPECTED_SCENARIO_EXIT_CODES = {
     "resize": 0,
     "device_removal": 51,
 }
+
+_DEVELOPMENT_DEPENDENCY_PROBES = (
+    "nodewerkc",
+    "nodewerk-studio",
+    "dxc",
+    "dxcompiler.dll",
+    "slangc",
+    "spirv-cross",
+    "cmake",
+    "ninja",
+)
+
+
+def _windows_build() -> str:
+    version = platform.version()
+    parts = [part for part in version.replace("-", ".").split(".") if part.isdigit()]
+    if len(parts) >= 3:
+        return ".".join(parts[:3])
+    return version
+
+
+def clean_host_provenance(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Retain host identity and prove the deployment host is a clean runtime."""
+    environment = dict(environ or os.environ)
+    probes = {
+        name: shutil.which(name, path=environment.get("PATH"))
+        for name in _DEVELOPMENT_DEPENDENCY_PROBES
+    }
+    detected = sorted(name for name, path in probes.items() if path)
+    cache_variables = sorted(
+        key
+        for key in environment
+        if key.startswith(("NODEWERK", "DXC_", "SLANG_", "VK_ICD_"))
+    )
+    system = platform.system()
+    machine = platform.machine()
+    os_build = _windows_build()
+    build_number = 0
+    if os_build:
+        tail = os_build.rsplit(".", 1)[-1]
+        build_number = int(tail) if tail.isdigit() else 0
+    clean_environment = (
+        system == "Windows"
+        and machine.lower() in {"amd64", "x86_64"}
+        and build_number >= 22000
+        and not detected
+        and not cache_variables
+    )
+    return {
+        "execution_kind": "physical",
+        "platform": system,
+        "release": platform.release(),
+        "os_build": os_build,
+        "windows_11_or_newer": build_number >= 22000,
+        "architecture": machine,
+        "x64": machine.lower() in {"amd64", "x86_64"},
+        "development_dependency_checks": probes,
+        "development_dependencies_present_on_path": detected,
+        "environment_cache_variables": cache_variables,
+        "clean_environment": clean_environment,
+        "application_pipeline_cache_present": any(
+            name in environment for name in cache_variables
+        ),
+    }
 
 
 def _scenario_row(
@@ -178,6 +244,7 @@ def run_clean_system(
     if executable is None:
         raise ValueError("deployment directory has no NW-07 executable")
     identity = export.inspect_artifact_directory(package_directory)
+    host = clean_host_provenance()
     embedded_package, _ = export.nw05_export.extract_embedded_package(
         executable.read_bytes()
     )
@@ -345,6 +412,11 @@ def run_clean_system(
     )
     scenario_failed = any(row["status"] == "failed" for row in rows)
     scenario_missing = any(row["status"] == "not_executed" for row in rows)
+    host_failed = (
+        host.get("platform") != "Windows"
+        or host.get("x64") is not True
+        or host.get("windows_11_or_newer") is not True
+    )
     report = {
         "format": REPORT_FORMAT,
         "version": REPORT_VERSION,
@@ -354,18 +426,22 @@ def run_clean_system(
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "artifact": identity,
+        "host": host,
         "deployment": deployment,
         "scenarios": rows,
         "verification_status": (
             "failed"
-            if scenario_failed or not deployment["only_runtime_executable"]
+            if scenario_failed
+            or host_failed
+            or not deployment["only_runtime_executable"]
             else "pending_unverified"
-            if scenario_missing
+            if scenario_missing or host.get("clean_environment") is not True
             else "verified"
         ),
         "policy": (
             "An executed scenario failure remains failed. Missing execution stays "
-            "pending. Deployment must contain only the self-contained release executable."
+            "pending. Deployment must contain only the self-contained release "
+            "executable on a verified clean Windows 11 x64 runtime host."
         ),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -382,6 +458,7 @@ def pending_report(reason: str) -> dict[str, Any]:
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "host": {},
         "deployment": {},
         "scenarios": [],
         "verification_status": "pending_unverified",
@@ -404,6 +481,63 @@ def validate_report(
         reasons.append("report format/version is not the NW-07 clean-system contract")
     if report.get("task") != contract.TASK:
         reasons.append("report task is not NW-07")
+    host_value = report.get("host")
+    host = host_value if isinstance(host_value, Mapping) else None
+    host_failed = False
+    host_pending = False
+    if host is None or not host:
+        host_pending = True
+        reasons.append("clean-system host provenance is missing")
+    else:
+        if (
+            host.get("execution_kind") not in {"physical", "documented_gpu_passthrough"}
+        ):
+            host_failed = True
+            reasons.append("clean-system execution kind is not physical/passthrough")
+        if host.get("platform") != "Windows":
+            host_failed = True
+            reasons.append("clean-system execution host is not Windows")
+        if host.get("x64") is not True:
+            host_failed = True
+            reasons.append("clean-system execution host is not x64")
+        if host.get("windows_11_or_newer") is not True:
+            host_failed = True
+            reasons.append("clean-system execution host is not Windows 11 or newer")
+        if host.get("clean_environment") is not True:
+            host_pending = True
+            reasons.append(
+                "clean-system host retains development dependencies or cache state"
+            )
+        present = host.get("development_dependencies_present_on_path")
+        if not isinstance(present, list) or present:
+            host_pending = True
+            reasons.append(
+                "clean-system host did not prove development dependencies are absent"
+            )
+        checks = host.get("development_dependency_checks")
+        if not isinstance(checks, Mapping) or not checks:
+            host_pending = True
+            reasons.append("clean-system dependency probes were not retained")
+        else:
+            detected_from_probes = sorted(
+                name for name, path in checks.items() if path
+            )
+            if detected_from_probes != sorted(present or []):
+                host_pending = True
+                reasons.append(
+                    "clean-system dependency probes disagree with the retained result"
+                )
+        if host.get("application_pipeline_cache_present") is True:
+            host_pending = True
+            reasons.append(
+                "clean-system host exposes an application pipeline cache"
+            )
+        cache_variables = host.get("environment_cache_variables")
+        if not isinstance(cache_variables, list) or cache_variables:
+            host_pending = True
+            reasons.append(
+                "clean-system host retains development cache environment variables"
+            )
     deployment_value = report.get("deployment")
     deployment = (
         deployment_value if isinstance(deployment_value, Mapping) else None
@@ -498,7 +632,7 @@ def validate_report(
         elif row.get("status") != "passed":
             failed.append(name)
             reasons.append(f"{name} did not record a passed execution")
-    if deployment_failed or failed:
+    if deployment_failed or failed or host_failed:
         status = "failed"
         if failed:
             reasons.append("executed clean-system scenarios failed: " + ", ".join(failed))
@@ -510,6 +644,9 @@ def validate_report(
         reasons.append(
             "clean-system scenarios were not executed: " + ", ".join(not_executed)
         )
+    elif host_pending:
+        status = "pending_unverified"
+        reasons.append("clean-system host provenance is incomplete or not clean")
     elif report.get("verification_status") == "failed":
         status = "failed"
         reasons.append("clean-system report records an executed failure")

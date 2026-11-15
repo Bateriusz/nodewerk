@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import sys
+import time
 from argparse import Namespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +31,27 @@ ENVIRONMENT = {
     "quality_profile": "nw07.quality.v1",
     "cache_state": "warm",
 }
+
+
+def _clean_host() -> dict:
+    return {
+        "execution_kind": "physical",
+        "platform": "Windows",
+        "release": "11",
+        "os_build": "10.0.26100.2314",
+        "windows_11_or_newer": True,
+        "architecture": "AMD64",
+        "x64": True,
+        "development_dependency_checks": {
+            "nodewerkc": None,
+            "dxc": None,
+            "cmake": None,
+        },
+        "development_dependencies_present_on_path": [],
+        "environment_cache_variables": [],
+        "clean_environment": True,
+        "application_pipeline_cache_present": False,
+    }
 
 
 def _record(**metrics) -> dict:
@@ -91,6 +113,36 @@ def test_environment_match_requires_every_frozen_field() -> None:
             assert regression.environments_match(
                 baseline["environment"], other["environment"]
             ) is False
+
+
+def test_shipped_metric_baseline_structure_is_understood() -> None:
+    baseline = json.loads(
+        (REPO_ROOT / "benchmarks" / "nw07" / "metric-baselines.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for name in (
+        "complete_distribution_bytes",
+        "process_start_to_first_present_ms",
+        "peak_engine_committed_gpu_bytes",
+        "p99_gpu_frame_time_ms",
+        "p99_cpu_submit_ms",
+    ):
+        baseline["metrics"][name]["baseline"] = {
+            "complete_distribution_bytes": 120000,
+            "process_start_to_first_present_ms": 800.0,
+            "peak_engine_committed_gpu_bytes": 200 * 1024 * 1024,
+            "p99_gpu_frame_time_ms": 10.0,
+            "p99_cpu_submit_ms": 5.0,
+        }[name]
+    baseline["environment"] = dict(ENVIRONMENT)
+    current = _record(p99_gpu_frame_time_ms=11.5)
+    result = regression.evaluate_regression(baseline, current)
+    assert regression._metric(
+        baseline, "p99_gpu_frame_time_ms"
+    ) == pytest.approx(10.0)
+    assert result["status"] == "flagged"
+    assert result["size"]["delta_bytes"] == 0
 
 
 def test_regression_cli_exit_codes(tmp_path: Path) -> None:
@@ -177,6 +229,84 @@ def test_retained_capture_namespacing_refuses_to_overwrite_different_bytes(
     source.write_bytes(b"different")
     with pytest.raises(ValueError):
         capture._retain_capture(source, destination_dir)
+
+
+def test_player_teardown_does_not_wait_out_the_measurement_window() -> None:
+    process = capture.subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdout=capture.subprocess.PIPE,
+        stderr=capture.subprocess.PIPE,
+        text=True,
+    )
+    started = time.monotonic()
+    capture._stop_player(process)
+    assert time.monotonic() - started < 5.0
+
+
+def test_failed_collection_is_persisted_and_returns_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failed = {
+        "capture_id": "nightly-failed",
+        "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "coverage_target": contract.PERF_CONTRACT_ID,
+        "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+        "status": "failed",
+        "runs": [],
+        "failure": "collector failed",
+        "validation": {"status": "failed", "reasons": ["collector failed"]},
+    }
+    monkeypatch.setattr(capture, "collect_perf", lambda args: failed)
+    evidence_path = tmp_path / "evidence.json"
+    code = capture.main(
+        [
+            "collect",
+            "--package",
+            str(tmp_path / "package"),
+            "--executable",
+            str(tmp_path / "player.exe"),
+            "--samples-dir",
+            str(tmp_path / "samples"),
+            "--reference",
+            str(tmp_path / "reference.json"),
+            "--collector-command",
+            "collector",
+            "--capture-id",
+            "nightly-failed",
+            "--evidence",
+            str(evidence_path),
+        ]
+    )
+    assert code == 1
+    record = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert record["captures"][-1]["status"] == "failed"
+
+
+def test_release_playback_exposes_explicit_fixed_tick_and_capture_protocol() -> None:
+    source = verify_nw07.export.nw05_export.generate_player_source(
+        package_sha256="1" * 64,
+        manifest_sha256="2" * 64,
+        present_sync_interval=0,
+    )
+    assert '"--tick"' in source
+    assert '"--hold-ms"' in source
+    assert "NW05_EXPLICIT_TICK" in source
+    assert hasattr(capture, "capture_release_correctness")
+
+
+def test_nightly_freshness_rejects_historical_captures() -> None:
+    stale = {
+        "captures": [
+            {
+                "capture_id": "old",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "captured_at_utc": "2020-01-01T00:00:00+00:00",
+            }
+        ]
+    }
+    reasons = verify_nw07._evidence_freshness_reasons(stale, 86400)
+    assert reasons and "stale" in reasons[0]
 
 
 def test_perf_capture_derives_run_timing_from_retained_metadata(
@@ -497,6 +627,7 @@ def test_clean_system_binary_dir_discovers_retained_report(
         "implementation_base": contract.IMPLEMENTATION_BASE,
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "host": _clean_host(),
         "deployment": {
             "executable": executable.name,
             "executable_sha256": executable_sha256,
@@ -579,6 +710,7 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
             "manifest_sha256": identity["manifest_sha256"],
             "executable_sha256": identity["executable_sha256"],
         },
+        "host": _clean_host(),
         "deployment": deployment_report,
         "scenarios": [
             {

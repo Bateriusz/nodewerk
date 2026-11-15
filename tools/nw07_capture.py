@@ -105,6 +105,14 @@ def _load_json(path: str | None) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _json_value_or_path(value: Any) -> Any:
+    if isinstance(value, str):
+        return _load_json(value)
+    if isinstance(value, Mapping):
+        return dict(value)
+    return value
+
+
 def _read_rgba32f(path: Path) -> array:
     data = path.read_bytes()
     expected = (
@@ -386,8 +394,8 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
             "driver_memory_bytes": args.driver_memory_bytes,
             "startup_pipeline_ms": args.startup_pipeline_ms,
             "generation_ms": args.generation_ms,
-            "image_quality_metrics": _load_json(args.image_quality),
-            "scaling_1440p": _load_json(args.scaling_1440p),
+            "image_quality_metrics": _json_value_or_path(args.image_quality),
+            "scaling_1440p": _json_value_or_path(args.scaling_1440p),
         },
         "unavailable_telemetry": [],
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -399,6 +407,274 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
         artifact_identity=identity,
         artifact_root=artifact_root,
         config=config,
+    )
+    capture["validation"] = validation
+    capture["status"] = _validation_status(validation)
+    return capture
+
+
+def _expected_capture_bytes() -> int:
+    return (
+        contract.OUTPUT_WIDTH
+        * contract.OUTPUT_HEIGHT
+        * contract.CAPTURE_BYTES_PER_PIXEL
+    )
+
+
+def _run_external_capture(
+    command: list[str],
+    *,
+    environment: Mapping[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        env=dict(environment),
+    )
+
+
+def capture_release_correctness(args: argparse.Namespace) -> dict[str, Any]:
+    """Drive the final release executable at every required fixed tick.
+
+    Release playback exposes `--tick` (a deterministic playback input, not a
+    capture control).  A supplied external capture command observes the live
+    release window and writes RGBA32F; the diagnostic sibling remains the only
+    artifact with internal readback capture controls and provides the
+    reference renderer captures.
+    """
+    package_dir = Path(args.package)
+    identity = export.inspect_artifact_directory(package_dir)
+    release = Path(args.executable)
+    if not release.is_file():
+        raise ValueError(f"release executable is unavailable: {release}")
+    if _sha256_file(release) != identity["executable_sha256"]:
+        raise ValueError(
+            "release executable does not match the published final artifact"
+        )
+    diagnostic = Path(args.diagnostic_executable)
+    if not diagnostic.is_file():
+        raise ValueError(f"diagnostic sibling executable is unavailable: {diagnostic}")
+    diagnostic_sha = _sha256_file(diagnostic)
+    if diagnostic_sha == identity["executable_sha256"]:
+        raise ValueError("diagnostic reference must be a separate sibling executable")
+    capture_command = shlex.split(args.capture_command, posix=os.name != "nt")
+    if not capture_command:
+        raise ValueError("an external release capture command is required")
+    measured: dict[str, Any] = {}
+    if args.metrics_command:
+        if not args.metrics_output:
+            raise ValueError("--metrics-command requires --metrics-output")
+        metrics_output = Path(args.metrics_output)
+        metrics_output.parent.mkdir(parents=True, exist_ok=True)
+        metrics_environment = dict(os.environ)
+        metrics_environment.update(
+            {
+                "NW07_PACKAGE": str(package_dir),
+                "NW07_EXECUTABLE": str(release),
+                "NW07_ARTIFACT_SHA256": identity["executable_sha256"],
+                "NW07_METRICS_OUTPUT": str(metrics_output),
+            }
+        )
+        metrics_completed = _run_external_capture(
+            shlex.split(args.metrics_command, posix=os.name != "nt"),
+            environment=metrics_environment,
+            timeout=300.0,
+        )
+        if metrics_completed.returncode != 0 or not metrics_output.is_file():
+            raise ValueError("nightly startup/memory/visual measurement command failed")
+        measured = json.loads(metrics_output.read_text(encoding="utf-8"))
+        if not isinstance(measured, Mapping):
+            raise ValueError("nightly measurement output is not a JSON object")
+    captures_dir = Path(args.captures_dir)
+    reference_dir = Path(args.reference_captures_dir)
+    captures_dir.mkdir(parents=True, exist_ok=True)
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    ticks = list(contract.REQUIRED_FIXED_TICKS) + [contract.LOOP_BOUNDARY_TICKS[1]]
+    executions: list[dict[str, Any]] = []
+    for tick in ticks:
+        output = captures_dir / f"tick_{tick}.rgba32f"
+        started = _utc_now()
+        player = _start_player(
+            release,
+            [
+                "--tick",
+                str(tick),
+                "--frames",
+                "1",
+                "--hold-ms",
+                str(args.hold_ms),
+            ],
+        )
+        time.sleep(args.capture_delay_ms / 1000.0)
+        env = dict(os.environ)
+        env.update(
+            {
+                "NW07_TICK": str(tick),
+                "NW07_OUTPUT": str(output),
+                "NW07_PLAYER_PID": str(player.pid),
+                "NW07_EXECUTABLE": str(release),
+                "NW07_ARTIFACT_SHA256": identity["executable_sha256"],
+            }
+        )
+        capture_completed = _run_external_capture(
+            capture_command,
+            environment=env,
+            timeout=max(30.0, args.hold_ms / 1000.0 + 20.0),
+        )
+        try:
+            stdout, stderr = player.communicate(
+                timeout=max(30.0, args.hold_ms / 1000.0 + 20.0)
+            )
+        except subprocess.TimeoutExpired:
+            player.kill()
+            stdout, stderr = player.communicate()
+        ended = _utc_now()
+        if not output.is_file() or output.stat().st_size != _expected_capture_bytes():
+            raise ValueError(
+                f"external capture did not produce a complete RGBA32F image for tick {tick}"
+            )
+        if player.returncode != 0:
+            raise ValueError(
+                f"release executable failed at fixed tick {tick}: exit {player.returncode}"
+            )
+        if capture_completed.returncode != 0:
+            raise ValueError(
+                f"external capture process failed at tick {tick}: "
+                f"{capture_completed.stderr.strip() or capture_completed.stdout.strip()}"
+            )
+        executions.append(
+            {
+                "renderer": "exported_player",
+                "tick": tick,
+                "executable_sha256": identity["executable_sha256"],
+                "player_pid": player.pid,
+                "started_utc": started,
+                "ended_utc": ended,
+                "exit_code": player.returncode,
+                "capture_command": capture_command,
+                "capture_exit_code": capture_completed.returncode,
+                "capture_stdout": capture_completed.stdout[-2000:],
+                "capture_stderr": capture_completed.stderr[-2000:],
+                "player_stdout": (stdout or "")[-2000:],
+                "player_stderr": (stderr or "")[-2000:],
+                "artifact_sha256": _sha256_file(output),
+                "bytes": output.stat().st_size,
+            }
+        )
+        # The diagnostic sibling remains the only artifact with internal
+        # fixed-tick readback controls.
+        diagnostic_completed = subprocess.run(
+            [
+                str(diagnostic),
+                "--capture-dir",
+                str(reference_dir),
+                "--capture-tick",
+                str(tick),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            env=dict(os.environ),
+        )
+        reference_output = reference_dir / f"tick_{tick}.rgba32f"
+        if (
+            diagnostic_completed.returncode != 0
+            or not reference_output.is_file()
+            or reference_output.stat().st_size != _expected_capture_bytes()
+        ):
+            raise ValueError(
+                f"diagnostic reference capture failed at fixed tick {tick}"
+            )
+        executions.append(
+            {
+                "renderer": "diagnostic_preview",
+                "tick": tick,
+                "executable_sha256": diagnostic_sha,
+                "exit_code": diagnostic_completed.returncode,
+                "artifact_sha256": _sha256_file(reference_output),
+                "bytes": reference_output.stat().st_size,
+            }
+        )
+    reference_execution = {
+        "execution_id": f"diagnostic-preview-{args.capture_id}",
+        "renderer": "diagnostic_preview",
+        "artifact_key": identity["artifact_key"],
+        "package_sha256": identity["package_sha256"],
+        "manifest_sha256": identity["manifest_sha256"],
+        "executable_sha256": diagnostic_sha,
+        "capture_protocol": contract.CORRECTNESS_CAPTURE_PROTOCOL,
+        "fixed_tick_executions": [
+            item for item in executions if item["renderer"] == "diagnostic_preview"
+        ],
+    }
+    reference_path = Path(args.reference_execution_output)
+    reference_path.parent.mkdir(parents=True, exist_ok=True)
+    reference_path.write_text(
+        json.dumps(reference_execution, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    def metric(name: str, fallback: Any) -> Any:
+        value = measured.get(name)
+        return value if value is not None else fallback
+
+    names = {
+        "package": args.package,
+        "captures_dir": str(captures_dir),
+        "artifact_root": args.artifact_root,
+        "reference_captures_dir": str(reference_dir),
+        "capture_id": args.capture_id,
+        "tier": args.tier,
+        "renderer": "exported_player",
+        "reference_renderer": "diagnostic_preview",
+        "reference_execution": str(reference_path),
+        "execution_kind": args.execution_kind,
+        "passthrough_documentation": args.passthrough_documentation,
+        "metadata": args.metadata,
+        "numeric_comparisons": args.numeric_comparisons,
+        "adapter": args.adapter,
+        "device_form_factor": args.device_form_factor,
+        "driver_version": args.driver_version,
+        "os_version": args.os_version,
+        "toolchain_identity": args.toolchain_identity,
+        "startup_ms": metric(
+            "process_start_to_first_present_ms", args.startup_ms
+        ),
+        "peak_gpu_bytes": metric(
+            "peak_engine_committed_gpu_bytes", args.peak_gpu_bytes
+        ),
+        "cache_kind": metric("cache_kind", args.cache_kind),
+        "cold_preparation": metric(
+            "cold_driver_cache_preparation", args.cold_preparation
+        ),
+        "warm_preparation": metric("warm_preparation", args.warm_preparation),
+        "memory_source": metric("memory_source", args.memory_source),
+        "process_ram_bytes": metric("process_ram_bytes", args.process_ram_bytes),
+        "driver_memory_bytes": metric(
+            "driver_memory_bytes", args.driver_memory_bytes
+        ),
+        "startup_pipeline_ms": metric(
+            "startup_pipeline_ms", args.startup_pipeline_ms
+        ),
+        "generation_ms": metric("generation_ms", args.generation_ms),
+        "image_quality": metric(
+            "image_quality_metrics", args.image_quality
+        ),
+        "scaling_1440p": metric("scaling_1440p", args.scaling_1440p),
+    }
+    capture = record_correctness(argparse.Namespace(**names))
+    capture["execution_records"] = executions
+    capture["release_capture_protocol"] = contract.RELEASE_CAPTURE_PROTOCOL
+    validation = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=identity,
+        artifact_root=Path(args.artifact_root or package_dir),
+        config=export.load_canonical_config(),
     )
     capture["validation"] = validation
     capture["status"] = _validation_status(validation)
@@ -558,12 +834,58 @@ def _start_player(executable: Path, player_args: list[str]) -> subprocess.Popen[
 
 
 def _stop_player(process: subprocess.Popen[str]) -> tuple[str, str]:
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except OSError:
+            pass
     try:
-        stdout, stderr = process.communicate(timeout=10)
+        stdout, stderr = process.communicate(timeout=2)
     except subprocess.TimeoutExpired:
         process.kill()
         stdout, stderr = process.communicate()
     return stdout or "", stderr or ""
+
+
+def _timeout_text(exc: subprocess.TimeoutExpired) -> str:
+    parts: list[str] = []
+    for value in (exc.stdout, exc.stderr):
+        if isinstance(value, bytes):
+            parts.append(value.decode("utf-8", errors="replace"))
+        elif value:
+            parts.append(str(value))
+    parts.append(str(exc))
+    return "\\n".join(parts)[-4000:]
+
+
+def _failed_collection_capture(
+    args: argparse.Namespace,
+    identity: Mapping[str, Any],
+    *,
+    failure: str,
+    runs: list[Any] | None = None,
+    collection: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "capture_id": args.capture_id,
+        "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "coverage_target": contract.PERF_CONTRACT_ID,
+        "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+        "contract_id": contract.PERF_CONTRACT_ID,
+        "status": "failed",
+        "artifact_key": identity.get("artifact_key"),
+        "package_sha256": identity.get("package_sha256"),
+        "manifest_sha256": identity.get("manifest_sha256"),
+        "executable_sha256": identity.get("executable_sha256"),
+        "profile_id": contract.PROFILE_ID,
+        "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "failure": failure,
+        "runs": list(runs or []),
+        "collection": dict(collection or {}),
+        "validation": {"status": "failed", "reasons": [failure]},
+        "captured_at_utc": _utc_now(),
+    }
 
 
 def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
@@ -573,7 +895,8 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
     external measurement collector (PresentMon/GPUView or equivalent) is
     required to write the raw GPU, CPU-submission, and displayed-interval
     samples; this harness never fabricates samples when the collector produces
-    nothing.
+    nothing.  Executed failures are persisted with all available logs and
+    samples instead of escaping before evidence is written.
     """
     config = export.load_canonical_config()
     if (config.get("quality", {}).get("settings", {}).get("vsync")) is not False:
@@ -584,32 +907,20 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(f"release executable is unavailable: {executable}")
     actual_sha = _sha256_file(executable)
     if actual_sha != identity["executable_sha256"]:
-        raise ValueError(
-            "release executable does not match the published final artifact"
+        return _failed_collection_capture(
+            args,
+            identity,
+            failure="release executable does not match the published final artifact",
         )
     collector = shlex.split(args.collector_command, posix=os.name != "nt")
     if not collector:
-        raise ValueError("a measurement collector command is required")
+        return _failed_collection_capture(
+            args, identity, failure="a measurement collector command is required"
+        )
     player_args = shlex.split(args.player_args, posix=os.name != "nt")
     samples_dir = Path(args.samples_dir)
     samples_dir.mkdir(parents=True, exist_ok=True)
-    probe = subprocess.run(
-        [str(executable), "--frames", "1"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-        env=dict(os.environ),
-    )
-    if (
-        probe.returncode != 0
-        or "NW05_PRESENT_SYNC_INTERVAL=0" not in probe.stdout
-    ):
-        raise ValueError(
-            "release executable did not execute with uncapped presentation; "
-            "performance evidence cannot be accepted"
-        )
-    record = {
+    record: dict[str, Any] = {
         "protocol": COLLECT_PROTOCOL,
         "artifact_key": identity["artifact_key"],
         "executable_sha256": identity["executable_sha256"],
@@ -619,25 +930,67 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         "uncapped": True,
         "fresh_process_per_run": True,
         "application_pipeline_cache": False,
-        "presentation_probe": {
-            "exit_code": probe.returncode,
-            "present_sync_interval_line": "NW05_PRESENT_SYNC_INTERVAL=0",
-            "stdout": probe.stdout[-4000:],
-            "stderr": probe.stderr[-4000:],
-        },
         "warmup_seconds": contract.WARMUP_SECONDS,
         "runs": [],
         "collected_at_utc": _utc_now(),
     }
-    # The frozen protocol is one five-second warm-up followed by three
-    # sequential 60-second runs. Each measured run uses a fresh process.
+
+    try:
+        probe = subprocess.run(
+            [str(executable), "--frames", "1"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            env=dict(os.environ),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        record["failure"] = f"uncapped-presentation probe failed: {exc}"
+        (samples_dir / "collector-record.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return _failed_collection_capture(
+            args, identity, failure=record["failure"], collection=record
+        )
+    record["presentation_probe"] = {
+        "exit_code": probe.returncode,
+        "present_sync_interval_line": "NW05_PRESENT_SYNC_INTERVAL=0",
+        "stdout": probe.stdout[-4000:],
+        "stderr": probe.stderr[-4000:],
+    }
+    if (
+        probe.returncode != 0
+        or "NW05_PRESENT_SYNC_INTERVAL=0" not in probe.stdout
+    ):
+        record["failure"] = (
+            "release executable did not execute with uncapped presentation; "
+            "performance evidence cannot be accepted"
+        )
+        (samples_dir / "collector-record.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return _failed_collection_capture(
+            args, identity, failure=record["failure"], collection=record
+        )
+
+    # One frozen five-second warm-up, ended before teardown so process
+    # termination never extends the measured window.
     warmup_started = _utc_now()
-    warmup_process = _start_player(executable, player_args)
+    try:
+        warmup_process = _start_player(executable, player_args)
+    except OSError as exc:
+        record["failure"] = f"release executable could not be launched: {exc}"
+        (samples_dir / "collector-record.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return _failed_collection_capture(
+            args, identity, failure=record["failure"], collection=record
+        )
     warmup_pid = warmup_process.pid
     time.sleep(contract.WARMUP_SECONDS)
     warmup_exited_early = warmup_process.poll() is not None
-    warmup_stdout, warmup_stderr = _stop_player(warmup_process)
     warmup_ended = _utc_now()
+    warmup_stdout, warmup_stderr = _stop_player(warmup_process)
     warmup_duration = (
         (_utc_seconds(warmup_ended) or 0.0) - (_utc_seconds(warmup_started) or 0.0)
     )
@@ -652,12 +1005,23 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         "stderr": warmup_stderr[-2000:],
     }
     if warmup_exited_early:
-        raise ValueError(
+        record["failure"] = (
             "release executable exited before the five-second warm-up completed"
         )
+        (samples_dir / "collector-record.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return _failed_collection_capture(
+            args, identity, failure=record["failure"], collection=record
+        )
 
+    failure: str | None = None
     for index in range(1, contract.PERF_RUN_COUNT + 1):
-        player = _start_player(executable, player_args)
+        try:
+            player = _start_player(executable, player_args)
+        except OSError as exc:
+            record["failure"] = f"release executable could not be launched: {exc}"
+            break
         run_started = _utc_now()
         run_dir = samples_dir / f"run{index}"
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -677,6 +1041,8 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
                 ),
             }
         )
+        collector_completed: subprocess.CompletedProcess[str] | None = None
+        collector_error = ""
         try:
             collector_completed = subprocess.run(
                 collector,
@@ -686,14 +1052,30 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
                 check=False,
                 env=env,
             )
-            player_exited_early = player.poll() is not None
-        finally:
-            player_stdout, player_stderr = _stop_player(player)
+        except subprocess.TimeoutExpired as exc:
+            collector_error = _timeout_text(exc)
+        except OSError as exc:
+            collector_error = str(exc)
+        player_exited_early = player.poll() is not None
+        # The measurement window ends before teardown.  Terminating the
+        # indefinitely looping player must not inflate the retained duration.
         run_ended = _utc_now()
+        player_stdout, player_stderr = _stop_player(player)
         duration_seconds = (
             (_utc_seconds(run_ended) or 0.0) - (_utc_seconds(run_started) or 0.0)
         )
+        collector_stdout = (
+            collector_completed.stdout[-4000:] if collector_completed else ""
+        )
+        collector_stderr = (
+            collector_completed.stderr[-4000:] if collector_completed else ""
+        )
+        collector_exit = (
+            collector_completed.returncode if collector_completed is not None else None
+        )
         timing = {
+            "warmup_started_utc": warmup_started,
+            "warmup_ended_utc": warmup_ended,
             "run_started_utc": run_started,
             "run_ended_utc": run_ended,
             "duration_seconds": duration_seconds,
@@ -703,50 +1085,71 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             "player_pid": player.pid,
             "artifact_sha256": identity["executable_sha256"],
             "collector_protocol": COLLECT_PROTOCOL,
-            "collector_exit_code": collector_completed.returncode,
+            "collector_exit_code": collector_exit,
             "player_exited_early": player_exited_early,
-            "collector_stdout": collector_completed.stdout[-4000:],
-            "collector_stderr": collector_completed.stderr[-4000:],
+            "collector_error": collector_error,
+            "collector_stdout": collector_stdout,
+            "collector_stderr": collector_stderr,
             "player_stdout": player_stdout[-4000:],
             "player_stderr": player_stderr[-4000:],
         }
         (samples_dir / f"run{index}-timing.json").write_text(
-            json.dumps(timing, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+            json.dumps(timing, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+        sample_presence = {
+            name: (
+                (samples_dir / f"run{index}-{name}.txt").is_file()
+                and (samples_dir / f"run{index}-{name}.txt").stat().st_size > 0
+            )
+            for name in ("gpu", "cpu", "displayed")
+        }
         record["runs"].append(
             {
                 "run_index": index,
+                "status": (
+                    "failed"
+                    if collector_error
+                    or collector_exit not in (None, 0)
+                    or player_exited_early
+                    or not all(sample_presence.values())
+                    else "passed"
+                ),
                 "timing": timing,
                 "player_pid": player.pid,
-                "collector_exit_code": collector_completed.returncode,
+                "collector_exit_code": collector_exit,
+                "collector_error": collector_error,
                 "player_exited_early": player_exited_early,
-                "samples_present": {
-                    name: (samples_dir / f"run{index}-{name}.txt").is_file()
-                    for name in ("gpu", "cpu", "displayed")
-                },
+                "samples_present": sample_presence,
             }
         )
-        if player_exited_early:
-            raise ValueError(
-                f"release executable exited before measured run {index} completed"
-            )
-        if collector_completed.returncode != 0:
-            raise ValueError(
+        if collector_error:
+            failure = f"measurement collector failed for run {index}: {collector_error}"
+        elif collector_exit not in (None, 0):
+            failure = (
                 f"measurement collector failed for run {index}: "
-                f"{collector_completed.stderr.strip() or collector_completed.stdout.strip()}"
+                f"{collector_stderr.strip() or collector_stdout.strip()}"
             )
-        for name in ("gpu", "cpu", "displayed"):
-            sample_path = samples_dir / f"run{index}-{name}.txt"
-            if not sample_path.is_file() or sample_path.stat().st_size == 0:
-                raise ValueError(
-                    f"measurement collector produced no {name} samples for run {index}"
-                )
+        elif player_exited_early:
+            failure = f"release executable exited before measured run {index} completed"
+        else:
+            for name in ("gpu", "cpu", "displayed"):
+                if not sample_presence[name]:
+                    failure = (
+                        f"measurement collector produced no {name} samples for run {index}"
+                    )
+                    break
+        if failure:
+            record["failure"] = failure
+            break
 
-    manifest_path = samples_dir / "collector-record.json"
-    manifest_path.write_text(
+    (samples_dir / "collector-record.json").write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    if failure:
+        return _failed_collection_capture(
+            args, identity, failure=failure, runs=record["runs"], collection=record
+        )
+
     namespace = argparse.Namespace(
         package=args.package,
         contract=args.contract,
@@ -761,7 +1164,6 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
     capture = record_perf(namespace)
     capture["collection"] = record
     return capture
-
 
 def _append_record(path: Path, capture: Mapping[str, Any]) -> dict[str, Any]:
     record = (
@@ -828,6 +1230,52 @@ def main(argv: list[str] | None = None) -> int:
     correctness.add_argument("--scaling-1440p")
     correctness.add_argument("--evidence", required=True)
 
+    release_correctness = subparsers.add_parser("release-correctness")
+    release_correctness.add_argument("--package", required=True)
+    release_correctness.add_argument("--executable", required=True)
+    release_correctness.add_argument("--diagnostic-executable", required=True)
+    release_correctness.add_argument("--capture-command", required=True)
+    release_correctness.add_argument("--captures-dir", required=True)
+    release_correctness.add_argument("--artifact-root")
+    release_correctness.add_argument("--reference-captures-dir", required=True)
+    release_correctness.add_argument("--reference-execution-output", required=True)
+    release_correctness.add_argument("--capture-id", required=True)
+    release_correctness.add_argument("--tier", choices=("ada", "blackwell"), required=True)
+    release_correctness.add_argument(
+        "--execution-kind",
+        choices=("physical", "documented_gpu_passthrough"),
+        default="physical",
+    )
+    release_correctness.add_argument("--passthrough-documentation", default="")
+    release_correctness.add_argument("--metadata")
+    release_correctness.add_argument("--numeric-comparisons")
+    release_correctness.add_argument("--adapter", default="")
+    release_correctness.add_argument(
+        "--device-form-factor",
+        choices=("desktop", "laptop", "mobile", "workstation", "data_center", "server", "other"),
+        default="",
+    )
+    release_correctness.add_argument("--driver-version", default="")
+    release_correctness.add_argument("--os-version", default="")
+    release_correctness.add_argument("--toolchain-identity", default="")
+    release_correctness.add_argument("--startup-ms", type=float)
+    release_correctness.add_argument("--peak-gpu-bytes", type=int)
+    release_correctness.add_argument("--cache-kind", choices=("cold_driver_cache", "warm"))
+    release_correctness.add_argument("--cold-preparation")
+    release_correctness.add_argument("--warm-preparation")
+    release_correctness.add_argument("--memory-source")
+    release_correctness.add_argument("--process-ram-bytes", type=int)
+    release_correctness.add_argument("--driver-memory-bytes", type=int)
+    release_correctness.add_argument("--startup-pipeline-ms", type=float)
+    release_correctness.add_argument("--generation-ms", type=float)
+    release_correctness.add_argument("--image-quality")
+    release_correctness.add_argument("--scaling-1440p")
+    release_correctness.add_argument("--hold-ms", type=int, default=1500)
+    release_correctness.add_argument("--capture-delay-ms", type=int, default=750)
+    release_correctness.add_argument("--metrics-command")
+    release_correctness.add_argument("--metrics-output")
+    release_correctness.add_argument("--evidence", required=True)
+
     perf = subparsers.add_parser("perf")
     perf.add_argument("--package", required=True)
     perf.add_argument("--contract", default=str(REPO_ROOT / "benchmarks" / "nw07" / "perf-ref-v1.json"))
@@ -865,16 +1313,77 @@ def main(argv: list[str] | None = None) -> int:
     collect.add_argument("--evidence", required=True)
 
     args = parser.parse_args(argv)
-    if args.command == "correctness":
-        capture = record_correctness(args)
-    elif args.command == "perf":
-        capture = record_perf(args)
-    elif args.command == "diagnostic-overhead":
-        capture = record_diagnostic(args)
-    else:
-        capture = collect_perf(args)
-    updated = _append_record(Path(args.evidence), capture)
+    try:
+        if args.command == "correctness":
+            capture = record_correctness(args)
+        elif args.command == "release-correctness":
+            capture = capture_release_correctness(args)
+        elif args.command == "perf":
+            capture = record_perf(args)
+        elif args.command == "diagnostic-overhead":
+            capture = record_diagnostic(args)
+        else:
+            capture = collect_perf(args)
+    except Exception as exc:
+        role = {
+            "correctness": contract.FIXED_TICK_CORRECTNESS_ROLE,
+            "release-correctness": contract.FIXED_TICK_CORRECTNESS_ROLE,
+            "perf": contract.PERFORMANCE_CERTIFICATION_ROLE,
+            "collect": contract.PERFORMANCE_CERTIFICATION_ROLE,
+            "diagnostic-overhead": contract.DIAGNOSTIC_OVERHEAD_ROLE,
+        }.get(args.command, "unverified_capture")
+        failure_record = {
+            "capture_id": getattr(args, "capture_id", f"{args.command}-failure"),
+            "task": contract.TASK,
+            "implementation_base": contract.IMPLEMENTATION_BASE,
+            "profile_id": contract.PROFILE_ID,
+            "requirements_digest": contract.REQUIREMENTS_DIGEST,
+            "evidence_role": role,
+            "status": "failed",
+            "failure": str(exc),
+            "captured_at_utc": _utc_now(),
+        }
+        try:
+            _append_record(Path(args.evidence), failure_record)
+        except Exception:
+            pass
+        print(
+            json.dumps(
+                {
+                    "format": "nw07-capture-failure",
+                    "command": args.command,
+                    "capture_id": getattr(args, "capture_id", ""),
+                    "status": "failed",
+                    "error": str(exc),
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        _append_record(Path(args.evidence), capture)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "format": "nw07-evidence-persist-failure",
+                    "status": "failed",
+                    "error": str(exc),
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 1
     print(json.dumps(capture, indent=2, sort_keys=True))
+    validation_status = str(
+        (capture.get("validation") or {}).get("status", "")
+    )
+    if capture.get("status") == "failed" or validation_status == "failed":
+        return 1
+    if validation_status in {"pending_unverified", "unverified"}:
+        return 2
     return 0
 
 

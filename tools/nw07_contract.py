@@ -66,6 +66,7 @@ IMAGE_TOLERANCE_MODE = "absolute_required"
 PERF_CONTRACT_ID = "nw07_perf_ref_v1"
 PRODUCTION_PROTOCOL = "nw07-production.v1"
 CORRECTNESS_CAPTURE_PROTOCOL = "nw07-correctness-capture.v1"
+RELEASE_CAPTURE_PROTOCOL = "nw07-release-fixed-tick-capture.v1"
 STARTUP_PROTOCOL = "nw07-startup.v1"
 PERF_RUN_PROTOCOL = "nw07-perf-run.v1"
 PERF_COLLECTION_PROTOCOL = "nw07-perf-collect.v1"
@@ -293,6 +294,7 @@ __all__ = [
     "PERF_CONTRACT_ID",
     "PRODUCTION_PROTOCOL",
     "CORRECTNESS_CAPTURE_PROTOCOL",
+    "RELEASE_CAPTURE_PROTOCOL",
     "STARTUP_PROTOCOL",
     "PERF_RUN_PROTOCOL",
     "DIAGNOSTIC_OVERHEAD_PROTOCOL",

@@ -443,3 +443,28 @@ def test_perf_protocol_uses_one_warmup_and_distinct_measured_processes() -> None
         "distinct fresh process" in reason
         for reason in result["runs"][1]["reasons"]
     )
+
+
+def test_populated_but_unfrozen_binding_cannot_certify() -> None:
+    bound = _bound()
+    unfrozen = copy.deepcopy(bound)
+    unfrozen["binding_status"] = "pending_reference_capture"
+    unfrozen.pop("binding_digest", None)
+    unfrozen.pop("binding_id", None)
+    unfrozen.pop("bound_at_utc", None)
+    assert evidence.validate_perf_contract(unfrozen)["status"] == "pending_binding"
+    assert (
+        evidence.validate_perf_capture(
+            _capture(), unfrozen, artifact_identity=_identity()
+        )["status"]
+        != "verified"
+    )
+
+
+def test_executed_failure_is_not_hidden_by_an_unbound_contract() -> None:
+    capture = _capture()
+    capture["runs"][1]["cpu_submit_ms"] = _samples(16.68)
+    result = evidence.validate_perf_capture(
+        capture, _contract(), artifact_identity=_identity()
+    )
+    assert result["status"] == "failed"

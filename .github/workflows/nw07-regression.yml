@@ -163,6 +163,61 @@ jobs:
           --collector-command "$env:NW07_COLLECTOR_COMMAND"
           --capture-id "nightly-$env:GITHUB_RUN_ID"
           --evidence "$env:NW07_EVIDENCE"
+      - name: Collect fresh fixed-tick visual, startup and memory evidence
+        env:
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+          NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
+          NW07_DIAGNOSTIC_EXECUTABLE: ${{ vars.NW07_DIAGNOSTIC_EXECUTABLE }}
+          NW07_RELEASE_CAPTURE_COMMAND: ${{ vars.NW07_RELEASE_CAPTURE_COMMAND }}
+          NW07_STARTUP_MS: ${{ vars.NW07_STARTUP_MS }}
+          NW07_PEAK_GPU_BYTES: ${{ vars.NW07_PEAK_GPU_BYTES }}
+          NW07_PROCESS_RAM_BYTES: ${{ vars.NW07_PROCESS_RAM_BYTES }}
+          NW07_DRIVER_MEMORY_BYTES: ${{ vars.NW07_DRIVER_MEMORY_BYTES }}
+          NW07_STARTUP_PIPELINE_MS: ${{ vars.NW07_STARTUP_PIPELINE_MS }}
+          NW07_GENERATION_MS: ${{ vars.NW07_GENERATION_MS }}
+          NW07_IMAGE_QUALITY: ${{ vars.NW07_IMAGE_QUALITY }}
+          NW07_SCALING_1440P: ${{ vars.NW07_SCALING_1440P }}
+          NW07_METRICS_COMMAND: ${{ vars.NW07_METRICS_COMMAND }}
+          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+        run: >-
+          python tools/nw07_capture.py release-correctness
+          --package "$env:NW07_PACKAGE"
+          --executable "$env:NW07_FIXTURE"
+          --diagnostic-executable "$env:NW07_DIAGNOSTIC_EXECUTABLE"
+          --capture-command "$env:NW07_RELEASE_CAPTURE_COMMAND"
+          --captures-dir "$env:RUNNER_TEMP\nw07-nightly-captures"
+          --reference-captures-dir "$env:RUNNER_TEMP\nw07-nightly-reference-captures"
+          --reference-execution-output "$env:RUNNER_TEMP\nw07-nightly-reference.json"
+          --capture-id "nightly-correctness-$env:GITHUB_RUN_ID"
+          --tier ada
+          --device-form-factor desktop
+          --startup-ms "$env:NW07_STARTUP_MS"
+          --peak-gpu-bytes "$env:NW07_PEAK_GPU_BYTES"
+          --cache-kind cold_driver_cache
+          --cold-preparation "Driver cache cleared before the clean run."
+          --warm-preparation "Artifact pre-run once before the warm run."
+          --memory-source "engine accounting plus driver local usage query"
+          --process-ram-bytes "$env:NW07_PROCESS_RAM_BYTES"
+          --driver-memory-bytes "$env:NW07_DRIVER_MEMORY_BYTES"
+          --startup-pipeline-ms "$env:NW07_STARTUP_PIPELINE_MS"
+          --generation-ms "$env:NW07_GENERATION_MS"
+          --image-quality "$env:NW07_IMAGE_QUALITY"
+          --scaling-1440p "$env:NW07_SCALING_1440P"
+          --metrics-command "$env:NW07_METRICS_COMMAND"
+          --metrics-output "$env:RUNNER_TEMP\nw07-nightly-measurements.json"
+          --evidence "$env:NW07_EVIDENCE"
+      - name: Re-run clean-system deployment qualification
+        env:
+          NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+          NW07_BINARY_DIR: ${{ vars.NW07_BINARY_DIR }}
+          NW07_CLEAN_REPORT: ${{ vars.NW07_CLEAN_REPORT }}
+        run: >-
+          python tools/nw07_clean_system.py
+          --fixture "$env:NW07_FIXTURE"
+          --package "$env:NW07_PACKAGE"
+          --deployment "$env:NW07_BINARY_DIR"
+          --output "$env:NW07_CLEAN_REPORT"
       - name: Run NW-07 Full verification on the reference host
         env:
           NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
@@ -181,6 +236,7 @@ jobs:
           --perf-ref "$env:NW07_PERF_CONTRACT"
           --binary-dir "$env:NW07_BINARY_DIR"
           --clean-report "$env:NW07_CLEAN_REPORT"
+          --max-evidence-age-seconds 86400
           --summary-json "$env:RUNNER_TEMP\nw07-full.json"
       - name: Evaluate matched-environment regression policy
         run: |
@@ -194,9 +250,14 @@ jobs:
         env:
           NW07_METRICS: ${{ vars.NW07_METRICS }}
       - name: Upload NW-07 GPU evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nw07-nightly-evidence
           path: |
             ${{ runner.temp }}/nw07-full.json
             ${{ runner.temp }}/nw07-nightly-samples/**
+            ${{ runner.temp }}/nw07-nightly-captures/**
+            ${{ runner.temp }}/nw07-nightly-reference-captures/**
+            ${{ runner.temp }}/nw07-nightly-reference.json
+            ${{ vars.NW07_EVIDENCE }}

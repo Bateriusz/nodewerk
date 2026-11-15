@@ -24,6 +24,30 @@
     "requirements_digest": {
       "const": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
     },
+    "host": {
+      "type": "object",
+      "properties": {
+        "execution_kind": {
+          "enum": ["physical", "documented_gpu_passthrough"]
+        },
+        "platform": { "type": "string" },
+        "os_build": { "type": "string" },
+        "architecture": { "type": "string" },
+        "x64": { "type": "boolean" },
+        "windows_11_or_newer": { "type": "boolean" },
+        "development_dependency_checks": { "type": "object" },
+        "development_dependencies_present_on_path": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "environment_cache_variables": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "clean_environment": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
     "deployment": { "type": "object" },
     "scenarios": {
       "type": "array",

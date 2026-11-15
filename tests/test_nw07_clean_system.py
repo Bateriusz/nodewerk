@@ -23,6 +23,24 @@ def _report() -> dict:
         "implementation_base": contract.IMPLEMENTATION_BASE,
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "host": {
+            "execution_kind": "physical",
+            "platform": "Windows",
+            "release": "11",
+            "os_build": "10.0.26100.2314",
+            "windows_11_or_newer": True,
+            "architecture": "AMD64",
+            "x64": True,
+            "development_dependency_checks": {
+                "nodewerkc": None,
+                "dxc": None,
+                "cmake": None,
+            },
+            "development_dependencies_present_on_path": [],
+            "environment_cache_variables": [],
+            "clean_environment": True,
+            "application_pipeline_cache_present": False,
+        },
         "deployment": {
             "only_runtime_executable": True,
             "development_dependencies_present": False,
@@ -277,3 +295,25 @@ def test_timeout_is_an_executed_failure_not_unavailable_evidence() -> None:
         timed_out=True,
     )
     assert clean_system.validate_report(report)["status"] == "failed"
+
+
+def test_clean_host_provenance_is_required_and_must_be_clean() -> None:
+    report = _report()
+    report.pop("host")
+    assert clean_system.validate_report(report)["status"] == "pending_unverified"
+
+    report = _report()
+    report["host"]["development_dependencies_present_on_path"] = ["cmake"]
+    report["host"]["clean_environment"] = False
+    assert clean_system.validate_report(report)["status"] == "pending_unverified"
+
+    report = _report()
+    report["host"]["platform"] = "Linux"
+    assert clean_system.validate_report(report)["status"] == "failed"
+
+
+def test_clean_host_provenance_records_os_arch_and_dependency_absence() -> None:
+    host = clean_system.clean_host_provenance({"PATH": ""})
+    assert host["architecture"]
+    assert "development_dependency_checks" in host
+    assert host["development_dependencies_present_on_path"] == []

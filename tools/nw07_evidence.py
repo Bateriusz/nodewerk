@@ -621,6 +621,18 @@ def validate_perf_contract(record: Mapping[str, Any]) -> dict[str, Any]:
         for field in required:
             if section.get(field) in (None, ""):
                 missing_bindings.append(f"{section_name}.{field}")
+    if record.get("binding_status") != "bound":
+        missing_bindings.append("binding_status")
+    for section_name in ("board", "host", "environment", "toolchain", "artifact", "cache"):
+        section = reference.get(section_name) or {}
+        if section.get("binding_status") != "bound":
+            missing_bindings.append(f"{section_name}.binding_status")
+    if not record.get("binding_digest"):
+        missing_bindings.append("binding_digest")
+    if not record.get("binding_id"):
+        missing_bindings.append("binding_id")
+    if _parse_utc_timestamp(record.get("bound_at_utc")) is None:
+        missing_bindings.append("bound_at_utc")
     if reasons:
         return {
             "status": "invalid",
@@ -788,6 +800,73 @@ def _protocol_mismatches(capture: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
+def _perf_executed_failure_reasons(
+    capture: Mapping[str, Any],
+    artifact_identity: Mapping[str, Any],
+) -> list[str]:
+    """Find executed failures without requiring complete pending metadata."""
+    failures: list[str] = []
+    if capture.get("status") == "failed":
+        failures.append("capture records an executed failure")
+    collection = capture.get("collection")
+    if isinstance(collection, Mapping):
+        if collection.get("status") == "failed":
+            failures.append("collection records an executed failure")
+        probe = collection.get("presentation_probe")
+        if isinstance(probe, Mapping) and probe.get("exit_code") not in (None, 0):
+            failures.append("uncapped-presentation probe failed")
+    warmup = capture.get("warmup")
+    if isinstance(warmup, Mapping):
+        if warmup.get("completed") is False:
+            failures.append("warm-up process exited before five seconds")
+        if warmup.get("exit_code") not in (None, 0):
+            failures.append("warm-up process failed")
+    probe = capture.get("presentation_probe")
+    if isinstance(probe, Mapping) and probe.get("exit_code") not in (None, 0):
+        failures.append("uncapped-presentation probe failed")
+    runs = capture.get("runs")
+    if not isinstance(runs, list):
+        return failures
+    for run in runs:
+        if not isinstance(run, Mapping):
+            failures.append("run is malformed")
+            continue
+        if run.get("status") == "failed":
+            failures.append("run records an executed failure")
+        if run.get("collector_exit_code") not in (None, 0):
+            failures.append("measurement collector failed")
+        if run.get("player_exited_early") is True:
+            failures.append("player exited before the measured run completed")
+        timing = run.get("timing")
+        if isinstance(timing, Mapping):
+            if timing.get("collector_exit_code") not in (None, 0):
+                failures.append("measurement collector failed")
+            if timing.get("player_exited_early") is True:
+                failures.append("player exited before the measured run completed")
+        for metric_name in ("gpu_frame_time_ms", "cpu_submit_ms"):
+            section = run.get(metric_name)
+            if not isinstance(section, Mapping):
+                continue
+            samples = section.get("samples")
+            if isinstance(samples, (list, tuple)) and samples:
+                try:
+                    p99 = nearest_rank_percentile(samples, contract.PERCENTILE)
+                except ValueError:
+                    continue
+                if not _strict_below(p99, contract.FRAME_TIME_THRESHOLD_MS):
+                    failures.append(
+                        f"{metric_name} retains p99 {p99} at or above the strict threshold"
+                    )
+            reported = _number(section.get("reported_p99_ms"))
+            if reported is not None and not _strict_below(
+                reported, contract.FRAME_TIME_THRESHOLD_MS
+            ):
+                failures.append(
+                    f"{metric_name} reports p99 {reported} at or above the strict threshold"
+                )
+    return failures
+
+
 def validate_perf_capture(
     capture: Mapping[str, Any],
     perf_contract: Mapping[str, Any],
@@ -808,6 +887,11 @@ def validate_perf_capture(
         result["status"] = "failed"
         reasons.extend(f"contract: {reason}" for reason in contract_validation["reasons"])
         return result
+    executed_failures = _perf_executed_failure_reasons(capture, artifact_identity)
+    if executed_failures:
+        result["status"] = "failed"
+        reasons.extend(executed_failures)
+        result["executed_failures"] = list(executed_failures)
     missing = [
         name
         for name in REQUIRED_PERF_METADATA
@@ -815,6 +899,8 @@ def validate_perf_capture(
     ]
     if missing:
         result["missing_metadata"] = missing
+        if executed_failures:
+            result["status"] = "failed"
         return result
     if capture.get("evidence_role") != contract.PERFORMANCE_CERTIFICATION_ROLE:
         result["status"] = "unverified"
@@ -876,8 +962,12 @@ def validate_perf_capture(
         result["status"] = "unverified"
         reasons.append("capture changed the requirements digest")
     if contract_validation["status"] == "pending_binding":
-        result["status"] = "pending_unverified"
+        result["status"] = "failed" if executed_failures else "pending_unverified"
         result["missing_contract_bindings"] = contract_validation["missing_bindings"]
+        return result
+    if perf_contract.get("binding_status") != "bound":
+        result["status"] = "failed" if executed_failures else "pending_unverified"
+        result["missing_contract_bindings"] = ["binding_status"]
         return result
     frozen_at = _parse_utc_timestamp(perf_contract.get("frozen_at_utc"))
     bound_at = _parse_utc_timestamp(perf_contract.get("bound_at_utc"))
@@ -1219,6 +1309,9 @@ def validate_perf_capture(
         result["status"] = "failed"
     elif result["status"] == "pending_unverified" and not reasons:
         result["status"] = "verified"
+    if executed_failures:
+        result["status"] = "failed"
+        result.setdefault("executed_failures", list(executed_failures))
     result["aggregate_percentiles_are_informational"] = True
     return result
 
@@ -1468,10 +1561,83 @@ def _validate_measurements(capture: Mapping[str, Any]) -> tuple[str, dict[str, A
             "invalid": invalid,
             "recorded": {name: measurements.get(name) for name in required},
         }
-    return ("pending" if unavailable else "passed"), {
+    detail: dict[str, Any] = {
         "unavailable": unavailable,
         "recorded": {name: measurements.get(name) for name in required},
     }
+    result_status = "pending" if unavailable else "passed"
+
+    def provenance_state(name: str, value: Any) -> tuple[str, str]:
+        if not isinstance(value, Mapping) or not value:
+            return "pending", f"{name} has no measured result"
+        artifact_sha = value.get("artifact_sha256")
+        if _unavailable(artifact_sha):
+            return "pending", f"{name} does not identify the measured artifact"
+        if artifact_sha != capture.get("executable_sha256"):
+            return "failed", f"{name} does not bind the final release artifact"
+        environment = value.get("environment")
+        if _unavailable(environment) and _unavailable(
+            value.get("environment_id")
+        ):
+            return "pending", f"{name} does not identify the measurement environment"
+        return "passed", ""
+
+    quality = measurements.get("image_quality_metrics")
+    quality_state, quality_reason = provenance_state(
+        "image_quality_metrics", quality
+    )
+    numeric_quality = [
+        _number(item)
+        for item in (quality.values() if isinstance(quality, Mapping) else [])
+        if _number(item) is not None and _number(item) >= 0.0
+    ]
+    if quality_state == "passed" and not numeric_quality:
+        quality_state = "pending"
+        quality_reason = "image_quality_metrics contains no measured numeric result"
+    detail["image_quality_metrics"] = {
+        "status": quality_state,
+        "reason": quality_reason,
+        "recorded": quality,
+    }
+    if quality_state == "failed":
+        return "failed", detail
+    if quality_state == "pending":
+        result_status = "pending"
+
+    scaling = measurements.get("scaling_1440p")
+    scaling_state, scaling_reason = provenance_state("scaling_1440p", scaling)
+    if scaling_state == "passed":
+        width = scaling.get("width")
+        height = scaling.get("height")
+        if width is None or height is None:
+            scaling_state = "pending"
+            scaling_reason = "scaling_1440p does not identify its resolution"
+        elif width != 2560 or height != 1440:
+            scaling_state = "failed"
+            scaling_reason = "scaling_1440p is not the required 2560x1440 capture"
+        else:
+            scale_value = None
+            for key in (
+                "p99_gpu_ms",
+                "p99_frame_time_ms",
+                "p99_gpu_frame_time_ms",
+            ):
+                scale_value = _number(scaling.get(key))
+                if scale_value is not None:
+                    break
+            if scale_value is None or scale_value <= 0.0:
+                scaling_state = "pending"
+                scaling_reason = "scaling_1440p has no measured frame-time result"
+    detail["scaling_1440p"] = {
+        "status": scaling_state,
+        "reason": scaling_reason,
+        "recorded": scaling,
+    }
+    if scaling_state == "failed":
+        return "failed", detail
+    if scaling_state == "pending":
+        result_status = "pending"
+    return result_status, detail
 
 
 def validate_startup_memory(capture: Mapping[str, Any]) -> dict[str, Any]:
@@ -1525,6 +1691,57 @@ def validate_startup_memory(capture: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _correctness_executed_failure_reasons(
+    capture: Mapping[str, Any],
+    artifact_identity: Mapping[str, Any],
+) -> list[str]:
+    """Collect executed failures before missing metadata can mask them."""
+    failures: list[str] = []
+    if capture.get("status") == "failed":
+        failures.append("capture records an executed failure")
+    startup_memory = validate_startup_memory(capture)
+    if startup_memory.get("status") == "failed":
+        failures.extend(startup_memory.get("reasons", []))
+    environment_state, environment_reasons = _execution_environment_state(capture)
+    if environment_state == "failed":
+        failures.extend(environment_reasons)
+    differences = _artifact_mismatches(capture, artifact_identity)
+    if differences:
+        failures.append("capture does not reference the exact final artifact")
+    comparison = capture.get("comparison")
+    if isinstance(comparison, Mapping):
+        if str(comparison.get("status", "")).strip().lower() == "failed":
+            failures.append("comparison records an executed failure")
+        summary = comparison.get("summary")
+        if isinstance(summary, Mapping) and str(
+            summary.get("status", "")
+        ).strip().lower() == "failed":
+            failures.append("comparison summary records an executed failure")
+        rows = comparison.get("per_tick")
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, Mapping) and str(
+                    row.get("status", "")
+                ).strip().lower() == "failed":
+                    failures.append(
+                        f"tick {row.get('tick')}: comparison row records an executed failure"
+                    )
+        loop_boundary = comparison.get("loop_boundary")
+        if isinstance(loop_boundary, Mapping):
+            if str(loop_boundary.get("status", "")).strip().lower() == "failed":
+                failures.append("loop-boundary comparison records an executed failure")
+            if loop_boundary.get("verified") is False and loop_boundary.get(
+                "source"
+            ) == "captured_boundary_comparison":
+                failures.append("captured loop-boundary comparison did not verify")
+    fixed_ticks = capture.get("fixed_ticks")
+    if isinstance(fixed_ticks, list) and set(fixed_ticks) != set(
+        contract.REQUIRED_FIXED_TICKS
+    ):
+        failures.append("fixed ticks do not match the frozen coverage set")
+    return failures
+
+
 def validate_correctness_capture(
     capture: Mapping[str, Any],
     *,
@@ -1564,6 +1781,13 @@ def validate_correctness_capture(
     if image_relative > contract.IMAGE_RELATIVE_TOLERANCE:
         result["status"] = "failed"
         result["reasons"].append("image relative tolerance was weakened")
+    executed_failures = _correctness_executed_failure_reasons(
+        capture, artifact_identity
+    )
+    if executed_failures:
+        result["status"] = "failed"
+        result["reasons"].extend(executed_failures)
+        result["executed_failures"] = list(executed_failures)
     missing = [
         name
         for name in REQUIRED_CORRECTNESS_METADATA
@@ -1637,6 +1861,76 @@ def validate_correctness_capture(
         if result["status"] != "failed":
             result["status"] = "pending_unverified"
         result["reasons"].append(artifact_detail)
+    if capture.get("renderer") == "exported_player":
+        if (
+            capture.get("release_capture_protocol")
+            != contract.RELEASE_CAPTURE_PROTOCOL
+        ):
+            if result["status"] != "failed":
+                result["status"] = "pending_unverified"
+            result["reasons"].append(
+                "exported-player images were not produced by the release "
+                "fixed-tick capture protocol"
+            )
+    else:
+        if result["status"] != "failed":
+            result["status"] = "unverified"
+        result["reasons"].append(
+            "fixed-tick coverage must use exported-player images as the primary capture"
+        )
+    if capture.get("release_capture_protocol") == contract.RELEASE_CAPTURE_PROTOCOL:
+        execution_rows = capture.get("execution_records")
+        if not isinstance(execution_rows, list) or not execution_rows:
+            result["status"] = "failed"
+            result["reasons"].append(
+                "release fixed-tick capture has no retained release execution records"
+            )
+        else:
+            by_tick = {
+                int(row.get("tick")): row
+                for row in execution_rows
+                if isinstance(row, Mapping)
+                and row.get("renderer") == "exported_player"
+                and isinstance(row.get("tick"), int)
+            }
+            expected = set(int(tick) for tick in contract.REQUIRED_FIXED_TICKS) | {
+                contract.LOOP_BOUNDARY_TICKS[1]
+            }
+            if set(by_tick) != expected:
+                result["status"] = "failed"
+                result["reasons"].append(
+                    "release execution records do not cover every required fixed tick"
+                )
+            for tick, row in by_tick.items():
+                if row.get("exit_code") != 0:
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"release executable failed at fixed tick {tick}"
+                    )
+                if (
+                    row.get("executable_sha256")
+                    != capture.get("executable_sha256")
+                ):
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"release execution at tick {tick} is not bound to the final executable"
+                    )
+                artifact_row = next(
+                    (
+                        item
+                        for item in capture.get("capture_artifacts", [])
+                        if isinstance(item, Mapping) and item.get("tick") == tick
+                    ),
+                    None,
+                )
+                if (
+                    not isinstance(artifact_row, Mapping)
+                    or row.get("artifact_sha256") != artifact_row.get("sha256")
+                ):
+                    result["status"] = "failed"
+                    result["reasons"].append(
+                        f"release execution at tick {tick} does not bind the retained image"
+                    )
     reference = capture.get("reference_execution")
     if not isinstance(reference, Mapping):
         result["status"] = "failed"
@@ -1676,9 +1970,10 @@ def validate_correctness_capture(
             result["status"] = "failed"
             result["reasons"].append("reference execution executable digest is malformed")
         elif reference_renderer == "exported_player":
-            if reference_executable != capture.get("executable_sha256"):
-                result["status"] = "failed"
-                result["reasons"].append("exported-player reference does not name the final release executable")
+            result["status"] = "failed"
+            result["reasons"].append(
+                "fixed-tick reference execution must be the diagnostic-preview sibling"
+            )
         elif reference_renderer == "diagnostic_preview":
             if reference_executable == capture.get("executable_sha256"):
                 result["status"] = "failed"
@@ -2063,6 +2358,9 @@ def validate_correctness_capture(
     elif measurement_state == "failed":
         result["status"] = "failed"
         result["reasons"].append("informational measurements are malformed")
+    if executed_failures:
+        result["status"] = "failed"
+        result.setdefault("executed_failures", list(executed_failures))
     if result["status"] == "pending_unverified" and not result["reasons"]:
         result["status"] = "verified"
     return result

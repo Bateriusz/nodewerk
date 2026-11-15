@@ -100,6 +100,11 @@ The generated player wires the frozen presentation setting into
 `PlayerConfig::present_sync_interval`; the uncapped NW-07 configuration passes
 `0` to `IDXGISwapChain3::Present`, and performance collection probes the final
 release executable for `NW05_PRESENT_SYNC_INTERVAL=0` before recording samples.
+Release playback also exposes `--tick <absolute-tick>` and `--hold-ms`
+(deterministic playback inputs, not capture controls). The release fixed-tick
+protocol launches the final executable at every required tick, captures the
+live window through an external capture adapter, and then captures the same
+ticks from the diagnostic sibling with its internal readback controls.
 
 ## Startup and memory protocol
 
@@ -169,6 +174,9 @@ hashed sibling executable. It also compares the Ada and Blackwell
 exported-player captures against each other. Declared
 zero-error summaries, missing reference files, and unrelated reference
 provenance cannot establish equivalence.
+Release-correctness records retain the release process identity, exit code,
+artifact hash, capture command, and retained image digest for every required
+tick. Declared images without those execution records cannot validate.
 The same physical-or-documented-passthrough rule applies to correctness
 captures; a generic VM is never sufficient for GPU acceptance.
 
@@ -239,6 +247,9 @@ Even where no hard ceiling applies, qualifying captures record process RAM,
 driver memory, startup pipeline time, generation time, image-quality metrics,
 and 1440p scaling. Missing values are recorded as unavailable and keep the
 record pending rather than being fabricated.
+Image-quality metrics must contain measured numeric results bound to the final
+executable and environment. 1440p scaling must identify the required 2560x1440
+capture and a measured frame time.
 
 ## Verification entry points
 
@@ -283,6 +294,9 @@ python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
   names it explicitly. The report's executable name/hash, byte size, file set,
   sidecars, and dependency state are recomputed from the actual deployment;
   a stale or foreign report cannot certify a different executable.
+  The report also retains the Windows build, x64 architecture, execution kind,
+  dependency-probe results, and cache-environment state. A host with
+  development tools or unresolved clean-environment evidence remains pending.
 
 `tools/nw07_clean_system.py` performs the clean-system run on Windows by
 executing the deployed release executable itself for the deployment startup

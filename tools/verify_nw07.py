@@ -605,8 +605,19 @@ def _base_correctness_capture(tier: str, identity: Mapping[str, Any]) -> dict[st
             "driver_memory_bytes": 240 * 1024 * 1024,
             "startup_pipeline_ms": 420.0,
             "generation_ms": 12.5,
-            "image_quality_metrics": {"ssim": 0.999, "psnr_db": 52.0},
-            "scaling_1440p": {"width": 2560, "height": 1440, "p99_gpu_ms": 12.1},
+            "image_quality_metrics": {
+                "ssim": 0.999,
+                "psnr_db": 52.0,
+                "artifact_sha256": identity["executable_sha256"],
+                "environment": {"adapter_description": adapter},
+            },
+            "scaling_1440p": {
+                "width": 2560,
+                "height": 1440,
+                "p99_gpu_ms": 12.1,
+                "artifact_sha256": identity["executable_sha256"],
+                "environment": {"adapter_description": adapter},
+            },
         },
         "unavailable_telemetry": [],
     }
@@ -1248,6 +1259,20 @@ def _full_clean_system_check(
         report = json.loads(report_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return _fail("nw07_clean_system", str(exc))
+    max_age = getattr(args, "max_evidence_age_seconds", None)
+    if max_age is not None:
+        captured = evidence._parse_utc_timestamp(report.get("captured_at_utc"))
+        if captured is None:
+            return _pending(
+                "nw07_clean_system",
+                "clean-system report has no timezone-aware capture timestamp",
+            )
+        age = datetime.now(timezone.utc).timestamp() - captured
+        if age < 0 or age > float(max_age):
+            return _pending(
+                "nw07_clean_system",
+                f"clean-system report is stale for the nightly window ({age:.1f}s old)",
+            )
     if (
         report.get("implementation_base") != contract.IMPLEMENTATION_BASE
         or report.get("profile_id") != contract.PROFILE_ID
@@ -1284,6 +1309,35 @@ def _full_clean_system_check(
     if validation["status"] == "failed":
         return _fail("nw07_clean_system", "; ".join(validation["reasons"]))
     return _pending("nw07_clean_system", "; ".join(validation["reasons"]))
+
+
+def _evidence_freshness_reasons(
+    record: Mapping[str, Any], max_age_seconds: float
+) -> list[str]:
+    reasons: list[str] = []
+    captures = record.get("captures") or record.get("executions") or []
+    if not isinstance(captures, list):
+        return ["evidence captures are malformed"]
+    now = datetime.now(timezone.utc).timestamp()
+    for capture in captures:
+        if not isinstance(capture, Mapping):
+            reasons.append("capture is malformed")
+            continue
+        role = capture.get("evidence_role")
+        if role == contract.DEVELOPMENT_SERIES_ROLE:
+            continue
+        captured = evidence._parse_utc_timestamp(capture.get("captured_at_utc"))
+        if captured is None:
+            reasons.append(
+                f"capture {capture.get('capture_id')!r} has no timezone-aware timestamp"
+            )
+            continue
+        age = now - captured
+        if age < 0 or age > float(max_age_seconds):
+            reasons.append(
+                f"capture {capture.get('capture_id')!r} is stale for the nightly window"
+            )
+    return reasons
 
 
 def build_checks(args: argparse.Namespace) -> list[CheckResult]:
@@ -1410,6 +1464,19 @@ def full_checks(args: argparse.Namespace) -> list[CheckResult]:
         checks.append(_fail("nw07_hardware_evidence", str(exc)))
         checks.append(_full_clean_system_check(args, identity))
         return checks
+    max_age = getattr(args, "max_evidence_age_seconds", None)
+    freshness = (
+        _evidence_freshness_reasons(record, float(max_age))
+        if max_age is not None
+        else []
+    )
+    if result["status"] == "verified" and freshness:
+        result = {
+            **result,
+            "status": "pending_unverified",
+            "milestone_complete": False,
+            "freshness_reasons": freshness,
+        }
     if result["status"] == "verified":
         checks.append(_ok("nw07_hardware_evidence", evidence=result))
     elif result["status"] == "failed":
@@ -1555,6 +1622,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-output")
     parser.add_argument("--binary-dir")
     parser.add_argument("--clean-report")
+    parser.add_argument("--max-evidence-age-seconds", type=float)
     parser.add_argument("--summary-json")
     args = parser.parse_args(argv)
     if args.mode == "ContractsOnly":
