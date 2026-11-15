@@ -3961,44 +3961,22 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     }
 #endif
 #if NW05_FROZEN_EMBEDDED_SPECIALIZATION
-    // The frozen release does not decode the CAP section's diagnostic-heavy
-    // field stream.  Reconstruct the canonical common-profile capability
-    // record from the immutable constants plus the decoded package content so
-    // runtime capability evaluation still enforces the full contract.
-    package.capability = CapabilityRecord{};
-    package.capability.profile_id =
-        std::string(kCommonProfileId.data(), kCommonProfileId.size());
-    package.capability.requirements_digest = std::string(
-        kCommonRequirementsDigest.data(), kCommonRequirementsDigest.size());
-    package.capability.required_dxgi_formats = {
-        "DXGI_FORMAT_R8G8B8A8_UNORM",
-        "DXGI_FORMAT_R32G32B32A32_FLOAT",
-        "DXGI_FORMAT_R32_UINT",
-        "DXGI_FORMAT_D32_FLOAT"};
-    const auto sorted_unique = [](std::vector<std::string>& values) {
-        std::sort(values.begin(), values.end());
-        values.erase(std::unique(values.begin(), values.end()), values.end());
-    };
-    package.capability.emitted_shader_targets.clear();
-    for (const auto& shader : package.shaders) {
-        package.capability.emitted_shader_targets.push_back(shader.target);
-    }
-    sorted_unique(package.capability.emitted_shader_targets);
-    package.capability.required_init_instructions.clear();
-    for (const auto& instruction : package.initialization) {
-        package.capability.required_init_instructions.push_back(
-            instruction.opcode);
-    }
-    sorted_unique(package.capability.required_init_instructions);
-    package.capability.required_frame_instructions.clear();
-    for (const auto& instruction : package.frame) {
-        package.capability.required_frame_instructions.push_back(
-            instruction.opcode);
-    }
-    sorted_unique(package.capability.required_frame_instructions);
-    package.capability.compiler_fingerprint = "frozen-nw07-release";
-    package.capability.profile_fingerprint =
-        ComputeProfileFingerprint(package.capability);
+    // CapabilityRecord defaults already carry the immutable common profile,
+    // requirements digest, runtime floors, dependency flags, and the exact
+    // canonical DXGI format set. The exporter validates the complete CAP
+    // record before freezing these exact package bytes. Preserve only the
+    // package-derived numeric limits that differ from the common maxima here;
+    // runtime shader-stage checks use the dedicated frozen CS/VS/PS path in
+    // capability_requirements.cpp. Avoid rebuilding dynamic CAP string lists
+    // in the 256 KiB release: doing so links sorting/fingerprint machinery into
+    // the player without strengthening the exact-SHA runtime contract.
+    package.capability.max_cbv_srv_uav_descriptors_per_frame = 17u;
+    package.capability.max_sampler_descriptors_per_frame = 0u;
+    package.capability.max_root_signature_dword_cost = 14u;
+    package.capability.limit_max_texture_2d_dimension = 1920u;
+    package.capability.limit_max_compute_threads_per_group = 64u;
+    package.capability.limit_max_buffer_bytes = 33177600ull;
+    package.capability.limit_swap_chain_buffer_count = 2u;
 #endif
     package.flags = flags;
 #if NW05_FROZEN_EMBEDDED_SPECIALIZATION

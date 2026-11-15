@@ -76,7 +76,7 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:fe117ad9e15a93f472088959919000dda417409b2427287fef1d9dec58560142",
+  "build_inputs_digest": "sha256:v1:1983b8f07f267221de78b1a37a56a0b859d9a5b4d00a6326c1a26c0b6b1d6b42",
   "loop": {
     "looping": true,
     "wrap": "modulo",
@@ -186,7 +186,7 @@
     "stretch_distribution_bytes_ceiling": 131072,
     "stretch_is_mandatory_gate": false,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000.0
+    "process_start_to_first_present_ms_ceiling": 2000
   },
   "fixed_tick_evaluation": {
     "ticks": [
@@ -236,7 +236,7 @@
   },
   "image_tolerances": {
     "numeric": {
-      "absolute": 1e-05,
+      "absolute": 0.00001,
       "relative": 0.0001,
       "mode": "absolute_or_relative"
     },
@@ -247,19 +247,19 @@
     },
     "per_device": {
       "desktop_ada_representative": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_representative": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_development_series": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
