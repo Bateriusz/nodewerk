@@ -57,10 +57,10 @@ void GenerateInstancesCS(uint3 dispatch_id : SV_DispatchThreadID)
         return;
     }
 
-    // Two thirds of the table is reserved for the visible tunnel structure.
-    // With the canonical demo count (1536), this gives 1024 evenly spaced
-    // rings and 512 obstacle/debris instances.
-    uint ring_count = min(1024u, max(128u, (InstanceCount * 2u) / 3u));
+    // Half of the table is the visible tunnel structure. With the canonical
+    // demo count (1024), this gives 512 evenly spaced rings and 512 hazards.
+    // The lower ring density avoids high-frequency temporal moire during flight.
+    uint ring_count = min(512u, max(128u, InstanceCount / 2u));
     uint seed = InstanceSeed + index;
     uint offset = index * 80u;
 
