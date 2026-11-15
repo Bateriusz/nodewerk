@@ -1287,6 +1287,28 @@ def _template_build_configuration(template_path: Path) -> dict[str, str]:
     return values
 
 
+def _run_specialized_player_command(
+    command: Sequence[str],
+) -> subprocess.CompletedProcess[str]:
+    """Run CMake/MSVC with deterministic, code-page-independent decoding.
+
+    Windows runners and developer machines may use a legacy ANSI code page.
+    CMake or MSVC can still emit UTF-8/non-ANSI bytes, so relying on Python's
+    locale-derived decoder can raise UnicodeDecodeError in background reader
+    threads. Decode explicitly as UTF-8 and preserve diagnostics with
+    replacement characters for malformed byte sequences.
+    """
+    return subprocess.run(
+        command,
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
 def _build_specialized_player(
     template_path: Path,
     source_text: str,
@@ -1366,13 +1388,7 @@ def _build_specialized_player(
         configure,
         ["cmake", "--build", str(build_root), "--target", "nw05_generated_player"],
     ):
-        completed = subprocess.run(
-            command,
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        completed = _run_specialized_player_command(command)
         if completed.returncode != 0:
             raise ExportError(
                 "specialized player configure/build failed: "
