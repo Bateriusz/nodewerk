@@ -55,14 +55,15 @@ node mesh_gpu nw.residency.generate_mesh@1.0.0 frequency=initialization residenc
   input mesh torus.out
 
 # placement_radius is interpreted by the branch-local instance shader as the
-# tunnel radius.  Roughly one quarter of instances become ribs; the rest become
-# deterministic hazards distributed through the 96-unit repeating segment.
+# tunnel radius.  Two thirds of the instances become a dense sequence of
+# distinct tunnel rings; the remaining third becomes small deterministic
+# hazards, mostly biased toward the walls so the flight corridor stays open.
 node instances nw.scene.instances@1.0.0 frequency=initialization
   param count 1536
   param seed 3237998146
   param placement_radius 4.6
-  param scale_min 0.20
-  param scale_max 0.70
+  param scale_min 0.06
+  param scale_max 0.22
   param twist_radians 9.42477796076938
 
 node scene_gpu nw.residency.generate_instances@1.0.0 frequency=initialization residency=gpu
@@ -96,7 +97,7 @@ node camera nw.camera.curve@1.0.0 frequency=frame
 
 node sun nw.light.directional@1.0.0 frequency=frame
   param direction -0.35 -0.45 -0.82
-  param color 2.6 1.15 0.62
+  param color 1.45 0.65 0.32
 
 # Used by the specialized VS as deterministic asteroid spin intensity.
 node twist nw.animation.twist@1.0.0 frequency=frame
@@ -113,14 +114,14 @@ node render nw.render.instanced@1.0.0 frequency=frame residency=gpu
 
 node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu
   input image render.image
-  param threshold 0.48
-  param intensity 0.82
-  param radius 2.0
+  param threshold 0.72
+  param intensity 0.48
+  param radius 1.6
   param resolution_scale 0.5
 
 node tonemap nw.post.tonemap@1.0.0 frequency=frame residency=gpu
   input image bloom.out
-  param exposure 1.10
+  param exposure 0.90
   param gamma 2.2
   param operator aces
 
