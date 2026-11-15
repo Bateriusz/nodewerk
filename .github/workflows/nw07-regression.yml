@@ -133,26 +133,38 @@ jobs:
             ${{ runner.temp }}/nw07-bootstrap-provenance.json
             build/nw07-distribution/**
 
-  nightly-gpu-check:
-    name: Nightly matched-environment GPU regression
+  nightly-gpu-capture:
+    name: Nightly fresh ${{ matrix.tier }} GPU evidence
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    # These self-hosted labels identify the frozen NW-07 reference and
-    # development-series hosts.  A generic VM is never sufficient for GPU
-    # acceptance.
-    runs-on: [self-hosted, windows, x64, nw07-gpu]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tier: ada
+            runner_label: nw07-ada
+          - tier: blackwell
+            runner_label: nw07-blackwell
+    runs-on: [self-hosted, windows, x64, nw07-gpu, ${{ matrix.runner_label }}]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Collect nightly GPU measurements before validation
+      - name: Initialize isolated nightly evidence fragment
+        shell: pwsh
+        env:
+          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+        run: |
+          Copy-Item "$env:NW07_EVIDENCE" "$env:RUNNER_TEMP\nw07-evidence-${{ matrix.tier }}.json" -Force
+      - name: Collect fresh reference performance samples
+        if: matrix.tier == 'ada'
         env:
           NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
           NW07_EXECUTABLE: ${{ vars.NW07_FIXTURE }}
           NW07_COLLECTOR_COMMAND: ${{ vars.NW07_COLLECTOR_COMMAND }}
           NW07_REFERENCE: ${{ vars.NW07_REFERENCE }}
           NW07_PERF_CONTRACT: ${{ vars.NW07_PERF_CONTRACT }}
-          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+          NW07_EXECUTION_KIND: ${{ vars.NW07_EXECUTION_KIND }}
         run: >-
           python tools/nw07_capture.py collect
           --package "$env:NW07_PACKAGE"
@@ -161,103 +173,134 @@ jobs:
           --contract "$env:NW07_PERF_CONTRACT"
           --reference "$env:NW07_REFERENCE"
           --collector-command "$env:NW07_COLLECTOR_COMMAND"
-          --capture-id "nightly-$env:GITHUB_RUN_ID"
-          --evidence "$env:NW07_EVIDENCE"
-      - name: Collect fresh fixed-tick visual, startup and memory evidence
+          --capture-id "nightly-perf-$env:GITHUB_RUN_ID"
+          --execution-kind "$env:NW07_EXECUTION_KIND"
+          --evidence "$env:RUNNER_TEMP\nw07-evidence-ada.json"
+      - name: Collect fresh fixed-tick correctness, startup and memory evidence
         env:
           NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
           NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
           NW07_DIAGNOSTIC_EXECUTABLE: ${{ vars.NW07_DIAGNOSTIC_EXECUTABLE }}
           NW07_RELEASE_CAPTURE_COMMAND: ${{ vars.NW07_RELEASE_CAPTURE_COMMAND }}
-          NW07_STARTUP_MS: ${{ vars.NW07_STARTUP_MS }}
-          NW07_PEAK_GPU_BYTES: ${{ vars.NW07_PEAK_GPU_BYTES }}
-          NW07_PROCESS_RAM_BYTES: ${{ vars.NW07_PROCESS_RAM_BYTES }}
-          NW07_DRIVER_MEMORY_BYTES: ${{ vars.NW07_DRIVER_MEMORY_BYTES }}
-          NW07_STARTUP_PIPELINE_MS: ${{ vars.NW07_STARTUP_PIPELINE_MS }}
-          NW07_GENERATION_MS: ${{ vars.NW07_GENERATION_MS }}
-          NW07_IMAGE_QUALITY: ${{ vars.NW07_IMAGE_QUALITY }}
-          NW07_SCALING_1440P: ${{ vars.NW07_SCALING_1440P }}
           NW07_METRICS_COMMAND: ${{ vars.NW07_METRICS_COMMAND }}
-          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+          NW07_EXECUTION_KIND: ${{ vars.NW07_EXECUTION_KIND }}
+          NW07_PASSTHROUGH_DOCUMENTATION: ${{ vars.NW07_PASSTHROUGH_DOCUMENTATION }}
         run: >-
           python tools/nw07_capture.py release-correctness
           --package "$env:NW07_PACKAGE"
           --executable "$env:NW07_FIXTURE"
           --diagnostic-executable "$env:NW07_DIAGNOSTIC_EXECUTABLE"
           --capture-command "$env:NW07_RELEASE_CAPTURE_COMMAND"
-          --captures-dir "$env:RUNNER_TEMP\nw07-nightly-captures"
-          --reference-captures-dir "$env:RUNNER_TEMP\nw07-nightly-reference-captures"
-          --reference-execution-output "$env:RUNNER_TEMP\nw07-nightly-reference.json"
-          --capture-id "nightly-correctness-$env:GITHUB_RUN_ID"
-          --tier ada
-          --device-form-factor desktop
-          --startup-ms "$env:NW07_STARTUP_MS"
-          --peak-gpu-bytes "$env:NW07_PEAK_GPU_BYTES"
-          --cache-kind cold_driver_cache
-          --cold-preparation "Driver cache cleared before the clean run."
-          --warm-preparation "Artifact pre-run once before the warm run."
-          --memory-source "engine accounting plus driver local usage query"
-          --process-ram-bytes "$env:NW07_PROCESS_RAM_BYTES"
-          --driver-memory-bytes "$env:NW07_DRIVER_MEMORY_BYTES"
-          --startup-pipeline-ms "$env:NW07_STARTUP_PIPELINE_MS"
-          --generation-ms "$env:NW07_GENERATION_MS"
-          --image-quality "$env:NW07_IMAGE_QUALITY"
-          --scaling-1440p "$env:NW07_SCALING_1440P"
+          --captures-dir "$env:RUNNER_TEMP\nw07-nightly-captures-${{ matrix.tier }}"
+          --artifact-root "$env:RUNNER_TEMP\nw07-artifact-root-${{ matrix.tier }}"
+          --reference-captures-dir "$env:RUNNER_TEMP\nw07-nightly-reference-${{ matrix.tier }}"
+          --reference-execution-output "$env:RUNNER_TEMP\nw07-reference-${{ matrix.tier }}.json"
+          --capture-id "nightly-correctness-${{ matrix.tier }}-$env:GITHUB_RUN_ID"
+          --tier "${{ matrix.tier }}"
+          --execution-kind "$env:NW07_EXECUTION_KIND"
+          --passthrough-documentation "$env:NW07_PASSTHROUGH_DOCUMENTATION"
           --metrics-command "$env:NW07_METRICS_COMMAND"
-          --metrics-output "$env:RUNNER_TEMP\nw07-nightly-measurements.json"
-          --evidence "$env:NW07_EVIDENCE"
+          --metrics-output "$env:RUNNER_TEMP\nw07-metrics-${{ matrix.tier }}.json"
+          --evidence "$env:RUNNER_TEMP\nw07-evidence-${{ matrix.tier }}.json"
+      - name: Stage nightly fragment
+        if: always()
+        shell: pwsh
+        run: |
+          $stage = "$env:RUNNER_TEMP\nw07-upload-${{ matrix.tier }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\nw07-evidence-${{ matrix.tier }}.json" "$stage\evidence-${{ matrix.tier }}.json" -Force -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP\nw07-artifact-root-${{ matrix.tier }}" "$stage\artifact-root-${{ matrix.tier }}" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP\nw07-nightly-samples" "$stage\perf-samples" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP\nw07-metrics-${{ matrix.tier }}.json" "$stage\metrics-${{ matrix.tier }}.json" -Force -ErrorAction SilentlyContinue
+      - name: Upload nightly capture fragment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw07-nightly-capture-${{ matrix.tier }}
+          path: ${{ runner.temp }}/nw07-upload-${{ matrix.tier }}/**
+
+  nightly-gpu-verify:
+    name: Nightly aggregate and Full verification
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: [nightly-gpu-capture]
+    runs-on: [self-hosted, windows, x64, nw07-gpu, nw07-ada]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nw07-nightly-capture-*
+          path: ${{ runner.temp }}/nw07-nightly-merged
+          merge-multiple: true
+      - name: Merge fresh Ada and Blackwell evidence
+        env:
+          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
+        run: >-
+          python tools/nw07_capture.py merge-evidence
+          --base "$env:NW07_EVIDENCE"
+          --input "$env:RUNNER_TEMP\nw07-nightly-merged\evidence-ada.json"
+          --input "$env:RUNNER_TEMP\nw07-nightly-merged\evidence-blackwell.json"
+          --output "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
+      - name: Restore retained raw captures beside the final package
+        shell: pwsh
+        env:
+          NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
+        run: |
+          foreach ($tier in @("ada", "blackwell")) {
+            $root = "$env:RUNNER_TEMP\nw07-nightly-merged\artifact-root-$tier"
+            if (-not (Test-Path $root -PathType Container)) {
+              throw "Missing retained raw evidence root for $tier"
+            }
+            Get-ChildItem $root -Directory | ForEach-Object {
+              $destination = Join-Path $env:NW07_PACKAGE $_.Name
+              New-Item -ItemType Directory -Force -Path $destination | Out-Null
+              Copy-Item (Join-Path $_.FullName "*") $destination -Recurse -Force
+            }
+          }
       - name: Re-run clean-system deployment qualification
         env:
           NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
           NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
           NW07_BINARY_DIR: ${{ vars.NW07_BINARY_DIR }}
-          NW07_CLEAN_REPORT: ${{ vars.NW07_CLEAN_REPORT }}
+          NW07_EXECUTION_KIND: ${{ vars.NW07_EXECUTION_KIND }}
+          NW07_PASSTHROUGH_DOCUMENTATION: ${{ vars.NW07_PASSTHROUGH_DOCUMENTATION }}
         run: >-
           python tools/nw07_clean_system.py
           --fixture "$env:NW07_FIXTURE"
           --package "$env:NW07_PACKAGE"
           --deployment "$env:NW07_BINARY_DIR"
-          --output "$env:NW07_CLEAN_REPORT"
-      - name: Run NW-07 Full verification on the reference host
+          --execution-kind "$env:NW07_EXECUTION_KIND"
+          --passthrough-documentation "$env:NW07_PASSTHROUGH_DOCUMENTATION"
+          --output "$env:RUNNER_TEMP\nw07-clean-system.json"
+      - name: Run NW-07 Full verification on fresh evidence
         env:
           NW07_FIXTURE: ${{ vars.NW07_FIXTURE }}
           NW07_PACKAGE: ${{ vars.NW07_PACKAGE }}
-          NW07_EVIDENCE: ${{ vars.NW07_EVIDENCE }}
           NW07_BUILD_REPORT: ${{ vars.NW07_BUILD_REPORT }}
           NW07_PERF_CONTRACT: ${{ vars.NW07_PERF_CONTRACT }}
           NW07_BINARY_DIR: ${{ vars.NW07_BINARY_DIR }}
-          NW07_CLEAN_REPORT: ${{ vars.NW07_CLEAN_REPORT }}
         run: >-
           python tools/verify_nw07.py --mode Full
           --fixture "$env:NW07_FIXTURE"
           --package "$env:NW07_PACKAGE"
-          --evidence "$env:NW07_EVIDENCE"
+          --evidence "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
           --build-report "$env:NW07_BUILD_REPORT"
           --perf-ref "$env:NW07_PERF_CONTRACT"
           --binary-dir "$env:NW07_BINARY_DIR"
-          --clean-report "$env:NW07_CLEAN_REPORT"
+          --clean-report "$env:RUNNER_TEMP\nw07-clean-system.json"
           --max-evidence-age-seconds 86400
           --summary-json "$env:RUNNER_TEMP\nw07-full.json"
       - name: Evaluate matched-environment regression policy
-        run: |
-          python -m pytest -q tests/test_nw07_regression_verify.py
-          if (Test-Path "$env:NW07_METRICS") {
-            python tools/nw07_regression.py `
-              --baseline benchmarks/nw07/metric-baselines.v1.json `
-              --current "$env:NW07_METRICS" `
-              --summary-json "$env:RUNNER_TEMP\nw07-regression.json"
-          }
-        env:
-          NW07_METRICS: ${{ vars.NW07_METRICS }}
-      - name: Upload NW-07 GPU evidence
+        run: python -m pytest -q tests/test_nw07_regression_verify.py
+      - name: Upload complete nightly evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nw07-nightly-evidence
           path: |
             ${{ runner.temp }}/nw07-full.json
-            ${{ runner.temp }}/nw07-nightly-samples/**
-            ${{ runner.temp }}/nw07-nightly-captures/**
-            ${{ runner.temp }}/nw07-nightly-reference-captures/**
-            ${{ runner.temp }}/nw07-nightly-reference.json
-            ${{ vars.NW07_EVIDENCE }}
+            ${{ runner.temp }}/nw07-clean-system.json
+            ${{ runner.temp }}/nw07-nightly-evidence.json
+            ${{ runner.temp }}/nw07-nightly-merged/**

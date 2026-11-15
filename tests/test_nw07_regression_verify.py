@@ -290,7 +290,8 @@ def test_release_playback_exposes_explicit_fixed_tick_and_capture_protocol() -> 
         present_sync_interval=0,
     )
     assert '"--tick"' in source
-    assert '"--hold-ms"' in source
+    assert '"--hold-ms"' not in source
+    assert "::Sleep(1500u)" in source
     assert "NW05_EXPLICIT_TICK" in source
     assert hasattr(capture, "capture_release_correctness")
 
@@ -879,3 +880,44 @@ def test_full_reports_milestone_only_when_every_gate_is_verified(
         and check["status"] == "pending_unverified"
         for check in missing_summary["checks"]
     )
+
+
+def test_freshness_requires_both_correctness_tiers_and_reference_perf() -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "captures": [
+            {
+                "capture_id": "ada",
+                "evidence_role": contract.FIXED_TICK_CORRECTNESS_ROLE,
+                "coverage_target": contract.CORRECTNESS_COVERAGE_TARGETS["ada"],
+                "captured_at_utc": now,
+            },
+            {
+                "capture_id": "perf",
+                "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+                "coverage_target": contract.PERF_CONTRACT_ID,
+                "captured_at_utc": now,
+            },
+        ]
+    }
+    reasons = verify_nw07._evidence_freshness_reasons(record, 86400)
+    assert any("Blackwell correctness" in reason for reason in reasons)
+    record["captures"].append(
+        {
+            "capture_id": "blackwell",
+            "evidence_role": contract.FIXED_TICK_CORRECTNESS_ROLE,
+            "coverage_target": contract.CORRECTNESS_COVERAGE_TARGETS["blackwell"],
+            "captured_at_utc": now,
+        }
+    )
+    assert verify_nw07._evidence_freshness_reasons(record, 86400) == []
+
+
+def test_fresh_metrics_cannot_fall_back_to_static_workflow_values() -> None:
+    identity = {"executable_sha256": "a" * 64}
+    with pytest.raises(ValueError, match="metadata"):
+        capture._normalize_fresh_correctness_metrics(
+            {"measurements": {}, "numeric_comparisons": {}},
+            identity=identity,
+            tier="ada",
+        )

@@ -313,7 +313,57 @@ def test_clean_host_provenance_is_required_and_must_be_clean() -> None:
 
 
 def test_clean_host_provenance_records_os_arch_and_dependency_absence() -> None:
-    host = clean_system.clean_host_provenance({"PATH": ""})
+    host = clean_system.clean_host_provenance({"PATH": ""}, execution_kind="physical")
     assert host["architecture"]
     assert "development_dependency_checks" in host
     assert host["development_dependencies_present_on_path"] == []
+
+
+def test_physical_clean_host_rejects_virtual_machine_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(clean_system.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(clean_system.platform, "version", lambda: "10.0.26100")
+    monkeypatch.setattr(
+        clean_system,
+        "_windows_virtualization_probe",
+        lambda: {
+            "available": True,
+            "manufacturer": "VMware, Inc.",
+            "model": "VMware Virtual Platform",
+            "hypervisor_present": True,
+            "error": "",
+        },
+    )
+    host = clean_system.clean_host_provenance({"PATH": ""}, execution_kind="physical")
+    assert host["clean_environment"] is False
+    assert host["virtualization_indicators"]
+    report = _report()
+    report["host"] = host
+    assert clean_system.validate_report(report)["status"] == "failed"
+
+
+def test_passthrough_clean_host_requires_documentation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(clean_system.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(clean_system.platform, "version", lambda: "10.0.26100")
+    monkeypatch.setattr(
+        clean_system,
+        "_windows_virtualization_probe",
+        lambda: {
+            "available": True,
+            "manufacturer": "QEMU",
+            "model": "Standard PC",
+            "hypervisor_present": True,
+            "error": "",
+        },
+    )
+    host = clean_system.clean_host_provenance(
+        {"PATH": ""},
+        execution_kind="documented_gpu_passthrough",
+        passthrough_documentation="",
+    )
+    assert host["clean_environment"] is False

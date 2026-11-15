@@ -175,14 +175,24 @@ def _correctness(tier: str) -> dict:
             "image_quality_metrics": {
                 "psnr_db": 52.0,
                 "artifact_sha256": identity["executable_sha256"],
-                "environment": {"adapter_description": adapter},
+                "environment": {
+                    "adapter_description": adapter,
+                    "driver_version": "610.88",
+                    "os_version": "Windows 11 10.0.26100",
+                    "toolchain_identity": "nw01-msvc-pinned",
+                },
             },
             "scaling_1440p": {
                 "width": 2560,
                 "height": 1440,
                 "p99_gpu_ms": 12.0,
                 "artifact_sha256": identity["executable_sha256"],
-                "environment": {"adapter_description": adapter},
+                "environment": {
+                    "adapter_description": adapter,
+                    "driver_version": "610.88",
+                    "os_version": "Windows 11 10.0.26100",
+                    "toolchain_identity": "nw01-msvc-pinned",
+                },
             },
         },
         "unavailable_telemetry": [],
@@ -916,3 +926,16 @@ def test_diagnostic_reference_must_be_a_separate_sibling_executable() -> None:
     )
     assert result["status"] == "failed"
     assert any("separate sibling executable" in reason for reason in result["reasons"])
+
+
+def test_missing_metadata_does_not_short_circuit_a_deterministic_failure() -> None:
+    capture = _correctness("ada")
+    capture.pop("driver_version", None)
+    capture["evidence_role"] = "wrong-role"
+    result = evidence.validate_correctness_capture(
+        capture,
+        coverage_target=capture["coverage_target"],
+        artifact_identity=_identity(),
+    )
+    assert result["status"] == "failed"
+    assert "driver_version" in result.get("missing_metadata", [])
