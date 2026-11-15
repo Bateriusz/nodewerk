@@ -154,6 +154,10 @@ def test_tunnel_specialization_keeps_rings_distinct_and_corridor_open() -> None:
     assert "lerp(0.56, 0.88" in instances_shader
     assert "float tube = 0.015;" in vertex_shader
     assert "float sway_x = 0.16" in vertex_shader
+    assert "float instance_center_z = LoadFloat(offset + 56u);" in vertex_shader
+    assert "float local_world_z = world.z - instance_center_z;" in vertex_shader
+    assert "world.z = wrapped_center_z + local_world_z;" in vertex_shader
+    assert "world.z = WrapCentered(world.z - camera_z, TUNNEL_LENGTH);" not in vertex_shader
 
     pixel_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_scene_ps.hlsl").read_text(encoding="utf-8")
     assert "HashUnit(input.instance_seed) * 0.35" not in pixel_shader
