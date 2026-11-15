@@ -175,7 +175,7 @@ jobs:
           --contract "$env:NW07_PERF_CONTRACT"
           --reference "$env:NW07_REFERENCE"
           --collector-command "$env:NW07_COLLECTOR_COMMAND"
-          --capture-id "nightly-perf-$env:GITHUB_RUN_ID"
+          --capture-id "nightly-perf-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           --execution-kind "$env:NW07_EXECUTION_KIND"
           --passthrough-documentation "$env:NW07_PASSTHROUGH_DOCUMENTATION"
           --evidence "$env:RUNNER_TEMP\nw07-evidence-ada.json"
@@ -255,7 +255,7 @@ jobs:
           --metrics "$env:RUNNER_TEMP\nw07-nightly-merged\metrics-blackwell.json"
           --evidence "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
           --artifact "$env:NW07_FIXTURE"
-          --performance-capture-id "nightly-perf-$env:GITHUB_RUN_ID"
+          --performance-capture-id "nightly-perf-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           --max-evidence-age-seconds 86400
           --output-dir "$env:RUNNER_TEMP\nw07-nightly-regression"
       - name: Restore retained raw captures beside the final package
