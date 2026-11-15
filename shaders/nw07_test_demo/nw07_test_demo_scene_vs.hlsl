@@ -192,10 +192,15 @@ VSOutput SceneVS(VSInput input)
     float3 world = world4.xyz;
     float3 world_normal = normalize(mul(float4(local_normal, 0.0), transform).xyz);
 
-    // Infinite periodic tunnel: the static 96-unit content segment is wrapped
-    // around the camera.  One 24 s phase advances exactly one segment.
+    // Infinite periodic tunnel: wrap the INSTANCE CENTRE, never individual
+    // vertices.  Per-vertex wrapping tears triangles when an asteroid crosses
+    // the segment seam, producing screen-length "shooting rays".
     float camera_z = phase * TUNNEL_LENGTH;
-    world.z = WrapCentered(world.z - camera_z, TUNNEL_LENGTH);
+    float instance_center_z = LoadFloat(offset + 56u);
+    float local_world_z = world.z - instance_center_z;
+    float wrapped_center_z =
+        WrapCentered(instance_center_z - camera_z, TUNNEL_LENGTH);
+    world.z = wrapped_center_z + local_world_z;
 
     // Small periodic weave and bank create the "ship through tunnel" sensation
     // while the scene remains a pure function of absolute tick.
