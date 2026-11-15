@@ -1,5 +1,5 @@
 name: NW-07 256 KiB Architectural Proof Regression
-# Final-gate evidence hardening: dual-tier fresh capture and fail-closed provenance.
+# Final-gate evidence hardening: dual-tier fresh capture and fail-closed provenance. Direct perf-call compatibility is regression-tested.
 
 on:
   workflow_dispatch:
