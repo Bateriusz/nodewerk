@@ -145,7 +145,7 @@ jobs:
             runner_label: nw07-ada
           - tier: blackwell
             runner_label: nw07-blackwell
-    runs-on: [self-hosted, windows, x64, nw07-gpu, ${{ matrix.runner_label }}]
+    runs-on: [self-hosted, windows, x64, nw07-gpu, "${{ matrix.runner_label }}"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
