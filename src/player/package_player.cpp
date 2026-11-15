@@ -1120,6 +1120,19 @@ ExitCode PackagePlayer::Fail(ExitCode code,
 #endif
 }
 
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+// In the frozen release the exact package has already been verified at build
+// time and again by SHA-256 at startup. Keep stable failure exit codes while
+// compiling out diagnostic arguments entirely. This is intentionally a
+// preprocessor substitution so string construction at call sites disappears
+// rather than merely being ignored by PackagePlayer::Fail().
+#define Fail(code, ...)                                                        \
+    ([&]() -> ExitCode {                                                       \
+        last_exit_ = (code);                                                   \
+        return (code);                                                         \
+    }())
+#endif
+
 void PackagePlayer::AddFailureDiagnostics(
     const std::vector<CapabilityRequirementFailure>& failures,
     const char* category,
@@ -6530,6 +6543,10 @@ void PackagePlayer::SetCaptureHook(CaptureHook hook,
                                    void* user_data) noexcept {
     instrumentation_.SetCaptureHook(hook, user_data);
 }
+#endif
+
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#undef Fail
 #endif
 
 } // namespace nw::player
