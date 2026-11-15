@@ -294,6 +294,7 @@ def test_gui_photoimage_falls_back_to_binary_ppm_file_on_windows_tk() -> None:
     fake_tk = FakeTk()
     window = object.__new__(gui.StudioWindow)
     window.tk = fake_tk
+    window.root = object()
     window.application = SimpleNamespace(
         pipeline=SimpleNamespace(last_valid_frame=frame)
     )
