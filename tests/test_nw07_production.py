@@ -105,6 +105,37 @@ def test_nw07_render_dimensions_are_not_the_material_texture_size() -> None:
 
 
 @pytest.mark.parametrize(
+    ("overrides", "expected"),
+    (
+        ({}, (256, 256)),
+        ({"nw07_output_width": "1280"}, (1280, 1080)),
+        ({"nw07_output_height": "720"}, (1920, 720)),
+        ({"nw07_output_width": "1280", "nw07_output_height": "720"}, (1280, 720)),
+    ),
+)
+def test_nw07_dimension_settings_override_material_texture_without_mixing_axes(
+    overrides: dict[str, str], expected: tuple[int, int]
+) -> None:
+    document = nw03.load_graph(GRAPH)
+    for name in ("nw07_output_width", "nw07_output_height"):
+        document.settings.pop(name, None)
+    document.settings.update(overrides)
+    optimized = optimizer.optimize_graph(document)
+    assert nw05_export._graph_render_dimensions(document, optimized) == expected
+
+
+def test_unknown_nw07_dimension_keys_do_not_override_the_material_texture() -> None:
+    document = nw03.load_graph(GRAPH)
+    for name in ("nw07_output_width", "nw07_output_height"):
+        document.settings.pop(name, None)
+    document.settings["nw07_output_widths"] = "1280"
+    optimized = optimizer.optimize_graph(document)
+    # Exact key matching preserves NW-06's texture-derived 256x256 output when a
+    # future graph pass introduces or renames a dimension setting.
+    assert nw05_export._graph_render_dimensions(document, optimized) == (256, 256)
+
+
+@pytest.mark.parametrize(
     "mutation",
     (
         lambda c: c["loop"].__setitem__("ticks", 480000),

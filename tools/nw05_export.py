@@ -47,6 +47,21 @@ DEFAULT_BYTE_CEILING = 48 * 1024 * 1024
 DEFAULT_MEMORY_BUDGET = 256 * 1024 * 1024
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Render-target dimension settings.  These are intentionally separate from the
+# procedural material texture dimensions: NW-06 sizes its proof from the
+# material texture, while NW-07 opts into a presentation surface whose size is
+# independent of that texture.  The names are contract keys, not heuristics;
+# renaming or merging them requires updating the canonical graph, the frozen
+# NW-07 configuration, and the dimension-precedence tests.
+NW07_OUTPUT_WIDTH_SETTING = "nw07_output_width"
+NW07_OUTPUT_HEIGHT_SETTING = "nw07_output_height"
+NW07_DEFAULT_OUTPUT_WIDTH = 1920
+NW07_DEFAULT_OUTPUT_HEIGHT = 1080
+NW05_OUTPUT_WIDTH_SETTING = "nw05_output_width"
+NW05_OUTPUT_HEIGHT_SETTING = "nw05_output_height"
+NW05_DEFAULT_OUTPUT_WIDTH = 256
+NW05_DEFAULT_OUTPUT_HEIGHT = 256
+
 
 def _graph_image_oracle_sha256(document: nw03.GraphDocument) -> str:
     """CPU oracle digest of the graph-derived procedural image expression."""
@@ -1241,6 +1256,27 @@ def _graph_render_dimensions(
     document: nw03.GraphDocument,
     optimized: optimizer.OptimizedGraph,
 ) -> tuple[int, int]:
+    """Resolve presentation dimensions from explicit settings, then the texture.
+
+    The precedence below is part of the NW-06/NW-07 contract and must not be
+    reordered by later graph passes:
+
+    1. NW-07 presentation settings win.  If either ``nw07_output_width`` or
+       ``nw07_output_height`` exists, the graph has explicitly opted into a
+       presentation-sized render target.  The missing axis falls back to the
+       NW-07 default (1920x1080); axes are never mixed with the material
+       texture size.  This is what lets a 256x256 procedural material render
+       into the certified 1920x1080 production surface.
+    2. Otherwise the first reachable NW-06 ``nw.texture.procedural`` or
+       ``nw.texture.noise2d`` texture supplies both dimensions.  This preserves
+       the NW-06 proof's 256x256 output semantics.
+    3. Otherwise explicit NW-05 output settings apply, defaulting to 256x256.
+
+    Keys are matched exactly.  A misspelled or newly introduced dimension key
+    deliberately does not opt into presentation-sized output, so an accidental
+    graph-pass rename cannot silently change the certified artifact size.
+    """
+
     def setting_dimension(name: str, default: int) -> int:
         raw = str(document.settings.get(name, default)).strip()
         try:
@@ -1251,14 +1287,13 @@ def _graph_render_dimensions(
             return default
         return max(1, min(8192, int(value)))
 
-    # NW-07 production presets decouple presentation dimensions from the
-    # procedural material texture.  The NW-06 proof intentionally derives its
-    # render size from the noise texture; only the explicit NW-07 settings opt
-    # into a distinct presentation size.
-    if "nw07_output_width" in document.settings or "nw07_output_height" in document.settings:
+    nw07_dimension_keys = (NW07_OUTPUT_WIDTH_SETTING, NW07_OUTPUT_HEIGHT_SETTING)
+    if any(name in document.settings for name in nw07_dimension_keys):
+        # Deliberate precedence: NW-07 presentation dimensions override the
+        # NW-06 material texture dimensions even when only one axis is present.
         return (
-            setting_dimension("nw07_output_width", 1920),
-            setting_dimension("nw07_output_height", 1080),
+            setting_dimension(NW07_OUTPUT_WIDTH_SETTING, NW07_DEFAULT_OUTPUT_WIDTH),
+            setting_dimension(NW07_OUTPUT_HEIGHT_SETTING, NW07_DEFAULT_OUTPUT_HEIGHT),
         )
 
     reachable = set(optimized.reachable_node_ids) | set(
@@ -1272,14 +1307,16 @@ def _graph_render_dimensions(
         in {"nw.texture.procedural", "nw.texture.noise2d"}
     ]
     if textures:
+        # NW-06 fallback: the material texture size is the render size unless
+        # the graph opted into the distinct NW-07 presentation namespace above.
         return (
             _node_int(textures[0], "width", 256),
             _node_int(textures[0], "height", 256),
         )
 
     return (
-        setting_dimension("nw05_output_width", 256),
-        setting_dimension("nw05_output_height", 256),
+        setting_dimension(NW05_OUTPUT_WIDTH_SETTING, NW05_DEFAULT_OUTPUT_WIDTH),
+        setting_dimension(NW05_OUTPUT_HEIGHT_SETTING, NW05_DEFAULT_OUTPUT_HEIGHT),
     )
 
 
