@@ -1239,6 +1239,245 @@ ExitCode PackagePlayer::CheckMemoryBudget(const char* stage) {
 }
 
 bool PackagePlayer::BuildFrameInstructionPlan() {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    // The generated NW-07 release has already verified the exact embedded
+    // package SHA-256 and the exporter ran the full semantic validator over
+    // those same bytes. Build only the executable frame representation here;
+    // do not relink the generic diagnostic validator into the 256 KiB proof.
+    frame_ops_.clear();
+    frame_ops_.reserve(package_.frame.size());
+    timeline_duration_ticks_ = 0u;
+    for (const auto& parameter : package_.parameters) {
+        if (parameter.name == "nw06.timeline.duration_ticks" &&
+            parameter.value.size() == sizeof(std::uint32_t)) {
+            std::memcpy(&timeline_duration_ticks_, parameter.value.data(),
+                        sizeof(timeline_duration_ticks_));
+            break;
+        }
+    }
+
+    bool has_active_root_signature = false;
+    std::uint32_t active_root_signature_id = 0u;
+    std::uint32_t active_descriptor_resource = 0u;
+    std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
+        active_descriptor_resources{};
+    std::array<bool, package::kMaxRootSignatureDwordCost>
+        active_descriptor_valid{};
+    std::array<bool, package::kMaxRootSignatureDwordCost>
+        active_descriptor_is_srv{};
+    present_resource_id_ = 0u;
+    present_source_width_ = 0u;
+    present_source_height_ = 0u;
+
+    for (const auto& instruction : package_.frame) {
+        FrameOp op{};
+        const auto& operands = instruction.operands;
+        if (instruction.opcode == "frame.set_root_signature" ||
+            instruction.opcode == "frame.set_graphics_root_signature") {
+            op.type = instruction.opcode == "frame.set_root_signature"
+                          ? FrameOp::Type::SetRootSignature
+                          : FrameOp::Type::SetGraphicsRootSignature;
+            op.root_parameter = operands[0].u32;
+            if (!has_active_root_signature ||
+                active_root_signature_id != op.root_parameter) {
+                active_descriptor_valid.fill(false);
+                active_descriptor_is_srv.fill(false);
+                active_descriptor_resource = 0u;
+            }
+            has_active_root_signature = true;
+            active_root_signature_id = op.root_parameter;
+        } else if (instruction.opcode == "frame.set_root_constants" ||
+                   instruction.opcode == "frame.set_graphics_root_constants") {
+            op.type = instruction.opcode == "frame.set_root_constants"
+                          ? FrameOp::Type::SetRootConstants
+                          : FrameOp::Type::SetGraphicsRootConstants;
+            op.root_parameter = operands[0].u32;
+            op.resource_a = operands[1].u32;
+            op.constant_count = operands[2].u32;
+            std::size_t byte_offset = 0u;
+#if NW06_COMPILE_FRAME_PARAMETER_BINDINGS
+            const std::string parameter_prefix =
+                "nw06.params." + std::to_string(op.resource_a) + ".";
+            const bool use_prefixed_parameters = std::any_of(
+                package_.parameters.begin(), package_.parameters.end(),
+                [&](const package::ParameterRecord& parameter) {
+                    return parameter.name.rfind(parameter_prefix, 0u) == 0u;
+                });
+#endif
+            for (const auto& parameter : package_.parameters) {
+#if NW06_COMPILE_FRAME_PARAMETER_BINDINGS
+                if (use_prefixed_parameters &&
+                    parameter.name.rfind(parameter_prefix, 0u) != 0u) {
+                    continue;
+                }
+#endif
+                std::uint8_t tick_kind = 0u;
+                std::uint32_t declared_bytes = 0u;
+                if (!TryParameterTickLayout(parameter, &tick_kind,
+                                            &declared_bytes)) {
+                    last_exit_ = ExitCode::PackageValidationFailed;
+                    return false;
+                }
+                const std::size_t capacity =
+                    static_cast<std::size_t>(op.constant_count) * 4u;
+                if (byte_offset >= capacity) break;
+                const std::size_t parameter_bytes =
+                    std::min<std::size_t>(parameter.value.size(),
+                                          capacity - byte_offset);
+                if (parameter_bytes == 0u) break;
+                if (parameter.name == "time" && parameter_bytes >= 4u &&
+                    op.time_byte_offset < 0) {
+                    op.time_byte_offset =
+                        static_cast<std::int32_t>(byte_offset);
+                }
+                if (parameter_bytes == declared_bytes &&
+                    op.parameter_count <
+                        package::kMaxRootSignatureDwordCost) {
+                    const std::uint32_t entry = op.parameter_count++;
+                    op.parameter_ids[entry] = parameter.parameter_id;
+                    op.parameter_offsets[entry] =
+                        static_cast<std::int32_t>(byte_offset);
+                    op.parameter_tick_kinds[entry] = tick_kind;
+                    op.parameter_sizes[entry] = declared_bytes;
+                }
+                std::memcpy(
+                    reinterpret_cast<std::uint8_t*>(op.constants.data()) +
+                        byte_offset,
+                    parameter.value.data(), parameter_bytes);
+                byte_offset += parameter_bytes;
+            }
+        } else if (instruction.opcode == "frame.set_descriptor_table" ||
+                   instruction.opcode == "frame.set_graphics_descriptor_table") {
+            op.type = instruction.opcode == "frame.set_descriptor_table"
+                          ? FrameOp::Type::SetDescriptorTable
+                          : FrameOp::Type::SetGraphicsDescriptorTable;
+            op.root_parameter = operands[0].u32;
+            op.resource_a = operands[2].u32;
+            active_descriptor_resource = op.resource_a;
+            if (op.root_parameter < active_descriptor_resources.size()) {
+                active_descriptor_resources[op.root_parameter] = op.resource_a;
+                active_descriptor_valid[op.root_parameter] = true;
+            }
+            const auto* root_record =
+                has_active_root_signature
+                    ? FindRootSignatureRecord(package_, active_root_signature_id)
+                    : nullptr;
+            const auto* binding =
+                root_record == nullptr
+                    ? nullptr
+                    : FindRootBinding(*root_record, op.root_parameter);
+            op.descriptor_is_srv =
+                binding != nullptr && binding->usage == "srv";
+            if (op.root_parameter < active_descriptor_is_srv.size()) {
+                active_descriptor_is_srv[op.root_parameter] =
+                    op.descriptor_is_srv;
+            }
+        } else if (instruction.opcode == "frame.barrier") {
+            op.type = FrameOp::Type::Barrier;
+            op.barrier_state = operands[0].u32;
+            op.resource_a = operands[1].u32;
+        } else if (instruction.opcode == "frame.dispatch") {
+            op.type = FrameOp::Type::Dispatch;
+            op.group_x = operands[0].u32;
+            op.group_y = operands[1].u32;
+            op.group_z = operands[2].u32;
+            op.shader_id = operands[3].u32;
+            op.descriptor_resource = active_descriptor_resource;
+            for (std::size_t root = 0u;
+                 root < active_descriptor_resources.size(); ++root) {
+                if (!active_descriptor_valid[root]) continue;
+                const std::uint32_t resource_id =
+                    active_descriptor_resources[root];
+                bool duplicate = false;
+                for (std::uint32_t index = 0u;
+                     index < op.descriptor_resource_count; ++index) {
+                    if (op.descriptor_resources[index] == resource_id) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate &&
+                    op.descriptor_resource_count <
+                        op.descriptor_resources.size()) {
+                    const std::uint32_t entry =
+                        op.descriptor_resource_count++;
+                    op.descriptor_resources[entry] = resource_id;
+                    op.descriptor_resource_is_srv[entry] =
+                        active_descriptor_is_srv[root];
+                }
+            }
+        } else if (instruction.opcode == "frame.set_graphics_pipeline") {
+            op.type = FrameOp::Type::SetGraphicsPipeline;
+            op.shader_id = operands[0].u32;
+        } else if (instruction.opcode == "frame.set_render_targets") {
+            op.type = FrameOp::Type::SetRenderTargets;
+            op.color_resource = operands[0].u32;
+            op.depth_resource = operands[1].u32;
+        } else if (instruction.opcode == "frame.execute_indirect") {
+            op.type = FrameOp::Type::ExecuteIndirect;
+            op.resource_a = operands[0].u32;
+            op.max_draw_count = operands[1].u32;
+        } else if (instruction.opcode == "frame.copy_buffer") {
+            op.type = FrameOp::Type::CopyBuffer;
+            op.resource_a = operands[0].u32;
+            op.resource_b = operands[1].u32;
+            op.byte_count = operands[2].u64;
+        } else if (instruction.opcode == "frame.set_timeline") {
+            op.type = FrameOp::Type::SetTimeline;
+            op.parameter_id = operands[0].u32;
+            op.tick_value = operands[1].u64;
+        } else if (instruction.opcode == "frame.present") {
+            op.type = FrameOp::Type::Present;
+            op.resource_a = operands[0].u32;
+            const package::ResourceDescriptor* present_resource =
+                FindPackageResource(package_, op.resource_a);
+            if (present_resource == nullptr) {
+                last_exit_ = ExitCode::PackageValidationFailed;
+                return false;
+            }
+            const std::uint64_t pixel_count =
+                present_resource->size_bytes / 16u;
+            std::uint32_t explicit_width = 0u;
+            std::uint32_t explicit_height = 0u;
+            for (const auto& parameter : package_.parameters) {
+                if (parameter.value.size() < 4u) continue;
+                std::uint32_t value = 0u;
+                std::memcpy(&value, parameter.value.data(), sizeof(value));
+                if (parameter.name == "nw05.present.width") {
+                    explicit_width = value;
+                } else if (parameter.name == "nw05.present.height") {
+                    explicit_height = value;
+                }
+            }
+            if (explicit_width != 0u && explicit_height != 0u &&
+                static_cast<std::uint64_t>(explicit_width) *
+                        explicit_height <=
+                    pixel_count) {
+                present_source_width_ = explicit_width;
+                present_source_height_ = explicit_height;
+            } else {
+                const std::uint32_t side = static_cast<std::uint32_t>(
+                    std::sqrt(static_cast<double>(pixel_count)));
+                if (static_cast<std::uint64_t>(side) * side == pixel_count) {
+                    present_source_width_ = side;
+                    present_source_height_ = side;
+                } else {
+                    present_source_width_ =
+                        static_cast<std::uint32_t>(pixel_count);
+                    present_source_height_ = 1u;
+                }
+            }
+            present_resource_id_ = op.resource_a;
+        } else {
+            last_exit_ = ExitCode::PackageValidationFailed;
+            return false;
+        }
+        op.instruction_index =
+            static_cast<std::uint32_t>(frame_ops_.size());
+        frame_ops_.push_back(std::move(op));
+    }
+    return true;
+#else
     frame_ops_.clear();
     last_frame_order_.clear();
     frame_ops_.reserve(package_.frame.size());
@@ -2412,6 +2651,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     }
 #endif
     return ExitCode::Success;
+#endif
 }
 
 ExitCode PackagePlayer::CreateSwapChainAndFrames() {
