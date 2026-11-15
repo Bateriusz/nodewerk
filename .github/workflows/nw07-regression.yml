@@ -27,6 +27,7 @@ jobs:
         run: python -m pip install pytest
       - name: Run NW-07 contract and regression tests
         run: python -m pytest -q tests/test_nw07_*.py
+      # Compile the exact frozen C++ branches on Linux before the Windows export.
       - name: Configure NW-07 frozen host compile gate
         run: >-
           cmake -S . -B build/nw07-frozen-host -G Ninja
