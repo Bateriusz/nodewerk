@@ -61,7 +61,9 @@
     "src/player/player_instrumentation.h",
     "src/player/resource_plan.cpp",
     "src/player/resource_plan.h",
+    "tools/dependency_check.py",
     "tools/nw03_compiler.py",
+    "tools/nw03_oracle.py",
     "tools/nw04_fixture.py",
     "tools/nw05_export.py",
     "tools/nw05_optimizer.py",
@@ -70,10 +72,11 @@
     "tools/nw06_procedural.py",
     "tools/nw06_timeline.py",
     "tools/nwp_package.py",
+    "tools/offline_shader_pack.py",
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:32de631e5933329be60689014e6b4682abe390c259e9e8891419d8c5b3ea3470",
+  "build_inputs_digest": "sha256:v1:b24527c0376e1885a34412edb7acadec93ac92dceb02b6dc329064b9250ec7ed",
   "loop": {
     "looping": true,
     "wrap": "modulo",
@@ -129,13 +132,13 @@
       "model": "directional",
       "direction": [
         -0.4,
-        -1.0,
+        -1,
         -0.3
       ],
       "color": [
-        1.0,
-        1.0,
-        1.0
+        1,
+        1,
+        1
       ]
     },
     "bloom": {
@@ -183,7 +186,7 @@
     "stretch_distribution_bytes_ceiling": 131072,
     "stretch_is_mandatory_gate": false,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000.0
+    "process_start_to_first_present_ms_ceiling": 2000
   },
   "fixed_tick_evaluation": {
     "ticks": [
@@ -225,11 +228,14 @@
     "pinned_toolchain_enforcement": "ON",
     "present_sync_interval": 0,
     "specialized_build_requires_empty_directory": true,
-    "codegen": "graph-derived generated player source"
+    "codegen": "graph-derived generated player source",
+    "toolchain_file": "cmake/toolchains/msvc-x64.cmake",
+    "crt_elimination_experiment": "OFF",
+    "capture_controls": "OFF"
   },
   "image_tolerances": {
     "numeric": {
-      "absolute": 1e-05,
+      "absolute": 0.00001,
       "relative": 0.0001,
       "mode": "absolute_or_relative"
     },
@@ -240,19 +246,19 @@
     },
     "per_device": {
       "desktop_ada_representative": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_representative": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_development_series": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
@@ -267,7 +273,7 @@
       "p99_gpu_frame_time_ms",
       "p99_cpu_submit_ms"
     ],
-    "matched_environment_relative_alert_percent": 10.0,
+    "matched_environment_relative_alert_percent": 10,
     "size_percentage_only_failure": false,
     "relative_comparison_requires_matched_environment": true,
     "per_change_checks": [
