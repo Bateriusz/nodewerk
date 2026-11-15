@@ -25,6 +25,16 @@ def _report() -> dict:
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "host": {
             "execution_kind": "physical",
+            "passthrough_documentation": "",
+            "virtualization_probe": {
+                "available": True,
+                "manufacturer": "ASUSTeK COMPUTER INC.",
+                "model": "Physical Desktop",
+                "hypervisor_present": False,
+                "error": "",
+            },
+            "virtualization_indicators": [],
+            "physical_host_evidence": True,
             "platform": "Windows",
             "release": "11",
             "os_build": "10.0.26100.2314",
@@ -220,6 +230,8 @@ def test_clean_system_cli_records_pending_without_prerequisites(tmp_path: Path) 
             str(tmp_path / "package"),
             "--deployment",
             str(tmp_path),
+            "--execution-kind",
+            "physical",
             "--output",
             str(output),
         ]
@@ -243,6 +255,8 @@ def test_clean_system_cli_does_not_crash_on_windows_without_prerequisites(
             str(tmp_path / "package"),
             "--deployment",
             str(tmp_path / "deployment"),
+            "--execution-kind",
+            "physical",
             "--output",
             str(output),
         ]

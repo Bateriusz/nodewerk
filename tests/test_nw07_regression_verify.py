@@ -36,6 +36,16 @@ ENVIRONMENT = {
 def _clean_host() -> dict:
     return {
         "execution_kind": "physical",
+        "passthrough_documentation": "",
+        "virtualization_probe": {
+            "available": True,
+            "manufacturer": "ASUSTeK COMPUTER INC.",
+            "model": "Physical Desktop",
+            "hypervisor_present": False,
+            "error": "",
+        },
+        "virtualization_indicators": [],
+        "physical_host_evidence": True,
         "platform": "Windows",
         "release": "11",
         "os_build": "10.0.26100.2314",

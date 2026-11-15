@@ -177,9 +177,9 @@ def _correctness(tier: str) -> dict:
                 "artifact_sha256": identity["executable_sha256"],
                 "environment": {
                     "adapter_description": adapter,
-                    "driver_version": "610.88",
-                    "os_version": "Windows 11 10.0.26100",
-                    "toolchain_identity": "nw01-msvc-pinned",
+                    "driver_version": "566.36",
+                    "os_version": "10.0.26100.2314",
+                    "toolchain_identity": "msvc-ltcg",
                 },
             },
             "scaling_1440p": {
@@ -189,9 +189,9 @@ def _correctness(tier: str) -> dict:
                 "artifact_sha256": identity["executable_sha256"],
                 "environment": {
                     "adapter_description": adapter,
-                    "driver_version": "610.88",
-                    "os_version": "Windows 11 10.0.26100",
-                    "toolchain_identity": "nw01-msvc-pinned",
+                    "driver_version": "566.36",
+                    "os_version": "10.0.26100.2314",
+                    "toolchain_identity": "msvc-ltcg",
                 },
             },
         },

@@ -1355,7 +1355,8 @@ def _evidence_freshness_reasons(
             for item in matching
         ):
             reasons.append(
-                f"no fresh {label} capture exists inside the nightly window"
+                f"no fresh {label} capture exists inside the nightly window "
+                "(capture is missing or stale)"
             )
     return reasons
 
