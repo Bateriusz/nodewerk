@@ -1518,6 +1518,17 @@ def _graph_render_dimensions(
             setting_dimension(NW07_OUTPUT_HEIGHT_SETTING, NW07_DEFAULT_OUTPUT_HEIGHT),
         )
 
+    nw06_dimension_keys = ("nw06_output_width", "nw06_output_height")
+    if any(name in document.settings for name in nw06_dimension_keys):
+        # NW-06 has its own explicit presentation dimensions.  They describe
+        # the render target, independently of the procedural material texture
+        # dimensions below.  Keep both axes in the NW-06 namespace so a
+        # rectangular output cannot silently fall back to a square texture.
+        return (
+            setting_dimension("nw06_output_width", 256),
+            setting_dimension("nw06_output_height", 256),
+        )
+
     reachable = set(optimized.reachable_node_ids) | set(
         optimized.constants_folded
     )
