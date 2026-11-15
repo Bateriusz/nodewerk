@@ -4,6 +4,8 @@ import struct
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
@@ -23,6 +25,10 @@ def _uint_parameter(package: nwp.NwpPackage, name: str) -> int:
     return struct.unpack("<I", parameter.value)[0]
 
 
+def _param_float(node: nw03.GraphNode, name: str) -> float:
+    return float(node.params[name][0])
+
+
 def test_demo_graph_stays_inside_the_existing_nw07_vocabulary() -> None:
     report = demo.validate_demo_graph(GRAPH)
     assert report["branch_only"] is True
@@ -36,18 +42,18 @@ def test_demo_graph_stays_inside_the_existing_nw07_vocabulary() -> None:
     optimized = optimizer.optimize_graph(document)
     node_map = optimized.node_map()
 
-    assert node_map["torus"].params["major_segments"][0] == "32.0"
-    assert node_map["torus"].params["minor_segments"][0] == "8.0"
-    assert node_map["torus"].params["major_radius"][0] == "1.0"
-    assert node_map["torus"].params["minor_radius"][0] == "0.055"
-    assert node_map["instances"].params["placement_radius"][0] == "7.5"
-    assert node_map["instances"].params["scale_min"][0] == "0.045"
-    assert node_map["instances"].params["scale_max"][0] == "0.14"
-    assert node_map["camera"].params["fov_degrees"][0] == "78.0"
-    assert node_map["camera"].params["radius_min"][0] == "5.2"
-    assert node_map["camera"].params["radius_max"][0] == "5.2"
-    assert node_map["twist"].params["max_twist_degrees"][0] == "720.0"
-    assert node_map["bloom"].params["resolution_scale"][0] == "0.5"
+    assert _param_float(node_map["torus"], "major_segments") == pytest.approx(32.0)
+    assert _param_float(node_map["torus"], "minor_segments") == pytest.approx(8.0)
+    assert _param_float(node_map["torus"], "major_radius") == pytest.approx(1.0)
+    assert _param_float(node_map["torus"], "minor_radius") == pytest.approx(0.055)
+    assert _param_float(node_map["instances"], "placement_radius") == pytest.approx(7.5)
+    assert _param_float(node_map["instances"], "scale_min") == pytest.approx(0.045)
+    assert _param_float(node_map["instances"], "scale_max") == pytest.approx(0.14)
+    assert _param_float(node_map["camera"], "fov_degrees") == pytest.approx(78.0)
+    assert _param_float(node_map["camera"], "radius_min") == pytest.approx(5.2)
+    assert _param_float(node_map["camera"], "radius_max") == pytest.approx(5.2)
+    assert _param_float(node_map["twist"], "max_twist_degrees") == pytest.approx(720.0)
+    assert _param_float(node_map["bloom"], "resolution_scale") == pytest.approx(0.5)
     assert node_map["tonemap"].params["operator"][0] == "aces"
 
 
@@ -92,8 +98,8 @@ def test_demo_does_not_replace_the_canonical_nw07_proof() -> None:
     experimental_optimized = optimizer.optimize_graph(experimental)
 
     assert CANONICAL_NW07 != GRAPH
-    assert canonical_optimized.node_map()["instances"].params["count"][0] == "256.0"
-    assert experimental_optimized.node_map()["instances"].params["count"][0] == "4096.0"
+    assert _param_float(canonical_optimized.node_map()["instances"], "count") == pytest.approx(256.0)
+    assert _param_float(experimental_optimized.node_map()["instances"], "count") == pytest.approx(4096.0)
     assert canonical.settings["nw07_loop_ticks"] == "960000"
     assert experimental.settings["nw07_loop_ticks"] == "1152000"
 
@@ -104,7 +110,7 @@ def test_demo_loop_curve_closes_exactly_after_one_revolution() -> None:
 
     assert keys[0] == [0, 0.0]
     assert keys[-1][0] == demo.LOOP_TICKS
-    assert abs(keys[-1][1] - 6.283185307179586) < 1e-12
+    assert keys[-1][1] == pytest.approx(6.283185307179586, abs=1e-12)
 
     document = nw03.load_graph(GRAPH)
     twist = float(document.nodes["twist"].params["max_twist_degrees"][0])
