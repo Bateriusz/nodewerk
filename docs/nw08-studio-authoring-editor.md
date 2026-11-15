@@ -110,6 +110,10 @@ into a newer generation.
 - Export calls `nw05_export.export_graph`; the CLI calls the same function.
   GUI and CLI exports of the same semantic graph, settings, pinned toolchain,
   and player inputs are byte-identical.
+- The GUI Export Settings dialog updates the live preview exporter and
+  toolchain identity immediately. Opening another graph or creating a new
+  proof preserves the launch preview mode, execution kind, resolution, and
+  export configuration through `StudioApplication.reopen()`.
 
 Preview reports include per-pass timings and deterministic size attribution.
 The native host accepts the configured GPU budget (`--memory-budget`) and
@@ -128,12 +132,16 @@ Compiler/semantic keys include:
 - capability-profile ID and requirements digest;
 - target profile and digest;
 - compiler settings and semantic/compiler inputs;
-- compiler id/version, DXC pin, target, optimization, OS/toolchain identity;
+- compiler id/version, the measured DXC version (or an explicit `unavailable`
+  marker), target, optimization, OS/toolchain identity;
 - generated shader/entry-point identity and bindings.
 
 Per-node device-resident realization keys use the node's canonical structural
 hash plus the same compiler/target inputs, and additionally include:
 
+- the preview width/height used for size attribution and exported artifacts;
+- the compiled shader specialization/blob identities and emitted
+  resource/root-signature binding identity from the existing export manifest;
 - the full compiler key;
 - the D3D12 device-instance recreation epoch;
 - capability-profile ID/digest;

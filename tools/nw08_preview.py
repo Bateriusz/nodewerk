@@ -125,6 +125,9 @@ class PreviewFrame:
     pass_timings: PassTimings = field(default_factory=lambda: PassTimings(()))
     size_attribution: Mapping[str, Any] = field(default_factory=dict)
     runtime_stats: Mapping[str, Any] = field(default_factory=dict)
+    shader_identity: str = ""
+    binding_identity: str = ""
+    node_shader_identities: Mapping[str, str] = field(default_factory=dict)
     backend: str = "reference"
     hardware_evidence: bool = False
     execution_kind: str = "contract_reference"
@@ -145,6 +148,9 @@ class PreviewFrame:
             "pass_timings": self.pass_timings.to_dict(),
             "size_attribution": dict(self.size_attribution),
             "runtime_stats": dict(self.runtime_stats),
+            "shader_identity": self.shader_identity,
+            "binding_identity": self.binding_identity,
+            "node_shader_identities": dict(self.node_shader_identities),
             "backend": self.backend,
             "hardware_evidence": self.hardware_evidence,
             "execution_kind": self.execution_kind,
@@ -236,6 +242,40 @@ def _int_param(node: nw03_compiler.GraphNode | None, name: str, default: int) ->
 def _toolchain_text(toolchain: ToolchainIdentity) -> str:
     return sha256_value(
         {"domain": "nw08.toolchain-identity.v1", **toolchain.to_key_fields()}
+    )
+
+
+def toolchain_identity_for(
+    dxc_executable: str | os.PathLike[str] | None,
+    *,
+    optimization: str = "O2",
+    os_build: str = "",
+    compiler_id: str = "nodewerkc",
+    compiler_version: str = "1",
+    target: str = "d3d12.fl12_0.sm6_0",
+) -> ToolchainIdentity:
+    """Build the toolchain identity actually used for compilation.
+
+    When a DXC executable is configured its measured version is part of every
+    compiler and device-resident key.  A missing/unqueryable DXC is represented
+    explicitly as ``unavailable`` rather than silently retaining the default
+    pinned version string.
+    """
+    dxc_version = "unavailable"
+    if dxc_executable:
+        try:
+            measured = nw03_compiler.query_dxc_version(str(dxc_executable))
+        except Exception:
+            measured = ""
+        if measured:
+            dxc_version = measured
+    return ToolchainIdentity(
+        compiler_id=compiler_id,
+        compiler_version=compiler_version,
+        dxc_version=dxc_version,
+        target=target,
+        optimization=optimization,
+        os_build=os_build,
     )
 
 
@@ -378,7 +418,121 @@ class PreviewExportBundle:
     package_path: Path | None = None
     executable_path: Path | None = None
     stats_path: Path | None = None
+    shader_identity: str = ""
+    binding_identity: str = ""
+    node_shader_identities: Mapping[str, str] = field(default_factory=dict)
     export_report: Mapping[str, Any] = field(default_factory=dict)
+
+
+def _export_preview_identities(
+    artifact: Any,
+) -> tuple[str, str, dict[str, str]]:
+    """Derive the actual generated shader/binding identities of an export.
+
+    These identities come from the compiled package, not from a second graph
+    model: shader rows are the export manifest's compiled specializations and
+    bindings are the emitted package resource/root-signature descriptors.
+    """
+    manifest = getattr(artifact, "manifest", {}) or {}
+    shader_rows = manifest.get("shaders") or []
+    canonical_shaders: list[dict[str, Any]] = []
+    node_entries: dict[str, list[str]] = {}
+    for row in shader_rows:
+        normalized = {
+            "specialization_id": str(row.get("specialization_id", "")),
+            "target": str(row.get("target", "")),
+            "blob_sha256": str(row.get("blob_sha256", "")),
+            "hlsl_sha256": str(row.get("hlsl_sha256", "")),
+            "execution_root": str(row.get("execution_root", "")),
+            "execution_order": int(row.get("execution_order", 0) or 0),
+            "output_region": int(row.get("output_region", 0) or 0),
+            "region_count": int(row.get("region_count", 1) or 1),
+            "unfused": bool(row.get("unfused", False)),
+            "root_node_ids": sorted(
+                str(node_id) for node_id in (row.get("root_node_ids") or [])
+            ),
+        }
+        canonical_shaders.append(normalized)
+        signature = sha256_value(
+            {
+                "domain": "nw08.preview.generated-shader.v1",
+                "shader": normalized,
+            }
+        )
+        for node_id in normalized["root_node_ids"]:
+            node_entries.setdefault(node_id, []).append(signature)
+    shader_identity = sha256_value(
+        {
+            "domain": "nw08.preview.shader-set.v1",
+            "shaders": sorted(
+                canonical_shaders,
+                key=lambda item: (
+                    item["specialization_id"],
+                    item["target"],
+                    item["blob_sha256"],
+                ),
+            ),
+        }
+    )
+    package = getattr(artifact, "package", None)
+    resources = (
+        [resource.to_dict() for resource in package.resources]
+        if package is not None
+        else []
+    )
+    root_signatures = (
+        [record.to_dict() for record in package.root_signatures]
+        if package is not None
+        else []
+    )
+    package_shaders = (
+        [
+            {
+                "entry_point": shader.entry_point,
+                "target": shader.target,
+                "blob_sha256": nwp_package.sha256_hex(shader.blob),
+                "root_signature_id": shader.root_signature_id,
+                "family": shader.family,
+                "thread_group_x": shader.thread_group_x,
+                "thread_group_y": shader.thread_group_y,
+                "thread_group_z": shader.thread_group_z,
+            }
+            for shader in package.shaders
+        ]
+        if package is not None
+        else []
+    )
+    binding_identity = sha256_value(
+        {
+            "domain": "nw08.preview.binding.v1",
+            "resources": sorted(
+                resources, key=lambda item: int(item["resource_id"])
+            ),
+            "root_signatures": sorted(
+                root_signatures,
+                key=lambda item: int(item["root_signature_id"]),
+            ),
+            "shaders": sorted(
+                package_shaders,
+                key=lambda item: (
+                    item["entry_point"],
+                    item["target"],
+                    item["blob_sha256"],
+                ),
+            ),
+        }
+    )
+    node_shader_identities = {
+        node_id: sha256_value(
+            {
+                "domain": "nw08.preview.node-shader.v1",
+                "node_id": node_id,
+                "shaders": sorted(signatures),
+            }
+        )
+        for node_id, signatures in node_entries.items()
+    }
+    return shader_identity, binding_identity, node_shader_identities
 
 
 class PreviewExporter(Protocol):
@@ -462,12 +616,18 @@ class RuntimePackageExporter:
         )
         artifact = result.artifacts[nwp_package.COMMON_PROFILE_ID]
         package_sha = hashlib.sha256(artifact.package_bytes).hexdigest()
+        shader_identity, binding_identity, node_shader_identities = (
+            _export_preview_identities(artifact)
+        )
         if self.mode == "package-host":
             package_path = work_directory / "edited-preview.nwp"
             package_path.write_bytes(artifact.package_bytes)
             return PreviewExportBundle(
                 package_sha256=package_sha,
                 package_path=package_path,
+                shader_identity=shader_identity,
+                binding_identity=binding_identity,
+                node_shader_identities=node_shader_identities,
                 export_report=result.to_dict(),
             )
         if artifact.executable_bytes is None:
@@ -479,6 +639,9 @@ class RuntimePackageExporter:
         return PreviewExportBundle(
             package_sha256=package_sha,
             executable_path=executable_path,
+            shader_identity=shader_identity,
+            binding_identity=binding_identity,
+            node_shader_identities=node_shader_identities,
             export_report=result.to_dict(),
         )
 
@@ -556,6 +719,44 @@ class WindowsRuntimePreviewBackend:
             optimization=optimization,
         )
 
+    def configure_exporter(
+        self,
+        *,
+        mode: str | None = None,
+        dxc_executable: str | None = None,
+        player_template: str | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
+        export_settings: nw05_export.ExportSettings | Mapping[str, Any] | None = None,
+        allow_test_payloads: bool | None = None,
+        optimization: str | None = None,
+    ) -> None:
+        """Replace the export configuration used by subsequent previews."""
+        selected_mode = self.mode if mode is None else mode
+        if selected_mode not in {"package-host", "embedded-player"}:
+            raise PreviewError(f"unsupported preview mode '{selected_mode}'")
+        if selected_mode == "package-host" and self.executable is None:
+            raise PreviewError(
+                "package-host preview requires a preview executable"
+            )
+        self.mode = selected_mode
+        self._physical_capable = (
+            os.name == "nt"
+            and not self._injected_runner
+            and selected_mode == "package-host"
+            and self.execution_kind
+            in {"physical", "documented_gpu_passthrough"}
+        )
+        self.hardware_evidence = self._physical_capable
+        self._exporter = RuntimePackageExporter(
+            mode=selected_mode,
+            dxc_executable=dxc_executable,
+            player_template=player_template,
+            cache_dir=cache_dir,
+            settings=export_settings,
+            allow_test_payloads=bool(allow_test_payloads),
+            optimization=optimization or "O2",
+        )
+
     def command(
         self,
         tick: int,
@@ -592,9 +793,9 @@ class WindowsRuntimePreviewBackend:
                 "--capture-dir",
                 str(capture_dir),
             ]
-        if self.memory_budget_bytes:
+        if self.mode == "package-host" and self.memory_budget_bytes:
             command.extend(["--memory-budget", str(int(self.memory_budget_bytes))])
-        if stats_path is not None:
+        if self.mode == "package-host" and stats_path is not None:
             command.extend(["--stats-json", str(stats_path)])
         return command
 
@@ -730,7 +931,9 @@ class WindowsRuntimePreviewBackend:
             except Exception:
                 sample = {}
             resources = estimate_size_attribution(document, width=width, height=height)
-            if "engine_resource_bytes" in stats:
+            if "peak_engine_resource_bytes" in stats:
+                engine_bytes = int(stats["peak_engine_resource_bytes"])
+            elif "engine_resource_bytes" in stats:
                 engine_bytes = int(stats["engine_resource_bytes"])
             else:
                 engine_bytes = int(resources.get("resident_payload_bytes", 0))
@@ -761,6 +964,9 @@ class WindowsRuntimePreviewBackend:
                 pass_timings=PassTimings(tuple(timings)),
                 size_attribution=resources,
                 runtime_stats=stats,
+                shader_identity=bundle.shader_identity,
+                binding_identity=bundle.binding_identity,
+                node_shader_identities=bundle.node_shader_identities,
                 backend=self.name,
                 hardware_evidence=physical,
                 execution_kind=(
@@ -775,6 +981,8 @@ class WindowsRuntimePreviewBackend:
 class _PendingPreviewJob:
     token: GenerationToken
     tick: int
+    width: int
+    height: int
     backend: PreviewBackend
     document: nw03_compiler.GraphDocument
     source_text: str
@@ -826,16 +1034,20 @@ class PreviewPipeline:
                 os_build = observed.os_build
             self.host_identity = observed
         else:
-            self.host_identity = discover_host_device_identity()
+            observed = discover_host_device_identity()
+            if not driver_version:
+                driver_version = observed.driver_version
+            if not os_build:
+                os_build = observed.os_build
             self.host_identity = replace(
-                self.host_identity,
+                observed,
                 adapter=adapter,
-                driver_version=driver_version or self.host_identity.driver_version,
-                os_build=os_build or self.host_identity.os_build,
+                driver_version=driver_version,
+                os_build=os_build,
                 available=adapter.available,
             )
         if toolchain is None:
-            self._toolchain = ToolchainIdentity(os_build=os_build)
+            self._toolchain = toolchain_identity_for(None, os_build=os_build)
         elif not toolchain.os_build and os_build:
             self._toolchain = replace(toolchain, os_build=os_build)
         else:
@@ -905,6 +1117,10 @@ class PreviewPipeline:
     def last_edit(self) -> EditResult | None:
         return self._last_edit
 
+    @property
+    def toolchain(self) -> ToolchainIdentity:
+        return self._toolchain
+
     # -- editing -----------------------------------------------------------
     def apply_edit(self, result: EditResult) -> EditResult:
         with self._state_lock:
@@ -951,6 +1167,8 @@ class PreviewPipeline:
             job = _PendingPreviewJob(
                 token=token,
                 tick=self.session.timeline_tick if tick is None else int(tick),
+                width=self.width,
+                height=self.height,
                 backend=backend or self.backend,
                 document=document,
                 source_text=emit_graph_text(document),
@@ -1016,8 +1234,8 @@ class PreviewPipeline:
             frame = job.backend.render(
                 job.document,
                 job.tick,
-                width=self.width,
-                height=self.height,
+                width=job.width,
+                height=job.height,
             )
         except PreviewError as exc:
             diagnostics = link_source_diagnostics(
@@ -1029,6 +1247,9 @@ class PreviewPipeline:
                 self._pending.pop(job_id, None)
                 if reservation is not None:
                     self._retire_reservation_locked(reservation)
+                current, current_reason = self._completion_current_locked(job)
+                if not current:
+                    return self._reject_locked(job.token, current_reason)
                 return self._reject_locked(
                     job.token, "preview_failed", diagnostics
                 )
@@ -1037,6 +1258,9 @@ class PreviewPipeline:
                 self._pending.pop(job_id, None)
                 if reservation is not None:
                     self._retire_reservation_locked(reservation)
+                current, current_reason = self._completion_current_locked(job)
+                if not current:
+                    return self._reject_locked(job.token, current_reason)
                 return self._reject_locked(
                     job.token,
                     "preview_device_lost",
@@ -1054,6 +1278,9 @@ class PreviewPipeline:
                 self._pending.pop(job_id, None)
                 if reservation is not None:
                     self._retire_reservation_locked(reservation)
+                current, current_reason = self._completion_current_locked(job)
+                if not current:
+                    return self._reject_locked(job.token, current_reason)
                 return self._reject_locked(
                     job.token,
                     "preview_failed",
@@ -1134,8 +1361,8 @@ class PreviewPipeline:
                 frame = ReferencePreviewBackend().render(
                     job.document,
                     job.tick,
-                    width=self.width,
-                    height=self.height,
+                    width=job.width,
+                    height=job.height,
                 )
             installed, install_reason, diagnostics = self._install_locked(
                 job, frame
@@ -1206,6 +1433,35 @@ class PreviewPipeline:
             return generation
 
     # -- cache keys / memory ----------------------------------------------
+    def set_toolchain(self, toolchain: ToolchainIdentity) -> None:
+        """Update the compiler/toolchain identity used by every key.
+
+        This does not increment the D3D12 device epoch, but it immediately
+        changes compiler and device-resident realization keys.
+        """
+        if not isinstance(toolchain, ToolchainIdentity):
+            raise PreviewError("set_toolchain requires a ToolchainIdentity")
+        with self._state_lock:
+            self._toolchain = toolchain
+            self.device.update_toolchain_identity(_toolchain_text(toolchain))
+            # A job submitted under the old toolchain/export identity must not
+            # install after that identity changes.
+            self._cancel_pending_locked(advance_generation=True)
+
+    def _cancel_pending_locked(self, *, advance_generation: bool = False) -> None:
+        for job_id in list(self._pending):
+            self.queue.cancel(job_id)
+        self._pending.clear()
+        if advance_generation:
+            # Evaluation inputs changed even though the semantic graph did
+            # not.  Advance the immutable snapshot generation so an already
+            # running render from the previous inputs cannot install.
+            self.queue.note_snapshot(self.queue.semantic_digest)
+
+    def invalidate_pending_jobs(self) -> None:
+        with self._state_lock:
+            self._cancel_pending_locked(advance_generation=True)
+
     def cache_keys(self) -> tuple[str, str]:
         inputs = self.session.cache_key_inputs(
             toolchain=self._toolchain,
@@ -1297,6 +1553,10 @@ class PreviewPipeline:
         self,
         document: nw03_compiler.GraphDocument,
         semantic_digest: str,
+        frame: PreviewFrame,
+        *,
+        width: int,
+        height: int,
     ) -> CacheKeyInputs:
         return CacheKeyInputs(
             semantic_digest=semantic_digest,
@@ -1307,11 +1567,19 @@ class PreviewPipeline:
             target_requirements_digest=document.requirements_digest,
             toolchain=self._toolchain,
             compiler_settings=dict(document.settings),
-            semantic_inputs={"document_profile": document.profile_id},
+            semantic_inputs={
+                "document_profile": document.profile_id,
+                "preview_width": width,
+                "preview_height": height,
+                "binding_identity": frame.binding_identity,
+            },
             compiler_inputs={
                 "compiler_id": self._toolchain.compiler_id,
                 "compiler_version": self._toolchain.compiler_version,
+                "binding_identity": frame.binding_identity,
             },
+            shader_identity=frame.shader_identity,
+            entry_point="preview",
         )
 
     def _node_realizations(
@@ -1323,8 +1591,8 @@ class PreviewPipeline:
         hashes = structural_hashes(document)
         sizes = node_size_attribution(
             document,
-            width=self.width,
-            height=self.height,
+            width=job.width,
+            height=job.height,
             total_bytes=max(1, int(frame.resident_bytes)),
         )
         profile = CapabilityProfileIdentity(
@@ -1344,13 +1612,21 @@ class PreviewPipeline:
                     "node_id": node_id,
                     "operator_id": node.operator_id,
                     "operator_version": node.version,
+                    "preview_width": job.width,
+                    "preview_height": job.height,
+                    "binding_identity": frame.binding_identity,
                 },
                 compiler_inputs={
                     "compiler_id": self._toolchain.compiler_id,
                     "compiler_version": self._toolchain.compiler_version,
                     "entry_point": f"node:{node.operator_id}",
+                    "binding_identity": frame.binding_identity,
                 },
                 observed_hardware={},
+                shader_identity=frame.node_shader_identities.get(
+                    node_id, frame.shader_identity
+                ),
+                entry_point=f"node:{node.operator_id}",
             )
             key = node_inputs.device_realization_key(
                 self.device.generation
@@ -1377,7 +1653,13 @@ class PreviewPipeline:
         persistent = bool(
             getattr(job.backend, "persistent_realizations", True)
         )
-        inputs = self._cache_inputs_for(job.document, job.token.semantic_digest)
+        inputs = self._cache_inputs_for(
+            job.document,
+            job.token.semantic_digest,
+            frame,
+            width=job.width,
+            height=job.height,
+        )
         compiler_key = inputs.compiler_key()
         device_key = inputs.device_realization_key(self.device.generation)
         rows = self._node_realizations(job, frame)
@@ -1473,7 +1755,7 @@ class PreviewPipeline:
         self, job: _PendingPreviewJob
     ) -> _RuntimeReservation:
         resources = estimate_size_attribution(
-            job.document, width=self.width, height=self.height
+            job.document, width=job.width, height=job.height
         )
         size_bytes = max(1, int(resources.get("resident_payload_bytes", 1)))
         key = sha256_value(
@@ -1551,7 +1833,7 @@ def create_preview_backend(
     memory_budget_bytes: int | None = None,
 ) -> PreviewBackend:
     """Select the real runtime backend when a player is supplied."""
-    if player_executable is not None:
+    if player_executable is not None or mode == "embedded-player":
         return WindowsRuntimePreviewBackend(
             player_executable,
             capture_controls=capture_controls,
@@ -1613,4 +1895,5 @@ __all__ = [
     "WindowsRuntimePreviewBackend",
     "create_preview_backend",
     "render_preview",
+    "toolchain_identity_for",
 ]

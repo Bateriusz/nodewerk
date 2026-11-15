@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw04_fixture  # noqa: E402
 import nw08_editor as editor  # noqa: E402
+import nw08_preview as preview  # noqa: E402
 import nw08_studio as studio  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 
@@ -242,6 +243,75 @@ def test_studio_configure_export_drives_the_existing_export_path(
     assert (
         application.report()["export_configuration"]["dxc_executable"] == str(dxc)
     )
+
+
+def test_configure_export_refreshes_live_backend_and_toolchain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nw08_test_toolchain
+
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    toolchain = nw08_test_toolchain.create_toolchain(tmp_path / "toolchain")
+    host = tmp_path / "preview-host.exe"
+    host.write_bytes(b"MZ")
+    application = studio.StudioApplication.create(
+        player_executable=host, preview_mode="package-host"
+    )
+    assert application.pipeline.toolchain.dxc_version == "unavailable"
+    application.configure_export(
+        dxc_executable=toolchain["dxc"],
+        player_template=toolchain["player_template"],
+        cache_dir=str(tmp_path / "cache"),
+        optimization="O1",
+    )
+    assert application.pipeline.toolchain.dxc_version == "1.8.2407.12"
+    assert application.pipeline.toolchain.optimization == "O1"
+    backend = application.pipeline.backend
+    assert isinstance(backend, preview.WindowsRuntimePreviewBackend)
+    assert backend._exporter.dxc_executable == toolchain["dxc"]
+    assert backend._exporter.player_template == toolchain["player_template"]
+    assert backend._exporter.cache_dir == str(tmp_path / "cache")
+    assert backend._exporter.optimization == "O1"
+
+
+def test_reopen_preserves_preview_and_export_configuration(
+    tmp_path: Path,
+) -> None:
+    import nw08_test_toolchain
+
+    toolchain = nw08_test_toolchain.create_toolchain(tmp_path / "toolchain")
+    host = tmp_path / "preview-host.exe"
+    host.write_bytes(b"MZ")
+    application = studio.StudioApplication.create(
+        player_executable=host,
+        preview_mode="embedded-player",
+        execution_kind="simulated",
+        dxc_executable=toolchain["dxc"],
+        player_template=toolchain["player_template"],
+        cache_dir=str(tmp_path / "cache"),
+        optimization="O3",
+        export_settings={"fusion_enabled": False},
+    )
+    reopened = application.reopen()
+    assert reopened.preview_mode == "embedded-player"
+    assert reopened.execution_kind == "simulated"
+    assert reopened.export_settings == {"fusion_enabled": False}
+    assert reopened.dxc_executable == toolchain["dxc"]
+    assert reopened.player_template == toolchain["player_template"]
+    assert reopened.cache_dir == str(tmp_path / "cache")
+    assert reopened.optimization == "O3"
+    assert isinstance(reopened.pipeline.backend, preview.WindowsRuntimePreviewBackend)
+
+
+def test_resolution_reconfiguration_invalidates_inflight_jobs() -> None:
+    application = studio.StudioApplication.create()
+    token = application.pipeline.submit_preview(tick=1)
+    application.configure_preview_resolution(1280, 720)
+    decision = application.pipeline.execute(token)
+    assert decision.accepted is False
+    assert decision.reason == "canceled"
+    assert application.report()["export_configuration"]["width"] == 1280
+    assert application.report()["export_configuration"]["height"] == 720
 
 
 def test_curve_and_connection_editing_with_undo() -> None:

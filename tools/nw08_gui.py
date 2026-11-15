@@ -23,7 +23,7 @@ REPO_ROOT = TOOLS_DIR.parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from nw08_editor import CurvePoint, EditorError, GraphEditorSession  # noqa: E402
+from nw08_editor import CurvePoint, EditorError  # noqa: E402
 from nw08_studio import DEFAULT_GPU_CACHE_BUDGET, StudioApplication  # noqa: E402
 
 
@@ -562,14 +562,7 @@ class StudioWindow:
         self.status.configure(text="GPU cache budget updated")
 
     def new_proof(self) -> None:
-        self.application = StudioApplication.create(
-            gpu_cache_budget_bytes=self.application.gpu_cache_budget_bytes,
-            dxc_executable=self.application.dxc_executable or None,
-            player_template=self.application.player_template or None,
-            cache_dir=self.application.cache_dir or None,
-            optimization=self.application.optimization,
-            allow_test_payloads=self.application.allow_test_payloads,
-        )
+        self.application = self.application.reopen()
         self.curve_editor = CurveEditorBinding(self.application)
         self.refresh()
 
@@ -584,16 +577,7 @@ class StudioWindow:
         if not path:
             return
         try:
-            session = GraphEditorSession.create_nw07_proof(path)
-            self.application = StudioApplication.create(
-                path,
-                gpu_cache_budget_bytes=self.application.gpu_cache_budget_bytes,
-                dxc_executable=self.application.dxc_executable or None,
-                player_template=self.application.player_template or None,
-                cache_dir=self.application.cache_dir or None,
-                optimization=self.application.optimization,
-                allow_test_payloads=self.application.allow_test_payloads,
-            )
+            self.application = self.application.reopen(path)
             self.curve_editor = CurveEditorBinding(self.application)
         except (EditorError, OSError) as exc:
             self.status.configure(text=f"open failed: {exc}")

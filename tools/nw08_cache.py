@@ -485,6 +485,23 @@ class DeviceEpochManager:
         self._generation = replace(self._generation, lost=True)
         return self._generation
 
+    def update_toolchain_identity(self, toolchain_identity: str) -> DeviceGeneration:
+        """Update the toolchain identity without changing the device epoch.
+
+        DXC/target/optimization identities are part of device-resident
+        realization keys.  Reconfiguring the authoring toolchain must therefore
+        change those keys immediately; it does not represent a D3D12 device
+        recreation and must not increment the epoch.
+        """
+        if not isinstance(toolchain_identity, str) or not toolchain_identity:
+            raise CacheIdentityError(
+                "toolchain_identity must be a non-empty string"
+            )
+        self._generation = replace(
+            self._generation, toolchain_identity=toolchain_identity
+        )
+        return self._generation
+
     def reinitialize(
         self,
         *,

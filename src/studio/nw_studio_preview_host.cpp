@@ -103,7 +103,8 @@ bool WriteReadback(const std::string& path, const std::vector<std::uint8_t>& byt
 bool WriteStats(const std::string& path,
                 const nw::player::PlayerAllocationStats& stats,
                 bool using_aliased_plan, std::uint32_t width,
-                std::uint32_t height, bool fence_retired) {
+                std::uint32_t height, std::uint64_t peak_engine_resource_bytes,
+                bool fence_retired) {
     if (path.empty()) {
         return true;
     }
@@ -113,7 +114,8 @@ bool WriteStats(const std::string& path,
     }
     const int written = std::fprintf(
         file,
-        "{\"engine_resource_bytes\":%llu,\"engine_cumulative_resource_bytes\":%llu,"
+        "{\"engine_resource_bytes\":%llu,\"peak_engine_resource_bytes\":%llu,"
+        "\"engine_cumulative_resource_bytes\":%llu,"
         "\"engine_upload_bytes\":%llu,\"engine_descriptor_count\":%llu,"
         "\"engine_heap_count\":%llu,\"package_plan_bytes\":%llu,"
         "\"allocation_calls\":%llu,\"frames_rendered\":%llu,"
@@ -121,6 +123,7 @@ bool WriteStats(const std::string& path,
         "\"width\":%u,\"height\":%u,\"post_initialization_allocation_violation\":%s,"
         "\"fence_retired\":%s}\n",
         static_cast<unsigned long long>(stats.engine_resource_bytes),
+        static_cast<unsigned long long>(peak_engine_resource_bytes),
         static_cast<unsigned long long>(stats.engine_cumulative_resource_bytes),
         static_cast<unsigned long long>(stats.engine_upload_bytes),
         static_cast<unsigned long long>(stats.engine_descriptor_count),
@@ -186,13 +189,16 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-    const nw::player::PlayerAllocationStats stats = player.allocation_stats();
+    const nw::player::PlayerAllocationStats peak_stats =
+        player.allocation_stats();
     const bool using_aliased_plan = player.using_aliased_plan();
     const std::uint32_t width = player.width();
     const std::uint32_t height = player.height();
     const nw::player::ExitCode shutdown = player.shutdown();
+    const nw::player::PlayerAllocationStats stats = player.allocation_stats();
+    const bool fence_retired = shutdown == nw::player::ExitCode::Success;
     if (!WriteStats(options.stats_path, stats, using_aliased_plan, width, height,
-                    true)) {
+                    peak_stats.engine_resource_bytes, fence_retired)) {
         return 1;
     }
     return shutdown == nw::player::ExitCode::Success

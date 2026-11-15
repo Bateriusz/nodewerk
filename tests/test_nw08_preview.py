@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -236,7 +237,22 @@ def test_embedded_preview_launches_the_exported_player(tmp_path: Path) -> None:
     assert calls
     assert calls[0][0] == str(exported_executable[0])
     assert "--capture-tick" in calls[0]
+    assert "--memory-budget" not in calls[0]
+    assert "--stats-json" not in calls[0]
     assert frame.hardware_evidence is False
+
+
+def test_embedded_preview_backend_is_selected_without_a_host_executable() -> None:
+    backend = preview.create_preview_backend(
+        None,
+        mode="embedded-player",
+        dxc_executable="/tmp/unused-dxc",
+        player_template="/tmp/unused-template",
+        execution_kind="simulated",
+    )
+    assert isinstance(backend, preview.WindowsRuntimePreviewBackend)
+    assert backend.mode == "embedded-player"
+    assert backend.executable is None
 
 
 def test_windows_backend_explicit_physical_with_stub_is_not_evidence(
@@ -299,6 +315,7 @@ class _GateBackend(preview.ReferencePreviewBackend):
 
     def __init__(self) -> None:
         self.block = False
+        self.fail_after_release = False
         self.entered = threading.Event()
         self.release = threading.Event()
         self.calls = 0
@@ -309,7 +326,35 @@ class _GateBackend(preview.ReferencePreviewBackend):
             self.entered.set()
             if not self.release.wait(10):
                 raise preview.PreviewError("test gate timed out")
+            if self.fail_after_release:
+                raise preview.PreviewError(
+                    "compiler failed after the job became obsolete",
+                    [
+                        {
+                            "category": "compiler",
+                            "severity": "error",
+                            "code": "should_not_win",
+                            "message": "stale failure diagnostic",
+                        }
+                    ],
+                )
         return super().render(document, tick, width=width, height=height)
+
+
+class _IdentityBackend(preview.ReferencePreviewBackend):
+    name = "identity-reference"
+
+    def __init__(self) -> None:
+        self.shader_identity = "sha256:v1:" + "1" * 64
+        self.binding_identity = "sha256:v1:" + "2" * 64
+
+    def render(self, document, tick, *, width, height):
+        frame = super().render(document, tick, width=width, height=height)
+        return replace(
+            frame,
+            shader_identity=self.shader_identity,
+            binding_identity=self.binding_identity,
+        )
 
 
 def test_submitted_job_renders_its_frozen_snapshot() -> None:
@@ -399,6 +444,56 @@ def test_inflight_completion_after_device_recreation_is_rejected() -> None:
     assert pipeline.last_valid_preview is None
 
 
+def test_failing_render_after_edit_reports_obsolete_snapshot() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    backend = _GateBackend()
+    pipeline = preview.PreviewPipeline(session, backend=backend)
+    assert pipeline.preview_now(tick=0).accepted
+
+    backend.block = True
+    backend.fail_after_release = True
+    token = pipeline.submit_preview(tick=1)
+    results: list[preview.CompletionDecision] = []
+    worker = threading.Thread(target=lambda: results.append(pipeline.execute(token)))
+    worker.start()
+    assert backend.entered.wait(10)
+    pipeline.apply_edit(session.set_parameter("camera", "fov_degrees", "55"))
+    backend.release.set()
+    worker.join(10)
+
+    assert results and results[0].accepted is False
+    assert results[0].reason == "obsolete_snapshot_generation"
+    assert all(
+        diagnostic.get("code") != "should_not_win"
+        for diagnostic in pipeline.last_diagnostics
+    )
+
+
+def test_failing_render_after_device_loss_reports_device_rejection() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    backend = _GateBackend()
+    pipeline = preview.PreviewPipeline(session, backend=backend)
+    assert pipeline.preview_now(tick=0).accepted
+
+    backend.block = True
+    backend.fail_after_release = True
+    token = pipeline.submit_preview(tick=1)
+    results: list[preview.CompletionDecision] = []
+    worker = threading.Thread(target=lambda: results.append(pipeline.execute(token)))
+    worker.start()
+    assert backend.entered.wait(10)
+    pipeline.handle_device_loss()
+    backend.release.set()
+    worker.join(10)
+
+    assert results and results[0].accepted is False
+    assert results[0].reason in {"device_lost", "obsolete_device_epoch"}
+    assert all(
+        diagnostic.get("code") != "should_not_win"
+        for diagnostic in pipeline.last_diagnostics
+    )
+
+
 def test_render_failure_returns_rejected_and_retains_last_valid() -> None:
     session = editor.GraphEditorSession.create_nw07_proof()
     backend = _GateBackend()
@@ -481,6 +576,40 @@ def test_parameter_edit_reuses_unchanged_per_node_realizations() -> None:
     assert pipeline.cache.stats["hits"] >= len(second.cached_nodes)
 
 
+def test_shader_or_binding_identity_change_invalidates_all_realizations() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    backend = _IdentityBackend()
+    pipeline = preview.PreviewPipeline(session, backend=backend)
+    assert pipeline.preview_now(tick=0).accepted
+    first = pipeline.last_valid_preview
+    assert first is not None
+    first_keys = dict(first.node_realization_keys)
+    assert first.frame.shader_identity == backend.shader_identity
+    assert first.frame.binding_identity == backend.binding_identity
+
+    pipeline.apply_parameter_edit("texture", "seed", "1297036694")
+    assert pipeline.preview_now(tick=0).accepted
+    stable = pipeline.last_valid_preview
+    assert stable is not None
+    assert set(stable.cached_nodes) == {
+        "camera",
+        "instances",
+        "mesh_gpu",
+        "scene_gpu",
+        "sun",
+        "torus",
+        "twist",
+    }
+
+    backend.shader_identity = "sha256:v1:" + "3" * 64
+    assert pipeline.preview_now(tick=0).accepted
+    changed = pipeline.last_valid_preview
+    assert changed is not None
+    assert changed.cached_nodes == ()
+    changed_keys = dict(changed.node_realization_keys)
+    assert all(first_keys[node_id] != changed_keys[node_id] for node_id in first_keys)
+
+
 def test_runtime_preview_reservation_bounds_real_gpu_budget() -> None:
     session = editor.GraphEditorSession.create_nw07_proof()
 
@@ -555,4 +684,158 @@ def test_runtime_preview_command_carries_budget_and_stats(tmp_path: Path) -> Non
     assert "67108864" in calls[0]
     assert "--stats-json" in calls[0]
     assert frame.resident_bytes == 12345
+
+
+def test_preview_resolution_is_part_of_realization_keys() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(session, width=1920, height=1080)
+    assert pipeline.preview_now(tick=0).accepted
+    first = pipeline.last_valid_preview
+    assert first is not None
+    first_keys = dict(first.node_realization_keys)
+    pipeline.width = 1280
+    pipeline.height = 720
+    assert pipeline.preview_now(tick=0).accepted
+    second = pipeline.last_valid_preview
+    assert second is not None
+    second_keys = dict(second.node_realization_keys)
+    assert second.cached_nodes == ()
+    assert all(first_keys[node_id] != second_keys[node_id] for node_id in first_keys)
+
+
+def test_submitted_job_freezes_preview_resolution() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(session, width=1920, height=1080)
+    token = pipeline.submit_preview(tick=2)
+    pipeline.width = 1280
+    pipeline.height = 720
+    decision = pipeline.execute(token)
+    assert decision.accepted is True
+    record = pipeline.last_valid_preview
+    assert record is not None
+    assert record.frame.width == 1920
+    assert record.frame.height == 1080
+
+
+def test_toolchain_identity_is_part_of_realization_keys() -> None:
+    import nw08_cache
+
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(session)
+    assert pipeline.preview_now(tick=0).accepted
+    first = pipeline.last_valid_preview
+    assert first is not None
+    first_keys = dict(first.node_realization_keys)
+    pipeline.set_toolchain(
+        nw08_cache.ToolchainIdentity(
+            dxc_version="9.9.9-test",
+            optimization="O1",
+            os_build=pipeline.toolchain.os_build,
+        )
+    )
+    assert pipeline.preview_now(tick=0).accepted
+    second = pipeline.last_valid_preview
+    assert second is not None
+    second_keys = dict(second.node_realization_keys)
+    assert second.cached_nodes == ()
+    assert all(first_keys[node_id] != second_keys[node_id] for node_id in first_keys)
+    assert pipeline.device.generation.toolchain_identity
+
+
+def test_toolchain_change_cancels_inflight_jobs() -> None:
+    import nw08_cache
+
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(session)
+    token = pipeline.submit_preview(tick=1)
+    pipeline.set_toolchain(
+        nw08_cache.ToolchainIdentity(
+            dxc_version="9.9.9-test",
+            os_build=pipeline.toolchain.os_build,
+        )
+    )
+    decision = pipeline.execute(token)
+    assert decision.accepted is False
+    assert decision.reason == "canceled"
+
+
+def test_toolchain_change_during_render_rejects_completion() -> None:
+    import nw08_cache
+
+    session = editor.GraphEditorSession.create_nw07_proof()
+    backend = _GateBackend()
+    pipeline = preview.PreviewPipeline(session, backend=backend)
+    assert pipeline.preview_now(tick=0).accepted
+    original = pipeline.last_valid_preview
+    assert original is not None
+
+    backend.block = True
+    token = pipeline.submit_preview(tick=1)
+    results: list[preview.CompletionDecision] = []
+    worker = threading.Thread(target=lambda: results.append(pipeline.execute(token)))
+    worker.start()
+    assert backend.entered.wait(10)
+    pipeline.set_toolchain(
+        nw08_cache.ToolchainIdentity(
+            dxc_version="9.9.9-test",
+            os_build=pipeline.toolchain.os_build,
+        )
+    )
+    backend.release.set()
+    worker.join(10)
+
+    assert results and results[0].accepted is False
+    assert results[0].reason == "obsolete_snapshot_generation"
+    assert pipeline.last_valid_preview is original
+
+
+def test_generated_shader_and_binding_identities_are_keyed() -> None:
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(session)
+    assert pipeline.preview_now(tick=0).accepted
+    first = pipeline.last_valid_preview
+    assert first is not None
+    # The reference backend has no compiled shader package, but the key inputs
+    # still carry explicit empty identities.  The real runtime backend fills
+    # these from the export manifest/package.
+    assert first.frame.shader_identity == ""
+    assert first.frame.binding_identity == ""
+
+
+def test_explicit_adapter_merges_discovered_driver_and_os() -> None:
+    import nw08_cache
+
+    session = editor.GraphEditorSession.create_nw07_proof()
+    pipeline = preview.PreviewPipeline(
+        session,
+        adapter=nw08_cache.AdapterDeviceIdentity(0x1002, 0x744C, 1, "explicit"),
+    )
+    generation = pipeline.device.generation
+    assert generation.driver_version == pipeline.host_identity.driver_version
+    assert generation.os_build == pipeline.host_identity.os_build
+    assert generation.driver_version
+    assert generation.os_build
+
+
+def test_export_bundle_carries_compiled_shader_and_binding_identities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    import nw08_test_toolchain
+
+    toolchain = nw08_test_toolchain.create_toolchain(tmp_path / "toolchain")
+    session = editor.GraphEditorSession.create_nw07_proof()
+    exporter = preview.RuntimePackageExporter(
+        mode="package-host",
+        dxc_executable=toolchain["dxc"],
+        player_template=toolchain["player_template"],
+        allow_test_payloads=True,
+    )
+    bundle = exporter.export(
+        session.document, tmp_path / "work", width=1920, height=1080
+    )
+    assert bundle.package_sha256
+    assert bundle.shader_identity.startswith("sha256:v1:")
+    assert bundle.binding_identity.startswith("sha256:v1:")
+    assert isinstance(bundle.node_shader_identities, dict)
 

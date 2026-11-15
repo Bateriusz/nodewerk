@@ -46,8 +46,9 @@ from nw08_editor import (  # noqa: E402
 from nw08_preview import (  # noqa: E402
     PreviewBackend,
     PreviewPipeline,
-    ReferencePreviewBackend,
+    WindowsRuntimePreviewBackend,
     create_preview_backend,
+    toolchain_identity_for,
 )
 
 DEFAULT_GPU_CACHE_BUDGET = 512 * 1024 * 1024
@@ -66,6 +67,13 @@ class StudioApplication:
     cache_dir: str = ""
     optimization: str = "O2"
     allow_test_payloads: bool = False
+    player_executable: str = ""
+    capture_controls: bool = True
+    preview_mode: str = "package-host"
+    execution_kind: str = "simulated"
+    width: int = 1920
+    height: int = 1080
+    explicit_backend: bool = False
 
     @classmethod
     def create(
@@ -96,6 +104,12 @@ class StudioApplication:
             if graph is not None
             else GraphEditorSession.create_nw07_proof()
         )
+        if toolchain is None:
+            toolchain = toolchain_identity_for(
+                dxc_executable,
+                optimization=optimization,
+                os_build=os_build,
+            )
         selected_backend = backend or create_preview_backend(
             player_executable,
             capture_controls=capture_controls,
@@ -130,6 +144,55 @@ class StudioApplication:
             cache_dir=str(cache_dir or ""),
             optimization=optimization,
             allow_test_payloads=allow_test_payloads,
+            player_executable=str(player_executable or ""),
+            capture_controls=capture_controls,
+            preview_mode=preview_mode,
+            execution_kind=execution_kind,
+            width=width,
+            height=height,
+            explicit_backend=backend is not None,
+        )
+
+    def _build_backend(self) -> PreviewBackend:
+        return create_preview_backend(
+            self.player_executable or None,
+            capture_controls=self.capture_controls,
+            mode=self.preview_mode,
+            dxc_executable=self.dxc_executable or None,
+            player_template=self.player_template or None,
+            cache_dir=self.cache_dir or None,
+            export_settings=self.export_settings,
+            allow_test_payloads=self.allow_test_payloads,
+            optimization=self.optimization,
+            execution_kind=self.execution_kind,
+            memory_budget_bytes=self.gpu_cache_budget_bytes,
+        )
+
+    def reopen(
+        self, graph: str | os.PathLike[str] | None = None
+    ) -> "StudioApplication":
+        """Rebuild the session while preserving launch/export configuration."""
+        generation = self.pipeline.device.generation
+        return StudioApplication.create(
+            graph,
+            backend=self.pipeline.backend if self.explicit_backend else None,
+            gpu_cache_budget_bytes=self.gpu_cache_budget_bytes,
+            player_executable=self.player_executable or None,
+            capture_controls=self.capture_controls,
+            width=self.width,
+            height=self.height,
+            export_settings=self.export_settings,
+            adapter=generation.adapter,
+            driver_version=generation.driver_version,
+            os_build=generation.os_build,
+            toolchain=self.pipeline.toolchain,
+            preview_mode=self.preview_mode,
+            dxc_executable=self.dxc_executable or None,
+            player_template=self.player_template or None,
+            cache_dir=self.cache_dir or None,
+            optimization=self.optimization,
+            allow_test_payloads=self.allow_test_payloads,
+            execution_kind=self.execution_kind,
         )
 
     # -- editing ----------------------------------------------------------
@@ -230,6 +293,15 @@ class StudioApplication:
         if hasattr(self.pipeline.backend, "memory_budget_bytes"):
             self.pipeline.backend.memory_budget_bytes = budget_bytes
 
+    def configure_preview_resolution(self, width: int, height: int) -> None:
+        if width <= 0 or height <= 0:
+            raise EditorError("preview resolution must be positive")
+        self.width = int(width)
+        self.height = int(height)
+        self.pipeline.width = self.width
+        self.pipeline.height = self.height
+        self.pipeline.invalidate_pending_jobs()
+
     @property
     def budget_bytes(self) -> int:
         return self.gpu_cache_budget_bytes
@@ -327,6 +399,30 @@ class StudioApplication:
             self.allow_test_payloads = bool(allow_test_payloads)
         if settings is not None:
             self.export_settings = dict(settings)
+        current_toolchain = self.pipeline.toolchain
+        self.pipeline.set_toolchain(
+            toolchain_identity_for(
+                self.dxc_executable or None,
+                optimization=self.optimization,
+                os_build=self.pipeline.device.generation.os_build,
+                compiler_id=current_toolchain.compiler_id,
+                compiler_version=current_toolchain.compiler_version,
+                target=current_toolchain.target,
+            )
+        )
+        if not self.explicit_backend:
+            self.pipeline.backend = self._build_backend()
+        elif isinstance(self.pipeline.backend, WindowsRuntimePreviewBackend):
+            self.pipeline.backend.configure_exporter(
+                mode=self.preview_mode,
+                dxc_executable=self.dxc_executable or None,
+                player_template=self.player_template or None,
+                cache_dir=self.cache_dir or None,
+                export_settings=self.export_settings,
+                allow_test_payloads=self.allow_test_payloads,
+                optimization=self.optimization,
+            )
+            self.pipeline.backend.memory_budget_bytes = self.gpu_cache_budget_bytes
 
     # -- reporting --------------------------------------------------------
     def report(self) -> dict[str, Any]:
@@ -345,6 +441,10 @@ class StudioApplication:
                 "cache_dir": self.cache_dir,
                 "optimization": self.optimization,
                 "allow_test_payloads": self.allow_test_payloads,
+                "preview_mode": self.preview_mode,
+                "player_executable": self.player_executable,
+                "width": self.width,
+                "height": self.height,
             },
             "hardware_evidence": bool(
                 self.pipeline.last_valid_frame

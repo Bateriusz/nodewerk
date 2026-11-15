@@ -226,7 +226,7 @@ def _real_preview(
     cache_dir: str | None,
     preview_mode: str,
 ) -> dict[str, Any]:
-    if not player_executable:
+    if not player_executable and preview_mode != "embedded-player":
         return _check(
             "real_preview",
             "pending_unverified",
@@ -238,14 +238,26 @@ def _real_preview(
             "failed",
             {"reason": f"unsupported execution kind '{execution_kind}'"},
         )
-    if preview_mode == "package-host" and not (player_template and dxc):
+    if not (player_template and dxc):
         return _check(
             "real_preview",
             "pending_unverified",
             {
                 "reason": (
-                    "package-host preview requires both --player-template and "
-                    "--dxc so the edited graph can be compiled before display"
+                    "real preview requires both --player-template and --dxc "
+                    "so the edited graph can be compiled before display"
+                )
+            },
+        )
+    if preview_mode != "package-host":
+        return _check(
+            "real_preview",
+            "pending_unverified",
+            {
+                "reason": (
+                    "physical preview evidence requires package-host mode; "
+                    "use the embedded_preview_compatibility check for the "
+                    "generated-player path"
                 )
             },
         )
@@ -270,7 +282,11 @@ def _real_preview(
             "pending_unverified" if not capture_controls else "failed",
             {"reason": str(exc)},
         )
-    pipeline = preview.PreviewPipeline(session, backend=backend)
+    pipeline = preview.PreviewPipeline(
+        session,
+        backend=backend,
+        toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
+    )
     results = []
     for tick in ticks:
         token = pipeline.submit_preview(tick=tick)
@@ -317,6 +333,85 @@ def _real_preview(
             "execution_kind": execution_kind,
             "frames": results,
         },
+    )
+
+
+def _embedded_preview_compatibility(
+    *,
+    player_template: str | None,
+    dxc: str | None,
+    cache_dir: str | None,
+    ticks: Sequence[int],
+    allow_test_payloads: bool,
+) -> dict[str, Any]:
+    """Exercise the generated-player path without claiming hardware evidence."""
+    if not (player_template and dxc):
+        return _check(
+            "embedded_preview_compatibility",
+            "pending_unverified",
+            {"reason": "player template and pinned DXC are required"},
+        )
+    if allow_test_payloads:
+        return _check(
+            "embedded_preview_compatibility",
+            "pending_unverified",
+            {
+                "reason": (
+                    "fixture payloads cannot produce a runnable generated "
+                    "player; use real pinned tools"
+                )
+            },
+        )
+    session = editor.GraphEditorSession.create_nw07_proof()
+    session.set_parameter("camera", "fov_degrees", "55")
+    try:
+        backend = preview.WindowsRuntimePreviewBackend(
+            None,
+            mode="embedded-player",
+            dxc_executable=dxc,
+            player_template=player_template,
+            cache_dir=cache_dir,
+            execution_kind="simulated",
+            memory_budget_bytes=512 * 1024 * 1024,
+        )
+    except preview.PreviewError as exc:
+        return _check(
+            "embedded_preview_compatibility",
+            "failed",
+            {"reason": str(exc)},
+        )
+    pipeline = preview.PreviewPipeline(
+        session,
+        backend=backend,
+        toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
+    )
+    frames = []
+    for tick in ticks:
+        token = pipeline.submit_preview(tick=tick)
+        decision = pipeline.execute(token)
+        record = pipeline.last_valid_preview
+        if (
+            not decision.accepted
+            or record is None
+            or record.token.job_id != token.job_id
+            or record.frame.tick != tick
+            or not record.frame.image_sha256
+            or record.frame.hardware_evidence
+        ):
+            return _check(
+                "embedded_preview_compatibility",
+                "failed",
+                {
+                    "tick": tick,
+                    "decision": decision.to_dict(),
+                    "diagnostics": pipeline.last_diagnostics,
+                },
+            )
+        frames.append(record.frame.to_dict())
+    return _check(
+        "embedded_preview_compatibility",
+        "passed",
+        {"execution_kind": "simulated_runtime", "frames": frames},
     )
 
 
@@ -445,6 +540,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dxc=args.dxc,
                 cache_dir=args.cache_dir,
                 preview_mode=args.preview_mode,
+            )
+        )
+        checks.append(
+            _embedded_preview_compatibility(
+                player_template=args.player_template,
+                dxc=args.dxc,
+                cache_dir=args.cache_dir,
+                ticks=ticks,
+                allow_test_payloads=args.allow_test_payloads,
             )
         )
 
