@@ -1026,7 +1026,16 @@ def _ensure_nw02_digest_binary() -> Path | None:
     if _NW02_DIGEST_BINARY is not None:
         return _NW02_DIGEST_BINARY or None  # type: ignore[return-value]
     compiler = None
-    for name in ("c++", "g++", "clang++", "clang-cl", "cl"):
+    # On Windows prefer the active native toolchain.  Generic c++/g++ names
+    # frequently resolve to an unrelated MinGW installation even when the
+    # pinned MSVC/clang-cl environment is already active, making this
+    # authoritative digest helper nondeterministic and dramatically slower.
+    compiler_names = (
+        ("cl", "clang-cl", "clang++", "c++", "g++")
+        if os.name == "nt"
+        else ("c++", "g++", "clang++", "clang-cl", "cl")
+    )
+    for name in compiler_names:
         compiler = shutil.which(name)
         if compiler:
             break
