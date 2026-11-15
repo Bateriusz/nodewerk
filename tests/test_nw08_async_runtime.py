@@ -245,6 +245,7 @@ def test_gui_photoimage_receives_raw_ppm_bytes() -> None:
     fake_tk = FakeTk()
     window = object.__new__(gui.StudioWindow)
     window.tk = fake_tk
+    window.root = object()
     window.application = SimpleNamespace(
         pipeline=SimpleNamespace(last_valid_frame=frame)
     )
@@ -254,7 +255,7 @@ def test_gui_photoimage_receives_raw_ppm_bytes() -> None:
     window.refresh_preview_image()
 
     assert fake_tk.calls
-    assert fake_tk.calls[0]["format"] == "PPM"
+    assert fake_tk.calls[0]["format"] == "ppm"
     assert isinstance(fake_tk.calls[0]["data"], bytes)
     assert fake_tk.calls[0]["data"].startswith(b"P6\n")
     assert window.preview_label.config["image"] is window._preview_photo
