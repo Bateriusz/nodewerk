@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef NW08_AUTHORING_RUNTIME
+#define NW08_AUTHORING_RUNTIME 0
+#endif
+
 // Minimal package-driven Windows 11 x64 D3D12 player.
 //
 // Public lifetime:
@@ -101,6 +105,29 @@ struct PlayerAllocationStats {
 
 struct PlatformState;
 
+#if NW08_AUTHORING_RUNTIME
+struct AuthoringAdapterIdentity {
+    std::uint32_t vendor_id = 0u;
+    std::uint32_t device_id = 0u;
+    std::uint32_t subsystem_id = 0u;
+    std::uint32_t luid_low = 0u;
+    std::int32_t luid_high = 0;
+    bool available = false;
+    bool software = false;
+};
+
+struct AuthoringReloadResult {
+    ExitCode exit_code = ExitCode::Success;
+    bool requires_device_recreation = false;
+    std::uint32_t reused_resources = 0u;
+    std::uint32_t recreated_resources = 0u;
+    std::uint32_t reused_root_signatures = 0u;
+    std::uint32_t recreated_root_signatures = 0u;
+    std::uint32_t reused_pipelines = 0u;
+    std::uint32_t recreated_pipelines = 0u;
+};
+#endif
+
 class PackagePlayer {
 public:
     PackagePlayer();
@@ -121,6 +148,17 @@ public:
     ExitCode readbackPresentedOutput(std::vector<std::uint8_t>* bytes);
     ExitCode resize(std::uint32_t width, std::uint32_t height);
     ExitCode shutdown();
+#if NW08_AUTHORING_RUNTIME
+    // Authoring-only hot reload.  It preserves the selected D3D12 device and
+    // fence domain when the package resource layout is compatible, retaining
+    // unchanged device-resident realizations.  Release/player builds compile
+    // this surface out completely.
+    AuthoringReloadResult reloadForAuthoringFromFile(const char* package_path);
+    AuthoringAdapterIdentity authoringAdapterIdentity() const noexcept;
+    const AuthoringReloadResult& authoring_reload_stats() const noexcept {
+        return authoring_reload_stats_;
+    }
+#endif
 
     // Uppercase aliases keep the C++ surface easy to discover next to the
     // lower-case contract names above.
@@ -260,6 +298,9 @@ private:
     bool CheckDeviceRemoved(const char* stage);
     bool CheckD3D12Validation(const char* stage);
     ExitCode CheckMemoryBudget(const char* stage);
+#if NW08_AUTHORING_RUNTIME
+    bool IsAuthoringRetainedResource(std::uint32_t resource_id) const noexcept;
+#endif
 
     PlayerConfig config_{};
     ExitCode last_exit_ = ExitCode::Success;
@@ -371,6 +412,11 @@ private:
     };
     std::vector<FrameOp> frame_ops_;
     std::vector<std::string> last_frame_order_;
+#if NW08_AUTHORING_RUNTIME
+    std::vector<std::uint32_t> authoring_retained_resource_ids_;
+    AuthoringReloadResult authoring_reload_stats_{};
+    bool authoring_reload_in_progress_ = false;
+#endif
     std::unique_ptr<PlatformState> platform_;
 
 #if NW_PLAYER_DIAGNOSTICS

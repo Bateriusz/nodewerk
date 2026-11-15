@@ -53,6 +53,7 @@ struct Options {
     std::uint32_t height = 1080u;
     bool headless = true;
     bool session = false;
+    bool allow_software_adapter = false;
     std::string capture_dir;
     std::string stats_path;
     std::uint64_t memory_budget_bytes = 0u;
@@ -63,7 +64,8 @@ void Usage() {
         stderr,
         "usage: nodewerk-studio-preview --package <nwp> [--tick N] "
         "[--width N] [--height N] [--capture-dir DIR] "
-        "[--memory-budget N] [--stats-json PATH] [--session] [--visible]\n");
+        "[--memory-budget N] [--stats-json PATH] [--session] "
+        "[--allow-software-adapter] [--visible]\n");
 }
 
 bool ParseU64(const char* text, std::uint64_t* value) {
@@ -114,6 +116,8 @@ bool ParseArgs(int argc, char** argv, Options* options) {
             options->headless = false;
         } else if (arg == "--session") {
             options->session = true;
+        } else if (arg == "--allow-software-adapter") {
+            options->allow_software_adapter = true;
         } else {
             return false;
         }
@@ -199,6 +203,10 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
     const nw::player::PlayerAllocationStats& stats = player.allocation_stats();
     const nw::player::QueriedAdapterCapabilities& adapter =
         player.queried_capabilities();
+    const nw::player::AuthoringAdapterIdentity identity =
+        player.authoringAdapterIdentity();
+    const nw::player::AuthoringReloadResult reload =
+        player.authoring_reload_stats();
     std::string driver_version;
     AppendJsonEscaped(&driver_version, adapter.driver_version);
     std::FILE* file = std::fopen(path.c_str(), "wb");
@@ -216,11 +224,19 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
         "\"width\":%u,\"height\":%u,\"post_initialization_allocation_violation\":%s,"
         "\"fence_retired\":%s,\"session_renders\":%llu,"
         "\"adapter_vendor_id\":%u,\"adapter_device_id\":%u,"
+        "\"adapter_subsystem_id\":%u,\"adapter_luid_low\":%u,"
+        "\"adapter_luid_high\":%d,\"adapter_is_software\":%s,"
         "\"adapter_identity_queried\":%s,\"driver_version\":%s,"
         "\"windows_build_number\":%u,"
         "\"runtime_cpu_submit_ms\":%.6f,\"runtime_cpu_available\":%s,"
         "\"runtime_gpu_ms\":%.6f,\"runtime_gpu_available\":%s,"
         "\"frame_instructions\":%s,"
+        "\"authoring_reused_resources\":%u,"
+        "\"authoring_recreated_resources\":%u,"
+        "\"authoring_reused_root_signatures\":%u,"
+        "\"authoring_recreated_root_signatures\":%u,"
+        "\"authoring_reused_pipelines\":%u,"
+        "\"authoring_recreated_pipelines\":%u,"
         "\"package_sha256\":\"%s\"}\n",
         static_cast<unsigned long long>(stats.engine_resource_bytes),
         static_cast<unsigned long long>(peak_stats.engine_resource_bytes),
@@ -238,9 +254,13 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
         stats.post_initialization_allocation_violation ? "true" : "false",
         fence_retired ? "true" : "false",
         static_cast<unsigned long long>(session_renders),
-        adapter.vendor_id,
-        adapter.device_id,
-        adapter.queried ? "true" : "false",
+        identity.vendor_id,
+        identity.device_id,
+        identity.subsystem_id,
+        identity.luid_low,
+        identity.luid_high,
+        identity.software ? "true" : "false",
+        identity.available ? "true" : "false",
         driver_version.c_str(),
         adapter.windows_build_number,
         timing.cpu_submit_ms,
@@ -248,6 +268,12 @@ bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player
         timing.gpu_ms,
         timing.gpu_available ? "true" : "false",
         timing.instructions_json.c_str(),
+        reload.reused_resources,
+        reload.recreated_resources,
+        reload.reused_root_signatures,
+        reload.recreated_root_signatures,
+        reload.reused_pipelines,
+        reload.recreated_pipelines,
         player.package_sha256().c_str());
     std::fclose(file);
     return written > 0;
@@ -315,15 +341,21 @@ bool IsDeviceRemoved(int exit_code) {
 void EmitReady(const nw::player::PackagePlayer& player) {
     const nw::player::QueriedAdapterCapabilities& adapter =
         player.queried_capabilities();
+    const nw::player::AuthoringAdapterIdentity identity =
+        player.authoringAdapterIdentity();
     std::string driver_version;
     AppendJsonEscaped(&driver_version, adapter.driver_version);
     std::printf(
         "{\"event\":\"ready\",\"adapter_vendor_id\":%u,"
-        "\"adapter_device_id\":%u,\"adapter_identity_queried\":%s,"
+        "\"adapter_device_id\":%u,\"adapter_subsystem_id\":%u,"
+        "\"adapter_luid_low\":%u,\"adapter_luid_high\":%d,"
+        "\"adapter_is_software\":%s,\"adapter_identity_queried\":%s,"
         "\"driver_version\":%s,\"windows_build_number\":%u,"
         "\"package_sha256\":\"%s\"}\n",
-        adapter.vendor_id, adapter.device_id,
-        adapter.queried ? "true" : "false", driver_version.c_str(),
+        identity.vendor_id, identity.device_id, identity.subsystem_id,
+        identity.luid_low, identity.luid_high,
+        identity.software ? "true" : "false",
+        identity.available ? "true" : "false", driver_version.c_str(),
         adapter.windows_build_number, player.package_sha256().c_str());
     std::fflush(stdout);
 }
@@ -354,6 +386,38 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
                         static_cast<unsigned long long>(session_renders));
             std::fflush(stdout);
             return retired ? 0 : static_cast<int>(shutdown);
+        }
+        if (command.rfind("load ", 0u) == 0u) {
+            const std::string package_path = command.substr(5u);
+            if (package_path.empty()) {
+                std::printf(
+                    "{\"event\":\"reload\",\"ok\":false,"
+                    "\"requires_device_recreation\":false,"
+                    "\"exit_code\":2,\"message\":\"empty package path\"}\n");
+                std::fflush(stdout);
+                continue;
+            }
+            const nw::player::AuthoringReloadResult reload =
+                player->reloadForAuthoringFromFile(package_path.c_str());
+            const int exit_code = static_cast<int>(reload.exit_code);
+            const bool ok = reload.exit_code == nw::player::ExitCode::Success;
+            std::printf(
+                "{\"event\":\"reload\",\"ok\":%s,"
+                "\"requires_device_recreation\":%s,\"exit_code\":%d,"
+                "\"reused_resources\":%u,\"recreated_resources\":%u,"
+                "\"reused_root_signatures\":%u,"
+                "\"recreated_root_signatures\":%u,"
+                "\"reused_pipelines\":%u,\"recreated_pipelines\":%u,"
+                "\"package_sha256\":\"%s\"}\n",
+                ok ? "true" : "false",
+                reload.requires_device_recreation ? "true" : "false",
+                exit_code, reload.reused_resources, reload.recreated_resources,
+                reload.reused_root_signatures,
+                reload.recreated_root_signatures,
+                reload.reused_pipelines, reload.recreated_pipelines,
+                player->package_sha256().c_str());
+            std::fflush(stdout);
+            continue;
         }
         if (command == "lose-device") {
             player->SetForceDeviceRemovedForTesting(true);
@@ -429,7 +493,9 @@ int main(int argc, char** argv) {
     config.visible_window = !options.headless;
     config.create_window = !options.headless;
     config.enable_validation = false;
+    config.allow_software_adapter = options.allow_software_adapter;
     config.memory_budget_bytes = options.memory_budget_bytes;
+    config.force_non_aliased_plan = true;
     // The authoring host waits for submitted GPU work before it reports a
     // result.  This is the fence boundary the Python session uses to retire
     // realizations and to guarantee that readback never races presentation.

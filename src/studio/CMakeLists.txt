@@ -28,23 +28,53 @@ if(NOT TARGET nw_package_player)
   return()
 endif()
 
+if(NOT TARGET nw_player_bootstrap)
+  message(FATAL_ERROR
+    "nodewerk-studio-preview requires the existing player bootstrap sources")
+endif()
+
+# Compile a distinct authoring runtime archive from the established player
+# implementation.  NW08_AUTHORING_RUNTIME enables the hot-reload surface only
+# in this archive: the frozen release nw_player_bootstrap target is untouched,
+# so editor-only incremental caching code cannot enter the release closure.
+get_target_property(_nw08_bootstrap_sources nw_player_bootstrap SOURCES)
+get_target_property(_nw08_bootstrap_includes nw_player_bootstrap INCLUDE_DIRECTORIES)
+set(_nw08_authoring_sources)
+foreach(_nw08_source IN LISTS _nw08_bootstrap_sources)
+  if(IS_ABSOLUTE "${_nw08_source}")
+    list(APPEND _nw08_authoring_sources "${_nw08_source}")
+  else()
+    list(APPEND _nw08_authoring_sources "${NW_STUDIO_ROOT}/${_nw08_source}")
+  endif()
+endforeach()
+add_library(nw08_player_bootstrap STATIC ${_nw08_authoring_sources})
+target_include_directories(nw08_player_bootstrap PUBLIC
+  ${_nw08_bootstrap_includes})
+target_compile_definitions(nw08_player_bootstrap PRIVATE
+  NW08_AUTHORING_RUNTIME=1)
+if(COMMAND nw_apply_player_profile)
+  nw_apply_player_profile(nw08_player_bootstrap)
+else()
+  message(FATAL_ERROR
+    "nodewerk-studio-preview requires nw_apply_player_profile for a "
+    "compatible CRT/build profile")
+endif()
+add_dependencies(nw08_player_bootstrap nw_offline_shaders)
+add_dependencies(nw08_player_bootstrap nw_offline_display_shader)
+target_link_libraries(nw08_player_bootstrap PUBLIC
+  d3d12 dxgi user32 kernel32)
+
 add_executable(nodewerk-studio-preview nw_studio_preview_host.cpp)
 target_include_directories(nodewerk-studio-preview PRIVATE
   "${NW_STUDIO_ROOT}/src/player"
   "${NW_STUDIO_ROOT}/src/package"
   "${NW_STUDIO_ROOT}/src")
-if(NOT TARGET nw_player_bootstrap)
-  message(FATAL_ERROR
-    "nodewerk-studio-preview requires nw_player_bootstrap (PackagePlayer "
-    "implementation) in addition to nw_package_player")
-endif()
-# ``nw_package_player`` only contains the package format implementation.
-# PackagePlayer itself lives in ``nw_player_bootstrap``; both archives are
-# required or the host has unresolved PackagePlayer symbols.  The bootstrap
-# archive exports d3d12/dxgi/user32/kernel32 publicly; gdi32 mirrors the
-# release package-player fixtures.
+target_compile_definitions(nodewerk-studio-preview PRIVATE
+  NW08_AUTHORING_RUNTIME=1)
+# nw_package_player supplies the immutable .nwp format implementation; the
+# separate authoring bootstrap supplies PackagePlayer plus hot reload.
 target_link_libraries(nodewerk-studio-preview PRIVATE
-  nw_player_bootstrap
+  nw08_player_bootstrap
   nw_package_player)
 if(WIN32)
   target_link_libraries(nodewerk-studio-preview PRIVATE gdi32)

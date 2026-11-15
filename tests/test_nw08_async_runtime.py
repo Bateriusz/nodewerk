@@ -67,6 +67,10 @@ def _runner_factory(width: int, height: int, *, returncode: int = 0):
                         "adapter_identity_queried": True,
                         "adapter_vendor_id": 0x10DE,
                         "adapter_device_id": 0x2805,
+                        "adapter_subsystem_id": 0x12345678,
+                        "adapter_luid_low": 0x89ABCDEF,
+                        "adapter_luid_high": 0x01234567,
+                        "adapter_is_software": False,
                         "driver_version": "566.36",
                         "windows_build_number": 26100,
                     }
@@ -203,9 +207,40 @@ class _DummyProcess:
         return None
 
 
-def test_authoring_session_reuses_device_until_recreation(monkeypatch) -> None:
+def test_authoring_session_hot_reloads_compatible_package_without_device_recreation(
+    monkeypatch,
+) -> None:
     session = preview.AuthoringRuntimeSession("/tmp/preview-host", mode="package-host")
     starts: list[str] = []
+    commands: list[str] = []
+    reload_responses = [
+        {
+            "event": "reload",
+            "ok": True,
+            "requires_device_recreation": False,
+            "exit_code": 0,
+            "reused_resources": 5,
+            "recreated_resources": 2,
+            "reused_root_signatures": 1,
+            "recreated_root_signatures": 0,
+            "reused_pipelines": 3,
+            "recreated_pipelines": 1,
+            "package_sha256": "bbb",
+        },
+        {
+            "event": "reload",
+            "ok": True,
+            "requires_device_recreation": True,
+            "exit_code": 0,
+            "reused_resources": 0,
+            "recreated_resources": 0,
+            "reused_root_signatures": 0,
+            "recreated_root_signatures": 0,
+            "reused_pipelines": 0,
+            "recreated_pipelines": 0,
+            "package_sha256": "bbb",
+        },
+    ]
 
     def fake_start(bundle, *, width, height, memory_budget_bytes):
         starts.append(bundle.package_sha256)
@@ -216,26 +251,57 @@ def test_authoring_session_reuses_device_until_recreation(monkeypatch) -> None:
                 "adapter_identity_queried": True,
                 "adapter_vendor_id": 0x10DE,
                 "adapter_device_id": 0x2805,
+                "adapter_subsystem_id": 0x12345678,
+                "adapter_luid_low": 0x89ABCDEF,
+                "adapter_luid_high": 0x01234567,
+                "adapter_is_software": False,
                 "driver_version": "566.36",
                 "windows_build_number": 26100,
             }
         )
 
+    def fake_write(command):
+        commands.append(command)
+
+    def fake_read_response(*, timeout):
+        assert reload_responses
+        return reload_responses.pop(0)
+
     monkeypatch.setattr(session, "_start_process", fake_start)
-    bundle_a = preview.PreviewExportBundle(package_sha256="aaa", package_path=Path("/tmp/a.nwp"))
-    bundle_b = preview.PreviewExportBundle(package_sha256="bbb", package_path=Path("/tmp/b.nwp"))
+    monkeypatch.setattr(session, "_write", fake_write)
+    monkeypatch.setattr(session, "_read_response", fake_read_response)
+
+    bundle_a = preview.PreviewExportBundle(
+        package_sha256="aaa", package_path=Path("/tmp/a.nwp")
+    )
+    bundle_b = preview.PreviewExportBundle(
+        package_sha256="bbb", package_path=Path("/tmp/b.nwp")
+    )
+    bundle_c = preview.PreviewExportBundle(
+        package_sha256="ccc", package_path=Path("/tmp/c.nwp")
+    )
 
     assert session.prepare(bundle_a, width=8, height=8) == 0
     assert session.persistent is True
     assert session.identity.available is True
-    # Same package reuses the same D3D12 device instance/epoch.
     assert session.prepare(bundle_a, width=8, height=8) == 0
     assert len(starts) == 1
-    # A new package requires a new PackagePlayer/device instance.
-    assert session.prepare(bundle_b, width=8, height=8) == 1
+
+    # A layout-compatible edited package is loaded into the same native
+    # PackagePlayer/device and retains real GPU objects.
+    assert session.prepare(bundle_b, width=8, height=8) == 0
+    assert len(starts) == 1
+    assert commands[-1] == "load /tmp/b.nwp"
+    assert session.report()["hot_reloads"] == 1
+    assert session.report()["last_reload"]["reused_resources"] == 5
+    assert session.report()["last_reload"]["reused_pipelines"] == 3
+
+    # Only a layout incompatibility forces a real device recreation/epoch bump.
+    assert session.prepare(bundle_c, width=8, height=8) == 1
     assert len(starts) == 2
+    assert starts[-1] == "ccc"
     assert session.reinitialize(minimum_epoch=5) == 5
-    assert session.prepare(bundle_b, width=8, height=8) == 5
+    assert session.prepare(bundle_c, width=8, height=8) == 5
 
 
 def test_runtime_backend_reports_measured_timings_and_no_fabricated_readback(
@@ -297,6 +363,10 @@ def test_host_identity_from_runtime_stats_uses_selected_adapter_only() -> None:
             "adapter_identity_queried": True,
             "adapter_vendor_id": 0x1002,
             "adapter_device_id": 0x744C,
+            "adapter_subsystem_id": 0x0B361002,
+            "adapter_luid_low": 0xDEADBEEF,
+            "adapter_luid_high": -2,
+            "adapter_is_software": False,
             "driver_version": "31.0.2",
             "windows_build_number": 26100,
             "gpu_model": "RTX 5070 Ti",
@@ -304,15 +374,15 @@ def test_host_identity_from_runtime_stats_uses_selected_adapter_only() -> None:
         }
     )
     assert identity.available is True
+    assert identity.software is False
     assert identity.adapter.vendor_id == 0x1002
     assert identity.adapter.device_id == 0x744C
+    assert identity.adapter.subsystem_id == 0x0B361002
+    assert identity.adapter.adapter_luid == "fffffffe:deadbeef"
     assert identity.driver_version == "31.0.2"
     assert "windows-build:26100" == identity.os_build
-    unavailable = cache.HostDeviceIdentity.from_runtime_stats(
-        {"adapter_identity_queried": False, "gpu_model": "RTX 4090"}
-    )
-    assert unavailable.available is False
-    assert unavailable.adapter.vendor_id == 0
+    # Marketing labels are deliberately absent from the cache identity.
+    assert "RTX" not in json.dumps(identity.to_key_fields())
 
 
 def test_gui_actions_route_export_through_the_shared_action_layer(
@@ -414,3 +484,18 @@ def test_full_verification_requires_gui_and_runtime_evidence(
     path.write_text(json.dumps(report), encoding="utf-8")
     _checks, status = verify_nw08.run_full(path)
     assert status == "pending_unverified"
+
+
+def test_authoring_runtime_is_compile_time_isolated_from_release_player() -> None:
+    studio_cmake = (REPO_ROOT / "src" / "studio" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+    root_cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    header = (REPO_ROOT / "src" / "player" / "package_player.h").read_text(
+        encoding="utf-8"
+    )
+    assert "add_library(nw08_player_bootstrap STATIC" in studio_cmake
+    assert "NW08_AUTHORING_RUNTIME=1" in studio_cmake
+    assert "target_link_libraries(nodewerk-studio-preview PRIVATE\n  nw08_player_bootstrap" in studio_cmake
+    assert "NW08_AUTHORING_RUNTIME=1" not in root_cmake
+    assert "#if NW08_AUTHORING_RUNTIME" in header

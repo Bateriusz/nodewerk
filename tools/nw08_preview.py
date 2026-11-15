@@ -697,14 +697,13 @@ class AuthoringRuntimeSession:
     """Persistent authoring-side D3D12 device/process session.
 
     The native host keeps one D3D12 device (and therefore one device-instance
-    epoch) alive while the exported package is unchanged.  Repeated timeline
-    scrubs reuse the same device and its submitted-work retirement fences.
+    epoch) alive across timeline scrubs *and compatible graph edits*.  A package
+    hot reload waits for submitted work, retains unchanged committed GPU
+    resources/root signatures/PSOs, and rebuilds only invalidated realizations.
 
-    A new package requires a new ``PackagePlayer`` instance, and
-    ``PackagePlayer`` owns its D3D12 device, so the host process is restarted
-    and the epoch is incremented *at that actual recreation point* rather than
-    reusing the previous epoch.  Stale completions from the old instance can
-    therefore never install.
+    Only a resource-layout incompatibility, explicit reinitialization, device
+    loss, or dead runtime process recreates the D3D12 device and advances the
+    epoch.  Stale completions from an older instance therefore never install.
     """
 
     def __init__(
@@ -714,6 +713,7 @@ class AuthoringRuntimeSession:
         mode: str = "package-host",
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
         execution_kind: str = "simulated",
+        allow_software_adapter: bool = False,
     ):
         self.executable = Path(executable) if executable is not None else None
         self.mode = mode
@@ -724,6 +724,7 @@ class AuthoringRuntimeSession:
             runner is None and mode == "package-host" and self.executable is not None
         )
         self.execution_kind = execution_kind
+        self.allow_software_adapter = bool(allow_software_adapter)
         self._process: subprocess.Popen[str] | None = None
         self._stdout: queue.Queue[str | None] = queue.Queue()
         self._stderr_lines: list[str] = []
@@ -737,6 +738,8 @@ class AuthoringRuntimeSession:
         self._reservations: dict[str, tuple[int, int]] = {}
         self._retired_bytes = 0
         self._renders = 0
+        self._hot_reloads = 0
+        self._last_reload: dict[str, Any] = {}
         self._capture_dir: Path | None = None
         self._stats_path: Path | None = None
         self._device_running = False
@@ -790,6 +793,8 @@ class AuthoringRuntimeSession:
             "device_epoch": self.device_epoch,
             "lost": self._lost,
             "renders": self._renders,
+            "hot_reloads": self._hot_reloads,
+            "last_reload": dict(self._last_reload),
             "reserved_bytes": self.reserved_bytes,
             "retired_bytes": self._retired_bytes,
             "identity": self._identity.to_key_fields(),
@@ -810,25 +815,55 @@ class AuthoringRuntimeSession:
         """Ensure a device exists for ``bundle`` and return its epoch."""
         with self._lock:
             if self._persistent:
-                if (
+                alive = (
                     self._device_running
                     and self._process is not None
                     and self._process.poll() is None
                     and not self._lost
-                    and self._package_sha == bundle.package_sha256
-                ):
-                    return self.device_epoch
-                was_running = (
-                    self._device_running
-                    and self._process is not None
-                    and self._process.poll() is None
                 )
-                self._stop_process()
-                if was_running:
-                    # A still-live device must be recreated for a new package.
-                    self._epoch += 1
-                elif self._epoch < 0:
-                    self._epoch = 0
+                if alive and self._package_sha == bundle.package_sha256:
+                    return self.device_epoch
+                if alive:
+                    if bundle.package_path is None:
+                        raise RuntimeSessionError(
+                            "persistent package-host reload requires a package path"
+                        )
+                    self._write(f"load {bundle.package_path}")
+                    response = self._read_response(timeout=300.0)
+                    if response.get("event") != "reload":
+                        raise RuntimeSessionError(
+                            "authoring runtime emitted an unexpected reload response: "
+                            + json.dumps(response, sort_keys=True)
+                        )
+                    self._last_reload = dict(response)
+                    if response.get("ok", False) and not response.get(
+                        "requires_device_recreation", False
+                    ):
+                        # A compatible edit was installed inside the same
+                        # PackagePlayer/device.  Device epoch deliberately does
+                        # not change: unchanged physical realizations remain live.
+                        self._package_sha = bundle.package_sha256
+                        self._hot_reloads += 1
+                        return self.device_epoch
+                    if not response.get("requires_device_recreation", False):
+                        raise RuntimeSessionError(
+                            "authoring runtime package hot reload failed: "
+                            + json.dumps(response, sort_keys=True)
+                        )
+                    # The native runtime proved that descriptor/resource layout
+                    # is incompatible with in-place reload.  This is an actual
+                    # device recreation, so advance the epoch exactly once.
+                    self._stop_process()
+                    self._epoch = max(0, self._epoch + 1)
+                else:
+                    had_device = self._epoch >= 0 and bool(self._package_sha)
+                    self._stop_process()
+                    if self._epoch < 0:
+                        self._epoch = 0
+                    elif had_device and not self._just_reinitialized:
+                        # A dead host/device followed by a new process is also a
+                        # real device-instance recreation.
+                        self._epoch += 1
                 self._lost = False
                 self._capture_dir = capture_dir
                 self._stats_path = stats_path
@@ -1016,6 +1051,8 @@ class AuthoringRuntimeSession:
             command.extend(["--stats-json", str(self._stats_path)])
         if memory_budget_bytes:
             command.extend(["--memory-budget", str(int(memory_budget_bytes))])
+        if self.allow_software_adapter:
+            command.append("--allow-software-adapter")
         return command
 
     def _start_process(
@@ -1174,9 +1211,10 @@ class WindowsRuntimePreviewBackend:
     native package host on that ``.nwp`` or the generated player built from it.
     In package-host mode an :class:`AuthoringRuntimeSession` keeps the host
     process (and therefore its D3D12 device instance) alive while the exported
-    package is unchanged, so timeline scrubs reuse actual GPU realizations and
-    submitted-work retirement fences.  A new package recreates the device and
-    increments the device epoch.
+    package is compatible with the live authoring layout.  Timeline scrubs and
+    ordinary graph edits therefore reuse actual unchanged GPU realizations and
+    submitted-work retirement fences.  The device epoch changes only when the
+    native runtime reports that a real device recreation is required.
 
     A successful process exit without a readback file is a failure, never
     hardware evidence.  Captured pixels are retained on the frame so the GUI
@@ -1205,6 +1243,7 @@ class WindowsRuntimePreviewBackend:
         optimization: str = "O2",
         execution_kind: str = "simulated",
         memory_budget_bytes: int | None = None,
+        allow_software_adapter: bool = False,
     ):
         if mode not in {"package-host", "embedded-player"}:
             raise PreviewError(f"unsupported preview mode '{mode}'")
@@ -1227,6 +1266,7 @@ class WindowsRuntimePreviewBackend:
         self._injected_runner = runner is not None
         self.memory_budget_bytes = memory_budget_bytes
         self.execution_kind = execution_kind
+        self.allow_software_adapter = bool(allow_software_adapter)
         # Physical evidence is possible only for an un-injected Windows process
         # invoked with an explicit physical/passthrough execution declaration.
         self._physical_capable = (
@@ -1257,6 +1297,7 @@ class WindowsRuntimePreviewBackend:
                 else (self._runner if mode != "package-host" else None)
             ),
             execution_kind=execution_kind,
+            allow_software_adapter=self.allow_software_adapter,
         )
         self._work_root: Path | None = Path(
             tempfile.mkdtemp(prefix=".nw08-preview-session-")
@@ -1422,6 +1463,7 @@ class WindowsRuntimePreviewBackend:
                 else None
             ),
             execution_kind=self.execution_kind,
+            allow_software_adapter=self.allow_software_adapter,
         )
         # The export configuration changed; the next prepare must re-export.
         with self._lock:
@@ -1615,8 +1657,15 @@ class WindowsRuntimePreviewBackend:
                 engine_bytes = int(stats["engine_resource_bytes"])
             else:
                 engine_bytes = int(resources.get("resident_payload_bytes", 0))
-            physical = bool(self._physical_capable and image_sha)
             identity = self._session.identity
+            # A WARP/software adapter is useful for native CI coverage but can
+            # never be promoted to physical hardware evidence.
+            physical = bool(
+                self._physical_capable
+                and image_sha
+                and identity.available
+                and not identity.software
+            )
             stats_with_session = dict(stats)
             stats_with_session["session"] = self._session.report()
             return PreviewFrame(
@@ -2804,6 +2853,7 @@ class PreviewPipeline:
             driver_version=resolved_driver,
             os_build=resolved_os or self.host_identity.os_build,
             available=True,
+            software=bool(identity.get("software", False)),
             detail="identity reported by the selected runtime D3D12 device",
         )
         self.device.adopt_device_identity(
@@ -2892,6 +2942,7 @@ def create_preview_backend(
     optimization: str = "O2",
     execution_kind: str = "simulated",
     memory_budget_bytes: int | None = None,
+    allow_software_adapter: bool = False,
 ) -> PreviewBackend:
     """Select the real runtime backend when a player is supplied."""
     if player_executable is not None or mode == "embedded-player":
@@ -2907,6 +2958,7 @@ def create_preview_backend(
             optimization=optimization,
             execution_kind=execution_kind,
             memory_budget_bytes=memory_budget_bytes,
+            allow_software_adapter=allow_software_adapter,
         )
     return ReferencePreviewBackend()
 

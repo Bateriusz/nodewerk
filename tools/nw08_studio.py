@@ -71,6 +71,7 @@ class StudioApplication:
     capture_controls: bool = True
     preview_mode: str = "package-host"
     execution_kind: str = "simulated"
+    allow_software_adapter: bool = False
     width: int = 1920
     height: int = 1080
     explicit_backend: bool = False
@@ -98,6 +99,7 @@ class StudioApplication:
         optimization: str = "O2",
         allow_test_payloads: bool = False,
         execution_kind: str = "simulated",
+        allow_software_adapter: bool = False,
     ) -> "StudioApplication":
         session = (
             GraphEditorSession.create_nw07_proof(graph)
@@ -122,6 +124,7 @@ class StudioApplication:
             optimization=optimization,
             execution_kind=execution_kind,
             memory_budget_bytes=gpu_cache_budget_bytes,
+            allow_software_adapter=allow_software_adapter,
         )
         pipeline = PreviewPipeline(
             session,
@@ -148,6 +151,7 @@ class StudioApplication:
             capture_controls=capture_controls,
             preview_mode=preview_mode,
             execution_kind=execution_kind,
+            allow_software_adapter=allow_software_adapter,
             width=width,
             height=height,
             explicit_backend=backend is not None,
@@ -166,6 +170,7 @@ class StudioApplication:
             optimization=self.optimization,
             execution_kind=self.execution_kind,
             memory_budget_bytes=self.gpu_cache_budget_bytes,
+            allow_software_adapter=self.allow_software_adapter,
         )
 
     def reopen(
@@ -193,6 +198,7 @@ class StudioApplication:
             optimization=self.optimization,
             allow_test_payloads=self.allow_test_payloads,
             execution_kind=self.execution_kind,
+            allow_software_adapter=self.allow_software_adapter,
         )
 
     # -- editing ----------------------------------------------------------

@@ -113,10 +113,12 @@ into a newer generation.
   generation-checked results, so edits, timeline scrubbing, and cancellation
   remain responsive. Stale or cancelled completions are discarded.
 - In `package-host` mode `AuthoringRuntimeSession` keeps the native host
-  process, and therefore its D3D12 device instance, alive while the exported
-  package is unchanged. Repeated timeline scrubs reuse the same device and its
-  real GPU realizations; a changed package or explicit reinitialization starts
-  a new device instance and advances the device epoch.
+  process and D3D12 device alive across timeline scrubs and layout-compatible
+  graph edits. Before an edited package is installed, submitted work is retired;
+  unchanged committed resources, root signatures, and PSOs remain live while
+  invalidated realizations are rebuilt. Only an incompatible resource layout,
+  device loss, dead host process, or explicit reinitialization creates a new
+  device instance and advances the device epoch.
 - Export calls `nw05_export.export_graph`; the CLI calls the same function.
   GUI and CLI exports of the same semantic graph, settings, pinned toolchain,
   and player inputs are byte-identical.
@@ -165,10 +167,10 @@ hash plus the same compiler/target inputs, and additionally include:
   adapter LUID).
 
 Device-resident keys use the identity reported for the adapter the runtime
-actually selected: the authoring host reports the vendor/device IDs and driver
-version queried from the `PackagePlayer` D3D12 device. The fallback Windows CIM
-inventory is used only when no runtime identity is available, and is refreshed
-for each device instance. On hosts where observation is unavailable the keys
+actually selected: the authoring host reports vendor/device/subsystem IDs, the
+real DXGI adapter LUID, and driver version from the `PackagePlayer` D3D12
+device. The fallback Windows CIM inventory is used only when complete runtime
+identity is unavailable, and is refreshed for each device instance. On hosts where observation is unavailable the keys
 use an explicit all-zero `AdapterDeviceIdentity.unavailable()` sentinel;
 production code never substitutes a fabricated NVIDIA/AMD PCI identity. A
 marketing name reported by any source is ignored.

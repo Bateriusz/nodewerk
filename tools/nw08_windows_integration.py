@@ -234,6 +234,7 @@ def _real_preview(
     dxc: str | None,
     cache_dir: str | None,
     preview_mode: str,
+    allow_software_adapter: bool = False,
 ) -> dict[str, Any]:
     if not player_executable and preview_mode != "embedded-player":
         return _check(
@@ -241,7 +242,11 @@ def _real_preview(
             "pending_unverified",
             {"reason": "no --preview-executable supplied"},
         )
-    if execution_kind not in {"physical", "documented_gpu_passthrough"}:
+    if execution_kind not in {
+        "physical",
+        "documented_gpu_passthrough",
+        "software_adapter",
+    }:
         return _check(
             "real_preview",
             "failed",
@@ -284,6 +289,7 @@ def _real_preview(
             cache_dir=cache_dir,
             execution_kind=execution_kind,
             memory_budget_bytes=512 * 1024 * 1024,
+            allow_software_adapter=allow_software_adapter,
         )
     except preview.PreviewError as exc:
         return _check(
@@ -444,6 +450,7 @@ def _runtime_pipeline(
     dxc: str,
     cache_dir: str | None,
     execution_kind: str,
+    allow_software_adapter: bool = False,
     gpu_budget_bytes: int = 512 * 1024 * 1024,
 ) -> tuple[preview.WindowsRuntimePreviewBackend, preview.PreviewPipeline]:
     session = (
@@ -459,6 +466,7 @@ def _runtime_pipeline(
         cache_dir=cache_dir,
         execution_kind=execution_kind,
         memory_budget_bytes=gpu_budget_bytes,
+        allow_software_adapter=allow_software_adapter,
     )
     pipeline = preview.PreviewPipeline(
         session,
@@ -493,6 +501,7 @@ def _runtime_shader_recovery(
     dxc: str | None,
     cache_dir: str | None,
     execution_kind: str,
+    allow_software_adapter: bool = False,
 ) -> dict[str, Any]:
     unmet = _runtime_requires_real(player_executable, player_template, dxc)
     if unmet is not None:
@@ -504,6 +513,7 @@ def _runtime_shader_recovery(
         dxc=str(dxc),
         cache_dir=cache_dir,
         execution_kind=execution_kind,
+        allow_software_adapter=allow_software_adapter,
     )
     try:
         if not pipeline.preview_now(tick=0).accepted:
@@ -569,6 +579,7 @@ def _runtime_device_recreation(
     dxc: str | None,
     cache_dir: str | None,
     execution_kind: str,
+    allow_software_adapter: bool = False,
 ) -> dict[str, Any]:
     unmet = _runtime_requires_real(player_executable, player_template, dxc)
     if unmet is not None:
@@ -580,6 +591,7 @@ def _runtime_device_recreation(
         dxc=str(dxc),
         cache_dir=cache_dir,
         execution_kind=execution_kind,
+        allow_software_adapter=allow_software_adapter,
     )
     try:
         if not pipeline.preview_now(tick=0).accepted:
@@ -645,6 +657,7 @@ def _runtime_fence_safe_cache(
     dxc: str | None,
     cache_dir: str | None,
     execution_kind: str,
+    allow_software_adapter: bool = False,
 ) -> dict[str, Any]:
     unmet = _runtime_requires_real(player_executable, player_template, dxc)
     if unmet is not None:
@@ -657,6 +670,7 @@ def _runtime_fence_safe_cache(
         dxc=str(dxc),
         cache_dir=cache_dir,
         execution_kind=execution_kind,
+        allow_software_adapter=allow_software_adapter,
         gpu_budget_bytes=budget,
     )
     try:
@@ -699,11 +713,54 @@ def _runtime_fence_safe_cache(
                 {"reason": "edited-graph preview failed", "diagnostics": pipeline.last_diagnostics},
             )
         edited = pipeline.last_valid_preview
-        if edited is None or pipeline.device.epoch <= first_epoch:
+        if edited is None:
+            return _check(
+                "runtime_fence_safe_cache", "failed", {"reason": "missing edited record"}
+            )
+        if pipeline.device.epoch != first_epoch:
             return _check(
                 "runtime_fence_safe_cache",
                 "failed",
-                {"reason": "new package did not recreate the device/epoch"},
+                {
+                    "reason": (
+                        "compatible graph edit recreated the D3D12 device; "
+                        "incremental GPU realizations were not preserved"
+                    ),
+                    "initial_epoch": first_epoch,
+                    "edited_epoch": pipeline.device.epoch,
+                },
+            )
+        runtime_session = backend.report()
+        reload = runtime_session.get("last_reload") or {}
+        if runtime_session.get("hot_reloads", 0) < 1:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "edited graph did not use the native package hot-reload path"},
+            )
+        if int(reload.get("reused_resources", 0)) < 1:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {
+                    "reason": "native runtime retained no physical GPU resources",
+                    "reload": reload,
+                },
+            )
+        if int(reload.get("reused_pipelines", 0)) < 1:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {
+                    "reason": "native runtime retained no unchanged pipeline state",
+                    "reload": reload,
+                },
+            )
+        if not edited.cached_nodes:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "edited graph reported no unchanged node cache hits"},
             )
         if not pipeline.cache.within_budget:
             return _check(
@@ -720,8 +777,9 @@ def _runtime_fence_safe_cache(
                 "live_bytes": pipeline.cache.live_bytes,
                 "retiring_bytes": pipeline.cache.retiring_bytes,
                 "scrub_cached_nodes": list(scrub.cached_nodes),
+                "edited_cached_nodes": list(edited.cached_nodes),
                 "edited_recomputed_nodes": list(edited.recomputed_nodes),
-                "session": backend.report(),
+                "session": runtime_session,
             },
         )
     finally:
@@ -736,6 +794,7 @@ def _gui_window_interaction(
     dxc: str | None,
     execution_kind: str,
     allow_test_payloads: bool = False,
+    allow_software_adapter: bool = False,
 ) -> dict[str, Any]:
     """Build the real Tk window and drive export/preview through it."""
     try:
@@ -753,6 +812,7 @@ def _gui_window_interaction(
         execution_kind=execution_kind,
         gpu_cache_budget_bytes=512 * 1024 * 1024,
         allow_test_payloads=allow_test_payloads,
+        allow_software_adapter=allow_software_adapter,
     )
     try:
         root = tk.Tk()
@@ -856,6 +916,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cache-dir")
     parser.add_argument("--allow-test-payloads", action="store_true")
     parser.add_argument(
+        "--allow-software-adapter",
+        action="store_true",
+        help="allow WARP/software D3D12 for native CI coverage; never hardware evidence",
+    )
+    parser.add_argument(
         "--embedded-preview",
         action="store_true",
         help=(
@@ -865,7 +930,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--execution-kind",
-        choices=["physical", "documented_gpu_passthrough"],
+        choices=["physical", "documented_gpu_passthrough", "software_adapter"],
         default="physical",
     )
     parser.add_argument(
@@ -945,6 +1010,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dxc=args.dxc,
                 execution_kind=args.execution_kind,
                 allow_test_payloads=args.allow_test_payloads,
+                allow_software_adapter=args.allow_software_adapter,
             )
         )
         checks.append(
@@ -954,6 +1020,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dxc=args.dxc,
                 cache_dir=args.cache_dir,
                 execution_kind=args.execution_kind,
+                allow_software_adapter=args.allow_software_adapter,
             )
         )
         checks.append(
@@ -963,6 +1030,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dxc=args.dxc,
                 cache_dir=args.cache_dir,
                 execution_kind=args.execution_kind,
+                allow_software_adapter=args.allow_software_adapter,
             )
         )
         checks.append(
@@ -972,6 +1040,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dxc=args.dxc,
                 cache_dir=args.cache_dir,
                 execution_kind=args.execution_kind,
+                allow_software_adapter=args.allow_software_adapter,
             )
         )
         ticks = args.capture_tick or [0, 240_000, 480_000, 720_000, 959_999]
@@ -985,6 +1054,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dxc=args.dxc,
                 cache_dir=args.cache_dir,
                 preview_mode=args.preview_mode,
+                allow_software_adapter=args.allow_software_adapter,
             )
         )
         checks.append(

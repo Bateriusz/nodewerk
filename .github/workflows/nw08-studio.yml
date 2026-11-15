@@ -64,8 +64,21 @@ jobs:
           cmake -S tools/nw08_authoring_build -B build/nw08-authoring `
             -DNW_BUILD_PROFILE=dev
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build/nw08-authoring --target nodewerk-studio-preview --parallel 2
+          cmake --build build/nw08-authoring --target nodewerk-studio-preview nw_procedural_image_player --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Locate native runtime inputs
+        shell: pwsh
+        run: |
+          $preview = Get-ChildItem build/nw08-authoring -Recurse -Filter nodewerk-studio-preview.exe |
+            Select-Object -First 1
+          $template = Get-ChildItem build/nw08-authoring -Recurse -Filter nw_procedural_image_player.exe |
+            Select-Object -First 1
+          $dxc = Get-Command dxc.exe -ErrorAction Stop
+          if (-not $preview) { throw "nodewerk-studio-preview.exe was not built" }
+          if (-not $template) { throw "nw_procedural_image_player.exe was not built" }
+          "NW08_PREVIEW_EXE=$($preview.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NW08_PLAYER_TEMPLATE_EXE=$($template.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NW08_DXC_EXE=$($dxc.Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run NW-08 regression coverage
         run: python -m pytest -q tests/test_nw08_*.py
       - name: Create deterministic contract-test toolchain
@@ -79,9 +92,12 @@ jobs:
         run: |
           set +e
           python tools/nw08_windows_integration.py \
-            --dxc "$RUNNER_TEMP/nw08-test-toolchain/mock_dxc.py" \
-            --player-template "$RUNNER_TEMP/nw08-test-toolchain/template.exe" \
-            --allow-test-payloads \
+            --dxc "$NW08_DXC_EXE" \
+            --player-template "$NW08_PLAYER_TEMPLATE_EXE" \
+            --preview-executable "$NW08_PREVIEW_EXE" \
+            --preview-mode package-host \
+            --execution-kind software_adapter \
+            --allow-software-adapter \
             --report "$RUNNER_TEMP/nw08-windows-integration.json"
           status=$?
           set -e
@@ -97,6 +113,11 @@ jobs:
               "shader_error_recovery",
               "device_recreation",
               "fence_safe_cache",
+              "gui_window_interaction",
+              "runtime_shader_error_recovery",
+              "runtime_device_recreation",
+              "runtime_fence_safe_cache",
+              "real_preview",
           }
           failed = sorted(name for name in required if checks.get(name) != "passed")
           if failed:
@@ -105,14 +126,16 @@ jobs:
               raise SystemExit(
                   "contract-test integration must not claim hardware evidence"
               )
-          if checks.get("real_preview") != "pending_unverified":
-              raise SystemExit(
-                  "real preview must remain pending without a real preview executable"
-              )
-          print("NW-08 export/recovery/cache checks passed; real preview pending.")
+          if checks.get("real_preview") != "passed":
+              raise SystemExit("native software-adapter preview did not pass")
+          print(
+              "NW-08 native GUI/runtime recovery, device recreation, "
+              "incremental GPU reuse and preview checks passed on WARP; "
+              "no physical hardware evidence claimed."
+          )
           PY
           if [ "$status" -eq 2 ]; then
-            echo "::notice::NW-08 real preview remains pending_unverified; GUI/CLI export, shader recovery, device recreation, and fence cache were exercised."
+            echo "::notice::NW-08 native runtime/GUI coverage passed on the software D3D12 adapter; physical hardware evidence remains pending."
             exit 0
           fi
           if [ "$status" -ne 0 ]; then

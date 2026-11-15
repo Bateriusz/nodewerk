@@ -14,12 +14,13 @@ is never linked into `nodewerk-player`.  The target links both
 player build profile so the Windows CRT settings match.
 
 The host accepts `--package <exported.nwp>`, `--memory-budget <bytes>`,
-`--stats-json <path>`, and `--session`.  In session mode it keeps one D3D12
-device alive and consumes `render <tick>` commands from stdin, so repeated
-timeline scrubs reuse the same device and its submitted-work retirement
-fences.  A new package (or an explicit editor reinitialization) creates a new
-device instance and increments the device epoch.  `lose-device` exercises the
-existing `PackagePlayer` device-removal seam.
+`--stats-json <path>`, and `--session`. In session mode it keeps one D3D12
+device alive and consumes `render <tick>` plus authoring-only `load <nwp>`
+commands from stdin. Compatible edited packages wait for GPU retirement and
+reuse unchanged physical resources/root signatures/PSOs in the same device
+epoch; only incompatible layouts or explicit/lost-device recovery recreate the
+device. `lose-device` exercises the existing `PackagePlayer` device-removal
+seam.
 
 The host enforces the configured budget through the existing
 `PlayerConfig::memory_budget_bytes` preflight, waits for submitted GPU work in

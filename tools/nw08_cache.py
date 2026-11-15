@@ -203,6 +203,7 @@ class HostDeviceIdentity:
     driver_version: str = "unavailable"
     os_build: str = ""
     available: bool = False
+    software: bool = False
     detail: str = ""
 
     @classmethod
@@ -212,6 +213,7 @@ class HostDeviceIdentity:
             driver_version="unavailable",
             os_build=platform.version() or "unavailable",
             available=False,
+            software=False,
             detail=detail or "adapter identity unavailable on this host",
         )
 
@@ -221,6 +223,7 @@ class HostDeviceIdentity:
             "driver_version": self.driver_version,
             "os_build": self.os_build,
             "available": self.available,
+            "software": self.software,
         }
 
     @classmethod
@@ -238,9 +241,15 @@ class HostDeviceIdentity:
         try:
             vendor_id = int(stats.get("adapter_vendor_id", 0) or 0)
             device_id = int(stats.get("adapter_device_id", 0) or 0)
+            subsystem_id = int(stats.get("adapter_subsystem_id", 0) or 0)
+            luid_low = int(stats.get("adapter_luid_low", 0) or 0)
+            luid_high = int(stats.get("adapter_luid_high", 0) or 0)
         except (TypeError, ValueError):
             vendor_id = 0
             device_id = 0
+            subsystem_id = 0
+            luid_low = 0
+            luid_high = 0
         driver_version = str(stats.get("driver_version") or "unavailable")
         windows_build = stats.get("windows_build_number")
         resolved_os = os_build or (
@@ -248,24 +257,32 @@ class HostDeviceIdentity:
             if isinstance(windows_build, int) and windows_build
             else ""
         )
+        adapter_luid = (
+            f"{luid_high & 0xFFFFFFFF:08x}:{luid_low & 0xFFFFFFFF:08x}"
+            if queried and (luid_low or luid_high)
+            else ""
+        )
         adapter = AdapterDeviceIdentity(
             vendor_id=vendor_id if queried else 0,
             device_id=device_id if queried else 0,
-            subsystem_id=0,
-            # PackagePlayer does not expose its DXGI LUID through the public
-            # API.  Leave it explicitly empty rather than fabricating one.
-            adapter_luid="",
+            subsystem_id=subsystem_id if queried else 0,
+            adapter_luid=adapter_luid,
         )
-        available = queried and adapter.available
+        # A device-resident realization key is accepted as runtime identity
+        # only when it contains the real DXGI LUID of the selected adapter.
+        # Vendor/device alone are insufficient on multi-adapter systems.
+        available = queried and adapter.available and bool(adapter_luid)
+        software = bool(stats.get("adapter_is_software", False))
         return cls(
             adapter=adapter,
             driver_version=driver_version if available else "unavailable",
             os_build=resolved_os or "unavailable",
             available=available,
+            software=software,
             detail=(
-                "identity queried from the selected D3D12 adapter"
+                "identity queried from the selected D3D12 adapter including DXGI LUID"
                 if available
-                else "runtime did not report a selected D3D12 adapter identity"
+                else "runtime did not report a complete selected D3D12 adapter identity"
             ),
         )
 
