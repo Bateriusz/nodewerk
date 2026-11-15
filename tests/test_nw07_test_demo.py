@@ -50,11 +50,14 @@ def test_demo_graph_stays_inside_the_existing_nw07_operator_vocabulary() -> None
     assert _param_float(node_map["torus"], "major_radius") == pytest.approx(0.75)
     assert _param_float(node_map["torus"], "minor_radius") == pytest.approx(0.68)
     assert _param_float(node_map["instances"], "placement_radius") == pytest.approx(4.6)
-    assert _param_float(node_map["instances"], "scale_min") == pytest.approx(0.20)
-    assert _param_float(node_map["instances"], "scale_max") == pytest.approx(0.70)
+    assert _param_float(node_map["instances"], "scale_min") == pytest.approx(0.06)
+    assert _param_float(node_map["instances"], "scale_max") == pytest.approx(0.22)
     assert _param_float(node_map["camera"], "fov_degrees") == pytest.approx(74.0)
     assert _param_float(node_map["twist"], "max_twist_degrees") == pytest.approx(540.0)
     assert _param_float(node_map["bloom"], "resolution_scale") == pytest.approx(0.5)
+    assert _param_float(node_map["bloom"], "threshold") == pytest.approx(0.72)
+    assert _param_float(node_map["bloom"], "intensity") == pytest.approx(0.48)
+    assert _param_float(node_map["tonemap"], "exposure") == pytest.approx(0.90)
     assert node_map["tonemap"].params["operator"][0] == "aces"
 
 
@@ -139,3 +142,15 @@ def test_demo_loop_timeline_closes_exactly_after_one_segment() -> None:
     # The tunnel VS wraps Tick modulo the final camera key and advances exactly
     # one 96-unit segment over that phase, so tick LOOP_TICKS == tick 0.
     assert demo.LOOP_TICKS == 24 * 48_000
+
+
+def test_tunnel_specialization_keeps_rings_distinct_and_corridor_open() -> None:
+    instances_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_instances_cs.hlsl").read_text(encoding="utf-8")
+    vertex_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_scene_vs.hlsl").read_text(encoding="utf-8")
+
+    assert "min(1024u" in instances_shader
+    assert "(InstanceCount * 2u) / 3u" in instances_shader
+    assert "lane_u < 0.08" in instances_shader
+    assert "lerp(0.56, 0.88" in instances_shader
+    assert "float tube = 0.008;" in vertex_shader
+    assert "float sway_x = 0.16" in vertex_shader
