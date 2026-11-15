@@ -905,6 +905,7 @@ def _gui_window_interaction(
                         "photo": str(photo) if photo is not None else "",
                         "widget_sha256": details["preview_widget_sha256"],
                         "frame_sha256": record.frame.image_sha256,
+                        "decode_error": getattr(window, "_preview_decode_error", ""),
                     },
                 )
         return _check("gui_window_interaction", "passed", details)
