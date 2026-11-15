@@ -891,7 +891,7 @@ def record_perf(args: argparse.Namespace) -> dict[str, Any]:
         "contract_id": contract.PERF_CONTRACT_ID,
         "execution_environment": {
             "kind": args.execution_kind,
-            "documentation": args.passthrough_documentation,
+            "documentation": getattr(args, "passthrough_documentation", ""),
         },
         "reference": reference,
         "artifact_key": identity["artifact_key"],
