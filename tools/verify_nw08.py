@@ -443,9 +443,13 @@ def run_full(evidence_path: Path) -> tuple[list[dict[str, Any]], str]:
         return checks, "failed"
     required = {
         "gui_cli_export_equivalence",
+        "gui_window_interaction",
         "shader_error_recovery",
         "device_recreation",
         "fence_safe_cache",
+        "runtime_shader_error_recovery",
+        "runtime_device_recreation",
+        "runtime_fence_safe_cache",
         "real_preview",
     }
     statuses = {
@@ -474,6 +478,20 @@ def run_full(evidence_path: Path) -> tuple[list[dict[str, Any]], str]:
             "windows_integration_evidence",
             "pending_unverified",
             {"statuses": statuses},
+        )
+        return checks, "pending_unverified"
+    if statuses.get("gui_window_interaction") != "passed":
+        _check(
+            checks,
+            "windows_integration_evidence",
+            "pending_unverified",
+            {
+                "reason": (
+                    "the real authoring GUI was not exercised successfully "
+                    "(a headless contract run is not GUI evidence)"
+                ),
+                "statuses": statuses,
+            },
         )
         return checks, "pending_unverified"
     if statuses["real_preview"] != "passed" or not report.get(

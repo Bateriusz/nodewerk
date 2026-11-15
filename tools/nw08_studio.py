@@ -281,6 +281,15 @@ class StudioApplication:
     def cancel_preview(self, token: GenerationToken | int) -> bool:
         return self.pipeline.cancel(token)
 
+    def close(self) -> None:
+        """Release the authoring runtime session and its exported artifacts."""
+        close = getattr(self.pipeline.backend, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # pragma: no cover - defensive shutdown boundary
+                pass
+
     def device_lost(self) -> DeviceGeneration:
         return self.pipeline.handle_device_loss()
 

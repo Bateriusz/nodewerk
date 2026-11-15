@@ -31,8 +31,39 @@ endif()
 add_executable(nodewerk-studio-preview nw_studio_preview_host.cpp)
 target_include_directories(nodewerk-studio-preview PRIVATE
   "${NW_STUDIO_ROOT}/src/player"
+  "${NW_STUDIO_ROOT}/src/package"
   "${NW_STUDIO_ROOT}/src")
-target_link_libraries(nodewerk-studio-preview PRIVATE nw_package_player)
+if(NOT TARGET nw_player_bootstrap)
+  message(FATAL_ERROR
+    "nodewerk-studio-preview requires nw_player_bootstrap (PackagePlayer "
+    "implementation) in addition to nw_package_player")
+endif()
+# ``nw_package_player`` only contains the package format implementation.
+# PackagePlayer itself lives in ``nw_player_bootstrap``; both archives are
+# required or the host has unresolved PackagePlayer symbols.  The bootstrap
+# archive exports d3d12/dxgi/user32/kernel32 publicly; gdi32 mirrors the
+# release package-player fixtures.
+target_link_libraries(nodewerk-studio-preview PRIVATE
+  nw_player_bootstrap
+  nw_package_player)
+if(WIN32)
+  target_link_libraries(nodewerk-studio-preview PRIVATE gdi32)
+endif()
+if(COMMAND nw_apply_player_profile)
+  # Match the CRT/profile of the player archives exactly; a /MD vs /MT
+  # mismatch is a hard lld-link failure on Windows.
+  nw_apply_player_profile(nodewerk-studio-preview)
+else()
+  message(FATAL_ERROR
+    "nodewerk-studio-preview requires nw_apply_player_profile for a "
+    "compatible CRT/build profile")
+endif()
+# The host uses the C stdio readback/stat writers; silence MSVC's
+# non-functional deprecation warning so /WX remains meaningful.
+if(MSVC)
+  target_compile_definitions(nodewerk-studio-preview PRIVATE
+    _CRT_SECURE_NO_WARNINGS)
+endif()
 target_compile_features(nodewerk-studio-preview PRIVATE cxx_std_20)
 set_target_properties(nodewerk-studio-preview PROPERTIES
   OUTPUT_NAME "nodewerk-studio-preview")

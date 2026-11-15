@@ -12,9 +12,15 @@ root.  Headless tests use :mod:`nw08_studio` instead.
 
 from __future__ import annotations
 
+import base64
 import json
+import math
 import os
+import queue as queue_module
+import struct
 import sys
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +29,246 @@ REPO_ROOT = TOOLS_DIR.parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
+from nw08_cache import (  # noqa: E402
+    CompletionDecision,
+    DeviceLostError,
+    GenerationToken,
+)
 from nw08_editor import CurvePoint, EditorError  # noqa: E402
+from nw08_preview import PreviewFrame, PreviewRecord  # noqa: E402
 from nw08_studio import DEFAULT_GPU_CACHE_BUDGET, StudioApplication  # noqa: E402
+
+
+def frame_to_ppm(
+    frame: PreviewFrame, *, max_width: int = 480, max_height: int = 270
+) -> bytes | None:
+    """Convert a captured RGBA32F frame into a displayable PPM P6 image.
+
+    Returns ``None`` when the frame carries no captured pixels (the
+    deterministic contract/reference backend produces no real pixels).  The
+    conversion is nearest-neighbour and only for display; it never feeds back
+    into semantic identity or export.
+    """
+    data = frame.image_data
+    if not data or frame.width <= 0 or frame.height <= 0:
+        return None
+    expected = frame.width * frame.height * 16
+    if len(data) != expected:
+        return None
+    step = max(
+        1,
+        int(
+            math.ceil(
+                max(
+                    frame.width / max(1, max_width),
+                    frame.height / max(1, max_height),
+                )
+            )
+        ),
+    )
+    out_width = max(1, frame.width // step)
+    out_height = max(1, frame.height // step)
+    row = bytearray()
+    rows: list[bytes] = []
+    for y in range(0, out_height * step, step):
+        row.clear()
+        base = y * frame.width * 16
+        for x in range(0, out_width * step, step):
+            offset = base + x * 16
+            values = []
+            for channel in range(3):
+                (value,) = struct.unpack_from("<f", data, offset + channel * 4)
+                if not math.isfinite(value):
+                    value = 0.0
+                values.append(max(0, min(255, int(round(value * 255.0)))))
+            row.extend(values)
+        rows.append(bytes(row))
+    header = f"P6\n{out_width} {out_height}\n255\n".encode("ascii")
+    return header + b"".join(rows)
+
+
+@dataclass(frozen=True)
+class PreviewOutcome:
+    token: GenerationToken
+    decision: CompletionDecision | None
+    accepted: bool
+    record: PreviewRecord | None
+    error: str = ""
+
+    @property
+    def frame(self) -> PreviewFrame | None:
+        return self.record.frame if self.record else None
+
+
+class PreviewDispatcher:
+    """Run preview compilation/rendering off the Tk event thread.
+
+    Only the latest requested generation may be installed.  A stale, failed,
+    cancelled, or device-epoch-obsolete completion is reported with
+    ``accepted=False`` and never replaces the last valid preview.  The GUI
+    drains outcomes from the Tk thread (``root.after``) and performs all widget
+    updates there.
+    """
+
+    def __init__(self, application: StudioApplication):
+        self.application = application
+        self._lock = threading.Lock()
+        self._results: queue_module.Queue[PreviewOutcome] = queue_module.Queue()
+        self._latest: GenerationToken | None = None
+        self._thread: threading.Thread | None = None
+        self._serial = 0
+
+    @property
+    def busy(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    @property
+    def latest_token(self) -> GenerationToken | None:
+        return self._latest
+
+    def request(self, tick: int | None = None) -> GenerationToken | None:
+        with self._lock:
+            if self._latest is not None:
+                self.application.cancel_preview(self._latest)
+            try:
+                token = self.application.submit_preview(tick)
+            except DeviceLostError:
+                self._latest = None
+                return None
+            self._latest = token
+            self._serial += 1
+            serial = self._serial
+            self._thread = threading.Thread(
+                target=self._work,
+                args=(token, serial),
+                name=f"nw08-preview-{token.job_id}",
+                daemon=True,
+            )
+            self._thread.start()
+            return token
+
+    def cancel(self) -> bool:
+        with self._lock:
+            token = self._latest
+            self._latest = None
+            self._serial += 1
+            if token is None:
+                return False
+            return self.application.cancel_preview(token)
+
+    def _work(self, token: GenerationToken, serial: int) -> None:
+        try:
+            decision = self.application.pipeline.execute(token)
+        except Exception as exc:  # pragma: no cover - defensive worker boundary
+            self._results.put(
+                PreviewOutcome(
+                    token=token,
+                    decision=None,
+                    accepted=False,
+                    record=None,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
+            return
+        record = self.application.pipeline.last_valid_preview
+        accepted = bool(
+            decision.accepted
+            and record is not None
+            and record.token.job_id == token.job_id
+        )
+        # A runtime session may create a new device while servicing this job;
+        # the installed record then carries the rebound epoch.  Validate and
+        # report that actual token rather than the pre-execution one.
+        effective = (
+            record.token
+            if record is not None and record.token.job_id == token.job_id
+            else token
+        )
+        self._results.put(
+            PreviewOutcome(
+                token=effective,
+                decision=decision,
+                accepted=accepted,
+                record=record,
+            )
+        )
+
+    def drain(self) -> list[PreviewOutcome]:
+        outcomes: list[PreviewOutcome] = []
+        while True:
+            try:
+                outcomes.append(self._results.get_nowait())
+            except queue_module.Empty:
+                break
+        return outcomes
+
+    def install_latest(self, outcomes: list[PreviewOutcome]) -> PreviewOutcome | None:
+        """Select the newest outcome that is still valid for this generation."""
+        latest = self._latest
+        pipeline = self.application.pipeline
+        selected: PreviewOutcome | None = None
+        for outcome in outcomes:
+            if latest is None or outcome.token.job_id != latest.job_id:
+                continue
+            if outcome.token.snapshot_generation != pipeline.queue.snapshot_generation:
+                continue
+            if outcome.token.device_epoch != pipeline.device.epoch:
+                continue
+            selected = outcome
+        return selected
+
+
+class GuiActions:
+    """Headless action layer shared by the Tk view and integration checks.
+
+    Every interactive menu/button operation is implemented here and the Tk
+    widgets are thin delegations.  Windows integration therefore exercises the
+    same export/preview/edit code paths as the GUI instead of a parallel
+    controller.
+    """
+
+    def __init__(self, application: StudioApplication):
+        self.application = application
+        self.dispatcher = PreviewDispatcher(application)
+
+    def export_to(
+        self,
+        directory: str | os.PathLike[str],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "dxc_executable": self.application.dxc_executable or None,
+            "cache_dir": self.application.cache_dir or None,
+            "optimization": self.application.optimization,
+        }
+        options.update(kwargs)
+        return self.application.export_report(directory, **options)
+
+    def set_parameter(self, node_id: str, name: str, value: Any):
+        return self.application.set_parameter(node_id, name, value)
+
+    def connect(
+        self, target_node: str, target_port: str, source_node: str, source_port: str
+    ):
+        return self.application.connect(
+            target_node, target_port, source_node, source_port
+        )
+
+    def disconnect(self, target_node: str, target_port: str):
+        return self.application.disconnect(target_node, target_port)
+
+    def add_curve_key(self, node_id: str, tick: int, value: float):
+        return self.application.add_curve_key(node_id, tick, value)
+
+    def scrub(self, tick: int):
+        return self.application.scrub(tick)
+
+    def reinitialize_device(self):
+        return self.application.reinitialize_device()
+
+    def close(self) -> None:
+        self.dispatcher.cancel()
 
 
 class CurveEditorBinding:
@@ -78,8 +322,12 @@ class StudioWindow:
         self.application = application
         self._dragged: str | None = None
         self.curve_editor = CurveEditorBinding(application)
+        self.dispatcher = PreviewDispatcher(application)
+        self.actions = GuiActions(application)
+        self._preview_photo: Any = None
         self._build()
         self.refresh()
+        self._schedule_preview_poll()
 
     # -- construction -----------------------------------------------------
     def _build(self) -> None:
@@ -136,15 +384,25 @@ class StudioWindow:
         notebook = ttk.Notebook(inspector)
         notebook.pack(fill=tk.BOTH, expand=True)
         self.inspector_tab = ttk.Frame(notebook)
+        self.preview_tab = ttk.Frame(notebook)
         self.diagnostics_tab = ttk.Frame(notebook)
         self.timings_tab = ttk.Frame(notebook)
         self.size_tab = ttk.Frame(notebook)
         self.state_tab = ttk.Frame(notebook)
         notebook.add(self.inspector_tab, text="Inspector")
+        notebook.add(self.preview_tab, text="Preview")
         notebook.add(self.diagnostics_tab, text="Diagnostics")
         notebook.add(self.timings_tab, text="Timings")
         notebook.add(self.size_tab, text="Size")
         notebook.add(self.state_tab, text="State")
+
+        self.preview_label = ttk.Label(
+            self.preview_tab,
+            text="no preview yet",
+            anchor="center",
+            justify="center",
+        )
+        self.preview_label.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(self.inspector_tab, text="Nodes (select to inspect)").pack(anchor="w")
         self.node_list = tk.Listbox(self.inspector_tab, height=10, exportselection=False)
@@ -228,6 +486,12 @@ class StudioWindow:
         controls = ttk.Frame(self.root)
         controls.pack(fill=tk.X)
         ttk.Button(controls, text="Preview", command=self.preview).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Cancel Preview", command=self.cancel_preview).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(
+            controls, text="Reinitialize Device", command=self.reinitialize_device
+        ).pack(side=tk.LEFT)
         ttk.Button(controls, text="Undo", command=self.undo).pack(side=tk.LEFT)
         ttk.Button(controls, text="Redo", command=self.redo).pack(side=tk.LEFT)
         ttk.Button(controls, text="Export…", command=self.export).pack(side=tk.LEFT)
@@ -253,6 +517,18 @@ class StudioWindow:
             except ValueError:
                 pass
 
+    def select_node_if_present(self, node_id: str) -> bool:
+        """Select ``node_id`` in the inspector list (used by integration)."""
+        try:
+            index = list(self.application.session.node_ids).index(node_id)
+        except ValueError:
+            return False
+        self.node_list.selection_clear(0, self.tk.END)
+        self.node_list.selection_set(index)
+        self.node_list.activate(index)
+        self._on_node_select()
+        return True
+
     def refresh(self) -> None:
         self._sync_node_list()
         self.refresh_parameters()
@@ -261,6 +537,7 @@ class StudioWindow:
         self.refresh_diagnostics()
         self.refresh_timings()
         self.refresh_size()
+        self.refresh_preview_image()
         self.refresh_state()
         session = self.application.session
         self.status.configure(
@@ -427,14 +704,64 @@ class StudioWindow:
             self.timings_list.insert(self.tk.END, "no preview yet")
             return
         for timing in record.frame.pass_timings.timings:
+            if not timing.available:
+                self.timings_list.insert(
+                    self.tk.END,
+                    f"{timing.name}: unavailable (not measured)",
+                )
+                continue
+            suffix = "" if timing.counts_toward_total else " [nested]"
             self.timings_list.insert(
                 self.tk.END,
-                f"{timing.name}: {timing.milliseconds:.3f} ms ({timing.kind})",
+                f"{timing.name}: {timing.milliseconds:.3f} ms "
+                f"({timing.kind}){suffix}",
             )
         self.timings_list.insert(
             self.tk.END,
             f"total: {record.frame.pass_timings.total_milliseconds:.3f} ms",
         )
+
+    def refresh_preview_image(self) -> None:
+        frame = self.application.pipeline.last_valid_frame
+        if frame is None:
+            self.preview_label.configure(
+                text="no preview yet", image=""
+            )
+            self._preview_photo = None
+            self._preview_image_sha = ""
+            return
+        if (
+            self._preview_photo is not None
+            and getattr(self, "_preview_image_sha", "") == frame.image_sha256
+        ):
+            return
+        ppm = frame_to_ppm(frame)
+        if ppm is None:
+            self.preview_label.configure(
+                image="",
+                text=(
+                    "no captured pixels\n"
+                    f"backend: {frame.backend}\n"
+                    f"execution: {frame.execution_kind}"
+                ),
+            )
+            self._preview_photo = None
+            self._preview_image_sha = ""
+            return
+        try:
+            photo = self.tk.PhotoImage(
+                data=base64.b64encode(ppm).decode("ascii"), format="PPM"
+            )
+        except Exception:  # pragma: no cover - Tk build without PPM support
+            self.preview_label.configure(
+                image="", text="captured frame could not be decoded for display"
+            )
+            self._preview_photo = None
+            self._preview_image_sha = ""
+            return
+        self._preview_photo = photo
+        self._preview_image_sha = frame.image_sha256
+        self.preview_label.configure(image=photo, text="")
 
     def refresh_size(self) -> None:
         self.size_list.delete(0, self.tk.END)
@@ -544,13 +871,74 @@ class StudioWindow:
         self.tick_label.configure(text=f"tick {self.application.session.timeline_tick}")
 
     def preview(self) -> None:
-        try:
-            ok = self.application.preview()
-        except Exception as exc:  # pragma: no cover - runtime backend boundary
-            self.status.configure(text=f"preview failed: {exc}")
+        token = self.dispatcher.request(self.application.session.timeline_tick)
+        if token is None:
+            self.status.configure(
+                text="preview unavailable: device lost; reinitialize the device"
+            )
             return
-        self.status.configure(text="preview updated" if ok else "preview rejected")
+        self.status.configure(
+            text=f"preview job {token.job_id} compiling/rendering…"
+        )
+
+    def cancel_preview(self) -> None:
+        cancelled = self.dispatcher.cancel()
+        self.status.configure(
+            text="preview cancelled" if cancelled else "no preview to cancel"
+        )
+
+    def reinitialize_device(self) -> None:
+        try:
+            generation = self.application.reinitialize_device()
+        except Exception as exc:
+            self.status.configure(text=f"device reinitialization failed: {exc}")
+            return
+        self.status.configure(
+            text=f"device reinitialized; epoch {generation.epoch}"
+        )
         self.refresh()
+
+    def _schedule_preview_poll(self) -> None:
+        try:
+            self.root.after(75, self._poll_preview)
+        except Exception:  # pragma: no cover - root already destroyed
+            return
+
+    def _poll_preview(self) -> None:
+        outcomes = self.dispatcher.drain()
+        if outcomes:
+            outcome = self.dispatcher.install_latest(outcomes)
+            if outcome is None:
+                # Completion from a cancelled/obsolete generation: never
+                # replace the last valid preview.
+                self.status.configure(text="discarded stale preview completion")
+            elif outcome.error:
+                self.status.configure(
+                    text=f"preview failed: {outcome.error}; last valid frame retained"
+                )
+                self.refresh()
+            elif outcome.accepted:
+                self.status.configure(
+                    text=(
+                        f"preview updated (job {outcome.token.job_id}, "
+                        f"epoch {outcome.token.device_epoch})"
+                    )
+                )
+                self.refresh()
+            else:
+                reason = (
+                    outcome.decision.reason
+                    if outcome.decision is not None
+                    else "rejected"
+                )
+                self.status.configure(
+                    text=f"preview rejected ({reason}); last valid frame retained"
+                )
+                self.refresh_diagnostics()
+                self.refresh_timings()
+                self.refresh_size()
+                self.refresh_state()
+        self._schedule_preview_poll()
 
     def apply_budget(self) -> None:
         try:
@@ -562,8 +950,14 @@ class StudioWindow:
         self.status.configure(text="GPU cache budget updated")
 
     def new_proof(self) -> None:
+        self.dispatcher.cancel()
+        self.actions.close()
+        if not self.application.explicit_backend:
+            self.application.close()
         self.application = self.application.reopen()
         self.curve_editor = CurveEditorBinding(self.application)
+        self.dispatcher = PreviewDispatcher(self.application)
+        self.actions = GuiActions(self.application)
         self.refresh()
 
     def open_graph(self) -> None:
@@ -577,8 +971,14 @@ class StudioWindow:
         if not path:
             return
         try:
+            self.dispatcher.cancel()
+            self.actions.close()
+            if not self.application.explicit_backend:
+                self.application.close()
             self.application = self.application.reopen(path)
             self.curve_editor = CurveEditorBinding(self.application)
+            self.dispatcher = PreviewDispatcher(self.application)
+            self.actions = GuiActions(self.application)
         except (EditorError, OSError) as exc:
             self.status.configure(text=f"open failed: {exc}")
             return
@@ -638,12 +1038,7 @@ class StudioWindow:
         if not directory:
             return
         try:
-            report = self.application.export_report(
-                directory,
-                dxc_executable=self.application.dxc_executable or None,
-                cache_dir=self.application.cache_dir or None,
-                optimization=self.application.optimization,
-            )
+            report = self.actions.export_to(directory)
         except Exception as exc:  # pragma: no cover - export backend boundary
             self.status.configure(text=f"export failed: {exc}")
             return
@@ -744,4 +1139,12 @@ def run_gui(
     return 0
 
 
-__all__ = ["CurveEditorBinding", "StudioWindow", "run_gui"]
+__all__ = [
+    "CurveEditorBinding",
+    "GuiActions",
+    "PreviewDispatcher",
+    "PreviewOutcome",
+    "StudioWindow",
+    "frame_to_ppm",
+    "run_gui",
+]

@@ -18,8 +18,11 @@ import copy
 import hashlib
 import json
 import os
+import queue
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -38,6 +41,7 @@ import nw07_export  # noqa: E402
 import nwp_package  # noqa: E402
 from nw08_cache import (  # noqa: E402
     AdapterDeviceIdentity,
+    CacheIdentityError,
     CacheKeyInputs,
     CapabilityProfileIdentity,
     CompletionDecision,
@@ -48,6 +52,7 @@ from nw08_cache import (  # noqa: E402
     GpuBudgetExceeded,
     GpuRealizationCache,
     AsyncJobQueue,
+    HostDeviceIdentity,
     ToolchainIdentity,
     discover_host_device_identity,
     sha256_value,
@@ -81,6 +86,11 @@ class PassTiming:
     name: str
     milliseconds: float
     kind: str = "reference"
+    measured: bool = True
+    available: bool = True
+    # Timings nested inside another measured interval (for example GPU work
+    # inside the process wall time) must not be added again to the total.
+    counts_toward_total: bool = True
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -93,6 +103,9 @@ class PassTiming:
             "name": self.name,
             "milliseconds": self.milliseconds,
             "kind": self.kind,
+            "measured": self.measured,
+            "available": self.available,
+            "counts_toward_total": self.counts_toward_total,
         }
 
 
@@ -102,7 +115,15 @@ class PassTimings:
 
     @property
     def total_milliseconds(self) -> float:
-        return sum(item.milliseconds for item in self.timings)
+        return sum(
+            item.milliseconds
+            for item in self.timings
+            if item.counts_toward_total and item.available
+        )
+
+    @property
+    def complete(self) -> bool:
+        return all(item.available for item in self.timings)
 
     def by_name(self) -> dict[str, float]:
         return {item.name: item.milliseconds for item in self.timings}
@@ -136,6 +157,13 @@ class PreviewFrame:
     hardware_evidence: bool = False
     execution_kind: str = "contract_reference"
     diagnostics: tuple[dict[str, Any], ...] = ()
+    # The captured presented pixels are retained in memory so the GUI can
+    # display the last accepted frame after failed edits.  They are never
+    # serialized into reports.
+    image_data: bytes = field(default=b"", repr=False, compare=False)
+    image_format: str = "rgba32f"
+    device_epoch: int | None = None
+    device_identity: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -159,7 +187,16 @@ class PreviewFrame:
             "hardware_evidence": self.hardware_evidence,
             "execution_kind": self.execution_kind,
             "diagnostics": list(self.diagnostics),
+            "image_bytes": len(self.image_data),
+            "image_format": self.image_format,
+            "has_image": bool(self.image_data),
+            "device_epoch": self.device_epoch,
+            "device_identity": dict(self.device_identity),
         }
+
+    @property
+    def has_image(self) -> bool:
+        return bool(self.image_data)
 
 
 @dataclass(frozen=True)
@@ -652,19 +689,503 @@ class RuntimePackageExporter:
         )
 
 
+class RuntimeSessionError(PreviewError):
+    """Raised when the authoring runtime session protocol fails."""
+
+
+class AuthoringRuntimeSession:
+    """Persistent authoring-side D3D12 device/process session.
+
+    The native host keeps one D3D12 device (and therefore one device-instance
+    epoch) alive while the exported package is unchanged.  Repeated timeline
+    scrubs reuse the same device and its submitted-work retirement fences.
+
+    A new package requires a new ``PackagePlayer`` instance, and
+    ``PackagePlayer`` owns its D3D12 device, so the host process is restarted
+    and the epoch is incremented *at that actual recreation point* rather than
+    reusing the previous epoch.  Stale completions from the old instance can
+    therefore never install.
+    """
+
+    def __init__(
+        self,
+        executable: str | os.PathLike[str] | None,
+        *,
+        mode: str = "package-host",
+        runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+        execution_kind: str = "simulated",
+    ):
+        self.executable = Path(executable) if executable is not None else None
+        self.mode = mode
+        self._runner = runner
+        # A stub runner is a deterministic one-shot contract harness; it is
+        # never reported as a persistent device session.
+        self._persistent = (
+            runner is None and mode == "package-host" and self.executable is not None
+        )
+        self.execution_kind = execution_kind
+        self._process: subprocess.Popen[str] | None = None
+        self._stdout: queue.Queue[str | None] = queue.Queue()
+        self._stderr_lines: list[str] = []
+        self._epoch = -1
+        self._package_sha = ""
+        self._identity = HostDeviceIdentity.unavailable(
+            "runtime session has not started"
+        )
+        self._lost = False
+        self._fence = 0
+        self._reservations: dict[str, tuple[int, int]] = {}
+        self._retired_bytes = 0
+        self._renders = 0
+        self._capture_dir: Path | None = None
+        self._stats_path: Path | None = None
+        self._device_running = False
+        self._just_reinitialized = False
+        self._lock = threading.RLock()
+
+    # -- state ------------------------------------------------------------
+    @property
+    def device_epoch(self) -> int:
+        return max(0, self._epoch)
+
+    @property
+    def persistent(self) -> bool:
+        return self._persistent and self._process is not None and not self._lost
+
+    @property
+    def lost(self) -> bool:
+        return self._lost
+
+    @property
+    def identity(self) -> HostDeviceIdentity:
+        return self._identity
+
+    def observe_identity(self, stats: Mapping[str, Any]) -> None:
+        """Refine the device identity from the selected D3D12 adapter."""
+        identity = HostDeviceIdentity.from_runtime_stats(stats)
+        if identity.available:
+            self._identity = identity
+
+    @property
+    def renders(self) -> int:
+        return self._renders
+
+    @property
+    def reserved_bytes(self) -> int:
+        return sum(size for _epoch, size in self._reservations.values())
+
+    @property
+    def retired_bytes(self) -> int:
+        return self._retired_bytes
+
+    @property
+    def session_package_sha256(self) -> str:
+        return self._package_sha
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "persistent": self._persistent,
+            "process_alive": self._process is not None
+            and self._process.poll() is None,
+            "device_epoch": self.device_epoch,
+            "lost": self._lost,
+            "renders": self._renders,
+            "reserved_bytes": self.reserved_bytes,
+            "retired_bytes": self._retired_bytes,
+            "identity": self._identity.to_key_fields(),
+            "session_package_sha256": self._package_sha,
+        }
+
+    # -- device lifecycle -------------------------------------------------
+    def prepare(
+        self,
+        bundle: PreviewExportBundle,
+        *,
+        width: int,
+        height: int,
+        memory_budget_bytes: int | None = None,
+        capture_dir: Path | None = None,
+        stats_path: Path | None = None,
+    ) -> int:
+        """Ensure a device exists for ``bundle`` and return its epoch."""
+        with self._lock:
+            if self._persistent:
+                if (
+                    self._device_running
+                    and self._process is not None
+                    and self._process.poll() is None
+                    and not self._lost
+                    and self._package_sha == bundle.package_sha256
+                ):
+                    return self.device_epoch
+                was_running = (
+                    self._device_running
+                    and self._process is not None
+                    and self._process.poll() is None
+                )
+                self._stop_process()
+                if was_running:
+                    # A still-live device must be recreated for a new package.
+                    self._epoch += 1
+                elif self._epoch < 0:
+                    self._epoch = 0
+                self._lost = False
+                self._capture_dir = capture_dir
+                self._stats_path = stats_path
+                self._start_process(
+                    bundle,
+                    width=width,
+                    height=height,
+                    memory_budget_bytes=memory_budget_bytes,
+                )
+                self._device_running = True
+                self._just_reinitialized = False
+                return self.device_epoch
+            # One-shot/injected execution: every process invocation is a new
+            # process, but the contract harness treats an unchanged package as
+            # the same logical session.  A changed package or explicit
+            # reinitialization advances the epoch.
+            if self._epoch < 0:
+                self._epoch = 0
+            elif self._just_reinitialized:
+                pass
+            elif self._package_sha and self._package_sha != bundle.package_sha256:
+                self._epoch += 1
+            self._just_reinitialized = False
+            self._package_sha = bundle.package_sha256
+            self._lost = False
+            return self.device_epoch
+
+    def reinitialize(self, minimum_epoch: int | None = None) -> int:
+        """Explicitly recreate the runtime device and increment the epoch."""
+        with self._lock:
+            self._stop_process()
+            self._epoch = max(
+                self._epoch + 1,
+                0 if minimum_epoch is None else int(minimum_epoch),
+            )
+            self._lost = False
+            self._device_running = False
+            self._just_reinitialized = True
+            self._package_sha = ""
+            self._identity = HostDeviceIdentity.unavailable(
+                "runtime device reinitialized; awaiting first render"
+            )
+            return self.device_epoch
+
+    def handle_device_loss(self) -> int:
+        with self._lock:
+            self._lost = True
+            self._reservations.clear()
+            self._device_running = False
+            if self._process is not None and self._process.poll() is None:
+                try:
+                    self._write("lose-device")
+                    self._read_response(timeout=5.0)
+                except (OSError, RuntimeSessionError):
+                    pass
+            self._stop_process()
+            return self.device_epoch
+
+    def close(self) -> None:
+        with self._lock:
+            self._stop_process()
+
+    # -- fences -----------------------------------------------------------
+    def reserve(self, key: str, size_bytes: int) -> tuple[str, int]:
+        with self._lock:
+            if self._lost:
+                raise DeviceLostError("cannot reserve on a lost runtime device")
+            self._fence += 1
+            self._reservations[key] = (self._fence, max(1, int(size_bytes)))
+            return key, self._fence
+
+    def release(self, key: str, *, retired: bool = True) -> None:
+        with self._lock:
+            entry = self._reservations.pop(key, None)
+            if entry is not None and retired:
+                self._retired_bytes += entry[1]
+
+    # -- rendering --------------------------------------------------------
+    def render(
+        self,
+        *,
+        tick: int,
+        capture_dir: Path,
+        stats_path: Path,
+        command: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if self._lost:
+                raise DeviceLostError(
+                    "runtime device is lost; reinitialize before previewing"
+                )
+            if self._persistent:
+                return self._render_session(
+                    tick=tick, capture_dir=capture_dir, stats_path=stats_path
+                )
+            if command is None:
+                raise RuntimeSessionError(
+                    "one-shot runtime execution requires a command"
+                )
+            return self._render_one_shot(
+                command=command, tick=tick, stats_path=stats_path
+            )
+
+    def _render_one_shot(
+        self,
+        *,
+        command: Sequence[str],
+        tick: int,
+        stats_path: Path,
+    ) -> dict[str, Any]:
+        if self._runner is None:
+            raise RuntimeSessionError("one-shot runtime session has no runner")
+        process = self._runner(
+            list(command), capture_output=True, text=True, check=False
+        )
+        self._renders += 1
+        result = {
+            "tick": tick,
+            "returncode": process.returncode,
+            "stderr": process.stderr or "",
+            "device_removed": process.returncode == 51,
+        }
+        if process.returncode != 0:
+            if process.returncode == 51:
+                self._lost = True
+                raise DeviceLostError(
+                    f"package player reported device removal: "
+                    f"{(process.stderr or '').strip()}"
+                )
+            raise RuntimeSessionError(
+                f"package player exited {process.returncode}: "
+                f"{(process.stderr or '').strip()}"
+            )
+        return result
+
+    def _render_session(
+        self,
+        *,
+        tick: int,
+        capture_dir: Path,
+        stats_path: Path,
+    ) -> dict[str, Any]:
+        self._write(f"render {tick}")
+        response = self._read_response(timeout=300.0)
+        self._renders += 1
+        response["tick"] = tick
+        if not response.get("ok", False):
+            exit_code = int(response.get("exit_code", 1) or 1)
+            device_removed = bool(response.get("device_removed")) or exit_code == 51
+            if device_removed:
+                self._lost = True
+                self._stop_process()
+                raise DeviceLostError(
+                    f"authoring runtime device was removed (exit {exit_code})"
+                )
+            raise RuntimeSessionError(
+                f"authoring runtime render failed (exit {exit_code})"
+            )
+        return response
+
+    # -- process plumbing -------------------------------------------------
+    def _session_command(
+        self,
+        bundle: PreviewExportBundle,
+        *,
+        width: int,
+        height: int,
+        memory_budget_bytes: int | None,
+    ) -> list[str]:
+        if bundle.package_path is None:
+            raise RuntimeSessionError("session mode requires a package-host bundle")
+        command = [
+            str(self.executable),
+            "--package",
+            str(bundle.package_path),
+            "--width",
+            str(width),
+            "--height",
+            str(height),
+            "--session",
+        ]
+        if self._capture_dir is not None:
+            command.extend(["--capture-dir", str(self._capture_dir)])
+        if self._stats_path is not None:
+            command.extend(["--stats-json", str(self._stats_path)])
+        if memory_budget_bytes:
+            command.extend(["--memory-budget", str(int(memory_budget_bytes))])
+        return command
+
+    def _start_process(
+        self,
+        bundle: PreviewExportBundle,
+        *,
+        width: int,
+        height: int,
+        memory_budget_bytes: int | None,
+    ) -> None:
+        command = self._session_command(
+            bundle,
+            width=width,
+            height=height,
+            memory_budget_bytes=memory_budget_bytes,
+        )
+        self._package_sha = bundle.package_sha256
+        self._stdout = queue.Queue()
+        self._stderr_lines = []
+        self._process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        stdout_queue = self._stdout
+        stderr_lines = self._stderr_lines
+        process = self._process
+        threading.Thread(
+            target=self._pump_stdout,
+            args=(process, stdout_queue),
+            name="nw08-runtime-stdout",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self._pump_stderr,
+            args=(process, stderr_lines),
+            name="nw08-runtime-stderr",
+            daemon=True,
+        ).start()
+        ready = self._read_response(timeout=60.0)
+        if ready.get("event") != "ready":
+            self._stop_process()
+            raise RuntimeSessionError(
+                "authoring runtime session did not become ready: "
+                + json.dumps(ready, sort_keys=True)
+            )
+        self._identity = HostDeviceIdentity.from_runtime_stats(ready)
+
+    def _pump_stdout(
+        self, process: subprocess.Popen[str], out_queue: queue.Queue[str | None]
+    ) -> None:
+        if process is None or process.stdout is None:
+            return
+        try:
+            for line in process.stdout:
+                out_queue.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            out_queue.put(None)
+
+    def _pump_stderr(
+        self, process: subprocess.Popen[str], stderr_lines: list[str]
+    ) -> None:
+        if process is None or process.stderr is None:
+            return
+        try:
+            for line in process.stderr:
+                stderr_lines.append(line.rstrip("\r\n"))
+                if len(stderr_lines) > 200:
+                    del stderr_lines[:100]
+        except (OSError, ValueError):
+            pass
+
+    def _read_response(self, *, timeout: float) -> dict[str, Any]:
+        try:
+            line = self._stdout.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise RuntimeSessionError(
+                "authoring runtime session did not respond within "
+                f"{timeout:.1f}s"
+            ) from exc
+        if line is None:
+            stderr = "\n".join(self._stderr_lines).strip()
+            raise RuntimeSessionError(
+                "authoring runtime session closed unexpectedly"
+                + (f": {stderr}" if stderr else "")
+            )
+        text = line.strip()
+        if not text:
+            return self._read_response(timeout=timeout)
+        try:
+            value = json.loads(text)
+        except ValueError as exc:
+            raise RuntimeSessionError(
+                f"authoring runtime session emitted invalid JSON: {text!r}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise RuntimeSessionError(
+                f"authoring runtime session emitted non-object: {text!r}"
+            )
+        return value
+
+    def _write(self, text: str) -> None:
+        process = self._process
+        if process is None or process.stdin is None or process.poll() is not None:
+            raise RuntimeSessionError("authoring runtime session is not running")
+        try:
+            process.stdin.write(text + "\n")
+            process.stdin.flush()
+        except (OSError, ValueError) as exc:
+            raise RuntimeSessionError(
+                "authoring runtime session input closed"
+            ) from exc
+
+    def _stop_process(self) -> None:
+        process = self._process
+        self._process = None
+        self._device_running = False
+        if process is None:
+            return
+        try:
+            if process.poll() is None and process.stdin is not None:
+                process.stdin.write("quit\n")
+                process.stdin.flush()
+                process.wait(timeout=30.0)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            try:
+                process.terminate()
+            except (OSError, ValueError):
+                pass
+            try:
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except (OSError, ValueError):
+                    pass
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    if stream is not None:
+                        stream.close()
+                except (OSError, ValueError):
+                    pass
+
+
 class WindowsRuntimePreviewBackend:
     """Preview the *edited* graph through the existing package-player runtime.
 
     The backend first exports the document it was given (through the same
     ``nw05_export.export_graph`` path used by the CLI) and then runs either the
     native package host on that ``.nwp`` or the generated player built from it.
+    In package-host mode an :class:`AuthoringRuntimeSession` keeps the host
+    process (and therefore its D3D12 device instance) alive while the exported
+    package is unchanged, so timeline scrubs reuse actual GPU realizations and
+    submitted-work retirement fences.  A new package recreates the device and
+    increments the device epoch.
+
     A successful process exit without a readback file is a failure, never
-    hardware evidence.
+    hardware evidence.  Captured pixels are retained on the frame so the GUI
+    can display the last accepted image after a failed edit.
     """
 
     name = "windows-package-player"
-    persistent_realizations = False
     reserves_gpu_memory = True
+    reports_device_identity = True
 
     def __init__(
         self,
@@ -724,6 +1245,135 @@ class WindowsRuntimePreviewBackend:
             allow_test_payloads=allow_test_payloads,
             optimization=optimization,
         )
+        self._session = AuthoringRuntimeSession(
+            self.executable,
+            mode=mode,
+            # A real package-host session keeps the device alive; the
+            # generated-player path is intentionally one process per render
+            # and uses the configured runner (subprocess.run by default).
+            runner=(
+                runner
+                if runner is not None
+                else (self._runner if mode != "package-host" else None)
+            ),
+            execution_kind=execution_kind,
+        )
+        self._work_root: Path | None = Path(
+            tempfile.mkdtemp(prefix=".nw08-preview-session-")
+        )
+        self._bundles: dict[str, PreviewExportBundle] = {}
+        self._prepared_key: str = ""
+        self._export_duration_ms: float = 0.0
+        self._lock = threading.RLock()
+
+    # -- device/session state --------------------------------------------
+    @property
+    def persistent_realizations(self) -> bool:
+        return self._session.persistent
+
+    @property
+    def device_epoch(self) -> int:
+        return self._session.device_epoch
+
+    @property
+    def device_identity(self) -> HostDeviceIdentity:
+        return self._session.identity
+
+    def report(self) -> dict[str, Any]:
+        return self._session.report()
+
+    def reinitialize_device(self, minimum_epoch: int | None = None) -> int:
+        with self._lock:
+            self._prepared_key = ""
+            return self._session.reinitialize(minimum_epoch)
+
+    def handle_device_loss(self) -> int:
+        with self._lock:
+            self._prepared_key = ""
+            return self._session.handle_device_loss()
+
+    def close(self) -> None:
+        with self._lock:
+            self._session.close()
+            root = self._work_root
+            self._work_root = None
+            self._bundles.clear()
+            self._prepared_key = ""
+        if root is not None:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def _document_key(
+        self,
+        document: nw03_compiler.GraphDocument,
+        *,
+        width: int,
+        height: int,
+    ) -> str:
+        return sha256_value(
+            {
+                "domain": "nw08.preview.session-document.v1",
+                "semantic_digest": editor_semantic_digest(document)[0],
+                "settings": dict(document.settings),
+                "width": width,
+                "height": height,
+                "mode": self.mode,
+                "exporter": repr(getattr(self._exporter, "settings", {})),
+            }
+        )
+
+    def _ensure_bundle(
+        self,
+        document: nw03_compiler.GraphDocument,
+        *,
+        width: int,
+        height: int,
+    ) -> tuple[str, PreviewExportBundle]:
+        key = self._document_key(document, width=width, height=height)
+        existing = self._bundles.get(key)
+        if existing is not None:
+            return key, existing
+        if self._work_root is None:
+            self._work_root = Path(
+                tempfile.mkdtemp(prefix=".nw08-preview-session-")
+            )
+        work_directory = self._work_root / f"export-{len(self._bundles):04d}"
+        work_directory.mkdir(parents=True, exist_ok=True)
+        export_start = time.perf_counter()
+        try:
+            bundle = self._exporter.export(
+                document, work_directory, width=width, height=height
+            )
+        except (nw05_export.ExportError, nw03_compiler.CompilerError) as exc:
+            raise PreviewError(str(exc), getattr(exc, "diagnostics", [])) from exc
+        self._export_duration_ms = (time.perf_counter() - export_start) * 1000.0
+        self._bundles[key] = bundle
+        return key, bundle
+
+    def prepare(
+        self,
+        document: nw03_compiler.GraphDocument,
+        *,
+        width: int,
+        height: int,
+    ) -> int:
+        """Export the document and create/reuse its runtime device instance."""
+        with self._lock:
+            key, bundle = self._ensure_bundle(document, width=width, height=height)
+            if self._work_root is None:
+                raise PreviewError("preview session was closed")
+            capture_dir = self._work_root / "capture"
+            capture_dir.mkdir(parents=True, exist_ok=True)
+            stats_path = self._work_root / "runtime-stats.json"
+            epoch = self._session.prepare(
+                bundle,
+                width=width,
+                height=height,
+                memory_budget_bytes=self.memory_budget_bytes,
+                capture_dir=capture_dir,
+                stats_path=stats_path,
+            )
+            self._prepared_key = key
+            return epoch
 
     def configure_exporter(
         self,
@@ -762,6 +1412,21 @@ class WindowsRuntimePreviewBackend:
             allow_test_payloads=bool(allow_test_payloads),
             optimization=optimization or "O2",
         )
+        self._session.close()
+        self._session = AuthoringRuntimeSession(
+            self.executable,
+            mode=selected_mode,
+            runner=(
+                self._runner
+                if (self._injected_runner or selected_mode != "package-host")
+                else None
+            ),
+            execution_kind=self.execution_kind,
+        )
+        # The export configuration changed; the next prepare must re-export.
+        with self._lock:
+            self._prepared_key = ""
+            self._bundles.clear()
 
     def command(
         self,
@@ -822,62 +1487,64 @@ class WindowsRuntimePreviewBackend:
         width: int,
         height: int,
     ) -> PreviewFrame:
-        import tempfile
-
-        timings: list[PassTiming] = []
-        with tempfile.TemporaryDirectory(prefix=".nw08-preview-") as raw:
-            work_directory = Path(raw)
-            capture_dir = work_directory / "capture"
-            capture_dir.mkdir()
-            stats_path = work_directory / "runtime-stats.json"
+        with self._lock:
             export_start = time.perf_counter()
-            try:
-                bundle = self._exporter.export(
-                    document, work_directory, width=width, height=height
+            key, bundle = self._ensure_bundle(document, width=width, height=height)
+            if key != self._prepared_key:
+                self._session.prepare(
+                    bundle,
+                    width=width,
+                    height=height,
+                    memory_budget_bytes=self.memory_budget_bytes,
+                    capture_dir=(
+                        (self._work_root / "capture")
+                        if self._work_root is not None
+                        else None
+                    ),
+                    stats_path=(
+                        (self._work_root / "runtime-stats.json")
+                        if self._work_root is not None
+                        else None
+                    ),
                 )
-            except (nw05_export.ExportError, nw03_compiler.CompilerError) as exc:
-                raise PreviewError(
-                    str(exc), getattr(exc, "diagnostics", [])
-                ) from exc
-            timings.append(
+                self._prepared_key = key
+            export_duration = self._export_duration_ms if key in self._bundles else (
+                time.perf_counter() - export_start
+            ) * 1000.0
+            if self._work_root is None:
+                raise PreviewError("preview session was closed")
+            work_directory = self._work_root / "capture"
+            work_directory.mkdir(parents=True, exist_ok=True)
+            capture_dir = work_directory
+            stats_path = self._work_root / "runtime-stats.json"
+            command = None
+            if not self._session.persistent:
+                command = self.command(
+                    tick,
+                    capture_dir,
+                    bundle,
+                    width=width,
+                    height=height,
+                    stats_path=stats_path,
+                )
+            timings: list[PassTiming] = [
                 PassTiming(
                     "offline_compile_export",
-                    (time.perf_counter() - export_start) * 1000.0,
+                    max(0.0, export_duration),
                     kind="compiler",
                 )
-            )
-            command = self.command(
-                tick,
-                capture_dir,
-                bundle,
-                width=width,
-                height=height,
-                stats_path=stats_path,
-            )
+            ]
             start = time.perf_counter()
-            process = self._runner(
-                command,
-                capture_output=True,
-                text=True,
-                check=False,
+            response = self._session.render(
+                tick=tick,
+                capture_dir=capture_dir,
+                stats_path=stats_path,
+                command=command,
             )
             elapsed_ms = (time.perf_counter() - start) * 1000.0
-            timings.append(PassTiming("runtime_frame", elapsed_ms, kind="runtime"))
-            if process.returncode != 0:
-                diagnostics = [
-                    {
-                        "category": "preview",
-                        "severity": "error",
-                        "code": "preview_execution_failed",
-                        "message": (
-                            f"package player exited {process.returncode}: "
-                            f"{(process.stderr or '').strip()}"
-                        ),
-                    }
-                ]
-                raise PreviewError(
-                    f"package player exited {process.returncode}", diagnostics
-                )
+            timings.append(
+                PassTiming("runtime_process_wall", elapsed_ms, kind="runtime")
+            )
             capture = capture_dir / f"tick_{tick}.rgba32f"
             if not capture.is_file():
                 raise PreviewError(
@@ -913,10 +1580,15 @@ class WindowsRuntimePreviewBackend:
                     ],
                 )
             image_sha = hashlib.sha256(data).hexdigest()
-            timings.append(
-                PassTiming("present_readback", elapsed_ms * 0.25, kind="runtime")
-            )
             stats = self._read_stats(stats_path)
+            if not stats and isinstance(response, dict):
+                stats = {
+                    key: value
+                    for key, value in response.items()
+                    if key not in {"event", "ok"}
+                }
+            self._session.observe_identity(stats)
+            self._append_measured_timings(timings, stats)
             if self._physical_capable and not stats.get("fence_retired"):
                 raise PreviewError(
                     "physical preview did not confirm fence retirement",
@@ -944,6 +1616,9 @@ class WindowsRuntimePreviewBackend:
             else:
                 engine_bytes = int(resources.get("resident_payload_bytes", 0))
             physical = bool(self._physical_capable and image_sha)
+            identity = self._session.identity
+            stats_with_session = dict(stats)
+            stats_with_session["session"] = self._session.report()
             return PreviewFrame(
                 tick=tick,
                 width=width,
@@ -969,7 +1644,7 @@ class WindowsRuntimePreviewBackend:
                 resident_bytes=max(1, engine_bytes),
                 pass_timings=PassTimings(tuple(timings)),
                 size_attribution=resources,
-                runtime_stats=stats,
+                runtime_stats=stats_with_session,
                 shader_identity=bundle.shader_identity,
                 binding_identity=bundle.binding_identity,
                 node_shader_identities=bundle.node_shader_identities,
@@ -978,7 +1653,72 @@ class WindowsRuntimePreviewBackend:
                 execution_kind=(
                     "physical_runtime" if physical else "simulated_runtime"
                 ),
+                image_data=data,
+                image_format="rgba32f",
+                device_epoch=self._session.device_epoch,
+                device_identity=identity.to_key_fields(),
             )
+
+    def _append_measured_timings(
+        self, timings: list[PassTiming], stats: Mapping[str, Any]
+    ) -> None:
+        cpu_available = bool(stats.get("runtime_cpu_available", False))
+        gpu_available = bool(stats.get("runtime_gpu_available", False))
+        if cpu_available:
+            timings.append(
+                PassTiming(
+                    "runtime_cpu_submit",
+                    max(0.0, float(stats.get("runtime_cpu_submit_ms", 0.0))),
+                    kind="runtime_internal",
+                    measured=True,
+                    counts_toward_total=False,
+                )
+            )
+        else:
+            timings.append(
+                PassTiming(
+                    "runtime_cpu_submit",
+                    0.0,
+                    kind="runtime_internal",
+                    measured=False,
+                    available=False,
+                    counts_toward_total=False,
+                )
+            )
+        if gpu_available:
+            timings.append(
+                PassTiming(
+                    "runtime_gpu",
+                    max(0.0, float(stats.get("runtime_gpu_ms", 0.0))),
+                    kind="runtime_internal",
+                    measured=True,
+                    counts_toward_total=False,
+                )
+            )
+        else:
+            timings.append(
+                PassTiming(
+                    "runtime_gpu",
+                    0.0,
+                    kind="runtime_internal",
+                    measured=False,
+                    available=False,
+                    counts_toward_total=False,
+                )
+            )
+        instructions = stats.get("frame_instructions") or []
+        if isinstance(instructions, list):
+            for index, name in enumerate(instructions):
+                timings.append(
+                    PassTiming(
+                        f"runtime_pass_{index}:{name}",
+                        0.0,
+                        kind="runtime_pass",
+                        measured=False,
+                        available=False,
+                        counts_toward_total=False,
+                    )
+                )
 
 
 
@@ -1031,8 +1771,17 @@ class PreviewPipeline:
         self.height = height
         self.cache = GpuRealizationCache(gpu_budget_bytes)
         self.queue = AsyncJobQueue(session.semantic_digest)
+        runtime_reports_identity = bool(
+            getattr(self.backend, "reports_device_identity", False)
+        )
         if adapter is None:
-            observed = discover_host_device_identity()
+            observed = (
+                HostDeviceIdentity.unavailable(
+                    "runtime reports the selected D3D12 adapter identity"
+                )
+                if runtime_reports_identity
+                else discover_host_device_identity()
+            )
             adapter = observed.adapter
             if not driver_version:
                 driver_version = observed.driver_version
@@ -1040,7 +1789,13 @@ class PreviewPipeline:
                 os_build = observed.os_build
             self.host_identity = observed
         else:
-            observed = discover_host_device_identity()
+            observed = (
+                HostDeviceIdentity.unavailable(
+                    "runtime reports the selected D3D12 adapter identity"
+                )
+                if runtime_reports_identity
+                else discover_host_device_identity()
+            )
             if not driver_version:
                 driver_version = observed.driver_version
             if not os_build:
@@ -1209,11 +1964,8 @@ class PreviewPipeline:
                 self._record_rejection_locked(decision)
                 return decision
             # Gate before doing any work: obsolete/cancelled jobs never compile.
-            decision = self.queue.complete(job.token)
-            if not decision.accepted:
-                self._pending.pop(job_id, None)
-                self._record_rejection_locked(decision)
-                return decision
+            # The job stays pending (and cancellable) through compilation and
+            # rendering; it is finalized only at installation below.
             current, reason = self._completion_current_locked(job)
             if not current:
                 self._pending.pop(job_id, None)
@@ -1234,6 +1986,49 @@ class PreviewPipeline:
                     return self._reject_locked(
                         job.token, "preview_gpu_budget_exceeded", diagnostics
                     )
+        # Compilation/export and device preparation run outside the state lock
+        # so edits, timeline scrubs, and cancellation remain responsive.
+        planned_epoch: int | None = None
+        prepare = getattr(job.backend, "prepare", None)
+        if callable(prepare):
+            try:
+                planned_epoch = int(
+                    prepare(job.document, width=job.width, height=job.height)
+                )
+            except DeviceLostError as exc:
+                return self._device_lost_completion(job, reservation, exc)
+            except PreviewError as exc:
+                return self._preview_failure_completion(job, reservation, exc)
+            except Exception as exc:  # pragma: no cover - defensive boundary
+                return self._preview_failure_completion(
+                    job, reservation, PreviewError(str(exc))
+                )
+        with self._state_lock:
+            current, reason = self._completion_current_locked(job)
+            if not current:
+                self._pending.pop(job_id, None)
+                if reservation is not None:
+                    self._retire_reservation_locked(reservation)
+                return self._reject_locked(job.token, reason)
+            if planned_epoch is not None and planned_epoch != self.device.epoch:
+                try:
+                    self._align_device_epoch_locked(job, planned_epoch)
+                except PreviewError as exc:
+                    self._pending.pop(job_id, None)
+                    if reservation is not None:
+                        self._retire_reservation_locked(reservation)
+                    return self._reject_locked(
+                        job.token,
+                        "preview_device_epoch_diverged",
+                        [
+                            {
+                                "category": "preview",
+                                "severity": "error",
+                                "code": "preview_device_epoch_diverged",
+                                "message": str(exc),
+                            }
+                        ],
+                    )
         # Rendering deliberately happens outside the state lock so an explicit
         # device-loss/reinitialization can invalidate an in-flight completion.
         try:
@@ -1243,53 +2038,16 @@ class PreviewPipeline:
                 width=job.width,
                 height=job.height,
             )
-        except PreviewError as exc:
-            diagnostics = link_source_diagnostics(
-                exc.diagnostics,
-                source_text=job.source_text,
-                source_name=str(self.session.source_path or "<editor>"),
-            )
-            with self._state_lock:
-                self._pending.pop(job_id, None)
-                if reservation is not None:
-                    self._retire_reservation_locked(reservation)
-                current, current_reason = self._completion_current_locked(job)
-                if not current:
-                    return self._reject_locked(job.token, current_reason)
-                return self._reject_locked(
-                    job.token, "preview_failed", diagnostics
-                )
         except DeviceLostError as exc:
-            with self._state_lock:
-                self._pending.pop(job_id, None)
-                if reservation is not None:
-                    self._retire_reservation_locked(reservation)
-                current, current_reason = self._completion_current_locked(job)
-                if not current:
-                    return self._reject_locked(job.token, current_reason)
-                return self._reject_locked(
-                    job.token,
-                    "preview_device_lost",
-                    [
-                        {
-                            "category": "preview",
-                            "severity": "error",
-                            "code": "preview_device_lost",
-                            "message": str(exc),
-                        }
-                    ],
-                )
+            return self._device_lost_completion(job, reservation, exc)
+        except PreviewError as exc:
+            return self._preview_failure_completion(job, reservation, exc)
         except Exception as exc:  # pragma: no cover - defensive boundary
-            with self._state_lock:
-                self._pending.pop(job_id, None)
-                if reservation is not None:
-                    self._retire_reservation_locked(reservation)
-                current, current_reason = self._completion_current_locked(job)
-                if not current:
-                    return self._reject_locked(job.token, current_reason)
-                return self._reject_locked(
-                    job.token,
-                    "preview_failed",
+            return self._preview_failure_completion(
+                job,
+                reservation,
+                PreviewError(
+                    str(exc),
                     [
                         {
                             "category": "preview",
@@ -1299,9 +2057,9 @@ class PreviewPipeline:
                             "source_linked": False,
                         }
                     ],
-                )
+                ),
+            )
         with self._state_lock:
-            self._pending.pop(job_id, None)
             if reservation is not None:
                 self._retire_reservation_locked(reservation)
             # Revalidate both the immutable snapshot generation and the device
@@ -1309,13 +2067,125 @@ class PreviewPipeline:
             # device instance can never install.
             current, reason = self._completion_current_locked(job)
             if not current:
+                self._pending.pop(job_id, None)
                 return self._reject_locked(job.token, reason)
+            decision = self.queue.complete(job.token)
+            if not decision.accepted:
+                self._pending.pop(job_id, None)
+                self._record_rejection_locked(decision)
+                return decision
+            self._pending.pop(job_id, None)
             installed, install_reason, diagnostics = self._install_locked(
                 job, frame
             )
             if not installed:
                 return self._reject_locked(job.token, install_reason, diagnostics)
             return decision
+
+    def _device_lost_completion(
+        self,
+        job: _PendingPreviewJob,
+        reservation: _RuntimeReservation | None,
+        error: DeviceLostError,
+    ) -> CompletionDecision:
+        with self._state_lock:
+            if reservation is not None:
+                self._retire_reservation_locked(reservation)
+            self._enter_device_lost_locked()
+            self._pending.pop(job.token.job_id, None)
+            return self._reject_locked(
+                job.token,
+                "preview_device_lost",
+                [
+                    {
+                        "category": "preview",
+                        "severity": "error",
+                        "code": "preview_device_lost",
+                        "message": str(error),
+                    }
+                ],
+            )
+
+    def _preview_failure_completion(
+        self,
+        job: _PendingPreviewJob,
+        reservation: _RuntimeReservation | None,
+        error: PreviewError,
+    ) -> CompletionDecision:
+        diagnostics = link_source_diagnostics(
+            error.diagnostics,
+            source_text=job.source_text,
+            source_name=str(self.session.source_path or "<editor>"),
+        )
+        with self._state_lock:
+            self._pending.pop(job.token.job_id, None)
+            # Finalize the queue entry so it does not remain "pending" after a
+            # failed compilation/render.  The rejection below still governs
+            # installation.
+            self.queue.complete(job.token)
+            if reservation is not None:
+                self._retire_reservation_locked(reservation)
+            current, current_reason = self._completion_current_locked(job)
+            if not current:
+                return self._reject_locked(job.token, current_reason)
+            return self._reject_locked(job.token, "preview_failed", diagnostics)
+
+    def _align_device_epoch_locked(
+        self, job: _PendingPreviewJob, planned_epoch: int
+    ) -> None:
+        """Adopt a device instance this job itself created.
+
+        The runtime session only advances its epoch when it actually creates a
+        new D3D12 device.  Because the executing job is the one that caused the
+        recreation, its own token is re-bound to the new epoch.  Every other
+        pending token keeps the old epoch and is rejected by the normal
+        generation checks.
+        """
+        if planned_epoch == self.device.epoch:
+            return
+        if planned_epoch != self.device.epoch + 1:
+            raise PreviewError(
+                "runtime device epoch advanced by more than one recreation"
+            )
+        identity = getattr(job.backend, "device_identity", None)
+        adapter = None
+        driver_version = None
+        os_build = None
+        if identity is not None and getattr(identity, "available", False):
+            adapter = identity.adapter
+            driver_version = identity.driver_version
+            os_build = identity.os_build
+            self.host_identity = identity
+        old_epoch = self.device.epoch
+        generation = self.device.reinitialize(
+            adapter=adapter,
+            capability_profile=CapabilityProfileIdentity(
+                self.session.document.profile_id,
+                self.session.document.requirements_digest,
+            ),
+            driver_version=driver_version,
+            os_build=os_build,
+        )
+        queue_epoch = self.queue.reinitialize()
+        if queue_epoch != generation.epoch:  # pragma: no cover
+            raise PreviewError("device and job queue epochs diverged")
+        # Realizations from the previous device instance are never reused.
+        # Those referenced by already-submitted work remain alive until their
+        # fences retire.
+        self.cache.invalidate_device(old_epoch)
+        job.token = self.queue.bind_device_epoch(
+            job.token.job_id, generation.epoch
+        )
+
+    def _enter_device_lost_locked(self) -> None:
+        if self.device.lost:
+            return
+        old_epoch = self.device.epoch
+        self._device_serial += 1
+        self.device.handle_device_loss()
+        self.queue.handle_device_loss()
+        self.cache.invalidate_device(old_epoch, force=True)
+        self._pending.clear()
 
     def finish(
         self,
@@ -1344,17 +2214,13 @@ class PreviewPipeline:
                 decision = self.queue.complete(job_id)
                 self._record_rejection_locked(decision)
                 return decision
-            decision = self.queue.complete(job.token)
-            if not decision.accepted:
-                self._pending.pop(job_id, None)
-                self._record_rejection_locked(decision)
-                return decision
             current, reason = self._completion_current_locked(job)
             if not current:
                 self._pending.pop(job_id, None)
                 return self._reject_locked(job.token, reason)
-            self._pending.pop(job_id, None)
             if error is not None:
+                self._pending.pop(job_id, None)
+                self.queue.complete(job.token)
                 diagnostics = link_source_diagnostics(
                     error.diagnostics,
                     source_text=job.source_text,
@@ -1370,6 +2236,12 @@ class PreviewPipeline:
                     width=job.width,
                     height=job.height,
                 )
+            decision = self.queue.complete(job.token)
+            if not decision.accepted:
+                self._pending.pop(job_id, None)
+                self._record_rejection_locked(decision)
+                return decision
+            self._pending.pop(job_id, None)
             installed, install_reason, diagnostics = self._install_locked(
                 job, frame
             )
@@ -1395,12 +2267,14 @@ class PreviewPipeline:
     # -- device lifecycle --------------------------------------------------
     def handle_device_loss(self, *, clear_history: bool = False) -> DeviceGeneration:
         with self._state_lock:
-            old_epoch = self.device.epoch
-            self._device_serial += 1
-            generation = self.device.handle_device_loss()
-            self.queue.handle_device_loss()
-            self.cache.invalidate_device(old_epoch, force=True)
-            self._pending.clear()
+            notify = getattr(self.backend, "handle_device_loss", None)
+            if callable(notify):
+                try:
+                    notify()
+                except Exception:  # pragma: no cover - defensive boundary
+                    pass
+            self._enter_device_lost_locked()
+            generation = self.device.generation
             if clear_history:
                 self._history.clear()
                 self._last_valid = None
@@ -1418,6 +2292,17 @@ class PreviewPipeline:
             self._device_serial += 1
             if toolchain is not None:
                 self._toolchain = toolchain
+            desired_epoch = self.device.epoch + 1
+            old_epoch = self.device.epoch
+            recreate = getattr(self.backend, "reinitialize_device", None)
+            backend_epoch: int | None = None
+            if callable(recreate):
+                try:
+                    backend_epoch = int(recreate(desired_epoch))
+                except TypeError:
+                    backend_epoch = int(recreate())
+                except Exception:  # pragma: no cover - defensive boundary
+                    backend_epoch = None
             generation = self.device.reinitialize(
                 adapter=adapter,
                 capability_profile=CapabilityProfileIdentity(
@@ -1433,7 +2318,14 @@ class PreviewPipeline:
             queue_epoch = self.queue.reinitialize()
             if queue_epoch != generation.epoch:  # pragma: no cover
                 raise PreviewError("device and job queue epochs diverged")
+            if backend_epoch is not None and backend_epoch != generation.epoch:
+                # Keep the pipeline honest about a runtime that recreated at a
+                # different actual epoch.
+                raise PreviewError(
+                    "runtime device epoch diverged from the pipeline epoch"
+                )
             self._pending.clear()
+            self.cache.invalidate_device(old_epoch)
             self._last_valid = None
             self._last_diagnostics = []
             return generation
@@ -1575,6 +2467,11 @@ class PreviewPipeline:
                 ),
                 "reserves_gpu_memory": bool(
                     getattr(self.backend, "reserves_gpu_memory", False)
+                ),
+                "runtime_session": (
+                    self.backend.report()
+                    if callable(getattr(self.backend, "report", None))
+                    else {}
                 ),
                 "node_cache": (
                     {
@@ -1763,6 +2660,12 @@ class PreviewPipeline:
         current, reason = self._completion_current_locked(job)
         if not current:
             return False, reason, []
+        if (
+            frame.device_epoch is not None
+            and frame.device_epoch != self.device.epoch
+        ):
+            return False, "obsolete_device_epoch", []
+        self._adopt_frame_device_identity_locked(frame)
         if job.token.job_id < self._last_installed_job:
             return False, "superseded_by_newer_job", []
         persistent = bool(
@@ -1871,6 +2774,43 @@ class PreviewPipeline:
         self._history.append(record)
         self._last_diagnostics = list(frame_with_digest.diagnostics)
         return True, "", []
+
+    def _adopt_frame_device_identity_locked(self, frame: PreviewFrame) -> None:
+        """Record the actual adapter of the device that produced ``frame``.
+
+        This refines the identity of the *current* device instance (first
+        render) and never changes the epoch.  Marketing names are not part of
+        the identity mapping.
+        """
+        identity = frame.device_identity
+        if not identity or not identity.get("available"):
+            return
+        adapter_fields = identity.get("adapter") or {}
+        try:
+            adapter = AdapterDeviceIdentity(
+                vendor_id=int(adapter_fields.get("vendor_id", 0) or 0),
+                device_id=int(adapter_fields.get("device_id", 0) or 0),
+                subsystem_id=int(adapter_fields.get("subsystem_id", 0) or 0),
+                adapter_luid=str(adapter_fields.get("adapter_luid", "") or ""),
+            )
+        except (CacheIdentityError, TypeError, ValueError):
+            return
+        if not adapter.available:
+            return
+        resolved_driver = str(identity.get("driver_version", "unavailable"))
+        resolved_os = str(identity.get("os_build", "") or "")
+        self.host_identity = HostDeviceIdentity(
+            adapter=adapter,
+            driver_version=resolved_driver,
+            os_build=resolved_os or self.host_identity.os_build,
+            available=True,
+            detail="identity reported by the selected runtime D3D12 device",
+        )
+        self.device.adopt_device_identity(
+            adapter,
+            driver_version=resolved_driver,
+            os_build=resolved_os or None,
+        )
 
     def _reserve_runtime_locked(
         self, job: _PendingPreviewJob
@@ -2002,6 +2942,7 @@ PreviewController = PreviewPipeline
 
 __all__ = [
     "NO_SHADER_IDENTITY",
+    "AuthoringRuntimeSession",
     "PassTiming",
     "PassTimings",
     "PreviewBackend",
@@ -2013,6 +2954,7 @@ __all__ = [
     "PreviewPipeline",
     "PreviewRecord",
     "ReferencePreviewBackend",
+    "RuntimeSessionError",
     "RuntimePackageExporter",
     "WindowsRuntimePreviewBackend",
     "create_preview_backend",

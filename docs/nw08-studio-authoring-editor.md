@@ -107,6 +107,16 @@ into a newer generation.
   hardware evidence. Physical evidence additionally requires a real,
   un-injected Windows process and an explicit physical/passthrough execution
   declaration.
+- The captured pixels are retained on the accepted frame and displayed in the
+  GUI. A failed edit keeps the last accepted image visible.
+- GUI preview work runs on a worker thread; the Tk event thread only drains
+  generation-checked results, so edits, timeline scrubbing, and cancellation
+  remain responsive. Stale or cancelled completions are discarded.
+- In `package-host` mode `AuthoringRuntimeSession` keeps the native host
+  process, and therefore its D3D12 device instance, alive while the exported
+  package is unchanged. Repeated timeline scrubs reuse the same device and its
+  real GPU realizations; a changed package or explicit reinitialization starts
+  a new device instance and advances the device epoch.
 - Export calls `nw05_export.export_graph`; the CLI calls the same function.
   GUI and CLI exports of the same semantic graph, settings, pinned toolchain,
   and player inputs are byte-identical.
@@ -115,7 +125,10 @@ into a newer generation.
   proof preserves the launch preview mode, execution kind, resolution, and
   export configuration through `StudioApplication.reopen()`.
 
-Preview reports include per-pass timings and deterministic size attribution.
+Preview reports include pass timings and deterministic size attribution.
+Measured process/timing values come from the authoring host's
+`PlayerInstrumentation`; unavailable measurements are labelled explicitly and
+never fabricated.
 The native host accepts the configured GPU budget (`--memory-budget`) and
 emits actual `PackagePlayer` allocation statistics plus an explicit
 `fence_retired` flag after `shutdown()` waits for submitted work. The pipeline
@@ -151,10 +164,14 @@ hash plus the same compiler/target inputs, and additionally include:
 - actual adapter/device identity (`vendor_id`, `device_id`, `subsystem_id`,
   adapter LUID).
 
-The host adapter/driver/OS identity is observed through the established Windows
-CIM video-controller inventory. On hosts where observation is unavailable the
-keys use an explicit all-zero `AdapterDeviceIdentity.unavailable()` sentinel;
-production code never substitutes a fabricated NVIDIA/AMD PCI identity.
+Device-resident keys use the identity reported for the adapter the runtime
+actually selected: the authoring host reports the vendor/device IDs and driver
+version queried from the `PackagePlayer` D3D12 device. The fallback Windows CIM
+inventory is used only when no runtime identity is available, and is refreshed
+for each device instance. On hosts where observation is unavailable the keys
+use an explicit all-zero `AdapterDeviceIdentity.unavailable()` sentinel;
+production code never substitutes a fabricated NVIDIA/AMD PCI identity. A
+marketing name reported by any source is ignored.
 
 GPU marketing names, RTX generation labels, and adapter descriptions are
 observed metadata only. They never define a cache predicate, compiler target,
@@ -176,6 +193,7 @@ The device generation is a D3D12 device-instance recreation epoch:
 - device loss invalidates GPU realizations and rejects in-flight completions;
 - old-epoch resources and jobs are never reused;
 - explicit preview reinitialization increments the epoch;
+- the GUI exposes an explicit **Reinitialize Device** action;
 - recovery never bypasses or changes operators and is independent of the
   release-player failure policy.
 
@@ -183,6 +201,9 @@ An in-flight render is revalidated twice: before work starts and after the
 backend returns. Device loss or a semantic edit during rendering causes the
 completion to be rejected, the last valid preview is retained only when the
 device is still live, and reinitialization increments the epoch.
+`DeviceRemoved` is propagated from the runtime host rather than collapsed into
+a generic preview failure, so the pipeline enters its lost-device state and
+queues/cache entries from the old device are invalidated.
 
 ## Disk cache corruption
 

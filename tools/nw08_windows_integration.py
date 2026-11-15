@@ -25,6 +25,7 @@ import platform
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -35,6 +36,7 @@ if str(TOOLS_DIR) not in sys.path:
 
 import nw08_cache as cache  # noqa: E402
 import nw08_editor as editor  # noqa: E402
+import nw08_gui as gui  # noqa: E402
 import nw08_preview as preview  # noqa: E402
 import nw08_studio as studio  # noqa: E402
 import nwp_package as nwp  # noqa: E402
@@ -61,12 +63,19 @@ def _export_equivalence(
     session.set_parameter("camera", "fov_degrees", "55")
     source = work / "edited.nwgraph"
     session.save(source)
-    gui = studio.StudioApplication.create(source).export(
-        work / "gui-export",
-        settings={"player_template": player_template},
-        dxc_executable=dxc,
-        allow_test_payloads=allow_test_payloads,
-    )
+    application = studio.StudioApplication.create(source)
+    # Exercise the same action layer the Tk window delegates to.
+    actions = gui.GuiActions(application)
+    try:
+        actions.export_to(
+            work / "gui-export",
+            settings={"player_template": player_template},
+            dxc_executable=dxc,
+            allow_test_payloads=allow_test_payloads,
+        )
+    finally:
+        actions.close()
+        application.close()
     cli_command = [
         sys.executable,
         str(TOOLS_DIR / "nodewerkc.py"),
@@ -427,6 +436,385 @@ def _embedded_preview_compatibility(
     )
 
 
+def _runtime_pipeline(
+    player_executable: str,
+    *,
+    graph: Path | None,
+    player_template: str,
+    dxc: str,
+    cache_dir: str | None,
+    execution_kind: str,
+    gpu_budget_bytes: int = 512 * 1024 * 1024,
+) -> tuple[preview.WindowsRuntimePreviewBackend, preview.PreviewPipeline]:
+    session = (
+        editor.GraphEditorSession.open(graph)
+        if graph is not None
+        else editor.GraphEditorSession.create_nw07_proof()
+    )
+    backend = preview.WindowsRuntimePreviewBackend(
+        player_executable,
+        mode="package-host",
+        dxc_executable=dxc,
+        player_template=player_template,
+        cache_dir=cache_dir,
+        execution_kind=execution_kind,
+        memory_budget_bytes=gpu_budget_bytes,
+    )
+    pipeline = preview.PreviewPipeline(
+        session,
+        backend=backend,
+        gpu_budget_bytes=gpu_budget_bytes,
+        toolchain=preview.toolchain_identity_for(dxc, optimization="O2"),
+    )
+    return backend, pipeline
+
+
+def _runtime_requires_real(
+    player_executable: str | None,
+    player_template: str | None,
+    dxc: str | None,
+) -> dict[str, Any] | None:
+    if not player_executable:
+        return {
+            "reason": "no --preview-executable supplied; real runtime session "
+            "checks remain pending_unverified"
+        }
+    if not (player_template and dxc):
+        return {
+            "reason": "real runtime checks require --player-template and --dxc"
+        }
+    return None
+
+
+def _runtime_shader_recovery(
+    *,
+    player_executable: str | None,
+    player_template: str | None,
+    dxc: str | None,
+    cache_dir: str | None,
+    execution_kind: str,
+) -> dict[str, Any]:
+    unmet = _runtime_requires_real(player_executable, player_template, dxc)
+    if unmet is not None:
+        return _check("runtime_shader_error_recovery", "pending_unverified", unmet)
+    backend, pipeline = _runtime_pipeline(
+        str(player_executable),
+        graph=REPO_ROOT / "fixtures" / "nw08" / "shader_edit_probe.nwgraph",
+        player_template=str(player_template),
+        dxc=str(dxc),
+        cache_dir=cache_dir,
+        execution_kind=execution_kind,
+    )
+    try:
+        if not pipeline.preview_now(tick=0).accepted:
+            return _check(
+                "runtime_shader_error_recovery",
+                "failed",
+                {"reason": "initial real preview failed", "diagnostics": pipeline.last_diagnostics},
+            )
+        previous = pipeline.last_valid_frame
+        invalid = pipeline.session.set_parameter("shader", "expression", "vec4(sin(")
+        pipeline.apply_edit(invalid)
+        if invalid.valid or pipeline.last_valid_preview is None:
+            return _check(
+                "runtime_shader_error_recovery",
+                "failed",
+                {"reason": "broken shader edit replaced the valid preview"},
+            )
+        if previous is not None and previous.image_data is not None:
+            if pipeline.last_valid_frame.image_sha256 != previous.image_sha256:
+                return _check(
+                    "runtime_shader_error_recovery",
+                    "failed",
+                    {"reason": "last accepted pixels changed after a failed edit"},
+                )
+        source = (pipeline.last_diagnostics[0].get("source") or {})
+        if source.get("node_id") != "shader" or not source.get("line"):
+            return _check(
+                "runtime_shader_error_recovery",
+                "failed",
+                {"reason": "diagnostic is not source-linked", "diagnostics": pipeline.last_diagnostics},
+            )
+        valid = pipeline.session.set_parameter(
+            "shader",
+            "expression",
+            "vec4(mix(uv.x, sin(uv.y * 5.0 + time), 0.5), 0.25, 0.5, 1.0)",
+        )
+        pipeline.apply_edit(valid)
+        if not pipeline.preview_now(tick=0).accepted:
+            return _check(
+                "runtime_shader_error_recovery",
+                "failed",
+                {"reason": "valid edit did not recover", "diagnostics": pipeline.last_diagnostics},
+            )
+        recovered = pipeline.last_valid_frame
+        return _check(
+            "runtime_shader_error_recovery",
+            "passed",
+            {
+                "previous_image": previous.image_sha256 if previous else "",
+                "recovered_image": recovered.image_sha256 if recovered else "",
+                "retained_last_valid": True,
+                "diagnostic": pipeline.last_diagnostics,
+            },
+        )
+    finally:
+        backend.close()
+
+
+def _runtime_device_recreation(
+    *,
+    player_executable: str | None,
+    player_template: str | None,
+    dxc: str | None,
+    cache_dir: str | None,
+    execution_kind: str,
+) -> dict[str, Any]:
+    unmet = _runtime_requires_real(player_executable, player_template, dxc)
+    if unmet is not None:
+        return _check("runtime_device_recreation", "pending_unverified", unmet)
+    backend, pipeline = _runtime_pipeline(
+        str(player_executable),
+        graph=None,
+        player_template=str(player_template),
+        dxc=str(dxc),
+        cache_dir=cache_dir,
+        execution_kind=execution_kind,
+    )
+    try:
+        if not pipeline.preview_now(tick=0).accepted:
+            return _check(
+                "runtime_device_recreation",
+                "failed",
+                {"reason": "initial real preview failed", "diagnostics": pipeline.last_diagnostics},
+            )
+        initial_epoch = pipeline.device.epoch
+        pending = pipeline.submit_preview(tick=100)
+        pipeline.handle_device_loss()
+        generation = pipeline.reinitialize_device()
+        decision = pipeline.execute(pending)
+        if decision.accepted:
+            return _check(
+                "runtime_device_recreation",
+                "failed",
+                {"reason": "stale job installed after device recreation"},
+            )
+        if not pipeline.preview_now(tick=0).accepted:
+            return _check(
+                "runtime_device_recreation",
+                "failed",
+                {"reason": "preview after reinitialization failed", "diagnostics": pipeline.last_diagnostics},
+            )
+        record = pipeline.last_valid_preview
+        if (
+            record is None
+            or record.token.device_epoch != generation.epoch
+            or generation.epoch <= initial_epoch
+        ):
+            return _check(
+                "runtime_device_recreation",
+                "failed",
+                {"reason": "reinitialized preview did not carry the new epoch"},
+            )
+        session = backend.report()
+        if not session.get("persistent"):
+            return _check(
+                "runtime_device_recreation",
+                "failed",
+                {"reason": "runtime session did not retain a persistent device"},
+            )
+        return _check(
+            "runtime_device_recreation",
+            "passed",
+            {
+                "initial_epoch": initial_epoch,
+                "epoch": generation.epoch,
+                "rejected_reason": decision.reason,
+                "frame_epoch": record.frame.device_epoch,
+                "session": session,
+            },
+        )
+    finally:
+        backend.close()
+
+
+def _runtime_fence_safe_cache(
+    *,
+    player_executable: str | None,
+    player_template: str | None,
+    dxc: str | None,
+    cache_dir: str | None,
+    execution_kind: str,
+) -> dict[str, Any]:
+    unmet = _runtime_requires_real(player_executable, player_template, dxc)
+    if unmet is not None:
+        return _check("runtime_fence_safe_cache", "pending_unverified", unmet)
+    budget = 256 * 1024 * 1024
+    backend, pipeline = _runtime_pipeline(
+        str(player_executable),
+        graph=None,
+        player_template=str(player_template),
+        dxc=str(dxc),
+        cache_dir=cache_dir,
+        execution_kind=execution_kind,
+        gpu_budget_bytes=budget,
+    )
+    try:
+        if not pipeline.preview_now(tick=0).accepted:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "initial real preview failed", "diagnostics": pipeline.last_diagnostics},
+            )
+        first = pipeline.last_valid_preview
+        first_epoch = pipeline.device.epoch
+        if not pipeline.preview_now(tick=240_000).accepted:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "timeline scrub preview failed", "diagnostics": pipeline.last_diagnostics},
+            )
+        scrub = pipeline.last_valid_preview
+        if scrub is None or first is None:
+            return _check(
+                "runtime_fence_safe_cache", "failed", {"reason": "missing records"}
+            )
+        if pipeline.device.epoch != first_epoch:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "timeline scrub recreated the device instead of reusing it"},
+            )
+        if not scrub.cache_hit:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "unchanged timeline frame did not reuse realizations"},
+            )
+        pipeline.apply_parameter_edit("texture", "seed", "1297036694")
+        if not pipeline.preview_now(tick=0).accepted:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "edited-graph preview failed", "diagnostics": pipeline.last_diagnostics},
+            )
+        edited = pipeline.last_valid_preview
+        if edited is None or pipeline.device.epoch <= first_epoch:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "new package did not recreate the device/epoch"},
+            )
+        if not pipeline.cache.within_budget:
+            return _check(
+                "runtime_fence_safe_cache",
+                "failed",
+                {"reason": "GPU cache exceeded its configured budget"},
+            )
+        return _check(
+            "runtime_fence_safe_cache",
+            "passed",
+            {
+                "budget_bytes": pipeline.cache.budget_bytes,
+                "total_bytes": pipeline.cache.total_bytes,
+                "live_bytes": pipeline.cache.live_bytes,
+                "retiring_bytes": pipeline.cache.retiring_bytes,
+                "scrub_cached_nodes": list(scrub.cached_nodes),
+                "edited_recomputed_nodes": list(edited.recomputed_nodes),
+                "session": backend.report(),
+            },
+        )
+    finally:
+        backend.close()
+
+
+def _gui_window_interaction(
+    work: Path,
+    *,
+    player_executable: str | None,
+    player_template: str | None,
+    dxc: str | None,
+    execution_kind: str,
+    allow_test_payloads: bool = False,
+) -> dict[str, Any]:
+    """Build the real Tk window and drive export/preview through it."""
+    try:
+        import tkinter as tk
+    except Exception as exc:  # pragma: no cover - headless host
+        return _check(
+            "gui_window_interaction",
+            "skipped",
+            {"reason": f"tkinter unavailable: {exc}"},
+        )
+    application = studio.StudioApplication.create(
+        player_executable=player_executable,
+        dxc_executable=dxc,
+        player_template=player_template,
+        execution_kind=execution_kind,
+        gpu_cache_budget_bytes=512 * 1024 * 1024,
+        allow_test_payloads=allow_test_payloads,
+    )
+    try:
+        root = tk.Tk()
+    except Exception as exc:  # pragma: no cover - no interactive desktop
+        application.close()
+        return _check(
+            "gui_window_interaction",
+            "skipped",
+            {"reason": f"Tk root unavailable: {exc}"},
+        )
+    window: Any = None
+    try:
+        window = gui.StudioWindow(root, application)
+        window.select_node_if_present("texture")
+        report = window.actions.export_to(work / "gui-window-export")
+        details: dict[str, Any] = {
+            "package_bytes": report["package_bytes"],
+            "executable_bytes": report["executable_bytes"],
+        }
+        if player_executable and player_template and dxc:
+            window.preview()
+            deadline = time.monotonic() + 180.0
+            while window.dispatcher.busy and time.monotonic() < deadline:
+                root.update()
+                time.sleep(0.05)
+            root.update()
+            record = application.pipeline.last_valid_preview
+            if record is None:
+                return _check(
+                    "gui_window_interaction",
+                    "failed",
+                    {
+                        "reason": "GUI preview did not install a frame",
+                        "status": window.status.cget("text"),
+                        "diagnostics": application.pipeline.last_diagnostics,
+                    },
+                )
+            details["preview_sha256"] = record.frame.image_sha256
+            details["preview_has_image"] = record.frame.has_image
+            if not record.frame.has_image:
+                return _check(
+                    "gui_window_interaction",
+                    "failed",
+                    {"reason": "GUI retained no captured preview pixels"},
+                )
+        return _check("gui_window_interaction", "passed", details)
+    except Exception as exc:
+        return _check(
+            "gui_window_interaction",
+            "failed",
+            {"error": f"{type(exc).__name__}: {exc}"},
+        )
+    finally:
+        try:
+            if window is not None:
+                window.dispatcher.cancel()
+            root.destroy()
+        except Exception:
+            pass
+        application.close()
+
+
 def _nw01_provisioning_contract() -> dict[str, Any]:
     """Consume the established NW-01 provisioning/evidence contracts."""
     sources = REPO_ROOT / "tools" / "nw01" / "toolchain-sources.json"
@@ -549,6 +937,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         checks.append(_shader_recovery(work))
         checks.append(_device_recreation())
         checks.append(_fence_safe_cache())
+        checks.append(
+            _gui_window_interaction(
+                work,
+                player_executable=args.preview_executable,
+                player_template=args.player_template,
+                dxc=args.dxc,
+                execution_kind=args.execution_kind,
+                allow_test_payloads=args.allow_test_payloads,
+            )
+        )
+        checks.append(
+            _runtime_shader_recovery(
+                player_executable=args.preview_executable,
+                player_template=args.player_template,
+                dxc=args.dxc,
+                cache_dir=args.cache_dir,
+                execution_kind=args.execution_kind,
+            )
+        )
+        checks.append(
+            _runtime_device_recreation(
+                player_executable=args.preview_executable,
+                player_template=args.player_template,
+                dxc=args.dxc,
+                cache_dir=args.cache_dir,
+                execution_kind=args.execution_kind,
+            )
+        )
+        checks.append(
+            _runtime_fence_safe_cache(
+                player_executable=args.preview_executable,
+                player_template=args.player_template,
+                dxc=args.dxc,
+                cache_dir=args.cache_dir,
+                execution_kind=args.execution_kind,
+            )
+        )
         ticks = args.capture_tick or [0, 240_000, 480_000, 720_000, 959_999]
         checks.append(
             _real_preview(

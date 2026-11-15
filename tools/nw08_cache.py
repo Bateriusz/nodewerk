@@ -29,7 +29,6 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field, replace
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
@@ -224,6 +223,52 @@ class HostDeviceIdentity:
             "available": self.available,
         }
 
+    @classmethod
+    def from_runtime_stats(
+        cls, stats: Mapping[str, Any], *, os_build: str = ""
+    ) -> "HostDeviceIdentity":
+        """Build identity from the *actually selected* D3D12 device.
+
+        The native authoring host reports the vendor/device ids and driver
+        version it queried from the adapter it created.  This deliberately
+        ignores any marketing description and does not substitute a CIM/PNP
+        inventory record for the device the player actually selected.
+        """
+        queried = bool(stats.get("adapter_identity_queried", False))
+        try:
+            vendor_id = int(stats.get("adapter_vendor_id", 0) or 0)
+            device_id = int(stats.get("adapter_device_id", 0) or 0)
+        except (TypeError, ValueError):
+            vendor_id = 0
+            device_id = 0
+        driver_version = str(stats.get("driver_version") or "unavailable")
+        windows_build = stats.get("windows_build_number")
+        resolved_os = os_build or (
+            f"windows-build:{int(windows_build)}"
+            if isinstance(windows_build, int) and windows_build
+            else ""
+        )
+        adapter = AdapterDeviceIdentity(
+            vendor_id=vendor_id if queried else 0,
+            device_id=device_id if queried else 0,
+            subsystem_id=0,
+            # PackagePlayer does not expose its DXGI LUID through the public
+            # API.  Leave it explicitly empty rather than fabricating one.
+            adapter_luid="",
+        )
+        available = queried and adapter.available
+        return cls(
+            adapter=adapter,
+            driver_version=driver_version if available else "unavailable",
+            os_build=resolved_os or "unavailable",
+            available=available,
+            detail=(
+                "identity queried from the selected D3D12 adapter"
+                if available
+                else "runtime did not report a selected D3D12 adapter identity"
+            ),
+        )
+
 
 _PCIPNP_RE = re.compile(
     r"VEN_([0-9A-Fa-f]{4}).*?DEV_([0-9A-Fa-f]{4})"
@@ -249,13 +294,15 @@ def _adapter_from_pnp(pnp_device_id: str) -> AdapterDeviceIdentity | None:
     )
 
 
-@lru_cache(maxsize=1)
 def discover_host_device_identity() -> HostDeviceIdentity:
     """Observe the host adapter/driver/OS identity without marketing labels.
 
-    Windows uses the established CIM video-controller inventory.  Other hosts
-    return the explicit unavailable sentinel.  Discovery failure is never
-    converted into a fabricated adapter identity.
+    This host-inventory fallback is *not* used to key a device-resident
+    realization when the authoring runtime can report the adapter it actually
+    selected (see :meth:`HostDeviceIdentity.from_runtime_stats`).  It is
+    intentionally not cached so a fresh device instance observes a fresh
+    identity; discovery failure is never converted into a fabricated adapter
+    identity.
     """
     os_build = platform.version() or "unavailable"
     if os.name != "nt":
@@ -499,6 +546,37 @@ class DeviceEpochManager:
             )
         self._generation = replace(
             self._generation, toolchain_identity=toolchain_identity
+        )
+        return self._generation
+
+    def adopt_device_identity(
+        self,
+        adapter: AdapterDeviceIdentity,
+        *,
+        driver_version: str | None = None,
+        os_build: str | None = None,
+    ) -> DeviceGeneration:
+        """Record the actual identity of the current device instance.
+
+        This does not increment the epoch: it refines the identity of the
+        device instance that already exists (first observed render).  A new
+        device instance must still be introduced with :meth:`reinitialize`.
+        """
+        if not isinstance(adapter, AdapterDeviceIdentity):
+            raise CacheIdentityError(
+                "device identity requires AdapterDeviceIdentity"
+            )
+        self._generation = replace(
+            self._generation,
+            adapter=adapter,
+            driver_version=(
+                self._generation.driver_version
+                if driver_version is None
+                else driver_version
+            ),
+            os_build=(
+                self._generation.os_build if os_build is None else os_build
+            ),
         )
         return self._generation
 
@@ -764,6 +842,32 @@ class AsyncJobQueue:
         self._pending.pop(job_id, None)
         return True
 
+    def bind_device_epoch(
+        self, job_id: int, device_epoch: int
+    ) -> GenerationToken:
+        """Re-bind one pending job to a device instance it itself created.
+
+        This is only valid after :meth:`reinitialize` has advanced the queue to
+        ``device_epoch``.  It exists because an authoring runtime session may
+        create a *new* device instance while servicing a job that was submitted
+        under the previous epoch; that job is the one that caused the actual
+        recreation and may install, while every other pending token remains
+        stale.
+        """
+        _require_int("device epoch", device_epoch)
+        token = self._tokens.get(job_id)
+        if token is None:
+            raise CacheIdentityError("cannot bind an unknown job")
+        if device_epoch != self._device_epoch:
+            raise CacheIdentityError(
+                "job can only bind to the current device epoch"
+            )
+        rebound = replace(token, device_epoch=device_epoch)
+        self._tokens[job_id] = rebound
+        if job_id in self._pending:
+            self._pending[job_id] = rebound
+        return rebound
+
     def complete(self, token: GenerationToken | int) -> CompletionDecision:
         if isinstance(token, int):
             stored = self._tokens.get(token)
@@ -809,6 +913,8 @@ class AsyncJobQueue:
             return False, "obsolete_snapshot_generation"
         if self._latest_by_snapshot.get(token.snapshot_generation) != token.job_id:
             return False, "superseded_by_newer_job"
+        if token.job_id in self._canceled:
+            return False, "canceled"
         return True, "current"
 
     def handle_device_loss(self) -> None:

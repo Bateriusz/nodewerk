@@ -5,15 +5,44 @@
 // absolute tick, with optional diagnostic readback through the existing
 // capture-control seam.  It is never linked into ``nodewerk-player`` and never
 // part of the release dependency closure.
+//
+// Two execution modes are supported:
+//
+//   * one-shot (default): initialize, render one tick, read back, shut down.
+//   * ``--session``: initialize once and keep the same D3D12 device alive while
+//     a line protocol on stdin drives additional ticks.  This is the authoring
+//     runtime session the Python preview pipeline keeps alive so repeated
+//     timeline scrubs reuse the device and its submitted-work retirement
+//     fences instead of recreating the whole device for every frame.
+//
+// The host reports the *actual* selected adapter identity (vendor/device and
+// driver) queried from the D3D12 device, measured instrumentation timings when
+// the diagnostic profile provides them, and whether shutdown observed the
+// complete retirement of all submitted GPU work.  It never reports marketing
+// names as identity and never fabricates timing values.
 
 #include "package_player.h"
 
+#include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 
 namespace {
 
@@ -23,6 +52,7 @@ struct Options {
     std::uint32_t width = 1920u;
     std::uint32_t height = 1080u;
     bool headless = true;
+    bool session = false;
     std::string capture_dir;
     std::string stats_path;
     std::uint64_t memory_budget_bytes = 0u;
@@ -33,7 +63,7 @@ void Usage() {
         stderr,
         "usage: nodewerk-studio-preview --package <nwp> [--tick N] "
         "[--width N] [--height N] [--capture-dir DIR] "
-        "[--memory-budget N] [--stats-json PATH] [--visible]\n");
+        "[--memory-budget N] [--stats-json PATH] [--session] [--visible]\n");
 }
 
 bool ParseU64(const char* text, std::uint64_t* value) {
@@ -82,11 +112,37 @@ bool ParseArgs(int argc, char** argv, Options* options) {
             options->height = static_cast<std::uint32_t>(std::strtoul(value, nullptr, 10));
         } else if (arg == "--visible") {
             options->headless = false;
+        } else if (arg == "--session") {
+            options->session = true;
         } else {
             return false;
         }
     }
     return !options->package_path.empty();
+}
+
+void AppendJsonEscaped(std::string* out, const std::string& value) {
+    out->push_back('"');
+    for (char character : value) {
+        switch (character) {
+            case '"': out->append("\\\""); break;
+            case '\\': out->append("\\\\"); break;
+            case '\n': out->append("\\n"); break;
+            case '\r': out->append("\\r"); break;
+            case '\t': out->append("\\t"); break;
+            default:
+                if (static_cast<unsigned char>(character) < 0x20u) {
+                    char buffer[8]{};
+                    std::snprintf(buffer, sizeof(buffer), "\\u%04x",
+                                  static_cast<unsigned>(character));
+                    out->append(buffer);
+                } else {
+                    out->push_back(character);
+                }
+                break;
+        }
+    }
+    out->push_back('"');
 }
 
 bool WriteReadback(const std::string& path, const std::vector<std::uint8_t>& bytes) {
@@ -100,14 +156,51 @@ bool WriteReadback(const std::string& path, const std::vector<std::uint8_t>& byt
     return written == bytes.size();
 }
 
-bool WriteStats(const std::string& path,
-                const nw::player::PlayerAllocationStats& stats,
+struct TimingSnapshot {
+    bool cpu_available = false;
+    bool gpu_available = false;
+    double cpu_submit_ms = 0.0;
+    double gpu_ms = 0.0;
+    std::string instructions_json;
+};
+
+TimingSnapshot CaptureTimings(const nw::player::PackagePlayer& player) {
+    TimingSnapshot timing{};
+#if NW_PLAYER_DIAGNOSTICS
+    const nw::player::PlayerTiming& measured = player.instrumentation().timing();
+    timing.cpu_available = measured.cpu_available;
+    timing.gpu_available = measured.gpu_available;
+    timing.cpu_submit_ms = measured.cpu_submit_ms;
+    timing.gpu_ms = measured.gpu_ms;
+#else
+    (void)player;
+#endif
+    timing.instructions_json = "[";
+    const std::vector<std::string>& order = player.last_frame_instruction_order();
+    for (std::size_t index = 0u; index < order.size(); ++index) {
+        if (index != 0u) {
+            timing.instructions_json.append(",");
+        }
+        AppendJsonEscaped(&timing.instructions_json, order[index]);
+    }
+    timing.instructions_json.append("]");
+    return timing;
+}
+
+bool WriteStats(const std::string& path, const nw::player::PackagePlayer& player,
+                const nw::player::PlayerAllocationStats& peak_stats,
                 bool using_aliased_plan, std::uint32_t width,
-                std::uint32_t height, std::uint64_t peak_engine_resource_bytes,
-                bool fence_retired) {
+                std::uint32_t height, bool fence_retired,
+                std::uint64_t session_renders,
+                const TimingSnapshot& timing) {
     if (path.empty()) {
         return true;
     }
+    const nw::player::PlayerAllocationStats& stats = player.allocation_stats();
+    const nw::player::QueriedAdapterCapabilities& adapter =
+        player.queried_capabilities();
+    std::string driver_version;
+    AppendJsonEscaped(&driver_version, adapter.driver_version);
     std::FILE* file = std::fopen(path.c_str(), "wb");
     if (file == nullptr) {
         return false;
@@ -121,9 +214,16 @@ bool WriteStats(const std::string& path,
         "\"allocation_calls\":%llu,\"frames_rendered\":%llu,"
         "\"frames_presented\":%llu,\"using_aliased_plan\":%s,"
         "\"width\":%u,\"height\":%u,\"post_initialization_allocation_violation\":%s,"
-        "\"fence_retired\":%s}\n",
+        "\"fence_retired\":%s,\"session_renders\":%llu,"
+        "\"adapter_vendor_id\":%u,\"adapter_device_id\":%u,"
+        "\"adapter_identity_queried\":%s,\"driver_version\":%s,"
+        "\"windows_build_number\":%u,"
+        "\"runtime_cpu_submit_ms\":%.6f,\"runtime_cpu_available\":%s,"
+        "\"runtime_gpu_ms\":%.6f,\"runtime_gpu_available\":%s,"
+        "\"frame_instructions\":%s,"
+        "\"package_sha256\":\"%s\"}\n",
         static_cast<unsigned long long>(stats.engine_resource_bytes),
-        static_cast<unsigned long long>(peak_engine_resource_bytes),
+        static_cast<unsigned long long>(peak_stats.engine_resource_bytes),
         static_cast<unsigned long long>(stats.engine_cumulative_resource_bytes),
         static_cast<unsigned long long>(stats.engine_upload_bytes),
         static_cast<unsigned long long>(stats.engine_descriptor_count),
@@ -136,9 +236,182 @@ bool WriteStats(const std::string& path,
         width,
         height,
         stats.post_initialization_allocation_violation ? "true" : "false",
-        fence_retired ? "true" : "false");
+        fence_retired ? "true" : "false",
+        static_cast<unsigned long long>(session_renders),
+        adapter.vendor_id,
+        adapter.device_id,
+        adapter.queried ? "true" : "false",
+        driver_version.c_str(),
+        adapter.windows_build_number,
+        timing.cpu_submit_ms,
+        timing.cpu_available ? "true" : "false",
+        timing.gpu_ms,
+        timing.gpu_available ? "true" : "false",
+        timing.instructions_json.c_str(),
+        player.package_sha256().c_str());
     std::fclose(file);
     return written > 0;
+}
+
+bool EnsureDirectory(const std::string& path) {
+    if (path.empty()) {
+        return true;
+    }
+#if defined(_WIN32)
+    std::string current;
+    current.reserve(path.size());
+    for (std::size_t index = 0u; index < path.size(); ++index) {
+        const char character = path[index];
+        current.push_back(character);
+        const bool separator = character == '/' || character == '\\';
+        const bool last = index + 1u == path.size();
+        if ((separator || last) && current.size() > 1u) {
+            if (current.back() != ':' ) {
+                CreateDirectoryA(current.c_str(), nullptr);
+            }
+        }
+    }
+    const DWORD attributes = GetFileAttributesA(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+           (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0u;
+#else
+    return ::mkdir(path.c_str(), 0777) == 0 || errno == EEXIST;
+#endif
+}
+
+std::string ParentDirectory(const std::string& path) {
+    const std::size_t separator = path.find_last_of("/\\");
+    if (separator == std::string::npos) {
+        return std::string();
+    }
+    return path.substr(0u, separator);
+}
+
+bool CaptureFrame(nw::player::PackagePlayer* player,
+                  const std::string& capture_dir, std::uint64_t tick) {
+    if (capture_dir.empty()) {
+        return true;
+    }
+    if (!EnsureDirectory(capture_dir)) {
+        return false;
+    }
+    std::vector<std::uint8_t> bytes;
+    if (player->readbackPresentedOutput(&bytes) != nw::player::ExitCode::Success) {
+        return false;
+    }
+    const std::string path = capture_dir + "/tick_" +
+                             std::to_string(tick) + ".rgba32f";
+    return WriteReadback(path, bytes);
+}
+
+int DeviceRemovedExitCode() {
+    return static_cast<int>(nw::player::ExitCode::DeviceRemoved);
+}
+
+bool IsDeviceRemoved(int exit_code) {
+    return exit_code == DeviceRemovedExitCode();
+}
+
+void EmitReady(const nw::player::PackagePlayer& player) {
+    const nw::player::QueriedAdapterCapabilities& adapter =
+        player.queried_capabilities();
+    std::string driver_version;
+    AppendJsonEscaped(&driver_version, adapter.driver_version);
+    std::printf(
+        "{\"event\":\"ready\",\"adapter_vendor_id\":%u,"
+        "\"adapter_device_id\":%u,\"adapter_identity_queried\":%s,"
+        "\"driver_version\":%s,\"windows_build_number\":%u,"
+        "\"package_sha256\":\"%s\"}\n",
+        adapter.vendor_id, adapter.device_id,
+        adapter.queried ? "true" : "false", driver_version.c_str(),
+        adapter.windows_build_number, player.package_sha256().c_str());
+    std::fflush(stdout);
+}
+
+int RunSession(const Options& options, nw::player::PackagePlayer* player) {
+    std::uint64_t session_renders = 0u;
+    if (!EnsureDirectory(options.capture_dir)) {
+        return 1;
+    }
+    if (!EnsureDirectory(ParentDirectory(options.stats_path))) {
+        return 1;
+    }
+    EmitReady(*player);
+    char line[512]{};
+    while (std::fgets(line, static_cast<int>(sizeof(line)), stdin) != nullptr) {
+        std::string command(line);
+        while (!command.empty() &&
+               (command.back() == '\n' || command.back() == '\r')) {
+            command.pop_back();
+        }
+        if (command == "quit") {
+            const nw::player::ExitCode shutdown = player->shutdown();
+            const bool retired = shutdown == nw::player::ExitCode::Success;
+            std::printf("{\"event\":\"shutdown\",\"ok\":%s,\"fence_retired\":%s,"
+                        "\"session_renders\":%llu}\n",
+                        retired ? "true" : "false",
+                        retired ? "true" : "false",
+                        static_cast<unsigned long long>(session_renders));
+            std::fflush(stdout);
+            return retired ? 0 : static_cast<int>(shutdown);
+        }
+        if (command == "lose-device") {
+            player->SetForceDeviceRemovedForTesting(true);
+            std::printf("{\"event\":\"device-lost\",\"ok\":true}\n");
+            std::fflush(stdout);
+            continue;
+        }
+        std::uint64_t tick = 0u;
+        if (command.rfind("render ", 0u) == 0u) {
+            const char* tick_text = command.c_str() + 7;
+            if (!ParseU64(tick_text, &tick)) {
+                std::printf("{\"event\":\"error\",\"message\":\"bad tick\"}\n");
+                std::fflush(stdout);
+                continue;
+            }
+        } else if (!ParseU64(command.c_str(), &tick)) {
+            std::printf("{\"event\":\"error\",\"message\":\"unknown command\"}\n");
+            std::fflush(stdout);
+            continue;
+        }
+        const nw::player::ExitCode rendered = player->renderAtTick(tick);
+        ++session_renders;
+        if (rendered != nw::player::ExitCode::Success) {
+            const int exit_code = static_cast<int>(rendered);
+            const TimingSnapshot timing = CaptureTimings(*player);
+            (void)WriteStats(options.stats_path, *player,
+                             player->allocation_stats(),
+                             player->using_aliased_plan(), player->width(),
+                             player->height(), false, session_renders, timing);
+            std::printf(
+                "{\"event\":\"render-failed\",\"ok\":false,\"tick\":%llu,"
+                "\"exit_code\":%d,\"device_removed\":%s}\n",
+                static_cast<unsigned long long>(tick), exit_code,
+                IsDeviceRemoved(exit_code) ? "true" : "false");
+            std::fflush(stdout);
+            if (IsDeviceRemoved(exit_code)) {
+                return exit_code;
+            }
+            continue;
+        }
+        const bool captured = CaptureFrame(player, options.capture_dir, tick);
+        const TimingSnapshot timing = CaptureTimings(*player);
+        const bool stats_ok =
+            WriteStats(options.stats_path, *player, player->allocation_stats(),
+                       player->using_aliased_plan(), player->width(),
+                       player->height(), true, session_renders, timing);
+        std::printf(
+            "{\"event\":\"rendered\",\"ok\":%s,\"tick\":%llu,"
+            "\"capture\":%s,\"stats\":%s,\"exit_code\":0}\n",
+            (captured && stats_ok) ? "true" : "false",
+            static_cast<unsigned long long>(tick),
+            captured ? "true" : "false", stats_ok ? "true" : "false");
+        std::fflush(stdout);
+    }
+    const nw::player::ExitCode shutdown = player->shutdown();
+    return shutdown == nw::player::ExitCode::Success
+               ? 0
+               : static_cast<int>(shutdown);
 }
 
 }  // namespace
@@ -157,51 +430,48 @@ int main(int argc, char** argv) {
     config.create_window = !options.headless;
     config.enable_validation = false;
     config.memory_budget_bytes = options.memory_budget_bytes;
+    // The authoring host waits for submitted GPU work before it reports a
+    // result.  This is the fence boundary the Python session uses to retire
+    // realizations and to guarantee that readback never races presentation.
+    config.wait_for_gpu_each_frame = true;
     nw::player::PackagePlayer player(config);
     const nw::player::ExitCode initialized =
         player.initializeFromFile(options.package_path.c_str());
     if (initialized != nw::player::ExitCode::Success) {
+        if (options.session) {
+            std::printf("{\"event\":\"init-failed\",\"exit_code\":%d}\n",
+                        static_cast<int>(initialized));
+            std::fflush(stdout);
+        }
         return static_cast<int>(initialized);
+    }
+    if (options.session) {
+        return RunSession(options, &player);
     }
     const nw::player::ExitCode rendered = player.renderAtTick(options.tick);
     if (rendered != nw::player::ExitCode::Success) {
+        const TimingSnapshot timing = CaptureTimings(player);
+        (void)WriteStats(options.stats_path, player, player.allocation_stats(),
+                         player.using_aliased_plan(), player.width(),
+                         player.height(), false, 1u, timing);
         player.shutdown();
         return static_cast<int>(rendered);
     }
-    if (!options.capture_dir.empty()) {
-        std::error_code directory_error;
-        std::filesystem::create_directories(options.capture_dir, directory_error);
-        if (directory_error) {
-            player.shutdown();
-            return 1;
-        }
-        std::vector<std::uint8_t> bytes;
-        const nw::player::ExitCode readback =
-            player.readbackPresentedOutput(&bytes);
-        if (readback != nw::player::ExitCode::Success) {
-            player.shutdown();
-            return static_cast<int>(readback);
-        }
-        const std::string path = options.capture_dir + "/tick_" +
-                                 std::to_string(options.tick) + ".rgba32f";
-        if (!WriteReadback(path, bytes)) {
-            player.shutdown();
-            return 1;
-        }
+    if (!CaptureFrame(&player, options.capture_dir, options.tick)) {
+        player.shutdown();
+        return 1;
     }
     const nw::player::PlayerAllocationStats peak_stats =
         player.allocation_stats();
     const bool using_aliased_plan = player.using_aliased_plan();
     const std::uint32_t width = player.width();
     const std::uint32_t height = player.height();
+    const TimingSnapshot timing = CaptureTimings(player);
     const nw::player::ExitCode shutdown = player.shutdown();
-    const nw::player::PlayerAllocationStats stats = player.allocation_stats();
     const bool fence_retired = shutdown == nw::player::ExitCode::Success;
-    if (!WriteStats(options.stats_path, stats, using_aliased_plan, width, height,
-                    peak_stats.engine_resource_bytes, fence_retired)) {
+    if (!WriteStats(options.stats_path, player, peak_stats, using_aliased_plan,
+                    width, height, fence_retired, 1u, timing)) {
         return 1;
     }
-    return shutdown == nw::player::ExitCode::Success
-               ? 0
-               : static_cast<int>(shutdown);
+    return fence_retired ? 0 : static_cast<int>(shutdown);
 }

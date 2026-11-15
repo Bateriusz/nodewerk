@@ -8,16 +8,29 @@ authoritative editor model and GUI are implemented in
 The optional native `nodewerk-studio-preview` host in this directory drives the
 unchanged `nw::player::PackagePlayer` runtime at an absolute tick and uses the
 existing diagnostic readback seam.  It exists only in the authoring product and
-is never linked into `nodewerk-player`.
+is never linked into `nodewerk-player`.  The target links both
+`nw_player_bootstrap` (which contains the `PackagePlayer` implementation) and
+`nw_package_player` (the package format), plus the platform libraries and the
+player build profile so the Windows CRT settings match.
 
-The host accepts `--package <exported.nwp>`, `--memory-budget <bytes>`, and
-`--stats-json <path>`.  It enforces the configured budget through the existing
+The host accepts `--package <exported.nwp>`, `--memory-budget <bytes>`,
+`--stats-json <path>`, and `--session`.  In session mode it keeps one D3D12
+device alive and consumes `render <tick>` commands from stdin, so repeated
+timeline scrubs reuse the same device and its submitted-work retirement
+fences.  A new package (or an explicit editor reinitialization) creates a new
+device instance and increments the device epoch.  `lose-device` exercises the
+existing `PackagePlayer` device-removal seam.
+
+The host enforces the configured budget through the existing
 `PlayerConfig::memory_budget_bytes` preflight, waits for submitted GPU work in
 `PackagePlayer::shutdown()`, and writes actual engine allocation statistics
-with an explicit `"fence_retired": true` marker.  The Python preview pipeline
-uses the process exit as the fence boundary and reserves the estimated
-realization before launch, so a preview that cannot fit the configured budget
-never starts.
+with an explicit `"fence_retired": true` marker together with the adapter
+vendor/device IDs and driver version queried from the selected D3D12 device.
+It also reports the measured `PlayerInstrumentation` CPU/GPU timings when the
+diagnostic profile provides them; unavailable values are labelled rather than
+fabricated.  The Python preview pipeline uses the process exit as the fence
+boundary and reserves the estimated realization before launch, so a preview
+that cannot fit the configured budget never starts.
 
 The repository-root `CMakeLists.txt`, `CMakePresets.json`, and every other file
 in `tools/nw07_contract.py::PINNED_BUILD_INPUTS` are frozen NW-07 build inputs.

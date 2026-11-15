@@ -10,8 +10,10 @@ function(nw_add_studio_authoring_targets)
     message(STATUS "NW-08 nodewerk-studio native targets are Windows-only")
     return()
   endif()
-  if(NOT TARGET nw_package_player)
-    message(STATUS "NW-08 studio authoring targets require nw_package_player")
+  if(NOT TARGET nw_package_player OR NOT TARGET nw_player_bootstrap)
+    message(STATUS
+      "NW-08 studio authoring targets require nw_package_player and "
+      "nw_player_bootstrap")
     return()
   endif()
   add_subdirectory("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src/studio"

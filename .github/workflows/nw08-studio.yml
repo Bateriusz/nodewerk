@@ -49,6 +49,23 @@ jobs:
           python-version: "3.12"
       - name: Install pytest
         run: python -m pip install pytest
+      - name: Bootstrap exact NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh ./tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath "$env:RUNNER_TEMP\nw01-bootstrap-nw08.json"
+      - name: Export the pinned build environment
+        shell: pwsh
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+      - name: Build the nodewerk-studio-preview native host
+        shell: pwsh
+        run: |
+          cmake -S tools/nw08_authoring_build -B build/nw08-authoring `
+            -DNW_BUILD_PROFILE=dev
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/nw08-authoring --target nodewerk-studio-preview --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run NW-08 regression coverage
         run: python -m pytest -q tests/test_nw08_*.py
       - name: Create deterministic contract-test toolchain
