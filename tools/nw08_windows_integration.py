@@ -858,6 +858,33 @@ def _gui_window_interaction(
                     "failed",
                     {"reason": "GUI retained no captured preview pixels"},
                 )
+            root.update_idletasks()
+            photo = getattr(window, "_preview_photo", None)
+            widget_image = str(window.preview_label.cget("image") or "")
+            details["preview_widget_image"] = widget_image
+            details["preview_widget_sha256"] = getattr(
+                window, "_preview_image_sha", ""
+            )
+            if (
+                photo is None
+                or not widget_image
+                or widget_image != str(photo)
+                or details["preview_widget_sha256"] != record.frame.image_sha256
+            ):
+                return _check(
+                    "gui_window_interaction",
+                    "failed",
+                    {
+                        "reason": (
+                            "captured pixels were not decoded and installed "
+                            "into the actual Tk preview widget"
+                        ),
+                        "widget_image": widget_image,
+                        "photo": str(photo) if photo is not None else "",
+                        "widget_sha256": details["preview_widget_sha256"],
+                        "frame_sha256": record.frame.image_sha256,
+                    },
+                )
         return _check("gui_window_interaction", "passed", details)
     except Exception as exc:
         return _check(
