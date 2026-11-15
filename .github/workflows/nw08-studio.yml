@@ -61,7 +61,9 @@ jobs:
       - name: Build the frozen runtime inputs and native authoring host
         shell: pwsh
         run: |
-          cmake -S . -B build/nw08-runtime -G Ninja -DNW_BUILD_PROFILE=dev
+          # The exported player must use the deterministic release profile;
+          # the separate studio host below remains a dev/diagnostic build.
+          cmake -S . -B build/nw08-runtime -G Ninja -DNW_BUILD_PROFILE=release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/nw08-runtime --target nw_procedural_image_player --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
