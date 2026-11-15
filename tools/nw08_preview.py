@@ -2562,27 +2562,47 @@ class PreviewPipeline:
             self._last_diagnostics = []
             return generation
 
+    def _advance_backend_epoch_locked(self, target_epoch: int) -> None:
+        """Advance pipeline/queue identity for a newly created backend device."""
+        if target_epoch <= self.device.epoch:
+            raise PreviewError("backend replacement must advance the device epoch")
+        while self.device.epoch < target_epoch:
+            old_epoch = self.device.epoch
+            generation = self.device.reinitialize(
+                capability_profile=CapabilityProfileIdentity(
+                    self.session.document.profile_id,
+                    self.session.document.requirements_digest,
+                )
+            )
+            queue_epoch = self.queue.reinitialize()
+            if queue_epoch != generation.epoch:  # pragma: no cover
+                raise PreviewError("device and job queue epochs diverged")
+            self.cache.invalidate_device(old_epoch)
+        self._device_serial += 1
+
     def replace_backend(self, backend: PreviewBackend) -> None:
-        """Retire an old runtime backend and align its replacement atomically."""
+        """Retire an old backend as a real device-lifecycle transition."""
         if backend is self.backend:
             return
         with self._execute_lock:
-            align = getattr(backend, "reinitialize_device", None)
-            if callable(align):
-                try:
-                    aligned = int(align(self.device.epoch))
-                except TypeError:
-                    aligned = int(align())
-                if aligned != self.device.epoch:
-                    close_new = getattr(backend, "close", None)
-                    if callable(close_new):
-                        close_new()
-                    raise PreviewError(
-                        "replacement backend device epoch diverged from pipeline"
-                    )
             with self._state_lock:
+                target_epoch = self.device.epoch + 1
+                align = getattr(backend, "reinitialize_device", None)
+                if callable(align):
+                    try:
+                        aligned = int(align(target_epoch))
+                    except TypeError:
+                        aligned = int(align())
+                    if aligned != target_epoch:
+                        close_new = getattr(backend, "close", None)
+                        if callable(close_new):
+                            close_new()
+                        raise PreviewError(
+                            "replacement backend device epoch diverged from pipeline"
+                        )
                 self._cancel_pending_locked(advance_generation=True)
                 old_backend = self.backend
+                self._advance_backend_epoch_locked(target_epoch)
                 self.backend = backend
             close_old = getattr(old_backend, "close", None)
             if callable(close_old):
@@ -2591,12 +2611,13 @@ class PreviewPipeline:
     def reconfigure_backend(
         self, configure: Callable[[int], None]
     ) -> None:
-        """Serialize in-place runtime reconfiguration against preview execution."""
+        """Reconfigure a runtime as a new device instance, never the old epoch."""
         with self._execute_lock:
             with self._state_lock:
+                target_epoch = self.device.epoch + 1
+                configure(target_epoch)
                 self._cancel_pending_locked(advance_generation=True)
-                epoch = self.device.epoch
-            configure(epoch)
+                self._advance_backend_epoch_locked(target_epoch)
 
     # -- cache keys / memory ----------------------------------------------
     def set_toolchain(self, toolchain: ToolchainIdentity) -> None:

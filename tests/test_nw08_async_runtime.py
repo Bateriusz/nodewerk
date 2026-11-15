@@ -622,7 +622,7 @@ def test_host_identity_from_runtime_stats_uses_selected_adapter_only() -> None:
     assert "RTX" not in json.dumps(identity.to_key_fields())
 
 
-def test_configure_export_retires_old_backend_and_preserves_epoch(
+def test_configure_export_retires_old_backend_and_advances_epoch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class ClosableBackend(preview.ReferencePreviewBackend):
@@ -641,11 +641,12 @@ def test_configure_export_retires_old_backend_and_preserves_epoch(
     new_backend = ClosableBackend()
     application = studio.StudioApplication.create(backend=old_backend)
     application.explicit_backend = False
-    application.pipeline.reinitialize_device()
+    initial = application.pipeline.reinitialize_device().epoch
     monkeypatch.setattr(application, "_build_backend", lambda: new_backend)
     application.configure_export(optimization="O1")
 
     assert old_backend.closed is True
+    assert application.pipeline.device.epoch == initial + 1
     assert new_backend.aligned_epoch == application.pipeline.device.epoch
 
 
