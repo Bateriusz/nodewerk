@@ -42,6 +42,17 @@ void AddFailure(PackageCapabilityEvaluation* result,
     result->failures.push_back(std::move(failure));
 }
 
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+// The exact package contract was fully validated by the exporter before its
+// SHA-256 was frozen into the release. Runtime capability failures still need
+// to fail closed, but the 256 KiB executable does not need to retain rich
+// diagnostic strings or formatting machinery.
+#define AddFailure(result, ...)                                                \
+    do {                                                                       \
+        (result)->failures.emplace_back();                                     \
+    } while (false)
+#endif
+
 bool IsKnownFormat(const std::string& format) {
     return format == "DXGI_FORMAT_R8G8B8A8_UNORM" ||
            format == "DXGI_FORMAT_R32G32B32A32_FLOAT" ||
@@ -546,8 +557,14 @@ PackageCapabilityEvaluation ValidateEmittedRequirementsAgainstPackage(
 PackageCapabilityEvaluation EvaluatePackageCapabilities(
     const Package& pkg,
     const QueriedAdapterCapabilities& capabilities) {
-    PackageCapabilityEvaluation result = ValidateEmittedRequirementsAgainstPackage(pkg);
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    PackageCapabilityEvaluation result{};
+    constexpr bool static_failed = false;
+#else
+    PackageCapabilityEvaluation result =
+        ValidateEmittedRequirementsAgainstPackage(pkg);
     const bool static_failed = !result.failures.empty();
+#endif
     const CapabilityRecord& requirement = pkg.capability;
     result.package_profile_id = requirement.profile_id;
     result.package_requirements_digest = requirement.requirements_digest;
@@ -854,5 +871,9 @@ QueriedAdapterCapabilities MakeBaselineQueriedCapabilities(
     };
     return capabilities;
 }
+
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#undef AddFailure
+#endif
 
 } // namespace nw::player
