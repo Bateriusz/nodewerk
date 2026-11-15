@@ -18,6 +18,7 @@ import os
 import queue as queue_module
 import struct
 import sys
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -748,14 +749,37 @@ class StudioWindow:
             self._preview_image_sha = ""
             return
         try:
+            # Tk 8.6 normally accepts binary PPM bytes directly.  Some Windows
+            # builds route -data through Tcl's string conversion and reject
+            # otherwise-valid P6 payloads containing NUL bytes.  Keep the
+            # zero-copy path first, then fall back to a short-lived binary PPM
+            # file; PhotoImage eagerly loads the file, so it can be removed
+            # immediately after construction.
             photo = self.tk.PhotoImage(data=ppm, format="PPM")
-        except Exception:  # pragma: no cover - Tk build without PPM support
-            self.preview_label.configure(
-                image="", text="captured frame could not be decoded for display"
-            )
-            self._preview_photo = None
-            self._preview_image_sha = ""
-            return
+        except Exception:
+            temporary: Path | None = None
+            try:
+                fd, raw_path = tempfile.mkstemp(
+                    prefix=".nw08-preview-", suffix=".ppm"
+                )
+                temporary = Path(raw_path)
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(ppm)
+                    stream.flush()
+                photo = self.tk.PhotoImage(file=str(temporary), format="PPM")
+            except Exception:  # pragma: no cover - Tk build without PPM support
+                self.preview_label.configure(
+                    image="", text="captured frame could not be decoded for display"
+                )
+                self._preview_photo = None
+                self._preview_image_sha = ""
+                return
+            finally:
+                if temporary is not None:
+                    try:
+                        temporary.unlink()
+                    except OSError:
+                        pass
         self._preview_photo = photo
         self._preview_image_sha = frame.image_sha256
         self.preview_label.configure(image=photo, text="")
