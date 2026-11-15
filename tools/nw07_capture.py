@@ -705,7 +705,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             "collector_protocol": COLLECT_PROTOCOL,
             "collector_exit_code": collector_completed.returncode,
             "player_exited_early": player_exited_early,
-            "collector_stdout": collector_completed.stdout[-4000:]
+            "collector_stdout": collector_completed.stdout[-4000:],
             "collector_stderr": collector_completed.stderr[-4000:],
             "player_stdout": player_stdout[-4000:],
             "player_stderr": player_stderr[-4000:],
