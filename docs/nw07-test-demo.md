@@ -16,7 +16,7 @@ The scene keeps the NW-07 operator vocabulary and normal `.nwgraph` authoring
 surface, but the branch-only export helper installs three **demo-specific shader
 specializations** during this export only:
 
-- `nw07_test_demo_instances_cs.hlsl` — divides 1,536 instances into repeating
+- `nw07_test_demo_instances_cs.hlsl` — divides 1,024 instances into repeating
   tunnel ribs and deterministic asteroid/debris hazards;
 - `nw07_test_demo_scene_vs.hlsl` — converts the absolute-tick loop into true
   forward travel through a 96-unit repeating tunnel segment, with periodic
@@ -32,7 +32,7 @@ and restores the canonical tuple in a `finally` block.
 
 The graph uses:
 
-- 1,536 deterministic instances;
+- 1,024 deterministic instances;
 - a 4.6-unit tunnel radius;
 - 512 thicker, evenly spaced tunnel rings;
 - 512 small asteroid-like hazards/debris pieces;
@@ -66,9 +66,14 @@ The static generated content occupies one 96-unit segment.  The specialized
 vertex shader advances the camera phase by one complete segment over exactly
 1,152,000 ticks, then wraps object depth around the camera.
 
-At tick 1,152,000 the shader evaluates the same wrapped phase as tick 0.  Camera
+At tick 1,152,000 the shader evaluates the same wrapped phase as tick 0. Camera
 weave, banking, obstacle rotation and segment placement are all functions of
 the same absolute tick, so no frame-delta state is required.
+
+Segment wrapping is performed on the instance centre, not per vertex. This
+keeps every asteroid and ring rigid while it crosses the 96-unit seam and
+prevents triangles from stretching across the whole tunnel as screen-length
+"shooting rays".
 
 ## Files
 
@@ -130,6 +135,17 @@ Run:
 ```powershell
 .\build\nw07-test-demo\artifact\nw_common_d3d12_fl12_0_sm6_0_v1.exe
 ```
+
+## CI downloadable executable
+
+The Windows release job also exports this demo through `tools/nw07_test_demo.py`
+and uploads a dedicated GitHub Actions artifact named:
+
+`nw07-test-demo-windows-exe`
+
+It contains the standalone Windows x64 executable under the artifact directory,
+plus the demo export report. This is separate from the canonical
+`nw07-windows-build-checks` artifact.
 
 ## Scope
 
