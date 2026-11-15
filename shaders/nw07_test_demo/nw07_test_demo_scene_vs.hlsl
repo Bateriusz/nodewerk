@@ -121,7 +121,7 @@ void BuildTunnelRib(
 {
     float u = uv.x * TAU;
     float v = uv.y * TAU;
-    float tube = 0.060;
+    float tube = 0.008;
     float radial = 1.0 + tube * cos(v);
     local_position = float3(radial * cos(u), radial * sin(u), tube * sin(v));
     local_normal = normalize(float3(cos(v) * cos(u), cos(v) * sin(u), sin(v)));
@@ -199,11 +199,11 @@ VSOutput SceneVS(VSInput input)
 
     // Small periodic weave and bank create the "ship through tunnel" sensation
     // while the scene remains a pure function of absolute tick.
-    float sway_x = 0.34 * sin(phase * TAU * 2.0);
-    float sway_y = 0.22 * sin(phase * TAU * 3.0 + 0.8);
-    float aim_x = 0.11 * sin(phase * TAU * 2.0 + 0.65);
-    float aim_y = 0.08 * sin(phase * TAU * 3.0 + 1.5);
-    float roll = 0.12 * sin(phase * TAU * 2.0 + 0.35);
+    float sway_x = 0.16 * sin(phase * TAU * 2.0);
+    float sway_y = 0.10 * sin(phase * TAU * 3.0 + 0.8);
+    float aim_x = 0.055 * sin(phase * TAU * 2.0 + 0.65);
+    float aim_y = 0.040 * sin(phase * TAU * 3.0 + 1.5);
+    float roll = 0.075 * sin(phase * TAU * 2.0 + 0.35);
 
     float3 eye = float3(sway_x, sway_y, -0.35);
     float3 target = float3(aim_x, aim_y, 1.0);
