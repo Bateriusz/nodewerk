@@ -262,6 +262,7 @@ def _run_record(
         "artifact_sha256": executable_sha256,
         "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
         "collector_exit_code": 0,
+        "player_exited_early": False,
     }
     return {
         "run_index": index,
@@ -273,6 +274,7 @@ def _run_record(
         "artifact_sha256": executable_sha256,
         "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
         "collector_exit_code": 0,
+        "player_exited_early": False,
         "timing": timing,
         "sample_density_hz": (
             min(len(gpu_values), len(cpu_values)) / contract.PERF_RUN_SECONDS

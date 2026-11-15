@@ -63,6 +63,7 @@ def _timing(index: int) -> dict:
         "artifact_sha256": _identity()["executable_sha256"],
         "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
         "collector_exit_code": 0,
+        "player_exited_early": False,
     }
 
 
@@ -126,6 +127,7 @@ def _capture() -> dict:
                 "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
                 "artifact_sha256": _identity()["executable_sha256"],
                 "collector_exit_code": 0,
+                "player_exited_early": False,
                 "timing": _timing(index),
                 "sample_density_hz": 10.0,
                 "gpu_frame_time_ms": _samples(10.0),

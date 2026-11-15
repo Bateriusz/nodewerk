@@ -205,6 +205,7 @@ def test_perf_capture_derives_run_timing_from_retained_metadata(
                     "artifact_sha256": "3" * 64,
                     "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
                     "collector_exit_code": 0,
+                    "player_exited_early": False,
                 }
             ),
             encoding="utf-8",

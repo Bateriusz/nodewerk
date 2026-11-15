@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """NW-07 benchmark/capture harness.
 
-The harness only records measurements it is given.  It never synthesizes
-reference provenance, never upgrades a missing value to a pass, and never
-writes a certifying status that the evidence validator would not derive from
-the raw data.  Raw fixed-tick RGBA32F captures and raw per-run sample files are
-retained and hashed.
+Correctness mode records supplied fixed-tick images and provenance. Performance
+collect mode actively launches the final player and an external measurement
+collector for the frozen one-warm-up/three-run protocol. The harness never
+synthesizes reference provenance, never upgrades a missing value to a pass, and
+never writes a certifying status that the evidence validator would not derive
+from retained raw data. Raw fixed-tick RGBA32F captures and raw per-run sample
+files are retained and hashed.
 """
 
 from __future__ import annotations
@@ -443,7 +445,7 @@ def record_perf(args: argparse.Namespace) -> dict[str, Any]:
                 "application_pipeline_cache": timing.get(
                     "application_pipeline_cache"
                 ),
-                "warmup_started_utc": timing.get("warmup_started_utc"),
+                "player_exited_early": timing.get("player_exited_early"),
                 "run_started_utc": timing.get("run_started_utc"),
                 "run_ended_utc": timing.get("run_ended_utc"),
                 "timing": timing,
@@ -684,6 +686,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
                 check=False,
                 env=env,
             )
+            player_exited_early = player.poll() is not None
         finally:
             player_stdout, player_stderr = _stop_player(player)
         run_ended = _utc_now()
@@ -701,7 +704,8 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             "artifact_sha256": identity["executable_sha256"],
             "collector_protocol": COLLECT_PROTOCOL,
             "collector_exit_code": collector_completed.returncode,
-            "collector_stdout": collector_completed.stdout[-4000:],
+            "player_exited_early": player_exited_early,
+            "collector_stdout": collector_completed.stdout[-4000:]
             "collector_stderr": collector_completed.stderr[-4000:],
             "player_stdout": player_stdout[-4000:],
             "player_stderr": player_stderr[-4000:],
@@ -716,15 +720,20 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
                 "timing": timing,
                 "player_pid": player.pid,
                 "collector_exit_code": collector_completed.returncode,
+                "player_exited_early": player_exited_early,
                 "samples_present": {
                     name: (samples_dir / f"run{index}-{name}.txt").is_file()
                     for name in ("gpu", "cpu", "displayed")
                 },
             }
         )
+        if player_exited_early:
+            raise ValueError(
+                f"release executable exited before measured run {index} completed"
+            )
         if collector_completed.returncode != 0:
             raise ValueError(
-                f"measurement collector failed for run {index}: "
+                f"measurement collector failed for run {index}: 
                 f"{collector_completed.stderr.strip() or collector_completed.stdout.strip()}"
             )
         for name in ("gpu", "cpu", "displayed"):

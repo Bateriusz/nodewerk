@@ -1119,6 +1119,14 @@ def validate_perf_capture(
         if run.get("collector_exit_code") != 0 or timing.get("collector_exit_code") != 0:
             run_result["status"] = "failed"
             run_result["reasons"].append("measurement collector did not complete successfully")
+        if (
+            run.get("player_exited_early") is not False
+            or timing.get("player_exited_early") is not False
+        ):
+            run_result["status"] = "failed"
+            run_result["reasons"].append(
+                "measured player did not remain alive for the complete collection window"
+            )
         for field, expected in (
             ("uncapped", True),
             ("fresh_process", True),

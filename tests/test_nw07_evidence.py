@@ -248,6 +248,7 @@ def _perf() -> dict:
                 "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
                 "artifact_sha256": identity["executable_sha256"],
                 "collector_exit_code": 0,
+                "player_exited_early": False,
                 "timing": {
                     "run_started_utc": (
                         base + timedelta(minutes=index)
@@ -263,6 +264,7 @@ def _perf() -> dict:
                     "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
                     "artifact_sha256": identity["executable_sha256"],
                     "collector_exit_code": 0,
+                    "player_exited_early": False,
                 },
                 "sample_density_hz": 10.0,
                 "gpu_frame_time_ms": samples,
