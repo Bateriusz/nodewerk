@@ -366,7 +366,7 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "renderer": args.renderer,
         "execution_environment": {
             "kind": args.execution_kind,
-            "documentation": args.passthrough_documentation,
+            "documentation": getattr(args, "passthrough_documentation", ""),
         },
         "fixed_ticks": list(contract.REQUIRED_FIXED_TICKS),
         "capture_artifacts": capture_artifacts,
