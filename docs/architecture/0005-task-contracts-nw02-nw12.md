@@ -24,6 +24,13 @@ NW-01 has no upstream task dependencies and serves as the architectural, schema,
 | **NW-11** | End-to-End Demo Assembly & Determinism Verification | Reuses the two-clean-directory reproducibility workflow (`schemas/reproducibility-report.schema.json`) and distinct exit-code diagnostics (`src/player/exit_codes.h`). |
 | **NW-12** | Final Hardware Qualification & Release Sign-Off | Executes against both pinned GPU baselines (`benchmarks/hardware/rtx-4060-baseline.json` and `benchmarks/hardware/rtx-50-series-baseline.json`) and clean physical Windows 11 validation (`schemas/clean-system-report.schema.json`) via `tools/verify-nw01.ps1`. |
 
+> **NW-08 scope revision:** The NW-08 implementation task re-scopes this
+> roadmap slot to the separate minimal `nodewerk-studio` authoring editor
+> (editable/previewable/exportable NW-07 proof). The three-product boundary,
+> frozen release inputs, capability policy, and `nw07_perf_ref_v1` contract are
+> unchanged. See [ADR-0007](0007-nw08-authoring-editor.md). Audio synthesis
+> remains outside this implementation and does not alter the product split.
+
 ## Enforced Scope Boundaries in NW-01
 
 - **No Editor:** `nodewerk-studio` is not implemented in NW-01.
