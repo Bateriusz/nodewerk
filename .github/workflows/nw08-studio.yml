@@ -89,7 +89,11 @@ jobs:
           "NW08_PLAYER_TEMPLATE_EXE=$($template.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "NW08_DXC_EXE=$($dxc.Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run NW-08 regression coverage
-        run: python -m pytest -q tests/test_nw08_*.py
+        shell: pwsh
+        run: |
+          $tests = Get-ChildItem tests/test_nw08_*.py | Select-Object -ExpandProperty FullName
+          if (-not $tests) { throw "no NW-08 regression tests were discovered" }
+          python -m pytest -q @tests
       - name: Create deterministic contract-test toolchain
         shell: bash
         run: |
