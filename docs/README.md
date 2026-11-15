@@ -24,6 +24,8 @@ graph semantics and `.nwgraph` schema.
 15. [NW-05 Typed-Graph Export and Procedural-Image Path](nw05-typed-graph-export.md)
 16. [NW-06 Procedural Scene, Timeline & Fixed-Tick Evidence](nw06-procedural-scene.md)
 17. [NW-07 256 KiB Architectural Proof — Feasibility Report](nw07-256k-architectural-proof.md)
+18. [ADR-0007: NW-08 Authoring Editor Scope and Release Isolation](architecture/0007-nw08-authoring-editor.md)
+19. [NW-08 `nodewerk-studio` Authoring Editor](nw08-studio-authoring-editor.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -50,4 +52,6 @@ graph semantics and `.nwgraph` schema.
 - NW-07 Export Report Schema: [`schemas/nw07-export-report.schema.json`](../schemas/nw07-export-report.schema.json)
 - NW-07 Clean-System Report Schema: [`schemas/nw07-clean-system-report.schema.json`](../schemas/nw07-clean-system-report.schema.json)
 - NW-07 Diagnostic Sibling-Build Overhead: [`benchmarks/nw07/diagnostic-overhead.v1.json`](../benchmarks/nw07/diagnostic-overhead.v1.json) (validated by [`schemas/nw07-diagnostic-overhead.schema.json`](../schemas/nw07-diagnostic-overhead.schema.json)); pending separate diagnostic measurement
+- NW-08 Studio Report Schema: [`schemas/nw08-studio-report.schema.json`](../schemas/nw08-studio-report.schema.json)
+- NW-08 Verification Summary Schema: [`schemas/nw08-verification.schema.json`](../schemas/nw08-verification.schema.json)
 - Upstream Measured-Evidence Status: [`benchmarks/evidence-status.json`](../benchmarks/evidence-status.json) (complete for recorded Windows/RTX captures)

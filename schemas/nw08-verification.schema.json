@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw08-verification.schema.json",
+  "title": "Nodewerk NW-08 verification summary",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "mode",
+    "status",
+    "success",
+    "hardware_evidence",
+    "checks"
+  ],
+  "properties": {
+    "format": { "const": "nw08-verification" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-08" },
+    "mode": {
+      "enum": ["ContractsOnly", "BuildChecks", "Full", "WindowsIntegration"]
+    },
+    "status": {
+      "enum": ["passed", "failed", "pending_unverified"]
+    },
+    "success": { "type": "boolean" },
+    "hardware_evidence": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "status": {
+            "enum": ["passed", "failed", "pending_unverified", "skipped"]
+          },
+          "detail": {}
+        }
+      }
+    }
+  }
+}

@@ -188,3 +188,30 @@ stretch value, process RAM, driver memory, startup pipeline time, generation
 time, image-quality metrics, 1440p scaling, and diagnostic sibling-build
 overhead are reported without becoming new absolute gates. See
 [`docs/nw07-256k-architectural-proof.md`](docs/nw07-256k-architectural-proof.md).
+
+## NW-08 Authoring Editor (`nodewerk-studio`)
+
+NW-08 adds the separate, minimal `nodewerk-studio` authoring application. It
+creates the frozen NW-07 proof graph in memory, edits graph connections,
+parameters, and curve keyframes, scrubs the integer timeline, previews through
+the existing package-player runtime, and exports through the unchanged
+`nw05_export.export_graph` / `.nwp` v1 path used by `nodewerkc`.
+
+```bash
+python tools/nw08_studio.py gui --player-executable <diagnostic-player.exe>
+python tools/nw08_studio.py report --preview --tick 240000
+python tools/nw08_studio.py export build/nw08-export \
+    --dxc <pinned-dxc> --player-template <specialized-player.exe>
+python tools/verify_nw08.py --mode ContractsOnly --summary-json build/nw08.json
+```
+
+Editor layout, selection, undo/redo, timeline position, and GPU-cache budget are
+authoring-only state and never enter canonical graph identity or release output.
+Asynchronous preview jobs are gated by both immutable graph snapshot generations
+and a D3D12 device-instance recreation epoch. GPU realizations are keyed by full
+semantic/compiler identity plus capability-profile ID/digest, driver/OS/toolchain
+identity, and actual adapter/device identity; RTX marketing names never define
+a cache predicate, compiler target, or device epoch. Real hardware preview,
+GUI/CLI export equivalence, and device recreation remain
+`pending_unverified` until executed on a Windows host. See
+[`docs/nw08-studio-authoring-editor.md`](docs/nw08-studio-authoring-editor.md).

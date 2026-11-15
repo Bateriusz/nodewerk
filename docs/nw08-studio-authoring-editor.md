@@ -1,0 +1,185 @@
+# NW-08 `nodewerk-studio` Authoring Editor
+
+- **Task:** NW-08 (implementation worker scope: interactive authoring editor)
+- **Formats:** `.nwgraph` v1 and `.nwp` v1 (both unchanged)
+- **Common profile:** `nw.common.d3d12.fl12_0.sm6_0.v1`
+- **Requirements digest:**
+  `sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a`
+- **Proof graph:** `fixtures/nw07/production_loop.nwgraph`
+- **Frozen performance contract:** `nw07_perf_ref_v1` (unchanged)
+
+NW-08 adds a separate, minimal `nodewerk-studio` authoring application. It is
+not a second engine: every edit is emitted as `.nwgraph` v1 and validated by the
+same `tools/nw03_compiler.py` frontend. Preview and export reuse the existing
+package-player runtime and `tools/nw05_export.py` export/package path. The
+release player, `.nwp` format, dependency closure, frozen NW-07 graph, and
+`nw07_perf_ref_v1` contract are untouched.
+
+## Components
+
+| Component | Responsibility |
+| :--- | :--- |
+| `tools/nw08_editor.py` | Authoritative graph editing, deterministic serialization, undo/redo, layout/selection, timeline, dependency invalidation |
+| `tools/nw08_cache.py` | Compiler/device cache identity, device epochs, asynchronous generation tokens, fence-safe bounded GPU cache |
+| `tools/nw08_preview.py` | Preview pipeline, last-valid retention, source-linked diagnostics, pass timings, size attribution |
+| `tools/nw08_studio.py` | Headless application model, CLI, export facade |
+| `tools/nw08_gui.py` | Minimal Tk GUI: graph, inspector, curves, timeline, preview, diagnostics, timings, size, cache budget |
+| `src/studio/nw_studio_preview_host.cpp` | Optional native authoring preview host over the unchanged `PackagePlayer` |
+| `tools/verify_nw08.py` | Contract/build/full verification entry point |
+| `tools/nw08_windows_integration.py` | Windows integration validation and retained evidence |
+
+The GUI is an authoring-only target. Tk, compiler/DXC, source maps, reflection
+data, and profiling state never enter `src/player/` or the generated release
+manifest. No second graph model, package/export format, player, plugin
+marketplace, asset browser, scripting console, or alternate evidence system is
+introduced.
+
+## Editing the NW-07 proof without serialized text
+
+`GraphEditorSession.create_nw07_proof()` loads the frozen graph into an editable
+document model. The GUI provides node selection, parameter inspection/editing,
+connection editing, curve keyframe editing, timeline scrubbing, preview, undo,
+redo, and export. Saving emits a deterministic `.nwgraph` v1 file; the frozen
+`fixtures/nw07/` directory is write-protected by the editor.
+
+Editor-only state is explicitly outside canonical identity:
+
+- layout coordinates,
+- selection,
+- undo/redo history,
+- timeline cursor,
+- preview/device/cache state.
+
+Changing layout or selection leaves the canonical semantic digest unchanged.
+Under identical release inputs, editor additions do not change the pinned
+NW-07 build-input digest or the release distribution byte size.
+
+## Incremental invalidation
+
+The editor mirrors the NW-02 dependency contract:
+
+- every node has a structural semantic identity covering operator id/version,
+  frequency, residency, canonical parameters, seed identity, and upstream
+  structural identities;
+- a parameter edit invalidates only the changed node and its transitive
+  dependent closure;
+- unrelated branches retain cache hits;
+- layout/selection changes invalidate nothing.
+
+For the NW-07 proof, editing the texture seed recomputes the texture and the
+material/render/bloom/tonemap/present chain while retaining cached torus, mesh,
+instance, camera, light, and twist branches.
+
+## Asynchronous preview and generation tokens
+
+Every semantic edit advances an immutable snapshot generation. Preview jobs
+carry:
+
+```text
+(job id, snapshot generation, device epoch, semantic digest)
+```
+
+A completion is accepted only when all of the following hold:
+
+- it was not cancelled;
+- it has not already completed;
+- its snapshot generation is still current;
+- its device epoch is still current;
+- no newer job for that snapshot has superseded it;
+- the device has not been lost.
+
+Failed edits, cancelled jobs, out-of-order completions, and jobs from a previous
+snapshot or device instance can never replace the last valid preview or publish
+into a newer generation.
+
+## Preview and export
+
+- `ReferencePreviewBackend` is a deterministic contract test backend and is
+  never reported as hardware evidence.
+- `WindowsRuntimePreviewBackend` launches the existing package player at an
+  absolute tick (using the established diagnostic `--capture-tick` protocol
+  when available) and reads back the presented RGBA32F image.
+- Export calls `nw05_export.export_graph`; the CLI calls the same function.
+  GUI and CLI exports of the same semantic graph, settings, pinned toolchain,
+  and player inputs are byte-identical.
+
+Preview reports include per-pass timings and deterministic size attribution.
+No hard real-time editor latency claim is made without a representative graph
+benchmark.
+
+## Cache identity
+
+Compiler/semantic keys include:
+
+- canonical semantic digest;
+- capability-profile ID and requirements digest;
+- target profile and digest;
+- compiler settings and semantic/compiler inputs;
+- compiler id/version, DXC pin, target, optimization, OS/toolchain identity;
+- generated shader/entry-point identity and bindings.
+
+Device-resident realization keys additionally include:
+
+- the full compiler key;
+- the D3D12 device-instance recreation epoch;
+- capability-profile ID/digest;
+- driver version, OS build, and toolchain identity;
+- actual adapter/device identity (`vendor_id`, `device_id`, `subsystem_id`,
+  adapter LUID).
+
+GPU marketing names, RTX generation labels, and adapter descriptions are
+observed metadata only. They never define a cache predicate, compiler target,
+capability predicate, or device epoch.
+
+## Bounded GPU memory and fence retirement
+
+The GPU realization cache is bounded by a configured byte budget.
+`live bytes + pending-retirement bytes` never exceeds that budget. A resource
+referenced by submitted GPU work is moved to a retirement queue when evicted or
+released and is destroyed only after a fence value at least as large as its
+submission fence is signalled. If submitted resources consume the whole budget,
+new admission fails closed instead of destroying work still in flight.
+
+## Device loss and reinitialization
+
+The device generation is a D3D12 device-instance recreation epoch:
+
+- device loss invalidates GPU realizations and rejects in-flight completions;
+- old-epoch resources and jobs are never reused;
+- explicit preview reinitialization increments the epoch;
+- recovery never bypasses or changes operators and is independent of the
+  release-player failure policy.
+
+## Disk cache corruption
+
+Disk shader-cache entries remain owned by the existing NW-03 `ShaderCache`.
+Corrupt metadata, an unexpected blob hash, or a metadata mismatch is treated as
+a cache miss; the entry is regenerated and atomically replaced without
+changing the `.dxil`/`.json` ownership convention or package identity.
+
+## Verification
+
+```bash
+pytest -q tests/test_nw08_*.py
+python tools/verify_nw08.py --mode ContractsOnly --summary-json build/nw08.json
+python tools/verify_nw08.py --mode BuildChecks \
+    --player-template <specialized-player.exe> --dxc <pinned-dxc> \
+    --summary-json build/nw08-build-checks.json
+python tools/nw08_windows_integration.py \
+    --player-template <specialized-player.exe> --dxc <pinned-dxc> \
+    --preview-executable <diagnostic-player.exe> \
+    --report build/nw08-windows-integration.json
+python tools/verify_nw08.py --mode Full \
+    --evidence build/nw08-windows-integration.json \
+    --summary-json build/nw08-full.json
+```
+
+- `ContractsOnly` is GPU-less and never claims hardware acceptance.
+- `BuildChecks` performs concrete GUI/CLI export equivalence when the pinned
+  DXC and player template are available; otherwise it reports pending.
+- `Full` requires the retained Windows integration report, including a real
+  preview execution for hardware evidence.
+
+Outstanding NW-07 hardware captures remain `pending_unverified`. They are not
+an implementation prerequisite for the editor and are never relabeled as
+verified by NW-08 contract tests.

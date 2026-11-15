@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Executable shim for `nodewerk-studio` when running from a source checkout."""
+
+from nw08_studio import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
