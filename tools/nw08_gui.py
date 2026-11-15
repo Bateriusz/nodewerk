@@ -12,7 +12,6 @@ root.  Headless tests use :mod:`nw08_studio` instead.
 
 from __future__ import annotations
 
-import base64
 import json
 import math
 import os
@@ -749,9 +748,7 @@ class StudioWindow:
             self._preview_image_sha = ""
             return
         try:
-            photo = self.tk.PhotoImage(
-                data=base64.b64encode(ppm).decode("ascii"), format="PPM"
-            )
+            photo = self.tk.PhotoImage(data=ppm, format="PPM")
         except Exception:  # pragma: no cover - Tk build without PPM support
             self.preview_label.configure(
                 image="", text="captured frame could not be decoded for display"

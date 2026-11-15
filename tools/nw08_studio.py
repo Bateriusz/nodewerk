@@ -426,18 +426,24 @@ class StudioApplication:
             )
         )
         if not self.explicit_backend:
-            self.pipeline.backend = self._build_backend()
+            self.pipeline.replace_backend(self._build_backend())
         elif isinstance(self.pipeline.backend, WindowsRuntimePreviewBackend):
-            self.pipeline.backend.configure_exporter(
-                mode=self.preview_mode,
-                dxc_executable=self.dxc_executable or None,
-                player_template=self.player_template or None,
-                cache_dir=self.cache_dir or None,
-                export_settings=self.export_settings,
-                allow_test_payloads=self.allow_test_payloads,
-                optimization=self.optimization,
-            )
-            self.pipeline.backend.memory_budget_bytes = self.gpu_cache_budget_bytes
+            backend = self.pipeline.backend
+
+            def reconfigure(epoch: int) -> None:
+                backend.configure_exporter(
+                    mode=self.preview_mode,
+                    dxc_executable=self.dxc_executable or None,
+                    player_template=self.player_template or None,
+                    cache_dir=self.cache_dir or None,
+                    export_settings=self.export_settings,
+                    allow_test_payloads=self.allow_test_payloads,
+                    optimization=self.optimization,
+                    minimum_epoch=epoch,
+                )
+                backend.memory_budget_bytes = self.gpu_cache_budget_bytes
+
+            self.pipeline.reconfigure_backend(reconfigure)
 
     # -- reporting --------------------------------------------------------
     def report(self) -> dict[str, Any]:

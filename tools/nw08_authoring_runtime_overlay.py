@@ -63,6 +63,11 @@ struct AuthoringReloadResult {
     std::uint32_t reused_pipelines = 0u;
     std::uint32_t recreated_pipelines = 0u;
 };
+
+struct AuthoringPassTiming {
+    std::string name;
+    double milliseconds = 0.0;
+};
 #endif
 """,
         "authoring declarations",
@@ -76,6 +81,9 @@ struct AuthoringReloadResult {
     AuthoringAdapterIdentity authoringAdapterIdentity() const noexcept;
     const AuthoringReloadResult& authoring_reload_stats() const noexcept {
         return authoring_reload_stats_;
+    }
+    const std::vector<AuthoringPassTiming>& authoring_pass_timings() const noexcept {
+        return authoring_pass_timings_;
     }
 #endif
 """,
@@ -97,11 +105,19 @@ struct AuthoringReloadResult {
         r"""    std::vector<std::string> last_frame_order_;
 #if NW08_AUTHORING_RUNTIME
     std::vector<std::uint32_t> authoring_retained_resource_ids_;
+    std::vector<AuthoringPassTiming> authoring_pass_timings_;
     AuthoringReloadResult authoring_reload_stats_{};
     bool authoring_reload_in_progress_ = false;
 #endif
 """,
         "authoring private state",
+    )
+
+    cpp = replace_once(
+        cpp,
+        "#include <cmath>\n",
+        "#include <chrono>\n#include <cmath>\n",
+        "authoring timing chrono include",
     )
 
     methods = r"""
@@ -536,6 +552,40 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
     )
     cpp = replace_once(
         cpp,
+        r"""    std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
+    for (const auto& op : frame_ops_) {""",
+        r"""    std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
+#if NW08_AUTHORING_RUNTIME
+    authoring_pass_timings_.clear();
+#endif
+    for (const auto& op : frame_ops_) {
+#if NW08_AUTHORING_RUNTIME
+        const auto authoring_pass_begin = std::chrono::steady_clock::now();
+#endif""",
+        "authoring pass timing begin",
+    )
+    cpp = replace_once(
+        cpp,
+        r"""                            "frame operation is unavailable in this build");
+        }
+    }
+    if (present_requested && state->swapchain != nullptr) {""",
+        r"""                            "frame operation is unavailable in this build");
+        }
+#if NW08_AUTHORING_RUNTIME
+        const auto authoring_pass_end = std::chrono::steady_clock::now();
+        authoring_pass_timings_.push_back(AuthoringPassTiming{
+            op.opcode,
+            std::chrono::duration<double, std::milli>(
+                authoring_pass_end - authoring_pass_begin).count(),
+        });
+#endif
+    }
+    if (present_requested && state->swapchain != nullptr) {""",
+        "authoring pass timing end",
+    )
+    cpp = replace_once(
+        cpp,
         r"""    frame_ops_.clear();
     last_frame_order_.clear();
     initialization_count_ = 0u;""",
@@ -543,6 +593,7 @@ AuthoringReloadResult PackagePlayer::reloadForAuthoringFromFile(
     last_frame_order_.clear();
 #if NW08_AUTHORING_RUNTIME
     authoring_retained_resource_ids_.clear();
+    authoring_pass_timings_.clear();
     authoring_reload_stats_ = AuthoringReloadResult{};
     authoring_reload_in_progress_ = false;
 #endif

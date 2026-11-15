@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,8 +26,16 @@ def _rgba(width: int, height: int, value: float = 0.5) -> bytes:
 
 
 class FakeExporter:
-    def __init__(self, package_bytes: bytes = b"edited-package"):
+    def __init__(
+        self,
+        package_bytes: bytes = b"edited-package",
+        *,
+        capture_width: int | None = None,
+        capture_height: int | None = None,
+    ):
         self.package_bytes = package_bytes
+        self.capture_width = capture_width
+        self.capture_height = capture_height
         self.calls = 0
 
     def export(self, document, work_directory, *, width, height):
@@ -36,11 +45,13 @@ class FakeExporter:
         return preview.PreviewExportBundle(
             package_sha256=__import__("hashlib").sha256(self.package_bytes).hexdigest(),
             package_path=package,
+            capture_width=self.capture_width or width,
+            capture_height=self.capture_height or height,
         )
 
 
 def _runner_factory(width: int, height: int, *, returncode: int = 0):
-    state = {"returncode": returncode}
+    state = {"returncode": returncode, "produce_output": True}
 
     def runner(command, **kwargs):
         if state["returncode"] != 0:
@@ -50,7 +61,8 @@ def _runner_factory(width: int, height: int, *, returncode: int = 0):
         capture_dir = Path(command[command.index("--capture-dir") + 1])
         tick = int(command[command.index("--tick") + 1])
         capture_dir.mkdir(parents=True, exist_ok=True)
-        (capture_dir / f"tick_{tick}.rgba32f").write_bytes(_rgba(width, height))
+        if state["produce_output"]:
+            (capture_dir / f"tick_{tick}.rgba32f").write_bytes(_rgba(width, height))
         if "--stats-json" in command:
             stats_path = Path(command[command.index("--stats-json") + 1])
             stats_path.write_text(
@@ -63,6 +75,10 @@ def _runner_factory(width: int, height: int, *, returncode: int = 0):
                         "runtime_gpu_ms": 2.5,
                         "runtime_gpu_available": True,
                         "frame_instructions": ["frame.generate", "frame.render"],
+                        "runtime_pass_timings": [
+                            {"name": "frame.generate", "milliseconds": 0.125},
+                            {"name": "frame.render", "milliseconds": 0.250},
+                        ],
                         "fence_retired": True,
                         "adapter_identity_queried": True,
                         "adapter_vendor_id": 0x10DE,
@@ -82,11 +98,23 @@ def _runner_factory(width: int, height: int, *, returncode: int = 0):
     return runner, state
 
 
-def _backend(tmp_path: Path, *, width: int = 8, height: int = 8):
+def _backend(
+    tmp_path: Path,
+    *,
+    width: int = 8,
+    height: int = 8,
+    capture_width: int | None = None,
+    capture_height: int | None = None,
+):
     executable = tmp_path / "preview-host.exe"
     executable.write_bytes(b"MZ")
-    runner, state = _runner_factory(width, height)
-    exporter = FakeExporter()
+    runner, state = _runner_factory(
+        capture_width or width, capture_height or height
+    )
+    exporter = FakeExporter(
+        capture_width=capture_width,
+        capture_height=capture_height,
+    )
     backend = preview.WindowsRuntimePreviewBackend(
         executable,
         runner=runner,
@@ -187,6 +215,49 @@ def test_frame_to_ppm_converts_captured_rgba32f() -> None:
     assert gui.frame_to_ppm(
         preview.PreviewFrame(tick=0, width=2, height=2, image_sha256="", semantic_digest="")
     ) is None
+
+
+def test_gui_photoimage_receives_raw_ppm_bytes() -> None:
+    frame = preview.PreviewFrame(
+        tick=0,
+        width=2,
+        height=2,
+        image_sha256="preview",
+        semantic_digest="sha256:v1:" + "a" * 64,
+        image_data=_rgba(2, 2, 0.25),
+    )
+
+    class FakeTk:
+        def __init__(self):
+            self.calls = []
+
+        def PhotoImage(self, **kwargs):
+            self.calls.append(kwargs)
+            return object()
+
+    class FakeLabel:
+        def __init__(self):
+            self.config = {}
+
+        def configure(self, **kwargs):
+            self.config.update(kwargs)
+
+    fake_tk = FakeTk()
+    window = object.__new__(gui.StudioWindow)
+    window.tk = fake_tk
+    window.application = SimpleNamespace(
+        pipeline=SimpleNamespace(last_valid_frame=frame)
+    )
+    window.preview_label = FakeLabel()
+    window._preview_photo = None
+    window._preview_image_sha = ""
+    window.refresh_preview_image()
+
+    assert fake_tk.calls
+    assert fake_tk.calls[0]["format"] == "PPM"
+    assert isinstance(fake_tk.calls[0]["data"], bytes)
+    assert fake_tk.calls[0]["data"].startswith(b"P6\n")
+    assert window.preview_label.config["image"] is window._preview_photo
 
 
 class _DummyProcess:
@@ -304,6 +375,19 @@ def test_authoring_session_hot_reloads_compatible_package_without_device_recreat
     assert session.prepare(bundle_c, width=8, height=8) == 5
 
 
+def test_one_shot_runtime_advances_epoch_for_every_device_instance() -> None:
+    session = preview.AuthoringRuntimeSession(
+        None, mode="embedded-player", runner=lambda *args, **kwargs: None
+    )
+    bundle = preview.PreviewExportBundle(
+        package_sha256="same-package",
+        executable_path=Path("/tmp/generated-player.exe"),
+    )
+    assert session.prepare(bundle, width=8, height=8) == 0
+    assert session.prepare(bundle, width=8, height=8) == 1
+    assert session.prepare(bundle, width=8, height=8) == 2
+
+
 def test_runtime_backend_reports_measured_timings_and_no_fabricated_readback(
     tmp_path: Path,
 ) -> None:
@@ -315,6 +399,13 @@ def test_runtime_backend_reports_measured_timings_and_no_fabricated_readback(
     assert "runtime_process_wall" in names
     gpu = next(item for item in frame.pass_timings.timings if item.name == "runtime_gpu")
     assert gpu.measured is True and gpu.counts_toward_total is False
+    pass_rows = [
+        item
+        for item in frame.pass_timings.timings
+        if item.kind == "runtime_pass_cpu"
+    ]
+    assert [item.milliseconds for item in pass_rows] == pytest.approx([0.125, 0.250])
+    assert all(item.measured and item.available for item in pass_rows)
     wall = next(
         item for item in frame.pass_timings.timings if item.name == "runtime_process_wall"
     )
@@ -329,6 +420,151 @@ def test_runtime_backend_reports_measured_timings_and_no_fabricated_readback(
     assert frame.device_identity["available"] is True
     assert frame.device_identity["adapter"]["vendor_id"] == 0x10DE
     backend.close()
+
+
+def test_runtime_capture_uses_exported_package_dimensions(tmp_path: Path) -> None:
+    backend, _, _, _ = _backend(
+        tmp_path, width=8, height=8, capture_width=2, capture_height=2
+    )
+    session = editor.GraphEditorSession.create_nw07_proof()
+    frame = backend.render(session.document, 0, width=8, height=8)
+    assert (frame.width, frame.height) == (2, 2)
+    assert len(frame.image_data) == 2 * 2 * 16
+    backend.close()
+
+
+def test_runtime_requires_fresh_capture_for_same_tick(tmp_path: Path) -> None:
+    backend, _, _, state = _backend(tmp_path)
+    session = editor.GraphEditorSession.create_nw07_proof()
+    assert backend.render(session.document, 0, width=8, height=8).has_image
+    state["produce_output"] = False
+    with pytest.raises(preview.PreviewError, match="no presented-output readback"):
+        backend.render(session.document, 0, width=8, height=8)
+    backend.close()
+
+
+def test_cached_export_reports_zero_current_compile_time(tmp_path: Path) -> None:
+    backend, exporter, _, _ = _backend(tmp_path)
+    session = editor.GraphEditorSession.create_nw07_proof()
+    first = backend.render(session.document, 0, width=8, height=8)
+    second = backend.render(session.document, 10, width=8, height=8)
+    first_export = next(
+        item for item in first.pass_timings.timings
+        if item.name == "offline_compile_export"
+    )
+    second_export = next(
+        item for item in second.pass_timings.timings
+        if item.name == "offline_compile_export"
+    )
+    assert exporter.calls == 1
+    assert first_export.milliseconds >= 0.0
+    assert second_export.milliseconds == 0.0
+    backend.close()
+
+
+def test_cancelled_prepare_does_not_leak_compile_timing_to_next_request(
+    tmp_path: Path,
+) -> None:
+    backend, exporter, _, _ = _backend(tmp_path)
+    session = editor.GraphEditorSession.create_nw07_proof()
+
+    # First request exports but is abandoned before render.
+    backend.prepare(session.document, width=8, height=8)
+    assert exporter.calls == 1
+
+    # A new request for the same cached bundle did no compilation itself.
+    backend.prepare(session.document, width=8, height=8)
+    frame = backend.render(session.document, 0, width=8, height=8)
+    export = next(
+        item for item in frame.pass_timings.timings
+        if item.name == "offline_compile_export"
+    )
+    assert exporter.calls == 1
+    assert export.milliseconds == 0.0
+    backend.close()
+
+
+def test_preview_history_keeps_pixels_only_for_last_valid_frame(tmp_path: Path) -> None:
+    backend, _, _, _ = _backend(tmp_path)
+    pipeline = preview.PreviewPipeline(
+        editor.GraphEditorSession.create_nw07_proof(),
+        backend=backend,
+        width=8,
+        height=8,
+    )
+    assert pipeline.preview_now(tick=0).accepted
+    assert pipeline.preview_now(tick=10).accepted
+    assert len(pipeline.history) == 2
+    assert pipeline.history[0].frame.image_data == b""
+    assert pipeline.history[1].frame.has_image
+    backend.close()
+
+
+class _PrepareEpochBackend(preview.ReferencePreviewBackend):
+    def __init__(self) -> None:
+        self.epoch = 0
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def prepare(self, document, *, width, height):
+        self.entered.set()
+        if not self.release.wait(10):
+            raise preview.PreviewError("prepare gate timed out")
+        self.epoch += 1
+        return self.epoch
+
+
+def test_cancelled_prepare_still_synchronizes_actual_device_epoch() -> None:
+    backend = _PrepareEpochBackend()
+    pipeline = preview.PreviewPipeline(
+        editor.GraphEditorSession.create_nw07_proof(), backend=backend
+    )
+    token = pipeline.submit_preview(tick=0)
+    results = []
+    worker = threading.Thread(target=lambda: results.append(pipeline.execute(token)))
+    worker.start()
+    assert backend.entered.wait(10)
+    assert pipeline.cancel(token)
+    backend.release.set()
+    worker.join(10)
+    assert results and not results[0].accepted
+    assert results[0].reason == "canceled"
+    assert pipeline.device.epoch == 1
+    assert pipeline.queue.device_epoch == 1
+
+
+class _DelayedDeviceLossBackend(preview.ReferencePreviewBackend):
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def render(self, document, tick, *, width, height):
+        self.entered.set()
+        if not self.release.wait(10):
+            raise preview.PreviewError("render gate timed out")
+        error = cache.DeviceLostError("old device removed")
+        error.device_epoch = 0
+        raise error
+
+
+def test_delayed_old_epoch_device_loss_does_not_poison_new_device() -> None:
+    backend = _DelayedDeviceLossBackend()
+    pipeline = preview.PreviewPipeline(
+        editor.GraphEditorSession.create_nw07_proof(), backend=backend
+    )
+    token = pipeline.submit_preview(tick=0)
+    results = []
+    worker = threading.Thread(target=lambda: results.append(pipeline.execute(token)))
+    worker.start()
+    assert backend.entered.wait(10)
+    generation = pipeline.reinitialize_device()
+    backend.release.set()
+    worker.join(10)
+    assert generation.epoch == 1
+    assert results and not results[0].accepted
+    assert results[0].reason == "obsolete_device_epoch"
+    assert pipeline.device.epoch == 1
+    assert pipeline.device.lost is False
 
 
 def test_runtime_device_loss_propagates_and_explicit_reinit_advances_epoch(
@@ -349,11 +585,12 @@ def test_runtime_device_loss_propagates_and_explicit_reinit_advances_epoch(
     assert decision.reason == "preview_device_lost"
     assert pipeline.device.lost is True
     assert pipeline.last_valid_preview is None
+    assert pipeline.device.epoch == 1
     generation = pipeline.reinitialize_device()
-    assert generation.epoch == 1
+    assert generation.epoch == 2
     state["returncode"] = 0
     assert pipeline.preview_now(tick=0).accepted
-    assert pipeline.last_valid_preview.token.device_epoch == 1
+    assert pipeline.last_valid_preview.token.device_epoch == 2
     backend.close()
 
 
@@ -383,6 +620,33 @@ def test_host_identity_from_runtime_stats_uses_selected_adapter_only() -> None:
     assert "windows-build:26100" == identity.os_build
     # Marketing labels are deliberately absent from the cache identity.
     assert "RTX" not in json.dumps(identity.to_key_fields())
+
+
+def test_configure_export_retires_old_backend_and_preserves_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ClosableBackend(preview.ReferencePreviewBackend):
+        def __init__(self) -> None:
+            self.closed = False
+            self.aligned_epoch = None
+
+        def close(self) -> None:
+            self.closed = True
+
+        def reinitialize_device(self, minimum_epoch=None):
+            self.aligned_epoch = int(minimum_epoch or 0)
+            return self.aligned_epoch
+
+    old_backend = ClosableBackend()
+    new_backend = ClosableBackend()
+    application = studio.StudioApplication.create(backend=old_backend)
+    application.explicit_backend = False
+    application.pipeline.reinitialize_device()
+    monkeypatch.setattr(application, "_build_backend", lambda: new_backend)
+    application.configure_export(optimization="O1")
+
+    assert old_backend.closed is True
+    assert new_backend.aligned_epoch == application.pipeline.device.epoch
 
 
 def test_gui_actions_route_export_through_the_shared_action_layer(
@@ -536,3 +800,8 @@ def test_authoring_runtime_overlay_preserves_frozen_release_inputs(
     assert "reloadForAuthoringFromFile" in generated_cpp
     assert "AdapterLuid.LowPart" in generated_cpp
     assert "authoring_retained_resource_ids_" in generated_cpp
+    assert "authoring_pass_timings_" in generated_cpp
+    host_text = (
+        REPO_ROOT / "src" / "studio" / "nw_studio_preview_host.cpp"
+    ).read_text(encoding="utf-8")
+    assert "runtime_pass_timings" in host_text
