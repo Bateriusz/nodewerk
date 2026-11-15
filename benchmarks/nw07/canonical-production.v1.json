@@ -186,7 +186,7 @@
     "stretch_distribution_bytes_ceiling": 131072,
     "stretch_is_mandatory_gate": false,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000
+    "process_start_to_first_present_ms_ceiling": 2000.0
   },
   "fixed_tick_evaluation": {
     "ticks": [

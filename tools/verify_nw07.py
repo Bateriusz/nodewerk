@@ -248,26 +248,32 @@ def _run_record(
     *,
     gpu_values: list[float],
     cpu_values: list[float],
+    executable_sha256: str,
 ) -> dict[str, Any]:
-    base = datetime(2026, 12, 1, tzinfo=timezone.utc) + timedelta(hours=index)
+    base = datetime(2026, 12, 1, tzinfo=timezone.utc) + timedelta(minutes=index)
     timing = {
-        "warmup_started_utc": base.isoformat(),
-        "run_started_utc": (base + timedelta(seconds=contract.WARMUP_SECONDS)).isoformat(),
+        "run_started_utc": base.isoformat(),
         "run_ended_utc": (
-            base
-            + timedelta(seconds=contract.WARMUP_SECONDS + contract.PERF_RUN_SECONDS)
+            base + timedelta(seconds=contract.PERF_RUN_SECONDS)
         ).isoformat(),
         "uncapped": True,
         "fresh_process": True,
         "application_pipeline_cache": False,
+        "player_pid": 1000 + index,
+        "artifact_sha256": executable_sha256,
+        "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
+        "collector_exit_code": 0,
     }
     return {
         "run_index": index,
-        "warmup_seconds": contract.WARMUP_SECONDS,
         "duration_seconds": contract.PERF_RUN_SECONDS,
         "uncapped": True,
         "fresh_process": True,
         "application_pipeline_cache": False,
+        "player_pid": 1000 + index,
+        "artifact_sha256": executable_sha256,
+        "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
+        "collector_exit_code": 0,
         "timing": timing,
         "sample_density_hz": (
             min(len(gpu_values), len(cpu_values)) / contract.PERF_RUN_SECONDS
@@ -317,6 +323,8 @@ def _synthetic_perf_capture(contract_record: Mapping[str, Any], identity: Mappin
         "contract_id": contract.PERF_CONTRACT_ID,
         "execution_environment": {"kind": "physical"},
         "reference": reference,
+        "reference_binding_digest": contract_record.get("binding_digest"),
+        "reference_binding_id": contract_record.get("binding_id"),
         "artifact_key": identity["artifact_key"],
         "package_sha256": identity["package_sha256"],
         "manifest_sha256": identity["manifest_sha256"],
@@ -334,11 +342,20 @@ def _synthetic_perf_capture(contract_record: Mapping[str, Any], identity: Mappin
             "fresh_process_per_run": True,
             "application_pipeline_cache": False,
         },
+        "warmup": {
+            "warmup_started_utc": "2026-12-01T00:00:00+00:00",
+            "warmup_ended_utc": "2026-12-01T00:00:05+00:00",
+            "duration_seconds": contract.WARMUP_SECONDS,
+            "player_pid": 999,
+            "artifact_sha256": identity["executable_sha256"],
+            "completed": True,
+        },
         "runs": [
             _run_record(
                 index,
                 gpu_values=_sample_list(600, 10.0, 0.001),
                 cpu_values=_sample_list(600, 6.0, 0.001),
+                executable_sha256=identity["executable_sha256"],
             )
             for index in range(1, 4)
         ],
@@ -472,6 +489,7 @@ def _base_correctness_capture(tier: str, identity: Mapping[str, Any]) -> dict[st
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "adapter_description": adapter,
+        "device_form_factor": "desktop",
         "device": adapter,
         "driver_version": "566.36" if tier == "ada" else "572.83",
         "os_version": "10.0.26100.2314",
@@ -517,8 +535,9 @@ def _base_correctness_capture(tier: str, identity: Mapping[str, Any]) -> dict[st
         "reference_execution": {
             "execution_id": f"{tier}-diagnostic-preview-1",
             "renderer": "diagnostic_preview",
+            "artifact_key": identity["artifact_key"],
             "package_sha256": identity["package_sha256"],
-            "executable_sha256": identity["executable_sha256"],
+            "executable_sha256": "4" * 64,
             "manifest_sha256": identity["manifest_sha256"],
             "capture_protocol": contract.CORRECTNESS_CAPTURE_PROTOCOL,
         },

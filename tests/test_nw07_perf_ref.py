@@ -409,7 +409,7 @@ def test_runs_recorded_before_the_frozen_binding_cannot_certify() -> None:
         capture, _bound(), artifact_identity=_identity()
     )
     assert result["status"] == "failed"
-    assert "retroactive" in " ".join(result["runs"][0]["reasons"])
+    assert "retroactive" in " ".join(result["reasons"])
 
     capture = _capture()
     capture["runs"][2].pop("timing")

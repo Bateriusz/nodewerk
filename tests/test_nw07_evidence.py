@@ -193,19 +193,6 @@ def _perf() -> dict:
     }
     samples["reported_p99_ms"] = evidence.nearest_rank_percentile(samples["samples"])
     base = datetime(2026, 12, 1, tzinfo=timezone.utc)
-    timing = {
-        "warmup_started_utc": base.isoformat(),
-        "run_started_utc": (
-            base + timedelta(seconds=contract.WARMUP_SECONDS)
-        ).isoformat(),
-        "run_ended_utc": (
-            base
-            + timedelta(seconds=contract.WARMUP_SECONDS + contract.PERF_RUN_SECONDS)
-        ).isoformat(),
-        "uncapped": True,
-        "fresh_process": True,
-        "application_pipeline_cache": False,
-    }
     return {
         "capture_id": "perf-capture",
         "task": contract.TASK,
@@ -221,6 +208,8 @@ def _perf() -> dict:
         "contract_id": contract.PERF_CONTRACT_ID,
         "execution_environment": {"kind": "physical"},
         "reference": copy.deepcopy(bound["reference"]),
+        "reference_binding_digest": bound["binding_digest"],
+        "reference_binding_id": bound["binding_id"],
         "artifact_key": identity["artifact_key"],
         "package_sha256": identity["package_sha256"],
         "manifest_sha256": identity["manifest_sha256"],
@@ -238,15 +227,43 @@ def _perf() -> dict:
             "fresh_process_per_run": True,
             "application_pipeline_cache": False,
         },
+        "warmup": {
+            "warmup_started_utc": base.isoformat(),
+            "warmup_ended_utc": (
+                base + timedelta(seconds=contract.WARMUP_SECONDS)
+            ).isoformat(),
+            "duration_seconds": contract.WARMUP_SECONDS,
+            "player_pid": 999,
+            "artifact_sha256": identity["executable_sha256"],
+            "completed": True,
+        },
         "runs": [
             {
                 "run_index": index,
-                "warmup_seconds": contract.WARMUP_SECONDS,
                 "duration_seconds": contract.PERF_RUN_SECONDS,
                 "uncapped": True,
                 "fresh_process": True,
                 "application_pipeline_cache": False,
-                "timing": timing,
+                "player_pid": 1000 + index,
+                "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
+                "artifact_sha256": identity["executable_sha256"],
+                "collector_exit_code": 0,
+                "timing": {
+                    "run_started_utc": (
+                        base + timedelta(minutes=index)
+                    ).isoformat(),
+                    "run_ended_utc": (
+                        base
+                        + timedelta(minutes=index, seconds=contract.PERF_RUN_SECONDS)
+                    ).isoformat(),
+                    "uncapped": True,
+                    "fresh_process": True,
+                    "application_pipeline_cache": False,
+                    "player_pid": 1000 + index,
+                    "collector_protocol": contract.PERF_COLLECTION_PROTOCOL,
+                    "artifact_sha256": identity["executable_sha256"],
+                    "collector_exit_code": 0,
+                },
                 "sample_density_hz": 10.0,
                 "gpu_frame_time_ms": samples,
                 "cpu_submit_ms": samples,
@@ -682,6 +699,7 @@ def test_blackwell_development_series_is_informational_and_has_no_gate() -> None
         "executable_sha256": identity["executable_sha256"],
         "executable_bytes": identity["executable_bytes"],
         "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+        "device_form_factor": "desktop",
         "matched_environment_id": "blackwell-dev-host-1",
         "metrics": {"p99_gpu_frame_time_ms": 8.0, "p99_cpu_submit_ms": 4.0},
     }
@@ -708,8 +726,18 @@ def test_blackwell_development_series_is_informational_and_has_no_gate() -> None
 
 
 def test_desktop_generation_classification_rejects_laptop_and_datacenter_parts() -> None:
-    assert evidence.classify_hardware_tier("NVIDIA GeForce RTX 4060 Ti") == "ada"
-    assert evidence.classify_hardware_tier("NVIDIA GeForce RTX 5070 Ti") == "blackwell"
+    assert (
+        evidence.classify_hardware_tier(
+            "NVIDIA GeForce RTX 4060 Ti", device_form_factor="desktop"
+        )
+        == "ada"
+    )
+    assert (
+        evidence.classify_hardware_tier(
+            "NVIDIA GeForce RTX 5070 Ti", device_form_factor="desktop"
+        )
+        == "blackwell"
+    )
     for unsupported in (
         "NVIDIA GeForce RTX 4090 Laptop GPU",
         "NVIDIA RTX A6000",
