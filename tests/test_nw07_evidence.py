@@ -481,6 +481,25 @@ def test_generic_vm_is_insufficient_and_passthrough_requires_documentation() -> 
     )
 
 
+def test_nonfinite_authoritative_tolerance_fails_closed() -> None:
+    section = {
+        "maximum_error": 1e-3,
+        "tolerance": 1e-3,
+        "maximum_relative_error": 0.0,
+        "relative_tolerance": 1e-4,
+    }
+    for bad in (float("nan"), float("inf"), -1.0):
+        status, detail = evidence._validate_tolerance_section(
+            section,
+            kind="image",
+            absolute_tolerance=bad,
+            relative_tolerance=1e-4,
+            relative_can_satisfy=False,
+        )
+        assert status == "failed"
+        assert "non-finite or negative" in detail
+
+
 def test_informational_measurements_missing_keep_record_pending() -> None:
     capture = _correctness("ada")
     del capture["measurements"]["process_ram_bytes"]

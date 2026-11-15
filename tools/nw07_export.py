@@ -122,11 +122,16 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
 
     def number(container: Mapping[str, Any], key: str, default: float = 0.0) -> float:
         try:
-            return float(container.get(key, default))
+            value = float(container.get(key, default))
         except (TypeError, ValueError) as exc:
             raise Nw07ExportError(
                 f"canonical production value '{key}' is not numeric"
             ) from exc
+        if not math.isfinite(value) or value < 0.0:
+            raise Nw07ExportError(
+                f"canonical production value '{key}' must be finite and nonnegative"
+            )
+        return value
 
     if record.get("format") != "nw07-canonical-production":
         raise Nw07ExportError("canonical production config has the wrong format")
@@ -168,6 +173,19 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
     ):
         if not content.get(key):
             raise Nw07ExportError(f"canonical production content is missing '{key}'")
+    for key in (
+        "noise_material",
+        "torus",
+        "camera",
+        "twist",
+        "lighting",
+        "bloom",
+        "tonemapping",
+    ):
+        if not isinstance(content.get(key), Mapping):
+            raise Nw07ExportError(
+                f"canonical production content.{key} is not an object"
+            )
     budget = section("artifact_budget")
     if budget.get("complete_distribution_bytes_ceiling") != contract.COMPLETE_DISTRIBUTION_CEILING_BYTES:
         raise Nw07ExportError("canonical production weakened the 256 KiB ceiling")
@@ -255,6 +273,7 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
     configured_inputs = record.get("pinned_inputs")
     if (
         not isinstance(configured_inputs, list)
+        or not all(isinstance(item, str) for item in configured_inputs)
         or len(configured_inputs) != len(contract.PINNED_BUILD_INPUTS)
         or set(configured_inputs) != set(contract.PINNED_BUILD_INPUTS)
     ):
@@ -283,6 +302,7 @@ def compute_pinned_inputs(
     configured = (config or {}).get("pinned_inputs")
     if configured is not None and (
         not isinstance(configured, list)
+        or not all(isinstance(item, str) for item in configured)
         or len(configured) != len(contract.PINNED_BUILD_INPUTS)
         or set(configured) != set(contract.PINNED_BUILD_INPUTS)
     ):

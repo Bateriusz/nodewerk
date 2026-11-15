@@ -997,6 +997,15 @@ def _validate_tolerance_section(
 ) -> tuple[str, str]:
     if not isinstance(section, Mapping):
         return "missing", f"{kind} comparison is absent"
+    if (
+        not math.isfinite(absolute_tolerance)
+        or not math.isfinite(relative_tolerance)
+        or absolute_tolerance < 0.0
+        or relative_tolerance < 0.0
+    ):
+        return "failed", (
+            f"{kind} comparison received a non-finite or negative authoritative tolerance"
+        )
     if str(section.get("status", "")).strip().lower() == "failed":
         return "failed", f"{kind} comparison is marked failed"
     maximum = _number(section.get("maximum_error"))

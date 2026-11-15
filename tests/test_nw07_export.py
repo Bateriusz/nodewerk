@@ -198,7 +198,20 @@ def test_malformed_caller_config_raises_export_error(tmp_path: Path) -> None:
         lambda c: c["image_tolerances"]["numeric"].__setitem__(
             "absolute", "not-a-number"
         ),
+        lambda c: c["image_tolerances"]["numeric"].__setitem__(
+            "absolute", "nan"
+        ),
+        lambda c: c["image_tolerances"]["image"].__setitem__(
+            "absolute", float("inf")
+        ),
         lambda c: c["quality"].__setitem__("settings", "not-an-object"),
+        lambda c: c["content"].__setitem__("noise_material", "not-an-object"),
+        lambda c: c["content"].__setitem__("torus", []),
+        lambda c: c["content"].__setitem__("twist", "not-an-object"),
+        lambda c: c["content"].__setitem__("lighting", 1),
+        lambda c: c["content"].__setitem__("bloom", "not-an-object"),
+        lambda c: c["content"].__setitem__("tonemapping", []),
+        lambda c: c.__setitem__("pinned_inputs", [{}]),
     ):
         config = export.load_canonical_config()
         mutation(config)
