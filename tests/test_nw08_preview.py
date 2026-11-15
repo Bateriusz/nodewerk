@@ -615,7 +615,7 @@ def test_global_shader_set_does_not_invalidate_no_shader_nodes() -> None:
     assert all(first_keys[node_id] == second_keys[node_id] for node_id in first_keys)
 
 
-def test_binding_identity_change_invalidates_all_realizations() -> None:
+def test_global_binding_identity_affects_only_the_whole_graph_key() -> None:
     session = editor.GraphEditorSession.create_nw07_proof()
     backend = _IdentityBackend()
     pipeline = preview.PreviewPipeline(session, backend=backend)
@@ -628,9 +628,13 @@ def test_binding_identity_change_invalidates_all_realizations() -> None:
     assert pipeline.preview_now(tick=0).accepted
     second = pipeline.last_valid_preview
     assert second is not None
-    assert second.cached_nodes == ()
+    # Package-global bindings belong to the whole-graph compiler/device key,
+    # not to every per-node realization key.
+    assert second.cached_nodes == tuple(sorted(first_keys))
     second_keys = dict(second.node_realization_keys)
-    assert all(first_keys[node_id] != second_keys[node_id] for node_id in first_keys)
+    assert all(first_keys[node_id] == second_keys[node_id] for node_id in first_keys)
+    assert second.compiler_key != first.compiler_key
+    assert second.device_realization_key != first.device_realization_key
 
 
 def test_node_shader_identity_change_invalidates_only_that_branch() -> None:
@@ -817,13 +821,35 @@ def test_cache_keys_delegate_to_the_realization_key_inputs() -> None:
     import nw08_cache
 
     session = editor.GraphEditorSession.create_nw07_proof()
-    pipeline = preview.PreviewPipeline(session)
+    pipeline = preview.PreviewPipeline(session, width=1920, height=1080)
     assert pipeline.preview_now(tick=0).accepted
-    frame = pipeline.last_valid_frame
-    assert frame is not None
-    compiler, device = pipeline.cache_keys()
-    assert (compiler, device) == pipeline.cache_keys(frame)
+    record = pipeline.last_valid_preview
+    assert record is not None
+    frame = record.frame
+    assert (record.compiler_key, record.device_realization_key) == (
+        pipeline.cache_keys(frame)
+    )
 
+    # An older frame must keep its own resolution and snapshot/document
+    # identity even after the current editor state changes.
+    pipeline.width = 1280
+    pipeline.height = 720
+    pipeline.apply_edit(session.set_parameter("camera", "fov_degrees", "55"))
+    assert (record.compiler_key, record.device_realization_key) == (
+        pipeline.cache_keys(frame)
+    )
+    current = pipeline.cache_keys(
+        preview.PreviewFrame(
+            tick=0,
+            width=1280,
+            height=720,
+            image_sha256="",
+            semantic_digest=pipeline.session.semantic_digest,
+        )
+    )
+    assert current != (record.compiler_key, record.device_realization_key)
+
+    compiler, device = pipeline.cache_keys(frame)
     pipeline.set_toolchain(
         nw08_cache.ToolchainIdentity(
             dxc_version="9.9.9-test",
@@ -833,12 +859,6 @@ def test_cache_keys_delegate_to_the_realization_key_inputs() -> None:
     changed_compiler, changed_device = pipeline.cache_keys(frame)
     assert changed_compiler != compiler
     assert changed_device != device
-
-    pipeline.width = 1280
-    pipeline.height = 720
-    resized_compiler, resized_device = pipeline.cache_keys(frame)
-    assert resized_compiler != changed_compiler
-    assert resized_device != changed_device
 
 
 def test_toolchain_change_during_render_rejects_completion() -> None:

@@ -67,23 +67,6 @@ NO_SHADER_IDENTITY = sha256_value(
     {"domain": "nw08.preview.no-shader.v1"}
 )
 
-_OPERATOR_SHADER_MAP: dict[str, tuple[str, ...]] = {
-    "nw.texture.noise2d": ("nw06_generate_cs",),
-    "nw.texture.procedural": ("nw06_generate_cs",),
-    "nw.residency.generate_texture": ("nw06_generate_cs",),
-    "nw.mesh.torus": ("nw06_generate_cs",),
-    "nw.residency.generate_mesh": ("nw06_generate_cs",),
-    "nw.scene.instances": ("nw06_instances_cs",),
-    "nw.residency.generate_instances": ("nw06_instances_cs",),
-    "nw.material.standard": ("nw06_material_cs",),
-    "nw.camera.curve": ("nw06_camera_cs",),
-    "nw.light.directional": ("nw06_light_cs",),
-    "nw.animation.twist": ("nw06_scene_vs", "nw06_scene_ps"),
-    "nw.render.instanced": ("nw06_scene_vs", "nw06_scene_ps"),
-    "nw.post.bloom": ("nw06_bloom_cs",),
-    "nw.post.tonemap": ("nw06_tonemap_cs",),
-}
-
 
 class PreviewError(RuntimeError):
     """Raised when preview execution cannot produce a valid frame."""
@@ -190,6 +173,7 @@ class PreviewRecord:
     cached_nodes: tuple[str, ...] = ()
     recomputed_nodes: tuple[str, ...] = ()
     realization_persistent: bool = True
+    document_identity: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -206,6 +190,7 @@ class PreviewRecord:
             "cached_nodes": list(self.cached_nodes),
             "recomputed_nodes": list(self.recomputed_nodes),
             "realization_persistent": self.realization_persistent,
+            "document_identity": dict(self.document_identity),
             "frame": self.frame.to_dict(),
         }
 
@@ -447,7 +432,6 @@ class PreviewExportBundle:
 
 def _export_preview_identities(
     artifact: Any,
-    document: nw03_compiler.GraphDocument | None = None,
 ) -> tuple[str, str, dict[str, str]]:
     """Derive the actual generated shader/binding identities of an export.
 
@@ -459,7 +443,6 @@ def _export_preview_identities(
     shader_rows = manifest.get("shaders") or []
     canonical_shaders: list[dict[str, Any]] = []
     node_entries: dict[str, list[str]] = {}
-    signature_by_name: dict[str, str] = {}
     for row in shader_rows:
         normalized = {
             "specialization_id": str(row.get("specialization_id", "")),
@@ -482,10 +465,6 @@ def _export_preview_identities(
                 "shader": normalized,
             }
         )
-        if normalized["specialization_id"]:
-            signature_by_name[normalized["specialization_id"]] = signature
-        if normalized["execution_root"]:
-            signature_by_name[normalized["execution_root"]] = signature
         for node_id in normalized["root_node_ids"]:
             node_entries.setdefault(node_id, []).append(signature)
     shader_identity = sha256_value(
@@ -559,26 +538,6 @@ def _export_preview_identities(
         )
         for node_id, signatures in node_entries.items()
     }
-    if document is not None:
-        for node_id, node in document.nodes.items():
-            if node_id in node_shader_identities:
-                continue
-            mapped = [
-                signature_by_name[name]
-                for name in _OPERATOR_SHADER_MAP.get(node.operator_id, ())
-                if name in signature_by_name
-            ]
-            node_shader_identities[node_id] = (
-                sha256_value(
-                    {
-                        "domain": "nw08.preview.node-shader.v1",
-                        "node_id": node_id,
-                        "shaders": sorted(set(mapped)),
-                    }
-                )
-                if mapped
-                else NO_SHADER_IDENTITY
-            )
     return shader_identity, binding_identity, node_shader_identities
 
 
@@ -664,7 +623,7 @@ class RuntimePackageExporter:
         artifact = result.artifacts[nwp_package.COMMON_PROFILE_ID]
         package_sha = hashlib.sha256(artifact.package_bytes).hexdigest()
         shader_identity, binding_identity, node_shader_identities = (
-            _export_preview_identities(artifact, document)
+            _export_preview_identities(artifact)
         )
         if self.mode == "package-host":
             package_path = work_directory / "edited-preview.nwp"
@@ -1528,18 +1487,49 @@ class PreviewPipeline:
                     width=self.width,
                     height=self.height,
                     image_sha256="",
-                    semantic_digest="",
+                    semantic_digest=self.session.semantic_digest,
                 )
-            inputs = self._cache_inputs_for(
-                self.session.document,
-                self.session.semantic_digest,
+                identity = self._current_document_identity()
+            else:
+                record = self._record_for_frame(selected)
+                if record is not None and record.document_identity:
+                    identity = dict(record.document_identity)
+                else:
+                    identity = self._current_document_identity()
+                    if selected.semantic_digest:
+                        identity["semantic_digest"] = selected.semantic_digest
+            inputs = self._cache_inputs_from_identity(
+                identity,
                 selected,
-                width=self.width,
-                height=self.height,
+                width=selected.width,
+                height=selected.height,
             )
             compiler = inputs.compiler_key()
             device = inputs.device_realization_key(self.device.generation)
             return compiler.key, device.key
+
+    def _record_for_frame(self, frame: PreviewFrame) -> PreviewRecord | None:
+        for record in reversed(self._history):
+            if record.frame is frame:
+                return record
+        for record in reversed(self._history):
+            if (
+                record.frame.semantic_digest == frame.semantic_digest
+                and record.frame.tick == frame.tick
+                and record.frame.width == frame.width
+                and record.frame.height == frame.height
+            ):
+                return record
+        return None
+
+    def _current_document_identity(self) -> dict[str, Any]:
+        document = self.session.document
+        return {
+            "semantic_digest": self.session.semantic_digest,
+            "profile_id": document.profile_id,
+            "requirements_digest": document.requirements_digest,
+            "settings": dict(document.settings),
+        }
 
     def set_gpu_budget(self, budget_bytes: int) -> None:
         with self._state_lock:
@@ -1628,17 +1618,39 @@ class PreviewPipeline:
         width: int,
         height: int,
     ) -> CacheKeyInputs:
+        return self._cache_inputs_from_identity(
+            {
+                "semantic_digest": semantic_digest,
+                "profile_id": document.profile_id,
+                "requirements_digest": document.requirements_digest,
+                "settings": dict(document.settings),
+            },
+            frame,
+            width=width,
+            height=height,
+        )
+
+    def _cache_inputs_from_identity(
+        self,
+        identity: Mapping[str, Any],
+        frame: PreviewFrame,
+        *,
+        width: int,
+        height: int,
+    ) -> CacheKeyInputs:
+        profile_id = str(identity["profile_id"])
+        requirements_digest = str(identity["requirements_digest"])
         return CacheKeyInputs(
-            semantic_digest=semantic_digest,
+            semantic_digest=str(identity["semantic_digest"]),
             capability_profile=CapabilityProfileIdentity(
-                document.profile_id, document.requirements_digest
+                profile_id, requirements_digest
             ),
-            target_profile_id=document.profile_id,
-            target_requirements_digest=document.requirements_digest,
+            target_profile_id=profile_id,
+            target_requirements_digest=requirements_digest,
             toolchain=self._toolchain,
-            compiler_settings=dict(document.settings),
+            compiler_settings=dict(identity.get("settings") or {}),
             semantic_inputs={
-                "document_profile": document.profile_id,
+                "document_profile": profile_id,
                 "preview_width": width,
                 "preview_height": height,
                 "binding_identity": frame.binding_identity,
@@ -1721,13 +1733,11 @@ class PreviewPipeline:
                     "operator_version": node.version,
                     "preview_width": job.width,
                     "preview_height": job.height,
-                    "binding_identity": frame.binding_identity,
                 },
                 compiler_inputs={
                     "compiler_id": self._toolchain.compiler_id,
                     "compiler_version": self._toolchain.compiler_version,
                     "entry_point": f"node:{node.operator_id}",
-                    "binding_identity": frame.binding_identity,
                 },
                 observed_hardware={},
                 shader_identity=shader_identity,
@@ -1849,6 +1859,12 @@ class PreviewPipeline:
             cached_nodes=tuple(sorted(cached_nodes)),
             recomputed_nodes=tuple(sorted(recomputed_nodes)),
             realization_persistent=persistent,
+            document_identity={
+                "semantic_digest": job.token.semantic_digest,
+                "profile_id": job.document.profile_id,
+                "requirements_digest": job.document.requirements_digest,
+                "settings": dict(job.document.settings),
+            },
         )
         self._last_installed_job = job.token.job_id
         self._last_valid = record

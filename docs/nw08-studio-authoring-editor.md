@@ -140,8 +140,10 @@ Per-node device-resident realization keys use the node's canonical structural
 hash plus the same compiler/target inputs, and additionally include:
 
 - the preview width/height used for size attribution and exported artifacts;
-- the compiled shader specialization/blob identities and emitted
-  resource/root-signature binding identity from the existing export manifest;
+- node-specific compiled shader specialization/blob identities derived from the
+  existing export manifest's `root_node_ids`; package-global shader-set and
+  resource/root-signature binding identities belong only to the whole-graph
+  compiler/device key;
 - the full compiler key;
 - the D3D12 device-instance recreation epoch;
 - capability-profile ID/digest;
