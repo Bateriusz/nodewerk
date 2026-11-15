@@ -736,7 +736,6 @@ def test_studio_native_host_links_player_implementation_and_profile() -> None:
     assert "cmake --build --preset nw07-release --target nw_procedural_image_player" in workflow
     assert "build/nw08-runtime" not in workflow
     assert "cmake/toolchains/msvc-x64.cmake" in workflow
-    assert "cmake -S . -B build/nw08-runtime" in workflow
     assert "--target nw_procedural_image_player" in workflow
     assert "cmake -S src/studio -B build/nw08-studio" in workflow
     assert "NW_STUDIO_RUNTIME_BUILD_DIR" in workflow
