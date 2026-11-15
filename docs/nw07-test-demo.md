@@ -34,8 +34,8 @@ The graph uses:
 
 - 1,536 deterministic instances;
 - a 4.6-unit tunnel radius;
-- 384 repeating structural ribs;
-- 1,152 asteroid-like hazards/debris pieces;
+- 1,024 thin repeating tunnel rings;
+- 512 much smaller asteroid-like hazards/debris pieces;
 - a low-poly near-closed 24x8 torus as the legal NW-07 source topology;
 - five-octave seeded value noise;
 - a warm directional light;
@@ -45,9 +45,15 @@ The graph uses:
 - a 24-second / 1,152,000-tick stateless loop.
 
 The source torus is deliberately almost closed (`major_radius=0.75`,
-`minor_radius=0.68`).  Tunnel ribs are reconstructed analytically from the
-mesh UVs, while hazards keep the chunky low-poly topology and receive seeded
-multi-frequency deformation and rotation.
+`minor_radius=0.68`). Tunnel rings are reconstructed analytically from the
+mesh UVs with a very thin cross-section so consecutive rings remain visibly
+separate instead of merging into a continuous sheet. Hazards keep the chunky
+low-poly topology and receive seeded multi-frequency deformation and rotation.
+
+The hazard scale is limited to 0.06–0.22. About 92% of hazards are biased into
+the outer 56–88% of the tunnel radius; only 8% enter a narrower central band.
+This keeps a readable flight corridor while still allowing occasional hazards
+to cross the player's line of travel.
 
 ## Loop model
 
