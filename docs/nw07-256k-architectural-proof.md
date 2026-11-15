@@ -116,6 +116,10 @@ Each run is evaluated independently. Raw GPU and CPU samples are retained and
 the p99 values are recomputed by `tools/nw07_evidence.py`. A single failed run
 fails the contract; an aggregate cannot rescue it. Displayed frame intervals
 are reported separately and never substitute for the gate metrics.
+`tools/nw07_capture.py perf` retains each run's `run<N>-timing.json` warm-up and
+measurement start/end timestamps. Validation derives the actual warm-up and run
+durations from those timestamps and rejects short, capped, or reused-process
+runs even when their declared protocol fields claim compliance.
 
 The contract's methodology is frozen, but host/artifact binding is currently
 `pending_reference_capture`. Certification remains pending until a matching
@@ -124,6 +128,9 @@ A different Ada device, a Blackwell device, a faster/higher-tier SKU, a legacy
 tier label, a stale artifact, a mismatched host/environment/protocol, or
 incomplete provenance cannot certify `nw07_perf_ref_v1`; such measurements are
 retained as informational or unverified.
+The capture's own execution environment must also be `physical` or a
+`documented_gpu_passthrough` with retained documentation; a generic VM cannot
+certify performance.
 
 ## Correctness coverage
 
@@ -136,6 +143,8 @@ executable/package/manifest hashes, driver/OS/toolchain identities, queried
 capabilities, cache state, clocks/power/thermal conditions, capture protocol,
 raw RGBA32F artifacts, reference provenance, and validated numeric/image
 comparisons.
+The same physical-or-documented-passthrough rule applies to correctness
+captures; a generic VM is never sufficient for GPU acceptance.
 
 Numeric acceptance preserves the NW-06 semantics (`1e-5` absolute **or** `1e-4`
 relative). Image-channel acceptance retains the `1e-4` absolute bound and
@@ -144,7 +153,10 @@ cannot be silently weakened.
 
 Loop-boundary evidence verifies that tick `960,000` is equivalent to tick `0`
 modulo one camera revolution and that the deterministic scene state is
-unchanged across the boundary. Fixed-tick replay is stateless.
+unchanged across the boundary. `tools/nw07_capture.py correctness` performs an
+actual image comparison when `tick_0.rgba32f` and `tick_960000.rgba32f` are
+supplied. Without the boundary capture it records only canonical-graph
+provenance and leaves verification pending. Fixed-tick replay is stateless.
 
 ## Matched-environment Blackwell development series
 
@@ -194,7 +206,8 @@ record pending rather than being fabricated.
 
 ```bash
 python tools/verify_nw07.py --mode ContractsOnly --summary-json build/nw07.json
-python tools/verify_nw07.py --mode BuildChecks
+python tools/verify_nw07.py --mode BuildChecks \
+    --player-template <specialized-player.exe> --dxc <pinned-dxc>
 python tools/verify_nw07.py --mode Full \
     --fixture <player.exe> --package <export-dir> --evidence <evidence.json>
 python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
@@ -206,11 +219,15 @@ python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
   exits `2`.
 - `Full` distinguishes an executed failure from pending evidence. It reports
   milestone success only when every hard gate and required coverage target is
-  verified.
+  verified. When `--player-template` and `--dxc` are supplied it also performs
+  the native BuildChecks export; otherwise the supplied final artifact and
+  hardware evidence provide the release binding.
 - `CleanSystem` requires a physical Windows 11 x64 host and a clean-system
   execution report covering corrupt payloads, missing required features,
   initialization failures, resize, and device removal with actionable exit
-  codes and retained failing captures.
+  codes and retained failing captures. `--binary-dir` discovers a retained
+  `nw07-clean-system.json` in the deployment directory, or `--clean-report`
+  names it explicitly.
 
 `tools/nw07_clean_system.py` performs the clean-system run on Windows by
 extracting the package embedded in the final executable and driving the

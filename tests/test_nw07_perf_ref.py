@@ -4,6 +4,7 @@ import copy
 import json
 import math
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,21 @@ def _samples(value: float, count: int = 600) -> dict:
     }
 
 
+def _timing(index: int) -> dict:
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index)
+    return {
+        "warmup_started_utc": base.isoformat(),
+        "run_started_utc": (base + timedelta(seconds=contract.WARMUP_SECONDS)).isoformat(),
+        "run_ended_utc": (
+            base
+            + timedelta(seconds=contract.WARMUP_SECONDS + contract.PERF_RUN_SECONDS)
+        ).isoformat(),
+        "uncapped": True,
+        "fresh_process": True,
+        "application_pipeline_cache": False,
+    }
+
+
 def _capture() -> dict:
     return {
         "capture_id": "perf-1",
@@ -80,6 +96,9 @@ def _capture() -> dict:
                 "duration_seconds": contract.PERF_RUN_SECONDS,
                 "uncapped": True,
                 "fresh_process": True,
+                "application_pipeline_cache": False,
+                "timing": _timing(index),
+                "sample_density_hz": 10.0,
                 "gpu_frame_time_ms": _samples(10.0),
                 "cpu_submit_ms": _samples(6.0),
                 "displayed_frame_intervals_ms": _samples(16.6),
@@ -287,6 +306,66 @@ def test_file_backed_samples_are_hashed_and_tampering_fails(tmp_path: Path) -> N
             _bound(),
             artifact_identity=_identity(),
             artifact_root=tmp_path,
+        )["status"]
+        == "failed"
+    )
+
+
+def test_performance_capture_rejects_generic_vm_and_undocumented_passthrough() -> None:
+    capture = _capture()
+    capture["execution_environment"] = {"kind": "generic_vm"}
+    assert (
+        evidence.validate_perf_capture(
+            capture, _bound(), artifact_identity=_identity()
+        )["status"]
+        == "failed"
+    )
+    capture = _capture()
+    capture["execution_environment"] = {
+        "kind": "documented_gpu_passthrough",
+        "documentation": "",
+    }
+    assert (
+        evidence.validate_perf_capture(
+            capture, _bound(), artifact_identity=_identity()
+        )["status"]
+        != "verified"
+    )
+    capture["execution_environment"]["documentation"] = "PCI passthrough dossier"
+    assert (
+        evidence.validate_perf_capture(
+            capture, _bound(), artifact_identity=_identity()
+        )["status"]
+        == "verified"
+    )
+
+
+def test_performance_capture_requires_retained_60_second_run_timing() -> None:
+    capture = _capture()
+    capture["runs"][0]["timing"]["run_ended_utc"] = (
+        datetime.fromisoformat(capture["runs"][0]["timing"]["run_started_utc"])
+        + timedelta(seconds=10)
+    ).isoformat()
+    result = evidence.validate_perf_capture(
+        capture, _bound(), artifact_identity=_identity()
+    )
+    assert result["status"] == "failed"
+    assert result["runs"][0]["status"] == "failed"
+
+    capture = _capture()
+    capture["runs"][1]["timing"]["fresh_process"] = False
+    assert (
+        evidence.validate_perf_capture(
+            capture, _bound(), artifact_identity=_identity()
+        )["status"]
+        == "failed"
+    )
+
+    capture = _capture()
+    capture["runs"][2].pop("timing")
+    assert (
+        evidence.validate_perf_capture(
+            capture, _bound(), artifact_identity=_identity()
         )["status"]
         == "failed"
     )

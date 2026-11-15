@@ -58,6 +58,28 @@ def test_missing_scenario_stays_pending() -> None:
     assert clean_system.validate_report(report)["status"] == "pending_unverified"
 
 
+def test_unexecuted_scenario_cannot_be_reported_as_verified() -> None:
+    report = _report()
+    report["scenarios"][0]["executed"] = False
+    report["scenarios"][0]["observed_exit_code"] = None
+    report["scenarios"][0]["status"] = "not_executed"
+    assert clean_system.validate_report(report)["status"] == "pending_unverified"
+
+
+def test_scenario_cannot_redefine_the_frozen_expected_exit_code() -> None:
+    report = _report()
+    report["scenarios"][0]["expected_exit_code"] = 0
+    report["scenarios"][0]["observed_exit_code"] = 0
+    report["scenarios"][0]["status"] = "passed"
+    assert clean_system.validate_report(report)["status"] == "failed"
+
+
+def test_executed_scenario_must_record_passed_status() -> None:
+    report = _report()
+    report["scenarios"][1]["status"] = "not_executed"
+    assert clean_system.validate_report(report)["status"] == "failed"
+
+
 def test_executed_scenario_failure_remains_failed() -> None:
     report = _report()
     report["scenarios"][0]["observed_exit_code"] = 0

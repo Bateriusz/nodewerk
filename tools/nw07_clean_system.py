@@ -38,6 +38,16 @@ REQUIRED_SCENARIOS = (
     "device_removal",
 )
 
+# The exit-code contract is frozen.  A report cannot redefine a scenario's
+# expected result to make an unexecuted or different run appear successful.
+EXPECTED_SCENARIO_EXIT_CODES = {
+    "corrupt_payload": 70,
+    "missing_required_feature": 23,
+    "initialization_failure": 42,
+    "resize": 0,
+    "device_removal": 51,
+}
+
 
 def _scenario_row(
     name: str,
@@ -64,11 +74,17 @@ def _scenario_row(
     }
 
 
-def deployment_report(executable: Path, deployment_directory: Path) -> dict[str, Any]:
+def deployment_report(
+    executable: Path,
+    deployment_directory: Path,
+    *,
+    exclude_paths: tuple[Path, ...] = (),
+) -> dict[str, Any]:
+    excluded = {path.resolve() for path in exclude_paths}
     files = [
         path
         for path in deployment_directory.rglob("*")
-        if path.is_file()
+        if path.is_file() and path.resolve() not in excluded
     ]
     sidecars = [
         str(path.relative_to(deployment_directory))
@@ -131,7 +147,9 @@ def run_clean_system(
     inspection = nwp.inspect_package_bytes(embedded_package, allow_dev=False)
     if not inspection.valid:
         raise ValueError("embedded package is invalid")
-    deployment = deployment_report(executable, deployment_directory)
+    deployment = deployment_report(
+        executable, deployment_directory, exclude_paths=(output,)
+    )
     rows: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="nw07-clean-") as temporary:
         temp = Path(temporary)
@@ -174,7 +192,7 @@ def run_clean_system(
             execute(
                 "corrupt_payload",
                 ["--package", str(corrupt_path), "--headless", "--frames", "0"],
-                70,
+                EXPECTED_SCENARIO_EXIT_CODES["corrupt_payload"],
             )
         )
         rows.append(
@@ -188,7 +206,7 @@ def run_clean_system(
                     "0",
                     "--simulate-capability-failure",
                 ],
-                23,
+                EXPECTED_SCENARIO_EXIT_CODES["missing_required_feature"],
             )
         )
         rows.append(
@@ -202,7 +220,7 @@ def run_clean_system(
                     "0",
                     "--simulate-pipeline-failure",
                 ],
-                42,
+                EXPECTED_SCENARIO_EXIT_CODES["initialization_failure"],
             )
         )
         rows.append(
@@ -216,7 +234,7 @@ def run_clean_system(
                     "5",
                     "--resize-sequence",
                 ],
-                0,
+                EXPECTED_SCENARIO_EXIT_CODES["resize"],
             )
         )
         rows.append(
@@ -230,7 +248,7 @@ def run_clean_system(
                     "2",
                     "--simulate-device-removal",
                 ],
-                51,
+                EXPECTED_SCENARIO_EXIT_CODES["device_removal"],
             )
         )
     scenario_failed = any(row["status"] == "failed" for row in rows)
@@ -312,15 +330,34 @@ def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(row, Mapping) and row.get("scenario")
     }
     missing = [name for name in REQUIRED_SCENARIOS if name not in by_name]
-    failed = [
-        name
-        for name, row in by_name.items()
-        if row.get("status") == "failed"
-        or (
-            row.get("executed")
-            and row.get("observed_exit_code") != row.get("expected_exit_code")
-        )
-    ]
+    failed: list[str] = []
+    not_executed: list[str] = []
+    for name in REQUIRED_SCENARIOS:
+        row = by_name.get(name)
+        if row is None:
+            continue
+        expected = EXPECTED_SCENARIO_EXIT_CODES[name]
+        if row.get("expected_exit_code") != expected:
+            failed.append(name)
+            reasons.append(
+                f"{name} declares expected exit code "
+                f"{row.get('expected_exit_code')} instead of the frozen {expected}"
+            )
+        if row.get("status") == "failed":
+            failed.append(name)
+            continue
+        if row.get("executed") is not True:
+            not_executed.append(name)
+            continue
+        if row.get("observed_exit_code") != expected:
+            failed.append(name)
+            reasons.append(
+                f"{name} observed exit code {row.get('observed_exit_code')} "
+                f"instead of {expected}"
+            )
+        elif row.get("status") != "passed":
+            failed.append(name)
+            reasons.append(f"{name} did not record a passed execution")
     if deployment_failed or failed:
         status = "failed"
         if failed:
@@ -328,6 +365,14 @@ def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
     elif missing:
         status = "pending_unverified"
         reasons.append("clean-system scenarios are missing: " + ", ".join(missing))
+    elif not_executed:
+        status = "pending_unverified"
+        reasons.append(
+            "clean-system scenarios were not executed: " + ", ".join(not_executed)
+        )
+    elif report.get("verification_status") == "failed":
+        status = "failed"
+        reasons.append("clean-system report records an executed failure")
     elif report.get("verification_status") != "verified":
         status = "pending_unverified"
         reasons.append("clean-system report is not verified")

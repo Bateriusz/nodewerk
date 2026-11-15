@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -78,6 +79,22 @@ def _correctness(tier: str) -> dict:
                 "height": contract.OUTPUT_HEIGHT,
             }
             for tick in contract.REQUIRED_FIXED_TICKS
+        ]
+        + [
+            {
+                "kind": contract.CAPTURE_KIND,
+                "format": contract.CAPTURE_FORMAT,
+                "path": f"tick_{contract.LOOP_BOUNDARY_TICKS[1]}.rgba32f",
+                "sha256": hashlib.sha256(
+                    f"{tier}-{contract.LOOP_BOUNDARY_TICKS[1]}".encode()
+                ).hexdigest(),
+                "bytes": contract.OUTPUT_WIDTH
+                * contract.OUTPUT_HEIGHT
+                * contract.CAPTURE_BYTES_PER_PIXEL,
+                "tick": contract.LOOP_BOUNDARY_TICKS[1],
+                "width": contract.OUTPUT_WIDTH,
+                "height": contract.OUTPUT_HEIGHT,
+            }
         ],
         "reference_execution": {
             "execution_id": f"{tier}-preview",
@@ -116,12 +133,20 @@ def _correctness(tier: str) -> dict:
             ],
             "loop_boundary": {
                 "verified": True,
+                "source": "captured_boundary_comparison",
                 "start_tick": 0,
-                "boundary_tick": contract.LOOP_TICKS,
+                "boundary_tick": contract.LOOP_BOUNDARY_TICKS[1],
                 "state_digest_equal_modulo_turn": True,
+                "state_digest_source": "verify_canonical_graph",
+                "graph_loop_boundary": {"seamless_modulo_turn": True},
+                "boundary_artifact_sha256": hashlib.sha256(
+                    f"{tier}-{contract.LOOP_BOUNDARY_TICKS[1]}".encode()
+                ).hexdigest(),
                 "numeric": {
                     "maximum_error": 0.0,
                     "tolerance": contract.NUMERIC_ABSOLUTE_TOLERANCE,
+                    "maximum_relative_error": 0.0,
+                    "relative_tolerance": contract.NUMERIC_RELATIVE_TOLERANCE,
                 },
             },
         },
@@ -162,6 +187,20 @@ def _perf() -> dict:
         "sample_count": 600,
     }
     samples["reported_p99_ms"] = evidence.nearest_rank_percentile(samples["samples"])
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    timing = {
+        "warmup_started_utc": base.isoformat(),
+        "run_started_utc": (
+            base + timedelta(seconds=contract.WARMUP_SECONDS)
+        ).isoformat(),
+        "run_ended_utc": (
+            base
+            + timedelta(seconds=contract.WARMUP_SECONDS + contract.PERF_RUN_SECONDS)
+        ).isoformat(),
+        "uncapped": True,
+        "fresh_process": True,
+        "application_pipeline_cache": False,
+    }
     return {
         "capture_id": "perf-capture",
         "task": contract.TASK,
@@ -195,6 +234,9 @@ def _perf() -> dict:
                 "duration_seconds": contract.PERF_RUN_SECONDS,
                 "uncapped": True,
                 "fresh_process": True,
+                "application_pipeline_cache": False,
+                "timing": timing,
+                "sample_density_hz": 10.0,
                 "gpu_frame_time_ms": samples,
                 "cpu_submit_ms": samples,
                 "displayed_frame_intervals_ms": {"samples": [16.6] * 60, "gate": False},
@@ -456,6 +498,66 @@ def test_diagnostic_overhead_must_be_a_separate_artifact() -> None:
     assert (
         evidence.validate_diagnostic_overhead(
             record, artifact_identity=_identity()
+        )["status"]
+        == "failed"
+    )
+
+
+def test_diagnostic_overhead_requires_complete_release_binding() -> None:
+    record = _diagnostic()
+    record.pop("executable_sha256")
+    assert (
+        evidence.validate_diagnostic_overhead(
+            record, artifact_identity=_identity()
+        )["status"]
+        != "verified"
+    )
+    record = _diagnostic()
+    record["release"]["executable_sha256"] = "e" * 64
+    assert (
+        evidence.validate_diagnostic_overhead(
+            record, artifact_identity=_identity()
+        )["status"]
+        != "verified"
+    )
+    record = _diagnostic()
+    record["executable_sha256"] = "e" * 64
+    assert (
+        evidence.validate_diagnostic_overhead(
+            record, artifact_identity=_identity()
+        )["status"]
+        != "verified"
+    )
+
+
+def test_loop_boundary_claims_require_measured_capture_provenance() -> None:
+    capture = _correctness("ada")
+    capture["comparison"]["loop_boundary"]["source"] = "graph-derived-provenance"
+    assert (
+        evidence.validate_correctness_capture(
+            capture,
+            coverage_target=capture["coverage_target"],
+            artifact_identity=_identity(),
+        )["status"]
+        == "failed"
+    )
+    capture = _correctness("ada")
+    del capture["comparison"]["loop_boundary"]["boundary_artifact_sha256"]
+    assert (
+        evidence.validate_correctness_capture(
+            capture,
+            coverage_target=capture["coverage_target"],
+            artifact_identity=_identity(),
+        )["status"]
+        == "failed"
+    )
+    capture = _correctness("ada")
+    del capture["comparison"]["loop_boundary"]["graph_loop_boundary"]
+    assert (
+        evidence.validate_correctness_capture(
+            capture,
+            coverage_target=capture["coverage_target"],
+            artifact_identity=_identity(),
         )["status"]
         == "failed"
     )

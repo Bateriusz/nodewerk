@@ -23,6 +23,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -246,12 +247,29 @@ def _run_record(
     gpu_values: list[float],
     cpu_values: list[float],
 ) -> dict[str, Any]:
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index)
+    timing = {
+        "warmup_started_utc": base.isoformat(),
+        "run_started_utc": (base + timedelta(seconds=contract.WARMUP_SECONDS)).isoformat(),
+        "run_ended_utc": (
+            base
+            + timedelta(seconds=contract.WARMUP_SECONDS + contract.PERF_RUN_SECONDS)
+        ).isoformat(),
+        "uncapped": True,
+        "fresh_process": True,
+        "application_pipeline_cache": False,
+    }
     return {
         "run_index": index,
         "warmup_seconds": contract.WARMUP_SECONDS,
         "duration_seconds": contract.PERF_RUN_SECONDS,
         "uncapped": True,
         "fresh_process": True,
+        "application_pipeline_cache": False,
+        "timing": timing,
+        "sample_density_hz": (
+            min(len(gpu_values), len(cpu_values)) / contract.PERF_RUN_SECONDS
+        ),
         "gpu_frame_time_ms": {
             "samples": gpu_values,
             "sample_count": len(gpu_values),
@@ -428,6 +446,8 @@ def _base_correctness_capture(tier: str, identity: Mapping[str, Any]) -> dict[st
         if tier == "ada"
         else "NVIDIA GeForce RTX 5070 Ti"
     )
+    boundary_tick = contract.LOOP_BOUNDARY_TICKS[1]
+    boundary_sha = hashlib.sha256(f"{tier}-{boundary_tick}".encode()).hexdigest()
     return {
         "capture_id": f"{tier}-correctness-1",
         "task": contract.TASK,
@@ -469,6 +489,20 @@ def _base_correctness_capture(tier: str, identity: Mapping[str, Any]) -> dict[st
                 "height": contract.OUTPUT_HEIGHT,
             }
             for tick in contract.REQUIRED_FIXED_TICKS
+        ]
+        + [
+            {
+                "kind": contract.CAPTURE_KIND,
+                "format": contract.CAPTURE_FORMAT,
+                "path": f"tick_{boundary_tick}.rgba32f",
+                "sha256": boundary_sha,
+                "bytes": contract.OUTPUT_WIDTH
+                * contract.OUTPUT_HEIGHT
+                * contract.CAPTURE_BYTES_PER_PIXEL,
+                "tick": boundary_tick,
+                "width": contract.OUTPUT_WIDTH,
+                "height": contract.OUTPUT_HEIGHT,
+            }
         ],
         "reference_execution": {
             "execution_id": f"{tier}-diagnostic-preview-1",
@@ -507,12 +541,18 @@ def _base_correctness_capture(tier: str, identity: Mapping[str, Any]) -> dict[st
             ],
             "loop_boundary": {
                 "verified": True,
+                "source": "captured_boundary_comparison",
                 "start_tick": 0,
-                "boundary_tick": contract.LOOP_TICKS,
+                "boundary_tick": boundary_tick,
                 "state_digest_equal_modulo_turn": True,
+                "state_digest_source": "verify_canonical_graph",
+                "graph_loop_boundary": {"seamless_modulo_turn": True},
+                "boundary_artifact_sha256": boundary_sha,
                 "numeric": {
                     "maximum_error": 1e-9,
                     "tolerance": contract.NUMERIC_ABSOLUTE_TOLERANCE,
+                    "maximum_relative_error": 1e-9,
+                    "relative_tolerance": contract.NUMERIC_RELATIVE_TOLERANCE,
                 },
             },
         },
@@ -874,7 +914,20 @@ def build_checks(args: argparse.Namespace) -> list[CheckResult]:
 
 
 def full_checks(args: argparse.Namespace) -> list[CheckResult]:
-    checks = build_checks(args)
+    # Full verification is driven by the supplied final artifact and hardware
+    # evidence.  BuildChecks' native Windows export is only added when the
+    # pinned player template and DXC were explicitly supplied; otherwise the
+    # artifact identity and evidence bindings provide the release provenance.
+    checks = contracts_only()
+    if args.player_template and args.dxc:
+        checks.extend(_native_export_checks(args))
+    elif args.player_template or args.dxc:
+        checks.append(
+            _pending(
+                "nw07_native_release_export",
+                "both --player-template and --dxc are required for native export checks",
+            )
+        )
     if not args.fixture or not args.package or not args.evidence:
         checks.append(
             _pending(
@@ -985,11 +1038,23 @@ def clean_system_checks(args: argparse.Namespace) -> list[CheckResult]:
     )
     if exe is None:
         return [_fail("nw07_clean_system", "deployment directory has no NW-07 executable")]
+    if not args.clean_report:
+        discovered = binary_dir / "nw07-clean-system.json"
+        if discovered.is_file():
+            args.clean_report = str(discovered)
+    evidence_files = set()
+    if args.clean_report:
+        try:
+            evidence_files.add(Path(args.clean_report).resolve())
+        except OSError:
+            pass
     files = [path for path in binary_dir.rglob("*") if path.is_file()]
     unexpected = [
         str(path.relative_to(binary_dir))
         for path in files
-        if path != exe and path.suffix.lower() in {".nwp", ".json", ".dll", ".pdb"}
+        if path != exe
+        and path.resolve() not in evidence_files
+        and path.suffix.lower() in {".nwp", ".json", ".dll", ".pdb"}
     ]
     if unexpected:
         return [

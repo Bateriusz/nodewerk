@@ -214,6 +214,16 @@ def load_canonical_config(path: Path | None = None) -> dict[str, Any]:
         raise Nw07ExportError("canonical production enabled a size-only percentage failure")
     if regression.get("relative_comparison_requires_matched_environment") is not True:
         raise Nw07ExportError("canonical production allows unmatched relative regression flags")
+    configured_inputs = record.get("pinned_inputs")
+    if (
+        not isinstance(configured_inputs, list)
+        or len(configured_inputs) != len(contract.PINNED_BUILD_INPUTS)
+        or set(configured_inputs) != set(contract.PINNED_BUILD_INPUTS)
+    ):
+        raise Nw07ExportError(
+            "canonical production pinned_inputs do not match the authoritative "
+            "pinned build-input contract"
+        )
     return record
 
 
@@ -223,7 +233,16 @@ def compute_pinned_inputs(
     repo_root: Path | None = None,
 ) -> dict[str, str]:
     root = Path(repo_root or REPO_ROOT)
-    paths = list((config or {}).get("pinned_inputs") or contract.PINNED_BUILD_INPUTS)
+    configured = (config or {}).get("pinned_inputs")
+    if configured is not None and (
+        not isinstance(configured, list)
+        or len(configured) != len(contract.PINNED_BUILD_INPUTS)
+        or set(configured) != set(contract.PINNED_BUILD_INPUTS)
+    ):
+        raise Nw07ExportError(
+            "pinned_inputs do not match the authoritative pinned build-input contract"
+        )
+    paths = list(contract.PINNED_BUILD_INPUTS)
     result: dict[str, str] = {}
     for relative in paths:
         path = root / relative

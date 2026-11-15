@@ -158,6 +158,7 @@ def test_unknown_nw07_dimension_keys_do_not_override_the_material_texture() -> N
         lambda c: c["image_tolerances"]["image"].__setitem__("absolute", 0.01),
         lambda c: c["image_tolerances"]["numeric"].__setitem__("absolute", 0.01),
         lambda c: c.__setitem__("requirements_digest", "sha256:v1:" + "0" * 64),
+        lambda c: c["pinned_inputs"].pop(),
     ),
 )
 def test_canonical_configuration_rejects_weakening(mutation) -> None:
@@ -175,6 +176,13 @@ def _load_from_record(config: dict) -> None:
         path = Path(temporary) / "config.json"
         path.write_text(json.dumps(config), encoding="utf-8")
         export.load_canonical_config(path)
+
+
+def test_pinned_input_contract_cannot_be_narrowed_outside_the_loader() -> None:
+    config = json.loads(CONFIG.read_text(encoding="utf-8"))
+    config["pinned_inputs"] = config["pinned_inputs"][:-1]
+    with pytest.raises(export.Nw07ExportError):
+        export.compute_pinned_inputs(config)
 
 
 def test_pinned_input_digest_tracks_build_inputs() -> None:

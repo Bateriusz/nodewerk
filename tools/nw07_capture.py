@@ -37,6 +37,21 @@ def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
 
 
+def _utc_seconds(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
+
+
 def _load_json(path: str | None) -> dict[str, Any]:
     if not path:
         return {}
@@ -124,6 +139,56 @@ def _sample_section(path: Path) -> dict[str, Any]:
     }
 
 
+def _loop_boundary_evidence(
+    captures_dir: Path,
+    graph_evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Measure tick 0 against tick 960,000 instead of asserting the boundary.
+
+    When either boundary capture is unavailable, the record keeps the canonical
+    graph's loop-boundary provenance but explicitly reports ``verified: false``.
+    """
+    start_tick, boundary_tick = contract.LOOP_BOUNDARY_TICKS
+    graph_loop = graph_evidence.get("loop_boundary")
+    graph_loop = dict(graph_loop) if isinstance(graph_loop, Mapping) else {}
+    result: dict[str, Any] = {
+        "verified": False,
+        "source": "graph-derived-provenance",
+        "start_tick": start_tick,
+        "boundary_tick": boundary_tick,
+        "state_digest_equal_modulo_turn": (
+            graph_loop.get("seamless_modulo_turn") is True
+        ),
+        "state_digest_source": "verify_canonical_graph",
+        "graph_loop_boundary": graph_loop,
+        "numeric": {
+            "maximum_error": None,
+            "tolerance": contract.NUMERIC_ABSOLUTE_TOLERANCE,
+            "maximum_relative_error": None,
+            "relative_tolerance": contract.NUMERIC_RELATIVE_TOLERANCE,
+        },
+    }
+    start_path = captures_dir / f"tick_{start_tick}.rgba32f"
+    boundary_path = captures_dir / f"tick_{boundary_tick}.rgba32f"
+    if not start_path.is_file() or not boundary_path.is_file():
+        result["unavailable_reason"] = (
+            "tick 0 and tick 960,000 captures were not both supplied"
+        )
+        return result
+    image = _compare_images(boundary_path, start_path)
+    result.update(
+        verified=True,
+        source="captured_boundary_comparison",
+        boundary_artifact_sha256=_sha256_file(boundary_path),
+        start_artifact_sha256=_sha256_file(start_path),
+    )
+    result["numeric"].update(
+        maximum_error=image["maximum_error"],
+        maximum_relative_error=image["maximum_relative_error"],
+    )
+    return result
+
+
 def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
     package_dir = Path(args.package)
     identity = export.inspect_artifact_directory(package_dir)
@@ -205,6 +270,28 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     graph_evidence = export.verify_canonical_graph(config)
+    loop_boundary = _loop_boundary_evidence(captures_dir, graph_evidence)
+    boundary_tick = contract.LOOP_BOUNDARY_TICKS[1]
+    boundary_path = captures_dir / f"tick_{boundary_tick}.rgba32f"
+    if boundary_path.is_file():
+        try:
+            boundary_relative = boundary_path.resolve().relative_to(artifact_root)
+        except ValueError:
+            boundary_stored = stored_dir / boundary_path.name
+            shutil.copyfile(boundary_path, boundary_stored)
+            boundary_relative = boundary_stored.relative_to(artifact_root)
+        capture_artifacts.append(
+            {
+                "kind": contract.CAPTURE_KIND,
+                "format": contract.CAPTURE_FORMAT,
+                "path": str(boundary_relative).replace("\\", "/"),
+                "sha256": _sha256_file(artifact_root / boundary_relative),
+                "bytes": boundary_path.stat().st_size,
+                "tick": boundary_tick,
+                "width": contract.OUTPUT_WIDTH,
+                "height": contract.OUTPUT_HEIGHT,
+            }
+        )
     metadata = _load_json(args.metadata)
     capture = {
         "capture_id": args.capture_id,
@@ -240,16 +327,7 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "reference_execution": _load_json(args.reference_execution),
         "comparison": {
             "per_tick": per_tick,
-            "loop_boundary": {
-                "verified": True,
-                "start_tick": 0,
-                "boundary_tick": contract.LOOP_TICKS,
-                "state_digest_equal_modulo_turn": True,
-                "numeric": {
-                    "maximum_error": 0.0,
-                    "tolerance": contract.NUMERIC_ABSOLUTE_TOLERANCE,
-                },
-            },
+            "loop_boundary": loop_boundary,
         },
         "startup": {
             "protocol": contract.STARTUP_PROTOCOL,
@@ -291,13 +369,44 @@ def record_perf(args: argparse.Namespace) -> dict[str, Any]:
         gpu = _sample_section(samples_dir / f"run{index}-gpu.txt")
         cpu = _sample_section(samples_dir / f"run{index}-cpu.txt")
         displayed = _sample_section(samples_dir / f"run{index}-displayed.txt")
+        timing_path = samples_dir / f"run{index}-timing.json"
+        timing = _load_json(str(timing_path)) if timing_path.is_file() else {}
+        if not isinstance(timing, Mapping):
+            timing = {}
+        run_started = _utc_seconds(
+            timing.get("run_started_utc") or timing.get("warmup_ended_utc")
+        )
+        run_ended = _utc_seconds(timing.get("run_ended_utc"))
+        warmup_started = _utc_seconds(timing.get("warmup_started_utc"))
+        duration_seconds = (
+            run_ended - run_started
+            if run_started is not None and run_ended is not None
+            else None
+        )
+        warmup_seconds = (
+            run_started - warmup_started
+            if run_started is not None and warmup_started is not None
+            else None
+        )
         runs.append(
             {
                 "run_index": index,
-                "warmup_seconds": contract.WARMUP_SECONDS,
-                "duration_seconds": contract.PERF_RUN_SECONDS,
-                "uncapped": True,
-                "fresh_process": True,
+                "warmup_seconds": warmup_seconds,
+                "duration_seconds": duration_seconds,
+                "uncapped": timing.get("uncapped"),
+                "fresh_process": timing.get("fresh_process"),
+                "application_pipeline_cache": timing.get(
+                    "application_pipeline_cache"
+                ),
+                "warmup_started_utc": timing.get("warmup_started_utc"),
+                "run_started_utc": timing.get("run_started_utc"),
+                "run_ended_utc": timing.get("run_ended_utc"),
+                "timing": timing,
+                "sample_density_hz": (
+                    min(gpu["sample_count"], cpu["sample_count"]) / duration_seconds
+                    if duration_seconds
+                    else None
+                ),
                 "gpu_frame_time_ms": gpu,
                 "cpu_submit_ms": cpu,
                 "displayed_frame_intervals_ms": {

@@ -20,6 +20,7 @@ import hashlib
 import json
 import math
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -124,6 +125,39 @@ def _unavailable(value: Any) -> bool:
         if value.get("available") is False:
             return True
     return False
+
+
+def _parse_utc_timestamp(value: Any) -> float | None:
+    """Return a POSIX timestamp for an explicit timezone-aware ISO-8601 value."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
+
+
+def _execution_environment_state(capture: Mapping[str, Any]) -> tuple[str, list[str]]:
+    """Evaluate the physical/passthrough execution contract used by both paths."""
+    environment = capture.get("execution_environment")
+    if not isinstance(environment, Mapping):
+        return "pending", ["execution environment is not documented"]
+    kind = environment.get("kind")
+    if kind == "generic_vm":
+        return "failed", ["a generic VM is insufficient for GPU acceptance"]
+    if kind not in {"physical", "documented_gpu_passthrough"}:
+        return "pending", ["execution environment kind is not acceptable"]
+    if kind == "documented_gpu_passthrough" and _unavailable(
+        environment.get("documentation")
+    ):
+        return "pending", ["GPU passthrough documentation is missing"]
+    return "passed", []
 
 
 def classify_hardware_tier(adapter_description: str) -> str:
@@ -688,6 +722,15 @@ def validate_perf_capture(
         result["status"] = "pending_unverified"
         result["missing_contract_bindings"] = contract_validation["missing_bindings"]
         return result
+    environment_state, environment_reasons = _execution_environment_state(capture)
+    if environment_reasons:
+        result["status"] = (
+            "failed" if environment_state == "failed" else "unverified"
+        )
+        result["execution_environment"] = dict(
+            capture.get("execution_environment") or {}
+        )
+        reasons.extend(environment_reasons)
     differences = _artifact_mismatches(capture, artifact_identity)
     contract_artifact = dict(
         ((perf_contract.get("reference") or {}).get("artifact") or {})
@@ -780,25 +823,106 @@ def validate_perf_capture(
         if run.get("status") == "failed":
             run_result["status"] = "failed"
             run_result["reasons"].append("run records an executed failure")
-        for field, expected in (
-            ("warmup_seconds", contract.WARMUP_SECONDS),
-            ("duration_seconds", contract.PERF_RUN_SECONDS),
-        ):
-            if run.get(field) != expected:
-                run_result["status"] = "failed"
-                run_result["reasons"].append(f"{field} is not {expected}")
         if run.get("uncapped") is not True:
             run_result["status"] = "failed"
             run_result["reasons"].append("run is not uncapped")
         if run.get("fresh_process") is not True:
             run_result["status"] = "failed"
             run_result["reasons"].append("run did not use a fresh process")
+        timing = run.get("timing")
+        if not isinstance(timing, Mapping):
+            timing = {}
+        run_started = _parse_utc_timestamp(
+            run.get("run_started_utc")
+            or timing.get("run_started_utc")
+            or timing.get("warmup_ended_utc")
+        )
+        run_ended = _parse_utc_timestamp(
+            run.get("run_ended_utc") or timing.get("run_ended_utc")
+        )
+        warmup_started = _parse_utc_timestamp(
+            run.get("warmup_started_utc")
+            or timing.get("warmup_started_utc")
+        )
+        if run_started is None or run_ended is None or warmup_started is None:
+            run_result["status"] = "failed"
+            run_result["reasons"].append(
+                "run start/end/warm-up timing evidence is missing or malformed"
+            )
+            derived_duration = None
+            derived_warmup = None
+        else:
+            derived_duration = run_ended - run_started
+            derived_warmup = run_started - warmup_started
+            if derived_duration < contract.PERF_RUN_SECONDS or derived_duration > (
+                contract.PERF_RUN_SECONDS + 1.0
+            ):
+                run_result["status"] = "failed"
+                run_result["reasons"].append(
+                    f"retained run timing covers {derived_duration:.3f} s, not a "
+                    f"{contract.PERF_RUN_SECONDS}-second run"
+                )
+            if derived_warmup < contract.WARMUP_SECONDS or derived_warmup > (
+                contract.WARMUP_SECONDS + 1.0
+            ):
+                run_result["status"] = "failed"
+                run_result["reasons"].append(
+                    f"retained warm-up timing covers {derived_warmup:.3f} s, not "
+                    f"{contract.WARMUP_SECONDS} seconds"
+                )
+            declared_duration = _number(run.get("duration_seconds"))
+            if (
+                declared_duration is None
+                or abs(declared_duration - derived_duration) > 0.05
+            ):
+                run_result["status"] = "failed"
+                run_result["reasons"].append(
+                    "declared run duration does not match retained timing evidence"
+                )
+            declared_warmup = _number(run.get("warmup_seconds"))
+            if (
+                declared_warmup is None
+                or abs(declared_warmup - derived_warmup) > 0.05
+            ):
+                run_result["status"] = "failed"
+                run_result["reasons"].append(
+                    "declared warm-up does not match retained timing evidence"
+                )
+        for field, expected in (
+            ("uncapped", True),
+            ("fresh_process", True),
+            ("application_pipeline_cache", False),
+        ):
+            if run.get(field) is not timing.get(field):
+                run_result["status"] = "failed"
+                run_result["reasons"].append(
+                    f"retained run metadata disagrees on '{field}'"
+                )
+            if timing.get(field) is not expected:
+                run_result["status"] = "failed"
+                run_result["reasons"].append(
+                    f"retained run metadata '{field}' is not {expected}"
+                )
+        run_result["timing"] = {
+            "warmup_seconds": derived_warmup,
+            "duration_seconds": derived_duration,
+            "uncapped": timing.get("uncapped"),
+            "fresh_process": timing.get("fresh_process"),
+            "application_pipeline_cache": timing.get("application_pipeline_cache"),
+        }
         for metric_name in ("gpu_frame_time_ms", "cpu_submit_ms"):
             try:
                 validated = _validate_sample_section(
                     run.get(metric_name),
                     artifact_root=artifact_root,
-                    minimum_count=contract.MIN_RAW_SAMPLES_PER_RUN,
+                    minimum_count=(
+                        max(
+                            contract.MIN_RAW_SAMPLES_PER_RUN,
+                            math.ceil(derived_duration * 10.0),
+                        )
+                        if derived_duration and derived_duration > 0
+                        else contract.MIN_RAW_SAMPLES_PER_RUN
+                    ),
                 )
             except ValueError as exc:
                 run_result["status"] = "failed"
@@ -841,14 +965,20 @@ def validate_perf_capture(
             except ValueError as exc:
                 run_result["status"] = "failed"
                 run_result["reasons"].append(f"displayed frame intervals: {exc}")
+        sample_counts = [
+            run_result[name]["sample_count"]
+            for name in ("gpu_frame_time_ms", "cpu_submit_ms")
+            if isinstance(run_result.get(name), Mapping)
+            and isinstance(run_result[name].get("sample_count"), int)
+        ]
+        if sample_counts and derived_duration and derived_duration > 0:
+            run_result["sample_density_hz"] = min(sample_counts) / derived_duration
         if run_result["status"] == "failed":
             executed_failure = True
         result["runs"].append(run_result)
     if executed_failure:
         result["status"] = "failed"
-    elif result["status"] == "unverified":
-        pass
-    else:
+    elif result["status"] == "pending_unverified" and not reasons:
         result["status"] = "verified"
     result["aggregate_percentiles_are_informational"] = True
     return result
@@ -1111,26 +1241,14 @@ def validate_correctness_capture(
     if capture.get("requirements_digest") != contract.REQUIREMENTS_DIGEST:
         result["status"] = "failed"
         result["reasons"].append("capture changed the requirements digest")
-    execution_environment = capture.get("execution_environment")
-    if not isinstance(execution_environment, Mapping):
+    environment_state, environment_reasons = _execution_environment_state(capture)
+    if environment_state == "failed":
+        result["status"] = "failed"
+        result["reasons"].extend(environment_reasons)
+    elif environment_state == "pending":
         if result["status"] != "failed":
             result["status"] = "pending_unverified"
-        result["reasons"].append("execution environment is not documented")
-    else:
-        execution_kind = execution_environment.get("kind")
-        if execution_kind == "generic_vm":
-            result["status"] = "failed"
-            result["reasons"].append("a generic VM is insufficient for GPU acceptance")
-        elif execution_kind not in {"physical", "documented_gpu_passthrough"}:
-            if result["status"] != "failed":
-                result["status"] = "pending_unverified"
-            result["reasons"].append("execution environment kind is not acceptable")
-        elif execution_kind == "documented_gpu_passthrough" and _unavailable(
-            execution_environment.get("documentation")
-        ):
-            if result["status"] != "failed":
-                result["status"] = "pending_unverified"
-            result["reasons"].append("GPU passthrough documentation is missing")
+        result["reasons"].extend(environment_reasons)
     tier = classify_hardware_tier(str(capture.get("adapter_description", "")))
     expected_tier = "ada" if "ada" in coverage_target else "blackwell" if "blackwell" in coverage_target else "unknown"
     if tier != expected_tier:
@@ -1339,10 +1457,28 @@ def validate_correctness_capture(
                 result["status"] = "failed"
                 result["reasons"].append("per-tick comparisons do not cover the fixed ticks")
         loop_boundary = comparison.get("loop_boundary")
-        if not isinstance(loop_boundary, Mapping) or loop_boundary.get("verified") is not True:
+        if not isinstance(loop_boundary, Mapping):
             result["status"] = "failed"
-            result["reasons"].append("loop-boundary comparison is not verified")
+            result["reasons"].append("loop-boundary comparison is absent")
+        elif loop_boundary.get("verified") is not True:
+            if (
+                loop_boundary.get("source") == "graph-derived-provenance"
+                and result["status"] != "failed"
+            ):
+                result["status"] = "pending_unverified"
+                result["reasons"].append(
+                    "loop-boundary comparison is not measured; only canonical "
+                    "graph provenance is available"
+                )
+            else:
+                result["status"] = "failed"
+                result["reasons"].append("loop-boundary comparison is not verified")
         else:
+            if loop_boundary.get("source") != "captured_boundary_comparison":
+                result["status"] = "failed"
+                result["reasons"].append(
+                    "loop-boundary evidence is not an executed tick-0/tick-960000 comparison"
+                )
             if loop_boundary.get("start_tick") != contract.LOOP_BOUNDARY_TICKS[0] or loop_boundary.get(
                 "boundary_tick"
             ) != contract.LOOP_BOUNDARY_TICKS[1]:
@@ -1365,6 +1501,26 @@ def validate_correctness_capture(
                 result["status"] = "failed"
                 result["reasons"].append(
                     "loop-boundary deterministic state is not equal modulo one turn"
+                )
+            graph_loop = loop_boundary.get("graph_loop_boundary")
+            if not isinstance(graph_loop, Mapping) or graph_loop.get(
+                "seamless_modulo_turn"
+            ) is not True:
+                result["status"] = "failed"
+                result["reasons"].append(
+                    "loop-boundary deterministic-state claim lacks canonical graph provenance"
+                )
+            boundary_sha = loop_boundary.get("boundary_artifact_sha256")
+            retained = {
+                item.get("sha256")
+                for item in capture.get("capture_artifacts", [])
+                if isinstance(item, Mapping)
+                and item.get("tick") == contract.LOOP_BOUNDARY_TICKS[1]
+            }
+            if not isinstance(boundary_sha, str) or boundary_sha not in retained:
+                result["status"] = "failed"
+                result["reasons"].append(
+                    "loop-boundary comparison does not retain the tick-960,000 capture"
                 )
     startup_memory = validate_startup_memory(capture)
     result["startup_memory"] = startup_memory
@@ -1406,10 +1562,17 @@ def validate_diagnostic_overhead(
         result["reasons"].append("diagnostic overhead protocol does not match")
     release = record.get("release") or {}
     diagnostic = record.get("diagnostic") or {}
-    if record.get("executable_sha256") not in (None, artifact_identity.get("executable_sha256")):
+    expected_executable = artifact_identity.get("executable_sha256")
+    binding_matched = (
+        isinstance(expected_executable, str)
+        and bool(expected_executable)
+        and record.get("executable_sha256") == expected_executable
+        and release.get("executable_sha256") == expected_executable
+    )
+    if record.get("executable_sha256") != expected_executable:
         result["status"] = "unverified"
         result["reasons"].append("diagnostic record does not bind the final release artifact")
-    if release.get("executable_sha256") != artifact_identity.get("executable_sha256"):
+    if release.get("executable_sha256") != expected_executable:
         result["status"] = "unverified"
         result["reasons"].append("release artifact identity does not match the final artifact")
     if release.get("contains_capture_controls") is not False:
@@ -1440,12 +1603,14 @@ def validate_diagnostic_overhead(
     )
     missing = [name for name in required if _number(measurements.get(name)) is None]
     if missing:
-        if result["status"] != "failed":
+        if result["status"] != "failed" and binding_matched:
             result["status"] = "pending_unverified"
         result["reasons"].append("diagnostic overhead measurements are incomplete")
-    if result["status"] != "failed" and not missing:
+    if result["status"] != "failed" and binding_matched and not missing:
         result["status"] = "verified"
         result["overhead"] = {name: measurements[name] for name in required}
+    elif result["status"] != "failed" and not binding_matched:
+        result["status"] = "unverified"
     return result
 
 
