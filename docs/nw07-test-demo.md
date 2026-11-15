@@ -34,8 +34,8 @@ The graph uses:
 
 - 1,536 deterministic instances;
 - a 4.6-unit tunnel radius;
-- 1,024 thin repeating tunnel rings;
-- 512 much smaller asteroid-like hazards/debris pieces;
+- 512 thicker, evenly spaced tunnel rings;
+- 512 small asteroid-like hazards/debris pieces;
 - a low-poly near-closed 24x8 torus as the legal NW-07 source topology;
 - five-octave seeded value noise;
 - a warm directional light;
@@ -46,11 +46,14 @@ The graph uses:
 
 The source torus is deliberately almost closed (`major_radius=0.75`,
 `minor_radius=0.68`). Tunnel rings are reconstructed analytically from the
-mesh UVs with a slightly thicker 0.0095 local tube cross-section. At the 4.6
-world scale this nearly fills the 96/1024 ring spacing without fully collapsing
-adjacent rings into one sheet, giving the tunnel more visual mass while keeping
-the repeating torus rhythm readable. Hazards keep the chunky
+mesh UVs with a 0.015 local tube cross-section and 512 evenly spaced rings over
+the 96-unit segment. This lower spatial frequency avoids temporal moire while
+keeping each torus visibly separate and substantial. Hazards keep the chunky
 low-poly topology and receive seeded multi-frequency deformation and rotation.
+
+The tunnel shading is identical for every ring: no per-ring random phase or
+segmented panel offset is applied. This deliberately removes the rapidly
+changing spoke/pattern effect seen with the denser 1024-ring version.
 
 The hazard scale is limited to 0.06–0.22. About 92% of hazards are biased into
 the outer 56–88% of the tunnel radius; only 8% enter a narrower central band.
