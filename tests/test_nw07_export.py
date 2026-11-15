@@ -355,7 +355,28 @@ def test_specialized_build_root_must_be_empty(tmp_path: Path) -> None:
 def test_nw07_enables_exact_frozen_package_specialization() -> None:
     config = export.load_canonical_config()
     assert config["build_configuration"]["build_profile"] == "release"
+    assert config["build_configuration"]["inbox_ucrt"] == "ON"
     source = Path(export.nw05_export.__file__).read_text(encoding="utf-8")
     assert "frozen_embedded_specialization: bool = False" in source
     nw07_source = Path(export.__file__).read_text(encoding="utf-8")
     assert "frozen_embedded_specialization=True" in nw07_source
+
+
+def test_nw07_release_preset_uses_windows_inbox_ucrt() -> None:
+    presets = json.loads((REPO_ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
+    release = next(
+        item for item in presets["configurePresets"] if item["name"] == "nw07-release"
+    )
+    assert release["cacheVariables"]["NW_USE_INBOX_UCRT"] == "ON"
+    profile = (REPO_ROOT / "cmake" / "BuildProfiles.cmake").read_text(encoding="utf-8")
+    assert "/NODEFAULTLIB:libucrt.lib" in profile
+    assert "/DEFAULTLIB:ucrt.lib" in profile
+
+
+def test_frozen_generated_main_avoids_std_string_for_frames_probe() -> None:
+    source = export.nw05_export.generate_player_source(
+        package_sha256="1" * 64,
+        manifest_sha256="2" * 64,
+        present_sync_interval=0,
+    )
+    assert 'std::strcmp(argv[index], "--frames") == 0' in source

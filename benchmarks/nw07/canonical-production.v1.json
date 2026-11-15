@@ -231,6 +231,7 @@
     "codegen": "graph-derived generated player source",
     "toolchain_file": "cmake/toolchains/msvc-x64.cmake",
     "crt_elimination_experiment": "OFF",
+    "inbox_ucrt": "ON",
     "capture_controls": "OFF"
   },
   "image_tolerances": {

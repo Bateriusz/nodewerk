@@ -854,8 +854,11 @@ def generate_player_source(
         + clock_includes +
         "#include <cstdio>\n"
         "#include <cstdlib>\n"
+        "#include <cstring>\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION || NW07_CAPTURE_CONTROLS\n"
         "#include <string>\n"
-        "#include <vector>\n\n"
+        "#include <vector>\n"
+        "#endif\n\n"
         "int main(int argc, char** argv) {\n"
         "    nw::player::EmbeddedPackage embedded;\n"
         "    if (!nw::player::LoadEmbeddedPackage(&embedded)) {\n"
@@ -934,7 +937,7 @@ def generate_player_source(
         "    }\n"
         "#else\n"
         "    for (int index = 1; index < argc; ++index) {\n"
-        "        if (std::string(argv[index]) == \"--frames\" && index + 1 < argc) {\n"
+        "        if (std::strcmp(argv[index], \"--frames\") == 0 && index + 1 < argc) {\n"
         "            max_frames = std::strtoull(argv[++index], nullptr, 10);\n"
         "        }\n"
         "    }\n"
@@ -1225,6 +1228,7 @@ def _template_build_configuration(template_path: Path) -> dict[str, str]:
             "NW_BUILD_PROFILE",
             "NW_ENFORCE_PINNED_TOOLCHAIN",
             "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
+            "NW_USE_INBOX_UCRT",
             "NW07_CAPTURE_CONTROLS",
         }:
             values[key] = value
@@ -1301,6 +1305,7 @@ def _build_specialized_player(
         "NW_BUILD_PROFILE",
         "NW_ENFORCE_PINNED_TOOLCHAIN",
         "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
+        "NW_USE_INBOX_UCRT",
         "NW07_CAPTURE_CONTROLS",
     ):
         if name in inherited:

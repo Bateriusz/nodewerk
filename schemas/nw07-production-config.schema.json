@@ -101,7 +101,7 @@
       "required": [
         "cmake_generator", "build_type", "build_profile",
         "pinned_toolchain_enforcement", "toolchain_file",
-        "crt_elimination_experiment", "capture_controls",
+        "crt_elimination_experiment", "inbox_ucrt", "capture_controls",
         "present_sync_interval", "specialized_build_requires_empty_directory", "codegen"
       ],
       "properties": {
@@ -111,6 +111,7 @@
         "pinned_toolchain_enforcement": { "const": "ON" },
         "toolchain_file": { "const": "cmake/toolchains/msvc-x64.cmake" },
         "crt_elimination_experiment": { "const": "OFF" },
+        "inbox_ucrt": { "const": "ON" },
         "capture_controls": { "const": "OFF" },
         "present_sync_interval": { "const": 0 },
         "specialized_build_requires_empty_directory": { "const": true },

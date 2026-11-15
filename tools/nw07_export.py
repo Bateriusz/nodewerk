@@ -781,6 +781,7 @@ def _validate_release_template_build_configuration(
         "NW_BUILD_PROFILE": frozen.get("build_profile"),
         "NW_ENFORCE_PINNED_TOOLCHAIN": frozen.get("pinned_toolchain_enforcement"),
         "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": frozen.get("crt_elimination_experiment"),
+        "NW_USE_INBOX_UCRT": frozen.get("inbox_ucrt"),
         "NW07_CAPTURE_CONTROLS": frozen.get("capture_controls"),
     }
     mismatches = {
@@ -808,6 +809,7 @@ def _validate_release_template_build_configuration(
         "pinned_toolchain_enforcement": observed["NW_ENFORCE_PINNED_TOOLCHAIN"],
         "toolchain_file": str(expected_toolchain.relative_to(repo_root)).replace("\\", "/"),
         "crt_elimination_experiment": observed["NW_ENABLE_CRT_ELIMINATION_EXPERIMENT"],
+        "inbox_ucrt": observed["NW_USE_INBOX_UCRT"],
         "capture_controls": observed["NW07_CAPTURE_CONTROLS"],
     }
 

@@ -26,6 +26,10 @@ option(NW_ENABLE_UNSAFE_SECTION_MERGE_EXPERIMENT
     "Explicit opt-in compact experiment testing /MERGE:.rdata=.text and /ALIGN:16 with /guard:cf and /CETCOMPAT retained"
     OFF)
 
+option(NW_USE_INBOX_UCRT
+    "Link release players to the Windows inbox UCRT while keeping the MSVC C++/compiler runtime static"
+    OFF)
+
 # NW-07 capture controls are only available in the diagnostic sibling build.
 # The release executable must never contain capture hooks, timing queries, or
 # diagnostic tooling; keeping the option dev-only makes that a configure-time
@@ -135,6 +139,18 @@ function(nw_apply_player_profile target_name)
                 /OPT:ICF=4
                 /PDBALTPATH:%_PDB%
             )
+            if(NW_USE_INBOX_UCRT)
+                # Windows 11 supplies ucrtbase.dll as an inbox component and
+                # the release dependency contract explicitly allowlists it.
+                # Preserve the static MSVC C++ runtime/startup/security support
+                # while replacing only the static UCRT archive.
+                target_compile_definitions(${target_name} PRIVATE
+                    NW_UCRT_LINKAGE_INBOX=1)
+                target_link_options(${target_name} PRIVATE
+                    /NODEFAULTLIB:libucrt.lib
+                    /DEFAULTLIB:ucrt.lib
+                )
+            endif()
         elseif(NW_BUILD_PROFILE STREQUAL "compact_experiment")
             # Fully static CRT (/MT) baseline; /NODEFAULTLIB remains an explicit experiment.
             set_property(TARGET ${target_name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")

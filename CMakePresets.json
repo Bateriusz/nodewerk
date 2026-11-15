@@ -88,6 +88,7 @@
         "CMAKE_BUILD_TYPE": "MinSizeRel",
         "NW_BUILD_PROFILE": "release",
         "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT": "OFF",
+        "NW_USE_INBOX_UCRT": "ON",
         "NW07_CAPTURE_CONTROLS": "OFF"
       }
     },
