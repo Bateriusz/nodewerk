@@ -2373,8 +2373,16 @@ class PreviewPipeline:
         reservation: _RuntimeReservation | None,
         error: PreviewError,
     ) -> CompletionDecision:
+        raw_diagnostics: Sequence[Mapping[str, Any]] = error.diagnostics or (
+            {
+                "category": "preview",
+                "severity": "error",
+                "code": "preview_backend_failed",
+                "message": str(error),
+            },
+        )
         diagnostics = link_source_diagnostics(
-            error.diagnostics,
+            raw_diagnostics,
             source_text=job.source_text,
             source_name=str(self.session.source_path or "<editor>"),
         )
