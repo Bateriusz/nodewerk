@@ -1119,7 +1119,7 @@ def validate_perf_capture(
         if run.get("collector_exit_code") != 0 or timing.get("collector_exit_code") != 0:
             run_result["status"] = "failed"
             run_result["reasons"].append("measurement collector did not complete successfully")
-        for field, expected in (        for field, expected in (
+        for field, expected in (
             ("uncapped", True),
             ("fresh_process", True),
             ("application_pipeline_cache", False),
@@ -1678,7 +1678,7 @@ def validate_correctness_capture(
         elif not _unavailable(reference_renderer):
             result["status"] = "failed"
             result["reasons"].append("reference renderer is unsupported")
-    comparison = capture.get("comparison")    comparison = capture.get("comparison")
+    comparison = capture.get("comparison")
     if not isinstance(comparison, Mapping):
         result["status"] = "failed"
         result["reasons"].append("comparison evidence is absent")

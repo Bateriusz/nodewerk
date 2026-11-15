@@ -137,8 +137,6 @@ def _capture() -> dict:
     }
 
 
-def test_nearest_rank_percentile_is_exact()
-
 def test_nearest_rank_percentile_is_exact() -> None:
     assert evidence.nearest_rank_percentile([1, 2, 3, 4, 5], 99.0) == 5
     assert evidence.nearest_rank_percentile([1, 2, 3, 4], 75.0) == 3

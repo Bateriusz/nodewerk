@@ -342,7 +342,7 @@ def record_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "profile_id": contract.PROFILE_ID,
         "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "adapter_description": metadata.get("adapter_description", args.adapter),
-        "device_form_factor": metadata.get("device_form_factor", args.device_form_factor),
+        "device_form_factor": metadata.get("device_form_factor", getattr(args, "device_form_factor", "")),
         "device": metadata.get("device", args.adapter),
         "driver_version": metadata.get("driver_version", args.driver_version),
         "os_version": metadata.get("os_version", args.os_version),
@@ -734,7 +734,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
                     f"measurement collector produced no {name} samples for run {index}"
                 )
 
-    manifest_path = samples_dir / "collector-record.json"    manifest_path = samples_dir / "collector-record.json"
+    manifest_path = samples_dir / "collector-record.json"
     manifest_path.write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
