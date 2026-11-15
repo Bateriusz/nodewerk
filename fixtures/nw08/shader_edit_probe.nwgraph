@@ -29,8 +29,11 @@ node texture_gpu nw.residency.upload_texture@1.0.0 frequency=frame residency=gpu
 node fullscreen nw.render.fullscreen@1.0.0 frequency=frame residency=gpu
   input shader shader.out
   input texture texture_gpu.out
+node screen nw.render.present@1.0.0 frequency=frame residency=gpu
+  input image fullscreen.image
 
 layout shader 0 0
 layout texture_recipe 220 0
 layout texture_gpu 440 0
 layout fullscreen 660 0
+layout screen 880 0
