@@ -939,3 +939,24 @@ def test_missing_metadata_does_not_short_circuit_a_deterministic_failure() -> No
     )
     assert result["status"] == "failed"
     assert "driver_version" in result.get("missing_metadata", [])
+
+
+def test_perf_passthrough_requires_and_accepts_retained_documentation() -> None:
+    identity = _identity()
+    contract_record = json.loads(PERF_REF.read_text(encoding="utf-8"))
+    bound = evidence.fully_bound_reference(
+        contract_record,
+        artifact_identity=identity,
+        bound_at_utc="2026-11-30T00:00:00+00:00",
+    )
+    capture = _perf()
+    capture["execution_environment"] = {"kind": "documented_gpu_passthrough"}
+    result = evidence.validate_perf_capture(
+        capture, bound, artifact_identity=identity
+    )
+    assert result["status"] != "verified"
+    capture["execution_environment"]["documentation"] = "GPU assigned through documented D3D12 passthrough."
+    result = evidence.validate_perf_capture(
+        capture, bound, artifact_identity=identity
+    )
+    assert result["status"] == "verified"

@@ -889,7 +889,10 @@ def record_perf(args: argparse.Namespace) -> dict[str, Any]:
         "coverage_target": contract.PERF_CONTRACT_ID,
         "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
         "contract_id": contract.PERF_CONTRACT_ID,
-        "execution_environment": {"kind": args.execution_kind},
+        "execution_environment": {
+            "kind": args.execution_kind,
+            "documentation": args.passthrough_documentation,
+        },
         "reference": reference,
         "artifact_key": identity["artifact_key"],
         "package_sha256": identity["package_sha256"],
@@ -1310,6 +1313,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         reference=args.reference,
         capture_id=args.capture_id,
         execution_kind=args.execution_kind,
+        passthrough_documentation=args.passthrough_documentation,
         evidence=args.evidence,
         presentation_probe=record["presentation_probe"],
         warmup=record["warmup"],
@@ -1484,6 +1488,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=("physical", "documented_gpu_passthrough"),
         default="physical",
     )
+    perf.add_argument("--passthrough-documentation", default="")
     perf.add_argument("--evidence", required=True)
 
     diagnostic = subparsers.add_parser("diagnostic-overhead")
@@ -1507,6 +1512,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=("physical", "documented_gpu_passthrough"),
         default="physical",
     )
+    collect.add_argument("--passthrough-documentation", default="")
     collect.add_argument("--evidence", required=True)
 
     merge = subparsers.add_parser("merge-evidence")
