@@ -967,6 +967,11 @@ def _validate_build_report(
         inputs = export.verify_pinned_inputs(config)
     except Exception as exc:
         return _fail("nw07_native_release_export", str(exc))
+    if not isinstance(report, Mapping):
+        return _fail(
+            "nw07_native_release_export",
+            "build/export report root is not a JSON object",
+        )
     if not inputs["frozen"] or not inputs["matches_frozen_digest"]:
         return _fail(
             "nw07_native_release_export",
@@ -983,10 +988,16 @@ def _validate_build_report(
                 "nw07_native_release_export",
                 "BuildChecks summary is not bound to the NW-07 implementation and profile",
             )
+        checks = report.get("checks")
+        if not isinstance(checks, list):
+            return _fail(
+                "nw07_native_release_export",
+                "BuildChecks summary checks are not a list",
+            )
         native = next(
             (
                 check
-                for check in report.get("checks") or []
+                for check in checks
                 if isinstance(check, Mapping)
                 and check.get("name") == "nw07_native_release_export"
             ),
@@ -1012,7 +1023,12 @@ def _validate_build_report(
                 "nw07_native_release_export",
                 "BuildChecks summary is not successful",
             )
-        evidence_payload = native.get("evidence") or {}
+        evidence_payload = native.get("evidence")
+        if not isinstance(evidence_payload, Mapping):
+            return _fail(
+                "nw07_native_release_export",
+                "BuildChecks native export evidence is not an object",
+            )
         mismatches = _native_evidence_mismatches(
             evidence_payload,
             identity,
@@ -1049,7 +1065,10 @@ def _validate_build_report(
                 },
             },
         )
-    if report.get("format") == "nw07-export-report":
+    if report.get("format") in {
+        "nw07-export-report",
+        "nw07-reproducibility-report",
+    }:
         if (
             report.get("success") is not True
             or report.get("implementation_base") != contract.IMPLEMENTATION_BASE
@@ -1060,25 +1079,44 @@ def _validate_build_report(
                 "nw07_native_release_export",
                 "export report is not a successful NW-07 release export",
             )
-        artifact = report.get("artifact") or {}
+        artifact = report.get("artifact")
+        distribution = report.get("distribution")
+        build_inputs = report.get("build_inputs")
+        reproducibility = report.get("reproducibility")
+        if not isinstance(artifact, Mapping):
+            return _fail(
+                "nw07_native_release_export",
+                "export report artifact is not an object",
+            )
+        if not isinstance(distribution, Mapping):
+            return _fail(
+                "nw07_native_release_export",
+                "export report distribution is not an object",
+            )
+        if not isinstance(build_inputs, Mapping):
+            return _fail(
+                "nw07_native_release_export",
+                "export report build_inputs is not an object",
+            )
+        if not isinstance(reproducibility, Mapping):
+            return _fail(
+                "nw07_native_release_export",
+                "export report has no reproducibility evidence",
+            )
         evidence_payload = {
             "artifact_key": artifact.get("artifact_key"),
             "package_sha256": artifact.get("package_sha256"),
             "manifest_sha256": artifact.get("manifest_sha256"),
             "executable_sha256": artifact.get("executable_sha256"),
-            "complete_distribution_bytes": (report.get("distribution") or {}).get(
+            "complete_distribution_bytes": distribution.get(
                 "complete_distribution_bytes"
             ),
-            "within_ceiling": (report.get("distribution") or {}).get(
-                "within_ceiling"
-            ),
-            "build_inputs_digest": (report.get("build_inputs") or {}).get("digest"),
-            "matches_frozen_digest": (report.get("build_inputs") or {}).get(
-                "matches_frozen_digest"
-            ),
+            "within_ceiling": distribution.get("within_ceiling"),
+            "build_inputs_digest": build_inputs.get("digest"),
+            "matches_frozen_digest": build_inputs.get("matches_frozen_digest"),
             "release_grade": report.get("release_grade"),
             "test_payload": report.get("test_payload"),
-            "reproducible": (report.get("reproducibility") or {}).get("matching"),
+            "reproducible": reproducibility.get("matching"),
         }
         mismatches = _native_evidence_mismatches(
             evidence_payload,
@@ -1086,6 +1124,26 @@ def _validate_build_report(
             inputs,
             require_reproducible=True,
         )
+        reproduction_fields = reproducibility.get("fields")
+        if reproducibility.get("matching") is not True:
+            mismatches.append("reproducibility report is not matching")
+        if reproducibility.get("build_inputs_digest") != inputs["digest"]:
+            mismatches.append(
+                "reproducibility report is bound to different build inputs"
+            )
+        if not isinstance(reproduction_fields, Mapping):
+            mismatches.append("reproducibility report has no artifact field binding")
+        else:
+            for field in (
+                "artifact_key",
+                "package_sha256",
+                "manifest_sha256",
+                "executable_sha256",
+            ):
+                if reproduction_fields.get(field) != evidence_payload.get(field):
+                    mismatches.append(
+                        f"reproducibility field '{field}' does not match the export"
+                    )
         if mismatches:
             return _fail(
                 "nw07_native_release_export",

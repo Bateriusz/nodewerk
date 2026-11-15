@@ -205,6 +205,10 @@ record pending rather than being fabricated.
 ## Verification entry points
 
 ```bash
+python tools/nw07_export.py --output build/nw07 \
+    --player-template <specialized-player.exe> --dxc <pinned-dxc> \
+    --reproducibility-root build/nw07-repro \
+    --report build/nw07-reproducibility.json
 python tools/verify_nw07.py --mode ContractsOnly --summary-json build/nw07.json
 python tools/verify_nw07.py --mode BuildChecks \
     --player-template <specialized-player.exe> --dxc <pinned-dxc> \
@@ -223,7 +227,9 @@ python tools/verify_nw07.py --mode CleanSystem --binary-dir <deployment-dir>
   milestone success only when every hard gate and required coverage target is
   verified. Release-export provenance is mandatory: Full either performs the
   native BuildChecks export when `--player-template` and `--dxc` are supplied,
-  or validates a passed BuildChecks summary supplied with `--build-report`.
+  or validates a passed BuildChecks summary or reproducibility export report
+  supplied with `--build-report`. The reproducibility export report embeds the
+  clean-directory matching fields and pinned build-input digest.
   The report must bind the same executable, package, manifest, size, pinned
   build-input digest, and clean-directory reproducibility as the final
   artifact. Without either source the native export gate remains pending.

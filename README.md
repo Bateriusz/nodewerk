@@ -155,6 +155,11 @@ the `.nwp` package and offline-compiled shaders.
 python tools/nw07_export.py --output build/nw07 \
     --player-template <specialized-player.exe> --dxc <pinned-dxc> \
     --report build/nw07-export.json
+# Reproducibility export report (usable as Full's --build-report):
+python tools/nw07_export.py --output build/nw07 \
+    --player-template <specialized-player.exe> --dxc <pinned-dxc> \
+    --reproducibility-root build/nw07-repro \
+    --report build/nw07-reproducibility.json
 python tools/verify_nw07.py --mode ContractsOnly --summary-json build/nw07.json
 python tools/verify_nw07.py --mode BuildChecks \
     --player-template <specialized-player.exe> --dxc <pinned-dxc> \

@@ -259,6 +259,110 @@ def test_loop_boundary_evidence_is_measured_only_from_boundary_captures(
     )
 
 
+def test_export_report_with_reproducibility_can_verify_and_malformed_reports_fail_closed(
+    tmp_path: Path,
+) -> None:
+    identity = {
+        "artifact_key": "sha256:v1:" + "a" * 64,
+        "package_sha256": "1" * 64,
+        "manifest_sha256": "2" * 64,
+        "executable_sha256": "3" * 64,
+        "size_accounting": {
+            "complete_distribution_bytes": 120000,
+            "within_ceiling": True,
+        },
+    }
+    inputs = verify_nw07.export.verify_pinned_inputs(
+        verify_nw07.export.load_canonical_config()
+    )
+    fields = {
+        "artifact_key": identity["artifact_key"],
+        "package_sha256": identity["package_sha256"],
+        "manifest_sha256": identity["manifest_sha256"],
+        "executable_sha256": identity["executable_sha256"],
+    }
+    report = {
+        "format": "nw07-export-report",
+        "version": 1,
+        "success": True,
+        "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "profile_id": contract.PROFILE_ID,
+        "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "artifact": {
+            **fields,
+            "artifact_key": identity["artifact_key"],
+        },
+        "distribution": {
+            "complete_distribution_bytes": 120000,
+            "within_ceiling": True,
+        },
+        "build_inputs": {
+            "digest": inputs["digest"],
+            "matches_frozen_digest": True,
+        },
+        "reproducibility": {
+            "matching": True,
+            "fields": fields,
+            "build_inputs_digest": inputs["digest"],
+        },
+        "release_grade": True,
+        "test_payload": False,
+    }
+    report_path = tmp_path / "export-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    check = verify_nw07._validate_build_report(
+        report_path, identity=identity
+    )
+    assert check.status == "passed"
+
+    reproducibility_report = dict(report)
+    reproducibility_report["format"] = "nw07-reproducibility-report"
+    report_path.write_text(
+        json.dumps(reproducibility_report), encoding="utf-8"
+    )
+    assert (
+        verify_nw07._validate_build_report(report_path, identity=identity).status
+        == "passed"
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    report_path.write_text(json.dumps([]), encoding="utf-8")
+    assert (
+        verify_nw07._validate_build_report(report_path, identity=identity).status
+        == "failed"
+    )
+
+    malformed_evidence = {
+        "format": "nw07-verification-summary",
+        "mode": "BuildChecks",
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "profile_id": contract.PROFILE_ID,
+        "requirements_digest": contract.REQUIREMENTS_DIGEST,
+        "success": True,
+        "checks": [
+            {
+                "name": "nw07_native_release_export",
+                "status": "passed",
+                "evidence": "not-an-object",
+            }
+        ],
+    }
+    report_path.write_text(json.dumps(malformed_evidence), encoding="utf-8")
+    assert (
+        verify_nw07._validate_build_report(report_path, identity=identity).status
+        == "failed"
+    )
+
+    malformed_artifact = dict(report)
+    malformed_artifact["artifact"] = "not-an-object"
+    report_path.write_text(json.dumps(malformed_artifact), encoding="utf-8")
+    assert (
+        verify_nw07._validate_build_report(report_path, identity=identity).status
+        == "failed"
+    )
+
+
 def test_verify_contracts_only_never_claims_certification(tmp_path: Path) -> None:
     summary_path = tmp_path / "summary.json"
     code = verify_nw07.main(

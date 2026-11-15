@@ -186,6 +186,52 @@ def test_unfrozen_build_inputs_never_match_a_frozen_digest() -> None:
     assert result["matches_frozen_digest"] is False
 
 
+def test_malformed_caller_config_raises_export_error(tmp_path: Path) -> None:
+    template = _template(tmp_path / "toolchain")
+    for mutation in (
+        lambda c: c.pop("graph"),
+        lambda c: c.__setitem__("loop", "not-an-object"),
+        lambda c: c.__setitem__("content", []),
+        lambda c: c["image_tolerances"].__setitem__(
+            "numeric", "not-an-object"
+        ),
+        lambda c: c["image_tolerances"]["numeric"].__setitem__(
+            "absolute", "not-a-number"
+        ),
+        lambda c: c["quality"].__setitem__("settings", "not-an-object"),
+    ):
+        config = export.load_canonical_config()
+        mutation(config)
+        with pytest.raises(export.Nw07ExportError):
+            export.export_production(
+                tmp_path / "artifact-malformed",
+                player_template=template,
+                dxc_executable=str(_mock_dxc(tmp_path / "toolchain")),
+                config=config,
+                allow_test_payloads=True,
+            )
+
+
+def test_reproducibility_report_embeds_reproducibility_evidence(
+    tmp_path: Path,
+) -> None:
+    template = _template(tmp_path / "toolchain")
+    report = export.export_reproducibility(
+        tmp_path / "repro",
+        player_template=template,
+        dxc_executable=str(_mock_dxc(tmp_path / "toolchain")),
+        allow_test_payloads=True,
+    )
+    assert report["reproducibility"]["matching"] is True
+    assert report["reproducibility"]["fields"]["executable_sha256"] == (
+        report["artifact"]["executable_sha256"]
+    )
+    clean_a = json.loads(
+        (tmp_path / "repro" / "clean-a-report.json").read_text(encoding="utf-8")
+    )
+    assert clean_a["reproducibility"]["matching"] is True
+
+
 def test_published_artifact_identity_tracks_modified_executable(tmp_path: Path) -> None:
     _export(tmp_path)
     artifact_dir = tmp_path / "artifact"

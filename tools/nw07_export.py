@@ -109,6 +109,25 @@ def load_canonical_config(path: Path | None = None) -> dict[str, Any]:
 
 def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any]:
     """Apply the canonical NW-07 contract to a file-backed or caller-supplied config."""
+    if not isinstance(record, Mapping):
+        raise Nw07ExportError("canonical production config is not an object")
+
+    def section(name: str) -> Mapping[str, Any]:
+        value = record.get(name)
+        if not isinstance(value, Mapping):
+            raise Nw07ExportError(
+                f"canonical production section '{name}' is not an object"
+            )
+        return value
+
+    def number(container: Mapping[str, Any], key: str, default: float = 0.0) -> float:
+        try:
+            return float(container.get(key, default))
+        except (TypeError, ValueError) as exc:
+            raise Nw07ExportError(
+                f"canonical production value '{key}' is not numeric"
+            ) from exc
+
     if record.get("format") != "nw07-canonical-production":
         raise Nw07ExportError("canonical production config has the wrong format")
     if record.get("version") != 1:
@@ -119,19 +138,23 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
         raise Nw07ExportError("canonical production config changed the common profile")
     if record.get("requirements_digest") != contract.REQUIREMENTS_DIGEST:
         raise Nw07ExportError("canonical production config changed the requirements digest")
-    if record.get("loop", {}).get("ticks") != contract.LOOP_TICKS:
+    graph = record.get("graph")
+    if not isinstance(graph, str) or not graph.strip():
+        raise Nw07ExportError("canonical production graph path is missing")
+    loop = section("loop")
+    if loop.get("ticks") != contract.LOOP_TICKS:
         raise Nw07ExportError("canonical production loop is not 960,000 ticks")
-    if record.get("loop", {}).get("duration_seconds") != contract.LOOP_SECONDS:
+    if loop.get("duration_seconds") != contract.LOOP_SECONDS:
         raise Nw07ExportError("canonical production loop is not 20 seconds")
-    if record.get("loop", {}).get("looping") is not True:
+    if loop.get("looping") is not True:
         raise Nw07ExportError("canonical production loop is not looping")
-    resolution = record.get("resolution", {})
+    resolution = section("resolution")
     if (
         resolution.get("width") != contract.OUTPUT_WIDTH
         or resolution.get("height") != contract.OUTPUT_HEIGHT
     ):
         raise Nw07ExportError("canonical production resolution is not 1920x1080")
-    content = record.get("content", {})
+    content = section("content")
     if content.get("torus_instances") != contract.TORUS_INSTANCE_COUNT:
         raise Nw07ExportError("canonical production does not contain 256 torus instances")
     for key in (
@@ -145,7 +168,7 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
     ):
         if not content.get(key):
             raise Nw07ExportError(f"canonical production content is missing '{key}'")
-    budget = record.get("artifact_budget", {})
+    budget = section("artifact_budget")
     if budget.get("complete_distribution_bytes_ceiling") != contract.COMPLETE_DISTRIBUTION_CEILING_BYTES:
         raise Nw07ExportError("canonical production weakened the 256 KiB ceiling")
     if budget.get("stretch_distribution_bytes_ceiling") != contract.STRETCH_DISTRIBUTION_CEILING_BYTES:
@@ -154,19 +177,29 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
         raise Nw07ExportError("the 128 KiB stretch measurement must not be a gate")
     if budget.get("peak_engine_committed_gpu_bytes_ceiling") != contract.PEAK_ENGINE_COMMITTED_GPU_BYTES:
         raise Nw07ExportError("canonical production weakened the 512 MiB GPU budget")
-    if float(budget.get("process_start_to_first_present_ms_ceiling", 0)) != contract.PROCESS_START_TO_FIRST_PRESENT_MS:
+    if number(budget, "process_start_to_first_present_ms_ceiling") != contract.PROCESS_START_TO_FIRST_PRESENT_MS:
         raise Nw07ExportError("canonical production weakened the 2 s startup gate")
-    tolerances = record.get("image_tolerances", {})
-    if float(tolerances.get("numeric", {}).get("absolute", 1.0)) > contract.NUMERIC_ABSOLUTE_TOLERANCE:
+    tolerances = section("image_tolerances")
+    numeric_tolerances = tolerances.get("numeric")
+    image_tolerances = tolerances.get("image")
+    if not isinstance(numeric_tolerances, Mapping) or not isinstance(
+        image_tolerances, Mapping
+    ):
+        raise Nw07ExportError(
+            "canonical production numeric/image tolerance sections are not objects"
+        )
+    if number(numeric_tolerances, "absolute", 1.0) > contract.NUMERIC_ABSOLUTE_TOLERANCE:
         raise Nw07ExportError("canonical production weakened the numeric absolute tolerance")
-    if float(tolerances.get("numeric", {}).get("relative", 1.0)) > contract.NUMERIC_RELATIVE_TOLERANCE:
+    if number(numeric_tolerances, "relative", 1.0) > contract.NUMERIC_RELATIVE_TOLERANCE:
         raise Nw07ExportError("canonical production weakened the numeric relative tolerance")
-    if float(tolerances.get("image", {}).get("absolute", 1.0)) > contract.IMAGE_ABSOLUTE_TOLERANCE:
+    if number(image_tolerances, "absolute", 1.0) > contract.IMAGE_ABSOLUTE_TOLERANCE:
         raise Nw07ExportError("canonical production weakened the image absolute tolerance")
-    if float(tolerances.get("image", {}).get("relative", 1.0)) > contract.IMAGE_RELATIVE_TOLERANCE:
+    if number(image_tolerances, "relative", 1.0) > contract.IMAGE_RELATIVE_TOLERANCE:
         raise Nw07ExportError("canonical production weakened the image relative tolerance")
-    quality = record.get("quality", {})
-    settings = quality.get("settings", {})
+    quality = section("quality")
+    settings = quality.get("settings")
+    if not isinstance(settings, Mapping):
+        raise Nw07ExportError("canonical production quality settings are not an object")
     if quality.get("profile_id") != "nw07.quality.v1":
         raise Nw07ExportError("canonical production changed the quality profile")
     if settings.get("resolution") != {"width": contract.OUTPUT_WIDTH, "height": contract.OUTPUT_HEIGHT}:
@@ -183,7 +216,7 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
     ):
         if settings.get(name) != expected:
             raise Nw07ExportError(f"canonical production changed quality setting '{name}'")
-    capture = record.get("capture", {})
+    capture = section("capture")
     if capture.get("protocol") != contract.CORRECTNESS_CAPTURE_PROTOCOL:
         raise Nw07ExportError("canonical production changed the correctness capture protocol")
     if capture.get("startup_protocol") != contract.STARTUP_PROTOCOL:
@@ -194,7 +227,7 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
         raise Nw07ExportError("canonical production changed the diagnostic-overhead protocol")
     if capture.get("application_pipeline_cache_used_on_clean_start") is not False:
         raise Nw07ExportError("canonical production allows an application pipeline cache")
-    diagnostics = record.get("diagnostics", {})
+    diagnostics = section("diagnostics")
     if diagnostics.get("release_build_profile") != contract.RELEASE_BUILD_PROFILE:
         raise Nw07ExportError("canonical production changed the release build profile")
     if diagnostics.get("diagnostic_sibling_build_profile") != contract.DIAGNOSTIC_BUILD_PROFILE:
@@ -205,15 +238,15 @@ def validate_canonical_config_record(record: Mapping[str, Any]) -> dict[str, Any
         raise Nw07ExportError("diagnostic build must be a separate artifact")
     if diagnostics.get("diagnostic_overhead_measured_separately") is not True:
         raise Nw07ExportError("diagnostic overhead must be measured separately")
-    fixed = record.get("fixed_tick_evaluation", {})
+    fixed = section("fixed_tick_evaluation")
     if list(fixed.get("ticks") or []) != list(contract.REQUIRED_FIXED_TICKS):
         raise Nw07ExportError("canonical production changed the fixed-tick coverage")
     if list(fixed.get("loop_boundary_ticks") or []) != list(contract.LOOP_BOUNDARY_TICKS):
         raise Nw07ExportError("canonical production changed the loop-boundary coverage")
     if fixed.get("deterministic_replay") is not True or fixed.get("stateless_scene") is not True:
         raise Nw07ExportError("canonical production weakened deterministic replay")
-    regression = record.get("regression", {})
-    if float(regression.get("matched_environment_relative_alert_percent", -1.0)) != contract.MATCHED_ENVIRONMENT_RELATIVE_ALERT_PERCENT:
+    regression = section("regression")
+    if number(regression, "matched_environment_relative_alert_percent", -1.0) != contract.MATCHED_ENVIRONMENT_RELATIVE_ALERT_PERCENT:
         raise Nw07ExportError("canonical production changed the regression alert threshold")
     if regression.get("size_percentage_only_failure") is not False:
         raise Nw07ExportError("canonical production enabled a size-only percentage failure")
@@ -986,14 +1019,42 @@ def export_reproducibility(
             "repeated exports from clean build directories are not reproducible",
             details={"differences": differences},
         )
+    fields_map = {field: first["artifact"].get(field) for field in fields}
+    reproducibility_payload = {
+        "format": "nw07-reproducibility-report",
+        "version": 1,
+        "matching": True,
+        "fields": fields_map,
+        "build_inputs_digest": first["build_inputs"]["digest"],
+    }
+    for report_name in ("clean-a-report.json", "clean-b-report.json"):
+        report_path = root / report_name
+        try:
+            report_record = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(report_record, Mapping):
+            report_record["reproducibility"] = reproducibility_payload
+            report_path.write_text(
+                json.dumps(report_record, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
     return {
         "format": "nw07-reproducibility-report",
         "version": 1,
+        "success": True,
         "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "profile_id": contract.PROFILE_ID,
+        "requirements_digest": contract.REQUIREMENTS_DIGEST,
         "clean_build_directories": [str(first_dir), str(second_dir)],
         "matching": True,
-        "fields": {field: first["artifact"].get(field) for field in fields},
+        "fields": fields_map,
         "build_inputs_digest": first["build_inputs"]["digest"],
+        "artifact": first["artifact"],
+        "distribution": first["distribution"],
+        "build_inputs": first["build_inputs"],
+        "reproducibility": reproducibility_payload,
         "release_grade": not allow_test_payloads,
         "test_payload": bool(allow_test_payloads),
     }
@@ -1020,6 +1081,13 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             graph_path=args.graph,
         )
+        if args.report:
+            path = Path(args.report)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
     else:
         report = export_production(
             args.output,
