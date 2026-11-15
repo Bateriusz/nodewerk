@@ -1056,8 +1056,29 @@ class AuthoringRuntimeSession:
                 error.device_epoch = self.device_epoch
                 self._stop_process()
                 raise error
+            runtime_diagnostics = response.get("diagnostics")
+            diagnostics: list[dict[str, Any]] = []
+            if isinstance(runtime_diagnostics, list):
+                diagnostics.extend(
+                    dict(item)
+                    for item in runtime_diagnostics
+                    if isinstance(item, Mapping)
+                )
+            if not diagnostics:
+                diagnostics.append(
+                    {
+                        "category": "preview",
+                        "severity": "error",
+                        "code": "authoring_runtime_render_failed",
+                        "message": (
+                            f"authoring runtime render failed (exit {exit_code}): "
+                            + json.dumps(response, sort_keys=True)
+                        ),
+                    }
+                )
             raise RuntimeSessionError(
-                f"authoring runtime render failed (exit {exit_code})"
+                f"authoring runtime render failed (exit {exit_code})",
+                diagnostics,
             )
         return response
 
