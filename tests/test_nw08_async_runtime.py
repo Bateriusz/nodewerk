@@ -362,7 +362,7 @@ def test_authoring_session_hot_reloads_compatible_package_without_device_recreat
     # PackagePlayer/device and retains real GPU objects.
     assert session.prepare(bundle_b, width=8, height=8) == 0
     assert len(starts) == 1
-    assert commands[-1] == "load /tmp/b.nwp"
+    assert commands[-1] == f"load {bundle_b.package_path}"
     assert session.report()["hot_reloads"] == 1
     assert session.report()["last_reload"]["reused_resources"] == 5
     assert session.report()["last_reload"]["reused_pipelines"] == 3
