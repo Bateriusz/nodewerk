@@ -1588,6 +1588,25 @@ def test_multiple_shader_roots_get_independent_aliasable_outputs(
     )
 
 
+def test_specialized_player_subprocess_output_is_utf8_safe() -> None:
+    completed = nw05_export._run_specialized_player_command(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os; "
+                "os.write(1, b'configure-ok\\n\\x88\\xff'); "
+                "os.write(2, b'build-warning\\x80')"
+            ),
+        ]
+    )
+    assert completed.returncode == 0
+    assert "configure-ok" in completed.stdout
+    assert "build-warning" in completed.stderr
+    assert "\ufffd" in completed.stdout
+    assert "\ufffd" in completed.stderr
+
+
 def test_relative_dxc_path_survives_working_directory_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
