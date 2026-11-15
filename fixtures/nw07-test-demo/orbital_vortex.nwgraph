@@ -114,8 +114,8 @@ node render nw.render.instanced@1.0.0 frequency=frame residency=gpu
 
 node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu
   input image render.image
-  param threshold 0.72
-  param intensity 0.48
+  param threshold 0.78
+  param intensity 0.42
   param radius 1.6
   param resolution_scale 0.5
 
