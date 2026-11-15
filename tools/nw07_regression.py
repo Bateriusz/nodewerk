@@ -13,7 +13,7 @@ import argparse
 import hashlib
 import json
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -263,6 +263,8 @@ def _perf_p99_from_evidence(
     *,
     artifact_sha256: str | None = None,
     environment: Mapping[str, Any] | None = None,
+    performance_capture_id: str | None = None,
+    max_evidence_age_seconds: float | None = None,
 ) -> dict[str, float]:
     captures = evidence_record.get("captures")
     if not isinstance(captures, list):
@@ -272,6 +274,11 @@ def _perf_p99_from_evidence(
         if not isinstance(capture, Mapping):
             continue
         if capture.get("evidence_role") != contract.PERFORMANCE_CERTIFICATION_ROLE:
+            continue
+        if (
+            performance_capture_id is not None
+            and capture.get("capture_id") != performance_capture_id
+        ):
             continue
         if artifact_sha256 is not None and capture.get(
             "executable_sha256"
@@ -306,11 +313,7 @@ def _perf_p99_from_evidence(
             mismatched = False
             for key, observed in comparisons:
                 expected = environment.get(key)
-                if expected not in (None, "") and observed not in (
-                    None,
-                    "",
-                    expected,
-                ):
+                if expected not in (None, "") and observed != expected:
                     mismatched = True
                     break
             if mismatched:
@@ -318,6 +321,13 @@ def _perf_p99_from_evidence(
         captured_at = evidence_timestamp(capture.get("captured_at_utc"))
         if captured_at is None:
             continue
+        if max_evidence_age_seconds is not None:
+            age_seconds = datetime.now(timezone.utc).timestamp() - captured_at
+            if (
+                age_seconds < 0
+                or age_seconds > float(max_evidence_age_seconds)
+            ):
+                continue
         validation = capture.get("validation")
         if not isinstance(validation, Mapping) or validation.get("status") != "verified":
             continue
@@ -361,6 +371,8 @@ def build_current_metrics(
     artifact_bytes: int,
     evidence_record: Mapping[str, Any] | None = None,
     artifact_sha256: str | None = None,
+    performance_capture_id: str | None = None,
+    max_evidence_age_seconds: float | None = None,
 ) -> dict[str, Any]:
     metadata = metrics.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
@@ -393,6 +405,8 @@ def build_current_metrics(
                 evidence_record,
                 artifact_sha256=artifact_sha256,
                 environment=metadata,
+                performance_capture_id=performance_capture_id,
+                max_evidence_age_seconds=max_evidence_age_seconds,
             )
         )
     return {
@@ -420,10 +434,16 @@ def merge_nightly_metrics(
     evidence_path: Path,
     artifact_path: Path,
     output_dir: Path,
+    performance_capture_id: str,
+    max_evidence_age_seconds: float,
 ) -> list[Path]:
     evidence_record = json.loads(evidence_path.read_text(encoding="utf-8"))
     if not isinstance(evidence_record, Mapping):
         raise ValueError("merged evidence is not a JSON object")
+    if not str(performance_capture_id).strip():
+        raise ValueError("current nightly performance capture id is required")
+    if max_evidence_age_seconds <= 0:
+        raise ValueError("nightly evidence age window must be positive")
     artifact_bytes = artifact_path.stat().st_size
     artifact_sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -442,6 +462,8 @@ def merge_nightly_metrics(
             artifact_bytes=artifact_bytes,
             evidence_record=evidence_record,
             artifact_sha256=artifact_sha256,
+            performance_capture_id=performance_capture_id,
+            max_evidence_age_seconds=max_evidence_age_seconds,
         )
         destination = output_dir / f"metrics-current-{tier}.json"
         destination.write_text(
@@ -465,6 +487,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--evidence")
     parser.add_argument("--artifact")
     parser.add_argument("--output-dir")
+    parser.add_argument("--performance-capture-id")
+    parser.add_argument("--max-evidence-age-seconds", type=float)
     parser.add_argument(
         "--matched-environment",
         choices=("auto", "true", "false"),
@@ -473,15 +497,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--summary-json")
     args = parser.parse_args(argv)
     if args.metrics:
-        if not args.evidence or not args.artifact or not args.output_dir:
+        if (
+            not args.evidence
+            or not args.artifact
+            or not args.output_dir
+            or not args.performance_capture_id
+            or args.max_evidence_age_seconds is None
+        ):
             parser.error(
-                "--metrics requires --evidence, --artifact, and --output-dir"
+                "--metrics requires --evidence, --artifact, --output-dir, "
+                "--performance-capture-id, and --max-evidence-age-seconds"
             )
+        if args.max_evidence_age_seconds <= 0:
+            parser.error("--max-evidence-age-seconds must be positive")
         written = merge_nightly_metrics(
             [Path(value) for value in args.metrics],
             evidence_path=Path(args.evidence),
             artifact_path=Path(args.artifact),
             output_dir=Path(args.output_dir),
+            performance_capture_id=args.performance_capture_id,
+            max_evidence_age_seconds=args.max_evidence_age_seconds,
         )
         print(
             json.dumps(

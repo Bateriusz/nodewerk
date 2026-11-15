@@ -255,6 +255,8 @@ jobs:
           --metrics "$env:RUNNER_TEMP\nw07-nightly-merged\metrics-blackwell.json"
           --evidence "$env:RUNNER_TEMP\nw07-nightly-evidence.json"
           --artifact "$env:NW07_FIXTURE"
+          --performance-capture-id "nightly-perf-$env:GITHUB_RUN_ID"
+          --max-evidence-age-seconds 86400
           --output-dir "$env:RUNNER_TEMP\nw07-nightly-regression"
       - name: Restore retained raw captures beside the final package
         shell: pwsh

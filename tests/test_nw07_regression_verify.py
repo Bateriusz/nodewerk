@@ -200,13 +200,23 @@ def test_nightly_metrics_merge_produces_current_series(tmp_path: Path) -> None:
     evidence = {
         "captures": [
             {
+                "capture_id": "nightly-perf-test",
                 "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
-                    "executable_sha256": hashlib.sha256(
-                        artifact.read_bytes()
-                    ).hexdigest(),
-                    "captured_at_utc": "2026-12-02T00:00:00+00:00",
+                "executable_sha256": hashlib.sha256(
+                    artifact.read_bytes()
+                ).hexdigest(),
+                "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+                "reference": {
+                    "board": {"model": "NVIDIA GeForce RTX 4060 Ti"},
+                    "environment": {
+                        "driver_version": "566.36",
+                        "os_build": "10.0.26100.2314",
+                    },
+                    "toolchain": {"toolchain_identity": "msvc-ltcg"},
+                    "host": {},
+                },
                 "validation": {
-                        "status": "verified",
+                    "status": "verified",
                     "runs": [
                         {
                             "gpu_frame_time_ms": {"p99_ms": 10.0},
@@ -228,6 +238,8 @@ def test_nightly_metrics_merge_produces_current_series(tmp_path: Path) -> None:
         evidence_path=evidence_path,
         artifact_path=artifact,
         output_dir=tmp_path / "current",
+        performance_capture_id="nightly-perf-test",
+        max_evidence_age_seconds=86400,
     )
     current = json.loads(written[0].read_text(encoding="utf-8"))
     assert current["metrics"]["complete_distribution_bytes"] == artifact.stat().st_size
@@ -1074,6 +1086,26 @@ def test_fresh_unverified_capture_cannot_borrow_historical_verification() -> Non
     assert excluded and excluded[0]["capture_id"] == "historical-verified"
 
 
+def test_fresh_evidence_filter_rejects_future_dated_capture() -> None:
+    now = datetime.now(timezone.utc)
+    record = {
+        "captures": [
+            {
+                "capture_id": "current",
+                "captured_at_utc": now.isoformat(),
+            },
+            {
+                "capture_id": "future",
+                "captured_at_utc": (now + timedelta(hours=1)).isoformat(),
+            },
+        ]
+    }
+    filtered, excluded = verify_nw07._filter_fresh_evidence(record, 86400)
+    assert [item["capture_id"] for item in filtered["captures"]] == ["current"]
+    assert [item["capture_id"] for item in excluded] == ["future"]
+    assert "future-dated" in excluded[0]["reason"]
+
+
 def test_fresh_metrics_cannot_fall_back_to_static_workflow_values() -> None:
     identity = {"executable_sha256": "a" * 64}
     with pytest.raises(ValueError, match="metadata"):
@@ -1143,6 +1175,7 @@ def test_fresh_metrics_preserve_and_reject_foreign_provenance() -> None:
 
 def test_regression_uses_the_fresh_bound_performance_capture() -> None:
     artifact_sha = "a" * 64
+    now = datetime.now(timezone.utc)
 
     def perf(capture_id: str, timestamp: str, p99: float) -> dict:
         return {
@@ -1172,8 +1205,21 @@ def test_regression_uses_the_fresh_bound_performance_capture() -> None:
 
     evidence_record = {
         "captures": [
-            perf("historical", "2025-01-01T00:00:00+00:00", 10.0),
-            perf("nightly-current", "2026-12-02T00:00:00+00:00", 15.0),
+            perf(
+                "nightly-perf-current",
+                (now - timedelta(minutes=1)).isoformat(),
+                15.0,
+            ),
+            perf(
+                "nightly-perf-other-run",
+                now.isoformat(),
+                40.0,
+            ),
+            perf(
+                "nightly-perf-current",
+                (now + timedelta(hours=1)).isoformat(),
+                5.0,
+            ),
         ]
     }
     selected = regression._perf_p99_from_evidence(
@@ -1186,5 +1232,50 @@ def test_regression_uses_the_fresh_bound_performance_capture() -> None:
             "toolchain_identity": "msvc-ltcg",
             "host": "AMD Ryzen 7 7800X3D",
         },
+        performance_capture_id="nightly-perf-current",
+        max_evidence_age_seconds=86400,
     )
     assert selected["p99_gpu_frame_time_ms"] == 15.0
+
+
+def test_regression_requires_complete_environment_binding() -> None:
+    artifact_sha = "a" * 64
+    now = datetime.now(timezone.utc).isoformat()
+    capture_record = {
+        "capture_id": "nightly-perf-current",
+        "evidence_role": contract.PERFORMANCE_CERTIFICATION_ROLE,
+        "executable_sha256": artifact_sha,
+        "captured_at_utc": now,
+        "reference": {
+            "board": {},
+            "environment": {
+                "driver_version": "566.36",
+                "os_build": "10.0.26100.2314",
+            },
+            "toolchain": {"toolchain_identity": "msvc-ltcg"},
+            "host": {"cpu_model": "AMD Ryzen 7 7800X3D"},
+        },
+        "validation": {
+            "status": "verified",
+            "runs": [
+                {
+                    "gpu_frame_time_ms": {"p99_ms": 10.0},
+                    "cpu_submit_ms": {"p99_ms": 5.0},
+                }
+            ],
+        },
+    }
+    selected = regression._perf_p99_from_evidence(
+        {"captures": [capture_record]},
+        artifact_sha256=artifact_sha,
+        environment={
+            "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+            "driver_version": "566.36",
+            "os_version": "10.0.26100.2314",
+            "toolchain_identity": "msvc-ltcg",
+            "host": "AMD Ryzen 7 7800X3D",
+        },
+        performance_capture_id="nightly-perf-current",
+        max_evidence_age_seconds=86400,
+    )
+    assert selected == {}

@@ -1409,16 +1409,20 @@ def _filter_fresh_evidence(
             excluded.append({"capture_id": None, "reason": "malformed capture"})
             continue
         captured = evidence._parse_utc_timestamp(capture.get("captured_at_utc"))
+        age_seconds = None if captured is None else now - captured
         if (
-            captured is None
-            or captured < 0
-            or now - captured > float(max_age_seconds)
+            age_seconds is None
+            or age_seconds < 0
+            or age_seconds > float(max_age_seconds)
         ):
             excluded.append(
                 {
                     "capture_id": capture.get("capture_id"),
                     "evidence_role": capture.get("evidence_role"),
-                    "reason": "capture is outside the nightly freshness window",
+                    "reason": (
+                        "capture is outside the nightly freshness window "
+                        "(missing, future-dated, or stale timestamp)"
+                    ),
                 }
             )
             continue
