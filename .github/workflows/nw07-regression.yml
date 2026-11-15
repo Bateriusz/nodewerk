@@ -166,6 +166,7 @@ jobs:
           NW07_REFERENCE: ${{ vars.NW07_REFERENCE }}
           NW07_PERF_CONTRACT: ${{ vars.NW07_PERF_CONTRACT }}
           NW07_EXECUTION_KIND: ${{ vars.NW07_EXECUTION_KIND }}
+          NW07_PASSTHROUGH_DOCUMENTATION: ${{ vars.NW07_PASSTHROUGH_DOCUMENTATION }}
         run: >-
           python tools/nw07_capture.py collect
           --package "$env:NW07_PACKAGE"
@@ -176,6 +177,7 @@ jobs:
           --collector-command "$env:NW07_COLLECTOR_COMMAND"
           --capture-id "nightly-perf-$env:GITHUB_RUN_ID"
           --execution-kind "$env:NW07_EXECUTION_KIND"
+          --passthrough-documentation "$env:NW07_PASSTHROUGH_DOCUMENTATION"
           --evidence "$env:RUNNER_TEMP\nw07-evidence-ada.json"
       - name: Collect fresh fixed-tick correctness, startup and memory evidence
         env:
@@ -222,7 +224,7 @@ jobs:
 
   nightly-gpu-verify:
     name: Nightly aggregate and Full verification
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     needs: [nightly-gpu-capture]
     runs-on: [self-hosted, windows, x64, nw07-gpu, nw07-ada]
     steps:
