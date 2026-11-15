@@ -134,6 +134,41 @@ jobs:
             ${{ runner.temp }}/nw07-bootstrap-provenance.json
             build/nw07-distribution/**
 
+      - name: Export NW-07-test-demo standalone executable
+        shell: pwsh
+        run: |
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template -PathType Leaf)) {
+            Write-Error "NW-07 test-demo player template was not built: $template"
+            exit 1
+          }
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          python tools/nw07_test_demo.py `
+            --output "$PWD/build/nw07-test-demo-ci/artifact" `
+            --report "$PWD/build/nw07-test-demo-ci/export-report.json" `
+            --player-template $template `
+            --dxc $dxc `
+            --build-root "$PWD/build/nw07-test-demo-ci/specialized-build"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "NW-07-test-demo export failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+          $exe = Join-Path $PWD "build/nw07-test-demo-ci/artifact/nw_common_d3d12_fl12_0_sm6_0_v1.exe"
+          if (-not (Test-Path $exe -PathType Leaf)) {
+            Write-Error "NW-07-test-demo executable was not produced: $exe"
+            exit 1
+          }
+
+      - name: Upload NW-07-test-demo Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw07-test-demo-windows-exe
+          path: |
+            build/nw07-test-demo-ci/artifact/**
+            build/nw07-test-demo-ci/export-report.json
+          if-no-files-found: error
+
+
   nightly-gpu-capture:
     name: Nightly fresh ${{ matrix.tier }} GPU evidence
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
