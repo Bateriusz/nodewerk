@@ -335,7 +335,9 @@ def test_curve_and_connection_editing_with_undo() -> None:
     assert added.valid
     connected = session.connect("fullscreen", "shader", "shader_alt", "out")
     assert connected.valid
-    assert connected.changed_nodes == ("fullscreen",)
+    # The presented output depends on fullscreen, so rewiring the shader
+    # invalidates both the edited node and its downstream present node.
+    assert connected.changed_nodes == ("fullscreen", "screen")
     rows = [
         row
         for row in session.connections()
