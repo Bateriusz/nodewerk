@@ -523,34 +523,7 @@ int main(int argc, char** argv) {
 
     if (args.simulate_present_failure) {
         code = player.renderAtTick(args.tick_start);
-        if (args.emit_display_image_hash) {
-        std::vector<std::uint8_t> image;
-        const nw::player::ExitCode readback =
-            player.readbackDisplayOutput(&image);
-        if (readback != nw::player::ExitCode::Success) {
-            std::fprintf(stderr,
-                         "NW_PLAYER_DISPLAY_IMAGE_READBACK_FAILED=%d\n",
-                         static_cast<int>(readback));
-            const int reported = player.Report(true);
-            (void)player.shutdown();
-            return reported;
-        }
-        std::uint64_t hash = 1469598103934665603ULL;
-        std::uint64_t nonzero_bytes = 0u;
-        for (const std::uint8_t byte : image) {
-            if (byte != 0u) ++nonzero_bytes;
-            hash ^= static_cast<std::uint64_t>(byte);
-            hash *= 1099511628211ULL;
-        }
-        std::printf("NW_PLAYER_DISPLAY_IMAGE_BYTES=%llu\n",
-                    static_cast<unsigned long long>(image.size()));
-        std::printf("NW_PLAYER_DISPLAY_IMAGE_NONZERO_BYTES=%llu\n",
-                    static_cast<unsigned long long>(nonzero_bytes));
-        std::printf("NW_PLAYER_DISPLAY_IMAGE_FNV64=%016llx\n",
-                    static_cast<unsigned long long>(hash));
-    }
-
-    const auto& stats = player.allocation_stats();
+        const auto& stats = player.allocation_stats();
         std::printf("NW_PLAYER_PRESENT_FAILURE_RETIRED=%d\n",
                     stats.present_failure_retirements > 0u ? 1 : 0);
         if (code != nw::player::ExitCode::PresentationFailed ||
@@ -680,6 +653,33 @@ int main(int argc, char** argv) {
         std::printf("NW_PLAYER_IMAGE_NONZERO_BYTES=%llu\n",
                     static_cast<unsigned long long>(nonzero_bytes));
         std::printf("NW_PLAYER_IMAGE_FNV64=%016llx\n",
+                    static_cast<unsigned long long>(hash));
+    }
+
+    if (args.emit_display_image_hash) {
+        std::vector<std::uint8_t> image;
+        const nw::player::ExitCode readback =
+            player.readbackDisplayOutput(&image);
+        if (readback != nw::player::ExitCode::Success) {
+            std::fprintf(stderr,
+                         "NW_PLAYER_DISPLAY_IMAGE_READBACK_FAILED=%d\n",
+                         static_cast<int>(readback));
+            const int reported = player.Report(true);
+            (void)player.shutdown();
+            return reported;
+        }
+        std::uint64_t hash = 1469598103934665603ULL;
+        std::uint64_t nonzero_bytes = 0u;
+        for (const std::uint8_t byte : image) {
+            if (byte != 0u) ++nonzero_bytes;
+            hash ^= static_cast<std::uint64_t>(byte);
+            hash *= 1099511628211ULL;
+        }
+        std::printf("NW_PLAYER_DISPLAY_IMAGE_BYTES=%llu\n",
+                    static_cast<unsigned long long>(image.size()));
+        std::printf("NW_PLAYER_DISPLAY_IMAGE_NONZERO_BYTES=%llu\n",
+                    static_cast<unsigned long long>(nonzero_bytes));
+        std::printf("NW_PLAYER_DISPLAY_IMAGE_FNV64=%016llx\n",
                     static_cast<unsigned long long>(hash));
     }
 
