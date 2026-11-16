@@ -6977,13 +6977,14 @@ bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
         const std::uint64_t target_sim =
             frame_tick / package::kTimelineTicksPerSimulationTick;
         if (target_sim < history_simulation_tick_) {
-            return Fail(ExitCode::InvalidArguments, "history",
-                        "history_backward_seek_requires_reinitialization",
-                        "simulation_tick",
-                        std::to_string(history_simulation_tick_),
-                        std::to_string(target_sim), "renderAtTick",
-                        "device playback cannot rewind History state without "
-                        "an explicit reinitialization/checkpoint restore");
+            Fail(ExitCode::InvalidArguments, "history",
+                 "history_backward_seek_requires_reinitialization",
+                 "simulation_tick",
+                 std::to_string(history_simulation_tick_),
+                 std::to_string(target_sim), "renderAtTick",
+                 "device playback cannot rewind History state without "
+                 "an explicit reinitialization/checkpoint restore");
+            return false;
         }
         const std::uint64_t required = target_sim - history_simulation_tick_;
         const std::uint64_t processed =
