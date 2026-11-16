@@ -131,8 +131,13 @@ backward device playback request fails closed unless the editor first restores
 a compatible checkpoint or reinitializes through the NW-08 boundary.
 The History extension also compiles a display pass. It samples the selected
 node's final state and writes every pixel of a `nw05.present.width *
-nw05.present.height` RGBA32F surface before `frame.present`; it never presents
-an internal `HIST` state buffer directly.
+nw05.present.height` RGBA32F package display buffer before `frame.present`;
+it never presents an internal `HIST` state buffer directly. This preserves the
+existing NW-04 presentation contract: `frame.present` consumes a raw RGBA32F
+UAV buffer, then `PackagePlayer`'s offline-compiled display shader converts
+that buffer into the player-owned `RWTexture2D<float4>` display texture, and
+the player copies that texture to the swap-chain backbuffer. Stateful content
+does not introduce a second presentation resource model.
 
 At a declared `nw09.loop_ticks` boundary the packaged player resets only
 `on-loop` History nodes to their declared initial bytes; every other node is
