@@ -6300,6 +6300,221 @@ ExitCode PackagePlayer::readbackPresentedOutput(
 #endif
 }
 
+
+ExitCode PackagePlayer::readbackDisplayOutput(
+    std::vector<std::uint8_t>* bytes) {
+    if (bytes == nullptr) {
+        return Fail(ExitCode::InvalidArguments, "readback",
+                    "display_readback_buffer_missing", "destination",
+                    "available", "null", "readback",
+                    "display readback destination is null");
+    }
+    bytes->clear();
+    if (!initialized_) {
+        return Fail(ExitCode::InvalidArguments, "readback",
+                    "display_readback_before_initialize", "initialized",
+                    "true", "false", "readback",
+                    "display readback requires an initialized player");
+    }
+#if defined(_WIN32)
+    PlatformState* state = platform_.get();
+    if (state == nullptr || state->device == nullptr ||
+        state->queue == nullptr || state->frames.empty() ||
+        state->display_texture == nullptr) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_platform_unavailable",
+                    "display_texture", "available", "unavailable",
+                    "readback",
+                    "display readback requires the native display texture");
+    }
+    const ExitCode drained = WaitForAllFrames("readback_display_image");
+    if (drained != ExitCode::Success) return drained;
+
+    const D3D12_RESOURCE_DESC texture_desc =
+        state->display_texture->GetDesc();
+    if (texture_desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+        texture_desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM ||
+        texture_desc.Width == 0u || texture_desc.Height == 0u ||
+        texture_desc.DepthOrArraySize != 1u || texture_desc.MipLevels != 1u) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_texture_invalid", "display_texture",
+                    "R8G8B8A8_UNORM 2D texture", "unexpected",
+                    "readback",
+                    "display readback requires the canonical player texture");
+    }
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT row_count = 0u;
+    UINT64 row_size = 0u;
+    UINT64 total_bytes = 0u;
+    state->device->GetCopyableFootprints(
+        &texture_desc, 0u, 1u, 0u, &footprint, &row_count, &row_size,
+        &total_bytes);
+    const std::uint64_t packed_row_bytes = texture_desc.Width * 4u;
+    if (total_bytes == 0u || row_count < texture_desc.Height ||
+        row_size < packed_row_bytes ||
+        footprint.Footprint.RowPitch < packed_row_bytes) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_footprint_invalid", "copy_footprint",
+                    "valid", "invalid", "readback",
+                    "display texture has an invalid copyable footprint");
+    }
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC readback_desc{};
+    readback_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    readback_desc.Width = total_bytes;
+    readback_desc.Height = 1u;
+    readback_desc.DepthOrArraySize = 1u;
+    readback_desc.MipLevels = 1u;
+    readback_desc.Format = DXGI_FORMAT_UNKNOWN;
+    readback_desc.SampleDesc.Count = 1u;
+    readback_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    const D3D12_RESOURCE_ALLOCATION_INFO readback_allocation =
+        state->device->GetResourceAllocationInfo(
+            0u, 1u, &readback_desc);
+    if (readback_allocation.SizeInBytes == 0u ||
+        readback_allocation.SizeInBytes == UINT64_MAX ||
+        readback_allocation.Alignment == 0u) {
+        return Fail(ExitCode::ResourceAllocationFailed, "memory",
+                    "display_readback_allocation_query_failed",
+                    "readback_allocation", "valid size/alignment",
+                    "unavailable", "readback",
+                    "could not query display readback allocation");
+    }
+
+    ID3D12Resource* readback = nullptr;
+    if (FAILED(state->device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &readback_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&readback))) ||
+        readback == nullptr) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_allocation_failed", "readback",
+                    "created", "failed", "readback",
+                    "display readback buffer allocation failed");
+    }
+    NoteEngineAllocation(readback_allocation.SizeInBytes, 0u, false, false,
+                         true);
+    auto release_now = [&]() {
+        if (readback != nullptr) readback->Release();
+        RemoveEngineResourceAllocation(readback_allocation.SizeInBytes);
+    };
+
+    auto& frame = state->frames[0];
+    if (frame.allocator == nullptr || frame.command_list == nullptr) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "display_readback_command_list_unavailable",
+                    "command_list", "available", "unavailable", "readback",
+                    "display readback command list is unavailable");
+    }
+    if (FAILED(frame.allocator->Reset()) ||
+        FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "display_readback_reset_failed", "reset", "succeeded",
+                    "failed", "readback",
+                    "display readback command list reset failed");
+    }
+
+    const D3D12_RESOURCE_STATES previous_state =
+        state->display_texture_state;
+    if (previous_state != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        D3D12_RESOURCE_BARRIER to_copy{};
+        to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        to_copy.Transition.pResource = state->display_texture;
+        to_copy.Transition.StateBefore = previous_state;
+        to_copy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        to_copy.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        frame.command_list->ResourceBarrier(1u, &to_copy);
+    }
+
+    D3D12_TEXTURE_COPY_LOCATION destination{};
+    destination.pResource = readback;
+    destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    destination.PlacedFootprint = footprint;
+    D3D12_TEXTURE_COPY_LOCATION source{};
+    source.pResource = state->display_texture;
+    source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    source.SubresourceIndex = 0u;
+    frame.command_list->CopyTextureRegion(
+        &destination, 0u, 0u, 0u, &source, nullptr);
+
+    if (previous_state != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        D3D12_RESOURCE_BARRIER restore{};
+        restore.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        restore.Transition.pResource = state->display_texture;
+        restore.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        restore.Transition.StateAfter = previous_state;
+        restore.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        frame.command_list->ResourceBarrier(1u, &restore);
+    }
+    if (FAILED(frame.command_list->Close())) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "display_readback_close_failed", "closed", "closed",
+                    "failed", "readback",
+                    "display readback command list close failed");
+    }
+
+    ID3D12CommandList* lists[] = {frame.command_list};
+    state->queue->ExecuteCommandLists(1u, lists);
+    const std::uint64_t fence_value = next_fence_value_++;
+    if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+        release_now();
+        return Fail(ExitCode::GpuSubmissionFailed, "readback",
+                    "display_readback_signal_failed", "signal",
+                    "succeeded", "failed", "readback",
+                    "display readback queue signal failed");
+    }
+    frame.fence_value = fence_value;
+    const ExitCode wait = WaitForFenceValue(
+        state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
+    if (wait != ExitCode::Success) {
+        release_now();
+        return wait;
+    }
+    frame.fence_value = 0u;
+
+    void* mapped = nullptr;
+    D3D12_RANGE range{0u, static_cast<SIZE_T>(total_bytes)};
+    if (FAILED(readback->Map(0u, &range, &mapped)) || mapped == nullptr) {
+        release_now();
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_map_failed", "mapped", "available",
+                    "failed", "readback",
+                    "display readback buffer Map failed");
+    }
+
+    const std::size_t width =
+        static_cast<std::size_t>(texture_desc.Width);
+    const std::size_t height =
+        static_cast<std::size_t>(texture_desc.Height);
+    bytes->resize(width * height * 4u);
+    const auto* source_bytes =
+        static_cast<const std::uint8_t*>(mapped) + footprint.Offset;
+    for (std::size_t row = 0u; row < height; ++row) {
+        std::memcpy(
+            bytes->data() + row * width * 4u,
+            source_bytes + row * footprint.Footprint.RowPitch,
+            width * 4u);
+    }
+    D3D12_RANGE empty{0u, 0u};
+    readback->Unmap(0u, &empty);
+    release_now();
+    return ExitCode::Success;
+#else
+    return Fail(ExitCode::InvalidArguments, "readback",
+                "display_readback_requires_native_device", "device",
+                "D3D12", "unavailable", "readback",
+                "display readback is a native Windows qualification path");
+#endif
+}
+
 ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     if (initialized_ || initialization_count_ != 0u) {
         return Fail(ExitCode::InvalidArguments, "lifecycle",
