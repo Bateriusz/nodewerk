@@ -275,6 +275,29 @@ def test_present_selects_the_history_node_feeding_screen(tmp_path: Path) -> None
     )
     assert surface.format == "DXGI_FORMAT_R32G32B32A32_FLOAT"
     assert surface.size_bytes == 320 * 180 * 16
+    assert surface.usage == "uav"
+    display = next(
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.dispatch"
+        and instruction.operands[-1].type == "shader_ref"
+    )
+    assert display.operands[-1].value in {
+        shader.shader_id for shader in package.shaders
+    }
+    assert display.operands[0].value == (320 * 180 + 63) // 64
+    display_index = package.frame.index(display)
+    assert any(
+        instruction.opcode == "frame.set_descriptor_table"
+        and instruction.operands[0].value == 1
+        and instruction.operands[2].value == result.report["present_resource_id"]
+        for instruction in package.frame[:display_index]
+    )
+    assert not any(
+        instruction.opcode == "frame.copy_buffer"
+        and instruction.operands[1].value == result.report["present_resource_id"]
+        for instruction in package.frame
+    )
 
 
 @pytest.mark.parametrize("fixture", [PARTICLES, FEEDBACK])
@@ -375,6 +398,58 @@ def test_package_schedule_processes_every_tick_and_honors_loop_reset(
     )
     assert simulation_tick == 3
     assert pending == 7
+
+
+def test_native_player_headless_stateful_schedule_when_available(
+    tmp_path: Path,
+) -> None:
+    candidates = []
+    override = os.environ.get("NW04_FIXTURE")
+    if override:
+        candidates.append(Path(override))
+    candidates.extend(
+        sorted((REPO_ROOT / "build").glob("**/nw_package_player_fixture*"))
+    )
+    fixture = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.is_file()
+            and candidate.suffix.lower() in ("", ".exe")
+            and "CMakeFiles" not in candidate.parts
+        ),
+        None,
+    )
+    if fixture is None:
+        pytest.skip("native NW-04 fixture is not built on this host")
+    dxc = nw03.resolve_dxc()
+    if dxc is None:
+        pytest.skip("offline DXC is unavailable on this host")
+    report = nw09_export.export_stateful_graph(
+        PARTICLES,
+        tmp_path / "stateful",
+        allow_test_payloads=False,
+        dxc_executable=dxc,
+        allow_unpinned_dxc=True,
+    )
+    result = subprocess.run(
+        [
+            str(fixture),
+            "--package",
+            report["package_path"],
+            "--headless",
+            "--frames",
+            "3",
+            "--tick-start",
+            "0",
+            "--tick-step",
+            "1600",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_export_settings_can_request_packaged_checkpoints(tmp_path: Path) -> None:

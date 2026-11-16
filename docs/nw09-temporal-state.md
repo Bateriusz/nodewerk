@@ -129,6 +129,11 @@ from the presentation timeline tick, processes every outstanding 120 Hz step in
 order (or leaves a declared work cap pending), and only then presents. A
 backward device playback request fails closed unless the editor first restores
 a compatible checkpoint or reinitializes through the NW-08 boundary.
+The History extension also compiles a display pass. It samples the selected
+node's final state and writes every pixel of a `nw05.present.width *
+nw05.present.height` RGBA32F surface before `frame.present`; it never presents
+an internal `HIST` state buffer directly.
+
 At a declared `nw09.loop_ticks` boundary the packaged player resets only
 `on-loop` History nodes to their declared initial bytes; every other node is
 still advanced through that tick. `never`/`manual` states that are ahead of the

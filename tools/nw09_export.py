@@ -40,6 +40,7 @@ class StatefulExportError(RuntimeError):
 
 
 HISTORY_ENTRY_POINT = "nw_history_main"
+HISTORY_PRESENT_ENTRY_POINT = "nw_history_present"
 HISTORY_THREAD_GROUP = (64, 1, 1)
 
 
@@ -203,15 +204,115 @@ def _history_hlsl(
     raise StatefulExportError(f"unknown History state type '{spec.state_type}'")
 
 
-def _history_shaders(
+def _state_dimensions(
+    document: nw03.GraphDocument, spec: temporal.HistorySpec
+) -> tuple[int, int]:
+    node = document.nodes[spec.node_id]
+    if spec.state_type == "nw.particles.v1":
+        return max(1, spec.element_count), 1
+    parsed = temporal._parse_canonical_initial(spec.initial_value)
+    fields = parsed if isinstance(parsed, Mapping) else {}
+    width = max(
+        1, temporal._declared_int(fields, "width", temporal._param_int(node, "width", 16))
+    )
+    height = max(
+        1, temporal._declared_int(fields, "height", temporal._param_int(node, "height", 8))
+    )
+    return width, height
+
+
+def _history_present_hlsl(
+    document: nw03.GraphDocument,
+    spec: temporal.HistorySpec,
+    present_width: int,
+    present_height: int,
+) -> str:
+    """Return a compute display pass that renders state to RGBA32F pixels."""
+
+    width = max(1, int(present_width))
+    height = max(1, int(present_height))
+    state_width, state_height = _state_dimensions(document, spec)
+    lines = [
+        "// Generated NW-09 History display pass; state -> RGBA32F pixels.",
+        "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
+        "ByteAddressBuffer nw_state : register(t0);",
+        "RWByteAddressBuffer nw_present : register(u0);",
+        f"[numthreads({HISTORY_THREAD_GROUP[0]}, 1, 1)]",
+        f"void {HISTORY_PRESENT_ENTRY_POINT}(uint3 dispatch_id : SV_DispatchThreadID) {{",
+        f"    uint pixel = dispatch_id.x;",
+        f"    if (pixel >= {width * height}u) return;",
+        f"    uint x = pixel % {width}u;",
+        f"    uint y = pixel / {width}u;",
+    ]
+    if spec.state_type == "nw.particles.v1":
+        count = max(1, spec.element_count)
+        lines.extend(
+            [
+                f"    uint particle = pixel % {count}u;",
+                "    uint source = particle * 20u;",
+                "    float4 value = float4(",
+                "        asfloat(nw_state.Load(source + 0u)),",
+                "        asfloat(nw_state.Load(source + 4u)),",
+                "        asfloat(nw_state.Load(source + 8u)),",
+                "        asfloat(nw_state.Load(source + 12u)));",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"    uint sx = min({state_width - 1}u, x * {state_width}u / {width}u);",
+                f"    uint sy = min({state_height - 1}u, y * {state_height}u / {height}u);",
+                f"    uint source = (sy * {state_width}u + sx) * 16u;",
+                "    float4 value = float4(",
+                "        asfloat(nw_state.Load(source + 0u)),",
+                "        asfloat(nw_state.Load(source + 4u)),",
+                "        asfloat(nw_state.Load(source + 8u)),",
+                "        asfloat(nw_state.Load(source + 12u)));",
+            ]
+        )
+    lines.extend(
+        [
+            "    uint destination = pixel * 16u;",
+            "    nw_present.Store(destination + 0u, asuint(value.x));",
+            "    nw_present.Store(destination + 4u, asuint(value.y));",
+            "    nw_present.Store(destination + 8u, asuint(value.z));",
+            "    nw_present.Store(destination + 12u, asuint(value.w));",
+            "}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _present_history_node(
     document: nw03.GraphDocument, specs: Sequence[temporal.HistorySpec]
+) -> str:
+    for node in document.nodes.values():
+        if node.operator_id != "nw.render.present":
+            continue
+        connection = node.inputs.get("image")
+        if connection is not None:
+            for spec in specs:
+                if spec.node_id == connection[0]:
+                    return spec.node_id
+            break
+    return specs[0].node_id
+
+
+def _history_shaders(
+    document: nw03.GraphDocument,
+    specs: Sequence[temporal.HistorySpec],
+    *,
+    present_width: int | None = None,
+    present_height: int | None = None,
 ) -> list[nw03.GeneratedShader]:
+    present_node = _present_history_node(document, specs)
     shaders: list[nw03.GeneratedShader] = []
     for spec in specs:
         hlsl = _history_hlsl(document, spec)
         shaders.append(
             nw03.GeneratedShader(
-                specialization_id=f"nw09.history.{spec.node_id}",
+                specialization_id=f"nw09.history.step.{spec.node_id}",
                 entry_point=HISTORY_ENTRY_POINT,
                 target=nw03.SHADER_TARGET,
                 family=nw03.PASS_FAMILY,
@@ -223,6 +324,30 @@ def _history_shaders(
                 execution_root=spec.node_id,
             )
         )
+        if spec.node_id == present_node:
+            shader_width = (
+                present_width
+                if present_width is not None
+                else max(1, spec.state_bytes // 16)
+            )
+            shader_height = 1 if present_height is None else present_height
+            present_hlsl = _history_present_hlsl(
+                document, spec, shader_width, shader_height
+            )
+            shaders.append(
+                nw03.GeneratedShader(
+                    specialization_id=f"nw09.history.present.{spec.node_id}",
+                    entry_point=HISTORY_PRESENT_ENTRY_POINT,
+                    target=nw03.SHADER_TARGET,
+                    family=nw03.PASS_FAMILY,
+                    hlsl=present_hlsl,
+                    source_map=(),
+                    root_expression=f"history-present:{spec.state_type}",
+                    root_node_ids=(spec.node_id,),
+                    thread_group=HISTORY_THREAD_GROUP,
+                    execution_root=spec.node_id,
+                )
+            )
     return shaders
 
 
@@ -308,6 +433,7 @@ def compile_history_base_package(
             ],
         )
     runtime = temporal.TemporalRuntime(document)
+    geometry = present_geometry(document)
     report = nw03.compile_package(
         document.source_name,
         destination_path,
@@ -319,7 +445,12 @@ def compile_history_base_package(
         optimization=optimization,
         allow_unpinned_dxc=allow_unpinned_dxc,
         allow_test_payloads=allow_test_payloads,
-        generated_shaders_override=_history_shaders(document, specs),
+        generated_shaders_override=_history_shaders(
+            document,
+            specs,
+            present_width=geometry[0] if geometry else None,
+            present_height=geometry[1] if geometry else None,
+        ),
     )
     package = nwp.decode_package(destination_path.read_bytes())
     report["optimized_partitions"] = {
@@ -368,7 +499,22 @@ def build_stateful_package(
             compile_report = base_report
             specs = compiled_specs
     package = compiled_package
-    if len(package.shaders) != len(specs):
+    geometry_for_shaders = present_geometry(document)
+    generated_order = sorted(
+        _history_shaders(
+            document,
+            specs,
+            present_width=(
+                geometry_for_shaders[0] if geometry_for_shaders else None
+            ),
+            present_height=(
+                geometry_for_shaders[1] if geometry_for_shaders else None
+            ),
+        ),
+        key=lambda item: item.specialization_id,
+    )
+    ordered_shaders = sorted(package.shaders, key=lambda item: item.shader_id)
+    if len(ordered_shaders) != len(generated_order):
         raise StatefulExportError(
             "compiled History shader count does not match the declarations"
         )
@@ -389,10 +535,21 @@ def build_stateful_package(
         raise StatefulExportError(
             "compiled History base package has no root-constant resource"
         )
-    ordered_shaders = sorted(package.shaders, key=lambda item: item.shader_id)
-    shader_id_by_state_id = {
-        index: shader.shader_id
-        for index, shader in enumerate(ordered_shaders, start=1)
+    shader_id_by_specialization = {
+        generated.specialization_id: shader.shader_id
+        for generated, shader in zip(generated_order, ordered_shaders)
+    }
+    step_shader_id_by_state_id = {
+        index: shader_id_by_specialization[
+            f"nw09.history.step.{spec.node_id}"
+        ]
+        for index, spec in enumerate(specs, start=1)
+    }
+    present_shader_node = _present_history_node(document, specs)
+    present_shader_id_by_node = {
+        present_shader_node: shader_id_by_specialization[
+            f"nw09.history.present.{present_shader_node}"
+        ]
     }
     next_resource = max(
         (resource.resource_id for resource in package.resources), default=0
@@ -575,7 +732,7 @@ def build_stateful_package(
                         nwp.InstructionOperand("u32", dispatch_groups[1]),
                         nwp.InstructionOperand("u32", dispatch_groups[2]),
                         nwp.InstructionOperand(
-                            "shader_ref", shader_id_by_state_id[index]
+                            "shader_ref", step_shader_id_by_state_id[index]
                         ),
                         nwp.InstructionOperand("u32", index),
                     ),
@@ -698,7 +855,7 @@ def build_stateful_package(
             name="output",
             kind="buffer",
             format="DXGI_FORMAT_R32G32B32A32_FLOAT",
-            usage="uav_srv",
+            usage="uav",
             pass_family=nw03.PASS_FAMILY,
             binding_slot=0,
             binding_space=0,
@@ -711,20 +868,61 @@ def build_stateful_package(
             (nwp.InstructionOperand("resource_ref", present_surface_id),),
         )
     )
-    present_copy_bytes = min(
-        present_state_record.state_bytes, present_surface_bytes
+    present_node_id = present_shader_node
+    present_groups = (
+        (present_width * present_height + HISTORY_THREAD_GROUP[0] - 1)
+        // HISTORY_THREAD_GROUP[0],
+        1,
+        1,
     )
-    frame.append(
-        nwp.Instruction(
-            "frame.copy_buffer",
-            (
-                nwp.InstructionOperand(
-                    "resource_ref", present_state_resource_id
+    frame.extend(
+        [
+            nwp.Instruction(
+                "frame.barrier",
+                (
+                    nwp.InstructionOperand("u32", 4),
+                    nwp.InstructionOperand("resource_ref", present_surface_id),
                 ),
-                nwp.InstructionOperand("resource_ref", present_surface_id),
-                nwp.InstructionOperand("u64", present_copy_bytes),
             ),
-        )
+            nwp.Instruction(
+                "frame.set_descriptor_table",
+                (
+                    nwp.InstructionOperand("u32", 2),
+                    nwp.InstructionOperand("string", "cbv_srv_uav"),
+                    nwp.InstructionOperand(
+                        "resource_ref",
+                        present_state_record.previous_resource_id,
+                    ),
+                ),
+            ),
+            nwp.Instruction(
+                "frame.set_descriptor_table",
+                (
+                    nwp.InstructionOperand("u32", 1),
+                    nwp.InstructionOperand("string", "cbv_srv_uav"),
+                    nwp.InstructionOperand("resource_ref", present_surface_id),
+                ),
+            ),
+            nwp.Instruction(
+                "frame.dispatch",
+                (
+                    nwp.InstructionOperand("u32", present_groups[0]),
+                    nwp.InstructionOperand("u32", present_groups[1]),
+                    nwp.InstructionOperand("u32", present_groups[2]),
+                    nwp.InstructionOperand(
+                        "shader_ref",
+                        present_shader_id_by_node[present_node_id],
+                    ),
+                ),
+            ),
+            nwp.Instruction(
+                "frame.barrier",
+                (
+                    nwp.InstructionOperand("u32", 4),
+                    nwp.InstructionOperand("resource_ref", present_surface_id),
+                ),
+            ),
+        ]
     )
     present_resource_id = present_surface_id
     frame.extend(
@@ -836,7 +1034,7 @@ def build_stateful_package(
         },
         "history": reports,
         "state_resources": state_resource_ids,
-        "present_state_node": present_source_node,
+        "present_state_node": present_node_id,
         "present_state_resource_id": present_state_resource_id,
         "present_resource_id": present_resource_id,
         "present_surface": {
