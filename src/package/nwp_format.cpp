@@ -3067,6 +3067,7 @@ bool ValidatePackage(const Package& package,
                       "development metadata is not allowed in a release package",
                       std::string(kSectionDev));
     }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (!package.history.empty()) {
         std::set<std::uint32_t> state_ids;
         for (const auto& history : package.history) {
@@ -3102,11 +3103,13 @@ bool ValidatePackage(const Package& package,
                           std::string(kSectionCheckpoints));
         }
     }
+#endif  // !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     return diagnostics.empty();
 }
 
 namespace {
 
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 std::vector<std::uint8_t> EncodeHistory(
     const std::vector<HistoryRecord>& records) {
     Writer writer;
@@ -3236,6 +3239,7 @@ bool DecodeCheckpoints(const std::uint8_t* data, std::size_t size,
     }
     return reader.Remaining() == 0u;
 }
+#endif  // !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 
 } // namespace
 
@@ -3260,6 +3264,7 @@ std::vector<std::uint8_t> EncodePackage(
     sections[std::string(kSectionRootSignatures)] =
         EncodeRootSignatures(package.root_signatures);
     sections[std::string(kSectionShaders)] = EncodeShaders(package.shaders);
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     const bool stateful =
         !package.history.empty() || !package.release_checkpoints.empty();
     if (!package.history.empty()) {
@@ -3270,6 +3275,9 @@ std::vector<std::uint8_t> EncodePackage(
         sections[std::string(kSectionCheckpoints)] =
             EncodeCheckpoints(package.release_checkpoints);
     }
+#else
+    constexpr bool stateful = false;
+#endif
     if (package.dev_metadata.has_value()) {
         sections[std::string(kSectionDev)] = *package.dev_metadata;
     }
@@ -3290,6 +3298,7 @@ std::vector<std::uint8_t> EncodePackage(
     if (package.dev_metadata.has_value()) {
         record_counts[std::string(kSectionDev)] = 0u;
     }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (!package.history.empty()) {
         record_counts[std::string(kSectionHistory)] =
             static_cast<std::uint32_t>(package.history.size());
@@ -3298,6 +3307,7 @@ std::vector<std::uint8_t> EncodePackage(
         record_counts[std::string(kSectionCheckpoints)] =
             static_cast<std::uint32_t>(package.release_checkpoints.size());
     }
+#endif
     for (const auto& [name, payload] : sections) {
         if (name != std::string(kSectionDev) && payload.empty()) {
             AddDiagnostic(diagnostics, "package_decode_limit",
@@ -3496,9 +3506,12 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             name != std::string(kSectionParameters) &&
             name != std::string(kSectionShaders) &&
             name != std::string(kSectionRootSignatures) &&
-            name != std::string(kSectionDev) &&
-            name != std::string(kSectionHistory) &&
-            name != std::string(kSectionCheckpoints)) {
+            name != std::string(kSectionDev)
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+            && name != std::string(kSectionHistory) &&
+            name != std::string(kSectionCheckpoints)
+#endif
+        ) {
             NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_unknown",
                           "unknown section '" + name + "'", name, entry_offset,
                           true);
@@ -4117,6 +4130,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         return true;
     };
     if (!decode_shaders()) return false;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (names.count(std::string(kSectionHistory)) != 0u) {
         if (!DecodeHistory(payloads[std::string(kSectionHistory)],
                            payload_sizes[std::string(kSectionHistory)],
@@ -4141,6 +4155,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                       "stateful extension flag/version do not match sections");
         return false;
     }
+#endif  // !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (names.count(std::string(kSectionDev)) != 0u) {
         package.dev_metadata = std::vector<std::uint8_t>(
             payloads[std::string(kSectionDev)],
