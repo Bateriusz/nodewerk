@@ -273,9 +273,15 @@ def test_present_selects_the_history_node_feeding_screen(tmp_path: Path) -> None
         for resource in package.resources
         if resource.resource_id == result.report["present_resource_id"]
     )
+    assert surface.kind == "buffer"
     assert surface.format == "DXGI_FORMAT_R32G32B32A32_FLOAT"
     assert surface.size_bytes == 320 * 180 * 16
     assert surface.usage == "uav"
+    assert result.report["presentation_path"] == {
+        "package_source": "rgba32f-uav-buffer",
+        "player_display_stage": "buffer-to-player-owned-texture",
+        "swapchain_stage": "player-owned-texture-to-backbuffer",
+    }
     display = next(
         instruction
         for instruction in package.frame
@@ -287,8 +293,22 @@ def test_present_selects_the_history_node_feeding_screen(tmp_path: Path) -> None
         for instruction in package.frame
         if instruction.opcode == "frame.simulation_step"
     )
+    shader_ids = result.report["shader_ids_by_specialization"]
     assert display.operands[-1].value == result.report["present_shader_id"]
+    assert display.operands[-1].value == shader_ids[
+        "nw09.history.present.feedback"
+    ]
     assert display.operands[-1].value != step.operands[3].value
+    records_by_state = {record.state_id: record for record in package.history}
+    for simulation_step in (
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.simulation_step"
+    ):
+        record = records_by_state[simulation_step.operands[4].value]
+        assert simulation_step.operands[3].value == shader_ids[
+            f"nw09.history.step.{record.node_id}"
+        ]
     assert display.operands[0].value == (320 * 180 + 63) // 64
     display_index = package.frame.index(display)
     assert any(
@@ -310,6 +330,8 @@ def test_history_hlsl_compiles_with_real_dxc_when_available(
 ) -> None:
     dxc = nw03.resolve_dxc()
     if dxc is None:
+        if os.environ.get("NW09_REQUIRE_REAL_DXC") == "1":
+            pytest.fail("required pinned offline DXC is unavailable")
         pytest.skip("offline DXC is unavailable on this host")
     document = nw03.load_graph(fixture)
     specs = temporal.history_specs(document)
@@ -404,9 +426,19 @@ def test_package_schedule_processes_every_tick_and_honors_loop_reset(
     assert pending == 7
 
 
-def test_native_player_headless_stateful_schedule_when_available(
+def _player_metrics(stdout: str) -> dict[str, str]:
+    metrics: dict[str, str] = {}
+    for line in stdout.splitlines():
+        if line.startswith("NW_PLAYER_") and "=" in line:
+            key, value = line.split("=", 1)
+            metrics[key] = value
+    return metrics
+
+
+def test_native_player_stateful_schedule_and_presentation_when_available(
     tmp_path: Path,
 ) -> None:
+    required = os.environ.get("NW09_REQUIRE_NATIVE") == "1"
     candidates = []
     override = os.environ.get("NW04_FIXTURE")
     if override:
@@ -425,9 +457,13 @@ def test_native_player_headless_stateful_schedule_when_available(
         None,
     )
     if fixture is None:
+        if required:
+            pytest.fail("required native NW-04 fixture is not built")
         pytest.skip("native NW-04 fixture is not built on this host")
     dxc = nw03.resolve_dxc()
     if dxc is None:
+        if required:
+            pytest.fail("required pinned offline DXC is unavailable")
         pytest.skip("offline DXC is unavailable on this host")
     report = nw09_export.export_stateful_graph(
         PARTICLES,
@@ -436,24 +472,81 @@ def test_native_player_headless_stateful_schedule_when_available(
         dxc_executable=dxc,
         allow_unpinned_dxc=True,
     )
-    result = subprocess.run(
-        [
-            str(fixture),
-            "--package",
-            report["package_path"],
-            "--headless",
-            "--frames",
-            "3",
-            "--tick-start",
-            "0",
-            "--tick-step",
-            "1600",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+
+    def run_player(*args: str) -> dict[str, str]:
+        result = subprocess.run(
+            [
+                str(fixture),
+                "--package",
+                report["package_path"],
+                "--allow-software-adapter",
+                *args,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        return _player_metrics(result.stdout)
+
+    # Actual stateful playback must execute the C++ fixed-step scheduler and
+    # the full package-buffer -> player texture -> swapchain presentation path.
+    initial = run_player(
+        "--frames", "1",
+        "--tick-start", "0",
+        "--tick-step", "1",
+        "--width", "320",
+        "--height", "180",
+        "--emit-image-hash",
+        "--validation",
     )
-    assert result.returncode == 0, result.stderr + result.stdout
+    advanced = run_player(
+        "--frames", "1",
+        "--tick-start", "3200",
+        "--tick-step", "1",
+        "--width", "320",
+        "--height", "180",
+        "--emit-image-hash",
+        "--validation",
+    )
+    assert advanced["NW_PLAYER_HISTORY_SIMULATION_TICK"] == "8"
+    assert advanced["NW_PLAYER_HISTORY_STEPS_EXECUTED"] == "8"
+    assert advanced["NW_PLAYER_HISTORY_PENDING_TICKS"] == "0"
+    assert advanced["NW_PLAYER_HISTORY_LOOP_RESETS"] == "0"
+    assert advanced["NW_PLAYER_PRESENT_SOURCE_WIDTH"] == "320"
+    assert advanced["NW_PLAYER_PRESENT_SOURCE_HEIGHT"] == "180"
+    assert advanced["NW_PLAYER_PRESENT_SOURCE_EXPLICIT"] == "1"
+    assert int(advanced["NW_PLAYER_IMAGE_BYTES"]) == 320 * 180 * 4
+    assert int(advanced["NW_PLAYER_IMAGE_NONZERO_BYTES"]) > 0
+    assert advanced["NW_PLAYER_IMAGE_FNV64"] != initial["NW_PLAYER_IMAGE_FNV64"]
+
+    # A bounded work budget must retain, not drop, the remaining simulation
+    # ticks. This executes PackagePlayer::record_history_schedule itself.
+    capped = run_player(
+        "--headless",
+        "--frames", "1",
+        "--tick-start", "4000",
+        "--tick-step", "1",
+        "--history-work-cap", "3",
+        "--validation",
+    )
+    assert capped["NW_PLAYER_HISTORY_SIMULATION_TICK"] == "3"
+    assert capped["NW_PLAYER_HISTORY_STEPS_EXECUTED"] == "3"
+    assert capped["NW_PLAYER_HISTORY_PENDING_TICKS"] == "7"
+
+    # The 9600-tick fixture loop is 24 simulation ticks. The on-loop History
+    # node must reset exactly at the boundary instead of dispatching that step.
+    looped = run_player(
+        "--headless",
+        "--frames", "1",
+        "--tick-start", "9600",
+        "--tick-step", "1",
+        "--validation",
+    )
+    assert looped["NW_PLAYER_HISTORY_SIMULATION_TICK"] == "24"
+    assert looped["NW_PLAYER_HISTORY_STEPS_EXECUTED"] == "23"
+    assert looped["NW_PLAYER_HISTORY_LOOP_RESETS"] == "1"
+    assert looped["NW_PLAYER_HISTORY_PENDING_TICKS"] == "0"
 
 
 def test_export_settings_can_request_packaged_checkpoints(tmp_path: Path) -> None:
