@@ -99,6 +99,31 @@ layout screen 320 0
 """
 
 
+def _bloom_tonemap_graph_text() -> str:
+    return _TONEMAP_GRAPH.replace(
+        "node tone nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
+        "  input image feedback.out\n"
+        "  param exposure 1.0\n"
+        "  param gamma 2.2\n"
+        "  param operator aces\n"
+        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
+        "  input image tone.out",
+        "node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu\n"
+        "  input image feedback.out\n"
+        "  param threshold 0.7\n"
+        "  param intensity 0.35\n"
+        "  param radius 1.5\n"
+        "  param resolution_scale 0.5\n"
+        "node tone nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
+        "  input image bloom.out\n"
+        "  param exposure 1.0\n"
+        "  param gamma 2.2\n"
+        "  param operator aces\n"
+        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
+        "  input image tone.out",
+    )
+
+
 def test_stateful_export_preserves_ordinary_downstream_consumers(
     tmp_path: Path,
 ) -> None:
@@ -505,28 +530,7 @@ def test_stateful_post_input_uses_typed_srv_access(tmp_path: Path) -> None:
 def test_stateful_bloom_matches_established_operator_semantics(
     tmp_path: Path,
 ) -> None:
-    text = _TONEMAP_GRAPH.replace(
-        "node tone nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
-        "  input image feedback.out\n"
-        "  param exposure 1.0\n"
-        "  param gamma 2.2\n"
-        "  param operator aces\n"
-        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
-        "  input image tone.out",
-        "node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu\n"
-        "  input image feedback.out\n"
-        "  param threshold 0.7\n"
-        "  param intensity 0.35\n"
-        "  param radius 1.5\n"
-        "  param resolution_scale 0.5\n"
-        "node tone nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
-        "  input image bloom.out\n"
-        "  param exposure 1.0\n"
-        "  param gamma 2.2\n"
-        "  param operator aces\n"
-        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
-        "  input image tone.out",
-    )
+    text = _bloom_tonemap_graph_text()
     graph = tmp_path / "bloom.nwgraph"
     graph.write_text(text, encoding="utf-8")
     document = nw03.load_graph(graph)
@@ -559,6 +563,25 @@ def test_stateful_bloom_matches_established_operator_semantics(
     bad.write_text(incompatible, encoding="utf-8")
     with pytest.raises(nw05_export.ExportError):
         _export(tmp_path, bad, "bad-artifact")
+
+
+def test_stateful_bloom_without_tonemap_fails_closed(
+    tmp_path: Path,
+) -> None:
+    text = _bloom_tonemap_graph_text()
+    text = text.replace(
+        "node tone nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
+        "  input image bloom.out\n"
+        "  param exposure 1.0\n"
+        "  param gamma 2.2\n"
+        "  param operator aces\n",
+        "",
+    ).replace("input image tone.out", "input image bloom.out")
+    graph = tmp_path / "bloom-direct-present.nwgraph"
+    graph.write_text(text, encoding="utf-8")
+    with pytest.raises(nw05_export.ExportError) as excinfo:
+        _export(tmp_path, graph, "bloom-direct-present")
+    assert "must be consumed directly by nw.post.tonemap" in str(excinfo.value)
 
 
 def test_stateful_export_rejects_frozen_embedded_specialization(
@@ -675,11 +698,76 @@ def test_native_tonemap_chain_validation_when_available(
     assert int(metrics["NW_PLAYER_DISPLAY_IMAGE_NONZERO_BYTES"]) > 0
 
 
+def test_native_bloom_tonemap_chain_validation_when_available(
+    tmp_path: Path,
+) -> None:
+    required = os.environ.get("NW09_REQUIRE_NATIVE") == "1"
+    fixture = _native_fixture()
+    if fixture is None:
+        if required:
+            pytest.fail("required native NW-04 fixture is not built")
+        pytest.skip("native NW-04 fixture is not built on this host")
+    dxc = nw03.resolve_dxc()
+    if dxc is None:
+        if required:
+            pytest.fail("required pinned offline DXC is unavailable")
+        pytest.skip("offline DXC is unavailable on this host")
+    graph = tmp_path / "bloom-tonemap.nwgraph"
+    graph.write_text(_bloom_tonemap_graph_text(), encoding="utf-8")
+    report = nw09_export.export_stateful_graph(
+        graph,
+        tmp_path / "stateful-bloom",
+        allow_test_payloads=False,
+        dxc_executable=dxc,
+        allow_unpinned_dxc=True,
+    )
+    result = subprocess.run(
+        [
+            str(fixture),
+            "--package",
+            report["package_path"],
+            "--allow-software-adapter",
+            "--frames",
+            "1",
+            "--tick-start",
+            "3200",
+            "--tick-step",
+            "1",
+            "--width",
+            "320",
+            "--height",
+            "180",
+            "--emit-display-image-hash",
+            "--validation",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    metrics = {
+        key: value
+        for key, value in (
+            line.split("=", 1)
+            for line in result.stdout.splitlines()
+            if line.startswith("NW_PLAYER_") and "=" in line
+        )
+    }
+    assert metrics["NW_PLAYER_HISTORY_SIMULATION_TICK"] == "8"
+    assert int(metrics["NW_PLAYER_DISPLAY_IMAGE_NONZERO_BYTES"]) > 0
+
+
 def test_real_generated_stateful_player_launches_with_link_metadata(
     tmp_path: Path,
 ) -> None:
+    required = os.environ.get("NW09_REQUIRE_REAL_PLAYER") == "1"
     template_value = os.environ.get("NW05_REAL_PLAYER_TEMPLATE", "")
     if os.name != "nt" or not template_value:
+        if required:
+            pytest.fail(
+                "required real generated-player launch needs Windows and "
+                "NW05_REAL_PLAYER_TEMPLATE"
+            )
         pytest.skip("real generated-player launch runs in Windows CI")
     template = Path(template_value)
     assert template.is_file()
@@ -716,4 +804,6 @@ def test_real_generated_stateful_player_launches_with_link_metadata(
     assert launched.returncode == 0, launched.stderr + launched.stdout
     # This marker is printed only after ParseEmbeddedLinkMetadata succeeds.
     assert "NW05_LINK_MANIFEST_VERIFIED=1" in launched.stdout
+    assert "NW05_EXPLICIT_TICK=3200" in launched.stdout
     assert "NW05_HISTORY_SIMULATION_TICK=8" in launched.stdout
+    assert "NW05_HISTORY_PENDING_TICKS=0" in launched.stdout
