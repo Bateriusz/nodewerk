@@ -23,6 +23,7 @@ struct FixtureArgs {
     std::uint32_t frames = 60u;
     std::uint64_t tick_start = 0u;
     std::uint64_t tick_step = 1u;
+    std::uint32_t history_work_cap = 0u;
     std::uint32_t width = 1280u;
     std::uint32_t height = 720u;
     bool diagnostics = false;
@@ -93,6 +94,11 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             }
         } else if (std::strcmp(arg, "--tick-step") == 0) {
             if (++index >= argc || !ParseU64(argv[index], &args->tick_step)) {
+                return false;
+            }
+        } else if (std::strcmp(arg, "--history-work-cap") == 0) {
+            if (++index >= argc ||
+                !ParseU32(argv[index], &args->history_work_cap)) {
                 return false;
             }
         } else if (std::strcmp(arg, "--width") == 0) {
@@ -170,7 +176,8 @@ int main(int argc, char** argv) {
         std::fprintf(
             stderr,
             "usage: nw_package_player_fixture --package <file.nwp> "
-            "[--frames N] [--tick-start N] [--tick-step N] [--width N] "
+            "[--frames N] [--tick-start N] [--tick-step N] "
+            "[--history-work-cap N] [--width N] "
             "[--height N] [--diagnostics] [--headless] "
             "[--allow-software-adapter] "
             "[--emit-benchmark-metrics] [--emit-image-hash] "
@@ -201,6 +208,7 @@ int main(int argc, char** argv) {
     config.emit_benchmark_metrics = args.emit_benchmark_metrics;
     config.wait_for_gpu_each_frame = args.emit_benchmark_metrics;
     config.frames_in_flight = 2u;
+    config.history_work_cap = args.history_work_cap;
 
     std::printf("NW_PLAYER_FROZEN_SPECIALIZATION=%d\n",
                 nw::player::PackagePlayer::compiled_with_frozen_specialization()
@@ -667,6 +675,18 @@ int main(int argc, char** argv) {
                 player.present_source_height());
     std::printf("NW_PLAYER_PRESENT_SOURCE_EXPLICIT=%d\n",
                 player.present_source_geometry_explicit() ? 1 : 0);
+    std::printf("NW_PLAYER_HISTORY_SIMULATION_TICK=%llu\n",
+                static_cast<unsigned long long>(
+                    player.history_simulation_tick()));
+    std::printf("NW_PLAYER_HISTORY_PENDING_TICKS=%llu\n",
+                static_cast<unsigned long long>(
+                    player.history_pending_ticks()));
+    std::printf("NW_PLAYER_HISTORY_STEPS_EXECUTED=%llu\n",
+                static_cast<unsigned long long>(
+                    player.history_steps_executed()));
+    std::printf("NW_PLAYER_HISTORY_LOOP_RESETS=%llu\n",
+                static_cast<unsigned long long>(
+                    player.history_loop_resets()));
     std::printf("NW_PLAYER_RESIZE_COUNT=%llu\n",
                 static_cast<unsigned long long>(stats.resize_count));
     std::printf("NW_PLAYER_UPLOAD_REUSE_WAITS=%llu\n",
