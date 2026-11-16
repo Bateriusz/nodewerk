@@ -126,6 +126,15 @@ established specialized-player generation, embedding, dependency accounting,
 and byte-ceiling enforcement; a History-free export still links no
 History/checkpoint support.
 
+The generated stateful player reuses the established link manifest, including
+its `link_metadata` feature-flag and memory-budget contract, so the generated
+main can verify the embedded manifest before initialization. Its playback loop
+converts monotonic wall time to the fixed 48,000-Hz absolute timeline and
+drives `renderAtTick` from that value rather than presenting a frame counter
+as a timeline tick. Presentation cadence therefore changes only how often a
+frame is presented; every required 120 Hz simulation tick is still processed in
+order by the existing `PackagePlayer` schedule.
+
 The supplied document is compiled through the established optimizer/offline
 DXC/cache/report pipeline. History nodes lower to ordinary compute
 specializations; the package uploads the declared initial state with
@@ -146,6 +155,13 @@ History producer and `nw.render.present` (for example
 the same package frame schedule, and the final pass remains the `frame.present`
 source. Presentation ancestry is resolved through the graph instead of falling
 back to the first History declaration.
+
+Post passes consume the player's typed buffer SRVs (`Buffer<float4>` /
+`Buffer<uint>`) rather than raw `ByteAddressBuffer` views, matching the
+descriptor types the established package player creates. `nw.post.bloom`
+reuses the established NW-06 operator semantics: half-resolution
+luminance-thresholded nine-tap extraction with a floating-point radius and
+intensity scaling, followed by the established tonemap operator.
 
 The fixed simulation tick is published to History shaders as exact 32-bit
 integer bits in the root-constant block rather than reconstructed from a

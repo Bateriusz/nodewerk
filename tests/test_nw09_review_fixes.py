@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import dataclasses
+import json
+import os
+import shutil
 import struct
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -382,3 +386,334 @@ def test_persistent_authoring_session_requests_history_rewind() -> None:
         stats_path=Path("/tmp/stats.json"),
     )
     assert commands == [f"render {TICK * 8}", "rewind", "render 0"]
+
+
+def test_stateful_manifest_carries_link_metadata_and_executable_launches(
+    tmp_path: Path,
+) -> None:
+    if os.name == "nt":
+        pytest.skip("POSIX launch harness uses a shell-script template")
+    template = tmp_path / "script_template"
+    template.write_text(
+        "#!/bin/sh\nprintf 'NW09_TEMPLATE_LAUNCHED\\n'\nexit 0\n",
+        encoding="utf-8",
+    )
+    template.chmod(0o755)
+    settings = nw05_export.ExportSettings(
+        byte_ceiling=16 * 1024 * 1024,
+        memory_budget=987654321,
+        player_template=str(template),
+    )
+    result = nw05_export.export_graph(
+        FEEDBACK,
+        tmp_path / "artifact",
+        settings=settings,
+        dxc_executable=str(_mock_dxc(tmp_path / "toolchain")),
+        allow_test_payloads=True,
+    )
+    manifest = json.loads(
+        (tmp_path / "artifact" / "link-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    # The generated main calls ParseEmbeddedLinkMetadata at startup.
+    assert manifest["link_metadata"] == {
+        "wave_ops": False,
+        "fp16_shader_ops": False,
+        "int64_shader_ops": False,
+        "memory_budget_bytes": 987654321,
+    }
+    player_source = (
+        tmp_path / "artifact" / "common.player.cpp"
+    ).read_text(encoding="utf-8")
+    assert "ParseEmbeddedLinkMetadata" in player_source
+    executable = tmp_path / "artifact" / "common.exe"
+    executable.chmod(0o755)
+    launched = subprocess.run(
+        [str(executable)], capture_output=True, text=True, check=False
+    )
+    assert launched.returncode == 0, launched.stderr
+    assert "NW09_TEMPLATE_LAUNCHED" in launched.stdout
+    assert result.artifacts[nwp.COMMON_PROFILE_ID].executable_bytes is not None
+
+
+def test_stateful_generated_player_uses_absolute_48khz_timeline(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path, FEEDBACK, "artifact")
+    manifest = json.loads(
+        (tmp_path / "artifact" / "link-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["timeline"] == {
+        "ticks_per_second": 48_000,
+        "frame_step_numerator": 1,
+        "frame_step_denominator": 1,
+        "duration_ticks": 0,
+        "mode": "absolute",
+    }
+    assert "player.nw09.fixed-step-timeline" in manifest["retained"][
+        "runtime_implementations"
+    ]
+    source = (
+        tmp_path / "artifact" / "common.player.cpp"
+    ).read_text(encoding="utf-8")
+    assert "CheckedTicksFromNanoseconds" in source
+    assert "48000u" in source
+    assert "player.history_simulation_tick()" in source
+    # The presentation-rate-dependent frame-counter loop must not be selected.
+    assert (
+        "for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick)"
+        not in source
+    )
+    assert result.artifacts[nwp.COMMON_PROFILE_ID].package.history
+
+
+def test_stateful_post_input_uses_typed_srv_access(tmp_path: Path) -> None:
+    graph = tmp_path / "tonemap.nwgraph"
+    graph.write_text(_TONEMAP_GRAPH, encoding="utf-8")
+    document = nw03.load_graph(graph)
+    chain = nw09_export.presentation_chain(document, "feedback")
+    assert [node.node_id for node in chain] == ["tone"]
+    hlsl = nw09_export._post_pass_hlsl(document, chain[0], 320, 180)
+    # The package/player realizes RGBA32F buffer SRVs as typed views, so the
+    # shader must use typed Buffer<float4> access rather than ByteAddressBuffer.
+    assert "Buffer<float4> nw_input : register(t0);" in hlsl
+    assert "ByteAddressBuffer nw_input" not in hlsl
+    assert "nw_input.Load(int(pixel))" in hlsl
+    # State shaders consume the typed R32_UINT SRV as well.
+    spec = temporal.history_specs(document)[0]
+    step = nw09_export._history_hlsl(document, spec)
+    assert "Buffer<uint> nw_previous : register(t0);" in step
+    assert "ByteAddressBuffer nw_previous" not in step
+
+    result = _export(tmp_path, graph, "artifact")
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    post = result.report["post_passes"][0]
+    post_input = next(
+        resource
+        for resource in package.resources
+        if resource.resource_id == post["copied_input_resource_id"]
+    )
+    assert post_input.kind == "buffer"
+    assert post_input.usage == "srv"
+    assert post_input.format == "DXGI_FORMAT_R32G32B32A32_FLOAT"
+    assert post_input.size_bytes == 320 * 180 * 16
+
+
+def test_stateful_bloom_matches_established_operator_semantics(
+    tmp_path: Path,
+) -> None:
+    text = _TONEMAP_GRAPH.replace(
+        "node tone nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
+        "  input image feedback.out\n"
+        "  param exposure 1.0\n"
+        "  param gamma 2.2\n"
+        "  param operator aces\n"
+        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
+        "  input image tone.out",
+        "node bloom nw.post.bloom@1.0.0 frequency=frame residency=gpu\n"
+        "  input image feedback.out\n"
+        "  param threshold 0.7\n"
+        "  param intensity 0.35\n"
+        "  param radius 1.5\n"
+        "  param resolution_scale 0.5\n"
+        "node tone nw.post.tonemap@1.0.0 frequency=frame residency=gpu\n"
+        "  input image bloom.out\n"
+        "  param exposure 1.0\n"
+        "  param gamma 2.2\n"
+        "  param operator aces\n"
+        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
+        "  input image tone.out",
+    )
+    graph = tmp_path / "bloom.nwgraph"
+    graph.write_text(text, encoding="utf-8")
+    document = nw03.load_graph(graph)
+    chain = nw09_export.presentation_chain(document, "feedback")
+    assert [node.operator_id for node in chain] == [
+        "nw.post.bloom",
+        "nw.post.tonemap",
+    ]
+    bloom = nw09_export._post_pass_hlsl(document, chain[0], 320, 180)
+    # Established semantics: floating-point radius, luminance threshold with
+    # the NW-06 luma weights, nine taps, intensity scaling, half resolution.
+    assert "1.5f" in bloom
+    assert "const int radius" not in bloom
+    assert "luma > 0.7f" in bloom
+    assert "0.2126f" in bloom and "0.7152f" in bloom and "0.0722f" in bloom
+    assert "bloom / 9.0f * 0.35f" in bloom
+    assert "0.5f" in bloom or "half" in bloom
+    assert "Buffer<float4> nw_input" in bloom
+
+    result = _export(tmp_path, graph, "artifact")
+    assert [item["operator_id"] for item in result.report["post_passes"]] == [
+        "nw.post.bloom",
+        "nw.post.tonemap",
+    ]
+
+    incompatible = text.replace(
+        "param resolution_scale 0.5", "param resolution_scale 0.25"
+    )
+    bad = tmp_path / "bloom-bad.nwgraph"
+    bad.write_text(incompatible, encoding="utf-8")
+    with pytest.raises(nw05_export.ExportError):
+        _export(tmp_path, bad, "bad-artifact")
+
+
+def test_stateful_export_rejects_frozen_embedded_specialization(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(nw05_export.ExportError) as excinfo:
+        _export(
+            tmp_path,
+            FEEDBACK,
+            "frozen",
+            frozen_embedded_specialization=True,
+        )
+    assert any(
+        item.get("code") == "stateful_frozen_player_incompatible"
+        for item in excinfo.value.diagnostics
+    )
+
+
+def test_absolute_timeline_cadences_reach_the_same_fixed_step() -> None:
+    # The generated player converts monotonic wall time to the 48,000-Hz
+    # absolute timeline. One second is 48,000 timeline ticks (120 simulation
+    # ticks) regardless of presentation cadence.
+    cadences_ms = [
+        [index * 1000 // 30 for index in range(0, 31)],
+        [index * 1000 // 60 for index in range(0, 61)],
+        [0, 7, 31, 222, 501, 777, 999, 1000],
+    ]
+    digests: list[str] = []
+    for milliseconds in cadences_ms:
+        ticks = [ms * 48_000 // 1000 for ms in milliseconds]
+        runtime = temporal.TemporalRuntime(nw03.load_graph(FEEDBACK))
+        runtime.advance_frames(ticks)
+        assert runtime.simulation_tick == 120
+        digests.append(runtime.state_digest())
+    assert len(set(digests)) == 1
+
+
+def _native_fixture() -> Path | None:
+    override = os.environ.get("NW04_FIXTURE")
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override))
+    candidates.extend(
+        sorted((REPO_ROOT / "build").glob("**/nw_package_player_fixture*"))
+    )
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.is_file()
+            and candidate.suffix.lower() in ("", ".exe")
+            and "CMakeFiles" not in candidate.parts
+        ),
+        None,
+    )
+
+
+def test_native_tonemap_chain_validation_when_available(
+    tmp_path: Path,
+) -> None:
+    required = os.environ.get("NW09_REQUIRE_NATIVE") == "1"
+    fixture = _native_fixture()
+    if fixture is None:
+        if required:
+            pytest.fail("required native NW-04 fixture is not built")
+        pytest.skip("native NW-04 fixture is not built on this host")
+    dxc = nw03.resolve_dxc()
+    if dxc is None:
+        if required:
+            pytest.fail("required pinned offline DXC is unavailable")
+        pytest.skip("offline DXC is unavailable on this host")
+    graph = tmp_path / "tonemap.nwgraph"
+    graph.write_text(_TONEMAP_GRAPH, encoding="utf-8")
+    report = nw09_export.export_stateful_graph(
+        graph,
+        tmp_path / "stateful",
+        allow_test_payloads=False,
+        dxc_executable=dxc,
+        allow_unpinned_dxc=True,
+    )
+    result = subprocess.run(
+        [
+            str(fixture),
+            "--package",
+            report["package_path"],
+            "--allow-software-adapter",
+            "--frames",
+            "1",
+            "--tick-start",
+            "3200",
+            "--tick-step",
+            "1",
+            "--width",
+            "320",
+            "--height",
+            "180",
+            "--emit-display-image-hash",
+            "--validation",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    metrics = {
+        key: value
+        for key, value in (
+            line.split("=", 1)
+            for line in result.stdout.splitlines()
+            if line.startswith("NW_PLAYER_") and "=" in line
+        )
+    }
+    assert metrics["NW_PLAYER_HISTORY_SIMULATION_TICK"] == "8"
+    assert int(metrics["NW_PLAYER_DISPLAY_IMAGE_NONZERO_BYTES"]) > 0
+
+
+def test_real_generated_stateful_player_launches_with_link_metadata(
+    tmp_path: Path,
+) -> None:
+    template_value = os.environ.get("NW05_REAL_PLAYER_TEMPLATE", "")
+    if os.name != "nt" or not template_value:
+        pytest.skip("real generated-player launch runs in Windows CI")
+    template = Path(template_value)
+    assert template.is_file()
+    dxc = shutil.which("dxc") or shutil.which("dxc.exe")
+    assert dxc, "pinned DXC must be on PATH for real generated-player launch"
+    settings = nw05_export.ExportSettings(
+        byte_ceiling=64 * 1024 * 1024,
+        memory_budget=512 * 1024 * 1024,
+        player_template=str(template),
+    )
+    result = nw05_export.export_graph(
+        FEEDBACK,
+        tmp_path / "stateful",
+        settings=settings,
+        dxc_executable=dxc,
+    )
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    assert artifact.executable_bytes is not None
+    executable = tmp_path / "stateful" / artifact.executable_name
+    launched = subprocess.run(
+        [
+            str(executable),
+            "--tick",
+            "3200",
+            "--frames",
+            "1",
+            "--allow-software-adapter",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert launched.returncode == 0, launched.stderr + launched.stdout
+    # This marker is printed only after ParseEmbeddedLinkMetadata succeeds.
+    assert "NW05_LINK_MANIFEST_VERIFIED=1" in launched.stdout
+    assert "NW05_HISTORY_SIMULATION_TICK=8" in launched.stdout

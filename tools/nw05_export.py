@@ -758,7 +758,10 @@ def generate_player_source(
     runtime_implementations = {
         str(item) for item in retained.get("runtime_implementations", [])
     }
-    nw06_runtime = (
+    temporal_fixed_step = (
+        "player.nw09.fixed-step-timeline" in runtime_implementations
+    )
+    nw06_runtime = not temporal_fixed_step and (
         "player.nw06.absolute-tick-camera" in runtime_implementations
     )
     timeline = manifest.get("timeline", {})
@@ -780,7 +783,62 @@ def generate_player_source(
             "NW-06 generated playback requires the fixed 48,000 Hz rational "
             "timeline"
         )
-    if nw06_runtime:
+    if temporal_fixed_step:
+        if ticks_per_second != 48_000:
+            raise ExportError(
+                "NW-09 generated playback requires the fixed 48,000 Hz "
+                "absolute timeline"
+            )
+        clock_includes = (
+            "#include \"player/clock_provider.h\"\n"
+            "#include <chrono>\n"
+            "#include <cstdint>\n"
+            "#include <thread>\n"
+        )
+        # Presentation cadence never selects the simulation tick: every frame
+        # converts monotonic wall time to the established 48,000-Hz absolute
+        # timeline and the PackagePlayer processes every required fixed tick
+        # in order.  A slower/irregular presentation rate therefore lags
+        # presentation, it does not slow simulation.
+        playback_loop = (
+            "    const auto playback_start = std::chrono::steady_clock::now();\n"
+            "    std::uint64_t presented_frames = 0u;\n"
+            "    std::uint64_t last_timeline_tick = 0u;\n"
+            "    bool have_tick = false;\n"
+            "    while (!player.window_closed()) {\n"
+            "        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(\n"
+            "            std::chrono::steady_clock::now() - playback_start);\n"
+            "        if (elapsed.count() < 0) {\n"
+            "            std::fprintf(stderr, \"NW09_CLOCK_BACKWARDS\\n\");\n"
+            "            return 70;\n"
+            "        }\n"
+            "        std::uint64_t tick = 0u;\n"
+            "        if (!nw::player::CheckedTicksFromNanoseconds(\n"
+            "                static_cast<std::uint64_t>(elapsed.count()),\n"
+            f"                {ticks_per_second}u, &tick)) {{\n"
+            "            std::fprintf(stderr, \"NW09_CLOCK_OVERFLOW\\n\");\n"
+            "            return 70;\n"
+            "        }\n"
+            "        if (!have_tick || tick != last_timeline_tick) {\n"
+            "            have_tick = true;\n"
+            "            last_timeline_tick = tick;\n"
+            "            const auto frame = player.renderAtTick(tick);\n"
+            "            if (frame != nw::player::ExitCode::Success) {\n"
+            "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+            "                return static_cast<int>(frame);\n"
+            "#else\n"
+            "                return player.Report(true);\n"
+            "#endif\n"
+            "            }\n"
+            "            ++presented_frames;\n"
+            "            if (max_frames != 0 && presented_frames >= max_frames) {\n"
+            "                break;\n"
+            "            }\n"
+            "        }\n"
+            "        std::this_thread::sleep_for(std::chrono::milliseconds(1));\n"
+            "    }\n"
+        )
+    elif nw06_runtime:
         clock_includes = (
             "#include \"player/clock_provider.h\"\n"
             "#include <chrono>\n"
@@ -1047,6 +1105,13 @@ def generate_player_source(
         "    std::printf(\"NW05_UAV_BARRIERS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().uav_barrier_count));\n"
         "    std::printf(\"NW05_VALIDATION_ENABLED=%d\\n\", player.validation_enabled() ? 1 : 0);\n"
         "#endif\n"
+        + (
+            "    std::printf(\"NW05_HISTORY_SIMULATION_TICK=%llu\\n\", static_cast<unsigned long long>(player.history_simulation_tick()));\n"
+            "    std::printf(\"NW05_HISTORY_PENDING_TICKS=%llu\\n\", static_cast<unsigned long long>(player.history_pending_ticks()));\n"
+            if temporal_fixed_step
+            else ""
+        )
+        +
         "    std::printf(\"NW05_PRESENT_SYNC_INTERVAL=%u\\n\", config.present_sync_interval);\n"
         "    const auto shutdown = player.shutdown();\n"
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
@@ -2908,6 +2973,28 @@ def export_graph(
                 "capability profile",
                 dependency_path=["capability_profile", "stateful_extension"],
             )
+        if settings.frozen_embedded_specialization:
+            # The frozen player compiles out History execution and its package
+            # decoder accepts only minor version 0, while this export emits
+            # the stateful minor version 1 extension.  Producing such an
+            # executable would create an artifact that cannot load its own
+            # embedded package, so reject the incompatible configuration.
+            raise ExportError(
+                "stateful NW-09 export requires the non-frozen History-capable "
+                "player configuration",
+                [
+                    nwp.package_diagnostic(
+                        "stateful_frozen_player_incompatible",
+                        "frozen_embedded_specialization cannot load a "
+                        "version-minor-1 stateful package",
+                    )
+                ],
+                dependency_path=[
+                    "stateful_extension",
+                    "specialized_player",
+                    "frozen_embedded_specialization",
+                ],
+            )
         # NW-09 stateful content is an explicit additive extension of the
         # established package/exporter path.  History-free documents never
         # enter this branch and keep the frozen NW-08A byte baseline.
@@ -2972,42 +3059,104 @@ def export_graph(
         runtime_dependencies, dependency_source = _runtime_dependencies(
             package, template_bytes
         )
-        manifest = {
-            "format": "nw09-stateful-link-manifest",
-            "version": 1,
-            "stateful_extension": {
-                "package_minor": nwp.VERSION_MINOR_STATEFUL,
-                "sections": [nwp.SECTION_HISTORY]
-                + (
-                    [nwp.SECTION_CHECKPOINTS]
-                    if package.release_checkpoints
-                    else []
-                ),
-                "history": [record.to_dict() for record in package.history],
-                "checkpoints": [
-                    record.to_dict() for record in package.release_checkpoints
-                ],
-                "checkpoint_byte_cost": stateful_report[
-                    "packaged_checkpoint_byte_cost"
-                ],
-                "portable_gpu_state_replay": False,
-            },
-            "artifact_profile_id": nwp.COMMON_PROFILE_ID,
-            "artifact_requirements_digest": nwp.COMMON_REQUIREMENTS_DIGEST,
-            "artifact_identity": artifact_key(
-                nwp.COMMON_PROFILE_ID,
-                nwp.COMMON_REQUIREMENTS_DIGEST,
-                emitted_requirements(package),
+        # Reuse the established generated-player link manifest (including its
+        # link_metadata contract) and add only the explicit stateful/temporal
+        # extension fields.  generate_player_source validates link_metadata at
+        # startup, so a hand-built manifest without it would make the
+        # generated executable exit with NW05_LINK_METADATA_INVALID.
+        optimized = optimizer.optimize_graph(document)
+        shader_rows = [
+            (f"{shader.entry_point}:{shader.shader_id}", shader.target, len(shader.blob))
+            for shader in package.shaders
+        ]
+        requires_aliasing = any(
+            bool(group.get("aliased"))
+            or (
+                bool(group.get("pending"))
+                and len(group.get("resource_ids", ())) > 1
+            )
+            for group in physical.alias_groups
+        )
+        manifest = optimizer.build_link_manifest(
+            optimized,
+            package=package,
+            shader_blobs=shader_rows,
+            profile_id=nwp.COMMON_PROFILE_ID,
+            requirements_digest=nwp.COMMON_REQUIREMENTS_DIGEST,
+            requires_aliasing=requires_aliasing,
+            runtime_dependencies=runtime_dependencies,
+            memory_budget_bytes=settings.memory_budget,
+        )
+        manifest["format"] = "nw09-stateful-link-manifest"
+        manifest["version"] = 1
+        manifest["stateful_extension"] = {
+            "package_minor": nwp.VERSION_MINOR_STATEFUL,
+            "sections": [nwp.SECTION_HISTORY]
+            + (
+                [nwp.SECTION_CHECKPOINTS]
+                if package.release_checkpoints
+                else []
             ),
-            "fixed_step": stateful_report["fixed_step"],
-            "present_geometry": stateful_report["present_geometry"],
-            "dependencies_source": dependency_source,
-            "retained": {"dependencies": list(runtime_dependencies)},
-            "feature_requirements": {},
+            "history": [record.to_dict() for record in package.history],
+            "checkpoints": [
+                record.to_dict() for record in package.release_checkpoints
+            ],
+            "checkpoint_byte_cost": stateful_report[
+                "packaged_checkpoint_byte_cost"
+            ],
+            "portable_gpu_state_replay": False,
         }
-        manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
-            nwp.canonical_json_bytes(manifest)
-        ).hexdigest()
+        manifest["artifact_profile_id"] = nwp.COMMON_PROFILE_ID
+        manifest["artifact_requirements_digest"] = nwp.COMMON_REQUIREMENTS_DIGEST
+        manifest["artifact_identity"] = artifact_key(
+            nwp.COMMON_PROFILE_ID,
+            nwp.COMMON_REQUIREMENTS_DIGEST,
+            emitted_requirements(package),
+        )
+        manifest["fixed_step"] = stateful_report["fixed_step"]
+        manifest["present_geometry"] = stateful_report["present_geometry"]
+        manifest["timeline"] = {
+            "ticks_per_second": 48_000,
+            "frame_step_numerator": 1,
+            "frame_step_denominator": 1,
+            "duration_ticks": 0,
+            "mode": "absolute",
+        }
+        manifest["dependencies_source"] = dependency_source
+        retained = manifest.setdefault("retained", {})
+        runtime_implementations = set(
+            retained.get("runtime_implementations", [])
+        )
+        runtime_implementations.update(
+            {
+                "player.nw09.fixed-step-timeline",
+                "player.nw09.stateful-history",
+            }
+        )
+        retained["runtime_implementations"] = sorted(runtime_implementations)
+        retained["dependencies"] = list(runtime_dependencies)
+        link_metadata = manifest.setdefault("link_metadata", {})
+        link_metadata.update(
+            {
+                "wave_ops": bool(
+                    manifest.get("feature_requirements", {}).get(
+                        "wave_ops", False
+                    )
+                ),
+                "fp16_shader_ops": bool(
+                    manifest.get("feature_requirements", {}).get(
+                        "fp16_shader_ops", False
+                    )
+                ),
+                "int64_shader_ops": bool(
+                    manifest.get("feature_requirements", {}).get(
+                        "int64_shader_ops", False
+                    )
+                ),
+                "memory_budget_bytes": int(settings.memory_budget),
+            }
+        )
+        _refresh_manifest_sha256(manifest)
         manifest_data = optimizer.manifest_bytes(manifest)
         specialized_player_bytes: bytes | None = None
         if template_bytes and not allow_test_payloads:

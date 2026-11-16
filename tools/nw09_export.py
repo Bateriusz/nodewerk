@@ -110,17 +110,19 @@ def _history_hlsl(
             [
                 f"// Generated NW-09 particle History compute entry point: {spec.node_id}.",
                 "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
-                "ByteAddressBuffer nw_previous : register(t0);",
+                "// Typed R32_UINT SRV access (no raw SRV is created for state).",
+                "Buffer<uint> nw_previous : register(t0);",
                 "RWByteAddressBuffer nw_current : register(u0);",
                 f"[numthreads({HISTORY_THREAD_GROUP[0]}, 1, 1)]",
                 f"void {HISTORY_ENTRY_POINT}(uint3 dispatch_id : SV_DispatchThreadID) {{",
                 f"    if (dispatch_id.x >= {count}u) return;",
                 "    uint base = dispatch_id.x * 20u;",
-                "    float x = asfloat(nw_previous.Load(base + 0u));",
-                "    float y = asfloat(nw_previous.Load(base + 4u));",
-                "    float vx = asfloat(nw_previous.Load(base + 8u));",
-                "    float vy = asfloat(nw_previous.Load(base + 12u));",
-                "    float age = asfloat(nw_previous.Load(base + 16u));",
+                "    uint word = dispatch_id.x * 5u;",
+                "    float x = asfloat(nw_previous[word + 0u]);",
+                "    float y = asfloat(nw_previous[word + 1u]);",
+                "    float vx = asfloat(nw_previous[word + 2u]);",
+                "    float vy = asfloat(nw_previous[word + 3u]);",
+                "    float age = asfloat(nw_previous[word + 4u]);",
                 f"    float dt = 1.0f / {_hlsl_float(temporal.FIXED_STEP_HZ)};",
                 f"    vy += {_hlsl_float(gravity)} * dt;",
                 "    x += vx * dt;",
@@ -163,18 +165,20 @@ def _history_hlsl(
             [
                 f"// Generated NW-09 feedback-image History compute entry point: {spec.node_id}.",
                 "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
-                "ByteAddressBuffer nw_previous : register(t0);",
+                "// Typed R32_UINT SRV access (no raw SRV is created for state).",
+                "Buffer<uint> nw_previous : register(t0);",
                 "RWByteAddressBuffer nw_current : register(u0);",
                 f"[numthreads({HISTORY_THREAD_GROUP[0]}, 1, 1)]",
                 f"void {HISTORY_ENTRY_POINT}(uint3 dispatch_id : SV_DispatchThreadID) {{",
                 f"    uint index = dispatch_id.x;",
                 f"    if (index >= {width * height}u) return;",
                 "    uint base = index * 16u;",
+                "    uint word = index * 4u;",
                 "    float4 previous = float4(",
-                "        asfloat(nw_previous.Load(base + 0u)),",
-                "        asfloat(nw_previous.Load(base + 4u)),",
-                "        asfloat(nw_previous.Load(base + 8u)),",
-                "        asfloat(nw_previous.Load(base + 12u)));",
+                "        asfloat(nw_previous[word + 0u]),",
+                "        asfloat(nw_previous[word + 1u]),",
+                "        asfloat(nw_previous[word + 2u]),",
+                "        asfloat(nw_previous[word + 3u]));",
                 "    // The player publishes the exact 32-bit simulation tick in",
                 "    // g_params[0].y; never rebuild it from float seconds.",
                 "    uint tick = asuint(g_params[0].y);",
@@ -237,7 +241,8 @@ def _history_present_hlsl(
     lines = [
         "// Generated NW-09 History display pass; state -> RGBA32F pixels.",
         "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
-        "ByteAddressBuffer nw_state : register(t0);",
+        "// Typed R32_UINT SRV access (no raw SRV is created for state).",
+        "Buffer<uint> nw_state : register(t0);",
         "RWByteAddressBuffer nw_present : register(u0);",
         f"[numthreads({HISTORY_THREAD_GROUP[0]}, 1, 1)]",
         f"void {HISTORY_PRESENT_ENTRY_POINT}(uint3 dispatch_id : SV_DispatchThreadID) {{",
@@ -251,12 +256,12 @@ def _history_present_hlsl(
         lines.extend(
             [
                 f"    uint particle = pixel % {count}u;",
-                "    uint source = particle * 20u;",
+                "    uint source = particle * 5u;",
                 "    float4 value = float4(",
-                "        asfloat(nw_state.Load(source + 0u)),",
-                "        asfloat(nw_state.Load(source + 4u)),",
-                "        asfloat(nw_state.Load(source + 8u)),",
-                "        asfloat(nw_state.Load(source + 12u)));",
+                "        asfloat(nw_state[source + 0u]),",
+                "        asfloat(nw_state[source + 1u]),",
+                "        asfloat(nw_state[source + 2u]),",
+                "        asfloat(nw_state[source + 3u]));",
             ]
         )
     else:
@@ -264,12 +269,12 @@ def _history_present_hlsl(
             [
                 f"    uint sx = min({state_width - 1}u, x * {state_width}u / {width}u);",
                 f"    uint sy = min({state_height - 1}u, y * {state_height}u / {height}u);",
-                f"    uint source = (sy * {state_width}u + sx) * 16u;",
+                f"    uint source = (sy * {state_width}u + sx) * 4u;",
                 "    float4 value = float4(",
-                "        asfloat(nw_state.Load(source + 0u)),",
-                "        asfloat(nw_state.Load(source + 4u)),",
-                "        asfloat(nw_state.Load(source + 8u)),",
-                "        asfloat(nw_state.Load(source + 12u)));",
+                "        asfloat(nw_state[source + 0u]),",
+                "        asfloat(nw_state[source + 1u]),",
+                "        asfloat(nw_state[source + 2u]),",
+                "        asfloat(nw_state[source + 3u]));",
             ]
         )
     lines.extend(
@@ -412,17 +417,18 @@ def _post_pass_hlsl(
     header = [
         f"// Generated NW-09 ordinary post pass: {node.operator_id} ({node.node_id}).",
         "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
-        "ByteAddressBuffer nw_input : register(t0);",
+        # The player realizes buffer SRVs as typed views (RGBA32F has 16-byte
+        # elements), so the matching shader access is a typed Buffer<float4>.
+        # A ByteAddressBuffer here would require a raw SRV that the established
+        # descriptor creation does not produce.
+        "Buffer<float4> nw_input : register(t0);",
         "RWByteAddressBuffer nw_output : register(u0);",
         f"[numthreads({HISTORY_THREAD_GROUP[0]}, 1, 1)]",
         "void nw09_post_main(uint3 dispatch_id : SV_DispatchThreadID) {",
         "    uint pixel = dispatch_id.x;",
         f"    if (pixel >= {count}u) return;",
         "    uint base = pixel * 16u;",
-        "    float3 scene = float3(",
-        "        asfloat(nw_input.Load(base + 0u)),",
-        "        asfloat(nw_input.Load(base + 4u)),",
-        "        asfloat(nw_input.Load(base + 8u)));",
+        "    float3 scene = nw_input.Load(int(pixel)).rgb;",
     ]
     if node.operator_id == "nw.post.tonemap":
         exposure = temporal._param_float(node, "exposure", 1.0)
@@ -453,33 +459,62 @@ def _post_pass_hlsl(
             "    float4 out_value = float4(mapped, 1.0f);",
         ]
     elif node.operator_id == "nw.post.bloom":
-        threshold = temporal._param_float(node, "threshold", 1.0)
-        intensity = temporal._param_float(node, "intensity", 0.5)
-        radius = max(1, temporal._param_int(node, "radius", 1))
+        # Reuse the established NW-06 bloom semantics exactly: a 3x3
+        # luminance-thresholded extraction at half resolution with a
+        # floating-point radius, averaged over nine taps and scaled by
+        # intensity.  The established tonemap pass adds the bloom buffer to
+        # the scene, so this pass emits that same `scene + bloom` composite
+        # for the following tonemap pass.
+        threshold = temporal._param_float(node, "threshold", 0.7)
+        intensity = temporal._param_float(node, "intensity", 0.35)
+        radius = temporal._param_float(node, "radius", 1.5)
+        resolution_scale = temporal._param_float(
+            node, "resolution_scale", 0.5
+        )
+        if abs(resolution_scale - 0.5) > 1e-6:
+            raise StatefulExportError(
+                f"stateful bloom node '{node.node_id}' must resolve at "
+                "exactly half resolution to match the established "
+                "nw.post.bloom operator"
+            )
+        half_width = max(1, width // 2)
+        half_height = max(1, height // 2)
         body = [
             "    uint x = pixel % "
             f"{width}u; uint y = pixel / {width}u;",
+            "    float2 uv = (float2(float(x), float(y)) + 0.5f) / "
+            f"float2({_hlsl_float(width)}, {_hlsl_float(height)});",
+            "    uint half_x = min(uint(uv.x * "
+            f"{_hlsl_float(half_width)}), {half_width - 1}u);",
+            "    uint half_y = min(uint(uv.y * "
+            f"{_hlsl_float(half_height)}), {half_height - 1}u);",
+            "    float2 half_uv = (float2(float(half_x), float(half_y)) + "
+            "0.5f) / "
+            f"float2({_hlsl_float(half_width)}, {_hlsl_float(half_height)});",
+            "    float2 texel = 1.0f / "
+            f"float2({_hlsl_float(width)}, {_hlsl_float(height)});",
             "    float3 bloom = float3(0.0f, 0.0f, 0.0f);",
-            f"    const int radius = {radius};",
-            "    for (int dy = -radius; dy <= radius; ++dy) {",
-            "        for (int dx = -radius; dx <= radius; ++dx) {",
-            "            int sx = clamp(int(x) + dx, 0, "
-            f"{width - 1});",
-            "            int sy = clamp(int(y) + dy, 0, "
-            f"{height - 1});",
-            "            uint source = (uint(sy) * "
-            f"{width}u + uint(sx)) * 16u;",
-            "            float3 sample = float3(",
-            "                asfloat(nw_input.Load(source + 0u)),",
-            "                asfloat(nw_input.Load(source + 4u)),",
-            "                asfloat(nw_input.Load(source + 8u)));",
-            f"            bloom += max(sample - {_hlsl_float(threshold)}, "
-            "float3(0.0f, 0.0f, 0.0f));",
+            "    [unroll]",
+            "    for (int dy = -1; dy <= 1; ++dy) {",
+            "        [unroll]",
+            "        for (int dx = -1; dx <= 1; ++dx) {",
+            "            int2 coordinate = int2(clamp(",
+            "                half_uv + float2(float(dx), float(dy)) * "
+            f"texel * {_hlsl_float(radius)}, 0.0f, 1.0f) * "
+            f"float2({_hlsl_float(width)}, {_hlsl_float(height)}));",
+            "            coordinate = min(coordinate, "
+            f"int2({width - 1}, {height - 1}));",
+            "            uint source = uint(coordinate.y) * "
+            f"{width}u + uint(coordinate.x);",
+            "            float3 sample_color = nw_input.Load(int(source)).rgb;",
+            "            float luma = dot(sample_color,",
+            "                float3(0.2126f, 0.7152f, 0.0722f));",
+            f"            bloom += luma > {_hlsl_float(threshold)} "
+            "? sample_color : float3(0.0f, 0.0f, 0.0f);",
             "        }",
             "    }",
-            f"    float taps = float((radius * 2 + 1) * (radius * 2 + 1));",
-            f"    float3 out_color = scene + {_hlsl_float(intensity)} * "
-            "(bloom / taps);",
+            "    float3 out_color = scene + bloom / 9.0f * "
+            f"{_hlsl_float(intensity)};",
             "    float4 out_value = float4(out_color, 1.0f);",
         ]
     else:
