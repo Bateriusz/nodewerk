@@ -123,6 +123,11 @@ public:
     // Reads back the exact resource target of frame.present.  Diagnostic/
     // qualification only; returns the bytes written by the package shader.
     ExitCode readbackPresentedOutput(std::vector<std::uint8_t>* bytes);
+    // Reads back the player-owned R8G8B8A8 display texture after the offline
+    // display pass has converted the package RGBA32F buffer.  This qualifies
+    // the actual buffer -> texture presentation stage without changing the
+    // established frame.present resource contract.
+    ExitCode readbackDisplayOutput(std::vector<std::uint8_t>* bytes);
     ExitCode resize(std::uint32_t width, std::uint32_t height);
     ExitCode shutdown();
 
