@@ -43,6 +43,7 @@ TIMELINE_TICKS_PER_SECOND = nw03.NW09_TIMELINE_TICKS_PER_SECOND
 TIMELINE_TICKS_PER_SIMULATION_TICK = nw03.NW09_TIMELINE_TICKS_PER_SIMULATION_TICK
 CHECKPOINT_VERSION = nw03.NW09_CHECKPOINT_VERSION
 RESET_POLICIES = nw03.NW09_RESET_POLICIES
+STATE_SEMANTICS = nw03.NW09_STATE_SEMANTICS
 
 
 class TemporalError(RuntimeError):
@@ -207,6 +208,7 @@ class HistorySpec:
             "step_rate_hz": self.step_rate_hz,
             "timeline_ticks_per_step": TIMELINE_TICKS_PER_SIMULATION_TICK,
             "state_layout_hash": self.state_layout_hash,
+            "state_semantics": STATE_SEMANTICS,
             "state_component_type": "float32",
             "state_component_bytes": 4,
             "values_per_element": self.values_per_element,
@@ -875,14 +877,6 @@ class TemporalRuntime:
                 self._states[spec.node_id] = self._initial_state(
                     spec, simulation_tick
                 )
-            elif spec.node_id in self._states:
-                # A non-reset node keeps its committed values but still
-                # advances its recorded simulation-tick identity.  Checkpoint
-                # restore compares every state's tick with the checkpoint.
-                self._states[spec.node_id] = replace(
-                    self._states[spec.node_id],
-                    simulation_tick=int(simulation_tick),
-                )
 
     def reset(self) -> None:
         """Reset to declared initial state at tick zero."""
@@ -944,31 +938,40 @@ class TemporalRuntime:
             for spec in self.specs
             if spec.reset_policy == "on-loop"
         }
-        if (
+        loop_boundary = (
             loop_reset_nodes
             and loop_sim_ticks > 0
             and next_tick % loop_sim_ticks == 0
-        ):
+        )
+        if loop_boundary:
             # The authoritative loop boundary is a reset tick.  The runtime
-            # commits the declared initial state and starts the next loop
-            # generation; no partial tick is ever observable.
+            # commits the declared initial state for on-loop nodes and still
+            # advances every other node through this tick.
             self._events_through(loop_ticks or 0)
             self._loop_generation += 1
             self._event_cursor = EventCursor(
                 loop_generation=self._loop_generation, tick=-1, sequence=0
             )
-            self._reset_states(
-                loop_reset_nodes, simulation_tick=next_tick
-            )
-            self._simulation_tick = next_tick
-            return
         previous = dict(self._states)
         updated: dict[str, TemporalState] = {}
         for spec in self.specs:
+            if loop_boundary and spec.node_id in loop_reset_nodes:
+                updated[spec.node_id] = self._initial_state(spec, next_tick)
+                continue
+            prior = previous[spec.node_id]
+            if (
+                spec.reset_policy in {"never", "manual"}
+                and prior.simulation_tick >= next_tick
+            ):
+                # A manual/never state recorded ahead of the replayed global
+                # tick remains frozen until replay catches up to it.  It is
+                # never stepped as though its old value belonged to tick zero.
+                updated[spec.node_id] = prior
+                continue
             node = self.document.nodes[spec.node_id]
             try:
                 updated[spec.node_id] = step_history_state(
-                    spec, node, previous[spec.node_id], next_tick
+                    spec, node, prior, next_tick
                 )
             except Exception as exc:  # pragma: no cover - defensive boundary
                 raise ReplayError(
@@ -1239,7 +1242,13 @@ class TemporalRuntime:
             stored_tick = int(
                 raw.get("simulation_tick", checkpoint.simulation_tick)
             )
-            if stored_tick != checkpoint.simulation_tick:
+            tick_valid = stored_tick == checkpoint.simulation_tick
+            if spec.reset_policy in {"never", "manual"}:
+                # Manual/never state may intentionally be ahead of (or behind)
+                # the global replay tick; it stays frozen until replay catches
+                # up.  The snapshot itself is still a coherent checkpoint.
+                tick_valid = stored_tick >= 0
+            if not tick_valid:
                 raise CheckpointError(
                     f"checkpoint state for '{spec.node_id}' is from simulation "
                     f"tick {stored_tick}, checkpoint tick is "

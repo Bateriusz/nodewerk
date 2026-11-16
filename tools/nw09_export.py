@@ -411,6 +411,22 @@ def build_stateful_package(
                 )
             )
             next_parameter_id += 1
+    if runtime.loop_ticks is not None:
+        parameters.append(
+            nwp.ParameterRecord(
+                parameter_id=next_parameter_id,
+                name="nw09.loop_ticks",
+                type="uint",
+                phase="initialization",
+                component_count=1,
+                value=struct.pack("<I", int(runtime.loop_ticks) & 0xFFFFFFFF),
+                timeline_start_frame=0,
+                timeline_end_frame=0,
+                timeline_step=0,
+                timeline_interpolation="none",
+            )
+        )
+        next_parameter_id += 1
     root_signature = package.root_signatures[0]
     bindings = (
         nwp.RootBinding("params", "cbv", 0, 0, 0),
@@ -640,10 +656,51 @@ def build_stateful_package(
         if connection is not None:
             present_source_node = connection[0]
             break
-    present_resource_id = resource_by_node.get(
+    present_state_resource_id = resource_by_node.get(
         present_source_node,
         next(iter(resource_by_node.values())),
     )
+    present_width, present_height = geometry or (1, 1)
+    present_surface_id = next_resource
+    next_resource += 1
+    present_surface_bytes = present_width * present_height * 16
+    resources.append(
+        nwp.ResourceDescriptor(
+            resource_id=present_surface_id,
+            name="output",
+            kind="buffer",
+            format="DXGI_FORMAT_R32G32B32A32_FLOAT",
+            usage="uav_srv",
+            pass_family=nw03.PASS_FAMILY,
+            binding_slot=0,
+            binding_space=0,
+            size_bytes=present_surface_bytes,
+        )
+    )
+    initialization.append(
+        nwp.Instruction(
+            "init.create_resource",
+            (nwp.InstructionOperand("resource_ref", present_surface_id),),
+        )
+    )
+    present_state_record = next(
+        record
+        for record in history_records
+        if record.current_resource_id == present_state_resource_id
+    )
+    frame.append(
+        nwp.Instruction(
+            "frame.copy_buffer",
+            (
+                nwp.InstructionOperand(
+                    "resource_ref", present_state_resource_id
+                ),
+                nwp.InstructionOperand("resource_ref", present_surface_id),
+                nwp.InstructionOperand("u64", present_state_record.state_bytes),
+            ),
+        )
+    )
+    present_resource_id = present_surface_id
     frame.extend(
         [
             nwp.Instruction(
@@ -754,7 +811,15 @@ def build_stateful_package(
         "history": reports,
         "state_resources": state_resource_ids,
         "present_state_node": present_source_node,
+        "present_state_resource_id": present_state_resource_id,
         "present_resource_id": present_resource_id,
+        "present_surface": {
+            "resource_id": present_surface_id,
+            "width": present_width,
+            "height": present_height,
+            "format": "DXGI_FORMAT_R32G32B32A32_FLOAT",
+            "size_bytes": present_surface_bytes,
+        },
         "frames_in_flight": frames_in_flight,
         "pending_retirement_bytes": sum(
             report["state_bytes"] * frames_in_flight for report in reports

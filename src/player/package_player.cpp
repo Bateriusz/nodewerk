@@ -294,6 +294,25 @@ bool TextureSeedForResource(const package::Package& pkg,
 
 std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
     std::uint64_t maximum = 0u;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    std::uint64_t maximum_history_state = 0u;
+    for (const auto& history : pkg.history) {
+        maximum_history_state =
+            std::max<std::uint64_t>(maximum_history_state,
+                                    history.initial_state.size());
+    }
+    if (maximum_history_state != 0u) {
+        const std::uint64_t stride =
+            RoundUp(maximum_history_state, kFrameUploadAlignment);
+        if (stride <=
+            std::numeric_limits<std::uint64_t>::max() /
+                std::max<std::size_t>(1u, pkg.history.size())) {
+            maximum = std::max(
+                maximum,
+                stride * static_cast<std::uint64_t>(pkg.history.size()));
+        }
+    }
+#endif
     for (const auto& instruction : pkg.initialization) {
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
         if (instruction.opcode == "init.upload_history_state" &&
@@ -1577,6 +1596,21 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     present_source_width_ = 0u;
     present_source_height_ = 0u;
     present_source_geometry_explicit_ = false;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    history_loop_ticks_ = 0u;
+    for (const auto& parameter : package_.parameters) {
+        if ((parameter.name == "nw09.loop_ticks" ||
+             parameter.name == "nw09_loop_ticks") &&
+            parameter.type == "uint" &&
+            parameter.value.size() == sizeof(std::uint32_t)) {
+            std::uint32_t loop_ticks = 0u;
+            std::memcpy(&loop_ticks, parameter.value.data(),
+                        sizeof(loop_ticks));
+            history_loop_ticks_ = loop_ticks;
+            break;
+        }
+    }
+#endif
     for (const auto& instruction : package_.frame) {
         bool known = true;
         FrameOp::Type type = FrameOp::Type::Present;
@@ -4784,8 +4818,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     auto record_history_schedule = [&]() -> ExitCode {
         if (package_.history.empty()) return ExitCode::Success;
         const std::uint64_t target_sim =
-            EffectiveTimelineTick(tick) /
-            package::kTimelineTicksPerSimulationTick;
+            tick / package::kTimelineTicksPerSimulationTick;
         if (target_sim < history_simulation_tick_) {
             return Fail(ExitCode::InvalidArguments, "history",
                         "history_backward_seek_requires_reinitialization",
@@ -4829,7 +4862,83 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
             }
             return true;
         };
+        const std::uint64_t loop_sim_ticks =
+            history_loop_ticks_ != 0u &&
+                    history_loop_ticks_ %
+                            package::kTimelineTicksPerSimulationTick ==
+                        0u
+                ? history_loop_ticks_ /
+                      package::kTimelineTicksPerSimulationTick
+                : 0u;
+        auto reset_history_state =
+            [&](const package::HistoryRecord* history,
+                PlatformState::ResourceSlot* current,
+                PlatformState::ResourceSlot* previous) -> ExitCode {
+            const std::size_t state_bytes = history->initial_state.size();
+            std::uint64_t reset_stride = 0u;
+            for (const auto& candidate : package_.history) {
+                reset_stride = std::max<std::uint64_t>(
+                    reset_stride, candidate.initial_state.size());
+            }
+            reset_stride = RoundUp(reset_stride, kFrameUploadAlignment);
+            const std::uint64_t reset_offset =
+                reset_stride * static_cast<std::uint64_t>(
+                                   history->state_id == 0u
+                                       ? 0u
+                                       : history->state_id - 1u);
+            if (frame.upload == nullptr ||
+                reset_offset > frame.upload_size ||
+                state_bytes > frame.upload_size - reset_offset) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_reset_upload_unavailable", "state_bytes",
+                            std::to_string(state_bytes),
+                            frame.upload == nullptr
+                                ? "unavailable"
+                                : std::to_string(frame.upload_size),
+                            "renderAtTick",
+                            "loop reset requires the history upload ring");
+            }
+            void* mapped = nullptr;
+            D3D12_RANGE read_range{0u, 0u};
+            if (FAILED(frame.upload->Map(reset_offset, &read_range, &mapped)) ||
+                mapped == nullptr) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_reset_map_failed", "mapped", "available",
+                            "unavailable", "renderAtTick",
+                            "loop-reset upload Map failed");
+            }
+            std::memcpy(mapped, history->initial_state.data(), state_bytes);
+            D3D12_RANGE write_range{0u, static_cast<SIZE_T>(state_bytes)};
+            frame.upload->Unmap(0u, &write_range);
+            if (!transition(current, D3D12_RESOURCE_STATE_COPY_DEST) ||
+                !transition(previous, D3D12_RESOURCE_STATE_COPY_DEST)) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_reset_transition_failed", "resources",
+                            "available", "missing", "renderAtTick",
+                            "loop-reset transition failed");
+            }
+            list->CopyBufferRegion(current->resource, 0u, frame.upload,
+                                   reset_offset,
+                                   static_cast<UINT>(state_bytes));
+            list->CopyBufferRegion(previous->resource, 0u, frame.upload,
+                                   reset_offset,
+                                   static_cast<UINT>(state_bytes));
+            if (!transition(current,
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS) ||
+                !transition(previous,
+                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_reset_restore_failed", "resources",
+                            "available", "missing", "renderAtTick",
+                            "loop-reset restore failed");
+            }
+            return ExitCode::Success;
+        };
         for (std::uint64_t iteration = 0u; iteration < processed; ++iteration) {
+            const std::uint64_t next_tick =
+                history_simulation_tick_ + iteration + 1u;
+            const bool loop_boundary =
+                loop_sim_ticks > 0u && next_tick % loop_sim_ticks == 0u;
             for (const FrameOp* step : steps) {
                 const package::HistoryRecord* history = nullptr;
                 for (const auto& candidate : package_.history) {
@@ -4857,6 +4966,14 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 std::to_string(history->state_id), "missing",
                                 "renderAtTick",
                                 "History ping-pong resources are unavailable");
+                }
+                if (loop_boundary &&
+                    history->reset_policy == "on-loop") {
+                    const ExitCode reset_code = reset_history_state(
+                        history, current, previous);
+                    if (reset_code != ExitCode::Success) return reset_code;
+                    ++history_loop_resets_;
+                    continue;
                 }
                 if (!transition(current,
                                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS) ||
@@ -4917,6 +5034,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 }
                 list->SetPipelineState(pipeline);
                 list->Dispatch(step->group_x, step->group_y, step->group_z);
+                ++history_steps_executed_;
                 D3D12_RESOURCE_BARRIER uav{};
                 uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
                 uav.UAV.pResource = current->resource;
@@ -6418,6 +6536,8 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     history_simulation_tick_ = 0u;
     history_pending_ticks_ = 0u;
+    history_steps_executed_ = 0u;
+    history_loop_resets_ = 0u;
 #endif
     last_exit_ = ExitCode::Success;
     return ExitCode::Success;
@@ -6991,6 +7111,28 @@ bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
             history_work_cap_ == 0u
                 ? required
                 : std::min<std::uint64_t>(required, history_work_cap_);
+        const std::uint64_t loop_sim_ticks =
+            history_loop_ticks_ != 0u &&
+                    history_loop_ticks_ %
+                            package::kTimelineTicksPerSimulationTick ==
+                        0u
+                ? history_loop_ticks_ /
+                      package::kTimelineTicksPerSimulationTick
+                : 0u;
+        for (std::uint64_t iteration = 0u; iteration < processed;
+             ++iteration) {
+            const std::uint64_t next_tick =
+                history_simulation_tick_ + iteration + 1u;
+            const bool boundary =
+                loop_sim_ticks > 0u && next_tick % loop_sim_ticks == 0u;
+            for (const auto& record : package_.history) {
+                if (boundary && record.reset_policy == "on-loop") {
+                    ++history_loop_resets_;
+                } else {
+                    ++history_steps_executed_;
+                }
+            }
+        }
         history_simulation_tick_ += processed;
         history_pending_ticks_ = target_sim - history_simulation_tick_;
     }

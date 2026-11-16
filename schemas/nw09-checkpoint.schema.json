@@ -22,7 +22,7 @@
   ],
   "properties": {
     "format": { "const": "nw09-checkpoint" },
-    "version": { "const": 1 },
+    "version": { "const": 2 },
     "tick": { "type": "integer", "minimum": 0, "multipleOf": 400 },
     "simulation_tick": { "type": "integer", "minimum": 0 },
     "semantic_digest": { "type": "string", "pattern": "^sha256:v1:[0-9a-f]{64}$" },

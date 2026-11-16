@@ -121,7 +121,7 @@ def test_backward_seek_resets_cursor_without_duplicate_events() -> None:
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("version", 2),
+        ("version", temporal.CHECKPOINT_VERSION + 1),
         ("tick", 1234),
         ("semantic_digest", "sha256:v1:deadbeef"),
         ("state_layout_hash", "sha256:v1:deadbeef"),
@@ -251,7 +251,9 @@ def test_loop_reset_policy_is_per_node(tmp_path: Path) -> None:
     assert runtime.loop_generation == 1
     fresh = temporal.TemporalRuntime(nw03.load_graph(graph))
     assert runtime.state("particles").values == fresh.state("particles").values
-    assert runtime.state("feedback").values == feedback_before
+    # The non-reset node is still stepped through the loop-boundary tick.
+    assert runtime.state("feedback").values != feedback_before
+    assert runtime.state("feedback").simulation_tick == 2
     checkpoint = runtime.checkpoint()
     assert all(
         state["simulation_tick"] == runtime.simulation_tick
@@ -297,6 +299,16 @@ def test_seek_reset_policy_is_per_node(tmp_path: Path) -> None:
     fresh = temporal.TemporalRuntime(nw03.load_graph(graph))
     assert runtime.state("particles").values == fresh.state("particles").values
     assert runtime.state("feedback").values == feedback_before
+    checkpoint = runtime.checkpoint()
+    restored = temporal.TemporalRuntime(nw03.load_graph(graph))
+    restored.restore_checkpoint(checkpoint)
+    assert restored.state_digest() == runtime.state_digest()
+    # The manual/never state is not stepped as if its old value were tick
+    # zero; it stays frozen until replay reaches its recorded tick.
+    runtime.advance_to(400 * 3)
+    assert runtime.state("feedback").values == feedback_before
+    runtime.advance_to(400 * 4)
+    assert runtime.state("feedback").values != feedback_before
 
 
 @pytest.mark.parametrize(

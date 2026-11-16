@@ -151,6 +151,12 @@ public:
     std::uint64_t history_pending_ticks() const noexcept {
         return history_pending_ticks_;
     }
+    std::uint64_t history_steps_executed() const noexcept {
+        return history_steps_executed_;
+    }
+    std::uint64_t history_loop_resets() const noexcept {
+        return history_loop_resets_;
+    }
 #endif
     std::uint32_t last_timeline_parameter_id() const noexcept {
         return timeline_parameter_id_;
@@ -409,8 +415,11 @@ private:
     std::vector<std::string> last_frame_order_;
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     std::uint32_t history_work_cap_ = 0u;
+    std::uint64_t history_loop_ticks_ = 0u;
     std::uint64_t history_simulation_tick_ = 0u;
     std::uint64_t history_pending_ticks_ = 0u;
+    std::uint64_t history_steps_executed_ = 0u;
+    std::uint64_t history_loop_resets_ = 0u;
 #endif
     std::unique_ptr<PlatformState> platform_;
 

@@ -86,7 +86,8 @@ single-queue fence/retirement planner remains the only lifetime authority.
 
 Compatibility is deterministic and checks:
 
-* checkpoint version,
+* checkpoint version (currently `2`; version `1` state semantics are
+  incompatible because the per-element mix changed),
 * tick (and its exact simulation-tick derivation),
 * semantic digest,
 * state/layout hash (including every History state layout hash),
@@ -128,6 +129,11 @@ from the presentation timeline tick, processes every outstanding 120 Hz step in
 order (or leaves a declared work cap pending), and only then presents. A
 backward device playback request fails closed unless the editor first restores
 a compatible checkpoint or reinitializes through the NW-08 boundary.
+At a declared `nw09.loop_ticks` boundary the packaged player resets only
+`on-loop` History nodes to their declared initial bytes; every other node is
+still advanced through that tick. `never`/`manual` states that are ahead of the
+global replay tick remain frozen until replay catches up, rather than being
+stepped as if their old value belonged to tick zero.
 State resources are raw `DXGI_FORMAT_R32_UINT` buffers of exactly
 `values_per_element * element_count * 4` bytes; the declared particle layout is
 five float32 values per particle and the feedback layout is four float32 values
@@ -137,6 +143,9 @@ Per-element random injection uses one documented uint32 mix in Python, the C++
 oracle, and the generated HLSL shader. It is a declared scalar operation, not
 an atomic reduction, so CPU and GPU evaluate the same per-element value at a
 matching simulation tick subject only to declared numeric tolerance.
+The mix revision is included in each History state-layout hash, so a checkpoint
+from the earlier SHA-256-derived semantics cannot be accepted merely because
+its version, tick, and capability fields happen to match.
 
 ## Fixtures
 

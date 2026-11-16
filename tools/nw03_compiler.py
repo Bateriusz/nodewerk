@@ -649,8 +649,12 @@ SHADER_SEED_BEHAVIORS = {
 NW09_FIXED_STEP_HZ = 120
 NW09_TIMELINE_TICKS_PER_SECOND = 48_000
 NW09_TIMELINE_TICKS_PER_SIMULATION_TICK = 400
-NW09_CHECKPOINT_VERSION = 1
+NW09_CHECKPOINT_VERSION = 2
 NW09_RESET_POLICIES = frozenset({"on-loop", "on-seek", "never", "manual"})
+# Revision tag for the deterministic per-element state update/mix.  It is part
+# of the checkpoint/layout identity so a runtime or shader change cannot accept
+# an otherwise field-identical older checkpoint.
+NW09_STATE_SEMANTICS = "nw09.uint32-mix.v1"
 
 
 @dataclass(frozen=True)
@@ -689,7 +693,8 @@ class HistoryDeclaration:
             + sha256_hex(
                 nwp_package.canonical_json_bytes(
                     {
-                        "domain": "nw09.history-layout.v1",
+                        "domain": "nw09.history-layout.v2",
+                        "state_semantics": NW09_STATE_SEMANTICS,
                         "state_type": self.state_type,
                         "initial_value": self.initial_value,
                         "reset_policy": self.reset_policy,

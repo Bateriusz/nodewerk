@@ -234,6 +234,8 @@ def test_present_selects_the_history_node_feeding_screen(tmp_path: Path) -> None
                 "nwgraph 1",
                 "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
                 "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+                "setting nw05.present.width 320",
+                "setting nw05.present.height 180",
                 "node particles nw.particles.system@1.0.0 frequency=history",
                 "  param count 2",
                 "  param seed 1",
@@ -263,9 +265,16 @@ def test_present_selects_the_history_node_feeding_screen(tmp_path: Path) -> None
     package = result.artifacts[nwp.COMMON_PROFILE_ID].package
     records = {record.node_id: record for record in package.history}
     assert result.report["present_state_node"] == "feedback"
-    assert result.report["present_resource_id"] == records[
+    assert result.report["present_state_resource_id"] == records[
         "feedback"
     ].current_resource_id
+    surface = next(
+        resource
+        for resource in package.resources
+        if resource.resource_id == result.report["present_resource_id"]
+    )
+    assert surface.format == "DXGI_FORMAT_R32G32B32A32_FLOAT"
+    assert surface.size_bytes == 320 * 180 * 16
 
 
 @pytest.mark.parametrize("fixture", [PARTICLES, FEEDBACK])
@@ -287,6 +296,85 @@ def test_history_hlsl_compiles_with_real_dxc_when_available(
             allow_test_payloads=False,
         )
         assert result["blob"]
+
+
+def _simulate_package_schedule(
+    package: nwp.NwpPackage,
+    presentation_ticks: list[int],
+    *,
+    work_cap: int | None = None,
+) -> tuple[int, int, int, int]:
+    """Model the packaged player's fixed-step ordering and loop resets."""
+
+    loop_ticks = 0
+    for parameter in package.parameters:
+        if parameter.name == "nw09.loop_ticks":
+            loop_ticks = struct.unpack("<I", parameter.value)[0]
+            break
+    loop_sim_ticks = (
+        loop_ticks // temporal.TIMELINE_TICKS_PER_SIMULATION_TICK
+        if loop_ticks
+        and loop_ticks % temporal.TIMELINE_TICKS_PER_SIMULATION_TICK == 0
+        else 0
+    )
+    records = {record.state_id: record for record in package.history}
+    steps = [
+        instruction.operands[4].value
+        for instruction in package.frame
+        if instruction.opcode == "frame.simulation_step"
+    ]
+    simulation_tick = 0
+    dispatches = 0
+    resets = 0
+    pending = 0
+    for presentation_tick in presentation_ticks:
+        target = presentation_tick // temporal.TIMELINE_TICKS_PER_SIMULATION_TICK
+        required = max(0, target - simulation_tick)
+        processed = required if work_cap is None else min(required, work_cap)
+        for _ in range(processed):
+            simulation_tick += 1
+            boundary = (
+                loop_sim_ticks > 0
+                and simulation_tick % loop_sim_ticks == 0
+            )
+            for state_id in steps:
+                record = records[state_id]
+                if boundary and record.reset_policy == "on-loop":
+                    resets += 1
+                else:
+                    dispatches += 1
+        pending = max(0, target - simulation_tick)
+    return simulation_tick, dispatches, resets, pending
+
+
+def test_package_schedule_processes_every_tick_and_honors_loop_reset(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path, PARTICLES, "artifact")
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    # 30 Hz and irregular presentation still process all 10 required ticks.
+    simulation_tick, dispatches, resets, pending = _simulate_package_schedule(
+        package, [400, 1200, 4000]
+    )
+    assert simulation_tick == 10
+    assert dispatches == 10
+    assert resets == 0
+    assert pending == 0
+    # 9600 timeline ticks is 24 simulation ticks; the on-loop node resets once
+    # instead of being stepped at that boundary.
+    simulation_tick, dispatches, resets, pending = _simulate_package_schedule(
+        package, [9600]
+    )
+    assert simulation_tick == 24
+    assert dispatches == 23
+    assert resets == 1
+    assert pending == 0
+    # A work cap defers presentation but never drops the remaining ticks.
+    simulation_tick, _, _, pending = _simulate_package_schedule(
+        package, [4000], work_cap=3
+    )
+    assert simulation_tick == 3
+    assert pending == 7
 
 
 def test_export_settings_can_request_packaged_checkpoints(tmp_path: Path) -> None:

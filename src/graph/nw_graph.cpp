@@ -6222,6 +6222,18 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
             count = width * height;
         }
         std::vector<double> values;
+        if (initial.explicit_values &&
+            initial.values.size() !=
+                static_cast<std::size_t>(count) * values_per_element) {
+            failure = EvalDiagnostic(
+                node, "History initial value array length " +
+                          std::to_string(initial.values.size()) +
+                          " does not match the declared state layout " +
+                          std::to_string(
+                              static_cast<std::size_t>(count) *
+                              values_per_element));
+            return false;
+        }
         if (context.previous_history_state.count(node.id) != 0u) {
             values =
                 context.previous_history_state.at(node.id).samples;
@@ -6230,11 +6242,8 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
             static_cast<std::size_t>(count) * values_per_element) {
             const std::size_t expected_values =
                 static_cast<std::size_t>(count) * values_per_element;
-            if (initial.explicit_values &&
-                initial.values.size() == expected_values) {
+            if (initial.explicit_values) {
                 values = initial.values;
-            } else if (!initial.explicit_values) {
-                values.assign(expected_values, 0.0);
             } else {
                 values.assign(expected_values, 0.0);
             }
