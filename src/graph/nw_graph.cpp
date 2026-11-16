@@ -5265,6 +5265,140 @@ std::map<std::string, std::string> ParseHistoryFields(
     return fields;
 }
 
+struct ParsedHistoryInitial {
+    std::map<std::string, std::string> fields;
+    std::vector<double> values;
+    bool explicit_values = false;
+};
+
+void SkipJsonSpace(std::string_view& text) {
+    while (!text.empty() &&
+           (text.front() == ' ' || text.front() == '\t' ||
+            text.front() == '\r' || text.front() == '\n')) {
+        text.remove_prefix(1u);
+    }
+}
+
+bool ParseJsonStringToken(std::string_view& text, std::string& out) {
+    SkipJsonSpace(text);
+    if (text.empty() || text.front() != '"') return false;
+    text.remove_prefix(1u);
+    out.clear();
+    while (!text.empty()) {
+        const char c = text.front();
+        text.remove_prefix(1u);
+        if (c == '"') return true;
+        if (c == '\\' && !text.empty()) {
+            const char escaped = text.front();
+            text.remove_prefix(1u);
+            out.push_back(escaped == 'n'   ? '\n'
+                          : escaped == 't' ? '\t'
+                          : escaped == 'r' ? '\r'
+                                           : escaped);
+        } else {
+            out.push_back(c);
+        }
+    }
+    return false;
+}
+
+bool ParseJsonNumberToken(std::string_view& text, std::string& out) {
+    SkipJsonSpace(text);
+    const std::size_t start = 0u;
+    std::size_t length = 0u;
+    while (length < text.size()) {
+        const char c = text[length];
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' ||
+            c == 'e' || c == 'E') {
+            ++length;
+            continue;
+        }
+        break;
+    }
+    if (length == 0u) return false;
+    out.assign(text.substr(start, length));
+    text.remove_prefix(length);
+    return true;
+}
+
+ParsedHistoryInitial ParseHistoryInitial(std::string_view text) {
+    ParsedHistoryInitial parsed;
+    while (!text.empty() &&
+           (text.front() == ' ' || text.front() == '\t' ||
+            text.front() == '\r' || text.front() == '\n')) {
+        text.remove_prefix(1u);
+    }
+    if (!text.empty() && text.front() == '[') {
+        text.remove_prefix(1u);
+        while (true) {
+            SkipJsonSpace(text);
+            if (text.empty()) break;
+            if (text.front() == ']') {
+                text.remove_prefix(1u);
+                parsed.explicit_values = true;
+                break;
+            }
+            std::string number;
+            if (!ParseJsonNumberToken(text, number)) break;
+            char* end = nullptr;
+            const double value = std::strtod(number.c_str(), &end);
+            if (end == number.c_str() || (end != nullptr && *end != '\0')) {
+                break;
+            }
+            parsed.values.push_back(value);
+            SkipJsonSpace(text);
+            if (!text.empty() && text.front() == ',') {
+                text.remove_prefix(1u);
+                continue;
+            }
+            if (!text.empty() && text.front() == ']') {
+                text.remove_prefix(1u);
+                parsed.explicit_values = true;
+                break;
+            }
+            break;
+        }
+        return parsed;
+    }
+    if (!text.empty() && text.front() == '{') {
+        text.remove_prefix(1u);
+        while (true) {
+            SkipJsonSpace(text);
+            if (text.empty()) break;
+            if (text.front() == '}') {
+                text.remove_prefix(1u);
+                break;
+            }
+            std::string key;
+            if (!ParseJsonStringToken(text, key)) break;
+            SkipJsonSpace(text);
+            if (text.empty() || text.front() != ':') break;
+            text.remove_prefix(1u);
+            SkipJsonSpace(text);
+            std::string value;
+            if (!text.empty() && text.front() == '"') {
+                if (!ParseJsonStringToken(text, value)) break;
+            } else if (!ParseJsonNumberToken(text, value)) {
+                break;
+            }
+            parsed.fields[key] = value;
+            SkipJsonSpace(text);
+            if (!text.empty() && text.front() == ',') {
+                text.remove_prefix(1u);
+                continue;
+            }
+            if (!text.empty() && text.front() == '}') {
+                text.remove_prefix(1u);
+                break;
+            }
+            break;
+        }
+        return parsed;
+    }
+    parsed.fields = ParseHistoryFields(text);
+    return parsed;
+}
+
 std::uint64_t HistoryFieldU64(
     const std::map<std::string, std::string>& fields,
     const std::string& name,
@@ -5291,21 +5425,17 @@ double HistoryFieldDouble(
 }
 
 double HistoryUnitHash(std::initializer_list<std::uint64_t> values) {
-    std::string payload;
-    bool first = true;
+    std::uint32_t h = 0x9E3779B9u;
     for (const std::uint64_t value : values) {
-        if (!first) payload.push_back(',');
-        payload += std::to_string(value);
-        first = false;
+        h ^= static_cast<std::uint32_t>(value) + 0x9E3779B9u +
+             (h << 6u) + (h >> 2u);
     }
-    const auto digest = Sha256Bytes(
-        reinterpret_cast<const std::uint8_t*>(payload.data()),
-        payload.size());
-    std::uint64_t raw = 0u;
-    for (std::size_t index = 0u; index < 8u; ++index) {
-        raw = (raw << 8u) | digest[index];
-    }
-    return static_cast<double>(raw) / 18446744073709551616.0;
+    h ^= h >> 16u;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15u;
+    h *= 0x846CA68Bu;
+    h ^= h >> 16u;
+    return static_cast<double>(h >> 8u) / 16777216.0;
 }
 
 const EvaluationValue* FindInputValue(
@@ -6048,8 +6178,9 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         // only after the whole simulation tick commits.
         const std::string state_type =
             node.history ? node.history->state_type : std::string();
-        const std::map<std::string, std::string> fields = ParseHistoryFields(
+        const ParsedHistoryInitial initial = ParseHistoryInitial(
             node.history ? node.history->initial_value : std::string());
+        const std::map<std::string, std::string>& fields = initial.fields;
         std::uint64_t count = 0u;
         std::uint64_t width = 0u;
         std::uint64_t height = 0u;
@@ -6097,14 +6228,22 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         }
         if (values.size() !=
             static_cast<std::size_t>(count) * values_per_element) {
-            values.assign(
-                static_cast<std::size_t>(count) * values_per_element, 0.0);
+            const std::size_t expected_values =
+                static_cast<std::size_t>(count) * values_per_element;
+            if (initial.explicit_values &&
+                initial.values.size() == expected_values) {
+                values = initial.values;
+            } else if (!initial.explicit_values) {
+                values.assign(expected_values, 0.0);
+            } else {
+                values.assign(expected_values, 0.0);
+            }
             const std::string mode = [&]() {
                 const auto found = fields.find("mode");
                 return found == fields.end() ? std::string("seeded")
                                              : found->second;
             }();
-            if (mode != "zero") {
+            if (!initial.explicit_values && mode != "zero") {
                 const std::uint64_t seed = HistoryFieldU64(
                     fields, "seed",
                     param("seed") ? static_cast<std::uint64_t>(

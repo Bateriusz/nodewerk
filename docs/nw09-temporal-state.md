@@ -122,11 +122,21 @@ size report, manifest, and package inspection.
 The supplied document is compiled through the established optimizer/offline
 DXC/cache/report pipeline. History nodes lower to ordinary compute
 specializations; the package uploads the declared initial state with
-`init.upload_history_state` and dispatches the simulation shader every tick.
+`init.upload_history_state` and emits `frame.simulation_step` for the packaged
+player's fixed-step scheduler. The player derives the target simulation tick
+from the presentation timeline tick, processes every outstanding 120 Hz step in
+order (or leaves a declared work cap pending), and only then presents. A
+backward device playback request fails closed unless the editor first restores
+a compatible checkpoint or reinitializes through the NW-08 boundary.
 State resources are raw `DXGI_FORMAT_R32_UINT` buffers of exactly
 `values_per_element * element_count * 4` bytes; the declared particle layout is
 five float32 values per particle and the feedback layout is four float32 values
 per image element.
+
+Per-element random injection uses one documented uint32 mix in Python, the C++
+oracle, and the generated HLSL shader. It is a declared scalar operation, not
+an atomic reduction, so CPU and GPU evaluate the same per-element value at a
+matching simulation tick subject only to declared numeric tolerance.
 
 ## Fixtures
 

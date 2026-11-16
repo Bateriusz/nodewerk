@@ -174,8 +174,27 @@ def test_stateful_package_executes_initial_upload_and_history_dispatch(
     ]
     assert len(uploads) == 2
     assert any(
-        instruction.opcode == "frame.dispatch" for instruction in package.frame
+        instruction.opcode == "frame.simulation_step"
+        for instruction in package.frame
     )
+    step = next(
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.simulation_step"
+    )
+    assert step.operands[3].type == "shader_ref"
+    assert step.operands[3].value in {
+        shader.shader_id for shader in package.shaders
+    }
+    assert step.operands[4].type == "u32"
+    copy = next(
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.copy_buffer"
+    )
+    # Established frame.copy_buffer contract is (source, destination).
+    assert copy.operands[0].value == record.current_resource_id
+    assert copy.operands[1].value == record.previous_resource_id
 
 
 def test_stateful_export_does_not_use_synthetic_fixture_package(
@@ -205,6 +224,69 @@ def test_history_shader_float_literals_are_dxc_valid(fixture: Path) -> None:
         # HLSL rejects integral literals such as `16f`; every float must have
         # a decimal point or exponent before the `f` suffix.
         assert not re.search(r"(?<![\w.])\d+f\b", hlsl)
+
+
+def test_present_selects_the_history_node_feeding_screen(tmp_path: Path) -> None:
+    graph = tmp_path / "two-history.nwgraph"
+    graph.write_text(
+        "\n".join(
+            [
+                "nwgraph 1",
+                "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+                "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+                "node particles nw.particles.system@1.0.0 frequency=history",
+                "  param count 2",
+                "  param seed 1",
+                "  param gravity -0.5",
+                "  param initial_velocity 1.0",
+                "  param lifetime_ticks 800",
+                "  param width 8",
+                "  param height 8",
+                '  history state-type nw.particles.v1 initial "mode=seeded;count=2;seed=1" '
+                "reset on-loop step-rate 120",
+                "node feedback nw.feedback.image@1.0.0 frequency=history",
+                "  param width 2",
+                "  param height 2",
+                "  param seed 2",
+                "  param decay 0.9",
+                "  param gain 0.2",
+                '  history state-type nw.feedback.image.v1 initial "mode=zero;width=2;height=2" '
+                "reset on-loop step-rate 120",
+                "node screen nw.render.present@1.0.0 frequency=frame residency=gpu",
+                "  input image feedback.out",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = _export(tmp_path, graph, "artifact")
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    records = {record.node_id: record for record in package.history}
+    assert result.report["present_state_node"] == "feedback"
+    assert result.report["present_resource_id"] == records[
+        "feedback"
+    ].current_resource_id
+
+
+@pytest.mark.parametrize("fixture", [PARTICLES, FEEDBACK])
+def test_history_hlsl_compiles_with_real_dxc_when_available(
+    tmp_path: Path, fixture: Path
+) -> None:
+    dxc = nw03.resolve_dxc()
+    if dxc is None:
+        pytest.skip("offline DXC is unavailable on this host")
+    document = nw03.load_graph(fixture)
+    specs = temporal.history_specs(document)
+    shaders = nw09_export._history_shaders(document, specs)
+    for index, shader in enumerate(shaders):
+        result = nw03.compile_generated_shader(
+            shader,
+            tmp_path / f"history_{index}.dxil",
+            dxc_executable=dxc,
+            allow_unpinned_dxc=True,
+            allow_test_payloads=False,
+        )
+        assert result["blob"]
 
 
 def test_export_settings_can_request_packaged_checkpoints(tmp_path: Path) -> None:

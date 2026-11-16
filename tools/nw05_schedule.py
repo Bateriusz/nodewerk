@@ -736,7 +736,7 @@ def build_logical_schedule(
                         state=_usage_state(usage),
                     )
                 )
-        elif opcode == "frame.dispatch":
+        elif opcode in {"frame.dispatch", "frame.simulation_step"}:
             for resource_id, usage in sorted(bound.items()):
                 if usage == "uav":
                     access = "write"
@@ -1030,6 +1030,7 @@ def _activation_frame(resource: LogicalResource, phase: str = "frame") -> int:
             continue
         if access.opcode in {
             "frame.dispatch",
+            "frame.simulation_step",
             "frame.copy_buffer",
             "frame.present",
         }:

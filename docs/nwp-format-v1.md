@@ -63,7 +63,7 @@ are checked with overflow-safe arithmetic before any payload allocation.
 | `CAP ` | Exactly one capability record: profile ID/digest, optional-profile identity, D3D12 feature level, shader model, resource binding/heap tiers, queues, limits, required DXGI formats, emitted shader targets, runtime/toolchain requirements, compiler/profile fingerprints, and exact required instruction opcodes. |
 | `RES ` | Bounded resource descriptors: id, semantic name, kind, DXGI format, usage, pass family, fixed binding slot/space, dimensions, byte size, flags. |
 | `INIT` | Initialization primitives (`init.create_resource`, `init.create_root_signature`, `init.upload_resource`, `init.upload_history_state`, `init.create_pipeline`). |
-| `FRAM` | Frame primitives (`frame.set_root_signature`, `frame.set_root_constants`, `frame.set_descriptor_table`, `frame.dispatch`, `frame.barrier`, `frame.present`, and the other documented opcodes). |
+| `FRAM` | Frame primitives (`frame.set_root_signature`, `frame.set_root_constants`, `frame.set_descriptor_table`, `frame.dispatch`, `frame.simulation_step`, `frame.barrier`, `frame.present`, and the other documented opcodes). |
 | `PARM` | Parameter and timeline records: canonical values, phase, component count, frame range, step, interpolation. |
 | `SHDR` | Deduplicated complete DXIL shader blob table plus specialization records. |
 | `RSIG` | Deduplicated complete root-signature blob table plus fixed pass-family binding records. |
@@ -102,6 +102,15 @@ bytes. `init.upload_history_state` fills both ping-pong resources from that
 declared initial state, and the emitted compute dispatch writes the current
 resource from the previous resource. No state layout is inferred from a
 four-component texture format.
+
+`frame.simulation_step` is the stateful-only fixed-step boundary. Its operands
+are `(group_x, group_y, group_z, shader_ref, history_state_id)`. A packaged
+player processes every required 120 Hz simulation tick in order for each
+presentation frame, advancing state by exactly 400 timeline ticks per step. A
+configured work cap leaves outstanding steps pending and presents the last
+completed state rather than dropping ticks. `frame.copy_buffer` operands remain
+the established `(source, destination)` pair; History copies the just-written
+current state into the previous state.
 
 ## Capability record
 

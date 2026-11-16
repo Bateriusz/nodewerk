@@ -288,6 +288,10 @@ INSTRUCTION_CONTRACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "frame.set_descriptor_table": ("frame", ("u32", "string", "resource_ref")),
     "frame.barrier": ("frame", ("u32", "resource_ref")),
     "frame.dispatch": ("frame", ("u32", "u32", "u32", "shader_ref")),
+    "frame.simulation_step": (
+        "frame",
+        ("u32", "u32", "u32", "shader_ref", "u32"),
+    ),
     "frame.draw": ("frame", ("u32", "u32")),
     "frame.copy_buffer": ("frame", ("resource_ref", "resource_ref", "u64")),
     "frame.set_timeline": ("frame", ("u32", "u64")),
@@ -2730,7 +2734,8 @@ def _validate_instructions(
                 elif (
                     operand.type == "u32"
                     and operand_index in (0, 1, 2)
-                    and instruction.opcode in {"frame.dispatch", "init.dispatch"}
+                    and instruction.opcode
+                    in {"frame.dispatch", "frame.simulation_step", "init.dispatch"}
                 ):
                     if operand.value == 0 or operand.value > 65535:
                         error(
@@ -2845,14 +2850,21 @@ def _validate_instructions(
                                     f"parameter {root_parameter} that does not bind resource "
                                     f"'{resource.name}' in the active root signature",
                                 )
-            if phase_name == "frame" and instruction.opcode == "frame.dispatch":
-                shader_operand = instruction.operands[-1]
+            if phase_name == "frame" and instruction.opcode in {
+                "frame.dispatch",
+                "frame.simulation_step",
+            }:
+                shader_operand = (
+                    instruction.operands[-1]
+                    if instruction.opcode == "frame.dispatch"
+                    else instruction.operands[3]
+                )
                 if shader_operand.type == "shader_ref":
                     shader = shader_by_id.get(shader_operand.value)
                     if shader is not None and shader.target != "cs_6_0":
                         error(
                             "package_dispatch_shader_target",
-                            f"frame.dispatch requires a compute shader target, "
+                            f"{instruction.opcode} requires a compute shader target, "
                             f"got '{shader.target}'",
                         )
                     pipeline_root = pipeline_roots.get(shader_operand.value)
@@ -3582,11 +3594,19 @@ def _validate_cross_references(
                 if operand.type == "shader_ref"
             )
     dispatched_shaders = {
-        instruction.operands[-1].value
+        (
+            instruction.operands[-1].value
+            if instruction.opcode == "frame.dispatch"
+            else instruction.operands[3].value
+        )
         for instruction in frame
-        if instruction.opcode == "frame.dispatch"
+        if instruction.opcode in {"frame.dispatch", "frame.simulation_step"}
         and instruction.operands
-        and instruction.operands[-1].type == "shader_ref"
+        and (
+            instruction.operands[-1].type == "shader_ref"
+            if instruction.opcode == "frame.dispatch"
+            else instruction.operands[3].type == "shader_ref"
+        )
     }
     init_dispatched_shaders = {
         instruction.operands[-1].value
@@ -3857,10 +3877,26 @@ def _validate_stateful_extension(
                 )
             )
     if package.history:
+        history_state_ids = {record.state_id for record in package.history}
+        for instruction in package.frame:
+            if (
+                instruction.opcode == "frame.simulation_step"
+                and len(instruction.operands) == 5
+                and instruction.operands[4].type == "u32"
+                and int(instruction.operands[4].value) not in history_state_ids
+            ):
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_history_dispatch",
+                        "frame.simulation_step references an unknown History "
+                        "state id",
+                        section=SECTION_FRAME,
+                    )
+                )
         history_dispatches = sum(
             1
             for instruction in package.frame
-            if instruction.opcode == "frame.dispatch"
+            if instruction.opcode in {"frame.dispatch", "frame.simulation_step"}
         )
         if history_dispatches < len(package.history):
             diagnostics.append(

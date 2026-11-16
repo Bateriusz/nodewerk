@@ -177,9 +177,12 @@ def _history_hlsl(
                 "    uint tick = uint(max(0.0f, floor(g_params[0].x / 400.0f)));",
                 "    uint x = index % "
                 f"{width}u; uint y = index / {width}u;",
-                "    uint h = (tick * 0x9e3779b1u) ^ (x * 0x85ebca6bu) ^ "
-                "(y * 0xc2b2ae35u) ^ "
-                f"{seed & 0xFFFFFFFF}u;",
+                "    uint h = 0x9e3779b9u;",
+                f"    h ^= {seed & 0xFFFFFFFF}u + 0x9e3779b9u + (h << 6u) + (h >> 2u);",
+                "    h ^= tick + 0x9e3779b9u + (h << 6u) + (h >> 2u);",
+                "    h ^= x + 0x9e3779b9u + (h << 6u) + (h >> 2u);",
+                "    h ^= y + 0x9e3779b9u + (h << 6u) + (h >> 2u);",
+                "    h ^= 11u + 0x9e3779b9u + (h << 6u) + (h >> 2u);",
                 "    h ^= h >> 16u; h *= 0x7feb352du; h ^= h >> 15u; "
                 "h *= 0x846ca68bu; h ^= h >> 16u;",
                 "    float injection = float(h >> 8u) * (1.0f / 16777216.0f);",
@@ -333,6 +336,7 @@ def build_stateful_package(
             "stateful packages require at least two frames in flight"
         )
     specs = tuple(specs) if specs is not None else temporal.history_specs(document)
+    specs = tuple(sorted(specs, key=lambda item: item.node_id))
     if not specs:
         raise StatefulExportError("document has no History declarations")
     if compiled_package is None:
@@ -355,6 +359,14 @@ def build_stateful_package(
         raise StatefulExportError(
             "compiled History shader count does not match the declarations"
         )
+    if not package.parameters:
+        raise StatefulExportError(
+            "compiled History base package has no timeline parameters"
+        )
+    if not package.root_signatures:
+        raise StatefulExportError(
+            "compiled History base package has no root signature"
+        )
     runtime = temporal.TemporalRuntime(document)
     parameters_resource = next(
         (resource for resource in package.resources if resource.usage == "cbv"),
@@ -364,6 +376,11 @@ def build_stateful_package(
         raise StatefulExportError(
             "compiled History base package has no root-constant resource"
         )
+    ordered_shaders = sorted(package.shaders, key=lambda item: item.shader_id)
+    shader_id_by_state_id = {
+        index: shader.shader_id
+        for index, shader in enumerate(ordered_shaders, start=1)
+    }
     next_resource = max(
         (resource.resource_id for resource in package.resources), default=0
     ) + 1
@@ -436,7 +453,7 @@ def build_stateful_package(
     history_records: list[nwp.HistoryRecord] = []
     reports: list[dict[str, Any]] = []
     state_resource_ids: list[int] = []
-    present_resource_id: int | None = None
+    resource_by_node: dict[str, int] = {}
     for index, spec in enumerate(specs, start=1):
         current_id = next_resource
         next_resource += 1
@@ -523,12 +540,15 @@ def build_stateful_package(
                     ),
                 ),
                 nwp.Instruction(
-                    "frame.dispatch",
+                    "frame.simulation_step",
                     (
                         nwp.InstructionOperand("u32", dispatch_groups[0]),
                         nwp.InstructionOperand("u32", dispatch_groups[1]),
                         nwp.InstructionOperand("u32", dispatch_groups[2]),
-                        nwp.InstructionOperand("shader_ref", index),
+                        nwp.InstructionOperand(
+                            "shader_ref", shader_id_by_state_id[index]
+                        ),
+                        nwp.InstructionOperand("u32", index),
                     ),
                 ),
                 nwp.Instruction(
@@ -548,8 +568,7 @@ def build_stateful_package(
                 ),
             ]
         )
-        if present_resource_id is None:
-            present_resource_id = current_id
+        resource_by_node[spec.node_id] = current_id
         history_records.append(
             nwp.HistoryRecord(
                 state_id=index,
@@ -613,8 +632,18 @@ def build_stateful_package(
                 ),
             )
         )
-    if present_resource_id is None:
-        raise StatefulExportError("stateful package has no presentable state")
+    present_source_node = ""
+    for node in document.nodes.values():
+        if node.operator_id != "nw.render.present":
+            continue
+        connection = node.inputs.get("image")
+        if connection is not None:
+            present_source_node = connection[0]
+            break
+    present_resource_id = resource_by_node.get(
+        present_source_node,
+        next(iter(resource_by_node.values())),
+    )
     frame.extend(
         [
             nwp.Instruction(
@@ -724,6 +753,8 @@ def build_stateful_package(
         },
         "history": reports,
         "state_resources": state_resource_ids,
+        "present_state_node": present_source_node,
+        "present_resource_id": present_resource_id,
         "frames_in_flight": frames_in_flight,
         "pending_retirement_bytes": sum(
             report["state_bytes"] * frames_in_flight for report in reports

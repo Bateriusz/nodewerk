@@ -836,12 +836,12 @@ ExitCode PackagePlayer::RunInitializationInstructions() {""",
     )
     cpp = replace_once(
         cpp,
-        r"""    std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
+        r"""    // NW08 overlay insertion point: per-frame pass timing begins here.
     for (const auto& op : frame_ops_) {""",
-        r"""    std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
-#if NW08_AUTHORING_RUNTIME
+        r"""#if NW08_AUTHORING_RUNTIME
     authoring_pass_timings_.clear();
 #endif
+    // NW08 overlay insertion point: per-frame pass timing begins here.
     for (const auto& op : frame_ops_) {
 #if NW08_AUTHORING_RUNTIME
         const auto authoring_pass_begin = std::chrono::steady_clock::now();

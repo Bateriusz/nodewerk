@@ -63,6 +63,10 @@ struct PlayerConfig {
     // checked after native allocation requirements are queried and before any
     // bulk resource creation.
     std::uint64_t memory_budget_bytes = 0u;
+    // Zero means process every required 120 Hz History tick in the current
+    // presentation frame.  A non-zero cap leaves outstanding ticks scheduled
+    // and presents the last completed tick instead of dropping work.
+    std::uint32_t history_work_cap = 0u;
 };
 
 struct PlayerDiagnostic {
@@ -140,6 +144,14 @@ public:
     std::uint64_t shutdown_count() const noexcept { return shutdown_count_; }
     std::uint64_t frames_rendered() const noexcept { return frames_rendered_; }
     std::uint64_t last_tick() const noexcept { return last_tick_; }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    std::uint64_t history_simulation_tick() const noexcept {
+        return history_simulation_tick_;
+    }
+    std::uint64_t history_pending_ticks() const noexcept {
+        return history_pending_ticks_;
+    }
+#endif
     std::uint32_t last_timeline_parameter_id() const noexcept {
         return timeline_parameter_id_;
     }
@@ -335,6 +347,9 @@ private:
             SetRenderTargets,
             Barrier,
             Dispatch,
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+            SimulationStep,
+#endif
             ExecuteIndirect,
             Draw,
             CopyBuffer,
@@ -359,6 +374,9 @@ private:
         std::array<bool, package::kMaxRootSignatureDwordCost>
             descriptor_resource_is_srv{};
         std::uint32_t shader_id = 0u;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        std::uint32_t history_state_id = 0u;
+#endif
         std::uint32_t group_x = 1u;
         std::uint32_t group_y = 1u;
         std::uint32_t group_z = 1u;
@@ -389,6 +407,11 @@ private:
     };
     std::vector<FrameOp> frame_ops_;
     std::vector<std::string> last_frame_order_;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    std::uint32_t history_work_cap_ = 0u;
+    std::uint64_t history_simulation_tick_ = 0u;
+    std::uint64_t history_pending_ticks_ = 0u;
+#endif
     std::unique_ptr<PlatformState> platform_;
 
 #if NW_PLAYER_DIAGNOSTICS

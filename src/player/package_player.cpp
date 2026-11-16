@@ -1151,6 +1151,9 @@ PackagePlayer::PackagePlayer(const PlayerConfig& config) : config_(config) {
     frames_in_flight_ = std::clamp(config.frames_in_flight, 1u, kMaxFramesInFlight);
     width_ = config.width;
     height_ = config.height;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    history_work_cap_ = config.history_work_cap;
+#endif
 }
 
 PackagePlayer::~PackagePlayer() { shutdown(); }
@@ -1599,6 +1602,10 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             type = FrameOp::Type::Barrier;
         } else if (instruction.opcode == "frame.dispatch") {
             type = FrameOp::Type::Dispatch;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "frame.simulation_step") {
+            type = FrameOp::Type::SimulationStep;
+#endif
         } else if (instruction.opcode == "frame.draw") {
             type = FrameOp::Type::Draw;
         } else if (instruction.opcode == "frame.copy_buffer") {
@@ -2039,6 +2046,103 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "signature");
                 return false;
             }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (type == FrameOp::Type::SimulationStep) {
+            if (instruction.operands.size() != 5u) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand_count", "operand_count", "5",
+                     std::to_string(instruction.operands.size()), "frame_plan",
+                     "frame.simulation_step operand count is invalid");
+                return false;
+            }
+            if (instruction.operands[0].type != package::OperandType::U32 ||
+                instruction.operands[1].type != package::OperandType::U32 ||
+                instruction.operands[2].type != package::OperandType::U32 ||
+                instruction.operands[3].type !=
+                    package::OperandType::ShaderRef ||
+                instruction.operands[4].type != package::OperandType::U32) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand", "operand_types",
+                     "u32,u32,u32,shader_ref,u32", "invalid", "frame_plan",
+                     "frame.simulation_step operand types are invalid");
+                return false;
+            }
+            op.group_x = instruction.operands[0].u32;
+            op.group_y = instruction.operands[1].u32;
+            op.group_z = instruction.operands[2].u32;
+            op.shader_id = instruction.operands[3].u32;
+            op.history_state_id = instruction.operands[4].u32;
+            if (op.group_x == 0u || op.group_y == 0u || op.group_z == 0u ||
+                op.group_x > 65535u || op.group_y > 65535u ||
+                op.group_z > 65535u) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_dispatch_bounds", "dispatch_groups",
+                     "1..65535",
+                     std::to_string(op.group_x) + "x" +
+                         std::to_string(op.group_y) + "x" +
+                         std::to_string(op.group_z),
+                     "frame_plan",
+                     "frame.simulation_step group dimensions are out of "
+                     "bounds");
+                return false;
+            }
+            bool state_found = false;
+            for (const auto& history : package_.history) {
+                if (history.state_id == op.history_state_id) {
+                    state_found = true;
+                    break;
+                }
+            }
+            if (!state_found) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_reference", "history_state_id",
+                     std::to_string(op.history_state_id), "missing",
+                     "frame_plan",
+                     "frame.simulation_step references a missing History "
+                     "state");
+                return false;
+            }
+            const package::ShaderRecord* step_shader = nullptr;
+            for (const auto& candidate : package_.shaders) {
+                if (candidate.shader_id == op.shader_id) {
+                    step_shader = &candidate;
+                    break;
+                }
+            }
+            if (step_shader == nullptr || !has_active_root_signature ||
+                step_shader->root_signature_id != active_root_signature_id) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_root_signature", "shader_id",
+                     std::to_string(op.shader_id), "matching active root",
+                     "frame_plan",
+                     "frame.simulation_step shader does not match the active "
+                     "root signature");
+                return false;
+            }
+            op.descriptor_resource = active_descriptor_resource;
+            for (std::size_t root = 0u;
+                 root < active_descriptor_resources.size(); ++root) {
+                if (!active_descriptor_valid[root]) continue;
+                const std::uint32_t resource_id =
+                    active_descriptor_resources[root];
+                bool duplicate = false;
+                for (std::uint32_t index = 0u;
+                     index < op.descriptor_resource_count; ++index) {
+                    if (op.descriptor_resources[index] == resource_id) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate && op.descriptor_resource_count <
+                                      op.descriptor_resources.size()) {
+                    const std::uint32_t entry =
+                        op.descriptor_resource_count++;
+                    op.descriptor_resources[entry] = resource_id;
+                    op.descriptor_resource_is_srv[entry] =
+                        active_descriptor_is_srv[root];
+                }
+            }
+#endif
         } else if (NW06_IF_RASTER(type == FrameOp::Type::SetGraphicsPipeline)) {
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             if (instruction.operands.size() != 1u ||
@@ -4666,6 +4770,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     bool package_has_constants = false;
     std::uint32_t package_constant_root = 0u;
     std::uint32_t package_constant_count = 0u;
+    std::int32_t package_time_byte_offset = -1;
     std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
         package_constant_values{};
     std::array<D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -4674,6 +4779,176 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     std::array<bool, package::kMaxRootSignatureDwordCost>
         package_table_valid{};
     std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    bool history_schedule_done = false;
+    auto record_history_schedule = [&]() -> ExitCode {
+        if (package_.history.empty()) return ExitCode::Success;
+        const std::uint64_t target_sim =
+            EffectiveTimelineTick(tick) /
+            package::kTimelineTicksPerSimulationTick;
+        if (target_sim < history_simulation_tick_) {
+            return Fail(ExitCode::InvalidArguments, "history",
+                        "history_backward_seek_requires_reinitialization",
+                        "simulation_tick",
+                        std::to_string(history_simulation_tick_),
+                        std::to_string(target_sim), "renderAtTick",
+                        "device playback cannot rewind History state without "
+                        "an explicit reinitialization/checkpoint restore");
+        }
+        const std::uint64_t required = target_sim - history_simulation_tick_;
+        const std::uint64_t processed =
+            history_work_cap_ == 0u
+                ? required
+                : std::min<std::uint64_t>(required, history_work_cap_);
+        std::vector<const FrameOp*> steps;
+        for (const auto& candidate : frame_ops_) {
+            if (candidate.type == FrameOp::Type::SimulationStep) {
+                steps.push_back(&candidate);
+            }
+        }
+        auto find_slot = [&](std::uint32_t resource_id)
+            -> PlatformState::ResourceSlot* {
+            for (auto& slot : state->resources) {
+                if (slot.resource_id == resource_id) return &slot;
+            }
+            return nullptr;
+        };
+        auto transition = [&](PlatformState::ResourceSlot* slot,
+                              D3D12_RESOURCE_STATES after) -> bool {
+            if (slot == nullptr || slot->resource == nullptr) return false;
+            if (slot->state != after) {
+                D3D12_RESOURCE_BARRIER barrier{};
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Transition.pResource = slot->resource;
+                barrier.Transition.StateBefore = slot->state;
+                barrier.Transition.StateAfter = after;
+                barrier.Transition.Subresource =
+                    D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                list->ResourceBarrier(1u, &barrier);
+                slot->state = after;
+            }
+            return true;
+        };
+        for (std::uint64_t iteration = 0u; iteration < processed; ++iteration) {
+            for (const FrameOp* step : steps) {
+                const package::HistoryRecord* history = nullptr;
+                for (const auto& candidate : package_.history) {
+                    if (candidate.state_id == step->history_state_id) {
+                        history = &candidate;
+                        break;
+                    }
+                }
+                if (history == nullptr) {
+                    return Fail(ExitCode::PackageValidationFailed,
+                                "package_validation", "history_state_missing",
+                                "history_state_id",
+                                std::to_string(step->history_state_id),
+                                "missing", "renderAtTick",
+                                "History simulation step has no state record");
+                }
+                PlatformState::ResourceSlot* current =
+                    find_slot(history->current_resource_id);
+                PlatformState::ResourceSlot* previous =
+                    find_slot(history->previous_resource_id);
+                if (current == nullptr || previous == nullptr) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "history_state_resource_missing",
+                                "history_state_id",
+                                std::to_string(history->state_id), "missing",
+                                "renderAtTick",
+                                "History ping-pong resources are unavailable");
+                }
+                if (!transition(current,
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS) ||
+                    !transition(previous,
+                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "history_transition_failed", "resources",
+                                "available", "missing", "renderAtTick",
+                                "History state transition failed");
+                }
+                if (package_root_signature != nullptr) {
+                    list->SetComputeRootSignature(package_root_signature);
+                }
+#if NW06_COMPILE_COMBINED_BINDINGS
+                const D3D12_GPU_DESCRIPTOR_HANDLE previous_handle =
+                    previous->has_srv_descriptor
+                        ? previous->srv_gpu_handle
+                        : previous->gpu_handle;
+#else
+                const D3D12_GPU_DESCRIPTOR_HANDLE previous_handle =
+                    previous->gpu_handle;
+#endif
+                list->SetComputeRootDescriptorTable(2u, previous_handle);
+                list->SetComputeRootDescriptorTable(1u, current->gpu_handle);
+                if (package_has_constants &&
+                    package_constant_count > 0u &&
+                    package_time_byte_offset >= 0 &&
+                    static_cast<std::uint32_t>(
+                        package_time_byte_offset) + 4u <=
+                        package_constant_count * 4u) {
+                    std::array<std::uint32_t,
+                               package::kMaxRootSignatureDwordCost>
+                        tick_values = package_constant_values;
+                    const float tick_seconds = static_cast<float>(
+                        (history_simulation_tick_ + iteration + 1u) *
+                        package::kTimelineTicksPerSimulationTick);
+                    std::memcpy(
+                        reinterpret_cast<std::uint8_t*>(tick_values.data()) +
+                            package_time_byte_offset,
+                        &tick_seconds, sizeof(tick_seconds));
+                    list->SetComputeRoot32BitConstants(
+                        package_constant_root, package_constant_count,
+                        tick_values.data(), 0u);
+                }
+                ID3D12PipelineState* pipeline = nullptr;
+                for (const auto& candidate : state->pipelines) {
+                    if (candidate.shader_id == step->shader_id) {
+                        pipeline = candidate.pipeline_state;
+                        break;
+                    }
+                }
+                if (pipeline == nullptr) {
+                    return Fail(ExitCode::PipelineStateCreationFailed,
+                                "pipeline", "history_pipeline_missing",
+                                "shader_id", std::to_string(step->shader_id),
+                                "missing", "renderAtTick",
+                                "History simulation pipeline was not created");
+                }
+                list->SetPipelineState(pipeline);
+                list->Dispatch(step->group_x, step->group_y, step->group_z);
+                D3D12_RESOURCE_BARRIER uav{};
+                uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                uav.UAV.pResource = current->resource;
+                list->ResourceBarrier(1u, &uav);
+                ++stats_.uav_barrier_count;
+                if (!transition(current, D3D12_RESOURCE_STATE_COPY_SOURCE) ||
+                    !transition(previous, D3D12_RESOURCE_STATE_COPY_DEST)) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "history_copy_transition_failed", "resources",
+                                "available", "missing", "renderAtTick",
+                                "History ping-pong copy transition failed");
+                }
+                list->CopyBufferRegion(
+                    previous->resource, 0u, current->resource, 0u,
+                    static_cast<UINT>(history->initial_state.size()));
+                if (!transition(previous,
+                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) ||
+                    !transition(current,
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS)) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "history_copy_restore_failed", "resources",
+                                "available", "missing", "renderAtTick",
+                                "History ping-pong copy restore failed");
+                }
+            }
+        }
+        history_simulation_tick_ += processed;
+        history_pending_ticks_ = target_sim - history_simulation_tick_;
+        return ExitCode::Success;
+    };
+#endif
+    // NW08 overlay insertion point: per-frame pass timing begins here.
     for (const auto& op : frame_ops_) {
         if (state->package_heap != nullptr) {
             for (std::size_t alias_index = 0u;
@@ -4784,6 +5059,8 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 op.parameter_tick_kinds[entry],
                                 timeline_value);
                             timeline_applied = true;
+                            package_time_byte_offset =
+                                op.parameter_offsets[entry];
                             break;
                         }
                     }
@@ -4795,6 +5072,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             reinterpret_cast<std::uint8_t*>(values.data()) +
                                 op.time_byte_offset,
                             &time_value, sizeof(time_value));
+                        package_time_byte_offset = op.time_byte_offset;
                     }
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                     if (op.type == FrameOp::Type::SetGraphicsRootConstants) {
@@ -5093,6 +5371,18 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     arguments->resource, 0u, nullptr, 0u);
                 break;
 #endif
+            }
+#endif
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+            case FrameOp::Type::SimulationStep: {
+                if (!history_schedule_done) {
+                    const ExitCode history_code = record_history_schedule();
+                    if (history_code != ExitCode::Success) {
+                        return history_code;
+                    }
+                    history_schedule_done = true;
+                }
+                break;
             }
 #endif
             case FrameOp::Type::Dispatch: {
@@ -6125,6 +6415,10 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     }
     initialized_ = true;
     initialization_count_ = 1u;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    history_simulation_tick_ = 0u;
+    history_pending_ticks_ = 0u;
+#endif
     last_exit_ = ExitCode::Success;
     return ExitCode::Success;
 }
@@ -6678,12 +6972,39 @@ bool PackagePlayer::BuildFramePlanForTesting(const package::Package& pkg) {
 
 bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
     const std::uint64_t frame_tick = EffectiveTimelineTick(tick);
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    if (!package_.history.empty()) {
+        const std::uint64_t target_sim =
+            frame_tick / package::kTimelineTicksPerSimulationTick;
+        if (target_sim < history_simulation_tick_) {
+            return Fail(ExitCode::InvalidArguments, "history",
+                        "history_backward_seek_requires_reinitialization",
+                        "simulation_tick",
+                        std::to_string(history_simulation_tick_),
+                        std::to_string(target_sim), "renderAtTick",
+                        "device playback cannot rewind History state without "
+                        "an explicit reinitialization/checkpoint restore");
+        }
+        const std::uint64_t required = target_sim - history_simulation_tick_;
+        const std::uint64_t processed =
+            history_work_cap_ == 0u
+                ? required
+                : std::min<std::uint64_t>(required, history_work_cap_);
+        history_simulation_tick_ += processed;
+        history_pending_ticks_ = target_sim - history_simulation_tick_;
+    }
+#endif
     bool timeline_override = timeline_override_active_;
     std::uint32_t timeline_parameter = timeline_parameter_id_;
     std::uint64_t timeline_value = timeline_tick_;
     last_root_constants_.fill(0u);
     last_root_constant_count_ = 0u;
     for (const auto& op : frame_ops_) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        if (op.type == FrameOp::Type::SimulationStep) {
+            continue;
+        }
+#endif
         if (op.type == FrameOp::Type::SetTimeline) {
             timeline_override = true;
             timeline_parameter = op.parameter_id;

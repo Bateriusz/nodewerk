@@ -252,6 +252,14 @@ def test_loop_reset_policy_is_per_node(tmp_path: Path) -> None:
     fresh = temporal.TemporalRuntime(nw03.load_graph(graph))
     assert runtime.state("particles").values == fresh.state("particles").values
     assert runtime.state("feedback").values == feedback_before
+    checkpoint = runtime.checkpoint()
+    assert all(
+        state["simulation_tick"] == runtime.simulation_tick
+        for state in checkpoint.states
+    )
+    restored = temporal.TemporalRuntime(nw03.load_graph(graph))
+    restored.restore_checkpoint(checkpoint)
+    assert restored.state_digest() == runtime.state_digest()
 
 
 def test_seek_reset_policy_is_per_node(tmp_path: Path) -> None:

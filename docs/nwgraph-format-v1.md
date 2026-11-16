@@ -93,6 +93,10 @@ unknown History fields are rejected by both readers. The declared initial value
 is semantic content: `mode=zero` is a real zero state, and the seeded particle
 and feedback layouts are packed as float32 with five values per particle or
 four values per feedback element.
+Initial values may be `;`-separated key/value fields, a JSON object, or a JSON
+numeric array. The authoring reader, C++ CPU oracle, exporter, and packaged
+shader path all consume the same declaration rather than substituting node
+parameter defaults for an explicit initial value.
 
 Temporal state is never treated as a pure cached output. History nodes
 participate in the semantic node identity, but their values are not memoized

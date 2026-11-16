@@ -1708,6 +1708,9 @@ std::vector<OperandContract> InstructionContracts() {
         {"frame.dispatch", "frame",
          {OperandType::U32, OperandType::U32, OperandType::U32,
           OperandType::ShaderRef}},
+        {"frame.simulation_step", "frame",
+         {OperandType::U32, OperandType::U32, OperandType::U32,
+          OperandType::ShaderRef, OperandType::U32}},
         {"frame.draw", "frame", {OperandType::U32, OperandType::U32}},
         {"frame.copy_buffer", "frame",
          {OperandType::ResourceRef, OperandType::ResourceRef, OperandType::U64}},
@@ -1848,6 +1851,7 @@ bool ValidateInstructions(
             } else if (operand.type == OperandType::U32 &&
                        operand_index < 3u &&
                        (instruction.opcode == "frame.dispatch" ||
+                        instruction.opcode == "frame.simulation_step" ||
                         instruction.opcode == "init.dispatch") &&
                        (operand.u32 == 0u || operand.u32 > 65535u)) {
                 error("package_instruction_operand",
@@ -1870,6 +1874,7 @@ bool ValidateInstructions(
             }
         }
         if ((instruction.opcode == "frame.dispatch" ||
+             instruction.opcode == "frame.simulation_step" ||
              instruction.opcode == "init.dispatch") &&
             instruction.operands.size() == contract->operands.size() &&
             instruction.operands[3].type == OperandType::ShaderRef) {
@@ -2778,10 +2783,16 @@ bool ValidateCrossReferences(const CapabilityRecord& capability,
         }
     }
     for (const auto& instruction : frame) {
-        if (instruction.opcode == "frame.dispatch" &&
+        if ((instruction.opcode == "frame.dispatch" ||
+             instruction.opcode == "frame.simulation_step") &&
             !instruction.operands.empty() &&
             instruction.operands.back().type == OperandType::ShaderRef) {
             dispatched_shaders.insert(instruction.operands.back().u32);
+        }
+        if (instruction.opcode == "frame.simulation_step" &&
+            instruction.operands.size() == 5u &&
+            instruction.operands[3].type == OperandType::ShaderRef) {
+            dispatched_shaders.insert(instruction.operands[3].u32);
         }
     }
     for (const auto& shader : shaders) {
@@ -3166,6 +3177,20 @@ bool ValidatePackage(const Package& package,
                               "init.upload_history_state references an unknown "
                               "History state id",
                               std::string(kSectionInitialization));
+            }
+        }
+        for (const auto& instruction : package.frame) {
+            if (instruction.opcode != "frame.simulation_step" ||
+                instruction.operands.size() != 5u ||
+                instruction.operands[4].type != OperandType::U32) {
+                continue;
+            }
+            if (history_by_id.count(instruction.operands[4].u32) == 0u) {
+                AddDiagnostic(diagnostics,
+                              "package_history_dispatch",
+                              "frame.simulation_step references an unknown "
+                              "History state id",
+                              std::string(kSectionFrame));
             }
         }
     }
@@ -4265,6 +4290,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     if (package.dev_metadata.has_value()) {
         actual_counts[std::string(kSectionDev)] = 0u;
     }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (!package.history.empty()) {
         actual_counts[std::string(kSectionHistory)] =
             static_cast<std::uint32_t>(package.history.size());
@@ -4273,6 +4299,7 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         actual_counts[std::string(kSectionCheckpoints)] =
             static_cast<std::uint32_t>(package.release_checkpoints.size());
     }
+#endif
     for (const auto& entry : entries) {
         if (entry.record_count != actual_counts[entry.name]) {
             NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_record_count",

@@ -141,13 +141,34 @@ def _parse_canonical_initial(value: str) -> Any:
 
 
 def _uint_hash(*values: int) -> int:
-    payload = ",".join(str(int(value)) for value in values).encode("ascii")
-    digest = hashlib.sha256(payload).digest()
-    return int.from_bytes(digest[:8], "big")
+    """Deterministic 32-bit hash shared with the C++ oracle and History shader.
+
+    The previous SHA-256-derived value could not be reproduced by the packaged
+    GPU shader without implementing SHA-256 in HLSL.  This documented mix uses
+    only uint32 wrap-around operations, so CPU, C++ and GPU evaluate the same
+    per-element injection in declared order.
+    """
+
+    mask = 0xFFFFFFFF
+    h = 0x9E3779B9
+    for value in values:
+        h ^= (
+            (int(value) & mask)
+            + 0x9E3779B9
+            + ((h << 6) & mask)
+            + (h >> 2)
+        ) & mask
+        h &= mask
+    h ^= h >> 16
+    h = (h * 0x7FEB352D) & mask
+    h ^= h >> 15
+    h = (h * 0x846CA68B) & mask
+    h ^= h >> 16
+    return h
 
 
 def _unit_hash(*values: int) -> float:
-    return _uint_hash(*values) / float(1 << 64)
+    return (_uint_hash(*values) >> 8) / float(1 << 24)
 
 
 @dataclass(frozen=True)
@@ -822,19 +843,26 @@ class TemporalRuntime:
         return self.state(node_id).values
 
     # -- lifecycle ---------------------------------------------------------
-    def _initial_state(self, spec: HistorySpec) -> TemporalState:
+    def _initial_state(
+        self, spec: HistorySpec, simulation_tick: int = 0
+    ) -> TemporalState:
         node = self.document.nodes[spec.node_id]
         return TemporalState(
             node_id=spec.node_id,
             operator_id=spec.operator_id,
             state_type=spec.state_type,
-            simulation_tick=0,
+            simulation_tick=int(simulation_tick),
             values=_initial_values(spec, node),
             state_layout_hash=spec.state_layout_hash,
             loop_generation=self._loop_generation,
         )
 
-    def _reset_states(self, node_ids: Iterable[str] | None = None) -> None:
+    def _reset_states(
+        self,
+        node_ids: Iterable[str] | None = None,
+        *,
+        simulation_tick: int = 0,
+    ) -> None:
         selected = (
             {spec.node_id for spec in self.specs}
             if node_ids is None
@@ -843,9 +871,18 @@ class TemporalRuntime:
         if not self._states:
             self._states = {}
         for spec in self.specs:
-            if spec.node_id not in selected:
-                continue
-            self._states[spec.node_id] = self._initial_state(spec)
+            if spec.node_id in selected:
+                self._states[spec.node_id] = self._initial_state(
+                    spec, simulation_tick
+                )
+            elif spec.node_id in self._states:
+                # A non-reset node keeps its committed values but still
+                # advances its recorded simulation-tick identity.  Checkpoint
+                # restore compares every state's tick with the checkpoint.
+                self._states[spec.node_id] = replace(
+                    self._states[spec.node_id],
+                    simulation_tick=int(simulation_tick),
+                )
 
     def reset(self) -> None:
         """Reset to declared initial state at tick zero."""
@@ -920,7 +957,9 @@ class TemporalRuntime:
             self._event_cursor = EventCursor(
                 loop_generation=self._loop_generation, tick=-1, sequence=0
             )
-            self._reset_states(loop_reset_nodes)
+            self._reset_states(
+                loop_reset_nodes, simulation_tick=next_tick
+            )
             self._simulation_tick = next_tick
             return
         previous = dict(self._states)
@@ -1213,7 +1252,9 @@ class TemporalRuntime:
                 simulation_tick=stored_tick,
                 values=values,
                 state_layout_hash=spec.state_layout_hash,
-                loop_generation=checkpoint.loop_generation,
+                loop_generation=int(
+                    raw.get("loop_generation", checkpoint.loop_generation)
+                ),
             )
         self._states = restored
         self._simulation_tick = checkpoint.simulation_tick

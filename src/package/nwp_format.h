@@ -39,6 +39,7 @@ inline constexpr std::uint16_t kVersionMinorStateful = 1;
 // HIST record layout version (the package minor remains 1).
 inline constexpr std::uint16_t kHistoryRecordVersion = 2;
 inline constexpr std::uint32_t kStatefulExtensionFlag = 2u;
+inline constexpr std::uint64_t kTimelineTicksPerSimulationTick = 400u;
 inline constexpr std::uint32_t kHeaderSize = 64;
 inline constexpr std::uint32_t kSectionEntrySize = 32;
 inline constexpr std::uint32_t kChecksumSize = 32;
