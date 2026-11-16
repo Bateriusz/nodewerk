@@ -472,9 +472,9 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
                 "\"device_removed\":%s}\n",
                 rewound == nw::player::ExitCode::Success ? "true" : "false",
                 exit_code,
-                IsDeviceRemoved(rewound) ? "true" : "false");
+                IsDeviceRemoved(exit_code) ? "true" : "false");
             std::fflush(stdout);
-            if (IsDeviceRemoved(rewound)) {
+            if (IsDeviceRemoved(exit_code)) {
                 return exit_code;
             }
             continue;
@@ -516,9 +516,9 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
                         "{\"event\":\"render-failed\",\"ok\":false,\"tick\":%llu,"
                         "\"exit_code\":%d,\"device_removed\":%s}\n",
                         static_cast<unsigned long long>(tick), exit_code,
-                        IsDeviceRemoved(rewound) ? "true" : "false");
+                        IsDeviceRemoved(exit_code) ? "true" : "false");
                     std::fflush(stdout);
-                    if (IsDeviceRemoved(rewound)) {
+                    if (IsDeviceRemoved(exit_code)) {
                         return exit_code;
                     }
                     continue;

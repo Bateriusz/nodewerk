@@ -312,6 +312,10 @@ def test_authoring_runtime_rewinds_history_on_backward_seek() -> None:
     ).read_text(encoding="utf-8")
     assert "rewindHistoryForAuthoring()" in host
     assert "history_simulation_tick()" in host
+    # The host's IsDeviceRemoved seam takes the integer exit code; passing the
+    # ExitCode enum directly is a Windows-only compile failure.
+    assert "IsDeviceRemoved(rewound)" not in host
+    assert "IsDeviceRemoved(exit_code)" in host
     overlay = (
         REPO_ROOT / "tools" / "nw08_authoring_runtime_overlay.py"
     ).read_text(encoding="utf-8")
