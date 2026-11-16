@@ -208,6 +208,10 @@ std::string AliasCandidateGroup(const package::ResourceDescriptor& resource) {
            std::to_string(resource.depth);
 }
 
+bool UsageRequiresUavOrdering(const std::string& usage) {
+    return usage == "uav" || usage == "uav_srv";
+}
+
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 bool IsHistoryStateResource(const package::Package& pkg,
                             std::uint32_t resource_id) {
@@ -829,8 +833,9 @@ ResourcePlanResult BuildAliasedResourcePlan(
                 barrier.resource_id = resource.resource_id;
                 barrier.before_resource_id = candidate.descriptor.resource_id;
                 barrier.group = placement.lifetime.permitted_alias_group;
-                barrier.uav_barrier = resource.usage == "uav" ||
-                                      candidate.descriptor.usage == "uav";
+                barrier.uav_barrier =
+                    UsageRequiresUavOrdering(resource.usage) ||
+                    UsageRequiresUavOrdering(candidate.descriptor.usage);
                 barrier.reason =
                     "fence-safe transient alias reuse after prior lifetime";
                 const auto use_it =
@@ -934,7 +939,15 @@ ResourcePlanResult BuildAliasedResourcePlan(
             activation.resource_id = resource_id;
             activation.before_resource_id = previous;
             activation.group = lifetimes[resource_id].permitted_alias_group;
-            activation.uav_barrier = true;
+            const ResourcePlacement* incoming =
+                result.plan.Find(resource_id);
+            const ResourcePlacement* outgoing =
+                result.plan.Find(previous);
+            activation.uav_barrier =
+                (incoming != nullptr &&
+                 UsageRequiresUavOrdering(incoming->descriptor.usage)) ||
+                (outgoing != nullptr &&
+                 UsageRequiresUavOrdering(outgoing->descriptor.usage));
             activation.reason =
                 index == 0u
                     ? "frame-boundary alias activation before reuse"
