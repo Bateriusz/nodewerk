@@ -466,7 +466,7 @@ def test_native_player_stateful_schedule_and_presentation_when_available(
             pytest.fail("required pinned offline DXC is unavailable")
         pytest.skip("offline DXC is unavailable on this host")
     report = nw09_export.export_stateful_graph(
-        PARTICLES,
+        FEEDBACK,
         tmp_path / "stateful",
         allow_test_payloads=False,
         dxc_executable=dxc,
