@@ -31,7 +31,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -325,14 +324,19 @@ def _initial_values(
         for index in range(count):
             x = _unit_hash(seed, index, 1)
             y = _unit_hash(seed, index, 2)
-            angle = _unit_hash(seed, index, 3) * 6.283185307179586
             speed = initial_velocity * (0.5 + 0.5 * _unit_hash(seed, index, 4))
+            # Use independent hash-derived direction components rather than
+            # libm sin/cos.  This keeps every deterministic operation to IEEE
+            # basic arithmetic so the fixed-tick state digest is identical on
+            # Windows and Linux hosts.
+            direction_x = 2.0 * _unit_hash(seed, index, 3) - 1.0
+            direction_y = 2.0 * _unit_hash(seed, index, 5) - 1.0
             values.extend(
                 [
                     x,
                     y,
-                    speed * math.cos(angle),
-                    speed * math.sin(angle),
+                    speed * direction_x,
+                    speed * direction_y,
                     0.0,
                 ]
             )
