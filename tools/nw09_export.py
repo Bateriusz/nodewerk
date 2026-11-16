@@ -400,6 +400,27 @@ def presentation_chain(
             )
         chain.insert(0, node)
         node_id = image_inputs[0]
+
+    # NW-06 defines bloom as a half-resolution extraction/blur whose output is
+    # combined with the original scene by the immediately following tonemap
+    # pass.  The stateful lowering realizes the same final computation in a
+    # buffer-only post chain by folding that scene+bloom composite into the
+    # bloom pass.  That representation is equivalent only when bloom is
+    # consumed directly by nw.post.tonemap.  Fail closed for bloom->present
+    # (or bloom->another operator) instead of silently changing the authored
+    # operator semantics.
+    for index, node in enumerate(chain):
+        if node.operator_id != "nw.post.bloom":
+            continue
+        if (
+            index + 1 >= len(chain)
+            or chain[index + 1].operator_id != "nw.post.tonemap"
+        ):
+            raise StatefulExportError(
+                f"stateful bloom node '{node.node_id}' must be consumed "
+                "directly by nw.post.tonemap to preserve the established "
+                "NW-06 bloom semantics"
+            )
     return tuple(chain)
 
 
