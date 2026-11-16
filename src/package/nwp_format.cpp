@@ -3275,8 +3275,6 @@ std::vector<std::uint8_t> EncodePackage(
         sections[std::string(kSectionCheckpoints)] =
             EncodeCheckpoints(package.release_checkpoints);
     }
-#else
-    constexpr bool stateful = false;
 #endif
     if (package.dev_metadata.has_value()) {
         sections[std::string(kSectionDev)] = *package.dev_metadata;
@@ -3349,9 +3347,15 @@ std::vector<std::uint8_t> EncodePackage(
     Writer writer;
     writer.bytes.insert(writer.bytes.end(), kMagic.begin(), kMagic.end());
     writer.U16(kVersionMajor);
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     writer.U16(stateful ? kVersionMinorStateful : kVersionMinor);
     writer.U32(kHeaderSize);
     writer.U32(package.flags | (stateful ? kStatefulExtensionFlag : 0u));
+#else
+    writer.U16(kVersionMinor);
+    writer.U32(kHeaderSize);
+    writer.U32(package.flags);
+#endif
     writer.U32(0);
     writer.U64(kHeaderSize);
     writer.U64(total_size);
@@ -3416,8 +3420,12 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     const std::uint32_t entry_size = ReadU32(data + 44);
     const std::uint64_t checksum_offset = ReadU64(data + 48);
     const std::uint64_t reserved2 = ReadU64(data + 56);
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (major != kVersionMajor ||
         (minor != kVersionMinor && minor != kVersionMinorStateful)) {
+#else
+    if (major != kVersionMajor || minor != kVersionMinor) {
+#endif
         NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_version_unknown",
                       "unknown .nwp version", {}, 8, true);
         return false;
