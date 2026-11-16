@@ -497,7 +497,7 @@ def test_native_player_stateful_schedule_and_presentation_when_available(
         "--tick-step", "1",
         "--width", "320",
         "--height", "180",
-        "--emit-image-hash",
+        "--emit-display-image-hash",
         "--validation",
     )
     advanced = run_player(
@@ -506,7 +506,7 @@ def test_native_player_stateful_schedule_and_presentation_when_available(
         "--tick-step", "1",
         "--width", "320",
         "--height", "180",
-        "--emit-image-hash",
+        "--emit-display-image-hash",
         "--validation",
     )
     assert advanced["NW_PLAYER_HISTORY_SIMULATION_TICK"] == "8"
@@ -516,9 +516,12 @@ def test_native_player_stateful_schedule_and_presentation_when_available(
     assert advanced["NW_PLAYER_PRESENT_SOURCE_WIDTH"] == "320"
     assert advanced["NW_PLAYER_PRESENT_SOURCE_HEIGHT"] == "180"
     assert advanced["NW_PLAYER_PRESENT_SOURCE_EXPLICIT"] == "1"
-    assert int(advanced["NW_PLAYER_IMAGE_BYTES"]) == 320 * 180 * 4
-    assert int(advanced["NW_PLAYER_IMAGE_NONZERO_BYTES"]) > 0
-    assert advanced["NW_PLAYER_IMAGE_FNV64"] != initial["NW_PLAYER_IMAGE_FNV64"]
+    assert int(advanced["NW_PLAYER_DISPLAY_IMAGE_BYTES"]) == 320 * 180 * 4
+    assert int(advanced["NW_PLAYER_DISPLAY_IMAGE_NONZERO_BYTES"]) > 0
+    assert (
+        advanced["NW_PLAYER_DISPLAY_IMAGE_FNV64"]
+        != initial["NW_PLAYER_DISPLAY_IMAGE_FNV64"]
+    )
 
     # A bounded work budget must retain, not drop, the remaining simulation
     # ticks. This executes PackagePlayer::record_history_schedule itself.
