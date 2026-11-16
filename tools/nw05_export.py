@@ -1371,6 +1371,14 @@ def _build_specialized_player(
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
+            # CMake/compiler output is UTF-8 on the pinned Windows toolchain,
+            # but localized tool and linker messages can still contain bytes
+            # that are not valid UTF-8 (for example a lone 0x88 from a legacy
+            # code page).  Decode through one explicit policy so a diagnostic
+            # failure is reported as readable text instead of an unrelated
+            # UnicodeDecodeError.
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if completed.returncode != 0:

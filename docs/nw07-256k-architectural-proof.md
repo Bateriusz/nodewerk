@@ -61,9 +61,11 @@ The **131,072-byte stretch value is a measurement only**. It is reported as
 
 The GPU-less contract suite exports the frozen graph twice with a structurally
 valid synthetic DXIL payload and a 258-byte synthetic player template. That
-exercise produces a **32,318-byte** self-contained executable (17,457-byte
-package + 14,511-byte link manifest + footer + template), within both the
-262,144-byte hard gate and the 131,072-byte stretch value. The export-time
+exercise produces an **18,008-byte** self-contained executable (17,626-byte
+package + 32-byte compact manifest binding + footer + template), within both
+the 262,144-byte hard gate and the 131,072-byte stretch value. The package now
+also carries the explicit `nw05.present.width` / `nw05.present.height`
+initialization parameters (1920x1080 for the canonical graph). The export-time
 logical peak physical realization is **192,983,040 bytes** (about 184 MiB),
 below the 512 MiB export budget. These numbers validate the accounting and
 budget paths only; they are **not** release-artifact or hardware evidence.

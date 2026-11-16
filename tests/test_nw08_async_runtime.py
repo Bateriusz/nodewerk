@@ -1043,3 +1043,59 @@ def test_package_capture_dimensions_follow_explicit_present_geometry() -> None:
         package, fallback_width=1920, fallback_height=1080
     ) == (256, 256)
 
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    ((256, 144), (144, 256), (1920, 1080), (256, 256)),
+)
+def test_package_capture_dimensions_prefer_explicit_rectangles_over_inference(
+    width: int, height: int
+) -> None:
+    package = nwp.NwpPackage(
+        frame=[
+            nwp.Instruction(
+                "frame.present",
+                (nwp.InstructionOperand("resource_ref", 7),),
+            )
+        ],
+        resources=[
+            nwp.ResourceDescriptor(
+                resource_id=7,
+                name="output",
+                kind="buffer",
+                format="DXGI_FORMAT_R32_UINT",
+                usage="uav",
+                pass_family="nw.common.procedural_image",
+                size_bytes=width * height * 16,
+            )
+        ],
+        parameters=[
+            nwp.ParameterRecord(
+                parameter_id=1,
+                name="nw05.present.width",
+                type="uint",
+                phase="initialization",
+                component_count=1,
+                value=width.to_bytes(4, "little"),
+            ),
+            nwp.ParameterRecord(
+                parameter_id=2,
+                name="nw05.present.height",
+                type="uint",
+                phase="initialization",
+                component_count=1,
+                value=height.to_bytes(4, "little"),
+            ),
+        ],
+    )
+    assert preview._package_capture_dimensions(
+        package, fallback_width=100, fallback_height=50
+    ) == (width, height)
+    # The pixel-count fallback would report a square for every case above.
+    inferred_side = int((width * height) ** 0.5)
+    assert inferred_side * inferred_side == width * height
+    if width == height:
+        assert (width, height) == (inferred_side, inferred_side)
+    else:
+        assert (width, height) != (inferred_side, inferred_side)
+

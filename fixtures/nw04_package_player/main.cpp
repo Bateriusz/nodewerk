@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -28,6 +29,7 @@ struct FixtureArgs {
     bool headless = false;
     bool allow_software_adapter = false;
     bool emit_benchmark_metrics = false;
+    bool emit_image_hash = false;
     bool validation = false;
     bool resize_sequence = false;
     bool simulate_minimize = false;
@@ -109,6 +111,8 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             args->allow_software_adapter = true;
         } else if (std::strcmp(arg, "--emit-benchmark-metrics") == 0) {
             args->emit_benchmark_metrics = true;
+        } else if (std::strcmp(arg, "--emit-image-hash") == 0) {
+            args->emit_image_hash = true;
         } else if (std::strcmp(arg, "--validation") == 0) {
             args->validation = true;
         } else if (std::strcmp(arg, "--no-validation") == 0) {
@@ -169,7 +173,8 @@ int main(int argc, char** argv) {
             "[--frames N] [--tick-start N] [--tick-step N] [--width N] "
             "[--height N] [--diagnostics] [--headless] "
             "[--allow-software-adapter] "
-            "[--emit-benchmark-metrics] [--resize-sequence] "
+            "[--emit-benchmark-metrics] [--emit-image-hash] "
+            "[--resize-sequence] "
             "[--simulate-minimize] [--win32-minimize-restore] "
             "[--simulate-device-removal] "
             "[--simulate-allocation-failure] [--simulate-capability-failure] "
@@ -196,6 +201,11 @@ int main(int argc, char** argv) {
     config.emit_benchmark_metrics = args.emit_benchmark_metrics;
     config.wait_for_gpu_each_frame = args.emit_benchmark_metrics;
     config.frames_in_flight = 2u;
+
+    std::printf("NW_PLAYER_FROZEN_SPECIALIZATION=%d\n",
+                nw::player::PackagePlayer::compiled_with_frozen_specialization()
+                    ? 1
+                    : 0);
 
     nw::player::PackagePlayer player(config);
     if (args.simulate_capability_failure) {
@@ -431,6 +441,12 @@ int main(int argc, char** argv) {
         std::printf("NW_PLAYER_LAST_TIMELINE_VALUE=%llu\n",
                     static_cast<unsigned long long>(
                         player.last_timeline_value()));
+        std::printf("NW_PLAYER_PRESENT_SOURCE_WIDTH=%u\n",
+                    player.present_source_width());
+        std::printf("NW_PLAYER_PRESENT_SOURCE_HEIGHT=%u\n",
+                    player.present_source_height());
+        std::printf("NW_PLAYER_PRESENT_SOURCE_EXPLICIT=%d\n",
+                    player.present_source_geometry_explicit() ? 1 : 0);
         return 0;
     }
     nw::player::ExitCode code = nw::player::ExitCode::Success;
@@ -602,6 +618,32 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (args.emit_image_hash) {
+        std::vector<std::uint8_t> image;
+        const nw::player::ExitCode readback =
+            player.readbackPresentedOutput(&image);
+        if (readback != nw::player::ExitCode::Success) {
+            std::fprintf(stderr, "NW_PLAYER_IMAGE_READBACK_FAILED=%d\n",
+                         static_cast<int>(readback));
+            const int reported = player.Report(true);
+            (void)player.shutdown();
+            return reported;
+        }
+        std::uint64_t hash = 1469598103934665603ULL;
+        std::uint64_t nonzero_bytes = 0u;
+        for (const std::uint8_t byte : image) {
+            if (byte != 0u) ++nonzero_bytes;
+            hash ^= static_cast<std::uint64_t>(byte);
+            hash *= 1099511628211ULL;
+        }
+        std::printf("NW_PLAYER_IMAGE_BYTES=%llu\n",
+                    static_cast<unsigned long long>(image.size()));
+        std::printf("NW_PLAYER_IMAGE_NONZERO_BYTES=%llu\n",
+                    static_cast<unsigned long long>(nonzero_bytes));
+        std::printf("NW_PLAYER_IMAGE_FNV64=%016llx\n",
+                    static_cast<unsigned long long>(hash));
+    }
+
     const auto& stats = player.allocation_stats();
     std::printf("NW_PLAYER_PROFILE_ID=%s\n",
                 player.package().capability.profile_id.c_str());
@@ -619,6 +661,12 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(player.frames_presented()));
     std::printf("NW_PLAYER_PRESENT_RESOURCE_ID=%u\n",
                 player.present_resource_id());
+    std::printf("NW_PLAYER_PRESENT_SOURCE_WIDTH=%u\n",
+                player.present_source_width());
+    std::printf("NW_PLAYER_PRESENT_SOURCE_HEIGHT=%u\n",
+                player.present_source_height());
+    std::printf("NW_PLAYER_PRESENT_SOURCE_EXPLICIT=%d\n",
+                player.present_source_geometry_explicit() ? 1 : 0);
     std::printf("NW_PLAYER_RESIZE_COUNT=%llu\n",
                 static_cast<unsigned long long>(stats.resize_count));
     std::printf("NW_PLAYER_UPLOAD_REUSE_WAITS=%llu\n",

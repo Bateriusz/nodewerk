@@ -254,6 +254,29 @@ else()
     target_compile_options(nw_package_player PRIVATE -w)
 endif()
 
+# Fully validating external-package decoder for diagnostic fixtures.  The
+# frozen release decoder intentionally substitutes the canonical-HD CAP limits
+# and omits CAP decoding for the exact-SHA generated artifact.  The fixture
+# loads arbitrary presentation sizes, so it must keep the full decoder while
+# still linking the frozen player implementation.
+add_library(nw_package_player_diagnostic STATIC
+    src/package/nwp_format.cpp
+)
+target_include_directories(nw_package_player_diagnostic PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+)
+target_compile_features(nw_package_player_diagnostic PUBLIC cxx_std_20)
+nw_apply_player_profile(nw_package_player_diagnostic)
+target_compile_definitions(nw_package_player_diagnostic PRIVATE
+    NW05_FROZEN_EMBEDDED_SPECIALIZATION=0
+)
+if(MSVC)
+    target_compile_options(nw_package_player_diagnostic PRIVATE /W0)
+else()
+    target_compile_options(nw_package_player_diagnostic PRIVATE -w)
+endif()
+
 # Host-only NW-06 contract check: decodes an exported common package and runs
 # the exact native capability derivation/validation used by PackagePlayer
 # initialization.  It has no D3D12 dependency and is built on every platform.
@@ -273,49 +296,18 @@ target_compile_features(nw06_capability_check PRIVATE cxx_std_20)
 # /MT and lld-link reports a RuntimeLibrary /failifmismatch error.
 nw_apply_player_profile(nw06_capability_check)
 
-# NW-04: package-driven compute + fullscreen-display player fixture.  The
-# fixture consumes the established NW-03 `.nwp` v1 container and never links
-# compiler/editor/reflection tooling.
-add_executable(nw_package_player_fixture
-    fixtures/nw04_package_player/main.cpp
-)
-target_link_libraries(nw_package_player_fixture PRIVATE
-    nw_player_bootstrap
-    nw_package_player
-)
-if(WIN32)
-    target_link_libraries(nw_package_player_fixture PRIVATE gdi32)
-endif()
-nw_apply_player_profile(nw_package_player_fixture)
-nw_attach_dependency_check(nw_package_player_fixture "package_player")
-
-# NW-05: content-free specialized-player template.  `nodewerkc export` appends
-# the graph-derived .nwp package and generated link manifest to this executable
-# (or an equivalent player build) using the deterministic embedded footer.  It
-# is part of the default Windows build so the self-contained player is actually
-# compiled and reproducible.
-add_executable(nw_procedural_image_player
-    fixtures/nw05_procedural_image/main.cpp
-)
-target_link_libraries(nw_procedural_image_player PRIVATE
-    nw_player_bootstrap
-    nw_package_player
-)
-if(WIN32)
-    target_link_libraries(nw_procedural_image_player PRIVATE gdi32)
-endif()
-nw_apply_player_profile(nw_procedural_image_player)
-nw_attach_dependency_check(nw_procedural_image_player "procedural_image_player")
-
-if(NW05_GENERATED_PLAYER_SOURCE)
-    if(NOT EXISTS "${NW05_GENERATED_PLAYER_SOURCE}")
-        message(FATAL_ERROR "NW05_GENERATED_PLAYER_SOURCE does not exist: ${NW05_GENERATED_PLAYER_SOURCE}")
-    endif()
-
-    # Build the generated NW-05 artifact from an isolated player closure.
-    # Generic release/NW-04 targets retain NW_ENABLE_D3D12_VALIDATION=0;
-    # this library alone carries the real debug-layer qualification path and
-    # only the optional feature-query code retained by the generated manifest.
+# Build the frozen NW-05 player closure used by generated artifacts and the
+# frozen diagnostic fixture.
+# Generic release/NW-04 targets retain NW_ENABLE_D3D12_VALIDATION=0; this
+# library alone carries the real debug-layer qualification path and only the
+# optional feature-query code retained by the generated manifest.
+#
+# The frozen PackagePlayer fixture links this exact library so its
+# `NW05_FROZEN_EMBEDDED_SPECIALIZATION` frame-plan branch is the implementation
+# that actually executes.  Defining the macro only on a generic bootstrap
+# archive or on a fixture main would leave both fixture modes running the
+# generic planner.
+if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
     add_library(nw05_player_bootstrap STATIC
         ${NW_PLAYER_BOOTSTRAP_SOURCES}
     )
@@ -351,6 +343,53 @@ if(NW05_GENERATED_PLAYER_SOURCE)
             user32
             kernel32
         )
+    endif()
+endif()
+
+# NW-04: package-driven compute + fullscreen-display player fixture.  The
+# fixture consumes the established NW-03 `.nwp` v1 container and never links
+# compiler/editor/reflection tooling.
+add_executable(nw_package_player_fixture
+    fixtures/nw04_package_player/main.cpp
+)
+if(NW05_FROZEN_EMBEDDED_SPECIALIZATION)
+    target_link_libraries(nw_package_player_fixture PRIVATE
+        nw05_player_bootstrap
+        nw_package_player_diagnostic
+    )
+else()
+    target_link_libraries(nw_package_player_fixture PRIVATE
+        nw_player_bootstrap
+        nw_package_player_diagnostic
+    )
+endif()
+if(WIN32)
+    target_link_libraries(nw_package_player_fixture PRIVATE gdi32)
+endif()
+nw_apply_player_profile(nw_package_player_fixture)
+nw_attach_dependency_check(nw_package_player_fixture "package_player")
+
+# NW-05: content-free specialized-player template.  `nodewerkc export` appends
+# the graph-derived .nwp package and generated link manifest to this executable
+# (or an equivalent player build) using the deterministic embedded footer.  It
+# is part of the default Windows build so the self-contained player is actually
+# compiled and reproducible.
+add_executable(nw_procedural_image_player
+    fixtures/nw05_procedural_image/main.cpp
+)
+target_link_libraries(nw_procedural_image_player PRIVATE
+    nw_player_bootstrap
+    nw_package_player
+)
+if(WIN32)
+    target_link_libraries(nw_procedural_image_player PRIVATE gdi32)
+endif()
+nw_apply_player_profile(nw_procedural_image_player)
+nw_attach_dependency_check(nw_procedural_image_player "procedural_image_player")
+
+if(NW05_GENERATED_PLAYER_SOURCE)
+    if(NOT EXISTS "${NW05_GENERATED_PLAYER_SOURCE}")
+        message(FATAL_ERROR "NW05_GENERATED_PLAYER_SOURCE does not exist: ${NW05_GENERATED_PLAYER_SOURCE}")
     endif()
 
     add_executable(nw05_generated_player "${NW05_GENERATED_PLAYER_SOURCE}")

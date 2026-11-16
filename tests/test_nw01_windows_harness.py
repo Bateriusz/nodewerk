@@ -102,6 +102,8 @@ def test_bootstrap_is_exact_version_fail_closed_and_has_bounded_delivery_fallbac
     assert "Invoke-NwDownloadWithFallback" in module
     assert "tool-version-identities.json" in module
     assert "Get-NwReportedToolVersions" in module
+    assert "response ended prematurely" in module
+    assert "responseended" in module
     assert "UnknownError" not in module
     assert "Assert-NwMsvcSelectedExecutables" in module
     assert "is outside required MSVC family" in module
@@ -842,6 +844,26 @@ def test_download_retries_fallbacks_and_content_validation(tmp_path: Path) -> No
     proc = run_pwsh_command(retry_script)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "retry-ok" in proc.stdout
+
+    truncated_response_script = textwrap.dedent(
+        f"""
+        Import-Module {module} -Force
+        $global:attempts = 0
+        $downloader = {{
+            param([string]$TargetUri, [string]$TargetOutFile)
+            $global:attempts++
+            $inner = [System.Exception]::new('The response ended prematurely. (ResponseEnded)')
+            throw [System.Exception]::new('Error while copying content to a stream.', $inner)
+        }}
+        $result = Invoke-NwDownloadWithFallback -Name 'test' -Uri 'https://example.invalid/truncated' -OutFile {output} -RetryPolicy {retry} -Downloader $downloader -FallbackProbe {{ 'exact-fallback' }}
+        if ($result.FallbackUsed -ne $true -or $result.FallbackValue -ne 'exact-fallback') {{ throw 'truncated response did not reach exact fallback' }}
+        if ($global:attempts -ne 4) {{ throw "attempts=$($global:attempts)" }}
+        Write-Output 'truncated-response-ok'
+        """
+    )
+    proc = run_pwsh_command(truncated_response_script)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "truncated-response-ok" in proc.stdout
 
     fallback_script = textwrap.dedent(
         f"""

@@ -196,6 +196,54 @@ bool ResourceNeedsCbvSrvUavDescriptor(
 #endif
 }
 
+struct PresentSourceGeometry {
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    bool explicit_geometry = false;
+};
+
+// Resolve the presentation geometry exactly once for every frame-plan
+// variant.  The package carries explicit initialization-phase dimensions in
+// `nw05.present.width` / `nw05.present.height`; those names are shared with
+// the NW-05 exporter.  Pixel-count inference remains a compatibility fallback
+// for older packages, but it cannot recover the orientation of a rectangular
+// output (256x144 and 144x256 have the same pixel count) and it reports square
+// geometry for any rectangle whose area is a perfect square.
+PresentSourceGeometry SelectPresentSourceGeometry(
+    const package::Package& pkg, std::uint64_t pixel_count) {
+    std::uint32_t explicit_width = 0u;
+    std::uint32_t explicit_height = 0u;
+    for (const auto& parameter : pkg.parameters) {
+        if (parameter.value.size() < 4u) continue;
+        std::uint32_t value = 0u;
+        std::memcpy(&value, parameter.value.data(), sizeof(value));
+        if (parameter.name == "nw05.present.width") {
+            explicit_width = value;
+        } else if (parameter.name == "nw05.present.height") {
+            explicit_height = value;
+        }
+    }
+    PresentSourceGeometry geometry{};
+    if (explicit_width != 0u && explicit_height != 0u &&
+        static_cast<std::uint64_t>(explicit_width) * explicit_height <=
+            pixel_count) {
+        geometry.width = explicit_width;
+        geometry.height = explicit_height;
+        geometry.explicit_geometry = true;
+        return geometry;
+    }
+    const std::uint32_t side = static_cast<std::uint32_t>(
+        std::sqrt(static_cast<double>(pixel_count)));
+    if (static_cast<std::uint64_t>(side) * side == pixel_count) {
+        geometry.width = side;
+        geometry.height = side;
+    } else {
+        geometry.width = static_cast<std::uint32_t>(pixel_count);
+        geometry.height = 1u;
+    }
+    return geometry;
+}
+
 #if defined(_WIN32)
 std::uint64_t RoundUp(std::uint64_t value, std::uint64_t alignment) {
     if (alignment == 0u) return value;
@@ -1077,6 +1125,14 @@ std::uint32_t PackagePlayer::specialized_implementation_mask() noexcept {
     return mask;
 }
 
+bool PackagePlayer::compiled_with_frozen_specialization() noexcept {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    return true;
+#else
+    return false;
+#endif
+}
+
 PackagePlayer::PackagePlayer() : PackagePlayer(PlayerConfig{}) {}
 
 PackagePlayer::PackagePlayer(const PlayerConfig& config) : config_(config) {
@@ -1288,6 +1344,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     present_resource_id_ = 0u;
     present_source_width_ = 0u;
     present_source_height_ = 0u;
+    present_source_geometry_explicit_ = false;
 
     for (const auto& instruction : package_.frame) {
         FrameOp op{};
@@ -1457,36 +1514,11 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             const std::uint64_t pixel_count =
                 present_resource->size_bytes / 16u;
-            std::uint32_t explicit_width = 0u;
-            std::uint32_t explicit_height = 0u;
-            for (const auto& parameter : package_.parameters) {
-                if (parameter.value.size() < 4u) continue;
-                std::uint32_t value = 0u;
-                std::memcpy(&value, parameter.value.data(), sizeof(value));
-                if (parameter.name == "nw05.present.width") {
-                    explicit_width = value;
-                } else if (parameter.name == "nw05.present.height") {
-                    explicit_height = value;
-                }
-            }
-            if (explicit_width != 0u && explicit_height != 0u &&
-                static_cast<std::uint64_t>(explicit_width) *
-                        explicit_height <=
-                    pixel_count) {
-                present_source_width_ = explicit_width;
-                present_source_height_ = explicit_height;
-            } else {
-                const std::uint32_t side = static_cast<std::uint32_t>(
-                    std::sqrt(static_cast<double>(pixel_count)));
-                if (static_cast<std::uint64_t>(side) * side == pixel_count) {
-                    present_source_width_ = side;
-                    present_source_height_ = side;
-                } else {
-                    present_source_width_ =
-                        static_cast<std::uint32_t>(pixel_count);
-                    present_source_height_ = 1u;
-                }
-            }
+            const PresentSourceGeometry geometry =
+                SelectPresentSourceGeometry(package_, pixel_count);
+            present_source_width_ = geometry.width;
+            present_source_height_ = geometry.height;
+            present_source_geometry_explicit_ = geometry.explicit_geometry;
             present_resource_id_ = op.resource_a;
         } else {
             last_exit_ = ExitCode::PackageValidationFailed;
@@ -1529,6 +1561,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     present_resource_id_ = 0u;
     present_source_width_ = 0u;
     present_source_height_ = 0u;
+    present_source_geometry_explicit_ = false;
     for (const auto& instruction : package_.frame) {
         bool known = true;
         FrameOp::Type type = FrameOp::Type::Present;
@@ -2232,38 +2265,11 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             }
             const std::uint64_t pixel_count =
                 present_resource->size_bytes / 16u;
-            bool explicit_geometry = false;
-            std::uint32_t explicit_width = 0u;
-            std::uint32_t explicit_height = 0u;
-            for (const auto& parameter : package_.parameters) {
-                if (parameter.value.size() < 4u) continue;
-                std::uint32_t value = 0u;
-                std::memcpy(&value, parameter.value.data(), sizeof(value));
-                if (parameter.name == "nw05.present.width") {
-                    explicit_width = value;
-                } else if (parameter.name == "nw05.present.height") {
-                    explicit_height = value;
-                }
-            }
-            if (explicit_width != 0u && explicit_height != 0u &&
-                static_cast<std::uint64_t>(explicit_width) * explicit_height <=
-                    pixel_count) {
-                present_source_width_ = explicit_width;
-                present_source_height_ = explicit_height;
-                explicit_geometry = true;
-            }
-            const std::uint32_t side = static_cast<std::uint32_t>(
-                std::sqrt(static_cast<double>(pixel_count)));
-            if (explicit_geometry) {
-                // Explicit package geometry takes precedence over inference.
-            } else if (static_cast<std::uint64_t>(side) * side == pixel_count) {
-                present_source_width_ = side;
-                present_source_height_ = side;
-            } else {
-                present_source_width_ =
-                    static_cast<std::uint32_t>(pixel_count);
-                present_source_height_ = 1u;
-            }
+            const PresentSourceGeometry geometry =
+                SelectPresentSourceGeometry(package_, pixel_count);
+            present_source_width_ = geometry.width;
+            present_source_height_ = geometry.height;
+            present_source_geometry_explicit_ = geometry.explicit_geometry;
             if (present_resource_id_ != 0u &&
                 present_resource_id_ != op.resource_a) {
                 Fail(ExitCode::PackageValidationFailed, "package_validation",
@@ -5727,6 +5733,7 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     present_resource_id_ = 0u;
     present_source_width_ = 0u;
     present_source_height_ = 0u;
+    present_source_geometry_explicit_ = false;
     frames_presented_ = 0u;
     using_aliased_plan_ = false;
     width_ = config_.width;

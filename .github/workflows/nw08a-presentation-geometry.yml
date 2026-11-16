@@ -1,0 +1,211 @@
+name: NW-08A Presentation Geometry and Windows Release Evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-canonical-build-checks:
+    name: Windows x64 canonical NW-07 BuildChecks and real-player geometry
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Bootstrap exact NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh ./tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath "$env:RUNNER_TEMP\nw08a-bootstrap-provenance.json"
+      - name: Export exact MSVC/SDK build environment
+        shell: pwsh
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+      - name: Verify exact pinned toolchain
+        shell: pwsh
+        run: pwsh ./tools/nw01/doctor.ps1
+
+      # Self-contained prerequisite for every later --player-template use.
+      # This is the canonical NW-07 release build contract, not an ad-hoc
+      # release configure.
+      - name: Configure canonical NW-07 release player template
+        shell: pwsh
+        run: |
+          cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build canonical NW-07 release player template
+        shell: pwsh
+        run: |
+          cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template -PathType Leaf)) {
+            Write-Error "NW-07 release player template was not built: $template"
+            exit 1
+          }
+          "NW08A_PLAYER_TEMPLATE=$template" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NW08A_DXC_EXE=$((Get-Command dxc.exe -ErrorAction Stop).Source)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build generic and frozen package-player fixtures
+        shell: pwsh
+        run: |
+          # Mirror the nw07-release preset's pinned MSVC toolchain and release
+          # cache settings; without the toolchain file the bootstrapped runner
+          # selects clang++ and links forbidden dynamic MSVC runtime imports.
+          $toolchain = Join-Path $PWD "cmake/toolchains/msvc-x64.cmake"
+          foreach ($mode in @("generic", "frozen")) {
+            $frozen = if ($mode -eq "frozen") { "ON" } else { "OFF" }
+            cmake -S . -B "build/nw08a-$mode" -G Ninja `
+              "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
+              -DCMAKE_BUILD_TYPE=MinSizeRel `
+              -DNW_BUILD_PROFILE=release `
+              -DNW_ENFORCE_PINNED_TOOLCHAIN=ON `
+              -DNW_ENABLE_CRT_ELIMINATION_EXPERIMENT=OFF `
+              -DNW_USE_INBOX_UCRT=ON `
+              -DNW07_CAPTURE_CONTROLS=OFF `
+              "-DNW05_FROZEN_EMBEDDED_SPECIALIZATION=$frozen"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cmake --build "build/nw08a-$mode" --target nw_package_player_fixture --parallel 2
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $player = "build/nw08a-$mode/staging/package_player/nw_package_player_fixture.exe"
+            if (-not (Test-Path $player -PathType Leaf)) {
+              Write-Error "PackagePlayer fixture was not built: $player"
+              exit 1
+            }
+          }
+
+      - name: Export and decode presentation packages through the release path
+        shell: pwsh
+        run: |
+          python tools/nw08a_presentation_cases.py `
+            --work build/nw08a-cases `
+            --dxc "$env:NW08A_DXC_EXE" `
+            --player-template "$env:NW08A_PLAYER_TEMPLATE" `
+            --report build/nw08a-cases/report.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = Get-Content -Raw build/nw08a-cases/report.json | ConvertFrom-Json
+          if ($report.success -ne $true -or $report.export_mode -ne "release") {
+            Write-Error "NW-08A presentation package export did not pass"
+            exit 1
+          }
+          foreach ($case in $report.cases) {
+            if ($case.status -ne "passed" -or
+                $case.present_width -ne $case.width -or
+                $case.present_height -ne $case.height) {
+              Write-Error "Presentation parameters do not match $($case.name)"
+              exit 1
+            }
+          }
+
+      - name: Exercise generic and frozen frame-plan geometry across window sizes
+        shell: pwsh
+        run: |
+          $cases = @("landscape", "portrait", "canonical_hd", "square")
+          $windows = @(@(320, 180), @(640, 360), @(1280, 720))
+          $expectedModes = @{ generic = 0; frozen = 1 }
+          $expected = @{
+            landscape = @(256, 144)
+            portrait = @(144, 256)
+            canonical_hd = @(1920, 1080)
+            square = @(256, 256)
+          }
+          $records = @()
+          foreach ($mode in @("generic", "frozen")) {
+            $player = Join-Path $PWD "build/nw08a-$mode/staging/package_player/nw_package_player_fixture.exe"
+            if (-not (Test-Path $player -PathType Leaf)) {
+              throw "Missing $mode PackagePlayer fixture: $player"
+            }
+            foreach ($case in $cases) {
+              $package = Join-Path $PWD "build/nw08a-cases/$case/$case.nwp"
+              if (-not (Test-Path $package -PathType Leaf)) {
+                throw "Missing presentation package: $package"
+              }
+              foreach ($size in $windows) {
+                $output = & $player --package $package --planner-self-test `
+                  --frames 1 --tick-start 0 --tick-step 1 `
+                  --width $size[0] --height $size[1] 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                  throw "$mode/$case/$($size[0])x$($size[1]) failed with exit code $LASTEXITCODE"
+                }
+                $lines = @($output | ForEach-Object { "$_" })
+                $modeLine = $lines | Where-Object { $_ -match '^NW_PLAYER_FROZEN_SPECIALIZATION=(\d+)$' } |
+                  Select-Object -First 1
+                $widthLine = $lines | Where-Object { $_ -match '^NW_PLAYER_PRESENT_SOURCE_WIDTH=(\d+)$' } |
+                  Select-Object -First 1
+                $heightLine = $lines | Where-Object { $_ -match '^NW_PLAYER_PRESENT_SOURCE_HEIGHT=(\d+)$' } |
+                  Select-Object -First 1
+                $explicitLine = $lines | Where-Object { $_ -match '^NW_PLAYER_PRESENT_SOURCE_EXPLICIT=(\d+)$' } |
+                  Select-Object -First 1
+                if (-not $modeLine -or -not $widthLine -or -not $heightLine -or -not $explicitLine) {
+                  throw "$mode/$case/$($size[0])x$($size[1]) emitted incomplete geometry lines"
+                }
+                $compiledFrozen = [int]($modeLine -replace '^NW_PLAYER_FROZEN_SPECIALIZATION=', '')
+                $sourceWidth = [int]($widthLine -replace '^NW_PLAYER_PRESENT_SOURCE_WIDTH=', '')
+                $sourceHeight = [int]($heightLine -replace '^NW_PLAYER_PRESENT_SOURCE_HEIGHT=', '')
+                $explicit = [int]($explicitLine -replace '^NW_PLAYER_PRESENT_SOURCE_EXPLICIT=', '')
+                if ($compiledFrozen -ne $expectedModes[$mode] -or
+                    $sourceWidth -ne $expected[$case][0] -or
+                    $sourceHeight -ne $expected[$case][1] -or $explicit -ne 1) {
+                  throw "$mode/$case/$($size[0])x$($size[1]) frozen=$compiledFrozen geometry $sourceWidth x $sourceHeight explicit=$explicit"
+                }
+                $records += [ordered]@{
+                  mode = $mode
+                  compiled_frozen = ($compiledFrozen -eq 1)
+                  case = $case
+                  window_width = $size[0]
+                  window_height = $size[1]
+                  source_width = $sourceWidth
+                  source_height = $sourceHeight
+                  explicit = ($explicit -eq 1)
+                }
+              }
+            }
+          }
+          $records | ConvertTo-Json -Depth 4 |
+            Set-Content -Path build/nw08a-cases/player-geometry.json -Encoding utf8
+
+      - name: Run canonical NW-07 BuildChecks (two clean dirs, 262144-byte gate)
+        shell: pwsh
+        run: |
+          python tools/verify_nw07.py --mode BuildChecks `
+            --player-template "$env:NW08A_PLAYER_TEMPLATE" `
+            --dxc "$env:NW08A_DXC_EXE" `
+            --native-output build/nw08a-nw07-verification `
+            --summary-json "$env:RUNNER_TEMP\nw08a-nw07-build-checks.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "NW-07 BuildChecks failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      - name: Record clean-directory hash equality and 262144-byte gate
+        shell: pwsh
+        run: |
+          python tools/nw08a_windows_build_checks.py `
+            --summary "$env:RUNNER_TEMP\nw08a-nw07-build-checks.json" `
+            --verification-root build/nw08a-nw07-verification `
+            --output "$env:RUNNER_TEMP\nw08a-windows-build-checks-record.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload NW-08A Windows validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw08a-windows-build-checks
+          path: |
+            ${{ runner.temp }}/nw08a-bootstrap-provenance.json
+            ${{ runner.temp }}/nw08a-nw07-build-checks.json
+            ${{ runner.temp }}/nw08a-windows-build-checks-record.json
+            build/nw08a-cases/**
+            build/nw08a-nw07-verification/**
