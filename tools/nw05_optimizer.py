@@ -41,7 +41,12 @@ DEFAULT_FUSION_MAX_NODES = 64
 DEFAULT_FUSION_MAX_EXPRESSION_BYTES = 65536
 QUANTIZATION_TOLERANCE = 0.0
 
-FREQUENCY_RANK = {"compile-time": 0, "initialization": 1, "frame": 2}
+FREQUENCY_RANK = {
+    "compile-time": 0,
+    "initialization": 1,
+    "history": 2,
+    "frame": 3,
+}
 
 # Compiler/authoring-only implementations that are known but are deliberately
 # excluded from a generated player link closure unless the graph actually uses
@@ -188,6 +193,7 @@ class IRNode:
     source_node_ids: tuple[str, ...] = ()
     cse_key: str = ""
     raw_params: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    history: nw03.HistoryDeclaration | None = None
 
     @property
     def operator_key(self) -> str:
@@ -212,6 +218,8 @@ class IRNode:
             }
         if self.cse_key:
             result["cse_key"] = self.cse_key
+        if self.history is not None:
+            result["history"] = self.history.canonical_dict()
         return result
 
 
@@ -456,6 +464,7 @@ class OptimizedGraph:
                 residency=ir_node.residency,
                 params=params,
                 inputs=inputs,
+                history=ir_node.history,
                 selected_outputs=tuple(sorted(ir_node.outputs)),
             )
             fusion = accepted_fusions.get(ir_node.node_id)
@@ -818,6 +827,7 @@ def _structural_key(
     frequency: str,
     params: dict[str, tuple[str, ...]],
     inputs: Sequence[IRInput],
+    history: nw03.HistoryDeclaration | None = None,
 ) -> str:
     payload = {
         "operator": f"{operator_id}@{operator_version}",
@@ -832,6 +842,8 @@ def _structural_key(
             for item in sorted(inputs, key=lambda entry: entry.port)
         ],
     }
+    if history is not None:
+        payload["history"] = history.canonical_dict()
     return "sha256:v1:" + _sha256(nwp.canonical_json_bytes(payload))
 
 
@@ -1427,14 +1439,21 @@ def _build_ir_nodes(
             raw_params={
                 name: tuple(values) for name, values in node.params.items()
             },
+            history=node.history,
         )
-        if node.operator_id in PURE_OPERATORS and node_id not in constants:
+        if (
+            node.operator_id in PURE_OPERATORS
+            and node_id not in constants
+            and node.frequency != "history"
+            and node.history is None
+        ):
             cse_key = _structural_key(
                 node.operator_id,
                 node.version,
                 node.frequency,
                 params,
                 ir_node.inputs,
+                node.history,
             )
             ir_node.cse_key = cse_key
             if cse_key in key_to_node:
@@ -1531,6 +1550,8 @@ def _partition_nodes(
             partitions["compile-time"].append(node_id)
         elif node.frequency == "initialization":
             partitions["initialization"].append(node_id)
+        elif node.frequency == "history":
+            partitions.setdefault("history", []).append(node_id)
         else:
             partitions["frame"].append(node_id)
         for item in node.inputs:

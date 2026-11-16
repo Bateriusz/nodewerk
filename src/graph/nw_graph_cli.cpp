@@ -437,7 +437,18 @@ std::string DocumentJson(const GraphDocument& document) {
                 << ",\"source_port\":"
                 << JsonString(node.inputs[p].source_port) << "}";
         }
-        out << "]}";
+        out << "]";
+        if (node.history) {
+            out << ",\"history\":{\"state_type\":"
+                << JsonString(node.history->state_type)
+                << ",\"initial_value\":"
+                << JsonString(node.history->initial_value)
+                << ",\"reset_policy\":"
+                << JsonString(ToString(node.history->reset_policy))
+                << ",\"step_rate_hz\":" << node.history->step_rate_hz
+                << ",\"timeline_ticks_per_step\":400}";
+        }
+        out << "}";
     }
     out << "],\"editor_layout\":{";
     bool first = true;

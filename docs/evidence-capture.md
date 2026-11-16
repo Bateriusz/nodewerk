@@ -318,3 +318,14 @@ desktop RTX 4060 Ti, and desktop RTX 5070 Ti. The actual minimum tested Windows 
 Verified release ledgers, compiler comparison, reproducibility, offline DXIL execution, hardware
 captures, and CleanSystem execution remain stored under `benchmarks/` and are still validated by
 the existing NW-01 schemas/verifier.
+
+## NW-09 temporal-state cross-device evidence
+
+`benchmarks/nw09/hardware-evidence.json` is the NW-09 cross-device capture
+record. It remains `pending_unverified` until the identical stateful artifact is
+executed on representative desktop Ada and Blackwell hardware. The record binds
+the exact package semantic digest, state-layout hash, capability-profile
+ID/digest, Windows build, driver version, and toolchain identity, and declares
+numeric/state tolerances. GPU marketing generation and exact SKU are metadata,
+not semantic or checkpoint-compatibility predicates. Missing physical coverage
+stays pending and never changes deterministic NW-09 semantics.

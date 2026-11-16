@@ -144,6 +144,7 @@ class ExportSettings:
     fusion_enabled: bool = True
     fusion_max_nodes: int = optimizer.DEFAULT_FUSION_MAX_NODES
     fusion_max_expression_bytes: int = optimizer.DEFAULT_FUSION_MAX_EXPRESSION_BYTES
+    packaged_checkpoint_ticks: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -165,6 +166,7 @@ class ExportSettings:
             "fusion_enabled": self.fusion_enabled,
             "fusion_max_nodes": self.fusion_max_nodes,
             "fusion_max_expression_bytes": self.fusion_max_expression_bytes,
+            "packaged_checkpoint_ticks": list(self.packaged_checkpoint_ticks),
         }
 
 
@@ -2892,6 +2894,201 @@ def export_graph(
             for profile_id in KNOWN_PROFILES
             if profile_id != nwp.COMMON_PROFILE_ID
         ]
+
+    if nw03.document_has_history(document):
+        if optional_profiles:
+            raise ExportError(
+                "stateful NW-09 artifacts currently support only the common "
+                "capability profile",
+                dependency_path=["capability_profile", "stateful_extension"],
+            )
+        # NW-09 stateful content is an explicit additive extension of the
+        # established package/exporter path.  History-free documents never
+        # enter this branch and keep the frozen NW-08A byte baseline.
+        import nw09_export  # local import keeps the stateless path dependency-free
+        import nw09_temporal
+
+        try:
+            package, stateful_report = nw09_export.build_stateful_package(
+                document,
+                allow_test_payloads=allow_test_payloads,
+                frames_in_flight=settings.frames_in_flight,
+                packaged_checkpoint_ticks=settings.packaged_checkpoint_ticks,
+            )
+            package_bytes = nwp.encode_package(package)
+            valid, diagnostics = nwp.validate_package_bytes(package_bytes)
+            if not valid:
+                raise nw09_export.StatefulExportError(
+                    "stateful package bytes did not round-trip", diagnostics
+                )
+        except nw09_export.StatefulExportError as exc:
+            raise ExportError(
+                str(exc), exc.diagnostics, dependency_path=["stateful_extension"]
+            ) from exc
+        output_directory.mkdir(parents=True, exist_ok=True)
+        package_path = output_directory / "common.nwp"
+        _write_bytes(package_path, package_bytes)
+        logical_schedule = schedule.build_logical_schedule(
+            package, frames_in_flight=settings.frames_in_flight
+        )
+        physical = schedule.realize_physical_aliases(
+            logical_schedule,
+            package,
+            allocation_query=allocation_query,
+            adapter_identity=adapter_identity,
+            frames_in_flight=settings.frames_in_flight,
+            allow_simulated_allocation=allow_test_payloads,
+            player_width=(
+                nw09_export.present_geometry(document)[0]
+                if nw09_export.present_geometry(document)
+                else 1280
+            ),
+            player_height=(
+                nw09_export.present_geometry(document)[1]
+                if nw09_export.present_geometry(document)
+                else 720
+            ),
+        )
+        manifest = {
+            "format": "nw09-stateful-link-manifest",
+            "version": 1,
+            "stateful_extension": {
+                "package_minor": nwp.VERSION_MINOR_STATEFUL,
+                "sections": [nwp.SECTION_HISTORY]
+                + (
+                    [nwp.SECTION_CHECKPOINTS]
+                    if package.release_checkpoints
+                    else []
+                ),
+                "history": [record.to_dict() for record in package.history],
+                "checkpoints": [
+                    record.to_dict() for record in package.release_checkpoints
+                ],
+                "checkpoint_byte_cost": sum(
+                    item["byte_cost"]
+                    for item in stateful_report["packaged_checkpoints"]
+                ),
+                "portable_gpu_state_replay": False,
+            },
+            "artifact_profile_id": nwp.COMMON_PROFILE_ID,
+            "artifact_requirements_digest": nwp.COMMON_REQUIREMENTS_DIGEST,
+            "artifact_identity": artifact_key(
+                nwp.COMMON_PROFILE_ID,
+                nwp.COMMON_REQUIREMENTS_DIGEST,
+                emitted_requirements(package),
+            ),
+            "fixed_step": stateful_report["fixed_step"],
+            "present_geometry": stateful_report["present_geometry"],
+        }
+        manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
+            nwp.canonical_json_bytes(manifest)
+        ).hexdigest()
+        manifest_data = nwp.canonical_json_bytes(manifest)
+        schedule_data = json.dumps(
+            logical_schedule.to_dict(), indent=2, sort_keys=True
+        ).encode("utf-8")
+        aliases_data = json.dumps(
+            physical.to_dict(), indent=2, sort_keys=True
+        ).encode("utf-8")
+        _write_bytes(output_directory / "link-manifest.json", manifest_data)
+        _write_bytes(
+            output_directory / "common.schedule.json", schedule_data
+        )
+        _write_bytes(output_directory / "common.aliases.json", aliases_data)
+        size_report = analyze_package_size(
+            package,
+            package_bytes,
+            manifest_bytes=len(manifest_data),
+            executable_bytes=0,
+            player_template_bytes=0,
+            byte_ceiling=settings.byte_ceiling,
+            runtime_dependencies=[],
+            dependency_source="stateful-contract",
+            artifact_files={
+                "link-manifest.json": len(manifest_data),
+                "common.schedule.json": len(schedule_data),
+                "common.aliases.json": len(aliases_data),
+            },
+        )
+        size_report["stateful"] = {
+            "package_minor": package.version_minor,
+            "history_bytes": sum(
+                record.state_bytes for record in package.history
+            ),
+            "checkpoint_byte_cost": stateful_report[
+                "packaged_checkpoint_byte_cost"
+            ],
+            "pending_retirement_bytes": stateful_report[
+                "pending_retirement_bytes"
+            ],
+            "portable_gpu_state_replay": False,
+        }
+        stateful_memory_bytes = (
+            int(physical.peak_bytes)
+            + int(stateful_report["pending_retirement_bytes"])
+            + int(stateful_report["packaged_checkpoint_byte_cost"])
+        )
+        size_report["stateful"]["accounted_memory_bytes"] = stateful_memory_bytes
+        size_report["stateful"]["memory_budget_bytes"] = settings.memory_budget
+        if stateful_memory_bytes > settings.memory_budget:
+            raise ExportError(
+                "stateful export exceeds the declared memory budget",
+                [
+                    nwp.package_diagnostic(
+                        "export_memory_budget_exceeded",
+                        "state/checkpoint allocation plus pending-retirement "
+                        "bytes exceed the memory budget",
+                    )
+                ],
+                dependency_path=["budget", "stateful_extension", "memory_budget"],
+            )
+        _write_bytes(
+            output_directory / "size-report.json",
+            json.dumps(size_report, indent=2, sort_keys=True).encode("utf-8"),
+        )
+        stateful_report.update(
+            {
+                "success": True,
+                "output_directory": str(output_directory),
+                "package_path": str(package_path),
+                "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
+                "package_bytes": len(package_bytes),
+                "size_report": size_report,
+                "manifest_sha256": manifest["manifest_sha256"],
+                "checkpoint_byte_cost": stateful_report[
+                    "packaged_checkpoint_byte_cost"
+                ],
+            }
+        )
+        if report_path is not None:
+            _write_bytes(
+                Path(report_path),
+                json.dumps(
+                    stateful_report, indent=2, sort_keys=True
+                ).encode("utf-8"),
+            )
+        artifact = ProfileArtifact(
+            profile_id=nwp.COMMON_PROFILE_ID,
+            requirements_digest=nwp.COMMON_REQUIREMENTS_DIGEST,
+            emitted_requirements=emitted_requirements(package),
+            artifact_key=manifest["artifact_identity"],
+            package_bytes=package_bytes,
+            package=package,
+            manifest=manifest,
+            logical_schedule=logical_schedule,
+            physical_realization=physical,
+            size_report=size_report,
+            executable_bytes=None,
+            executable_name="",
+            generation_decisions=(),
+        )
+        return ExportResult(
+            output_directory=str(output_directory),
+            settings=settings,
+            artifacts={nwp.COMMON_PROFILE_ID: artifact},
+            report=stateful_report,
+            common_artifact_key=manifest["artifact_identity"],
+        )
 
     try:
         optimized = optimizer.optimize_graph(

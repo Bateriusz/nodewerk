@@ -208,6 +208,17 @@ std::string AliasCandidateGroup(const package::ResourceDescriptor& resource) {
            std::to_string(resource.depth);
 }
 
+bool IsHistoryStateResource(const package::Package& pkg,
+                            std::uint32_t resource_id) {
+    for (const auto& record : pkg.history) {
+        if (record.current_resource_id == resource_id ||
+            record.previous_resource_id == resource_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct DerivedResourceUse {
     std::uint64_t first_frame = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t last_frame = 0u;
@@ -460,6 +471,11 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
         use.persistent = usage == "cbv" || usage == "sampler" ||
                          usage == "readback" || use.initialized ||
                          (use.read && !use.write);
+        if (IsHistoryStateResource(pkg, entry.first)) {
+            // NW-09 current/previous history state is live across every tick
+            // and frame and must never enter the transient alias pool.
+            use.persistent = true;
+        }
         if (!use.frame_access) {
             use.first_frame = 0u;
             use.last_frame = 0u;
@@ -593,6 +609,9 @@ std::map<std::uint32_t, DerivedResourceUse> DeriveResourceUses(
         use.persistent = usage == "cbv" || usage == "sampler" ||
                          usage == "readback" || use.initialized ||
                          (use.read && !use.write);
+        if (IsHistoryStateResource(pkg, entry.first)) {
+            use.persistent = true;
+        }
         if (!use.frame_access) {
             use.first_frame = 0u;
             use.last_frame = 0u;

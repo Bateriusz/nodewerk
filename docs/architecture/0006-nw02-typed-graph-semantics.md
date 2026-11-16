@@ -37,9 +37,10 @@ contracts.
    hashed. A node id becomes semantic only through an explicit `seed node-id`
    input.
 5. **Explicit drift boundaries.** Ordinary cycles, incompatible ports,
-   frequency regressions, history semantics (reserved for NW-09), implicit
-   readbacks/uploads, malformed/unknown/mismatched capability identities, and
-   out-of-bounds resources fail through precise source-linked diagnostics.
+   frequency regressions, implicit readbacks/uploads, malformed/unknown/
+   mismatched capability identities, and out-of-bounds resources fail through
+   precise source-linked diagnostics. NW-09 later adds explicit History
+   declarations; see [ADR-0008](0008-nw09-temporal-state.md).
 6. **CPU reference behavior.** Control/math, curve, scene/camera/light/material,
    ShaderExpr composition, and practical procedural oracles have deterministic
    CPU reference evaluation. Cache invalidation is limited to the dependent

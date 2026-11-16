@@ -64,11 +64,47 @@ enum class Frequency {
     CompileTime = 0,
     Initialization = 1,
     Frame = 2,
-    History = 99, // reserved for NW-09; rejected by initial exports
+    // NW-09 temporal state.  History nodes run at a fixed 120 Hz simulation
+    // cadence (400 timeline ticks per step).  Previous-tick state is an
+    // external scheduler input, not an ordinary graph edge.
+    History = 3,
 };
 
 std::string_view ToString(Frequency frequency) noexcept;
 std::optional<Frequency> ParseFrequency(std::string_view text);
+
+// Scheduling rank is intentionally separate from the enum's stable numeric
+// identity.  Existing stateless encodings keep Frame == 2; History executes
+// after initialization and before the frame-visible consumer DAG.
+inline int FrequencyRank(Frequency frequency) noexcept {
+    switch (frequency) {
+    case Frequency::CompileTime: return 0;
+    case Frequency::Initialization: return 1;
+    case Frequency::History: return 2;
+    case Frequency::Frame: return 3;
+    }
+    return 3;
+}
+
+enum class HistoryResetPolicy {
+    OnLoop,
+    OnSeek,
+    Never,
+    Manual,
+};
+
+std::string_view ToString(HistoryResetPolicy policy) noexcept;
+std::optional<HistoryResetPolicy> ParseHistoryResetPolicy(
+    std::string_view text);
+
+struct HistoryDeclaration {
+    std::string state_type;
+    std::string initial_value;
+    HistoryResetPolicy reset_policy = HistoryResetPolicy::OnLoop;
+    // NW-09 fixes this to 120.  The canonical timeline is 48,000 integer
+    // ticks/second, so every simulation tick is exactly 400 timeline ticks.
+    std::uint32_t step_rate_hz = 120u;
+};
 
 enum class OperatorKind {
     PureShaderExpr,
@@ -215,6 +251,7 @@ struct OperatorSchema {
     bool produces_resource = false;
     bool explicit_readback = false;
     bool explicit_residency_conversion = false;
+    bool produces_temporal_state = false;
     std::optional<ResourceDescriptor> resource_descriptor;
     std::string lowering_hook;
     std::string lowering_hook_version;
@@ -373,6 +410,7 @@ struct NodeDefinition {
     bool has_declared_residency = false;
     bool has_declared_seed_behavior = false;
     SeedSpec seed;
+    std::optional<HistoryDeclaration> history;
     std::map<std::string, ParamValue> params;
     std::vector<NodeInput> inputs;
 };
@@ -399,6 +437,12 @@ struct GraphDocument {
 struct ValidationResult;
 ValidationResult ValidateGraphDocument(const GraphDocument& document,
                                        const OperatorRegistry& registry);
+
+struct HistoryExternalInput {
+    std::string node_id;
+    std::string port = "previous";
+    std::string state_type;
+};
 
 class GraphSnapshot {
 public:
@@ -442,6 +486,11 @@ private:
     std::string canonical_text_;
     std::string semantic_digest_;
 };
+
+// NW-09 scheduler seam: previous-tick state is an external input for every
+// History node.  It is not an authored DAG edge.
+std::vector<HistoryExternalInput> HistoryExternalInputs(
+    const GraphDocument& document);
 
 struct ParseResult {
     std::optional<GraphDocument> document;
@@ -508,14 +557,6 @@ std::uint64_t DeriveSeed(const GraphSnapshot& snapshot,
 // CPU reference evaluation
 // ---------------------------------------------------------------------------
 
-struct EvaluationContext {
-    Frequency frequency = Frequency::Frame;
-    std::uint64_t frame_index = 0;
-    double time_seconds = 0.0;
-    std::uint64_t seed_base = 0;
-    unsigned worker_count = 1; // accepted for scheduling parity; evaluation is deterministic
-};
-
 struct EvaluationValue {
     LogicalType type = LogicalType::Scalar;
     Residency residency = Residency::Cpu;
@@ -536,6 +577,21 @@ struct EvaluationValue {
 using LogicalValue = EvaluationValue;
 
 using OutputValues = std::map<std::string, LogicalValue>;
+
+struct EvaluationContext {
+    Frequency frequency = Frequency::Frame;
+    std::uint64_t frame_index = 0;
+    double time_seconds = 0.0;
+    std::uint64_t seed_base = 0;
+    unsigned worker_count = 1; // accepted for scheduling parity; evaluation is deterministic
+    // NW-09 external previous-tick state.  A history node reads this map and
+    // writes its current-tick value into next_history_state.  The public
+    // GraphEvaluator API never exposes a half-committed tick.
+    std::map<std::string, EvaluationValue> previous_history_state;
+    std::map<std::string, EvaluationValue>* next_history_state = nullptr;
+    std::uint64_t simulation_tick = 0;
+    std::uint64_t loop_generation = 0;
+};
 
 // Authoring/compiler-side implementation entry point for an operator. The
 // function receives the immutable snapshot, the node declaration, and all

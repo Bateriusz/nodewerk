@@ -175,7 +175,17 @@ KNOWN_OPERATORS = {
     "nw.render.gbuffer",
     "nw.render.composite",
     "nw.render.present",
+    # NW-09 temporal state.  These operators are the only built-ins that may
+    # declare the `history` frequency and a History declaration.  Previous-tick
+    # state is supplied by the fixed-step scheduler as an external input; it is
+    # never an ordinary author-supplied graph edge.
+    "nw.particles.system",
+    "nw.feedback.image",
 }
+
+# Operators whose schema admits the NW-09 `history` frequency.  Ordinary
+# operators remain invalid at that frequency (see `history_not_supported`).
+HISTORY_OPERATORS = {"nw.particles.system", "nw.feedback.image"}
 
 OPERATOR_INPUTS = {
     "nw.math.add": {"a", "b"},
@@ -275,6 +285,8 @@ OUTPUT_PORTS = {
     "nw.render.gbuffer": {"color", "normals"},
     "nw.render.composite": {"out"},
     "nw.render.present": {"out"},
+    "nw.particles.system": {"out"},
+    "nw.feedback.image": {"out"},
 }
 
 SHADER_OPERATORS = {
@@ -496,6 +508,14 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
         "inputs": {"image": ("image", 1, "gpu")},
         "outputs": {"out": ("image", 1, "gpu")},
     },
+    # NW-09 temporal state outputs.  `previous` is intentionally absent from
+    # authored inputs: it is an external scheduler input, not a DAG edge.
+    "nw.particles.system": {
+        "outputs": {"out": ("image", 1, "gpu")},
+    },
+    "nw.feedback.image": {
+        "outputs": {"out": ("image", 1, "gpu")},
+    },
 }
 
 PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
@@ -602,12 +622,82 @@ PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
         "near": {"kind": "float", "min": 0.0001},
         "far": {"kind": "float", "min": 0.0002},
     },
+    "nw.particles.system": {
+        "count": {"kind": "int", "min": 1, "max": 65536},
+        "seed": {"kind": "int", "min": 0, "max": 4294967295},
+        "gravity": {"kind": "float"},
+        "initial_velocity": {"kind": "float", "min": 0.0},
+        "lifetime_ticks": {"kind": "int", "min": 1},
+        "width": {"kind": "int", "min": 1, "max": 8192},
+        "height": {"kind": "int", "min": 1, "max": 8192},
+    },
+    "nw.feedback.image": {
+        "width": {"kind": "int", "min": 1, "max": 8192},
+        "height": {"kind": "int", "min": 1, "max": 8192},
+        "seed": {"kind": "int", "min": 0, "max": 4294967295},
+        "decay": {"kind": "float", "min": 0.0, "max": 1.0},
+        "gain": {"kind": "float", "min": 0.0},
+    },
 }
 
 SHADER_SEED_BEHAVIORS = {
     "nw.control.seed": {"explicit", "derived-from-graph", "node-id", "derived"},
     "nw.proc.hash_noise": {"explicit", "derived", "derived-from-upstream"},
 }
+
+
+NW09_FIXED_STEP_HZ = 120
+NW09_TIMELINE_TICKS_PER_SECOND = 48_000
+NW09_TIMELINE_TICKS_PER_SIMULATION_TICK = 400
+NW09_CHECKPOINT_VERSION = 1
+NW09_RESET_POLICIES = frozenset({"on-loop", "on-seek", "never", "manual"})
+
+
+@dataclass(frozen=True)
+class HistoryDeclaration:
+    """Explicit NW-09 temporal-state declaration attached to a history node.
+
+    The declaration is semantic graph content: it participates in the node's
+    structural identity and therefore in the package semantic digest.  It does
+    not make the node a pure cached expression; the previous-tick value is an
+    external scheduler input and the produced current-tick value becomes
+    visible only after the tick completes.
+    """
+
+    state_type: str
+    initial_value: str
+    reset_policy: str = "on-loop"
+    step_rate_hz: int = NW09_FIXED_STEP_HZ
+
+    def canonical_dict(self) -> dict[str, Any]:
+        return {
+            "state_type": self.state_type,
+            "initial_value": self.initial_value,
+            "reset_policy": self.reset_policy,
+            "step_rate_hz": self.step_rate_hz,
+            "timeline_ticks_per_step": (
+                NW09_TIMELINE_TICKS_PER_SECOND // self.step_rate_hz
+                if self.step_rate_hz > 0
+                and NW09_TIMELINE_TICKS_PER_SECOND % self.step_rate_hz == 0
+                else 0
+            ),
+        }
+
+    def state_layout_hash(self) -> str:
+        return (
+            "sha256:v1:"
+            + sha256_hex(
+                nwp_package.canonical_json_bytes(
+                    {
+                        "domain": "nw09.history-layout.v1",
+                        "state_type": self.state_type,
+                        "initial_value": self.initial_value,
+                        "reset_policy": self.reset_policy,
+                        "step_rate_hz": self.step_rate_hz,
+                    }
+                )
+            )
+        )
 
 
 @dataclass
@@ -619,6 +709,7 @@ class GraphNode:
     residency: str
     params: dict[str, list[str]] = field(default_factory=dict)
     inputs: dict[str, tuple[str, str]] = field(default_factory=dict)
+    history: HistoryDeclaration | None = None
     # NW-05 dead-output elimination: retained output ports for this node.
     # Empty means the operator's full declared output set.
     selected_outputs: tuple[str, ...] = ()
@@ -893,6 +984,62 @@ def parse_graph_text(
             current.inputs[tokens[1]] = (source_node, source_port)
         elif keyword == "seed":
             current.params.setdefault("__seed__", tokens[1:])
+        elif keyword == "history":
+            if len(tokens) < 3 or (len(tokens) - 1) % 2 != 0:
+                diagnostics.append(
+                    _diagnostic(
+                        "parse_error",
+                        "history requires <key> <value> pairs",
+                        node_id=current.node_id,
+                        line=line_number,
+                    )
+                )
+                continue
+            fields: dict[str, str] = {}
+            for index in range(1, len(tokens), 2):
+                fields[tokens[index].replace("_", "-")] = tokens[index + 1]
+            allowed = {"state-type", "initial", "reset", "step-rate"}
+            unknown = sorted(set(fields) - allowed)
+            missing = sorted(allowed - set(fields))
+            if unknown:
+                diagnostics.append(
+                    _diagnostic(
+                        "parse_error",
+                        "unknown history field(s): " + ", ".join(unknown),
+                        node_id=current.node_id,
+                        line=line_number,
+                    )
+                )
+                continue
+            if missing:
+                diagnostics.append(
+                    _diagnostic(
+                        "parse_error",
+                        "history declaration is missing field(s): "
+                        + ", ".join(missing),
+                        node_id=current.node_id,
+                        line=line_number,
+                    )
+                )
+                continue
+            try:
+                step_rate = int(fields["step-rate"], 10)
+            except ValueError:
+                diagnostics.append(
+                    _diagnostic(
+                        "invalid_history_declaration",
+                        f"history step-rate '{fields['step-rate']}' is not an integer",
+                        node_id=current.node_id,
+                        line=line_number,
+                    )
+                )
+                continue
+            current.history = HistoryDeclaration(
+                state_type=fields["state-type"],
+                initial_value=fields["initial"],
+                reset_policy=fields["reset"],
+                step_rate_hz=step_rate,
+            )
         else:
             diagnostics.append(
                 _diagnostic(
@@ -1338,6 +1485,90 @@ def _validate_node_parameters(node: GraphNode) -> list[dict[str, Any]]:
     return diagnostics
 
 
+NW09_STATE_TYPES = frozenset(
+    {"nw.particles.v1", "nw.feedback.image.v1"}
+)
+
+
+def _validate_history_declaration(
+    node: GraphNode,
+) -> list[dict[str, Any]]:
+    assert node.history is not None
+    declaration = node.history
+    diagnostics: list[dict[str, Any]] = []
+
+    def error(code: str, message: str) -> None:
+        diagnostics.append(
+            _diagnostic(
+                code,
+                message,
+                node_id=node.node_id,
+                operator_id=node.operator_id,
+            )
+        )
+
+    if declaration.state_type not in NW09_STATE_TYPES:
+        error(
+            "invalid_history_declaration",
+            f"unknown History state type '{declaration.state_type}'",
+        )
+    if not declaration.initial_value.strip():
+        error(
+            "invalid_history_declaration",
+            "History declaration requires a non-empty initial value",
+        )
+    if declaration.reset_policy not in NW09_RESET_POLICIES:
+        error(
+            "invalid_history_declaration",
+            f"unknown History reset policy '{declaration.reset_policy}'",
+        )
+    if declaration.step_rate_hz != NW09_FIXED_STEP_HZ:
+        error(
+            "invalid_history_step_rate",
+            "NW-09 History requires a fixed 120 Hz step rate",
+        )
+    if (
+        declaration.step_rate_hz <= 0
+        or NW09_TIMELINE_TICKS_PER_SECOND % declaration.step_rate_hz != 0
+        or NW09_TIMELINE_TICKS_PER_SECOND // declaration.step_rate_hz != 400
+    ):
+        error(
+            "invalid_history_step_rate",
+            "History step rate must divide 48000 timeline ticks/second into "
+            "exactly 400 ticks per simulation tick",
+        )
+    # A History node may not author the external previous-state port as an
+    # ordinary graph edge.  The scheduler injects it.
+    if "previous" in node.inputs:
+        error(
+            "ordinary_cycle",
+            "History previous-tick state is an external scheduler input and "
+            "must not be authored as an ordinary graph edge",
+        )
+    return diagnostics
+
+
+def document_has_history(document: GraphDocument) -> bool:
+    """True when the document declares any NW-09 temporal state."""
+
+    return any(
+        node.frequency == "history" or node.history is not None
+        for node in document.nodes.values()
+    )
+
+
+def history_declarations(
+    document: GraphDocument,
+) -> dict[str, HistoryDeclaration]:
+    """Return node-id -> declaration for every valid history node."""
+
+    return {
+        node_id: node.history
+        for node_id, node in document.nodes.items()
+        if node.frequency == "history" and node.history is not None
+    }
+
+
 def validate_graph_document(document: GraphDocument) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
     if document.schema_version != 1:
@@ -1398,7 +1629,12 @@ def validate_graph_document(document: GraphDocument) -> list[dict[str, Any]]:
             )
         )
 
-    frequency_rank = {"compile-time": 0, "initialization": 1, "frame": 2}
+    frequency_rank = {
+        "compile-time": 0,
+        "initialization": 1,
+        "history": 2,
+        "frame": 3,
+    }
     residency_rank = {"logical": 0, "cpu": 1, "gpu": 2, "readback": 3}
     for node in document.ordered_nodes():
         if node.operator_id not in KNOWN_OPERATORS:
@@ -1421,19 +1657,45 @@ def validate_graph_document(document: GraphDocument) -> list[dict[str, Any]]:
                 )
             )
         if node.frequency == "history":
-            diagnostics.append(
-                _diagnostic(
-                    "history_not_supported",
-                    "history frequency is reserved for NW-09",
-                    node_id=node.node_id,
-                    operator_id=node.operator_id,
+            if node.history is None:
+                # Preserve the pre-NW-09 diagnostic for a bare
+                # `frequency=history` declaration that provides no History
+                # schema.  This is the historical invalid fixture.
+                diagnostics.append(
+                    _diagnostic(
+                        "history_not_supported",
+                        "history frequency requires an explicit History "
+                        "declaration (state type, initial value, reset policy, "
+                        "and fixed step rate)",
+                        node_id=node.node_id,
+                        operator_id=node.operator_id,
+                    )
                 )
-            )
+            elif node.operator_id not in HISTORY_OPERATORS:
+                diagnostics.append(
+                    _diagnostic(
+                        "unsupported_frequency",
+                        f"operator '{node.operator_id}' has no History schema",
+                        node_id=node.node_id,
+                        operator_id=node.operator_id,
+                    )
+                )
+            else:
+                diagnostics.extend(_validate_history_declaration(node))
         elif node.frequency not in frequency_rank:
             diagnostics.append(
                 _diagnostic(
                     "unsupported_frequency",
                     f"unsupported frequency '{node.frequency}'",
+                    node_id=node.node_id,
+                    operator_id=node.operator_id,
+                )
+            )
+        elif node.history is not None:
+            diagnostics.append(
+                _diagnostic(
+                    "invalid_history_declaration",
+                    "a History declaration requires frequency=history",
                     node_id=node.node_id,
                     operator_id=node.operator_id,
                 )

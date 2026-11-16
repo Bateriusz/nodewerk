@@ -3067,8 +3067,177 @@ bool ValidatePackage(const Package& package,
                       "development metadata is not allowed in a release package",
                       std::string(kSectionDev));
     }
+    if (!package.history.empty()) {
+        std::set<std::uint32_t> state_ids;
+        for (const auto& history : package.history) {
+            if (!state_ids.insert(history.state_id).second) {
+                AddDiagnostic(diagnostics, "package_history_duplicate_state_id",
+                              "duplicate History state id",
+                              std::string(kSectionHistory));
+            }
+            if (history.step_rate_hz != 120u) {
+                AddDiagnostic(diagnostics, "package_history_step_rate",
+                              "History step rate must be exactly 120 Hz",
+                              std::string(kSectionHistory));
+            }
+            if (history.current_resource_id == history.previous_resource_id) {
+                AddDiagnostic(diagnostics, "package_history_ping_pong_alias",
+                              "History current/previous resources must differ",
+                              std::string(kSectionHistory));
+            }
+            if (resource_ids.count(history.current_resource_id) == 0u ||
+                resource_ids.count(history.previous_resource_id) == 0u) {
+                AddDiagnostic(diagnostics, "package_history_resource",
+                              "History state references an unknown resource",
+                              std::string(kSectionHistory));
+            }
+        }
+    }
+    for (const auto& checkpoint : package.release_checkpoints) {
+        if (checkpoint.capability_profile_id != package.capability.profile_id ||
+            checkpoint.capability_requirements_digest !=
+                package.capability.requirements_digest) {
+            AddDiagnostic(diagnostics, "package_checkpoint_capability",
+                          "packaged checkpoint capability identity does not match",
+                          std::string(kSectionCheckpoints));
+        }
+    }
     return diagnostics.empty();
 }
+
+namespace {
+
+std::vector<std::uint8_t> EncodeHistory(
+    const std::vector<HistoryRecord>& records) {
+    Writer writer;
+    writer.U16(kVersionMinorStateful);
+    writer.U16(0);
+    writer.U32(static_cast<std::uint32_t>(records.size()));
+    for (const auto& record : records) {
+        writer.U32(record.state_id);
+        writer.String(record.node_id);
+        writer.String(record.operator_id);
+        writer.String(record.state_type);
+        writer.String(record.initial_value);
+        writer.String(record.reset_policy);
+        writer.U32(record.step_rate_hz);
+        writer.String(record.state_layout_hash);
+        writer.U32(record.values_per_element);
+        writer.U64(record.element_count);
+        writer.U32(record.current_resource_id);
+        writer.U32(record.previous_resource_id);
+        writer.U32(record.frames_in_flight);
+        writer.U32(record.flags);
+    }
+    return writer.bytes;
+}
+
+std::vector<std::uint8_t> EncodeCheckpoints(
+    const std::vector<ReleaseCheckpointRecord>& records) {
+    Writer writer;
+    writer.U16(kVersionMinorStateful);
+    writer.U16(0);
+    writer.U32(static_cast<std::uint32_t>(records.size()));
+    for (const auto& record : records) {
+        writer.U32(record.checkpoint_id);
+        writer.String(record.label);
+        writer.U64(record.tick);
+        writer.U64(record.simulation_tick);
+        writer.String(record.semantic_digest);
+        writer.String(record.state_layout_hash);
+        writer.String(record.capability_profile_id);
+        writer.String(record.capability_requirements_digest);
+        writer.U32(record.state_count);
+        writer.U32(record.flags);
+        writer.Blob(record.payload);
+    }
+    return writer.bytes;
+}
+
+bool DecodeHistory(const std::uint8_t* data, std::size_t size,
+                   std::vector<HistoryRecord>& records,
+                   std::vector<Diagnostic>& diagnostics) {
+    Reader reader{data, size, 0, &diagnostics, std::string(kSectionHistory),
+                  0, false};
+    std::uint16_t version = 0;
+    std::uint16_t flags = 0;
+    std::uint32_t count = 0;
+    if (!reader.U16(version) || !reader.U16(flags) || !reader.U32(count)) {
+        return false;
+    }
+    if (version != kVersionMinorStateful || flags != 0u ||
+        count > kMaxRecordCount) {
+        AddDiagnostic(diagnostics, "package_unknown_section_version",
+                      "HIST section header is invalid",
+                      std::string(kSectionHistory), 0, true);
+        return false;
+    }
+    records.clear();
+    records.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        HistoryRecord record;
+        if (!reader.U32(record.state_id) ||
+            !reader.String(record.node_id) ||
+            !reader.String(record.operator_id) ||
+            !reader.String(record.state_type) ||
+            !reader.String(record.initial_value) ||
+            !reader.String(record.reset_policy) ||
+            !reader.U32(record.step_rate_hz) ||
+            !reader.String(record.state_layout_hash) ||
+            !reader.U32(record.values_per_element) ||
+            !reader.U64(record.element_count) ||
+            !reader.U32(record.current_resource_id) ||
+            !reader.U32(record.previous_resource_id) ||
+            !reader.U32(record.frames_in_flight) ||
+            !reader.U32(record.flags)) {
+            return false;
+        }
+        records.push_back(std::move(record));
+    }
+    return reader.Remaining() == 0u;
+}
+
+bool DecodeCheckpoints(const std::uint8_t* data, std::size_t size,
+                       std::vector<ReleaseCheckpointRecord>& records,
+                       std::vector<Diagnostic>& diagnostics) {
+    Reader reader{data, size, 0, &diagnostics,
+                  std::string(kSectionCheckpoints), 0, false};
+    std::uint16_t version = 0;
+    std::uint16_t flags = 0;
+    std::uint32_t count = 0;
+    if (!reader.U16(version) || !reader.U16(flags) || !reader.U32(count)) {
+        return false;
+    }
+    if (version != kVersionMinorStateful || flags != 0u ||
+        count > kMaxRecordCount) {
+        AddDiagnostic(diagnostics, "package_unknown_section_version",
+                      "CKPT section header is invalid",
+                      std::string(kSectionCheckpoints), 0, true);
+        return false;
+    }
+    records.clear();
+    records.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        ReleaseCheckpointRecord record;
+        if (!reader.U32(record.checkpoint_id) ||
+            !reader.String(record.label) ||
+            !reader.U64(record.tick) ||
+            !reader.U64(record.simulation_tick) ||
+            !reader.String(record.semantic_digest) ||
+            !reader.String(record.state_layout_hash) ||
+            !reader.String(record.capability_profile_id) ||
+            !reader.String(record.capability_requirements_digest) ||
+            !reader.U32(record.state_count) ||
+            !reader.U32(record.flags) ||
+            !reader.Blob(record.payload, kMaxBlobBytes)) {
+            return false;
+        }
+        records.push_back(std::move(record));
+    }
+    return reader.Remaining() == 0u;
+}
+
+} // namespace
 
 std::vector<std::uint8_t> EncodePackage(
     const Package& package, std::vector<Diagnostic>& diagnostics) {
@@ -3091,6 +3260,16 @@ std::vector<std::uint8_t> EncodePackage(
     sections[std::string(kSectionRootSignatures)] =
         EncodeRootSignatures(package.root_signatures);
     sections[std::string(kSectionShaders)] = EncodeShaders(package.shaders);
+    const bool stateful =
+        !package.history.empty() || !package.release_checkpoints.empty();
+    if (!package.history.empty()) {
+        sections[std::string(kSectionHistory)] =
+            EncodeHistory(package.history);
+    }
+    if (!package.release_checkpoints.empty()) {
+        sections[std::string(kSectionCheckpoints)] =
+            EncodeCheckpoints(package.release_checkpoints);
+    }
     if (package.dev_metadata.has_value()) {
         sections[std::string(kSectionDev)] = *package.dev_metadata;
     }
@@ -3110,6 +3289,14 @@ std::vector<std::uint8_t> EncodePackage(
         static_cast<std::uint32_t>(package.shaders.size());
     if (package.dev_metadata.has_value()) {
         record_counts[std::string(kSectionDev)] = 0u;
+    }
+    if (!package.history.empty()) {
+        record_counts[std::string(kSectionHistory)] =
+            static_cast<std::uint32_t>(package.history.size());
+    }
+    if (!package.release_checkpoints.empty()) {
+        record_counts[std::string(kSectionCheckpoints)] =
+            static_cast<std::uint32_t>(package.release_checkpoints.size());
     }
     for (const auto& [name, payload] : sections) {
         if (name != std::string(kSectionDev) && payload.empty()) {
@@ -3152,9 +3339,9 @@ std::vector<std::uint8_t> EncodePackage(
     Writer writer;
     writer.bytes.insert(writer.bytes.end(), kMagic.begin(), kMagic.end());
     writer.U16(kVersionMajor);
-    writer.U16(kVersionMinor);
+    writer.U16(stateful ? kVersionMinorStateful : kVersionMinor);
     writer.U32(kHeaderSize);
-    writer.U32(package.flags);
+    writer.U32(package.flags | (stateful ? kStatefulExtensionFlag : 0u));
     writer.U32(0);
     writer.U64(kHeaderSize);
     writer.U64(total_size);
@@ -3219,7 +3406,8 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     const std::uint32_t entry_size = ReadU32(data + 44);
     const std::uint64_t checksum_offset = ReadU64(data + 48);
     const std::uint64_t reserved2 = ReadU64(data + 56);
-    if (major != kVersionMajor || minor != kVersionMinor) {
+    if (major != kVersionMajor ||
+        (minor != kVersionMinor && minor != kVersionMinorStateful)) {
         NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_version_unknown",
                       "unknown .nwp version", {}, 8, true);
         return false;
@@ -3308,7 +3496,9 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             name != std::string(kSectionParameters) &&
             name != std::string(kSectionShaders) &&
             name != std::string(kSectionRootSignatures) &&
-            name != std::string(kSectionDev)) {
+            name != std::string(kSectionDev) &&
+            name != std::string(kSectionHistory) &&
+            name != std::string(kSectionCheckpoints)) {
             NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_section_unknown",
                           "unknown section '" + name + "'", name, entry_offset,
                           true);
@@ -3927,6 +4117,30 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         return true;
     };
     if (!decode_shaders()) return false;
+    if (names.count(std::string(kSectionHistory)) != 0u) {
+        if (!DecodeHistory(payloads[std::string(kSectionHistory)],
+                           payload_sizes[std::string(kSectionHistory)],
+                           package.history, diagnostics)) {
+            return false;
+        }
+    }
+    if (names.count(std::string(kSectionCheckpoints)) != 0u) {
+        if (!DecodeCheckpoints(
+                payloads[std::string(kSectionCheckpoints)],
+                payload_sizes[std::string(kSectionCheckpoints)],
+                package.release_checkpoints, diagnostics)) {
+            return false;
+        }
+    }
+    const bool stateful_present =
+        !package.history.empty() || !package.release_checkpoints.empty();
+    if (stateful_present != ((flags & kStatefulExtensionFlag) != 0u) ||
+        stateful_present != (minor == kVersionMinorStateful)) {
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics,
+                      "package_stateful_extension_mismatch",
+                      "stateful extension flag/version do not match sections");
+        return false;
+    }
     if (names.count(std::string(kSectionDev)) != 0u) {
         package.dev_metadata = std::vector<std::uint8_t>(
             payloads[std::string(kSectionDev)],
@@ -3949,6 +4163,14 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         static_cast<std::uint32_t>(package.shaders.size());
     if (package.dev_metadata.has_value()) {
         actual_counts[std::string(kSectionDev)] = 0u;
+    }
+    if (!package.history.empty()) {
+        actual_counts[std::string(kSectionHistory)] =
+            static_cast<std::uint32_t>(package.history.size());
+    }
+    if (!package.release_checkpoints.empty()) {
+        actual_counts[std::string(kSectionCheckpoints)] =
+            static_cast<std::uint32_t>(package.release_checkpoints.size());
     }
     for (const auto& entry : entries) {
         if (entry.record_count != actual_counts[entry.name]) {

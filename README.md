@@ -215,3 +215,33 @@ a cache predicate, compiler target, or device epoch. Real hardware preview,
 GUI/CLI export equivalence, and device recreation remain
 `pending_unverified` until executed on a Windows host. See
 [`docs/nw08-studio-authoring-editor.md`](docs/nw08-studio-authoring-editor.md).
+
+## NW-09 Explicit Temporal State
+
+NW-09 extends the existing typed DAG and compiler/package/player path with
+explicit temporal state for particles and feedback. A History declaration
+declares its state type, initial value, reset policy, and fixed 120 Hz step
+rate. At 48,000 integer timeline ticks/second every simulation tick is exactly
+**400 ticks**. Previous-tick state is an external scheduler input, writes commit
+only when a tick completes, ordinary cycles remain invalid, and temporal state
+is never treated as a pure cached output.
+
+History-free exports keep the unchanged `.nwp` v1.0 bytes and link no History
+or checkpoint support. Stateful documents use the explicit `.nwp` v1.1
+extension with optional `HIST`/`CKPT` sections. Current/previous state resources
+are distinct ping-pong resources with fence-safe lifetime and memory-budget
+accounting. Checkpoints are compatible only when version, tick, semantic/
+state-layout hash, and capability-profile ID/digest match; device checkpoints
+additionally bind to the actual D3D12 device lifetime and NW-08 recreation
+epoch. Packaged checkpoints report their byte cost and make no portable GPU
+state claim.
+
+```bash
+pytest -v tests/test_nw09_history_graph.py tests/test_nw09_temporal_runtime.py \
+    tests/test_nw09_export_and_package.py tests/test_nw09_preview_and_safety.py
+```
+
+See [`docs/nw09-temporal-state.md`](docs/nw09-temporal-state.md) and
+[ADR-0008](docs/architecture/0008-nw09-temporal-state.md). Windows D3D12
+execution/synchronization on representative Ada and Blackwell hardware remains
+separate physical evidence and `pending_unverified` until captured.

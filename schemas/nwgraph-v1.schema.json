@@ -111,7 +111,7 @@
             "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
           },
           "frequency": {
-            "enum": ["compile-time", "initialization", "frame"]
+            "enum": ["compile-time", "initialization", "history", "frame"]
           },
           "residency": {
             "enum": ["logical", "cpu", "gpu", "readback"]
@@ -166,6 +166,25 @@
               },
               "additionalProperties": false
             }
+          },
+          "history": {
+            "type": "object",
+            "required": [
+              "state_type",
+              "initial_value",
+              "reset_policy",
+              "step_rate_hz"
+            ],
+            "properties": {
+              "state_type": { "type": "string", "minLength": 1 },
+              "initial_value": { "type": "string", "minLength": 1 },
+              "reset_policy": {
+                "enum": ["on-loop", "on-seek", "never", "manual"]
+              },
+              "step_rate_hz": { "const": 120 },
+              "timeline_ticks_per_step": { "const": 400 }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

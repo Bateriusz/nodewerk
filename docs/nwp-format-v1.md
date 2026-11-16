@@ -68,10 +68,32 @@ are checked with overflow-safe arithmetic before any payload allocation.
 | `SHDR` | Deduplicated complete DXIL shader blob table plus specialization records. |
 | `RSIG` | Deduplicated complete root-signature blob table plus fixed pass-family binding records. |
 | `DEVC` | Development-only sidecar metadata. It is rejected by the release reader and never written by release compilation. |
+| `HIST` | NW-09 stateful extension: History declarations with state type, initial value, reset policy, fixed 120 Hz step rate, state-layout hash, and distinct current/previous ping-pong resource ids. |
+| `CKPT` | NW-09 optional packaged release checkpoints with explicit byte cost. Packaged/disk checkpoints are host-resident and make no portable GPU-state replay claim. |
 
 All seven release sections (`CAP`, `RES`, `INIT`, `FRAM`, `PARM`, `SHDR`,
 `RSIG`) are required exactly once. Unknown section IDs, duplicate sections,
 missing required sections, and `DEVC` in release mode are rejected.
+
+### NW-09 stateful extension
+
+History-free exports continue to emit exactly `.nwp` version `1.0` with the
+seven baseline sections and no new bytes. A document that declares NW-09
+History selects the explicit, additive stateful extension:
+
+* header minor version becomes `1`;
+* package `flags` bit 1 (`STATEFUL_EXTENSION_FLAG`) is set;
+* `HIST` is emitted when History records exist;
+* `CKPT` is emitted only when the caller explicitly requests packaged release
+  checkpoints.
+
+The extended reader accepts both `1.0` and `1.1`, rejects mismatched
+flag/version/section combinations, requires distinct current and previous state
+resources, and requires an exact 120 Hz step rate. Checkpoint compatibility is
+deterministic over checkpoint version, tick, semantic/state-layout hash, and
+capability-profile ID/digest. Packaged checkpoints report their serialized byte
+cost in the export report and package inspection. They are not a portable GPU
+state format.
 
 ## Capability record
 

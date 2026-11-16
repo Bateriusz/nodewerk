@@ -3058,6 +3058,25 @@ class PreviewPipeline:
             key = node_inputs.device_realization_key(
                 self.device.generation
             ).key
+            if node.frequency == "history" or node.history is not None:
+                # Temporal state is an external-input recurrence, never a pure
+                # frame-independent cached output.  Bind the key to the exact
+                # simulation tick and committed state digest so a history
+                # realization cannot be reused as a stateless cache entry.
+                key = sha256_value(
+                    {
+                        "domain": "nw09.preview.temporal-realization.v1",
+                        "base_key": key,
+                        "node_id": node_id,
+                        "tick": int(job.tick),
+                        "state_layout_hash": (
+                            node.history.state_layout_hash()
+                            if node.history is not None
+                            else ""
+                        ),
+                        "state_digest": frame.content_digest,
+                    }
+                )
             rows.append(
                 _NodeRealization(
                     node_id=node_id,
