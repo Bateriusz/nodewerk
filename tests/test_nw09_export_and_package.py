@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -194,6 +195,16 @@ def test_stateful_export_does_not_use_synthetic_fixture_package(
         instruction.opcode == "init.upload_history_state"
         for instruction in package.initialization
     )
+
+
+@pytest.mark.parametrize("fixture", [PARTICLES, FEEDBACK])
+def test_history_shader_float_literals_are_dxc_valid(fixture: Path) -> None:
+    document = nw03.load_graph(fixture)
+    for spec in temporal.history_specs(document):
+        hlsl = nw09_export._history_hlsl(document, spec)
+        # HLSL rejects integral literals such as `16f`; every float must have
+        # a decimal point or exponent before the `f` suffix.
+        assert not re.search(r"(?<![\w.])\d+f\b", hlsl)
 
 
 def test_export_settings_can_request_packaged_checkpoints(tmp_path: Path) -> None:

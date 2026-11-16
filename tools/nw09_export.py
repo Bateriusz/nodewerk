@@ -43,6 +43,26 @@ HISTORY_ENTRY_POINT = "nw_history_main"
 HISTORY_THREAD_GROUP = (64, 1, 1)
 
 
+def _hlsl_float(value: float) -> str:
+    """Return a valid HLSL float literal.
+
+    Python's ``g`` formatting emits ``16`` for an integral float; HLSL
+    rejects the resulting ``16f`` literal.  Always include a decimal point and
+    normalize exponent forms so the generated shader is accepted by DXC on
+    Windows as well as by the test container path.
+    """
+
+    text = format(float(value), ".9g").lower()
+    if "e" in text:
+        mantissa, exponent = text.split("e", 1)
+        if "." not in mantissa:
+            mantissa += ".0"
+        return f"{mantissa}e{int(exponent)}f"
+    if "." not in text:
+        text += ".0"
+    return text + "f"
+
+
 def present_geometry(document: nw03.GraphDocument) -> tuple[int, int] | None:
     """Return the explicit NW-05 rectangular presentation geometry."""
 
@@ -100,18 +120,18 @@ def _history_hlsl(
                 "    float vx = asfloat(nw_previous.Load(base + 8u));",
                 "    float vy = asfloat(nw_previous.Load(base + 12u));",
                 "    float age = asfloat(nw_previous.Load(base + 16u));",
-                f"    float dt = 1.0f / {float(temporal.FIXED_STEP_HZ)}f;",
-                f"    vy += {float(gravity):.17g}f * dt;",
+                f"    float dt = 1.0f / {_hlsl_float(temporal.FIXED_STEP_HZ)};",
+                f"    vy += {_hlsl_float(gravity)} * dt;",
                 "    x += vx * dt;",
                 "    y += vy * dt;",
                 "    age += 1.0f;",
-                f"    if (x < 0.0f || x >= {float(width):.17g}f) {{",
+                f"    if (x < 0.0f || x >= {_hlsl_float(width)}) {{",
                 "        vx = -vx;",
-                f"        x = clamp(x, 0.0f, {float(width - 1):.17g}f);",
+                f"        x = clamp(x, 0.0f, {_hlsl_float(width - 1)});",
                 "    }",
-                f"    if (y < 0.0f || y >= {float(height):.17g}f) {{",
+                f"    if (y < 0.0f || y >= {_hlsl_float(height)}) {{",
                 "        vy = -vy;",
-                f"        y = clamp(y, 0.0f, {float(height - 1):.17g}f);",
+                f"        y = clamp(y, 0.0f, {_hlsl_float(height - 1)});",
                 "    }",
                 "    nw_current.Store(base + 0u, asuint(x));",
                 "    nw_current.Store(base + 4u, asuint(y));",
@@ -163,12 +183,12 @@ def _history_hlsl(
                 "    h ^= h >> 16u; h *= 0x7feb352du; h ^= h >> 15u; "
                 "h *= 0x846ca68bu; h ^= h >> 16u;",
                 "    float injection = float(h >> 8u) * (1.0f / 16777216.0f);",
-                f"    float4 current = float4({float(decay):.17g}f * previous.x + "
-                f"{float(gain):.17g}f * injection,",
-                f"        {float(decay):.17g}f * previous.y + "
-                f"{float(gain):.17g}f * (1.0f - injection),",
-                f"        {float(decay):.17g}f * previous.z + "
-                f"{float(gain):.17g}f * (0.5f + 0.5f * injection), 1.0f);",
+                f"    float4 current = float4({_hlsl_float(decay)} * previous.x + "
+                f"{_hlsl_float(gain)} * injection,",
+                f"        {_hlsl_float(decay)} * previous.y + "
+                f"{_hlsl_float(gain)} * (1.0f - injection),",
+                f"        {_hlsl_float(decay)} * previous.z + "
+                f"{_hlsl_float(gain)} * (0.5f + 0.5f * injection), 1.0f);",
                 "    nw_current.Store(base + 0u, asuint(current.x));",
                 "    nw_current.Store(base + 4u, asuint(current.y));",
                 "    nw_current.Store(base + 8u, asuint(current.z));",
@@ -251,9 +271,16 @@ def compile_history_base_package(
         ) from exc
     destination_path = Path(destination)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    dxc = dxc_executable or nw03.resolve_dxc()
-    if dxc is None and allow_test_payloads:
-        dxc = _test_dxc(destination_path.parent / ".nw09-test-toolchain")
+    dxc = dxc_executable
+    if dxc is None:
+        # Contract tests use the explicit synthetic DXIL container on every
+        # host.  Falling back to an installed Windows DXC here would make the
+        # same test compile real HLSL on CI and synthetic payloads locally.
+        dxc = (
+            _test_dxc(destination_path.parent / ".nw09-test-toolchain")
+            if allow_test_payloads
+            else nw03.resolve_dxc()
+        )
     if dxc is None:
         raise StatefulExportError(
             "offline DXC compiler is required for stateful export",
