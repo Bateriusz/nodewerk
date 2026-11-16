@@ -6401,6 +6401,14 @@ ExitCode PackagePlayer::readbackDisplayOutput(
         if (readback != nullptr) readback->Release();
         RemoveEngineResourceAllocation(readback_allocation.SizeInBytes);
     };
+    auto defer_release = [&]() {
+        if (readback != nullptr) {
+            state->deferred_readbacks.emplace_back(
+                readback, readback_allocation.SizeInBytes);
+            readback = nullptr;
+        }
+        // Accounting remains live until the deferred release is retired.
+    };
 
     auto& frame = state->frames[0];
     if (frame.allocator == nullptr || frame.command_list == nullptr) {
@@ -6465,7 +6473,7 @@ ExitCode PackagePlayer::readbackDisplayOutput(
     state->queue->ExecuteCommandLists(1u, lists);
     const std::uint64_t fence_value = next_fence_value_++;
     if (FAILED(state->queue->Signal(state->fence, fence_value))) {
-        release_now();
+        defer_release();
         return Fail(ExitCode::GpuSubmissionFailed, "readback",
                     "display_readback_signal_failed", "signal",
                     "succeeded", "failed", "readback",
@@ -6475,7 +6483,7 @@ ExitCode PackagePlayer::readbackDisplayOutput(
     const ExitCode wait = WaitForFenceValue(
         state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
     if (wait != ExitCode::Success) {
-        release_now();
+        defer_release();
         return wait;
     }
     frame.fence_value = 0u;
