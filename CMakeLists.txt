@@ -254,6 +254,29 @@ else()
     target_compile_options(nw_package_player PRIVATE -w)
 endif()
 
+# Fully validating external-package decoder for diagnostic fixtures.  The
+# frozen release decoder intentionally substitutes the canonical-HD CAP limits
+# and omits CAP decoding for the exact-SHA generated artifact.  The fixture
+# loads arbitrary presentation sizes, so it must keep the full decoder while
+# still linking the frozen player implementation.
+add_library(nw_package_player_diagnostic STATIC
+    src/package/nwp_format.cpp
+)
+target_include_directories(nw_package_player_diagnostic PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+)
+target_compile_features(nw_package_player_diagnostic PUBLIC cxx_std_20)
+nw_apply_player_profile(nw_package_player_diagnostic)
+target_compile_definitions(nw_package_player_diagnostic PRIVATE
+    NW05_FROZEN_EMBEDDED_SPECIALIZATION=0
+)
+if(MSVC)
+    target_compile_options(nw_package_player_diagnostic PRIVATE /W0)
+else()
+    target_compile_options(nw_package_player_diagnostic PRIVATE -w)
+endif()
+
 # Host-only NW-06 contract check: decodes an exported common package and runs
 # the exact native capability derivation/validation used by PackagePlayer
 # initialization.  It has no D3D12 dependency and is built on every platform.
@@ -332,12 +355,12 @@ add_executable(nw_package_player_fixture
 if(NW05_FROZEN_EMBEDDED_SPECIALIZATION)
     target_link_libraries(nw_package_player_fixture PRIVATE
         nw05_player_bootstrap
-        nw_package_player
+        nw_package_player_diagnostic
     )
 else()
     target_link_libraries(nw_package_player_fixture PRIVATE
         nw_player_bootstrap
-        nw_package_player
+        nw_package_player_diagnostic
     )
 endif()
 if(WIN32)

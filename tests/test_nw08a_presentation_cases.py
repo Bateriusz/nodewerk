@@ -268,6 +268,27 @@ def test_frozen_fixture_links_the_specialized_player_implementation() -> None:
     assert "if(NW05_FROZEN_EMBEDDED_SPECIALIZATION)" in fixture
     assert "nw05_player_bootstrap" in fixture
     assert "nw_player_bootstrap" in fixture
+    # The fixture loads arbitrary external packages, including sizes smaller
+    # than canonical HD.  It must not link the frozen decoder that substitutes
+    # the canonical-HD CAP limits; it links the fully validating decoder even
+    # though the player implementation itself is frozen.
+    assert fixture.count("nw_package_player_diagnostic") == 2
+    assert "\n        nw_package_player\n" not in fixture
+
+    diagnostic_start = cmake.index(
+        "add_library(nw_package_player_diagnostic STATIC"
+    )
+    diagnostic_end = cmake.index("# Host-only NW-06", diagnostic_start)
+    diagnostic = cmake[diagnostic_start:diagnostic_end]
+    assert "NW05_FROZEN_EMBEDDED_SPECIALIZATION=0" in diagnostic
+
+    generated_start = cmake.index(
+        'add_executable(nw05_generated_player "${NW05_GENERATED_PLAYER_SOURCE}")'
+    )
+    generated_end = cmake.index("add_library(nw_compiler", generated_start)
+    generated = cmake[generated_start:generated_end]
+    assert "nw_package_player\n" in generated
+    assert "nw_package_player_diagnostic" not in generated
 
     header = (
         REPO_ROOT / "src" / "player" / "package_player.h"

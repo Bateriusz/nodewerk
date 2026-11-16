@@ -43,9 +43,10 @@ compare package bytes for determinism.  The player-source regression asserts
 that both frame-plan variants call the shared geometry helper and that the
 square fallback remains.  The NW-08A regressions additionally assert that the
 frozen fixture links `nw05_player_bootstrap` (the implementation generated
-players use), that the fixture reports its compiled mode from PackagePlayer,
-and that the Windows workflow configures both fixtures with the pinned MSVC
-toolchain.
+players use), that the fixture links the fully validating external-package
+decoder rather than the frozen canonical-HD decoder, that the fixture reports
+its compiled mode from PackagePlayer, and that the Windows workflow configures
+both fixtures with the pinned MSVC toolchain.
 
 ## Windows real-player procedure
 
@@ -78,7 +79,14 @@ unless a physical adapter actually executed the player.
 2. Build the diagnostic player fixture twice with the same pinned MSVC
    toolchain and release cache settings as the canonical preset.  The frozen
    configuration builds `nw05_player_bootstrap`, the implementation used by
-   generated players, and links the fixture against it:
+   generated players, and links the fixture against it.  The fixture always
+   links `nw_package_player_diagnostic`, a fully validating decoder compiled
+   without `NW05_FROZEN_EMBEDDED_SPECIALIZATION`.  The frozen release decoder
+   substitutes canonical-HD CAP limits and is valid only for the exact-SHA
+   generated artifact, so using it for the diagnostic fixture would reject
+   smaller landscape/portrait/square packages during package load.  Generated
+   release targets continue to link `nw_package_player`; only the diagnostic
+   fixture uses the full decoder.
 
    ```powershell
    $toolchain = Join-Path $PWD "cmake/toolchains/msvc-x64.cmake"
@@ -308,6 +316,7 @@ execution was available, so the real-player rows are deliberately
 | Deterministic repeated export | Linux, test payloads | passed (pytest) |
 | Generic frame-plan geometry | Linux source contract and fixture-link contract | passed (shared helper; fixture links generic bootstrap) |
 | Frozen frame-plan geometry | Linux source contract and fixture-link contract | passed (shared helper; frozen fixture links `nw05_player_bootstrap`) |
+| Frozen external-package loading for 256x144 / 144x256 / 1920x1080 / 256x256 | Linux source and CMake link contract | passed (fixture links `nw_package_player_diagnostic`, not the frozen decoder); native execution unexecuted |
 | Generic/frozen compiled-mode assertion | Linux source contract | passed (fixture reports `compiled_with_frozen_specialization()`) |
 | Subprocess non-ASCII / invalid UTF-8 decoding (0x88) | Linux, mocked CMake output | passed (pytest) |
 | Windows generic planner, 4 cases x 3 window sizes | No Windows host | unexecuted |
