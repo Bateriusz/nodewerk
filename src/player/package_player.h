@@ -206,6 +206,10 @@ public:
     // Compile-time specialization fingerprint used by generated NW-05 mains
     // to verify that the linked runtime implementations match the manifest.
     static std::uint32_t specialized_implementation_mask() noexcept;
+    // True only when this player implementation was compiled for the frozen
+    // embedded-package release branch.  Validation fixtures use it to prove
+    // which frame-plan implementation they actually linked and executed.
+    static bool compiled_with_frozen_specialization() noexcept;
 
     // Explicit test seams.  They never change runtime eligibility branches;
     // they replace the queried snapshot or allocator with a deterministic

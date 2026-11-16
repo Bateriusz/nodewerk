@@ -210,6 +210,16 @@ def test_windows_validation_workflow_builds_template_and_records_checks() -> Non
         "build/nw07-release/staging/procedural_image_player/"
         "nw_procedural_image_player.exe"
     ) in workflow
+    toolchain = workflow.index(
+        '$toolchain = Join-Path $PWD "cmake/toolchains/msvc-x64.cmake"'
+    )
+    fixture_configure = workflow.index("cmake -S . -B \"build/nw08a-$mode\"")
+    assert toolchain < fixture_configure < case_export
+    assert '"-DCMAKE_TOOLCHAIN_FILE=$toolchain"' in workflow
+    assert "-DNW_USE_INBOX_UCRT=ON" in workflow
+    assert "NW_PLAYER_FROZEN_SPECIALIZATION" in workflow
+    assert "$expectedModes = @{ generic = 0; frozen = 1 }" in workflow
+    assert "compiled_frozen" in workflow
     assert "--planner-self-test" in workflow
     assert "tools/nw08a_windows_build_checks.py" in workflow
     assert "--verification-root build/nw08a-nw07-verification" in workflow
@@ -231,3 +241,60 @@ def test_windows_validation_doc_builds_template_before_export() -> None:
     assert "creates `build/nw07-release`" in doc
     assert "nw08a-windows-build-checks-record.json" in doc
     assert "windows-canonical-build-checks" in doc
+
+
+def test_frozen_fixture_links_the_specialized_player_implementation() -> None:
+    cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    bootstrap_start = cmake.index(
+        "if(NW05_GENERATED_PLAYER_SOURCE OR "
+        "NW05_FROZEN_EMBEDDED_SPECIALIZATION)"
+    )
+    bootstrap_end = cmake.index("# NW-04: package-driven", bootstrap_start)
+    bootstrap = cmake[bootstrap_start:bootstrap_end]
+    assert "add_library(nw05_player_bootstrap STATIC" in bootstrap
+    assert (
+        "NW05_FROZEN_EMBEDDED_SPECIALIZATION="
+        "$<BOOL:${NW05_FROZEN_EMBEDDED_SPECIALIZATION}>"
+    ) in bootstrap
+
+    fixture_start = cmake.index(
+        "add_executable(nw_package_player_fixture", bootstrap_end
+    )
+    fixture_end = cmake.index(
+        "nw_attach_dependency_check(nw_package_player_fixture",
+        fixture_start,
+    )
+    fixture = cmake[fixture_start:fixture_end]
+    assert "if(NW05_FROZEN_EMBEDDED_SPECIALIZATION)" in fixture
+    assert "nw05_player_bootstrap" in fixture
+    assert "nw_player_bootstrap" in fixture
+
+    header = (
+        REPO_ROOT / "src" / "player" / "package_player.h"
+    ).read_text(encoding="utf-8")
+    source = (
+        REPO_ROOT / "src" / "player" / "package_player.cpp"
+    ).read_text(encoding="utf-8")
+    fixture_main = (
+        REPO_ROOT / "fixtures" / "nw04_package_player" / "main.cpp"
+    ).read_text(encoding="utf-8")
+    assert "compiled_with_frozen_specialization" in header
+    assert (
+        "bool PackagePlayer::compiled_with_frozen_specialization()"
+        in source
+    )
+    assert "NW_PLAYER_FROZEN_SPECIALIZATION=" in fixture_main
+
+
+def test_windows_validation_doc_separates_windowed_display_evidence() -> None:
+    doc = (
+        REPO_ROOT / "docs" / "nw08a-presentation-geometry-validation.md"
+    ).read_text(encoding="utf-8")
+    assert "Windowed hardware validation (display evidence)" in doc
+    assert "Do not pass `--headless`" in doc
+    assert "--emit-image-hash" in doc
+    assert "NW_PLAYER_PRESENTS" in doc
+    assert "unexecuted" in doc
+    assert "CMAKE_TOOLCHAIN_FILE" in doc
+    assert "nw05_player_bootstrap" in doc
+    assert "NW_PLAYER_FROZEN_SPECIALIZATION" in doc

@@ -61,12 +61,20 @@ jobs:
       - name: Build generic and frozen package-player fixtures
         shell: pwsh
         run: |
+          # Mirror the nw07-release preset's pinned MSVC toolchain and release
+          # cache settings; without the toolchain file the bootstrapped runner
+          # selects clang++ and links forbidden dynamic MSVC runtime imports.
+          $toolchain = Join-Path $PWD "cmake/toolchains/msvc-x64.cmake"
           foreach ($mode in @("generic", "frozen")) {
             $frozen = if ($mode -eq "frozen") { "ON" } else { "OFF" }
             cmake -S . -B "build/nw08a-$mode" -G Ninja `
+              "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
               -DCMAKE_BUILD_TYPE=MinSizeRel `
               -DNW_BUILD_PROFILE=release `
               -DNW_ENFORCE_PINNED_TOOLCHAIN=ON `
+              -DNW_ENABLE_CRT_ELIMINATION_EXPERIMENT=OFF `
+              -DNW_USE_INBOX_UCRT=ON `
+              -DNW07_CAPTURE_CONTROLS=OFF `
               "-DNW05_FROZEN_EMBEDDED_SPECIALIZATION=$frozen"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cmake --build "build/nw08a-$mode" --target nw_package_player_fixture --parallel 2
@@ -106,6 +114,7 @@ jobs:
         run: |
           $cases = @("landscape", "portrait", "canonical_hd", "square")
           $windows = @(@(320, 180), @(640, 360), @(1280, 720))
+          $expectedModes = @{ generic = 0; frozen = 1 }
           $expected = @{
             landscape = @(256, 144)
             portrait = @(144, 256)
@@ -131,24 +140,29 @@ jobs:
                   throw "$mode/$case/$($size[0])x$($size[1]) failed with exit code $LASTEXITCODE"
                 }
                 $lines = @($output | ForEach-Object { "$_" })
+                $modeLine = $lines | Where-Object { $_ -match '^NW_PLAYER_FROZEN_SPECIALIZATION=(\d+)$' } |
+                  Select-Object -First 1
                 $widthLine = $lines | Where-Object { $_ -match '^NW_PLAYER_PRESENT_SOURCE_WIDTH=(\d+)$' } |
                   Select-Object -First 1
                 $heightLine = $lines | Where-Object { $_ -match '^NW_PLAYER_PRESENT_SOURCE_HEIGHT=(\d+)$' } |
                   Select-Object -First 1
                 $explicitLine = $lines | Where-Object { $_ -match '^NW_PLAYER_PRESENT_SOURCE_EXPLICIT=(\d+)$' } |
                   Select-Object -First 1
-                if (-not $widthLine -or -not $heightLine -or -not $explicitLine) {
+                if (-not $modeLine -or -not $widthLine -or -not $heightLine -or -not $explicitLine) {
                   throw "$mode/$case/$($size[0])x$($size[1]) emitted incomplete geometry lines"
                 }
+                $compiledFrozen = [int]($modeLine -replace '^NW_PLAYER_FROZEN_SPECIALIZATION=', '')
                 $sourceWidth = [int]($widthLine -replace '^NW_PLAYER_PRESENT_SOURCE_WIDTH=', '')
                 $sourceHeight = [int]($heightLine -replace '^NW_PLAYER_PRESENT_SOURCE_HEIGHT=', '')
                 $explicit = [int]($explicitLine -replace '^NW_PLAYER_PRESENT_SOURCE_EXPLICIT=', '')
-                if ($sourceWidth -ne $expected[$case][0] -or
+                if ($compiledFrozen -ne $expectedModes[$mode] -or
+                    $sourceWidth -ne $expected[$case][0] -or
                     $sourceHeight -ne $expected[$case][1] -or $explicit -ne 1) {
-                  throw "$mode/$case/$($size[0])x$($size[1]) geometry $sourceWidth x $sourceHeight explicit=$explicit"
+                  throw "$mode/$case/$($size[0])x$($size[1]) frozen=$compiledFrozen geometry $sourceWidth x $sourceHeight explicit=$explicit"
                 }
                 $records += [ordered]@{
                   mode = $mode
+                  compiled_frozen = ($compiledFrozen -eq 1)
                   case = $case
                   window_width = $size[0]
                   window_height = $size[1]

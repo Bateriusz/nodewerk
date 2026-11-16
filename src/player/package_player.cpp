@@ -1125,6 +1125,14 @@ std::uint32_t PackagePlayer::specialized_implementation_mask() noexcept {
     return mask;
 }
 
+bool PackagePlayer::compiled_with_frozen_specialization() noexcept {
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    return true;
+#else
+    return false;
+#endif
+}
+
 PackagePlayer::PackagePlayer() : PackagePlayer(PlayerConfig{}) {}
 
 PackagePlayer::PackagePlayer(const PlayerConfig& config) : config_(config) {
