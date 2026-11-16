@@ -108,7 +108,7 @@ def _history_hlsl(
         )
         return "\n".join(
             [
-                "// Generated NW-09 particle History compute entry point.",
+                f"// Generated NW-09 particle History compute entry point: {spec.node_id}.",
                 "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
                 "ByteAddressBuffer nw_previous : register(t0);",
                 "RWByteAddressBuffer nw_current : register(u0);",
@@ -161,7 +161,7 @@ def _history_hlsl(
         )
         return "\n".join(
             [
-                "// Generated NW-09 feedback-image History compute entry point.",
+                f"// Generated NW-09 feedback-image History compute entry point: {spec.node_id}.",
                 "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
                 "ByteAddressBuffer nw_previous : register(t0);",
                 "RWByteAddressBuffer nw_current : register(u0);",
@@ -175,7 +175,9 @@ def _history_hlsl(
                 "        asfloat(nw_previous.Load(base + 4u)),",
                 "        asfloat(nw_previous.Load(base + 8u)),",
                 "        asfloat(nw_previous.Load(base + 12u)));",
-                "    uint tick = uint(max(0.0f, floor(g_params[0].x / 400.0f)));",
+                "    // The player publishes the exact 32-bit simulation tick in",
+                "    // g_params[0].y; never rebuild it from float seconds.",
+                "    uint tick = asuint(g_params[0].y);",
                 "    uint x = index % "
                 f"{width}u; uint y = index / {width}u;",
                 "    uint h = 0x9e3779b9u;",
@@ -287,16 +289,216 @@ def _history_present_hlsl(
 def _present_history_node(
     document: nw03.GraphDocument, specs: Sequence[temporal.HistorySpec]
 ) -> str:
-    for node in document.nodes.values():
-        if node.operator_id != "nw.render.present":
-            continue
-        connection = node.inputs.get("image")
-        if connection is not None:
-            for spec in specs:
-                if spec.node_id == connection[0]:
-                    return spec.node_id
-            break
-    return specs[0].node_id
+    """Return the History node that actually feeds presentation.
+
+    The authored graph may pass the History output through ordinary post
+    operators (for example ``feedback -> nw.post.tonemap -> present``).  The
+    previous direct-input check silently fell back to the first History node,
+    which allowed a stateful export to discard the authored tonemap stage.
+    Walk the real presentation ancestry and require exactly one History
+    producer; an indirect or ambiguous presentation path is an explicit
+    export error rather than a silent substitution.
+    """
+
+    spec_ids = {spec.node_id for spec in specs}
+    present_nodes = sorted(
+        (
+            node
+            for node in document.nodes.values()
+            if node.operator_id == "nw.render.present"
+        ),
+        key=lambda item: item.node_id,
+    )
+    if not present_nodes:
+        raise StatefulExportError(
+            "stateful graph has no nw.render.present node"
+        )
+    present = present_nodes[0]
+    connection = present.inputs.get("image")
+    if connection is None:
+        raise StatefulExportError(
+            f"present node '{present.node_id}' has no image input"
+        )
+
+    visiting: set[str] = set()
+
+    def history_ancestors(node_id: str) -> set[str]:
+        if node_id in spec_ids:
+            return {node_id}
+        if node_id in visiting:
+            return set()
+        visiting.add(node_id)
+        node = document.nodes.get(node_id)
+        if node is None:
+            return set()
+        found: set[str] = set()
+        for source, _source_port in node.inputs.values():
+            found.update(history_ancestors(source))
+        visiting.remove(node_id)
+        return found
+
+    ancestors = history_ancestors(connection[0])
+    if not ancestors:
+        raise StatefulExportError(
+            f"presentation path from '{connection[0]}' reaches no History node"
+        )
+    if len(ancestors) != 1:
+        raise StatefulExportError(
+            "stateful presentation path reaches multiple History nodes: "
+            + ", ".join(sorted(ancestors))
+        )
+    return next(iter(ancestors))
+
+
+def presentation_chain(
+    document: nw03.GraphDocument, history_node: str
+) -> tuple[nw03.GraphNode, ...]:
+    """Return the authored ordinary image nodes between History and present."""
+
+    present_nodes = sorted(
+        (
+            node
+            for node in document.nodes.values()
+            if node.operator_id == "nw.render.present"
+        ),
+        key=lambda item: item.node_id,
+    )
+    if not present_nodes:
+        return ()
+    present = present_nodes[0]
+    connection = present.inputs.get("image")
+    if connection is None:
+        return ()
+    chain: list[nw03.GraphNode] = []
+    seen: set[str] = set()
+    node_id = connection[0]
+    while node_id != history_node:
+        if node_id in seen:
+            raise StatefulExportError(
+                "stateful presentation path contains a cycle"
+            )
+        seen.add(node_id)
+        node = document.nodes.get(node_id)
+        if node is None:
+            raise StatefulExportError(
+                f"presentation path references unknown node '{node_id}'"
+            )
+        image_inputs = [
+            source
+            for port, (source, _source_port) in node.inputs.items()
+            if port == "image"
+        ]
+        if len(image_inputs) != 1:
+            raise StatefulExportError(
+                f"presentation node '{node_id}' ({node.operator_id}) must have "
+                "exactly one image input to be lowered into the stateful schedule"
+            )
+        chain.insert(0, node)
+        node_id = image_inputs[0]
+    return tuple(chain)
+
+
+def _post_pass_hlsl(
+    document: nw03.GraphDocument,
+    node: nw03.GraphNode,
+    present_width: int,
+    present_height: int,
+) -> str:
+    """Return a deterministic compute pass for an ordinary post operator."""
+
+    width = max(1, int(present_width))
+    height = max(1, int(present_height))
+    count = width * height
+    header = [
+        f"// Generated NW-09 ordinary post pass: {node.operator_id} ({node.node_id}).",
+        "cbuffer NwParams : register(b0) { float4 g_params[4]; };",
+        "ByteAddressBuffer nw_input : register(t0);",
+        "RWByteAddressBuffer nw_output : register(u0);",
+        f"[numthreads({HISTORY_THREAD_GROUP[0]}, 1, 1)]",
+        "void nw09_post_main(uint3 dispatch_id : SV_DispatchThreadID) {",
+        "    uint pixel = dispatch_id.x;",
+        f"    if (pixel >= {count}u) return;",
+        "    uint base = pixel * 16u;",
+        "    float3 scene = float3(",
+        "        asfloat(nw_input.Load(base + 0u)),",
+        "        asfloat(nw_input.Load(base + 4u)),",
+        "        asfloat(nw_input.Load(base + 8u)));",
+    ]
+    if node.operator_id == "nw.post.tonemap":
+        exposure = temporal._param_float(node, "exposure", 1.0)
+        gamma = temporal._param_float(node, "gamma", 2.2)
+        operator = node.params.get("operator", ["aces"])[0]
+        operator_value = {"linear": 0, "reinhard": 1, "aces": 2}.get(
+            operator, 2
+        )
+        body = [
+            f"    float3 color = scene * {_hlsl_float(exposure)};",
+            f"    uint tonemap_operator = {operator_value}u;",
+            "    float3 mapped;",
+            "    if (tonemap_operator == 1u) {",
+            "        mapped = color / (1.0f + color);",
+            "    } else if (tonemap_operator == 2u) {",
+            "        const float a = 2.51f;",
+            "        const float b = 0.03f;",
+            "        const float c = 2.43f;",
+            "        const float d = 0.59f;",
+            "        const float e = 0.14f;",
+            "        mapped = saturate((color * (a * color + b)) /",
+            "            (color * (c * color + d) + e));",
+            "    } else {",
+            "        mapped = saturate(color);",
+            "    }",
+            "    mapped = pow(max(mapped, 0.0f), "
+            f"1.0f / {_hlsl_float(gamma)});",
+            "    float4 out_value = float4(mapped, 1.0f);",
+        ]
+    elif node.operator_id == "nw.post.bloom":
+        threshold = temporal._param_float(node, "threshold", 1.0)
+        intensity = temporal._param_float(node, "intensity", 0.5)
+        radius = max(1, temporal._param_int(node, "radius", 1))
+        body = [
+            "    uint x = pixel % "
+            f"{width}u; uint y = pixel / {width}u;",
+            "    float3 bloom = float3(0.0f, 0.0f, 0.0f);",
+            f"    const int radius = {radius};",
+            "    for (int dy = -radius; dy <= radius; ++dy) {",
+            "        for (int dx = -radius; dx <= radius; ++dx) {",
+            "            int sx = clamp(int(x) + dx, 0, "
+            f"{width - 1});",
+            "            int sy = clamp(int(y) + dy, 0, "
+            f"{height - 1});",
+            "            uint source = (uint(sy) * "
+            f"{width}u + uint(sx)) * 16u;",
+            "            float3 sample = float3(",
+            "                asfloat(nw_input.Load(source + 0u)),",
+            "                asfloat(nw_input.Load(source + 4u)),",
+            "                asfloat(nw_input.Load(source + 8u)));",
+            f"            bloom += max(sample - {_hlsl_float(threshold)}, "
+            "float3(0.0f, 0.0f, 0.0f));",
+            "        }",
+            "    }",
+            f"    float taps = float((radius * 2 + 1) * (radius * 2 + 1));",
+            f"    float3 out_color = scene + {_hlsl_float(intensity)} * "
+            "(bloom / taps);",
+            "    float4 out_value = float4(out_color, 1.0f);",
+        ]
+    else:
+        raise StatefulExportError(
+            f"stateful presentation node '{node.node_id}' "
+            f"({node.operator_id}) has no supported ordinary lowering"
+        )
+    return "\n".join(
+        header
+        + body
+        + [
+            "    nw_output.Store(base + 0u, asuint(out_value.x));",
+            "    nw_output.Store(base + 4u, asuint(out_value.y));",
+            "    nw_output.Store(base + 8u, asuint(out_value.z));",
+            "    nw_output.Store(base + 12u, asuint(out_value.w));",
+            "}",
+            "",
+        ]
+    )
 
 
 def _history_shaders(
@@ -307,6 +509,7 @@ def _history_shaders(
     present_height: int | None = None,
 ) -> list[nw03.GeneratedShader]:
     present_node = _present_history_node(document, specs)
+    post_chain = presentation_chain(document, present_node)
     shaders: list[nw03.GeneratedShader] = []
     for spec in specs:
         hlsl = _history_hlsl(document, spec)
@@ -348,6 +551,30 @@ def _history_shaders(
                     execution_root=spec.node_id,
                 )
             )
+            if post_chain:
+                for post_node in post_chain:
+                    post_hlsl = _post_pass_hlsl(
+                        document, post_node, shader_width, shader_height
+                    )
+                    shaders.append(
+                        nw03.GeneratedShader(
+                            specialization_id=(
+                                f"nw09.post.{post_node.operator_id}."
+                                f"{post_node.node_id}"
+                            ),
+                            entry_point="nw09_post_main",
+                            target=nw03.SHADER_TARGET,
+                            family=nw03.PASS_FAMILY,
+                            hlsl=post_hlsl,
+                            source_map=(),
+                            root_expression=(
+                                f"post:{post_node.operator_id}"
+                            ),
+                            root_node_ids=(post_node.node_id,),
+                            thread_group=HISTORY_THREAD_GROUP,
+                            execution_root=post_node.node_id,
+                        )
+                    )
     return shaders
 
 
@@ -585,10 +812,25 @@ def build_stateful_package(
         for index, spec in enumerate(specs, start=1)
     }
     present_shader_node = _present_history_node(document, specs)
+    post_chain = presentation_chain(document, present_shader_node)
+    history_image_shader_id = shader_id_by_specialization[
+        f"nw09.history.present.{present_shader_node}"
+    ]
+    post_shader_rows: list[tuple[nw03.GraphNode, int]] = [
+        (
+            node,
+            shader_id_by_specialization[
+                f"nw09.post.{node.operator_id}.{node.node_id}"
+            ],
+        )
+        for node in post_chain
+    ]
     present_shader_id_by_node = {
-        present_shader_node: shader_id_by_specialization[
-            f"nw09.history.present.{present_shader_node}"
-        ]
+        present_shader_node: (
+            post_shader_rows[-1][1]
+            if post_shader_rows
+            else history_image_shader_id
+        )
     }
     next_resource = max(
         (resource.resource_id for resource in package.resources), default=0
@@ -596,9 +838,39 @@ def build_stateful_package(
     resources = [parameters_resource]
     initialization: list[nwp.Instruction] = []
     parameters = list(package.parameters)
+    if (
+        not parameters
+        or parameters[0].name != "time"
+        or len(parameters[0].value) != 4
+    ):
+        raise StatefulExportError(
+            "compiled History base package must expose the canonical 'time' "
+            "parameter first so the exact simulation tick can be packed "
+            "immediately after it"
+        )
     next_parameter_id = max(
         (parameter.parameter_id for parameter in parameters), default=0
     ) + 1
+    # The fixed-step simulation tick is an exact integer scheduler input.  It
+    # is packed immediately after the float ``time`` parameter so the player
+    # can publish its 32-bit value in the root-constant block without ever
+    # reconstructing it from a float32 timeline value (which loses precision
+    # above 2^24 timeline ticks).
+    parameters.append(
+        nwp.ParameterRecord(
+            parameter_id=next_parameter_id,
+            name="nw09.simulation_tick",
+            type="uint",
+            phase="initialization",
+            component_count=1,
+            value=struct.pack("<I", 0),
+            timeline_start_frame=0,
+            timeline_end_frame=0,
+            timeline_step=0,
+            timeline_interpolation="none",
+        )
+    )
+    next_parameter_id += 1
     geometry = present_geometry(document)
     if geometry is not None:
         for name, value in (
@@ -858,18 +1130,7 @@ def build_stateful_package(
                 ),
             )
         )
-    present_source_node = ""
-    for node in document.nodes.values():
-        if node.operator_id != "nw.render.present":
-            continue
-        connection = node.inputs.get("image")
-        if connection is not None:
-            present_source_node = connection[0]
-            break
-    present_state_resource_id = resource_by_node.get(
-        present_source_node,
-        next(iter(resource_by_node.values())),
-    )
+    present_state_resource_id = resource_by_node[present_shader_node]
     present_state_record = next(
         record
         for record in history_records
@@ -887,11 +1148,11 @@ def build_stateful_package(
             present_width * present_height * 16,
             ((present_state_record.state_bytes + 15) // 16) * 16,
         )
-    present_surface_id = next_resource
+    history_image_surface_id = next_resource
     next_resource += 1
     resources.append(
         nwp.ResourceDescriptor(
-            resource_id=present_surface_id,
+            resource_id=history_image_surface_id,
             name="output",
             kind="buffer",
             format="DXGI_FORMAT_R32G32B32A32_FLOAT",
@@ -905,7 +1166,11 @@ def build_stateful_package(
     initialization.append(
         nwp.Instruction(
             "init.create_resource",
-            (nwp.InstructionOperand("resource_ref", present_surface_id),),
+            (
+                nwp.InstructionOperand(
+                    "resource_ref", history_image_surface_id
+                ),
+            ),
         )
     )
     present_node_id = present_shader_node
@@ -921,7 +1186,9 @@ def build_stateful_package(
                 "frame.barrier",
                 (
                     nwp.InstructionOperand("u32", 4),
-                    nwp.InstructionOperand("resource_ref", present_surface_id),
+                    nwp.InstructionOperand(
+                        "resource_ref", history_image_surface_id
+                    ),
                 ),
             ),
             nwp.Instruction(
@@ -940,7 +1207,9 @@ def build_stateful_package(
                 (
                     nwp.InstructionOperand("u32", 1),
                     nwp.InstructionOperand("string", "cbv_srv_uav"),
-                    nwp.InstructionOperand("resource_ref", present_surface_id),
+                    nwp.InstructionOperand(
+                        "resource_ref", history_image_surface_id
+                    ),
                 ),
             ),
             nwp.Instruction(
@@ -950,8 +1219,7 @@ def build_stateful_package(
                     nwp.InstructionOperand("u32", present_groups[1]),
                     nwp.InstructionOperand("u32", present_groups[2]),
                     nwp.InstructionOperand(
-                        "shader_ref",
-                        present_shader_id_by_node[present_node_id],
+                        "shader_ref", history_image_shader_id
                     ),
                 ),
             ),
@@ -959,12 +1227,149 @@ def build_stateful_package(
                 "frame.barrier",
                 (
                     nwp.InstructionOperand("u32", 4),
-                    nwp.InstructionOperand("resource_ref", present_surface_id),
+                    nwp.InstructionOperand(
+                        "resource_ref", history_image_surface_id
+                    ),
                 ),
             ),
         ]
     )
-    present_resource_id = present_surface_id
+    present_resource_id = history_image_surface_id
+    post_reports: list[dict[str, Any]] = []
+    for post_node, post_shader_id in post_shader_rows:
+        # The established root-signature/validation contract binds the
+        # generated SRV root parameter to a resource literally named "input"
+        # and the UAV root parameter to a resource named "output".  Publish the
+        # ordinary pass input through an explicit copy into a distinct,
+        # fence-safe "input" resource rather than aliasing the UAV.
+        post_input_id = next_resource
+        next_resource += 1
+        resources.append(
+            nwp.ResourceDescriptor(
+                resource_id=post_input_id,
+                name="input",
+                kind="buffer",
+                format="DXGI_FORMAT_R32G32B32A32_FLOAT",
+                usage="srv",
+                pass_family=nw03.PASS_FAMILY,
+                binding_slot=0,
+                binding_space=0,
+                size_bytes=present_surface_bytes,
+            )
+        )
+        initialization.append(
+            nwp.Instruction(
+                "init.create_resource",
+                (
+                    nwp.InstructionOperand(
+                        "resource_ref", post_input_id
+                    ),
+                ),
+            )
+        )
+        post_surface_id = next_resource
+        next_resource += 1
+        resources.append(
+            nwp.ResourceDescriptor(
+                resource_id=post_surface_id,
+                name="output",
+                kind="buffer",
+                format="DXGI_FORMAT_R32G32B32A32_FLOAT",
+                usage="uav",
+                pass_family=nw03.PASS_FAMILY,
+                binding_slot=0,
+                binding_space=0,
+                size_bytes=present_surface_bytes,
+            )
+        )
+        initialization.append(
+            nwp.Instruction(
+                "init.create_resource",
+                (
+                    nwp.InstructionOperand(
+                        "resource_ref", post_surface_id
+                    ),
+                ),
+            )
+        )
+        frame.extend(
+            [
+                nwp.Instruction(
+                    "frame.copy_buffer",
+                    (
+                        nwp.InstructionOperand(
+                            "resource_ref", present_resource_id
+                        ),
+                        nwp.InstructionOperand(
+                            "resource_ref", post_input_id
+                        ),
+                        nwp.InstructionOperand(
+                            "u64", present_surface_bytes
+                        ),
+                    ),
+                ),
+                nwp.Instruction(
+                    "frame.barrier",
+                    (
+                        nwp.InstructionOperand("u32", 4),
+                        nwp.InstructionOperand(
+                            "resource_ref", post_surface_id
+                        ),
+                    ),
+                ),
+                nwp.Instruction(
+                    "frame.set_descriptor_table",
+                    (
+                        nwp.InstructionOperand("u32", 2),
+                        nwp.InstructionOperand("string", "cbv_srv_uav"),
+                        nwp.InstructionOperand(
+                            "resource_ref", post_input_id
+                        ),
+                    ),
+                ),
+                nwp.Instruction(
+                    "frame.set_descriptor_table",
+                    (
+                        nwp.InstructionOperand("u32", 1),
+                        nwp.InstructionOperand("string", "cbv_srv_uav"),
+                        nwp.InstructionOperand(
+                            "resource_ref", post_surface_id
+                        ),
+                    ),
+                ),
+                nwp.Instruction(
+                    "frame.dispatch",
+                    (
+                        nwp.InstructionOperand("u32", present_groups[0]),
+                        nwp.InstructionOperand("u32", present_groups[1]),
+                        nwp.InstructionOperand("u32", present_groups[2]),
+                        nwp.InstructionOperand(
+                            "shader_ref", post_shader_id
+                        ),
+                    ),
+                ),
+                nwp.Instruction(
+                    "frame.barrier",
+                    (
+                        nwp.InstructionOperand("u32", 4),
+                        nwp.InstructionOperand(
+                            "resource_ref", post_surface_id
+                        ),
+                    ),
+                ),
+            ]
+        )
+        post_reports.append(
+            {
+                "node_id": post_node.node_id,
+                "operator_id": post_node.operator_id,
+                "shader_id": post_shader_id,
+                "input_resource_id": present_resource_id,
+                "copied_input_resource_id": post_input_id,
+                "output_resource_id": post_surface_id,
+            }
+        )
+        present_resource_id = post_surface_id
     frame.extend(
         [
             nwp.Instruction(
@@ -1082,7 +1487,7 @@ def build_stateful_package(
             sorted(shader_id_by_specialization.items())
         ),
         "present_surface": {
-            "resource_id": present_surface_id,
+            "resource_id": present_resource_id,
             "kind": "buffer",
             "usage": "uav",
             "width": present_width,
@@ -1090,6 +1495,21 @@ def build_stateful_package(
             "format": "DXGI_FORMAT_R32G32B32A32_FLOAT",
             "size_bytes": present_surface_bytes,
         },
+        "history_image_surface": {
+            "resource_id": history_image_surface_id,
+            "shader_id": history_image_shader_id,
+            "width": present_width,
+            "height": present_height,
+        },
+        "post_passes": post_reports,
+        "presentation_nodes": [
+            {
+                "node_id": node.node_id,
+                "operator_id": node.operator_id,
+                "shader_id": shader_id,
+            }
+            for node, shader_id in post_shader_rows
+        ],
         "presentation_path": {
             "package_source": "rgba32f-uav-buffer",
             "player_display_stage": "buffer-to-player-owned-texture",
@@ -1100,8 +1520,8 @@ def build_stateful_package(
             report["state_bytes"] * frames_in_flight for report in reports
         ),
         "packaged_checkpoints": checkpoint_reports,
-        "packaged_checkpoint_byte_cost": sum(
-            item["byte_cost"] for item in checkpoint_reports
+        "packaged_checkpoint_byte_cost": (
+            nwp.release_checkpoint_section_byte_cost(checkpoints)
         ),
         "present_geometry": (
             {"width": present_geometry(document)[0], "height": present_geometry(document)[1]}

@@ -46,6 +46,8 @@ STATEFUL_EXTENSION_FLAG = 2
 HEADER_SIZE = 64
 SECTION_ENTRY_SIZE = 32
 CHECKSUM_SIZE = 32
+# CKPT section header: u16 version + u16 flags + u32 record count.
+_CHECKPOINT_SECTION_HEADER_BYTES = 8
 CHECKSUM_ALGORITHM_SHA256 = 1
 
 SECTION_CAPABILITY = "CAP "
@@ -687,6 +689,19 @@ class ReleaseCheckpointRecord:
     flags: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        # Report the cost of the *actual serialized record* rather than a
+        # hand-estimated payload+label heuristic.  The CKPT record carries the
+        # label and payload length prefixes plus four semantic/capability
+        # digests and their length prefixes; omitting them understated export
+        # accounting.  The per-record cost also names the CKPT section header
+        # and directory-entry overhead explicitly so callers can reconcile it
+        # with ``release_checkpoint_section_byte_cost``.
+        encoded_record_bytes = (
+            len(_encode_checkpoints([self])) - _CHECKPOINT_SECTION_HEADER_BYTES
+        )
+        section_overhead_bytes = (
+            _CHECKPOINT_SECTION_HEADER_BYTES + SECTION_ENTRY_SIZE
+        )
         return {
             "checkpoint_id": self.checkpoint_id,
             "label": self.label,
@@ -699,7 +714,9 @@ class ReleaseCheckpointRecord:
             "payload_sha256": sha256_hex(self.payload),
             "payload_bytes": len(self.payload),
             "state_count": self.state_count,
-            "byte_cost": len(self.payload) + len(self.label.encode("utf-8")) + 64,
+            "encoded_record_bytes": encoded_record_bytes,
+            "checkpoint_section_overhead_bytes": section_overhead_bytes,
+            "byte_cost": encoded_record_bytes + section_overhead_bytes,
             "flags": self.flags,
             "portable_gpu_state_claim": False,
         }
@@ -756,9 +773,8 @@ class NwpPackage:
                 "checkpoints": [
                     item.to_dict() for item in self.release_checkpoints
                 ],
-                "checkpoint_byte_cost": sum(
-                    len(item.label.encode("utf-8")) + 64 + len(item.payload)
-                    for item in self.release_checkpoints
+                "checkpoint_byte_cost": release_checkpoint_section_byte_cost(
+                    self.release_checkpoints
                 ),
                 "portable_gpu_state_replay": False,
             }
@@ -4095,6 +4111,21 @@ def _encode_checkpoints(records: Sequence[ReleaseCheckpointRecord]) -> bytes:
         writer.u32(record.flags)
         writer.bytes(record.payload)
     return bytes(writer.buffer)
+
+
+def release_checkpoint_section_byte_cost(
+    records: Sequence[ReleaseCheckpointRecord],
+) -> int:
+    """Return the exact stored bytes of the optional CKPT section.
+
+    The value is the serialized CKPT payload (header plus every record) plus
+    the package section-directory entry that points at it.  An empty record
+    list costs nothing because the section is omitted entirely.
+    """
+
+    if not records:
+        return 0
+    return len(_encode_checkpoints(records)) + SECTION_ENTRY_SIZE
 
 
 def _decode_checkpoints(

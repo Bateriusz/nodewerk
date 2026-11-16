@@ -77,9 +77,9 @@ single-queue fence/retirement planner remains the only lifetime authority.
 | `initialize` / `reset` | Restore the declared initial state at tick 0, clear loop generation, and reset event cursors. |
 | `advance_to(tick)` | Process every simulation tick from the current absolute tick to `tick // 400`, in order. A work cap leaves outstanding ticks scheduled. |
 | loop reset | At an exact loop boundary the runtime increments the loop generation, resets all History states to their declared initial values, and resets the event cursor for the new generation. |
-| `seek(tick, checkpoint)` | Restore a compatible checkpoint at or before the target, otherwise reset to initial state and replay every required tick from zero. |
+| `seek(tick, checkpoint)` | Restore a compatible checkpoint at or before the target, otherwise reset to initial state and replay every required tick from zero. A replay from zero restores loop generation 0 while retaining event-deduplication identities. |
 | `replay` | Explicit seek/replay entry point used by editor playback, preview, and checkpoint recovery. |
-| event replay | Events are emitted once per loop generation and tick. Backward seeks reset the event cursor but do not duplicate an already observed event in the same generation. |
+| event replay | Events are emitted once per loop generation and tick. Backward seeks reset the event cursor and the loop generation to the replay origin, so rebuilt state digests match a fresh runtime and an already observed event is never emitted twice. |
 | device reinitialization | Device-resident checkpoints and GPU realizations from an earlier D3D12 device lifetime or recreation epoch are rejected. Recovery must pass through the explicit NW-08 preview reinitialization boundary before replay can publish. |
 
 ## Checkpoint compatibility
@@ -118,7 +118,13 @@ Stateful documents use the explicit `.nwp` v1.1 additive extension:
 Stateful packages are still produced and consumed through the existing
 `nwp_package`, `PackagePlayer`, resource-plan, schedule, and player
 architecture. Packaged checkpoints report their byte cost in the export report,
-size report, manifest, and package inspection.
+size report, manifest, and package inspection. The reported cost is derived
+from the encoded `CKPT` record (including the semantic/layout/capability
+digests and every length prefix) plus the section header and directory-entry
+overhead, not from a payload-plus-label estimate. Stateful exports reuse the
+established specialized-player generation, embedding, dependency accounting,
+and byte-ceiling enforcement; a History-free export still links no
+History/checkpoint support.
 
 The supplied document is compiled through the established optimizer/offline
 DXC/cache/report pipeline. History nodes lower to ordinary compute
@@ -128,7 +134,23 @@ player's fixed-step scheduler. The player derives the target simulation tick
 from the presentation timeline tick, processes every outstanding 120 Hz step in
 order (or leaves a declared work cap pending), and only then presents. A
 backward device playback request fails closed unless the editor first restores
-a compatible checkpoint or reinitializes through the NW-08 boundary.
+a compatible checkpoint or reinitializes through the NW-08 boundary. The
+persistent authoring preview host performs that recovery: a backward scrub
+retires submitted work, re-uploads both ping-pong resources and rewinds the
+simulation counter together, then submits the ordinary render request which
+replays every required tick from zero. Release playback never silently rewinds.
+
+The authored image path is preserved. Ordinary downstream nodes between the
+History producer and `nw.render.present` (for example
+`feedback -> nw.post.tonemap -> present`) lower to ordinary compute passes in
+the same package frame schedule, and the final pass remains the `frame.present`
+source. Presentation ancestry is resolved through the graph instead of falling
+back to the first History declaration.
+
+The fixed simulation tick is published to History shaders as exact 32-bit
+integer bits in the root-constant block rather than reconstructed from a
+float32 timeline value. Above 2^24 timeline ticks the float32 round-trip would
+otherwise select a neighbouring simulation tick.
 The History extension also compiles a display pass. It samples the selected
 node's final state and writes every pixel of a `nw05.present.width *
 nw05.present.height` RGBA32F package display buffer before `frame.present`;

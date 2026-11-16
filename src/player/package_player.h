@@ -149,7 +149,6 @@ public:
     std::uint64_t shutdown_count() const noexcept { return shutdown_count_; }
     std::uint64_t frames_rendered() const noexcept { return frames_rendered_; }
     std::uint64_t last_tick() const noexcept { return last_tick_; }
-#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     std::uint64_t history_simulation_tick() const noexcept {
         return history_simulation_tick_;
     }
@@ -162,7 +161,6 @@ public:
     std::uint64_t history_loop_resets() const noexcept {
         return history_loop_resets_;
     }
-#endif
     std::uint32_t last_timeline_parameter_id() const noexcept {
         return timeline_parameter_id_;
     }
@@ -358,9 +356,7 @@ private:
             SetRenderTargets,
             Barrier,
             Dispatch,
-#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             SimulationStep,
-#endif
             ExecuteIndirect,
             Draw,
             CopyBuffer,
@@ -385,9 +381,7 @@ private:
         std::array<bool, package::kMaxRootSignatureDwordCost>
             descriptor_resource_is_srv{};
         std::uint32_t shader_id = 0u;
-#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
         std::uint32_t history_state_id = 0u;
-#endif
         std::uint32_t group_x = 1u;
         std::uint32_t group_y = 1u;
         std::uint32_t group_z = 1u;
@@ -395,6 +389,7 @@ private:
         std::uint32_t barrier_state = 0u;
         std::uint32_t constant_count = 0u;
         std::int32_t time_byte_offset = -1;
+        std::int32_t simulation_tick_byte_offset = -1;
         std::uint64_t byte_count = 0u;
         std::uint64_t tick_value = 0u;
         std::uint32_t max_draw_count = 1u;
@@ -418,14 +413,12 @@ private:
     };
     std::vector<FrameOp> frame_ops_;
     std::vector<std::string> last_frame_order_;
-#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     std::uint32_t history_work_cap_ = 0u;
     std::uint64_t history_loop_ticks_ = 0u;
     std::uint64_t history_simulation_tick_ = 0u;
     std::uint64_t history_pending_ticks_ = 0u;
     std::uint64_t history_steps_executed_ = 0u;
     std::uint64_t history_loop_resets_ = 0u;
-#endif
     std::unique_ptr<PlatformState> platform_;
 
 #if NW_PLAYER_DIAGNOSTICS

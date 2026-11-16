@@ -1441,6 +1441,12 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                     op.time_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
                 }
+                if (parameter.name == "nw09.simulation_tick" &&
+                    parameter_bytes >= 4u &&
+                    op.simulation_tick_byte_offset < 0) {
+                    op.simulation_tick_byte_offset =
+                        static_cast<std::int32_t>(byte_offset);
+                }
                 if (parameter_bytes == declared_bytes &&
                     op.parameter_count <
                         package::kMaxRootSignatureDwordCost) {
@@ -1826,6 +1832,12 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 if (parameter.name == "time" && parameter_bytes >= 4u &&
                     op.time_byte_offset < 0) {
                     op.time_byte_offset =
+                        static_cast<std::int32_t>(byte_offset);
+                }
+                if (parameter.name == "nw09.simulation_tick" &&
+                    parameter_bytes >= 4u &&
+                    op.simulation_tick_byte_offset < 0) {
+                    op.simulation_tick_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
                 }
                 const bool full_parameter_fits =
@@ -4718,6 +4730,18 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
     }
     NoteEngineAllocation(0u, 0u, false, true, false);
 #endif
+    // Initialization (including the NW-08 authoring hot-reload path) is the
+    // authoritative reset boundary for temporal state.  The initial-state
+    // bytes were just re-uploaded into both ping-pong resources, so the
+    // simulation counter must be rewound with them.  Leaving it at a previous
+    // preview's tick makes the next render execute zero steps and present the
+    // new package's initial state.
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    history_simulation_tick_ = 0u;
+    history_pending_ticks_ = 0u;
+    history_steps_executed_ = 0u;
+    history_loop_resets_ = 0u;
+#endif
     return ExitCode::Success;
 }
 
@@ -4805,6 +4829,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     std::uint32_t package_constant_root = 0u;
     std::uint32_t package_constant_count = 0u;
     std::int32_t package_time_byte_offset = -1;
+    std::int32_t package_simulation_tick_byte_offset = -1;
     std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
         package_constant_values{};
     std::array<D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -5012,24 +5037,50 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 list->SetComputeRootDescriptorTable(2u, previous_handle);
                 list->SetComputeRootDescriptorTable(1u, current->gpu_handle);
                 if (package_has_constants &&
-                    package_constant_count > 0u &&
-                    package_time_byte_offset >= 0 &&
-                    static_cast<std::uint32_t>(
-                        package_time_byte_offset) + 4u <=
-                        package_constant_count * 4u) {
+                    package_constant_count > 0u) {
                     std::array<std::uint32_t,
                                package::kMaxRootSignatureDwordCost>
                         tick_values = package_constant_values;
-                    const float tick_seconds = static_cast<float>(
-                        (history_simulation_tick_ + iteration + 1u) *
-                        package::kTimelineTicksPerSimulationTick);
-                    std::memcpy(
-                        reinterpret_cast<std::uint8_t*>(tick_values.data()) +
-                            package_time_byte_offset,
-                        &tick_seconds, sizeof(tick_seconds));
-                    list->SetComputeRoot32BitConstants(
-                        package_constant_root, package_constant_count,
-                        tick_values.data(), 0u);
+                    const std::uint64_t simulation_tick =
+                        history_simulation_tick_ + iteration + 1u;
+                    bool updated = false;
+                    if (package_time_byte_offset >= 0 &&
+                        static_cast<std::uint32_t>(
+                            package_time_byte_offset) + 4u <=
+                            package_constant_count * 4u) {
+                        const float tick_seconds = static_cast<float>(
+                            simulation_tick *
+                            package::kTimelineTicksPerSimulationTick);
+                        std::memcpy(
+                            reinterpret_cast<std::uint8_t*>(
+                                tick_values.data()) +
+                                package_time_byte_offset,
+                            &tick_seconds, sizeof(tick_seconds));
+                        updated = true;
+                    }
+                    if (package_simulation_tick_byte_offset >= 0 &&
+                        static_cast<std::uint32_t>(
+                            package_simulation_tick_byte_offset) + 4u <=
+                            package_constant_count * 4u) {
+                        // Publish the exact integer tick as raw 32-bit bits.
+                        // Consumers must read it with asuint instead of
+                        // dividing a float32 timeline value (which loses
+                        // low bits above 2^24).
+                        const std::uint32_t simulation_tick_bits =
+                            static_cast<std::uint32_t>(simulation_tick);
+                        std::memcpy(
+                            reinterpret_cast<std::uint8_t*>(
+                                tick_values.data()) +
+                                package_simulation_tick_byte_offset,
+                            &simulation_tick_bits,
+                            sizeof(simulation_tick_bits));
+                        updated = true;
+                    }
+                    if (updated) {
+                        list->SetComputeRoot32BitConstants(
+                            package_constant_root, package_constant_count,
+                            tick_values.data(), 0u);
+                    }
                 }
                 ID3D12PipelineState* pipeline = nullptr;
                 for (const auto& candidate : state->pipelines) {
@@ -5150,6 +5201,8 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     package_has_constants = false;
                     package_constant_root = 0u;
                     package_constant_count = 0u;
+                    package_time_byte_offset = -1;
+                    package_simulation_tick_byte_offset = -1;
                     package_table_valid.fill(false);
                 }
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
@@ -5204,6 +5257,13 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 op.time_byte_offset,
                             &time_value, sizeof(time_value));
                         package_time_byte_offset = op.time_byte_offset;
+                    }
+                    if (op.simulation_tick_byte_offset >= 0 &&
+                        static_cast<std::uint32_t>(
+                            op.simulation_tick_byte_offset) + 4u <=
+                            op.constant_count * 4u) {
+                        package_simulation_tick_byte_offset =
+                            op.simulation_tick_byte_offset;
                     }
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                     if (op.type == FrameOp::Type::SetGraphicsRootConstants) {
@@ -5504,7 +5564,16 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 #endif
             }
 #endif
-#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+            case FrameOp::Type::SimulationStep:
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation",
+                            "stateful_package_requires_full_player",
+                            "frame.simulation_step", "unsupported",
+                            "present", "renderAtTick",
+                            "the frozen release player has no History/checkpoint "
+                            "execution support");
+#else
             case FrameOp::Type::SimulationStep: {
                 if (!history_schedule_done) {
                     const ExitCode history_code = record_history_schedule();

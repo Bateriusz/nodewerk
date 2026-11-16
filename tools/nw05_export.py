@@ -2935,12 +2935,13 @@ def export_graph(
             raise ExportError(
                 str(exc), exc.diagnostics, dependency_path=["stateful_extension"]
             ) from exc
-        output_directory.mkdir(parents=True, exist_ok=True)
         package_path = output_directory / "common.nwp"
-        _write_bytes(package_path, package_bytes)
         logical_schedule = schedule.build_logical_schedule(
             package, frames_in_flight=settings.frames_in_flight
         )
+        stateful_geometry = nw09_export.present_geometry(document)
+        render_width = stateful_geometry[0] if stateful_geometry else 1280
+        render_height = stateful_geometry[1] if stateful_geometry else 720
         physical = schedule.realize_physical_aliases(
             logical_schedule,
             package,
@@ -2948,16 +2949,28 @@ def export_graph(
             adapter_identity=adapter_identity,
             frames_in_flight=settings.frames_in_flight,
             allow_simulated_allocation=allow_test_payloads,
-            player_width=(
-                nw09_export.present_geometry(document)[0]
-                if nw09_export.present_geometry(document)
-                else 1280
-            ),
-            player_height=(
-                nw09_export.present_geometry(document)[1]
-                if nw09_export.present_geometry(document)
-                else 720
-            ),
+            player_width=render_width,
+            player_height=render_height,
+        )
+        template_path = (
+            Path(settings.player_template)
+            if settings.player_template
+            else None
+        )
+        template_bytes = (
+            template_path.read_bytes()
+            if template_path is not None and template_path.is_file()
+            else b""
+        )
+        if not allow_test_payloads and not template_bytes:
+            raise ExportError(
+                "production NW-09 stateful export requires a configured "
+                "Windows player template so the generated specialized main "
+                "can be compiled and linked",
+                dependency_path=["stateful_extension", "specialized_player", "template"],
+            )
+        runtime_dependencies, dependency_source = _runtime_dependencies(
+            package, template_bytes
         )
         manifest = {
             "format": "nw09-stateful-link-manifest",
@@ -2974,10 +2987,9 @@ def export_graph(
                 "checkpoints": [
                     record.to_dict() for record in package.release_checkpoints
                 ],
-                "checkpoint_byte_cost": sum(
-                    item["byte_cost"]
-                    for item in stateful_report["packaged_checkpoints"]
-                ),
+                "checkpoint_byte_cost": stateful_report[
+                    "packaged_checkpoint_byte_cost"
+                ],
                 "portable_gpu_state_replay": False,
             },
             "artifact_profile_id": nwp.COMMON_PROFILE_ID,
@@ -2989,35 +3001,132 @@ def export_graph(
             ),
             "fixed_step": stateful_report["fixed_step"],
             "present_geometry": stateful_report["present_geometry"],
+            "dependencies_source": dependency_source,
+            "retained": {"dependencies": list(runtime_dependencies)},
+            "feature_requirements": {},
         }
         manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
             nwp.canonical_json_bytes(manifest)
         ).hexdigest()
-        manifest_data = nwp.canonical_json_bytes(manifest)
+        manifest_data = optimizer.manifest_bytes(manifest)
+        specialized_player_bytes: bytes | None = None
+        if template_bytes and not allow_test_payloads:
+            # Reuse the established specialized-player generation and import
+            # accounting instead of shipping a bare package.  The generated
+            # main drives the same PackagePlayer stateful schedule.
+            preliminary_source = generate_player_source(
+                package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+                manifest_sha256=manifest["manifest_sha256"],
+                manifest=manifest,
+                memory_budget_bytes=settings.memory_budget,
+                width=render_width,
+                height=render_height,
+                present_sync_interval=settings.present_sync_interval,
+            )
+            preliminary_player = _build_specialized_player(
+                template_path,
+                preliminary_source,
+                manifest,
+                nwp.COMMON_PROFILE_ID,
+                build_root_override=(
+                    Path(settings.specialized_build_root)
+                    if settings.specialized_build_root
+                    else None
+                ),
+                frozen_embedded_specialization=settings.frozen_embedded_specialization,
+            )
+            actual_dependencies = _pe_runtime_dependencies(preliminary_player)
+            manifest["retained"]["dependencies"] = actual_dependencies
+            manifest["dependencies_source"] = "specialized-pe-imports"
+            _refresh_manifest_sha256(manifest)
+            manifest_data = optimizer.manifest_bytes(manifest)
+            final_source = generate_player_source(
+                package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+                manifest_sha256=manifest["manifest_sha256"],
+                manifest=manifest,
+                memory_budget_bytes=settings.memory_budget,
+                width=render_width,
+                height=render_height,
+                present_sync_interval=settings.present_sync_interval,
+            )
+            specialized_player_bytes = _build_specialized_player(
+                template_path,
+                final_source,
+                manifest,
+                nwp.COMMON_PROFILE_ID,
+                build_root_override=(
+                    Path(settings.specialized_build_root)
+                    if settings.specialized_build_root
+                    else None
+                ),
+                frozen_embedded_specialization=settings.frozen_embedded_specialization,
+            )
+            final_dependencies = _pe_runtime_dependencies(specialized_player_bytes)
+            if final_dependencies != actual_dependencies:
+                raise ExportError(
+                    "specialized executable dependency closure changed after "
+                    "final manifest linkage",
+                    dependency_path=["stateful_extension", "specialized_player", "imports"],
+                )
+            runtime_dependencies = final_dependencies
+            dependency_source = "specialized-pe-imports"
+        executable_bytes: bytes | None = None
+        executable_name = ""
+        if template_bytes:
+            player_image = (
+                template_bytes
+                if allow_test_payloads
+                else specialized_player_bytes
+            )
+            if player_image is None:
+                raise ExportError(
+                    "specialized player image is unavailable",
+                    dependency_path=["stateful_extension", "specialized_player", "output"],
+                )
+            embedded_manifest_payload = (
+                hashlib.sha256(manifest_data).digest()
+                if settings.frozen_embedded_specialization
+                else manifest_data
+            )
+            executable_bytes = embed_package(
+                player_image, package_bytes, embedded_manifest_payload
+            )
+            executable_name = "common.exe"
         schedule_data = json.dumps(
             logical_schedule.to_dict(), indent=2, sort_keys=True
         ).encode("utf-8")
         aliases_data = json.dumps(
             physical.to_dict(), indent=2, sort_keys=True
         ).encode("utf-8")
-        _write_bytes(output_directory / "link-manifest.json", manifest_data)
-        _write_bytes(
-            output_directory / "common.schedule.json", schedule_data
-        )
-        _write_bytes(output_directory / "common.aliases.json", aliases_data)
+        player_source = generate_player_source(
+            package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+            manifest_sha256=manifest["manifest_sha256"],
+            manifest=manifest,
+            memory_budget_bytes=settings.memory_budget,
+            width=render_width,
+            height=render_height,
+            present_sync_interval=settings.present_sync_interval,
+        ).encode("utf-8")
         size_report = analyze_package_size(
             package,
             package_bytes,
             manifest_bytes=len(manifest_data),
-            executable_bytes=0,
-            player_template_bytes=0,
+            executable_bytes=(
+                len(executable_bytes) if executable_bytes else 0
+            ),
+            player_template_bytes=(
+                len(specialized_player_bytes)
+                if specialized_player_bytes is not None
+                else len(template_bytes)
+            ),
             byte_ceiling=settings.byte_ceiling,
-            runtime_dependencies=[],
-            dependency_source="stateful-contract",
+            runtime_dependencies=runtime_dependencies,
+            dependency_source=dependency_source,
             artifact_files={
                 "link-manifest.json": len(manifest_data),
                 "common.schedule.json": len(schedule_data),
                 "common.aliases.json": len(aliases_data),
+                "common.player.cpp": len(player_source),
             },
         )
         size_report["stateful"] = {
@@ -3052,6 +3161,31 @@ def export_graph(
                 ],
                 dependency_path=["budget", "stateful_extension", "memory_budget"],
             )
+        if not size_report["distribution"]["within_byte_ceiling"]:
+            raise ExportError(
+                "artifact 'common' exceeds the byte ceiling "
+                f"({size_report['distribution']['total_distributed_bytes']} > "
+                f"{settings.byte_ceiling})",
+                [
+                    nwp.package_diagnostic(
+                        "export_byte_ceiling_exceeded",
+                        "distributed bytes exceed the configured ceiling",
+                    )
+                ],
+                dependency_path=["budget", "stateful_extension", "byte_ceiling"],
+            )
+        # Only publish an artifact after every budget check succeeded, so a
+        # rejected export cannot leave a partially updated stateful closure.
+        output_directory.mkdir(parents=True, exist_ok=True)
+        _write_bytes(package_path, package_bytes)
+        _write_bytes(output_directory / "link-manifest.json", manifest_data)
+        _write_bytes(
+            output_directory / "common.schedule.json", schedule_data
+        )
+        _write_bytes(output_directory / "common.aliases.json", aliases_data)
+        _write_bytes(output_directory / "common.player.cpp", player_source)
+        if executable_bytes is not None:
+            _write_bytes(output_directory / executable_name, executable_bytes)
         _write_bytes(
             output_directory / "size-report.json",
             json.dumps(size_report, indent=2, sort_keys=True).encode("utf-8"),
@@ -3088,8 +3222,8 @@ def export_graph(
             logical_schedule=logical_schedule,
             physical_realization=physical,
             size_report=size_report,
-            executable_bytes=None,
-            executable_name="",
+            executable_bytes=executable_bytes,
+            executable_name=executable_name,
             generation_decisions=(),
         )
         return ExportResult(

@@ -1190,9 +1190,14 @@ class TemporalRuntime:
     def restore_checkpoint(
         self, checkpoint: Checkpoint, *, allow_device_replay: bool = False
     ) -> CheckpointCompatibility:
-        compatibility = self.checkpoint_compatibility(
-            checkpoint, target_tick=checkpoint.tick
-        )
+        try:
+            compatibility = self.checkpoint_compatibility(
+                checkpoint, target_tick=checkpoint.tick
+            )
+        except (TypeError, ValueError, OverflowError, AttributeError) as exc:
+            raise CheckpointError(
+                f"checkpoint metadata is malformed: {exc}"
+            ) from exc
         if not compatibility.compatible:
             raise CheckpointError(compatibility.reason, [compatibility.to_dict()])
         if checkpoint.residency == "device" and not allow_device_replay:
@@ -1202,78 +1207,113 @@ class TemporalRuntime:
         self._require_recovery_boundary(
             from_device_state=checkpoint.residency == "device"
         )
-        restored: dict[str, TemporalState] = {}
-        states_by_node = {
-            str(item.get("node_id")): item for item in checkpoint.states
-        }
-        unknown = set(states_by_node) - {spec.node_id for spec in self.specs}
-        if unknown:
+        # Validate and convert the complete checkpoint payload *before*
+        # mutating any runtime state.  A checkpoint whose compatibility
+        # metadata matches but whose numeric fields are malformed must fall
+        # back to initial-state replay through ``seek`` rather than raise an
+        # uncaught ``ValueError`` or leave a half-installed runtime.
+        try:
+            states_by_node = {
+                str(item.get("node_id")): item for item in checkpoint.states
+            }
+            unknown = set(states_by_node) - {spec.node_id for spec in self.specs}
+            if unknown:
+                raise CheckpointError(
+                    "checkpoint contains unknown History node(s): "
+                    + ", ".join(sorted(unknown))
+                )
+            restored: dict[str, TemporalState] = {}
+            for spec in self.specs:
+                raw = states_by_node.get(spec.node_id)
+                if raw is None:
+                    raise CheckpointError(
+                        f"checkpoint is missing History node '{spec.node_id}'"
+                    )
+                if raw.get("operator_id") != spec.operator_id:
+                    raise CheckpointError(
+                        f"checkpoint state for '{spec.node_id}' belongs to operator "
+                        f"'{raw.get('operator_id')}', expected '{spec.operator_id}'"
+                    )
+                if raw.get("state_type") != spec.state_type:
+                    raise CheckpointError(
+                        f"checkpoint state for '{spec.node_id}' has state type "
+                        f"'{raw.get('state_type')}', expected '{spec.state_type}'"
+                    )
+                if raw.get("state_layout_hash") not in (None, spec.state_layout_hash):
+                    raise CheckpointError(
+                        f"checkpoint state for '{spec.node_id}' has an incompatible "
+                        "state layout hash"
+                    )
+                raw_values = raw.get("values", ())
+                if isinstance(raw_values, (str, bytes)) or not isinstance(
+                    raw_values, (list, tuple)
+                ):
+                    raise CheckpointError(
+                        f"checkpoint state for '{spec.node_id}' has a malformed "
+                        "value list"
+                    )
+                values = tuple(float(value) for value in raw_values)
+                if len(values) != spec.element_count * spec.values_per_element:
+                    raise CheckpointError(
+                        f"checkpoint state for '{spec.node_id}' has the wrong "
+                        "layout length"
+                    )
+                stored_tick = int(
+                    raw.get("simulation_tick", checkpoint.simulation_tick)
+                )
+                tick_valid = stored_tick == checkpoint.simulation_tick
+                if spec.reset_policy in {"never", "manual"}:
+                    # Manual/never state may intentionally be ahead of (or behind)
+                    # the global replay tick; it stays frozen until replay catches
+                    # up.  The snapshot itself is still a coherent checkpoint.
+                    tick_valid = stored_tick >= 0
+                if not tick_valid:
+                    raise CheckpointError(
+                        f"checkpoint state for '{spec.node_id}' is from simulation "
+                        f"tick {stored_tick}, checkpoint tick is "
+                        f"{checkpoint.simulation_tick}"
+                    )
+                restored[spec.node_id] = TemporalState(
+                    node_id=spec.node_id,
+                    operator_id=spec.operator_id,
+                    state_type=spec.state_type,
+                    simulation_tick=stored_tick,
+                    values=values,
+                    state_layout_hash=spec.state_layout_hash,
+                    loop_generation=int(
+                        raw.get("loop_generation", checkpoint.loop_generation)
+                    ),
+                )
+            cursor = checkpoint.event_cursor
+            if not isinstance(cursor, Mapping):
+                raise CheckpointError("checkpoint event cursor is malformed")
+            cursor_generation = int(
+                cursor.get("loop_generation", checkpoint.loop_generation)
+            )
+            cursor_tick = int(cursor.get("tick", checkpoint.tick))
+            cursor_sequence = int(cursor.get("sequence", 0))
+            simulation_tick = int(checkpoint.simulation_tick)
+            timeline_tick = int(checkpoint.tick)
+            loop_generation = int(checkpoint.loop_generation)
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+            AttributeError,
+            KeyError,
+        ) as exc:
             raise CheckpointError(
-                "checkpoint contains unknown History node(s): "
-                + ", ".join(sorted(unknown))
-            )
-        for spec in self.specs:
-            raw = states_by_node.get(spec.node_id)
-            if raw is None:
-                raise CheckpointError(
-                    f"checkpoint is missing History node '{spec.node_id}'"
-                )
-            if raw.get("operator_id") != spec.operator_id:
-                raise CheckpointError(
-                    f"checkpoint state for '{spec.node_id}' belongs to operator "
-                    f"'{raw.get('operator_id')}', expected '{spec.operator_id}'"
-                )
-            if raw.get("state_type") != spec.state_type:
-                raise CheckpointError(
-                    f"checkpoint state for '{spec.node_id}' has state type "
-                    f"'{raw.get('state_type')}', expected '{spec.state_type}'"
-                )
-            if raw.get("state_layout_hash") not in (None, spec.state_layout_hash):
-                raise CheckpointError(
-                    f"checkpoint state for '{spec.node_id}' has an incompatible "
-                    "state layout hash"
-                )
-            values = tuple(float(value) for value in raw.get("values", ()))
-            if len(values) != spec.element_count * spec.values_per_element:
-                raise CheckpointError(
-                    f"checkpoint state for '{spec.node_id}' has the wrong "
-                    "layout length"
-                )
-            stored_tick = int(
-                raw.get("simulation_tick", checkpoint.simulation_tick)
-            )
-            tick_valid = stored_tick == checkpoint.simulation_tick
-            if spec.reset_policy in {"never", "manual"}:
-                # Manual/never state may intentionally be ahead of (or behind)
-                # the global replay tick; it stays frozen until replay catches
-                # up.  The snapshot itself is still a coherent checkpoint.
-                tick_valid = stored_tick >= 0
-            if not tick_valid:
-                raise CheckpointError(
-                    f"checkpoint state for '{spec.node_id}' is from simulation "
-                    f"tick {stored_tick}, checkpoint tick is "
-                    f"{checkpoint.simulation_tick}"
-                )
-            restored[spec.node_id] = TemporalState(
-                node_id=spec.node_id,
-                operator_id=spec.operator_id,
-                state_type=spec.state_type,
-                simulation_tick=stored_tick,
-                values=values,
-                state_layout_hash=spec.state_layout_hash,
-                loop_generation=int(
-                    raw.get("loop_generation", checkpoint.loop_generation)
-                ),
-            )
+                f"checkpoint payload is malformed: {exc}",
+                [compatibility.to_dict()],
+            ) from exc
         self._states = restored
-        self._simulation_tick = checkpoint.simulation_tick
-        self._timeline_tick = checkpoint.tick
-        self._loop_generation = checkpoint.loop_generation
-        cursor = checkpoint.event_cursor
+        self._simulation_tick = simulation_tick
+        self._timeline_tick = timeline_tick
+        self._loop_generation = loop_generation
         self._event_cursor = EventCursor(
-            loop_generation=int(cursor.get("loop_generation", self._loop_generation)),
-            tick=int(cursor.get("tick", checkpoint.tick)),
-            sequence=int(cursor.get("sequence", 0)),
+            loop_generation=cursor_generation,
+            tick=cursor_tick,
+            sequence=cursor_sequence,
         )
         return compatibility
 
@@ -1302,27 +1342,51 @@ class TemporalRuntime:
         checkpoint_error: CheckpointError | None = None
 
         if checkpoint is not None:
-            compatibility = self.checkpoint_compatibility(
-                checkpoint, target_tick=timeline_tick
-            )
-            if (
-                compatibility.compatible
-                and checkpoint.simulation_tick <= target_sim
-            ):
-                try:
-                    self.restore_checkpoint(
-                        checkpoint,
-                        allow_device_replay=checkpoint.residency == "device",
-                    )
-                    used_checkpoint = True
-                except CheckpointError as exc:
-                    checkpoint_error = exc
-            else:
-                checkpoint_error = CheckpointError(
-                    compatibility.reason
-                    if not compatibility.compatible
-                    else "checkpoint is ahead of the requested tick"
+            try:
+                compatibility = self.checkpoint_compatibility(
+                    checkpoint, target_tick=timeline_tick
                 )
+                compatible_before_target = (
+                    checkpoint.simulation_tick <= target_sim
+                )
+            except (
+                CheckpointError,
+                TypeError,
+                ValueError,
+                OverflowError,
+                AttributeError,
+            ) as exc:
+                compatibility = None
+                compatible_before_target = False
+                checkpoint_error = CheckpointError(
+                    f"checkpoint metadata is malformed: {exc}"
+                )
+            if compatibility is not None:
+                if compatibility.compatible and compatible_before_target:
+                    try:
+                        self.restore_checkpoint(
+                            checkpoint,
+                            allow_device_replay=checkpoint.residency == "device",
+                        )
+                        used_checkpoint = True
+                    except (
+                        CheckpointError,
+                        TypeError,
+                        ValueError,
+                        OverflowError,
+                        AttributeError,
+                    ) as exc:
+                        checkpoint_error = (
+                            exc
+                            if isinstance(exc, CheckpointError)
+                            else CheckpointError(str(exc))
+                        )
+                else:
+                    checkpoint_error = CheckpointError(
+                        compatibility.reason
+                        if not compatibility.compatible
+                        else "checkpoint is ahead of the requested tick"
+                    )
 
         backward = target_sim < self._simulation_tick
         if not used_checkpoint and (backward or checkpoint_error is not None):
@@ -1334,11 +1398,17 @@ class TemporalRuntime:
                 for spec in self.specs
                 if spec.reset_policy not in {"never", "manual"}
             }
+            # A replay from tick zero starts a new loop generation.  Restoring
+            # generation zero (rather than retaining the abandoned forward
+            # generation) makes state digests match a fresh runtime and lets
+            # the retained emitted-event keys deduplicate already observed
+            # events instead of re-emitting them under a borrowed generation.
+            self._loop_generation = 0
             self._reset_states(seek_reset_nodes)
             self._simulation_tick = 0
             self._timeline_tick = 0
             self._event_cursor = EventCursor(
-                loop_generation=self._loop_generation, tick=-1, sequence=0
+                loop_generation=0, tick=-1, sequence=0
             )
             fallback = True
 
