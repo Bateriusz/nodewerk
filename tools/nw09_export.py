@@ -276,14 +276,27 @@ def compile_history_base_package(
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     dxc = dxc_executable
     if dxc is None:
-        # Contract tests use the explicit synthetic DXIL container on every
-        # host.  Falling back to an installed Windows DXC here would make the
-        # same test compile real HLSL on CI and synthetic payloads locally.
-        dxc = (
-            _test_dxc(destination_path.parent / ".nw09-test-toolchain")
-            if allow_test_payloads
-            else nw03.resolve_dxc()
-        )
+        candidate = nw03.resolve_dxc()
+        if allow_test_payloads:
+            # Prefer a real pinned offline compiler when the host provides one
+            # so CI validates the generated HLSL/register contract.  Hosts
+            # without DXC use the deterministic synthetic contract payload.
+            if candidate is not None:
+                try:
+                    version = nw03.query_dxc_version(candidate)
+                except Exception:
+                    version = ""
+                dxc = (
+                    candidate
+                    if nw03.PINNED_DXC_VERSION in version
+                    else None
+                )
+            if dxc is None:
+                dxc = _test_dxc(
+                    destination_path.parent / ".nw09-test-toolchain"
+                )
+        else:
+            dxc = candidate
     if dxc is None:
         raise StatefulExportError(
             "offline DXC compiler is required for stateful export",
@@ -660,10 +673,25 @@ def build_stateful_package(
         present_source_node,
         next(iter(resource_by_node.values())),
     )
-    present_width, present_height = geometry or (1, 1)
+    present_state_record = next(
+        record
+        for record in history_records
+        if record.current_resource_id == present_state_resource_id
+    )
+    if geometry is None:
+        present_surface_bytes = max(
+            16, ((present_state_record.state_bytes + 15) // 16) * 16
+        )
+        present_width = present_surface_bytes // 16
+        present_height = 1
+    else:
+        present_width, present_height = geometry
+        present_surface_bytes = max(
+            present_width * present_height * 16,
+            ((present_state_record.state_bytes + 15) // 16) * 16,
+        )
     present_surface_id = next_resource
     next_resource += 1
-    present_surface_bytes = present_width * present_height * 16
     resources.append(
         nwp.ResourceDescriptor(
             resource_id=present_surface_id,
@@ -683,10 +711,8 @@ def build_stateful_package(
             (nwp.InstructionOperand("resource_ref", present_surface_id),),
         )
     )
-    present_state_record = next(
-        record
-        for record in history_records
-        if record.current_resource_id == present_state_resource_id
+    present_copy_bytes = min(
+        present_state_record.state_bytes, present_surface_bytes
     )
     frame.append(
         nwp.Instruction(
@@ -696,7 +722,7 @@ def build_stateful_package(
                     "resource_ref", present_state_resource_id
                 ),
                 nwp.InstructionOperand("resource_ref", present_surface_id),
-                nwp.InstructionOperand("u64", present_state_record.state_bytes),
+                nwp.InstructionOperand("u64", present_copy_bytes),
             ),
         )
     )

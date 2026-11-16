@@ -4898,6 +4898,14 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             "renderAtTick",
                             "loop reset requires the history upload ring");
             }
+            if (frame.fence_value != 0u) {
+                const ExitCode wait = WaitForFenceValue(
+                    state->fence, frame.fence_value, state->fence_event,
+                    kFenceTimeoutMs);
+                if (wait != ExitCode::Success) return wait;
+                frame.fence_value = 0u;
+                ++stats_.upload_reuse_waits;
+            }
             void* mapped = nullptr;
             D3D12_RANGE read_range{0u, 0u};
             if (FAILED(frame.upload->Map(0u, &read_range, &mapped)) ||
@@ -7100,7 +7108,7 @@ bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (!package_.history.empty()) {
         const std::uint64_t target_sim =
-            frame_tick / package::kTimelineTicksPerSimulationTick;
+            tick / package::kTimelineTicksPerSimulationTick;
         if (target_sim < history_simulation_tick_) {
             Fail(ExitCode::InvalidArguments, "history",
                  "history_backward_seek_requires_reinitialization",
