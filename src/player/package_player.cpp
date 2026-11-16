@@ -4900,15 +4900,20 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
             }
             void* mapped = nullptr;
             D3D12_RANGE read_range{0u, 0u};
-            if (FAILED(frame.upload->Map(reset_offset, &read_range, &mapped)) ||
+            if (FAILED(frame.upload->Map(0u, &read_range, &mapped)) ||
                 mapped == nullptr) {
                 return Fail(ExitCode::ResourceAllocationFailed, "resource",
                             "history_reset_map_failed", "mapped", "available",
                             "unavailable", "renderAtTick",
                             "loop-reset upload Map failed");
             }
-            std::memcpy(mapped, history->initial_state.data(), state_bytes);
-            D3D12_RANGE write_range{0u, static_cast<SIZE_T>(state_bytes)};
+            std::memcpy(
+                static_cast<std::uint8_t*>(mapped) +
+                    static_cast<std::size_t>(reset_offset),
+                history->initial_state.data(), state_bytes);
+            D3D12_RANGE write_range{
+                static_cast<SIZE_T>(reset_offset),
+                static_cast<SIZE_T>(reset_offset + state_bytes)};
             frame.upload->Unmap(0u, &write_range);
             if (!transition(current, D3D12_RESOURCE_STATE_COPY_DEST) ||
                 !transition(previous, D3D12_RESOURCE_STATE_COPY_DEST)) {
