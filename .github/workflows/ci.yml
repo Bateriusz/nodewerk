@@ -126,7 +126,7 @@ jobs:
           pwsh ./tools/nw01/run-build-checks.ps1
           -SummaryPath "$env:RUNNER_TEMP\nw01-build-checks.json"
 
-      - name: Verify real-PE NW-05 export reproducibility
+      - name: Verify real-PE NW-05 and NW-09 generated-player exports
         shell: pwsh
         run: |
           cmake --preset clang-cl-release
@@ -140,6 +140,9 @@ jobs:
           }
           $env:NW05_REAL_PLAYER_TEMPLATE = (Resolve-Path $template).Path
           python -m pytest tests/test_nw05_real_export.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:NW09_REQUIRE_REAL_PLAYER = "1"
+          python -m pytest -v tests/test_nw09_review_fixes.py::test_real_generated_stateful_player_launches_with_link_metadata
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload NW-01 build-check evidence
@@ -221,7 +224,7 @@ jobs:
           "NW04_FIXTURE=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Append
           "NW04_PACKAGE=$displayPackage" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Run required NW-09 native scheduler, presentation and real-DXC contracts
+      - name: Run required NW-09 native scheduler, post-chain presentation and real-DXC contracts
         env:
           NW04_ALLOW_SOFTWARE_ADAPTER: "1"
           NW09_REQUIRE_NATIVE: "1"
@@ -230,6 +233,8 @@ jobs:
           python -m pytest -v
           tests/test_nw09_export_and_package.py::test_history_hlsl_compiles_with_real_dxc_when_available
           tests/test_nw09_export_and_package.py::test_native_player_stateful_schedule_and_presentation_when_available
+          tests/test_nw09_review_fixes.py::test_native_tonemap_chain_validation_when_available
+          tests/test_nw09_review_fixes.py::test_native_bloom_tonemap_chain_validation_when_available
 
       - name: Run required NW-04 native lifecycle and D3D12 validation
         env:
