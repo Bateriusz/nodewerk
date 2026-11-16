@@ -539,6 +539,13 @@ def build_stateful_package(
         generated.specialization_id: shader.shader_id
         for generated, shader in zip(generated_order, ordered_shaders)
     }
+    if compile_report is not None:
+        reported_shaders = compile_report.get("fixture", {}).get("shaders", [])
+        if reported_shaders:
+            shader_id_by_specialization = {
+                str(row["specialization_id"]): int(row["shader_id"])
+                for row in reported_shaders
+            }
     step_shader_id_by_state_id = {
         index: shader_id_by_specialization[
             f"nw09.history.step.{spec.node_id}"
@@ -780,6 +787,7 @@ def build_stateful_package(
                 "previous_resource_id": previous_id,
                 "ping_pong_distinct": current_id != previous_id,
                 "state_bytes": state_bytes,
+                "step_shader_id": step_shader_id_by_state_id[index],
                 "frames_in_flight": frames_in_flight,
             }
         )
@@ -1037,6 +1045,7 @@ def build_stateful_package(
         "present_state_node": present_node_id,
         "present_state_resource_id": present_state_resource_id,
         "present_resource_id": present_resource_id,
+        "present_shader_id": present_shader_id_by_node[present_node_id],
         "present_surface": {
             "resource_id": present_surface_id,
             "width": present_width,

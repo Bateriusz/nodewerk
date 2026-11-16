@@ -183,9 +183,9 @@ def test_stateful_package_executes_initial_upload_and_history_dispatch(
         if instruction.opcode == "frame.simulation_step"
     )
     assert step.operands[3].type == "shader_ref"
-    assert step.operands[3].value in {
-        shader.shader_id for shader in package.shaders
-    }
+    assert step.operands[3].value == result.report["history"][0][
+        "step_shader_id"
+    ]
     assert step.operands[4].type == "u32"
     copy = next(
         instruction
@@ -282,9 +282,13 @@ def test_present_selects_the_history_node_feeding_screen(tmp_path: Path) -> None
         if instruction.opcode == "frame.dispatch"
         and instruction.operands[-1].type == "shader_ref"
     )
-    assert display.operands[-1].value in {
-        shader.shader_id for shader in package.shaders
-    }
+    step = next(
+        instruction
+        for instruction in package.frame
+        if instruction.opcode == "frame.simulation_step"
+    )
+    assert display.operands[-1].value == result.report["present_shader_id"]
+    assert display.operands[-1].value != step.operands[3].value
     assert display.operands[0].value == (320 * 180 + 63) // 64
     display_index = package.frame.index(display)
     assert any(
