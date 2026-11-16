@@ -237,7 +237,10 @@ struct ShaderRecord {
     std::uint32_t flags = 0;
 };
 
-#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+// Keep these public model types present in every build configuration.  The
+// frozen bootstrap and the diagnostic decoder are linked into the same fixture,
+// so changing Package's layout based on a PRIVATE target compile definition
+// creates an ABI/ODR violation across translation units.
 struct HistoryRecord {
     std::uint32_t state_id = 0;
     std::string node_id;
@@ -268,7 +271,6 @@ struct ReleaseCheckpointRecord {
     std::uint32_t flags = 0;
     std::vector<std::uint8_t> payload;
 };
-#endif  // !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 
 struct Package {
     CapabilityRecord capability;
@@ -278,10 +280,11 @@ struct Package {
     std::vector<ParameterRecord> parameters;
     std::vector<ShaderRecord> shaders;
     std::vector<RootSignatureRecord> root_signatures;
-#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    // ABI-stable across generic, frozen, and diagnostic builds. Frozen builds
+    // may compile out stateful behavior, but never fields from the shared
+    // package model used at library boundaries.
     std::vector<HistoryRecord> history;
     std::vector<ReleaseCheckpointRecord> release_checkpoints;
-#endif
     std::optional<std::vector<std::uint8_t>> dev_metadata;
     std::uint32_t flags = 1u;
 };
