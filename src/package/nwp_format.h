@@ -23,6 +23,10 @@
 #define NW05_FROZEN_EMBEDDED_SPECIALIZATION 0
 #endif
 
+#ifndef NW09_FORCE_STATEFUL_PACKAGE_MODEL
+#define NW09_FORCE_STATEFUL_PACKAGE_MODEL 0
+#endif
+
 namespace nw::package {
 
 inline constexpr std::array<std::uint8_t, 8> kMagic = {
@@ -237,10 +241,10 @@ struct ShaderRecord {
     std::uint32_t flags = 0;
 };
 
-// Keep these public model types present in every build configuration.  The
-// frozen bootstrap and the diagnostic decoder are linked into the same fixture,
-// so changing Package's layout based on a PRIVATE target compile definition
-// creates an ABI/ODR violation across translation units.
+// The size-specialized release omits NW-09 stateful model storage. Diagnostic
+// frozen fixtures explicitly force the full model so every translation unit on
+// that fixture boundary uses the same Package ABI as the full decoder.
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION || NW09_FORCE_STATEFUL_PACKAGE_MODEL
 struct HistoryRecord {
     std::uint32_t state_id = 0;
     std::string node_id;
@@ -271,6 +275,7 @@ struct ReleaseCheckpointRecord {
     std::uint32_t flags = 0;
     std::vector<std::uint8_t> payload;
 };
+#endif
 
 struct Package {
     CapabilityRecord capability;
@@ -280,11 +285,10 @@ struct Package {
     std::vector<ParameterRecord> parameters;
     std::vector<ShaderRecord> shaders;
     std::vector<RootSignatureRecord> root_signatures;
-    // ABI-stable across generic, frozen, and diagnostic builds. Frozen builds
-    // may compile out stateful behavior, but never fields from the shared
-    // package model used at library boundaries.
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION || NW09_FORCE_STATEFUL_PACKAGE_MODEL
     std::vector<HistoryRecord> history;
     std::vector<ReleaseCheckpointRecord> release_checkpoints;
+#endif
     std::optional<std::vector<std::uint8_t>> dev_metadata;
     std::uint32_t flags = 1u;
 };
