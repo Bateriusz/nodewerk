@@ -431,6 +431,12 @@ int main(int argc, char** argv) {
         std::printf("NW_PLAYER_LAST_TIMELINE_VALUE=%llu\n",
                     static_cast<unsigned long long>(
                         player.last_timeline_value()));
+        std::printf("NW_PLAYER_PRESENT_SOURCE_WIDTH=%u\n",
+                    player.present_source_width());
+        std::printf("NW_PLAYER_PRESENT_SOURCE_HEIGHT=%u\n",
+                    player.present_source_height());
+        std::printf("NW_PLAYER_PRESENT_SOURCE_EXPLICIT=%d\n",
+                    player.present_source_geometry_explicit() ? 1 : 0);
         return 0;
     }
     nw::player::ExitCode code = nw::player::ExitCode::Success;
@@ -619,6 +625,12 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(player.frames_presented()));
     std::printf("NW_PLAYER_PRESENT_RESOURCE_ID=%u\n",
                 player.present_resource_id());
+    std::printf("NW_PLAYER_PRESENT_SOURCE_WIDTH=%u\n",
+                player.present_source_width());
+    std::printf("NW_PLAYER_PRESENT_SOURCE_HEIGHT=%u\n",
+                player.present_source_height());
+    std::printf("NW_PLAYER_PRESENT_SOURCE_EXPLICIT=%d\n",
+                player.present_source_geometry_explicit() ? 1 : 0);
     std::printf("NW_PLAYER_RESIZE_COUNT=%llu\n",
                 static_cast<unsigned long long>(stats.resize_count));
     std::printf("NW_PLAYER_UPLOAD_REUSE_WAITS=%llu\n",

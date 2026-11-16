@@ -21,6 +21,7 @@ import nw05_export  # noqa: E402
 import nw05_optimizer as optimizer  # noqa: E402
 import nw06_export  # noqa: E402
 import nw06_procedural as procedural  # noqa: E402
+import nw08_preview as preview  # noqa: E402
 
 
 PROCEDURAL = REPO_ROOT / "fixtures" / "nw06" / "procedural_scene.nwgraph"
@@ -935,3 +936,181 @@ def test_player_contract_mirror_uses_uint_tick_representation() -> None:
     assert timeline == 24_000
     assert last_constants is not None
     assert struct.unpack_from("<I", last_constants, 0)[0] == 24_000
+
+
+def _compile_presentation_package(
+    directory: Path, width: int, height: int
+) -> tuple[bytes, nwp.NwpPackage]:
+    document = nw03.load_graph(PROCEDURAL)
+    optimized = optimizer.optimize_graph(document)
+    package_bytes, package, _report = nw06_export.compile_profile_package(
+        optimized,
+        document,
+        directory / f"{width}x{height}.nwp",
+        dxc_executable=None,
+        optimization="O2",
+        allow_unpinned_dxc=False,
+        allow_test_payloads=True,
+        width=width,
+        height=height,
+    )
+    return package_bytes, nwp.decode_package(package_bytes)
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    ((256, 144), (144, 256), (1920, 1080), (256, 256)),
+)
+def test_nw06_exports_explicit_rectangular_presentation_geometry(
+    tmp_path: Path, width: int, height: int
+) -> None:
+    _package_bytes, package = _compile_presentation_package(
+        tmp_path, width, height
+    )
+    present_parameters = [
+        parameter
+        for parameter in package.parameters
+        if parameter.name in {"nw05.present.width", "nw05.present.height"}
+    ]
+    # Exactly one explicit parameter per axis; no duplicate or inferred value.
+    assert [parameter.name for parameter in present_parameters] == [
+        "nw05.present.width",
+        "nw05.present.height",
+    ]
+    assert len({parameter.parameter_id for parameter in present_parameters}) == 2
+    assert len({parameter.parameter_id for parameter in package.parameters}) == (
+        len(package.parameters)
+    )
+    for parameter, expected in zip(
+        present_parameters, (width, height), strict=True
+    ):
+        assert parameter.type == "uint"
+        assert parameter.phase == "initialization"
+        assert parameter.component_count == 1
+        assert len(parameter.value) == 4
+        assert struct.unpack("<I", parameter.value)[0] == expected
+
+    present_resource_id = next(
+        instruction.operands[0].value
+        for instruction in package.frame
+        if instruction.opcode == "frame.present"
+    )
+    present_resource = next(
+        resource
+        for resource in package.resources
+        if resource.resource_id == present_resource_id
+    )
+    assert present_resource.size_bytes == width * height * 16
+
+    # The preview plan mirrors PackagePlayer: explicit package geometry wins
+    # over pixel-count inference.  All three rectangular sizes below have a
+    # square pixel count, so inference would otherwise yield 192x192 or
+    # 1440x1440 instead of the authored rectangle.
+    assert preview._package_capture_dimensions(
+        package, fallback_width=8, fallback_height=8
+    ) == (width, height)
+
+
+def test_repeated_nw06_exports_with_rectangular_geometry_are_deterministic(
+    tmp_path: Path,
+) -> None:
+    first_bytes, first_package = _compile_presentation_package(
+        tmp_path / "first", 1920, 1080
+    )
+    second_bytes, second_package = _compile_presentation_package(
+        tmp_path / "second", 1920, 1080
+    )
+    assert first_bytes == second_bytes
+    assert first_package == second_package
+
+
+def test_player_geometry_plan_is_shared_by_generic_and_frozen_paths() -> None:
+    source = (
+        REPO_ROOT / "src" / "player" / "package_player.cpp"
+    ).read_text(encoding="utf-8")
+    start = source.index("bool PackagePlayer::BuildFrameInstructionPlan()")
+    end = source.index(
+        "#endif  // NW05_FROZEN_EMBEDDED_SPECIALIZATION", start
+    )
+    body = source[start:end]
+    frozen_start = body.index("#if NW05_FROZEN_EMBEDDED_SPECIALIZATION")
+    generic_start = body.index("#else", frozen_start)
+    frozen = body[frozen_start:generic_start]
+    generic = body[generic_start:]
+    # Both frame-plan variants resolve geometry through the same helper, so the
+    # specialized release and the diagnostic/generic player cannot disagree.
+    assert frozen.count(
+        "SelectPresentSourceGeometry(package_, pixel_count)"
+    ) == 1
+    assert generic.count(
+        "SelectPresentSourceGeometry(package_, pixel_count)"
+    ) == 1
+    assert source.count("std::sqrt(static_cast<double>(pixel_count))") == 1
+    helper_start = source.index(
+        "PresentSourceGeometry SelectPresentSourceGeometry("
+    )
+    helper_end = source.index("#if defined(_WIN32)", helper_start)
+    helper = source[helper_start:helper_end]
+    # Explicit geometry is checked before inference, and square presentation
+    # stays square because the fallback square branch is preserved.
+    assert helper.index('parameter.name == "nw05.present.width"') < (
+        helper.index("std::sqrt")
+    )
+    assert "geometry.explicit_geometry = true;" in helper
+    assert "static_cast<std::uint64_t>(side) * side == pixel_count" in helper
+
+
+def _player_fixture() -> Path | None:
+    candidates = []
+    override = os.environ.get("NW04_FIXTURE")
+    if override:
+        candidates.append(Path(override))
+    candidates.extend(
+        sorted((REPO_ROOT / "build").glob("**/nw_package_player_fixture*"))
+    )
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.is_file()
+            and candidate.suffix.lower() in ("", ".exe")
+            and "CMakeFiles" not in candidate.parts
+        ),
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    ((256, 144), (144, 256), (1920, 1080), (256, 256)),
+)
+def test_native_planner_reads_explicit_presentation_geometry(
+    tmp_path: Path, width: int, height: int
+) -> None:
+    fixture = _player_fixture()
+    if fixture is None:
+        # The source-level contract above is always checked.  When CI has built
+        # the native fixture, additionally execute the real PackagePlayer plan.
+        return
+    _package_bytes, package = _compile_presentation_package(
+        tmp_path, width, height
+    )
+    package_path = tmp_path / "presentation-geometry.nwp"
+    package_path.write_bytes(nwp.encode_package(replace(package, flags=1)))
+    completed = subprocess.run(
+        [
+            str(fixture),
+            "--package",
+            str(package_path),
+            "--planner-self-test",
+            "--frames",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert f"NW_PLAYER_PRESENT_SOURCE_WIDTH={width}" in completed.stdout
+    assert f"NW_PLAYER_PRESENT_SOURCE_HEIGHT={height}" in completed.stdout
+    assert "NW_PLAYER_PRESENT_SOURCE_EXPLICIT=1" in completed.stdout

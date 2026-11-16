@@ -76,7 +76,7 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:1983b8f07f267221de78b1a37a56a0b859d9a5b4d00a6326c1a26c0b6b1d6b42",
+  "build_inputs_digest": "sha256:v1:70a3d2a3ee09c982741c071c1b7a474adcdffc8aacfa3319cf98a2ada6d10fca",
   "loop": {
     "looping": true,
     "wrap": "modulo",

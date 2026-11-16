@@ -1602,3 +1602,97 @@ def test_relative_dxc_path_survives_working_directory_change(
     )
     assert result.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
 
+
+_CMAKE_OUTPUT_SCRIPT = (
+    "import sys\n"
+    "sys.stdout.buffer.write(b'configure \\xc3\\xa9 ok\\n')\n"
+    "sys.stderr.buffer.write(b'warning \\x88 tail\\n')\n"
+)
+
+
+def _specialized_template_tree(tmp_path: Path) -> tuple[Path, Path]:
+    build_root = tmp_path / "build"
+    build_root.mkdir()
+    (build_root / "CMakeCache.txt").write_text(
+        "NW_ENFORCE_PINNED_TOOLCHAIN:BOOL=ON\n", encoding="utf-8"
+    )
+    staging = build_root / "staging" / "procedural_image_player"
+    staging.mkdir(parents=True)
+    template = staging / "nw_procedural_image_player.exe"
+    template.write_bytes(b"MZ" + b"\x00" * 32)
+    generated = build_root / "nw05-generated"
+    generated.mkdir()
+    (generated / "nw05_generated_player.exe").write_bytes(b"fixture-exe")
+    return build_root, template
+
+
+class _WindowsName:
+    name = "nt"
+
+
+def _cmake_output_runner(
+    calls: list[subprocess.CompletedProcess[str]],
+    *,
+    fail_on_call: int | None = None,
+):
+    real_run = subprocess.run
+
+    def runner(command, **kwargs):
+        completed = real_run(
+            [sys.executable, "-c", _CMAKE_OUTPUT_SCRIPT], **kwargs
+        )
+        calls.append(completed)
+        if fail_on_call is not None and len(calls) == fail_on_call:
+            return subprocess.CompletedProcess(
+                completed.args, 1, completed.stdout, completed.stderr
+            )
+        return completed
+
+    return runner
+
+
+def test_specialized_player_build_decodes_non_ascii_and_invalid_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _build_root, template = _specialized_template_tree(tmp_path)
+    calls: list[subprocess.CompletedProcess[str]] = []
+    monkeypatch.setattr(
+        nw05_export.subprocess, "run", _cmake_output_runner(calls)
+    )
+    monkeypatch.setattr(nw05_export, "os", _WindowsName())
+    executable = nw05_export._build_specialized_player(
+        template,
+        "// generated player source\n",
+        {},
+        nwp.COMMON_PROFILE_ID,
+    )
+    assert executable == b"fixture-exe"
+    # Configure and build both pass through the explicit UTF-8/replace policy.
+    assert len(calls) == 2
+    for completed in calls:
+        assert "configure \u00e9 ok" in completed.stdout
+        assert "warning \ufffd tail" in completed.stderr
+
+
+def test_specialized_player_build_reports_readable_non_utf8_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _build_root, template = _specialized_template_tree(tmp_path)
+    calls: list[subprocess.CompletedProcess[str]] = []
+    monkeypatch.setattr(
+        nw05_export.subprocess,
+        "run",
+        _cmake_output_runner(calls, fail_on_call=1),
+    )
+    monkeypatch.setattr(nw05_export, "os", _WindowsName())
+    with pytest.raises(nw05_export.ExportError) as failure:
+        nw05_export._build_specialized_player(
+            template,
+            "// generated player source\n",
+            {},
+            nwp.COMMON_PROFILE_ID,
+        )
+    message = str(failure.value)
+    assert "specialized player configure/build failed" in message
+    assert "warning \ufffd tail" in message
+

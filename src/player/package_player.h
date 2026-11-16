@@ -149,6 +149,19 @@ public:
     std::uint32_t present_resource_id() const noexcept {
         return present_resource_id_;
     }
+    // Presentation source geometry resolved from the validated package.  The
+    // explicit flag distinguishes package-provided dimensions from the legacy
+    // pixel-count inference used by older packages without geometry
+    // parameters.
+    std::uint32_t present_source_width() const noexcept {
+        return present_source_width_;
+    }
+    std::uint32_t present_source_height() const noexcept {
+        return present_source_height_;
+    }
+    bool present_source_geometry_explicit() const noexcept {
+        return present_source_geometry_explicit_;
+    }
     std::uint64_t frames_presented() const noexcept {
         return frames_presented_;
     }
@@ -298,6 +311,7 @@ private:
     std::uint32_t present_resource_id_ = 0u;
     std::uint32_t present_source_width_ = 0u;
     std::uint32_t present_source_height_ = 0u;
+    bool present_source_geometry_explicit_ = false;
     std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
         last_root_constants_{};
     std::uint32_t last_root_constant_count_ = 0u;

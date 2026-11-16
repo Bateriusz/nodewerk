@@ -26,6 +26,7 @@ graph semantics and `.nwgraph` schema.
 17. [NW-07 256 KiB Architectural Proof — Feasibility Report](nw07-256k-architectural-proof.md)
 18. [ADR-0007: NW-08 Authoring Editor Scope and Release Isolation](architecture/0007-nw08-authoring-editor.md)
 19. [NW-08 `nodewerk-studio` Authoring Editor](nw08-studio-authoring-editor.md)
+20. [NW-08A Presentation Geometry Correction and Windows Validation](nw08a-presentation-geometry-validation.md)
 
 ## Schemas & Recorded Baseline Artifacts
 

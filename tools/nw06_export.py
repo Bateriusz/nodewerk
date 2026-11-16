@@ -980,6 +980,35 @@ def build_package(
         )
         next_id += 1
 
+    # Presentation geometry is explicit package data, not a property inferred
+    # from the output buffer's byte count.  Pixel-count inference cannot
+    # distinguish a 256x144 output from a 144x256 output (both 36,864 pixels),
+    # and it turns common rectangular sizes whose pixel count is a perfect
+    # square (256x144, 1920x1080) into squares.  PackagePlayer already prefers
+    # these two initialization parameters in both its generic and
+    # frozen-specialized frame-plan paths; NW-06 previously failed to emit
+    # them.  Keep the shared NW-05 names and initialization-phase uint
+    # semantics so the existing package format and both player paths agree.
+    for name, value in (
+        ("nw05.present.width", width),
+        ("nw05.present.height", height),
+    ):
+        parameters.append(
+            nwp.ParameterRecord(
+                parameter_id=next_id,
+                name=name,
+                type="uint",
+                phase="initialization",
+                component_count=1,
+                value=struct.pack("<I", int(value) & 0xFFFFFFFF),
+                timeline_start_frame=0,
+                timeline_end_frame=0,
+                timeline_step=0,
+                timeline_interpolation="none",
+            )
+        )
+        next_id += 1
+
     shader_records: list[nwp.ShaderRecord] = []
     root_by_family = {root.family: root for root in roots}
     for row in shader_rows:
