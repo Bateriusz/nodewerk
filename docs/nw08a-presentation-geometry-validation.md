@@ -26,6 +26,7 @@ older packages that lack them.
 ## Automated contract checks (no GPU required)
 
 ```bash
+python -m pytest -q tests/test_nw08a_presentation_cases.py
 python -m pytest -q tests/test_nw06_export.py \
   -k "presentation or geometry or deterministic"
 python -m pytest -q tests/test_nw08_async_runtime.py \
@@ -49,7 +50,28 @@ Run on a Windows 11 x64 host with the pinned MSVC/DXC toolchain from
 `tools/nw01/enter-build-env.ps1`.  Nothing below claims hardware evidence
 unless a physical adapter actually executed the player.
 
-1. Build the diagnostic player fixture twice so the generic validator and the
+1. Build the canonical NW-07 release player template.  This prerequisite
+   creates `build/nw07-release` and must run before every step that consumes
+   `$template`:
+
+   ```powershell
+   cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+   cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+   $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+   if (-not (Test-Path $template -PathType Leaf)) {
+     throw "NW-07 release player template was not built: $template"
+   }
+   $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+   ```
+
+   Keep `$template` and `$dxc` in the same PowerShell session for the steps
+   below.  The CI job performs the same build before it runs any player or
+   exporter.
+
+2. Build the diagnostic player fixture twice so the generic validator and the
    frozen-specialized branch both accept an external `.nwp` package:
 
    ```powershell
@@ -66,13 +88,11 @@ unless a physical adapter actually executed the player.
    cmake --build build/nw08a-frozen --target nw_package_player_fixture --parallel 2
    ```
 
-2. Export a release package for each case.  The graph settings are the
+3. Export a release package for each case.  The graph settings are the
    existing `nw07_output_width` / `nw07_output_height` keys, so no new graph
    or package model is introduced:
 
    ```powershell
-   $template = "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
-   $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
    python tools/nw08a_presentation_cases.py `
      --work build/nw08a-cases `
      --dxc $dxc `
@@ -87,7 +107,7 @@ unless a physical adapter actually executed the player.
    `--player-template` runs the same geometry checks against the shared test
    payload path on a GPU-less host.
 
-3. Run the same package through both frame-plan variants at several window
+4. Run the same package through both frame-plan variants at several window
    sizes.  `--headless` keeps the run deterministic; the geometry plan is
    built before presentation, so the printed source geometry is the value the
    display pass consumes:
@@ -116,7 +136,12 @@ unless a physical adapter actually executed the player.
    must be `1`.  A 256x144 source in a 1280x720 window therefore exercises
    rectangular scaling rather than square inference.
 
-4. Confirm the canonical NW-07 release path still satisfies its hard gates and
+   The Windows CI job uses the same fixture with `--planner-self-test`, which
+   resolves the frame plan without requiring a physical adapter and fails the
+   job unless every mode/case/window tuple reports the authored geometry and
+   `EXPLICIT=1`.
+
+5. Confirm the canonical NW-07 release path still satisfies its hard gates and
    two-clean-directory reproducibility:
 
    ```powershell
@@ -129,6 +154,24 @@ unless a physical adapter actually executed the player.
    The check must report `matches_frozen_digest: true`, identical
    package/manifest/executable hashes from both clean build directories, and
    `complete_distribution_bytes <= 262144`.  The ceiling is unchanged.
+
+6. Validate and record the BuildChecks evidence.  This turns the two clean
+   export reports into a deterministic artifact that asserts hash equality and
+   the 262,144-byte hard limit:
+
+   ```powershell
+   python tools/nw08a_windows_build_checks.py `
+     --summary build/nw08a-nw07-build-checks.json `
+     --verification-root build/nw08a-nw07-verification `
+     --output build/nw08a-windows-build-checks-record.json
+   ```
+
+   The Windows workflow `.github/workflows/nw08a-presentation-geometry.yml`
+   runs steps 1-6 on `windows-latest` in the job
+   `windows-canonical-build-checks` and uploads the raw BuildChecks JSON plus
+   this record as the `nw08a-windows-build-checks` artifact.  The job is the
+   repeatable record for the canonical two-directory check; this Linux
+   worktree did not execute it.
 
 ## Recorded results
 
@@ -144,8 +187,8 @@ execution was available, so the real-player rows are deliberately
 | Frozen frame-plan geometry | Linux source contract | passed (shared helper) |
 | Windows generic player, 4 cases x 3 window sizes | No Windows host | unexecuted |
 | Windows frozen player, 4 cases x 3 window sizes | No Windows host | unexecuted |
-| Windows canonical NW-07 BuildChecks (two clean dirs, 262144-byte gate) | No Windows host | unexecuted |
+| Windows canonical NW-07 BuildChecks (two clean dirs, 262144-byte gate) | GitHub Actions `windows-latest`, job `windows-canonical-build-checks` in `nw08a-presentation-geometry.yml` | recorded by the `nw08a-windows-build-checks` artifact (`nw08a-nw07-build-checks.json` and `nw08a-windows-build-checks-record.json`); not executed in this Linux worktree |
 
 Attach the `NW_PLAYER_PRESENT_SOURCE_*` output, adapter/device/driver lines,
-and the NW-07 BuildChecks JSON to the validation record before treating any
-Windows row as passed.
+and the NW-07 BuildChecks JSON/record to the validation record before treating
+any Windows row as passed.
