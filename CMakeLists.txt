@@ -344,6 +344,51 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
             kernel32
         )
     endif()
+
+    # The frozen diagnostic fixture links the full external-package decoder.
+    # Give its player bootstrap the same full NW-09 Package model ABI while
+    # preserving the size-specialized Package layout in the real release
+    # bootstrap above. This avoids an ODR/ABI mismatch without charging the
+    # 256 KiB generated player for History/checkpoint containers.
+    if(NW05_FROZEN_EMBEDDED_SPECIALIZATION)
+        add_library(nw05_player_bootstrap_diagnostic STATIC
+            ${NW_PLAYER_BOOTSTRAP_SOURCES}
+        )
+        target_include_directories(nw05_player_bootstrap_diagnostic PUBLIC
+            "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/player"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
+        )
+        nw_apply_player_profile(nw05_player_bootstrap_diagnostic)
+        target_compile_definitions(nw05_player_bootstrap_diagnostic PRIVATE
+            NW09_FORCE_STATEFUL_PACKAGE_MODEL=1
+            NW05_SPECIALIZED_VALIDATION=1
+            NW05_FROZEN_EMBEDDED_SPECIALIZATION=1
+            NW05_COMPILE_WAVE_OPS_QUERY=$<BOOL:${NW05_COMPILE_WAVE_OPS_QUERY}>
+            NW05_COMPILE_INT64_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_INT64_SHADER_OPS_QUERY}>
+            NW05_COMPILE_FP16_SHADER_OPS_QUERY=$<BOOL:${NW05_COMPILE_FP16_SHADER_OPS_QUERY}>
+            NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD}>
+            NW05_COMPILE_PROCEDURAL_TEXTURE_R8=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_R8}>
+            NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=$<BOOL:${NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F}>
+            NW06_COMPILE_GPU_INITIALIZATION=$<BOOL:${NW06_COMPILE_GPU_INITIALIZATION}>
+            NW06_COMPILE_INDEXED_INSTANCED_INDIRECT=$<BOOL:${NW06_COMPILE_INDEXED_INSTANCED_INDIRECT}>
+            NW06_COMPILE_ANALYTIC_LIGHTING_TWIST=$<BOOL:${NW06_COMPILE_ANALYTIC_LIGHTING_TWIST}>
+            NW06_COMPILE_ABSOLUTE_TICK_CAMERA=$<BOOL:${NW06_COMPILE_ABSOLUTE_TICK_CAMERA}>
+            NW06_COMPILE_HALF_RESOLUTION_BLOOM=$<BOOL:${NW06_COMPILE_HALF_RESOLUTION_BLOOM}>
+            NW06_COMPILE_TONEMAP=$<BOOL:${NW06_COMPILE_TONEMAP}>
+        )
+        add_dependencies(nw05_player_bootstrap_diagnostic nw_offline_shaders)
+        add_dependencies(nw05_player_bootstrap_diagnostic nw_offline_display_shader)
+        if(WIN32)
+            target_link_libraries(nw05_player_bootstrap_diagnostic PUBLIC
+                d3d12
+                dxgi
+                user32
+                kernel32
+            )
+        endif()
+    endif()
 endif()
 
 # NW-04: package-driven compute + fullscreen-display player fixture.  The
@@ -353,8 +398,11 @@ add_executable(nw_package_player_fixture
     fixtures/nw04_package_player/main.cpp
 )
 if(NW05_FROZEN_EMBEDDED_SPECIALIZATION)
+    target_compile_definitions(nw_package_player_fixture PRIVATE
+        NW09_FORCE_STATEFUL_PACKAGE_MODEL=1
+    )
     target_link_libraries(nw_package_player_fixture PRIVATE
-        nw05_player_bootstrap
+        nw05_player_bootstrap_diagnostic
         nw_package_player_diagnostic
     )
 else()
