@@ -165,7 +165,10 @@ class HistorySpec:
 
     @property
     def state_bytes(self) -> int:
-        return self.values_per_element * self.element_count * 8
+        # History state is a packed float32 raw buffer.  The resource
+        # descriptor advertises DXGI_FORMAT_R32_UINT and exactly this many
+        # bytes, so the declared layout and the executable allocation agree.
+        return self.values_per_element * self.element_count * 4
 
     @property
     def external_previous_port(self) -> str:
@@ -183,6 +186,8 @@ class HistorySpec:
             "step_rate_hz": self.step_rate_hz,
             "timeline_ticks_per_step": TIMELINE_TICKS_PER_SIMULATION_TICK,
             "state_layout_hash": self.state_layout_hash,
+            "state_component_type": "float32",
+            "state_component_bytes": 4,
             "values_per_element": self.values_per_element,
             "element_count": self.element_count,
             "state_bytes": self.state_bytes,
@@ -214,14 +219,40 @@ def _param_int(node: nw03.GraphNode, name: str, default: int) -> int:
 def _history_element_layout(
     node: nw03.GraphNode, declaration: nw03.HistoryDeclaration
 ) -> tuple[int, int]:
+    parsed = _parse_canonical_initial(declaration.initial_value)
+    fields = parsed if isinstance(parsed, Mapping) else {}
     if declaration.state_type == "nw.particles.v1":
-        count = max(1, _param_int(node, "count", 8))
+        count = max(1, _declared_int(fields, "count", _param_int(node, "count", 8)))
         return 5, count
     if declaration.state_type == "nw.feedback.image.v1":
-        width = max(1, _param_int(node, "width", 16))
-        height = max(1, _param_int(node, "height", 8))
+        width = max(
+            1, _declared_int(fields, "width", _param_int(node, "width", 16))
+        )
+        height = max(
+            1, _declared_int(fields, "height", _param_int(node, "height", 8))
+        )
         return 4, width * height
     raise TemporalError(f"unknown History state type '{declaration.state_type}'")
+
+
+def _declared_int(fields: Mapping[str, Any], name: str, default: int) -> int:
+    raw = fields.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _declared_float(fields: Mapping[str, Any], name: str, default: float) -> float:
+    raw = fields.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def history_specs(document: nw03.GraphDocument) -> tuple[HistorySpec, ...]:
@@ -317,9 +348,26 @@ def _initial_values(
 ) -> tuple[float, ...]:
     parsed = _parse_canonical_initial(spec.initial_value)
     if spec.state_type == "nw.particles.v1":
-        count = spec.element_count
-        seed = _param_int(node, "seed", 0)
-        initial_velocity = _param_float(node, "initial_velocity", 1.0)
+        if isinstance(parsed, list):
+            values = tuple(float(value) for value in parsed)
+            if len(values) != spec.element_count * 5:
+                raise TemporalError(
+                    "particle initial state length does not match count*5"
+                )
+            return values
+        fields = parsed if isinstance(parsed, Mapping) else {}
+        mode = str(fields.get("mode", "seeded")).lower()
+        count = _declared_int(fields, "count", spec.element_count)
+        if count != spec.element_count:
+            raise TemporalError(
+                "particle initial count does not match the declared state layout"
+            )
+        if mode == "zero" or parsed in (0, 0.0):
+            return tuple(0.0 for _ in range(spec.element_count * 5))
+        seed = _declared_int(fields, "seed", _param_int(node, "seed", 0))
+        initial_velocity = _declared_float(
+            fields, "initial_velocity", _param_float(node, "initial_velocity", 1.0)
+        )
         values: list[float] = []
         for index in range(count):
             x = _unit_hash(seed, index, 1)
@@ -342,8 +390,6 @@ def _initial_values(
             )
         return tuple(values)
     if spec.state_type == "nw.feedback.image.v1":
-        # The explicit initial value may override the default zero image with a
-        # bounded deterministic seed ramp.
         if isinstance(parsed, list):
             values = tuple(float(value) for value in parsed)
             if len(values) != spec.element_count * 4:
@@ -351,9 +397,17 @@ def _initial_values(
                     "feedback initial image length does not match width*height*4"
                 )
             return values
-        if parsed in (0, 0.0, "zero"):
+        fields = parsed if isinstance(parsed, Mapping) else {}
+        mode = str(fields.get("mode", "seeded")).lower()
+        if mode == "zero" or parsed in (0, 0.0, "zero"):
             return tuple(0.0 for _ in range(spec.element_count * 4))
-        seed = _param_int(node, "seed", 0)
+        width = _declared_int(fields, "width", _param_int(node, "width", 16))
+        height = _declared_int(fields, "height", _param_int(node, "height", 8))
+        if width * height != spec.element_count:
+            raise TemporalError(
+                "feedback initial dimensions do not match the declared state layout"
+            )
+        seed = _declared_int(fields, "seed", _param_int(node, "seed", 0))
         values = []
         for index in range(spec.element_count * 4):
             values.append(_unit_hash(seed, index, 7) * 0.01)
@@ -367,9 +421,11 @@ def _step_particles(
     previous: tuple[float, ...],
 ) -> tuple[float, ...]:
     count = spec.element_count
-    gravity = _param_float(node, "gravity", -0.5)
-    width = max(1, _param_int(node, "width", 16))
-    height = max(1, _param_int(node, "height", 8))
+    parsed = _parse_canonical_initial(spec.initial_value)
+    fields = parsed if isinstance(parsed, Mapping) else {}
+    gravity = _declared_float(fields, "gravity", _param_float(node, "gravity", -0.5))
+    width = max(1, _declared_int(fields, "width", _param_int(node, "width", 16)))
+    height = max(1, _declared_int(fields, "height", _param_int(node, "height", 8)))
     dt = 1.0 / FIXED_STEP_HZ
     values = list(previous)
     for index in range(count):
@@ -395,11 +451,13 @@ def _step_feedback(
     previous: tuple[float, ...],
     simulation_tick: int,
 ) -> tuple[float, ...]:
-    decay = _param_float(node, "decay", 0.95)
-    gain = _param_float(node, "gain", 0.5)
-    seed = _param_int(node, "seed", 0)
-    width = max(1, _param_int(node, "width", 16))
-    height = max(1, _param_int(node, "height", 8))
+    parsed = _parse_canonical_initial(spec.initial_value)
+    fields = parsed if isinstance(parsed, Mapping) else {}
+    decay = _declared_float(fields, "decay", _param_float(node, "decay", 0.95))
+    gain = _declared_float(fields, "gain", _param_float(node, "gain", 0.5))
+    seed = _declared_int(fields, "seed", _param_int(node, "seed", 0))
+    width = max(1, _declared_int(fields, "width", _param_int(node, "width", 16)))
+    height = max(1, _declared_int(fields, "height", _param_int(node, "height", 8)))
     values = list(previous)
     # Deterministic per-element scalar update.  No reduction order is left to
     # the implementation: each output element has exactly one writer.
@@ -437,6 +495,21 @@ def step_history_state(
         state_layout_hash=spec.state_layout_hash,
         loop_generation=previous.loop_generation,
     )
+
+
+def initial_state_values(
+    document: nw03.GraphDocument, spec: HistorySpec
+) -> tuple[float, ...]:
+    """Return the declared initial values as executable float32 state."""
+
+    node = document.nodes[spec.node_id]
+    values = _initial_values(spec, node)
+    if len(values) != spec.element_count * spec.values_per_element:
+        raise TemporalError(
+            f"declared initial state for '{spec.node_id}' does not match its "
+            "element layout"
+        )
+    return values
 
 
 @dataclass(frozen=True)
@@ -749,19 +822,30 @@ class TemporalRuntime:
         return self.state(node_id).values
 
     # -- lifecycle ---------------------------------------------------------
-    def _reset_states(self) -> None:
-        self._states = {}
+    def _initial_state(self, spec: HistorySpec) -> TemporalState:
+        node = self.document.nodes[spec.node_id]
+        return TemporalState(
+            node_id=spec.node_id,
+            operator_id=spec.operator_id,
+            state_type=spec.state_type,
+            simulation_tick=0,
+            values=_initial_values(spec, node),
+            state_layout_hash=spec.state_layout_hash,
+            loop_generation=self._loop_generation,
+        )
+
+    def _reset_states(self, node_ids: Iterable[str] | None = None) -> None:
+        selected = (
+            {spec.node_id for spec in self.specs}
+            if node_ids is None
+            else set(node_ids)
+        )
+        if not self._states:
+            self._states = {}
         for spec in self.specs:
-            node = self.document.nodes[spec.node_id]
-            self._states[spec.node_id] = TemporalState(
-                node_id=spec.node_id,
-                operator_id=spec.operator_id,
-                state_type=spec.state_type,
-                simulation_tick=0,
-                values=_initial_values(spec, node),
-                state_layout_hash=spec.state_layout_hash,
-                loop_generation=self._loop_generation,
-            )
+            if spec.node_id not in selected:
+                continue
+            self._states[spec.node_id] = self._initial_state(spec)
 
     def reset(self) -> None:
         """Reset to declared initial state at tick zero."""
@@ -818,11 +902,13 @@ class TemporalRuntime:
             and loop_ticks % TIMELINE_TICKS_PER_SIMULATION_TICK == 0
             else 0
         )
-        resets_on_loop = any(
-            spec.reset_policy == "on-loop" for spec in self.specs
-        )
+        loop_reset_nodes = {
+            spec.node_id
+            for spec in self.specs
+            if spec.reset_policy == "on-loop"
+        }
         if (
-            resets_on_loop
+            loop_reset_nodes
             and loop_sim_ticks > 0
             and next_tick % loop_sim_ticks == 0
         ):
@@ -834,7 +920,7 @@ class TemporalRuntime:
             self._event_cursor = EventCursor(
                 loop_generation=self._loop_generation, tick=-1, sequence=0
             )
-            self._reset_states()
+            self._reset_states(loop_reset_nodes)
             self._simulation_tick = next_tick
             return
         previous = dict(self._states)
@@ -1078,11 +1164,32 @@ class TemporalRuntime:
         states_by_node = {
             str(item.get("node_id")): item for item in checkpoint.states
         }
+        unknown = set(states_by_node) - {spec.node_id for spec in self.specs}
+        if unknown:
+            raise CheckpointError(
+                "checkpoint contains unknown History node(s): "
+                + ", ".join(sorted(unknown))
+            )
         for spec in self.specs:
             raw = states_by_node.get(spec.node_id)
             if raw is None:
                 raise CheckpointError(
                     f"checkpoint is missing History node '{spec.node_id}'"
+                )
+            if raw.get("operator_id") != spec.operator_id:
+                raise CheckpointError(
+                    f"checkpoint state for '{spec.node_id}' belongs to operator "
+                    f"'{raw.get('operator_id')}', expected '{spec.operator_id}'"
+                )
+            if raw.get("state_type") != spec.state_type:
+                raise CheckpointError(
+                    f"checkpoint state for '{spec.node_id}' has state type "
+                    f"'{raw.get('state_type')}', expected '{spec.state_type}'"
+                )
+            if raw.get("state_layout_hash") not in (None, spec.state_layout_hash):
+                raise CheckpointError(
+                    f"checkpoint state for '{spec.node_id}' has an incompatible "
+                    "state layout hash"
                 )
             values = tuple(float(value) for value in raw.get("values", ()))
             if len(values) != spec.element_count * spec.values_per_element:
@@ -1090,11 +1197,20 @@ class TemporalRuntime:
                     f"checkpoint state for '{spec.node_id}' has the wrong "
                     "layout length"
                 )
+            stored_tick = int(
+                raw.get("simulation_tick", checkpoint.simulation_tick)
+            )
+            if stored_tick != checkpoint.simulation_tick:
+                raise CheckpointError(
+                    f"checkpoint state for '{spec.node_id}' is from simulation "
+                    f"tick {stored_tick}, checkpoint tick is "
+                    f"{checkpoint.simulation_tick}"
+                )
             restored[spec.node_id] = TemporalState(
                 node_id=spec.node_id,
                 operator_id=spec.operator_id,
                 state_type=spec.state_type,
-                simulation_tick=int(raw.get("simulation_tick", checkpoint.simulation_tick)),
+                simulation_tick=stored_tick,
                 values=values,
                 state_layout_hash=spec.state_layout_hash,
                 loop_generation=checkpoint.loop_generation,
@@ -1131,16 +1247,6 @@ class TemporalRuntime:
         if timeline_tick < 0:
             raise TemporalError("timeline tick must be non-negative")
         target_sim = simulation_tick_for_timeline_tick(timeline_tick)
-        if (
-            any(spec.reset_policy == "on-seek" for spec in self.specs)
-            and target_sim != self._simulation_tick
-        ):
-            self._reset_states()
-            self._simulation_tick = 0
-            self._timeline_tick = 0
-            self._event_cursor = EventCursor(
-                loop_generation=self._loop_generation, tick=-1, sequence=0
-            )
         used_checkpoint = False
         fallback = False
         checkpoint_error: CheckpointError | None = None
@@ -1169,15 +1275,21 @@ class TemporalRuntime:
                 )
 
         backward = target_sim < self._simulation_tick
-        if backward or (not used_checkpoint and self._simulation_tick != 0):
+        if not used_checkpoint and (backward or checkpoint_error is not None):
+            # Per-node reset policy: seeking restarts states that participate
+            # in replay (on-loop/on-seek), while never/manual states keep their
+            # committed value.  A full explicit reset still resets every node.
+            seek_reset_nodes = {
+                spec.node_id
+                for spec in self.specs
+                if spec.reset_policy not in {"never", "manual"}
+            }
+            self._reset_states(seek_reset_nodes)
             self._simulation_tick = 0
             self._timeline_tick = 0
-            self._reset_states()
             self._event_cursor = EventCursor(
                 loop_generation=self._loop_generation, tick=-1, sequence=0
             )
-            fallback = True
-        if not used_checkpoint and checkpoint_error is not None:
             fallback = True
 
         advance = self.advance_to(timeline_tick, work_cap=work_cap)
@@ -1198,13 +1310,6 @@ class TemporalRuntime:
         work_cap: int | None = None,
     ) -> ReplayResult:
         try:
-            if checkpoint is not None:
-                compatibility = self.checkpoint_compatibility(
-                    checkpoint, target_tick=target_tick
-                )
-                if not compatibility.compatible:
-                    # Explicit declared fallback: reset and replay from zero.
-                    self.reset()
             return self.seek(target_tick, checkpoint=checkpoint, work_cap=work_cap)
         except ReplayError as exc:
             return ReplayResult(

@@ -295,6 +295,18 @@ bool TextureSeedForResource(const package::Package& pkg,
 std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
     std::uint64_t maximum = 0u;
     for (const auto& instruction : pkg.initialization) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        if (instruction.opcode == "init.upload_history_state" &&
+            instruction.operands.size() == 2u &&
+            instruction.operands[1].type == package::OperandType::U32) {
+            for (const auto& history : pkg.history) {
+                if (history.state_id == instruction.operands[1].u32) {
+                    maximum = std::max<std::uint64_t>(
+                        maximum, history.initial_state.size());
+                }
+            }
+        }
+#endif
         if (instruction.opcode != "init.upload_resource" ||
             instruction.operands.empty() ||
             instruction.operands[0].type !=
@@ -4061,6 +4073,142 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 kFenceTimeoutMs);
             if (wait != ExitCode::Success) return wait;
 #endif
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "init.upload_history_state") {
+            if (!require_operands(instruction, 2u) ||
+                instruction.operands[0].type !=
+                    package::OperandType::ResourceRef ||
+                instruction.operands[1].type != package::OperandType::U32) {
+                return last_exit_;
+            }
+            const std::uint32_t resource_id = instruction.operands[0].u32;
+            const package::HistoryRecord* history = nullptr;
+            for (const auto& candidate : package_.history) {
+                if (candidate.state_id == instruction.operands[1].u32) {
+                    history = &candidate;
+                    break;
+                }
+            }
+            if (history == nullptr) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation", "history_state_missing",
+                            "state_id", std::to_string(instruction.operands[1].u32),
+                            "missing", "init.upload_history_state",
+                            "initial-state upload references an unknown History "
+                            "state");
+            }
+            PlatformState::ResourceSlot* slot = nullptr;
+            for (auto& candidate : state->resources) {
+                if (candidate.resource_id == resource_id) {
+                    slot = &candidate;
+                    break;
+                }
+            }
+            if (slot == nullptr || slot->resource == nullptr ||
+                history->initial_state.empty()) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_upload_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "init.upload_history_state",
+                            "history state resource or initial bytes are missing");
+            }
+            const std::uint64_t upload_bytes = history->initial_state.size();
+            if (state->frames.empty() || state->frames[0].upload == nullptr ||
+                state->frames[0].upload_size < upload_bytes) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "frame_upload_ring_unavailable", "upload_bytes",
+                            std::to_string(upload_bytes),
+                            state->frames.empty() ||
+                                    state->frames[0].upload == nullptr
+                                ? "unavailable"
+                                : std::to_string(
+                                      state->frames[0].upload_size),
+                            "init.upload_history_state",
+                            "per-frame upload ring is too small for the "
+                            "history initial state");
+            }
+            auto& frame = state->frames[0];
+            if (frame.fence_value != 0u) {
+                const ExitCode wait = WaitForFenceValue(
+                    state->fence, frame.fence_value, state->fence_event,
+                    kFenceTimeoutMs);
+                if (wait != ExitCode::Success) return wait;
+                frame.fence_value = 0u;
+                ++stats_.upload_reuse_waits;
+            }
+            void* mapped = nullptr;
+            D3D12_RANGE read_range{0u, 0u};
+            if (FAILED(frame.upload->Map(0u, &read_range, &mapped)) ||
+                mapped == nullptr) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_upload_map_failed", "mapped", "available",
+                            "unavailable", "init.upload_history_state",
+                            "history initial-state Map failed");
+            }
+            std::memcpy(mapped, history->initial_state.data(),
+                        history->initial_state.size());
+            D3D12_RANGE write_range{0u,
+                                    static_cast<SIZE_T>(upload_bytes)};
+            frame.upload->Unmap(0u, &write_range);
+            if (frame.command_list == nullptr || frame.allocator == nullptr) {
+                return Fail(ExitCode::CommandListRecordingFailed,
+                            "command_list", "upload_command_list_unavailable",
+                            "command_list", "created", "unavailable",
+                            "init.upload_history_state",
+                            "frame command list/allocator is unavailable");
+            }
+            if (FAILED(frame.allocator->Reset()) ||
+                FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
+                return Fail(ExitCode::CommandListRecordingFailed,
+                            "command_list", "command_list_reset_failed",
+                            "reset", "succeeded", "failed",
+                            "init.upload_history_state",
+                            "command list reset failed for history upload");
+            }
+            D3D12_RESOURCE_BARRIER to_copy{};
+            to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            to_copy.Transition.pResource = slot->resource;
+            to_copy.Transition.StateBefore = slot->state;
+            to_copy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            to_copy.Transition.Subresource =
+                D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            frame.command_list->ResourceBarrier(1u, &to_copy);
+            frame.command_list->CopyBufferRegion(
+                slot->resource, 0u, frame.upload, 0u, upload_bytes);
+            const package::ResourceDescriptor* uploaded =
+                FindPackageResource(package_, resource_id);
+            if (uploaded == nullptr) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation", "history_upload_resource",
+                            "resource_id", std::to_string(resource_id),
+                            "missing", "init.upload_history_state",
+                            "history state resource descriptor is missing");
+            }
+            const D3D12_RESOURCE_STATES final_state =
+                WorkingStateForUsage(*uploaded);
+            D3D12_RESOURCE_BARRIER to_work = to_copy;
+            to_work.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            to_work.Transition.StateAfter = final_state;
+            frame.command_list->ResourceBarrier(1u, &to_work);
+            slot->state = final_state;
+            if (FAILED(frame.command_list->Close())) {
+                return Fail(ExitCode::CommandListRecordingFailed,
+                            "command_list", "command_list_close_failed",
+                            "closed", "closed", "failed",
+                            "init.upload_history_state",
+                            "history upload command list close failed");
+            }
+            ID3D12CommandList* lists[] = {frame.command_list};
+            state->queue->ExecuteCommandLists(1u, lists);
+            const std::uint64_t fence_value = next_fence_value_++;
+            if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+                return Fail(ExitCode::GpuSubmissionFailed, "gpu_execution",
+                            "queue_signal_failed", "signal", "succeeded",
+                            "failed", "init.upload_history_state",
+                            "history upload queue Signal failed");
+            }
+            frame.fence_value = fence_value;
+#endif
         } else if (instruction.opcode == "init.upload_resource") {
             if (!require_operands(instruction, 1u)) {
                 return last_exit_;
@@ -4394,6 +4542,32 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         std::to_string(instruction.operands[0].u32),
                         "simulated failure", "init.create_pipeline",
                         "deterministic pipeline creation failure seam");
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "init.upload_history_state") {
+            if (!require_operands(instruction, 2u) ||
+                instruction.operands[0].type !=
+                    package::OperandType::ResourceRef ||
+                instruction.operands[1].type != package::OperandType::U32) {
+                return last_exit_;
+            }
+            const package::HistoryRecord* history = nullptr;
+            for (const auto& candidate : package_.history) {
+                if (candidate.state_id == instruction.operands[1].u32) {
+                    history = &candidate;
+                    break;
+                }
+            }
+            if (history == nullptr || history->initial_state.empty() ||
+                FindPackageResource(package_, instruction.operands[0].u32) ==
+                    nullptr) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation", "history_upload_missing",
+                            "state_id",
+                            std::to_string(instruction.operands[1].u32),
+                            "missing", "init.upload_history_state",
+                            "history initial-state upload is incomplete");
+            }
+#endif
         } else if (instruction.opcode == "init.upload_resource") {
             // Initialization owns frame slot 0's upload ring, matching the
             // native path.

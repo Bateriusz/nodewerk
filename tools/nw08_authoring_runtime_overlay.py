@@ -749,7 +749,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {""",
                 kFenceTimeoutMs);
             if (wait != ExitCode::Success) return wait;
 #endif
-        } else if (instruction.opcode == "init.upload_resource") {""",
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "init.upload_history_state") {""",
         r"""            const ExitCode wait = WaitForFenceValue(
                 state->fence, fence_value, state->fence_event,
                 kFenceTimeoutMs);
@@ -782,7 +783,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {""",
             ++authoring_dispatch_index;
 #endif
 #endif
-        } else if (instruction.opcode == "init.upload_resource") {""",
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "init.upload_history_state") {""",
         "authoring init dispatch execution accounting",
     )
     cpp = replace_once(

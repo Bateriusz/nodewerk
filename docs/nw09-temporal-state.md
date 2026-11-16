@@ -110,13 +110,23 @@ support.
 
 Stateful documents use the explicit `.nwp` v1.1 additive extension:
 
-* `HIST` for History declarations and ping-pong resource identities;
+* `HIST` (record layout version 2) for History declarations, exact packed
+  float32 initial-state bytes, and ping-pong resource identities;
 * `CKPT` for optional packaged release checkpoints.
 
 Stateful packages are still produced and consumed through the existing
 `nwp_package`, `PackagePlayer`, resource-plan, schedule, and player
 architecture. Packaged checkpoints report their byte cost in the export report,
 size report, manifest, and package inspection.
+
+The supplied document is compiled through the established optimizer/offline
+DXC/cache/report pipeline. History nodes lower to ordinary compute
+specializations; the package uploads the declared initial state with
+`init.upload_history_state` and dispatches the simulation shader every tick.
+State resources are raw `DXGI_FORMAT_R32_UINT` buffers of exactly
+`values_per_element * element_count * 4` bytes; the declared particle layout is
+five float32 values per particle and the feedback layout is four float32 values
+per image element.
 
 ## Fixtures
 

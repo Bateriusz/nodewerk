@@ -209,6 +209,88 @@ def test_loop_reset_restarts_declared_initial_state() -> None:
     assert runtime.state("feedback").values == fresh.state("feedback").values
 
 
+def test_declared_zero_initial_feedback_state_is_zero() -> None:
+    runtime = _runtime(FEEDBACK)
+    values = runtime.state("feedback").values
+    assert set(values) == {0.0}
+
+
+def test_loop_reset_policy_is_per_node(tmp_path: Path) -> None:
+    text = (
+        "nwgraph 1\n"
+        "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+        "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a\n"
+        "setting nw09_loop_ticks 800\n"
+        "node particles nw.particles.system@1.0.0 frequency=history\n"
+        "  param count 2\n"
+        "  param seed 1\n"
+        "  param gravity -0.5\n"
+        "  param initial_velocity 1.0\n"
+        "  param lifetime_ticks 800\n"
+        "  param width 8\n"
+        "  param height 8\n"
+        '  history state-type nw.particles.v1 initial "mode=seeded;count=2;seed=1" '
+        "reset on-loop step-rate 120\n"
+        "node feedback nw.feedback.image@1.0.0 frequency=history\n"
+        "  param width 2\n"
+        "  param height 2\n"
+        "  param seed 2\n"
+        "  param decay 0.9\n"
+        "  param gain 0.2\n"
+        '  history state-type nw.feedback.image.v1 initial "mode=seeded;width=2;height=2;seed=2" '
+        "reset never step-rate 120\n"
+        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
+        "  input image feedback.out\n"
+    )
+    graph = tmp_path / "two.nwgraph"
+    graph.write_text(text, encoding="utf-8")
+    runtime = temporal.TemporalRuntime(nw03.load_graph(graph))
+    runtime.advance_to(400)
+    feedback_before = runtime.state("feedback").values
+    runtime.advance_to(800)
+    assert runtime.loop_generation == 1
+    fresh = temporal.TemporalRuntime(nw03.load_graph(graph))
+    assert runtime.state("particles").values == fresh.state("particles").values
+    assert runtime.state("feedback").values == feedback_before
+
+
+def test_seek_reset_policy_is_per_node(tmp_path: Path) -> None:
+    text = (
+        "nwgraph 1\n"
+        "profile nw.common.d3d12.fl12_0.sm6_0.v1 "
+        "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a\n"
+        "node particles nw.particles.system@1.0.0 frequency=history\n"
+        "  param count 2\n"
+        "  param seed 1\n"
+        "  param gravity -0.5\n"
+        "  param initial_velocity 1.0\n"
+        "  param lifetime_ticks 800\n"
+        "  param width 8\n"
+        "  param height 8\n"
+        '  history state-type nw.particles.v1 initial "mode=seeded;count=2;seed=1" '
+        "reset on-seek step-rate 120\n"
+        "node feedback nw.feedback.image@1.0.0 frequency=history\n"
+        "  param width 2\n"
+        "  param height 2\n"
+        "  param seed 2\n"
+        "  param decay 0.9\n"
+        "  param gain 0.2\n"
+        '  history state-type nw.feedback.image.v1 initial "mode=seeded;width=2;height=2;seed=2" '
+        "reset never step-rate 120\n"
+        "node screen nw.render.present@1.0.0 frequency=frame residency=gpu\n"
+        "  input image feedback.out\n"
+    )
+    graph = tmp_path / "seek-policies.nwgraph"
+    graph.write_text(text, encoding="utf-8")
+    runtime = temporal.TemporalRuntime(nw03.load_graph(graph))
+    runtime.advance_to(400 * 3)
+    feedback_before = runtime.state("feedback").values
+    assert runtime.seek(0).ok
+    fresh = temporal.TemporalRuntime(nw03.load_graph(graph))
+    assert runtime.state("particles").values == fresh.state("particles").values
+    assert runtime.state("feedback").values == feedback_before
+
+
 @pytest.mark.parametrize(
     "name,path",
     [("particles", PARTICLES), ("feedback", FEEDBACK)],

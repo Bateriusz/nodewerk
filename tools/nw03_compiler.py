@@ -1489,6 +1489,14 @@ NW09_STATE_TYPES = frozenset(
     {"nw.particles.v1", "nw.feedback.image.v1"}
 )
 
+# A History state type is bound to exactly one operator schema.  The operator
+# and state type are both semantic content; a feedback-image layout on a
+# particle operator (or the reverse) is never a valid declaration.
+NW09_OPERATOR_STATE_TYPE = {
+    "nw.particles.system": "nw.particles.v1",
+    "nw.feedback.image": "nw.feedback.image.v1",
+}
+
 
 def _validate_history_declaration(
     node: GraphNode,
@@ -1511,6 +1519,16 @@ def _validate_history_declaration(
         error(
             "invalid_history_declaration",
             f"unknown History state type '{declaration.state_type}'",
+        )
+    expected_state_type = NW09_OPERATOR_STATE_TYPE.get(node.operator_id)
+    if (
+        expected_state_type is not None
+        and declaration.state_type != expected_state_type
+    ):
+        error(
+            "invalid_history_declaration",
+            f"History state type '{declaration.state_type}' does not belong to "
+            f"operator '{node.operator_id}' (expected '{expected_state_type}')",
         )
     if not declaration.initial_value.strip():
         error(

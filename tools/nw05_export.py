@@ -147,7 +147,7 @@ class ExportSettings:
     packaged_checkpoint_ticks: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "byte_ceiling": self.byte_ceiling,
             "memory_budget": self.memory_budget,
             "quantization_tolerance": self.quantization_tolerance,
@@ -166,8 +166,14 @@ class ExportSettings:
             "fusion_enabled": self.fusion_enabled,
             "fusion_max_nodes": self.fusion_max_nodes,
             "fusion_max_expression_bytes": self.fusion_max_expression_bytes,
-            "packaged_checkpoint_ticks": list(self.packaged_checkpoint_ticks),
         }
+        # History-free exports keep the exact NW-08A report surface.  The
+        # checkpoint request is an explicit stateful-only extension.
+        if self.packaged_checkpoint_ticks:
+            payload["packaged_checkpoint_ticks"] = list(
+                self.packaged_checkpoint_ticks
+            )
+        return payload
 
 
 @dataclass
@@ -2914,6 +2920,10 @@ def export_graph(
                 allow_test_payloads=allow_test_payloads,
                 frames_in_flight=settings.frames_in_flight,
                 packaged_checkpoint_ticks=settings.packaged_checkpoint_ticks,
+                dxc_executable=dxc_executable,
+                optimization=optimization,
+                allow_unpinned_dxc=allow_unpinned_dxc,
+                cache_dir=str(cache_dir) if cache_dir is not None else None,
             )
             package_bytes = nwp.encode_package(package)
             valid, diagnostics = nwp.validate_package_bytes(package_bytes)

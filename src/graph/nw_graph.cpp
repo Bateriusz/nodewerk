@@ -3712,6 +3712,17 @@ ParseResult ParseGraphText(std::string_view text,
             if (tokens.size() < 3u || (tokens.size() - 1u) % 2u != 0u) {
                 malformed = true;
             }
+            for (const auto& field : fields) {
+                if (field.first != "state-type" &&
+                    field.first != "initial" &&
+                    field.first != "reset" &&
+                    field.first != "step-rate") {
+                    result.diagnostics.push_back(MakeDiagnostic(
+                        DiagnosticCode::ParseError,
+                        "unknown History field '" + field.first + "'", source));
+                    malformed = true;
+                }
+            }
             if (malformed || fields.count("state-type") == 0u ||
                 fields.count("initial") == 0u ||
                 fields.count("reset") == 0u ||
@@ -4502,6 +4513,28 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
                         DiagnosticCode::InvalidParameterValue,
                         "unknown History state type '" + history.state_type + "'",
                         source));
+                } else {
+                    const std::string expected =
+                        node.operator_id == "nw.particles.system"
+                            ? "nw.particles.v1"
+                            : node.operator_id == "nw.feedback.image"
+                                  ? "nw.feedback.image.v1"
+                                  : std::string();
+                    if (expected.empty()) {
+                        diagnostics.push_back(MakeDiagnostic(
+                            DiagnosticCode::HistoryNotSupported,
+                            "operator '" + node.operator_id +
+                                "' has no History state schema",
+                            source));
+                    } else if (history.state_type != expected) {
+                        diagnostics.push_back(MakeDiagnostic(
+                            DiagnosticCode::InvalidParameterValue,
+                            "History state type '" + history.state_type +
+                                "' does not belong to operator '" +
+                                node.operator_id + "' (expected '" + expected +
+                                "')",
+                            source));
+                    }
                 }
                 if (history.initial_value.empty()) {
                     diagnostics.push_back(MakeDiagnostic(
@@ -5199,6 +5232,80 @@ std::uint32_t HashU32(std::uint32_t a, std::uint32_t b, std::uint32_t c) {
     h *= 0x846ca68bu;
     h ^= h >> 16u;
     return h;
+}
+
+std::map<std::string, std::string> ParseHistoryFields(
+    std::string_view text) {
+    std::map<std::string, std::string> fields;
+    auto trim = [](std::string& item) {
+        const auto first = item.find_first_not_of(" \t");
+        const auto last = item.find_last_not_of(" \t");
+        item = first == std::string::npos
+                   ? std::string()
+                   : item.substr(first, last - first + 1u);
+    };
+    std::size_t start = 0u;
+    while (start <= text.size()) {
+        const std::size_t end = text.find(';', start);
+        const std::string_view entry =
+            text.substr(start, end == std::string_view::npos
+                                   ? std::string_view::npos
+                                   : end - start);
+        const std::size_t equals = entry.find('=');
+        if (equals != std::string_view::npos) {
+            std::string key(entry.substr(0u, equals));
+            std::string value(entry.substr(equals + 1u));
+            trim(key);
+            trim(value);
+            fields[key] = value;
+        }
+        if (end == std::string_view::npos) break;
+        start = end + 1u;
+    }
+    return fields;
+}
+
+std::uint64_t HistoryFieldU64(
+    const std::map<std::string, std::string>& fields,
+    const std::string& name,
+    std::uint64_t fallback) {
+    const auto found = fields.find(name);
+    if (found == fields.end()) return fallback;
+    std::uint64_t parsed = 0;
+    if (!FromCharsU64(found->second, parsed)) return fallback;
+    return parsed;
+}
+
+double HistoryFieldDouble(
+    const std::map<std::string, std::string>& fields,
+    const std::string& name,
+    double fallback) {
+    const auto found = fields.find(name);
+    if (found == fields.end()) return fallback;
+    char* end = nullptr;
+    const double parsed = std::strtod(found->second.c_str(), &end);
+    if (end == found->second.c_str() || (end != nullptr && *end != '\0')) {
+        return fallback;
+    }
+    return parsed;
+}
+
+double HistoryUnitHash(std::initializer_list<std::uint64_t> values) {
+    std::string payload;
+    bool first = true;
+    for (const std::uint64_t value : values) {
+        if (!first) payload.push_back(',');
+        payload += std::to_string(value);
+        first = false;
+    }
+    const auto digest = Sha256Bytes(
+        reinterpret_cast<const std::uint8_t*>(payload.data()),
+        payload.size());
+    std::uint64_t raw = 0u;
+    for (std::size_t index = 0u; index < 8u; ++index) {
+        raw = (raw << 8u) | digest[index];
+    }
+    return static_cast<double>(raw) / 18446744073709551616.0;
 }
 
 const EvaluationValue* FindInputValue(
@@ -5939,50 +6046,177 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         // External previous-tick state is read here; the current-tick state is
         // written into the caller-provided next-state map and becomes visible
         // only after the whole simulation tick commits.
-        EvaluationValue previous;
-        if (context.previous_history_state.count(node.id) != 0u) {
-            previous = context.previous_history_state.at(node.id);
+        const std::string state_type =
+            node.history ? node.history->state_type : std::string();
+        const std::map<std::string, std::string> fields = ParseHistoryFields(
+            node.history ? node.history->initial_value : std::string());
+        std::uint64_t count = 0u;
+        std::uint64_t width = 0u;
+        std::uint64_t height = 0u;
+        std::uint32_t values_per_element = 0u;
+        if (state_type == "nw.particles.v1") {
+            values_per_element = 5u;
+            count = HistoryFieldU64(
+                fields, "count",
+                param("count") ? static_cast<std::uint64_t>(
+                                     param("count")->integer)
+                               : 8u);
+            if (count == 0u) count = 1u;
+            width = HistoryFieldU64(
+                fields, "width",
+                param("width") ? static_cast<std::uint64_t>(
+                                     param("width")->integer)
+                               : 16u);
+            height = HistoryFieldU64(
+                fields, "height",
+                param("height") ? static_cast<std::uint64_t>(
+                                      param("height")->integer)
+                                : 8u);
+            if (width == 0u) width = 1u;
+            if (height == 0u) height = 1u;
         } else {
-            previous.type = LogicalType::RenderImage;
-            previous.residency = Residency::Gpu;
-            previous.component_count = 4u;
+            values_per_element = 4u;
+            width = HistoryFieldU64(
+                fields, "width",
+                param("width") ? static_cast<std::uint64_t>(
+                                     param("width")->integer)
+                               : 16u);
+            height = HistoryFieldU64(
+                fields, "height",
+                param("height") ? static_cast<std::uint64_t>(
+                                      param("height")->integer)
+                                : 8u);
+            if (width == 0u) width = 1u;
+            if (height == 0u) height = 1u;
+            count = width * height;
         }
-        EvaluationValue current = previous;
-        current.type = LogicalType::RenderImage;
-        current.residency = Residency::Gpu;
-        current.component_count = 4u;
-        const double tick = static_cast<double>(context.simulation_tick);
-        if (op == "nw.particles.system") {
-            const ParamValue* velocity = param("initial_velocity");
-            const ParamValue* gravity = param("gravity");
-            const double vx = previous.numbers[0];
-            const double vy = previous.numbers[1] +
-                              (gravity ? gravity->number : 0.0) / 120.0;
-            current.numbers[0] = vx;
-            current.numbers[1] = vy;
-            current.numbers[2] = static_cast<double>(
-                (static_cast<std::uint64_t>(tick) + 1u) %
-                static_cast<std::uint64_t>(
-                    param("lifetime_ticks") ? param("lifetime_ticks")->integer
-                                            : 9600));
-            current.numbers[3] =
-                velocity ? velocity->number : 1.0;
-        } else {
-            const ParamValue* decay = param("decay");
-            const ParamValue* gain = param("gain");
-            for (std::uint32_t i = 0; i < 4u; ++i) {
-                current.numbers[i] =
-                    (decay ? decay->number : 0.95) * previous.numbers[i] +
-                    (gain ? gain->number : 0.5) *
-                        UnitFromU64(HashU32(
-                            static_cast<std::uint32_t>(tick),
-                            static_cast<std::uint32_t>(
-                                param("seed") ? param("seed")->integer : 0),
-                            i));
+        std::vector<double> values;
+        if (context.previous_history_state.count(node.id) != 0u) {
+            values =
+                context.previous_history_state.at(node.id).samples;
+        }
+        if (values.size() !=
+            static_cast<std::size_t>(count) * values_per_element) {
+            values.assign(
+                static_cast<std::size_t>(count) * values_per_element, 0.0);
+            const std::string mode = [&]() {
+                const auto found = fields.find("mode");
+                return found == fields.end() ? std::string("seeded")
+                                             : found->second;
+            }();
+            if (mode != "zero") {
+                const std::uint64_t seed = HistoryFieldU64(
+                    fields, "seed",
+                    param("seed") ? static_cast<std::uint64_t>(
+                                        param("seed")->integer)
+                                  : 0u);
+                if (state_type == "nw.particles.v1") {
+                    const double velocity = HistoryFieldDouble(
+                        fields, "initial_velocity",
+                        param("initial_velocity")
+                            ? param("initial_velocity")->number
+                            : 1.0);
+                    for (std::uint64_t index = 0u; index < count; ++index) {
+                        const std::size_t base =
+                            static_cast<std::size_t>(index) * 5u;
+                        const double speed =
+                            velocity *
+                            (0.5 + 0.5 * HistoryUnitHash({seed, index, 4u}));
+                        const double direction_x =
+                            2.0 * HistoryUnitHash({seed, index, 3u}) - 1.0;
+                        const double direction_y =
+                            2.0 * HistoryUnitHash({seed, index, 5u}) - 1.0;
+                        values[base] = HistoryUnitHash({seed, index, 1u});
+                        values[base + 1u] =
+                            HistoryUnitHash({seed, index, 2u});
+                        values[base + 2u] = speed * direction_x;
+                        values[base + 3u] = speed * direction_y;
+                        values[base + 4u] = 0.0;
+                    }
+                } else {
+                    for (std::size_t index = 0u; index < values.size();
+                         ++index) {
+                        values[index] =
+                            HistoryUnitHash({seed, index, 7u}) * 0.01;
+                    }
+                }
             }
         }
+        const std::uint64_t tick = context.simulation_tick;
+        if (state_type == "nw.particles.v1") {
+            const double gravity = HistoryFieldDouble(
+                fields, "gravity",
+                param("gravity") ? param("gravity")->number : -0.5);
+            const double dt = 1.0 / 120.0;
+            for (std::uint64_t index = 0u; index < count; ++index) {
+                const std::size_t base =
+                    static_cast<std::size_t>(index) * 5u;
+                double x = values[base];
+                double y = values[base + 1u];
+                double vx = values[base + 2u];
+                double vy = values[base + 3u];
+                double age = values[base + 4u];
+                vy += gravity * dt;
+                x += vx * dt;
+                y += vy * dt;
+                age += 1.0;
+                if (x < 0.0 || x >= static_cast<double>(width)) {
+                    vx = -vx;
+                    x = std::min(std::max(x, 0.0),
+                                 static_cast<double>(width - 1u));
+                }
+                if (y < 0.0 || y >= static_cast<double>(height)) {
+                    vy = -vy;
+                    y = std::min(std::max(y, 0.0),
+                                 static_cast<double>(height - 1u));
+                }
+                values[base] = x;
+                values[base + 1u] = y;
+                values[base + 2u] = vx;
+                values[base + 3u] = vy;
+                values[base + 4u] = age;
+            }
+        } else {
+            const double decay = HistoryFieldDouble(
+                fields, "decay",
+                param("decay") ? param("decay")->number : 0.95);
+            const double gain = HistoryFieldDouble(
+                fields, "gain",
+                param("gain") ? param("gain")->number : 0.5);
+            const std::uint64_t seed = HistoryFieldU64(
+                fields, "seed",
+                param("seed") ? static_cast<std::uint64_t>(
+                                    param("seed")->integer)
+                              : 0u);
+            for (std::uint64_t y = 0u; y < height; ++y) {
+                for (std::uint64_t x = 0u; x < width; ++x) {
+                    const std::size_t base =
+                        static_cast<std::size_t>(y * width + x) * 4u;
+                    const double injection =
+                        HistoryUnitHash({seed, tick, x, y, 11u});
+                    values[base] =
+                        decay * values[base] + gain * injection;
+                    values[base + 1u] =
+                        decay * values[base + 1u] +
+                        gain * (1.0 - injection);
+                    values[base + 2u] =
+                        decay * values[base + 2u] +
+                        gain * (0.5 + 0.5 * injection);
+                    values[base + 3u] = 1.0;
+                }
+            }
+        }
+        EvaluationValue current;
+        current.type = LogicalType::RenderImage;
+        current.residency = Residency::Gpu;
+        current.component_count = static_cast<std::uint32_t>(
+            std::min<std::size_t>(4u, values.size()));
+        for (std::uint32_t i = 0; i < current.component_count; ++i) {
+            current.numbers[i] = NormalizeZero(values[i]);
+        }
+        current.samples = values;
         current.text = "history:" + node.operator_id + ":tick=" +
-                       std::to_string(context.simulation_tick);
+                       std::to_string(tick);
         outputs["out"] = current;
         if (context.next_history_state != nullptr) {
             (*context.next_history_state)[node.id] = current;

@@ -36,6 +36,8 @@ inline constexpr std::uint16_t kVersionMinor = 0;
 // NW-09 explicit stateful-content extension.  Stateless packages continue to
 // emit kVersionMinor bytes exactly.
 inline constexpr std::uint16_t kVersionMinorStateful = 1;
+// HIST record layout version (the package minor remains 1).
+inline constexpr std::uint16_t kHistoryRecordVersion = 2;
 inline constexpr std::uint32_t kStatefulExtensionFlag = 2u;
 inline constexpr std::uint32_t kHeaderSize = 64;
 inline constexpr std::uint32_t kSectionEntrySize = 32;
@@ -259,6 +261,10 @@ struct HistoryRecord {
     std::uint32_t current_resource_id = 0;
     std::uint32_t previous_resource_id = 0;
     std::uint32_t frames_in_flight = 2u;
+    // Exact packed little-endian float32 initial state.  The declared
+    // values_per_element/element_count layout and the state resource byte
+    // size both equal initial_state.size().
+    std::vector<std::uint8_t> initial_state;
     std::uint32_t flags = 0;
 };
 

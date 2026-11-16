@@ -1675,6 +1675,8 @@ std::vector<OperandContract> InstructionContracts() {
          {OperandType::ShaderRef, OperandType::ShaderRef,
           OperandType::RootSignatureRef}},
         {"init.upload_resource", "initialization", {OperandType::ResourceRef}},
+        {"init.upload_history_state", "initialization",
+         {OperandType::ResourceRef, OperandType::U32}},
         {"init.set_root_signature", "initialization",
          {OperandType::RootSignatureRef}},
         {"init.set_root_constants", "initialization",
@@ -3070,15 +3072,52 @@ bool ValidatePackage(const Package& package,
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (!package.history.empty()) {
         std::set<std::uint32_t> state_ids;
+        std::map<std::uint32_t, const HistoryRecord*> history_by_id;
         for (const auto& history : package.history) {
             if (!state_ids.insert(history.state_id).second) {
                 AddDiagnostic(diagnostics, "package_history_duplicate_state_id",
                               "duplicate History state id",
                               std::string(kSectionHistory));
             }
+            history_by_id[history.state_id] = &history;
             if (history.step_rate_hz != 120u) {
                 AddDiagnostic(diagnostics, "package_history_step_rate",
                               "History step rate must be exactly 120 Hz",
+                              std::string(kSectionHistory));
+            }
+            const std::string expected_state_type =
+                history.operator_id == "nw.particles.system"
+                    ? "nw.particles.v1"
+                    : history.operator_id == "nw.feedback.image"
+                          ? "nw.feedback.image.v1"
+                          : std::string();
+            if (expected_state_type.empty()) {
+                AddDiagnostic(diagnostics, "package_history_operator",
+                              "History record uses an operator with no History "
+                              "schema",
+                              std::string(kSectionHistory));
+            } else if (history.state_type != expected_state_type) {
+                AddDiagnostic(diagnostics, "package_history_state_type",
+                              "History state type is not bound to its operator",
+                              std::string(kSectionHistory));
+            }
+            if (history.reset_policy != "on-loop" &&
+                history.reset_policy != "on-seek" &&
+                history.reset_policy != "never" &&
+                history.reset_policy != "manual") {
+                AddDiagnostic(diagnostics, "package_history_reset_policy",
+                              "unknown History reset policy",
+                              std::string(kSectionHistory));
+            }
+            if (history.values_per_element == 0u ||
+                history.element_count == 0u ||
+                history.initial_state.size() !=
+                    static_cast<std::size_t>(history.values_per_element) *
+                        static_cast<std::size_t>(history.element_count) *
+                        sizeof(float)) {
+                AddDiagnostic(diagnostics, "package_history_initial_state",
+                              "History initial-state bytes do not match the "
+                              "declared layout",
                               std::string(kSectionHistory));
             }
             if (history.current_resource_id == history.previous_resource_id) {
@@ -3091,6 +3130,42 @@ bool ValidatePackage(const Package& package,
                 AddDiagnostic(diagnostics, "package_history_resource",
                               "History state references an unknown resource",
                               std::string(kSectionHistory));
+            }
+            for (const std::uint32_t resource_id :
+                 {history.current_resource_id, history.previous_resource_id}) {
+                const auto resource =
+                    std::find_if(package.resources.begin(),
+                                 package.resources.end(),
+                                 [resource_id](const ResourceDescriptor& item) {
+                                     return item.resource_id == resource_id;
+                                 });
+                if (resource != package.resources.end() &&
+                    (resource->kind != "buffer" ||
+                     resource->format != "DXGI_FORMAT_R32_UINT" ||
+                     resource->size_bytes !=
+                         static_cast<std::uint64_t>(history.values_per_element) *
+                             history.element_count * sizeof(float))) {
+                    AddDiagnostic(diagnostics,
+                                  "package_history_state_layout",
+                                  "History state resource must be an exact raw "
+                                  "R32_UINT buffer",
+                                  std::string(kSectionHistory));
+                }
+            }
+        }
+        for (const auto& instruction : package.initialization) {
+            if (instruction.opcode != "init.upload_history_state" ||
+                instruction.operands.size() != 2u ||
+                instruction.operands[0].type != OperandType::ResourceRef ||
+                instruction.operands[1].type != OperandType::U32) {
+                continue;
+            }
+            if (history_by_id.count(instruction.operands[1].u32) == 0u) {
+                AddDiagnostic(diagnostics,
+                              "package_history_initial_upload",
+                              "init.upload_history_state references an unknown "
+                              "History state id",
+                              std::string(kSectionInitialization));
             }
         }
     }
@@ -3113,7 +3188,7 @@ namespace {
 std::vector<std::uint8_t> EncodeHistory(
     const std::vector<HistoryRecord>& records) {
     Writer writer;
-    writer.U16(kVersionMinorStateful);
+    writer.U16(kHistoryRecordVersion);
     writer.U16(0);
     writer.U32(static_cast<std::uint32_t>(records.size()));
     for (const auto& record : records) {
@@ -3130,6 +3205,7 @@ std::vector<std::uint8_t> EncodeHistory(
         writer.U32(record.current_resource_id);
         writer.U32(record.previous_resource_id);
         writer.U32(record.frames_in_flight);
+        writer.Blob(record.initial_state);
         writer.U32(record.flags);
     }
     return writer.bytes;
@@ -3168,7 +3244,7 @@ bool DecodeHistory(const std::uint8_t* data, std::size_t size,
     if (!reader.U16(version) || !reader.U16(flags) || !reader.U32(count)) {
         return false;
     }
-    if (version != kVersionMinorStateful || flags != 0u ||
+    if ((version != 1u && version != kHistoryRecordVersion) || flags != 0u ||
         count > kMaxRecordCount) {
         AddDiagnostic(diagnostics, "package_unknown_section_version",
                       "HIST section header is invalid",
@@ -3192,6 +3268,8 @@ bool DecodeHistory(const std::uint8_t* data, std::size_t size,
             !reader.U32(record.current_resource_id) ||
             !reader.U32(record.previous_resource_id) ||
             !reader.U32(record.frames_in_flight) ||
+            (version >= kHistoryRecordVersion &&
+             !reader.Blob(record.initial_state, kMaxBlobBytes)) ||
             !reader.U32(record.flags)) {
             return false;
         }

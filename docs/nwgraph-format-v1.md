@@ -86,7 +86,13 @@ own recurrence is not an ordinary graph edge, and authoring an explicit
 `nw.particles.system` and `nw.feedback.image` expose History schemas. A bare
 `frequency=history` declaration without a History schema is rejected with
 `history_not_supported`, preserving the pre-NW-09 diagnostic. A declaration on
-a non-history node is rejected with `invalid_history_declaration`.
+a non-history node is rejected with `invalid_history_declaration`. The state
+type is bound to the operator (`nw.particles.system` requires
+`nw.particles.v1`; `nw.feedback.image` requires `nw.feedback.image.v1`), and
+unknown History fields are rejected by both readers. The declared initial value
+is semantic content: `mode=zero` is a real zero state, and the seeded particle
+and feedback layouts are packed as float32 with five values per particle or
+four values per feedback element.
 
 Temporal state is never treated as a pure cached output. History nodes
 participate in the semantic node identity, but their values are not memoized

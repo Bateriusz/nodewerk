@@ -58,6 +58,10 @@ SECTION_ROOT_SIGNATURES = "RSIG"
 SECTION_DEV = "DEVC"
 SECTION_HISTORY = "HIST"
 SECTION_CHECKPOINTS = "CKPT"
+# The stateful package minor remains 1.  This is the HIST *record* version:
+# version 2 carries the exact packed initial-state bytes so a packaged player
+# can fill the declared state resource without reinterpreting authoring text.
+HISTORY_RECORD_VERSION = 2
 
 ROOT_SIGNATURE_DXBC_MAGIC = b"DXBC"
 ROOT_SIGNATURE_CHUNK = b"RTS0"
@@ -267,6 +271,7 @@ INSTRUCTION_CONTRACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "init.create_root_signature": ("initialization", ("root_signature_ref",)),
     "init.create_pipeline": ("initialization", ("shader_ref", "root_signature_ref")),
     "init.upload_resource": ("initialization", ("resource_ref",)),
+    "init.upload_history_state": ("initialization", ("resource_ref", "u32")),
     "init.set_root_signature": ("initialization", ("root_signature_ref",)),
     "init.set_root_constants": ("initialization", ("u32", "resource_ref", "u32")),
     "init.set_descriptor_table": (
@@ -626,11 +631,12 @@ class HistoryRecord:
     current_resource_id: int
     previous_resource_id: int
     frames_in_flight: int = 2
+    initial_state: bytes = b""
     flags: int = 0
 
     @property
     def state_bytes(self) -> int:
-        return self.values_per_element * self.element_count * 8
+        return self.values_per_element * self.element_count * 4
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -648,6 +654,11 @@ class HistoryRecord:
             "values_per_element": self.values_per_element,
             "element_count": self.element_count,
             "state_bytes": self.state_bytes,
+            "state_format": "DXGI_FORMAT_R32_UINT",
+            "state_component_type": "float32",
+            "state_component_bytes": 4,
+            "initial_state_bytes": len(self.initial_state),
+            "initial_state_sha256": sha256_hex(self.initial_state),
             "current_resource_id": self.current_resource_id,
             "previous_resource_id": self.previous_resource_id,
             "frames_in_flight": self.frames_in_flight,
@@ -717,7 +728,7 @@ class NwpPackage:
         return bool(self.history or self.release_checkpoints)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "format": FORMAT_NAME,
             "version": {"major": VERSION_MAJOR, "minor": self.version_minor},
             "capability": self.capability.to_dict(),
@@ -727,7 +738,14 @@ class NwpPackage:
             "parameters": [item.to_dict() for item in self.parameters],
             "shaders": [item.to_dict() for item in self.shaders],
             "root_signatures": [item.to_dict() for item in self.root_signatures],
-            "stateful_extension": {
+            "flags": self.flags,
+            "contains_authoring_metadata": bool(self.dev_metadata),
+        }
+        # A History-free package has exactly the pre-NW-09 inspection surface.
+        # The stateful extension is additive and appears only when its sections
+        # are actually present.
+        if self.stateful:
+            payload["stateful_extension"] = {
                 "present": self.stateful,
                 "section_version": VERSION_MINOR_STATEFUL,
                 "history": [item.to_dict() for item in self.history],
@@ -739,10 +757,8 @@ class NwpPackage:
                     for item in self.release_checkpoints
                 ),
                 "portable_gpu_state_replay": False,
-            },
-            "flags": self.flags,
-            "contains_authoring_metadata": bool(self.dev_metadata),
-        }
+            }
+        return payload
 
 
 @dataclass(frozen=True)
@@ -3682,6 +3698,9 @@ def _validate_stateful_extension(
             )
         )
     resource_ids = {resource.resource_id for resource in package.resources}
+    resources_by_id = {
+        resource.resource_id: resource for resource in package.resources
+    }
     state_ids: set[int] = set()
     node_ids: set[str] = set()
     for record in package.history:
@@ -3719,6 +3738,48 @@ def _validate_stateful_extension(
                     section=SECTION_HISTORY,
                 )
             )
+        expected_state_type = {
+            "nw.particles.system": "nw.particles.v1",
+            "nw.feedback.image": "nw.feedback.image.v1",
+        }.get(record.operator_id)
+        if expected_state_type is None:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_operator",
+                    f"History record '{record.node_id}' uses operator "
+                    f"'{record.operator_id}' with no History schema",
+                    section=SECTION_HISTORY,
+                )
+            )
+        elif record.state_type != expected_state_type:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_state_type",
+                    f"History state type '{record.state_type}' does not belong "
+                    f"to operator '{record.operator_id}' (expected "
+                    f"'{expected_state_type}')",
+                    section=SECTION_HISTORY,
+                )
+            )
+        if record.values_per_element <= 0 or record.element_count <= 0:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_layout",
+                    f"History record '{record.node_id}' declares an empty state "
+                    "layout",
+                    section=SECTION_HISTORY,
+                )
+            )
+        elif len(record.initial_state) != record.state_bytes:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_initial_state",
+                    f"History record '{record.node_id}' carries "
+                    f"{len(record.initial_state)} initial-state bytes, expected "
+                    f"{record.state_bytes}",
+                    section=SECTION_HISTORY,
+                )
+            )
         if record.current_resource_id == record.previous_resource_id:
             diagnostics.append(
                 package_diagnostic(
@@ -3745,6 +3806,69 @@ def _validate_stateful_extension(
                     "package_history_frames_in_flight",
                     "stateful release packages require at least two frames in flight",
                     section=SECTION_HISTORY,
+                )
+            )
+        for resource_id in (
+            record.current_resource_id,
+            record.previous_resource_id,
+        ):
+            resource = resources_by_id.get(resource_id)
+            if resource is None:
+                continue
+            if resource.kind != "buffer" or resource.format != "DXGI_FORMAT_R32_UINT":
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_history_state_format",
+                        f"History state resource {resource_id} must be a raw "
+                        "DXGI_FORMAT_R32_UINT buffer",
+                        section=SECTION_HISTORY,
+                    )
+                )
+            if resource.size_bytes != record.state_bytes:
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_history_state_layout",
+                        f"History state resource {resource_id} is "
+                        f"{resource.size_bytes} bytes but the declared layout "
+                        f"is {record.state_bytes} bytes",
+                        section=SECTION_HISTORY,
+                    )
+                )
+    uploads: dict[int, set[int]] = {}
+    for instruction in package.initialization:
+        if (
+            instruction.opcode == "init.upload_history_state"
+            and len(instruction.operands) == 2
+            and instruction.operands[0].type == "resource_ref"
+            and instruction.operands[1].type == "u32"
+        ):
+            uploads.setdefault(int(instruction.operands[1].value), set()).add(
+                int(instruction.operands[0].value)
+            )
+    for record in package.history:
+        required = {record.current_resource_id, record.previous_resource_id}
+        if uploads.get(record.state_id, set()) != required:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_initial_upload",
+                    f"History state {record.state_id} must upload its declared "
+                    "initial bytes into both ping-pong resources",
+                    section=SECTION_HISTORY,
+                )
+            )
+    if package.history:
+        history_dispatches = sum(
+            1
+            for instruction in package.frame
+            if instruction.opcode == "frame.dispatch"
+        )
+        if history_dispatches < len(package.history):
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_dispatch",
+                    "stateful package must dispatch one simulation shader for "
+                    "every History declaration",
+                    section=SECTION_FRAME,
                 )
             )
     checkpoint_ids: set[int] = set()
@@ -3792,7 +3916,7 @@ def _validate_stateful_extension(
 
 def _encode_history(records: Sequence[HistoryRecord]) -> bytes:
     writer = _Writer()
-    writer.u16(VERSION_MINOR_STATEFUL)
+    writer.u16(HISTORY_RECORD_VERSION)
     writer.u16(0)
     writer.u32(len(records))
     for record in records:
@@ -3809,6 +3933,7 @@ def _encode_history(records: Sequence[HistoryRecord]) -> bytes:
         writer.u32(record.current_resource_id)
         writer.u32(record.previous_resource_id)
         writer.u32(record.frames_in_flight)
+        writer.bytes(record.initial_state)
         writer.u32(record.flags)
     return bytes(writer.buffer)
 
@@ -3822,7 +3947,7 @@ def _decode_history(
     count = reader.u32()
     if version is None or flags is None or count is None:
         return None
-    if version != VERSION_MINOR_STATEFUL:
+    if version not in (1, HISTORY_RECORD_VERSION):
         diagnostics.append(
             package_diagnostic(
                 "package_unknown_section_version",
@@ -3863,6 +3988,9 @@ def _decode_history(
         current_resource_id = reader.u32()
         previous_resource_id = reader.u32()
         frames_in_flight = reader.u32()
+        initial_state = (
+            reader.bytes() if version >= HISTORY_RECORD_VERSION else b""
+        )
         record_flags = reader.u32()
         if None in (
             state_id,
@@ -3878,6 +4006,7 @@ def _decode_history(
             current_resource_id,
             previous_resource_id,
             frames_in_flight,
+            initial_state,
             record_flags,
         ):
             return None
@@ -3896,6 +4025,7 @@ def _decode_history(
                 current_resource_id=int(current_resource_id),
                 previous_resource_id=int(previous_resource_id),
                 frames_in_flight=int(frames_in_flight),
+                initial_state=bytes(initial_state),
                 flags=int(record_flags),
             )
         )

@@ -133,6 +133,69 @@ def test_packaged_release_checkpoints_report_byte_cost(tmp_path: Path) -> None:
     assert package.version_minor == nwp.VERSION_MINOR_STATEFUL
 
 
+def test_packaged_checkpoint_is_runtime_compatible(tmp_path: Path) -> None:
+    report = nw09_export.export_stateful_graph(
+        PARTICLES,
+        tmp_path / "stateful",
+        allow_test_payloads=True,
+        packaged_checkpoint_ticks=(0, 4000),
+    )
+    package = nwp.decode_package(Path(report["package_path"]).read_bytes())
+    runtime = temporal.TemporalRuntime(nw03.load_graph(PARTICLES))
+    for record in package.release_checkpoints:
+        checkpoint = temporal.Checkpoint.from_dict(json.loads(record.payload))
+        runtime.advance_to(checkpoint.tick)
+        compatibility = runtime.checkpoint_compatibility(checkpoint)
+        assert compatibility.compatible, compatibility.reason
+        assert checkpoint.semantic_digest != "deferred-to-runtime-semantic-digest"
+        assert checkpoint.state_layout_hash.startswith("sha256:v1:")
+
+
+def test_stateful_package_executes_initial_upload_and_history_dispatch(
+    tmp_path: Path,
+) -> None:
+    result = _export(tmp_path, PARTICLES, "artifact")
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    assert package.history
+    record = package.history[0]
+    assert record.initial_state
+    assert len(record.initial_state) == record.state_bytes
+    for resource_id in (record.current_resource_id, record.previous_resource_id):
+        resource = next(
+            item for item in package.resources if item.resource_id == resource_id
+        )
+        assert resource.format == "DXGI_FORMAT_R32_UINT"
+        assert resource.size_bytes == record.state_bytes
+    uploads = [
+        instruction
+        for instruction in package.initialization
+        if instruction.opcode == "init.upload_history_state"
+    ]
+    assert len(uploads) == 2
+    assert any(
+        instruction.opcode == "frame.dispatch" for instruction in package.frame
+    )
+
+
+def test_stateful_export_does_not_use_synthetic_fixture_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("stateful export must compile the supplied document")
+
+    monkeypatch.setattr(
+        nw04_fixture, "build_compute_display_package", forbidden, raising=False
+    )
+    result = _export(tmp_path, FEEDBACK, "artifact")
+    package = result.artifacts[nwp.COMMON_PROFILE_ID].package
+    assert package.history
+    assert package.shaders
+    assert any(
+        instruction.opcode == "init.upload_history_state"
+        for instruction in package.initialization
+    )
+
+
 def test_export_settings_can_request_packaged_checkpoints(tmp_path: Path) -> None:
     settings = replace(
         _settings(tmp_path), packaged_checkpoint_ticks=(0, 4000)
