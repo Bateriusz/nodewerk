@@ -535,17 +535,49 @@ def build_stateful_package(
         raise StatefulExportError(
             "compiled History base package has no root-constant resource"
         )
-    shader_id_by_specialization = {
-        generated.specialization_id: shader.shader_id
-        for generated, shader in zip(generated_order, ordered_shaders)
+
+    # Never infer shader identity from positional ordering.  NW-03 assigns
+    # package shader ids while retaining an explicit specialization-id report;
+    # use that report as the authoritative binding between generated History
+    # specializations and package records.  Positional zips can silently swap
+    # the step and display shaders when the two orderings differ.
+    if compile_report is None:
+        raise StatefulExportError(
+            "compiled History shader identity report is required"
+        )
+    reported_shaders = compile_report.get("fixture", {}).get("shaders", [])
+    if not reported_shaders:
+        raise StatefulExportError(
+            "compiled History report contains no shader identity rows"
+        )
+    shader_id_by_specialization: dict[str, int] = {}
+    for row in reported_shaders:
+        specialization_id = str(row.get("specialization_id", ""))
+        shader_id = int(row.get("shader_id", 0))
+        if not specialization_id or shader_id <= 0:
+            raise StatefulExportError(
+                "compiled History report contains an invalid shader identity"
+            )
+        if specialization_id in shader_id_by_specialization:
+            raise StatefulExportError(
+                f"duplicate compiled History specialization {specialization_id!r}"
+            )
+        shader_id_by_specialization[specialization_id] = shader_id
+    expected_specializations = {
+        generated.specialization_id for generated in generated_order
     }
-    if compile_report is not None:
-        reported_shaders = compile_report.get("fixture", {}).get("shaders", [])
-        if reported_shaders:
-            shader_id_by_specialization = {
-                str(row["specialization_id"]): int(row["shader_id"])
-                for row in reported_shaders
-            }
+    if set(shader_id_by_specialization) != expected_specializations:
+        missing = sorted(expected_specializations - set(shader_id_by_specialization))
+        unexpected = sorted(set(shader_id_by_specialization) - expected_specializations)
+        raise StatefulExportError(
+            "compiled History shader identity set does not match generated "
+            f"specializations (missing={missing}, unexpected={unexpected})"
+        )
+    package_shader_ids = {shader.shader_id for shader in package.shaders}
+    if not set(shader_id_by_specialization.values()) <= package_shader_ids:
+        raise StatefulExportError(
+            "compiled History report references a shader id absent from the package"
+        )
     step_shader_id_by_state_id = {
         index: shader_id_by_specialization[
             f"nw09.history.step.{spec.node_id}"
@@ -1046,12 +1078,22 @@ def build_stateful_package(
         "present_state_resource_id": present_state_resource_id,
         "present_resource_id": present_resource_id,
         "present_shader_id": present_shader_id_by_node[present_node_id],
+        "shader_ids_by_specialization": dict(
+            sorted(shader_id_by_specialization.items())
+        ),
         "present_surface": {
             "resource_id": present_surface_id,
+            "kind": "buffer",
+            "usage": "uav",
             "width": present_width,
             "height": present_height,
             "format": "DXGI_FORMAT_R32G32B32A32_FLOAT",
             "size_bytes": present_surface_bytes,
+        },
+        "presentation_path": {
+            "package_source": "rgba32f-uav-buffer",
+            "player_display_stage": "buffer-to-player-owned-texture",
+            "swapchain_stage": "player-owned-texture-to-backbuffer",
         },
         "frames_in_flight": frames_in_flight,
         "pending_retirement_bytes": sum(
