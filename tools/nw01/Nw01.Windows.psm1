@@ -376,7 +376,15 @@ function Add-NwPathEntry {
 
 function Test-NwTransientDownloadException {
     param([Parameter(Mandatory)]$Exception)
-    $message = [string]$Exception.Message
+    $messages = New-Object System.Collections.Generic.List[string]
+    $current = $Exception
+    for ($depth = 0; $depth -lt 5 -and $null -ne $current; $depth++) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$current.Message)) {
+            $messages.Add([string]$current.Message)
+        }
+        $current = $current.InnerException
+    }
+    $message = $messages -join ' | '
     $statusCode = $null
     if ($Exception.PSObject.Properties.Name -contains "Response" -and $Exception.Response) {
         try { $statusCode = [int]$Exception.Response.StatusCode } catch { }
@@ -384,7 +392,11 @@ function Test-NwTransientDownloadException {
     if ($statusCode -in @(408, 425, 429) -or ($statusCode -ge 500 -and $statusCode -le 599)) {
         return $true
     }
-    return $message -match "(?i)(timed? out|timeout|connection.*(closed|reset|refused)|temporar|name resolution|dns|network.*unreachable|5\d\d|429)"
+    # HttpRequestException messages from truncated/chunked responses on
+    # PowerShell 7 can be as terse as "The response ended prematurely.
+    # (ResponseEnded)". They are delivery failures, not HTTP contract
+    # rejections, so they must enter the bounded retry/fallback path.
+    return $message -match "(?i)(timed? out|timeout|connection.*(closed|reset|refused|abort)|temporar|name resolution|dns|network.*unreachable|response ended prematurely|responseended|premature (end|eof)|unexpected end of (stream|response|file)|error while copying content|copying content to a stream|broken pipe|underlying connection was closed|5\d\d|429)"
 }
 
 function Invoke-NwDownloadWithFallback {
