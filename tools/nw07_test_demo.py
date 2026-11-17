@@ -35,6 +35,9 @@ OUTPUT_WIDTH = 1920
 OUTPUT_HEIGHT = 1080
 INSTANCE_COUNT = 1024
 TUNNEL_RADIUS = 4.6
+NW09_FIXED_STEP_TICKS = 400
+NW09_PARTICLE_INSTANCES = 128
+NW09_TEMPORAL_ECHO_INSTANCES = 128
 
 DEMO_SHADER_FILES = (
     REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_instances_cs.hlsl",
@@ -239,6 +242,13 @@ def validate_demo_graph(path: Path = DEMO_GRAPH) -> dict[str, Any]:
         "demo_shader_specialization": [
             str(path.relative_to(REPO_ROOT)) for path in DEMO_SHADER_FILES
         ],
+        "nw09_visual_extensions": {
+            "fixed_step_ticks": NW09_FIXED_STEP_TICKS,
+            "fixed_step_hz": 120,
+            "seeded_particle_instances": NW09_PARTICLE_INSTANCES,
+            "temporal_echo_instances": NW09_TEMPORAL_ECHO_INSTANCES,
+            "uses_history_abi": False,
+        },
         "branch_only": True,
     }
 
@@ -359,6 +369,13 @@ def main(argv: list[str] | None = None) -> int:
                 "instance_count": INSTANCE_COUNT,
                 "tunnel_radius": TUNNEL_RADIUS,
                 "demo_shader_specialization": True,
+                "nw09_visual_extensions": {
+                    "fixed_step_ticks": NW09_FIXED_STEP_TICKS,
+                    "fixed_step_hz": 120,
+                    "seeded_particle_instances": NW09_PARTICLE_INSTANCES,
+                    "temporal_echo_instances": NW09_TEMPORAL_ECHO_INSTANCES,
+                    "uses_history_abi": False,
+                },
             },
             indent=2,
             sort_keys=True,
