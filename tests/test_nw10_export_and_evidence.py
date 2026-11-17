@@ -207,14 +207,35 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         if compact_physical_path.is_file():
             assert (
                 status["evidence_status"]
-                == "performance_and_compact_verified_correctness_pending"
+                == "performance_compact_and_correctness_verified_system_pending"
             )
             assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
         else:
             assert status["evidence_status"] == "performance_verified_correctness_pending"
-        assert status["physical_evidence"] == "performance_verified"
+        assert status["physical_evidence"] == "performance_and_correctness_verified"
         assert status["reference_capture"] == "verified_reference_capture"
         assert status["frame_time"] == "verified_preserved"
+        correctness_path = (
+            REPO_ROOT
+            / "benchmarks"
+            / "nw10"
+            / "common-artifact-correctness.v1.json"
+        )
+        correctness = json.loads(correctness_path.read_text(encoding="utf-8"))
+        assert correctness["format"] == "nw10-common-artifact-correctness-summary"
+        assert correctness["status"] == "verified"
+        assert correctness["common_artifact"]["package_sha256"] == (
+            status["correctness_evidence"]["package_sha256"]
+        )
+        assert correctness["ada"]["status"] == "verified"
+        assert correctness["blackwell"]["status"] == "verified"
+        assert correctness["comparison"]["fixed_tick_status"] == "passed"
+        assert correctness["comparison"]["ada_loop_boundary_status"] == "passed"
+        assert correctness["comparison"]["blackwell_loop_boundary_status"] == "passed"
+        assert correctness["comparison"]["worst_absolute_error"] == 0.0
+        assert correctness["comparison"]["worst_relative_error"] == 0.0
+        assert correctness["privacy"]["raw_capture_bytes_embedded"] is False
+        assert correctness["privacy"]["local_paths_included"] is False
         preservation = json.loads(performance_path.read_text(encoding="utf-8"))
         assert preservation["format"] == "nw10-performance-preservation"
         assert preservation["status"] == "verified_preserved"
@@ -339,10 +360,10 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
             encoding="utf-8"
         )
     )
-    assert status["evidence_status"] == "performance_and_compact_verified_correctness_pending"
+    assert status["evidence_status"] == "performance_compact_and_correctness_verified_system_pending"
     assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
     assert status["compact_feasibility"]["target_met"] is False
     assert status["compact_feasibility"]["minimum_measured_candidate_bytes"] == 219_710
     assert status["compact_feasibility"]["minimum_validated_runnable_bytes"] == 222_058
-    assert status["ada_correctness"] == "pending_unverified"
-    assert status["blackwell_correctness"] == "pending_unverified"
+    assert status["ada_correctness"] == "verified"
+    assert status["blackwell_correctness"] == "verified"
