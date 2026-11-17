@@ -12,7 +12,8 @@ from typing import Iterable, Mapping, Sequence
 
 
 _GPU_FIELDS = ("GPUTime", "MsGPUTime")
-_CPU_FIELDS = ("CPUBusy", "MsCPUBusy")
+_CPU_BUSY_FIELDS = ("CPUBusy", "MsCPUBusy")
+_PRESENT_API_FIELDS = ("MsInPresentAPI", "InPresentAPI")
 _DISPLAY_FIELDS = ("MsBetweenDisplayChange", "DisplayedTime", "MsDisplayedTime")
 
 
@@ -51,12 +52,13 @@ def extract_samples(
         if row_pid != process_id:
             continue
         gpu_value = _metric_value(_first_present(row, _GPU_FIELDS))
-        cpu_value = _metric_value(_first_present(row, _CPU_FIELDS))
+        cpu_busy = _metric_value(_first_present(row, _CPU_BUSY_FIELDS))
+        present_api = _metric_value(_first_present(row, _PRESENT_API_FIELDS))
         display_value = _metric_value(_first_present(row, _DISPLAY_FIELDS))
         if gpu_value is not None:
             gpu.append(gpu_value)
-        if cpu_value is not None:
-            cpu.append(cpu_value)
+        if cpu_busy is not None and present_api is not None:
+            cpu.append(cpu_busy + present_api)
         if display_value is not None:
             displayed.append(display_value)
     return gpu, cpu, displayed
@@ -99,7 +101,6 @@ def run_presentmon(
         "--output_file",
         str(csv_path),
         "--no_console_stats",
-        "--v2_metrics",
         "--qpc_time_ms",
         "--session_name",
         session,
@@ -188,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         "cpu_samples": len(cpu),
         "displayed_samples": len(displayed),
         "gpu_source": list(_GPU_FIELDS),
-        "cpu_source": list(_CPU_FIELDS),
+        "cpu_source": {"busy": list(_CPU_BUSY_FIELDS), "present_api": list(_PRESENT_API_FIELDS), "formula": "cpu_busy_ms + present_api_ms"},
         "displayed_source": list(_DISPLAY_FIELDS),
         "raw_csv": str(csv_path),
     }
