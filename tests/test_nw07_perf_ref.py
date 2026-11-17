@@ -17,6 +17,7 @@ import nw07_evidence as evidence  # noqa: E402
 
 PERF_REF = REPO_ROOT / "benchmarks" / "nw07" / "perf-ref-v1.json"
 NW01_RTX4060_BASELINE = REPO_ROOT / "benchmarks" / "hardware" / "rtx-4060-baseline.json"
+NW07_PERF_SCHEMA = REPO_ROOT / "schemas" / "nw07-perf-ref.schema.json"
 
 
 def _identity() -> dict:
@@ -179,6 +180,10 @@ def test_reference_board_matches_verified_nw01_rtx4060ti_baseline() -> None:
     assert contract.REFERENCE_BOARD_MODEL == metadata["gpu_model"]
     assert contract.REFERENCE_BOARD_VENDOR_ID == expected_vendor_id
     assert contract.REFERENCE_BOARD_DEVICE_ID == expected_device_id
+    schema = json.loads(NW07_PERF_SCHEMA.read_text(encoding="utf-8"))
+    board_schema = schema["properties"]["reference"]["properties"]["board"]["properties"]
+    assert board_schema["vendor_id"]["const"] == expected_vendor_id
+    assert board_schema["device_id"]["const"] == expected_device_id
 
 
 @pytest.mark.parametrize(
