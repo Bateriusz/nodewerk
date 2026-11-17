@@ -11,7 +11,10 @@ on:
     - cron: "17 3 * * *"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Keep scheduled/nightly runs isolated from push/PR runs on the same ref.
+  # Without event_name, a queued nightly on refs/heads/main can hold the
+  # concurrency group and leave a later push-to-main workflow pending.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
