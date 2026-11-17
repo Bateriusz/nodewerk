@@ -99,7 +99,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": 0,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 6158,
           "parameter_layout_id": "nwc.params.canonical.v1",
           "value_encoding": "canonical",
@@ -109,7 +109,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3363,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 2795,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -119,7 +119,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3503,
-          "maximum_absolute_error": 217209200,
+          "maximum_absolute_error": 217209200.0,
           "packed_bytes": 2655,
           "parameter_layout_id": "nwc.params.float16.v1",
           "value_encoding": "f16",
@@ -137,7 +137,7 @@
         }
       ],
       "declared_tolerance": {
-        "absolute": 0.00001,
+        "absolute": 1e-05,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       },
@@ -146,7 +146,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3363,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 2795,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -527,14 +527,14 @@
         "codec_id": "nwc.codec.stored.v1",
         "complete_runnable_distribution_bytes": 4346,
         "components": {
-          "auxiliary_file_bytes": 36010,
+          "auxiliary_file_bytes": 36014,
           "auxiliary_files": {
             "link-manifest.json": 6092,
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
             "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
             "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
-            "size-report.json": 4832
+            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
+            "size-report.json": 4834
           },
           "canonical_package_bytes": 3964,
           "decoder_code_bytes": null,
@@ -547,8 +547,8 @@
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
             "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
             "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
-            "size-report.json": 4832
+            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
+            "size-report.json": 4834
           },
           "player_image_bytes": 258,
           "required_auxiliary_files": {},
@@ -615,14 +615,14 @@
         "codec_id": "nwc.codec.mszip.v1",
         "complete_runnable_distribution_bytes": 2089,
         "components": {
-          "auxiliary_file_bytes": 36010,
+          "auxiliary_file_bytes": 36014,
           "auxiliary_files": {
             "link-manifest.json": 6092,
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
             "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
             "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
-            "size-report.json": 4832
+            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
+            "size-report.json": 4834
           },
           "canonical_package_bytes": 3964,
           "decoder_code_bytes": null,
@@ -635,8 +635,8 @@
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
             "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
             "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
-            "size-report.json": 4832
+            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
+            "size-report.json": 4834
           },
           "player_image_bytes": 258,
           "required_auxiliary_files": {},
@@ -825,7 +825,7 @@
             "adopted": false,
             "canonical_bytes": 595,
             "delta_bytes": 0,
-            "maximum_absolute_error": 0,
+            "maximum_absolute_error": 0.0,
             "packed_bytes": 595,
             "parameter_layout_id": "nwc.params.canonical.v1",
             "value_encoding": "canonical",
@@ -835,7 +835,7 @@
             "adopted": false,
             "canonical_bytes": 595,
             "delta_bytes": -310,
-            "maximum_absolute_error": 0,
+            "maximum_absolute_error": 0.0,
             "packed_bytes": 285,
             "parameter_layout_id": "nwc.params.varint-stringtable.v1",
             "value_encoding": "canonical",
@@ -845,7 +845,7 @@
             "adopted": false,
             "canonical_bytes": 595,
             "delta_bytes": -324,
-            "maximum_absolute_error": 1296971168,
+            "maximum_absolute_error": 1296971168.0,
             "packed_bytes": 271,
             "parameter_layout_id": "nwc.params.float16.v1",
             "value_encoding": "f16",
@@ -863,7 +863,7 @@
           }
         ],
         "declared_tolerance": {
-          "absolute": 0.00001,
+          "absolute": 1e-05,
           "mode": "absolute_or_relative",
           "relative": 0.0001
         },
@@ -872,7 +872,7 @@
             "adopted": false,
             "canonical_bytes": 595,
             "delta_bytes": -310,
-            "maximum_absolute_error": 0,
+            "maximum_absolute_error": 0.0,
             "packed_bytes": 285,
             "parameter_layout_id": "nwc.params.varint-stringtable.v1",
             "value_encoding": "canonical",
@@ -982,7 +982,7 @@
           "relative": 0.0001
         },
         "numeric": {
-          "absolute": 0.00001,
+          "absolute": 1e-05,
           "mode": "absolute_or_relative",
           "relative": 0.0001
         }
@@ -1005,7 +1005,7 @@
       "width": 1920
     },
     "report_path": "benchmarks/nw10/intro-export-report.v1.json",
-    "report_sha256": "a24c01ba9650a1c086a82febef8ccb53c1233d999e9cce344f691ac65d77eb27"
+    "report_sha256": "e49c851cc08e83f131950e28199516386e37a6167583248dc54ff126f10844f5"
   },
   "minimum_measured_artifact": {
     "bytes": 2089,
@@ -1081,7 +1081,7 @@
     "tools/nw06_export.py": "51224c05dc3e93983104704759773ae6a3b61e18ea34c76d28085058a6e506f9",
     "tools/nw06_procedural.py": "8c5fdd9ec85776679733df80c5012182ddf8084cf10b6abb6d0b76e5a9b867e4",
     "tools/nw06_timeline.py": "c481aafaf948387dfc4eea36f712385d970d3dcc182e6f56c8b49d4b1217a81e",
-    "tools/nw07_contract.py": "74709c7d0935fdc0bb40516768e3c84d9cd522080b91b0342e9e47dc275d57b8",
+    "tools/nw07_contract.py": "26a5b8abce5ebb51c4a1a9a9cd936a05a0570f6fdbfc7956c13c6d09b858546e",
     "tools/nw07_export.py": "3b6371ccab796aa73ee66638c7b5eeceb2424d317e1dd114cd3acfd8538508fd",
     "tools/nw10_compact.py": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
@@ -1091,7 +1091,7 @@
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:782865fc64d9c8ffdf06760ec3b9dc1169eedd8c6c533b4f891281d9611d4260",
+  "nw10_build_inputs_digest": "sha256:v1:ee592f105acacd3a8980a75562b108ef56a92f7e5cc71bfbe2f642613a0592c1",
   "packaging_modes": [
     {
       "clean_system_checked": false,
@@ -1125,7 +1125,7 @@
         "relative": 0.0001
       },
       "numeric": {
-        "absolute": 0.00001,
+        "absolute": 1e-05,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       }
@@ -1560,7 +1560,7 @@
             "adopted": false,
             "canonical_bytes": 6158,
             "delta_bytes": 0,
-            "maximum_absolute_error": 0,
+            "maximum_absolute_error": 0.0,
             "packed_bytes": 6158,
             "parameter_layout_id": "nwc.params.canonical.v1",
             "value_encoding": "canonical",
@@ -1570,7 +1570,7 @@
             "adopted": false,
             "canonical_bytes": 6158,
             "delta_bytes": -3363,
-            "maximum_absolute_error": 0,
+            "maximum_absolute_error": 0.0,
             "packed_bytes": 2795,
             "parameter_layout_id": "nwc.params.varint-stringtable.v1",
             "value_encoding": "canonical",
@@ -1580,7 +1580,7 @@
             "adopted": false,
             "canonical_bytes": 6158,
             "delta_bytes": -3503,
-            "maximum_absolute_error": 217209200,
+            "maximum_absolute_error": 217209200.0,
             "packed_bytes": 2655,
             "parameter_layout_id": "nwc.params.float16.v1",
             "value_encoding": "f16",
@@ -1598,7 +1598,7 @@
           }
         ],
         "declared_tolerance": {
-          "absolute": 0.00001,
+          "absolute": 1e-05,
           "mode": "absolute_or_relative",
           "relative": 0.0001
         },
@@ -1607,7 +1607,7 @@
             "adopted": false,
             "canonical_bytes": 6158,
             "delta_bytes": -3363,
-            "maximum_absolute_error": 0,
+            "maximum_absolute_error": 0.0,
             "packed_bytes": 2795,
             "parameter_layout_id": "nwc.params.varint-stringtable.v1",
             "value_encoding": "canonical",
@@ -1688,7 +1688,7 @@
       }
     },
     "report_path": "benchmarks/nw10/proof-export-report.v1.json",
-    "report_sha256": "429469a0ae192171f120a26324e1ac219d3b997b64eefcecdc6e9daef197eba8",
+    "report_sha256": "034f3883ca35451e9fe737c6ec1defed856cb6aebd043721ad7543131e9697b4",
     "reproducibility": {
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",

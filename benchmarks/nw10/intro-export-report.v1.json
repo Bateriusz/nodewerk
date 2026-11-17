@@ -288,14 +288,14 @@
       "codec_id": "nwc.codec.stored.v1",
       "complete_runnable_distribution_bytes": 4346,
       "components": {
-        "auxiliary_file_bytes": 36010,
+        "auxiliary_file_bytes": 36014,
         "auxiliary_files": {
           "link-manifest.json": 6092,
           "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
           "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
           "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
-          "size-report.json": 4832
+          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
+          "size-report.json": 4834
         },
         "canonical_package_bytes": 3964,
         "decoder_code_bytes": null,
@@ -308,8 +308,8 @@
           "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
           "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
           "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
-          "size-report.json": 4832
+          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
+          "size-report.json": 4834
         },
         "player_image_bytes": 258,
         "required_auxiliary_files": {},
@@ -376,14 +376,14 @@
       "codec_id": "nwc.codec.mszip.v1",
       "complete_runnable_distribution_bytes": 2089,
       "components": {
-        "auxiliary_file_bytes": 36010,
+        "auxiliary_file_bytes": 36014,
         "auxiliary_files": {
           "link-manifest.json": 6092,
           "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
           "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
           "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
-          "size-report.json": 4832
+          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
+          "size-report.json": 4834
         },
         "canonical_package_bytes": 3964,
         "decoder_code_bytes": null,
@@ -396,8 +396,8 @@
           "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
           "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
           "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
-          "size-report.json": 4832
+          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
+          "size-report.json": 4834
         },
         "player_image_bytes": 258,
         "required_auxiliary_files": {},

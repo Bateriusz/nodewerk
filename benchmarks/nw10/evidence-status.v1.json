@@ -7,19 +7,19 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "62d93ec95e24aa6315eff44bdce57f335b47e693c875457cec41080b2d691220"
+      "sha256": "744a45e5d1073d8521377cf3334b4363ca26811a0320eef28415e469549ded1f"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "c9268d6d1f19b36c67e345be90aa48947a1e9c59d056300b1f19bc9231e9984a"
+      "sha256": "a6714d0f1e1e55f3d2a9dedd3babc98ba2b8dc58bd1693c41ea937eac13976a7"
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
-      "sha256": "429469a0ae192171f120a26324e1ac219d3b997b64eefcecdc6e9daef197eba8"
+      "sha256": "034f3883ca35451e9fe737c6ec1defed856cb6aebd043721ad7543131e9697b4"
     },
     {
       "path": "benchmarks/nw10/intro-export-report.v1.json",
-      "sha256": "a24c01ba9650a1c086a82febef8ccb53c1233d999e9cce344f691ac65d77eb27"
+      "sha256": "e49c851cc08e83f131950e28199516386e37a6167583248dc54ff126f10844f5"
     }
   ],
   "format": "nw10-evidence-status",
