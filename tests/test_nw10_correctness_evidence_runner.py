@@ -108,3 +108,5 @@ def test_transferred_capture_requires_no_build_toolchain() -> None:
     assert "--frames 1" in text
     assert "get-filehash" in text
     assert "utf8encoding($false)" in text
+    assert "measure-object -property bytes" not in text
+    assert '$rawbytes += [int64]$row["bytes"]' in text
