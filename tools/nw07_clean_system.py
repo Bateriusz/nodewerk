@@ -79,6 +79,7 @@ def _windows_virtualization_probe() -> dict[str, Any]:
             "manufacturer": "",
             "model": "",
             "hypervisor_present": None,
+            "virtualization_based_security_status": None,
             "error": "not_windows",
         }
     command = [
@@ -88,8 +89,13 @@ def _windows_virtualization_probe() -> dict[str, Any]:
         "-Command",
         (
             "$c=Get-CimInstance Win32_ComputerSystem;"
+            "$vbs=$null;"
+            "try{$d=Get-CimInstance -Namespace root\\Microsoft\\Windows\\DeviceGuard "
+            "-ClassName Win32_DeviceGuard -ErrorAction Stop;"
+            "$vbs=$d.VirtualizationBasedSecurityStatus}catch{};"
             "[pscustomobject]@{Manufacturer=$c.Manufacturer;Model=$c.Model;"
-            "HypervisorPresent=$c.HypervisorPresent}|ConvertTo-Json -Compress"
+            "HypervisorPresent=$c.HypervisorPresent;"
+            "VirtualizationBasedSecurityStatus=$vbs}|ConvertTo-Json -Compress"
         ),
     ]
     try:
@@ -102,6 +108,7 @@ def _windows_virtualization_probe() -> dict[str, Any]:
             "manufacturer": "",
             "model": "",
             "hypervisor_present": None,
+            "virtualization_based_security_status": None,
             "error": str(exc),
         }
     if completed.returncode != 0:
@@ -110,6 +117,7 @@ def _windows_virtualization_probe() -> dict[str, Any]:
             "manufacturer": "",
             "model": "",
             "hypervisor_present": None,
+            "virtualization_based_security_status": None,
             "error": completed.stderr.strip() or completed.stdout.strip(),
         }
     try:
@@ -120,13 +128,20 @@ def _windows_virtualization_probe() -> dict[str, Any]:
             "manufacturer": "",
             "model": "",
             "hypervisor_present": None,
+            "virtualization_based_security_status": None,
             "error": str(exc),
         }
+    raw_vbs_status = value.get("VirtualizationBasedSecurityStatus")
+    try:
+        vbs_status = int(raw_vbs_status) if raw_vbs_status is not None else None
+    except (TypeError, ValueError):
+        vbs_status = None
     return {
         "available": True,
         "manufacturer": str(value.get("Manufacturer", "")),
         "model": str(value.get("Model", "")),
         "hypervisor_present": bool(value.get("HypervisorPresent", False)),
+        "virtualization_based_security_status": vbs_status,
         "error": "",
     }
 
@@ -178,10 +193,15 @@ def clean_host_provenance(
         marker for marker in vm_markers if marker in identity_text
     )
     kind_valid = execution_kind in {"physical", "documented_gpu_passthrough"}
+    hypervisor_present = virtualization.get("hypervisor_present")
+    vbs_status = virtualization.get("virtualization_based_security_status")
+    hypervisor_is_explained = hypervisor_present is False or (
+        hypervisor_present is True and vbs_status == 2
+    )
     physical_evidence = (
         execution_kind == "physical"
         and virtualization.get("available") is True
-        and virtualization.get("hypervisor_present") is False
+        and hypervisor_is_explained
         and bool(virtualization.get("manufacturer"))
         and bool(virtualization.get("model"))
         and not virtualization_indicators
@@ -625,12 +645,13 @@ def validate_report(
                 host_pending = True
                 reasons.append("physical clean-system host manufacturer/model is missing")
             hypervisor = probe.get("hypervisor_present")
-            if hypervisor is True:
+            vbs_status = probe.get("virtualization_based_security_status")
+            if hypervisor is True and vbs_status != 2:
                 host_failed = True
                 reasons.append(
-                    "physical clean-system claim reports a hypervisor-present host"
+                    "physical clean-system host reports an unexplained active hypervisor"
                 )
-            elif hypervisor is not False:
+            elif hypervisor not in {True, False}:
                 host_pending = True
                 reasons.append(
                     "physical clean-system host hypervisor status was not probed"
