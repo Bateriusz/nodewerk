@@ -503,3 +503,16 @@ def test_unverified_label_cannot_hide_over_threshold_raw_samples() -> None:
         capture, _bound(), artifact_identity=_identity()
     )
     assert result["status"] == "failed"
+
+
+def test_console_summary_omits_raw_samples() -> None:
+    import nw07_capture as capture_module
+
+    capture = _capture()
+    summary = capture_module._console_summary(capture)
+    assert summary["status"] is None or summary["status"] == capture.get("status")
+    assert summary["validation_status"] == "verified"
+    assert len(summary["runs"]) == 3
+    assert summary["runs"][0]["gpu_p99_ms"] == 10.0004
+    assert summary["runs"][0]["cpu_p99_ms"] == 6.0004
+    assert "samples" not in json.dumps(summary)

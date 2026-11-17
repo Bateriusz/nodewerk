@@ -1352,6 +1352,40 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
     capture["collection"] = record
     return capture
 
+def _console_summary(capture: Mapping[str, Any]) -> dict[str, Any]:
+    validation = capture.get("validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    runs = validation.get("runs")
+    compact_runs: list[dict[str, Any]] = []
+    if isinstance(runs, list):
+        for run in runs:
+            if not isinstance(run, Mapping):
+                continue
+            gpu = run.get("gpu_frame_time_ms")
+            cpu = run.get("cpu_submit_ms")
+            compact_runs.append(
+                {
+                    "run_index": run.get("run_index"),
+                    "status": run.get("status"),
+                    "gpu_p99_ms": (
+                        gpu.get("p99_ms") if isinstance(gpu, Mapping) else None
+                    ),
+                    "cpu_p99_ms": (
+                        cpu.get("p99_ms") if isinstance(cpu, Mapping) else None
+                    ),
+                    "sample_density_hz": run.get("sample_density_hz"),
+                }
+            )
+    return {
+        "format": "nw07-capture-summary",
+        "capture_id": capture.get("capture_id"),
+        "status": capture.get("status"),
+        "validation_status": validation.get("status"),
+        "reference_binding_id": capture.get("reference_binding_id"),
+        "runs": compact_runs,
+    }
+
+
 def _append_record(path: Path, capture: Mapping[str, Any]) -> dict[str, Any]:
     record = (
         json.loads(path.read_text(encoding="utf-8"))
@@ -1591,7 +1625,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    print(json.dumps(capture, indent=2, sort_keys=True))
+    print(json.dumps(_console_summary(capture), indent=2, sort_keys=True))
     validation_status = str(
         (capture.get("validation") or {}).get("status", "")
     )
