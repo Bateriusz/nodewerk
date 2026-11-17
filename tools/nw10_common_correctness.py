@@ -471,6 +471,28 @@ def compare(
         raise ValueError("Ada and Blackwell captures do not name the same common artifact")
     _verify_capture_manifest(ada, ada_capture_dir)
     _verify_capture_manifest(blackwell, blackwell_capture_dir)
+    ada_loop = _compare_rgba32f(
+        ada_capture_dir / f"tick_{nw07_contract.LOOP_BOUNDARY_TICKS[0]}.rgba32f",
+        ada_capture_dir / f"tick_{nw07_contract.LOOP_BOUNDARY_TICKS[1]}.rgba32f",
+    )
+    blackwell_loop = _compare_rgba32f(
+        blackwell_capture_dir / f"tick_{nw07_contract.LOOP_BOUNDARY_TICKS[0]}.rgba32f",
+        blackwell_capture_dir / f"tick_{nw07_contract.LOOP_BOUNDARY_TICKS[1]}.rgba32f",
+    )
+    ada_loop["status"] = (
+        "passed"
+        if ada_loop["maximum_error"] <= nw07_contract.IMAGE_ABSOLUTE_TOLERANCE
+        else "failed"
+    )
+    blackwell_loop["status"] = (
+        "passed"
+        if blackwell_loop["maximum_error"] <= nw07_contract.IMAGE_ABSOLUTE_TOLERANCE
+        else "failed"
+    )
+    for loop_result in (ada_loop, blackwell_loop):
+        loop_result["absolute_tolerance"] = nw07_contract.IMAGE_ABSOLUTE_TOLERANCE
+        loop_result["relative_tolerance"] = nw07_contract.IMAGE_RELATIVE_TOLERANCE
+
     per_tick: list[dict[str, Any]] = []
     worst_absolute = 0.0
     worst_relative = 0.0
@@ -485,7 +507,11 @@ def compare(
         worst_relative = max(worst_relative, result["maximum_relative_error"])
     status = (
         "verified"
-        if all(row["status"] == "passed" for row in per_tick)
+        if (
+            all(row["status"] == "passed" for row in per_tick)
+            and ada_loop["status"] == "passed"
+            and blackwell_loop["status"] == "passed"
+        )
         else "failed"
     )
     public = {
@@ -498,12 +524,12 @@ def compare(
         "ada": {
             "hardware": ada["hardware"],
             "capture_manifest": ada["captures"],
-            "loop_boundary": ada["loop_boundary"],
+            "loop_boundary": ada_loop,
         },
         "blackwell": {
             "hardware": blackwell["hardware"],
             "capture_manifest": blackwell["captures"],
-            "loop_boundary": blackwell["loop_boundary"],
+            "loop_boundary": blackwell_loop,
         },
         "comparison": {
             "per_tick": per_tick,

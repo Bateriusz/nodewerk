@@ -6,7 +6,7 @@ param(
     [string]$Tier,
     [switch]$Compare,
     [switch]$Bundle,
-    [switch]$PreparePortableBundle,
+    [switch]$PrepareTransferBundle,
     [ValidateSet("ada", "blackwell")]
     [string]$TargetTier,
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
@@ -174,15 +174,15 @@ function New-NwBundle {
 try {
     Set-Location $repo
 
-    if ($PreparePortableBundle) {
+    if ($PrepareTransferBundle) {
         if ($PSBoundParameters.ContainsKey("Tier") -or $Compare) {
-            throw "-PreparePortableBundle cannot be combined with -Tier or -Compare."
+            throw "-PrepareTransferBundle cannot be combined with -Tier or -Compare."
         }
         if (-not $PSBoundParameters.ContainsKey("TargetTier")) {
-            throw "-PreparePortableBundle requires -TargetTier ada or blackwell."
+            throw "-PrepareTransferBundle requires -TargetTier ada or blackwell."
         }
         if (-not $IsWindows) {
-            throw "Portable correctness bundle preparation is Windows-only."
+            throw "Correctness transfer bundle preparation is Windows-only."
         }
 
         $branch = (& git branch --show-current).Trim()
@@ -205,19 +205,22 @@ try {
         if ($null -eq $pythonCommand) { throw "Python 3 is required on build host." }
         $python = $pythonCommand.Source
 
-        Write-Host "[NW10 CORRECTNESS] preparing portable bundle on qualified build host"
+        Write-Host "[NW10 CORRECTNESS] preparing diagnostic transfer bundle on qualified build host"
         Import-Module (Join-Path $repo "tools/nw01/Nw01.Windows.psm1") -Force
         $entered = Enter-NwBuildEnvironment -RepoRoot $repo
         Write-Host "[NW10 CORRECTNESS] MSVC toolset=$($entered.VisualStudio.VcVarsVersion) SDK=$($entered.VisualStudio.WindowsSdkVersion)"
 
         $root = Resolve-NwRepoPath $WorkRoot
-        $portableRoot = Join-Path $root ("portable-" + $TargetTier)
-        $commonTemplate = Join-Path $portableRoot "common-template"
-        $commonArtifact = Join-Path $portableRoot "common"
-        $commonReport = Join-Path $portableRoot "common-report.json"
-        $runnerBuild = Join-Path $portableRoot "runner-build"
-        $packageRoot = Join-Path $portableRoot "transfer-package"
-        Remove-Item $portableRoot -Recurse -Force -ErrorAction SilentlyContinue
+        $transferRoot = Join-Path $root ("transfer-" + $TargetTier)
+        $commonTemplate = Join-Path $transferRoot "common-template"
+        $commonArtifact = Join-Path $transferRoot "common"
+        $commonReport = Join-Path $transferRoot "common-report.json"
+        $diagTemplate = Join-Path $transferRoot "diagnostic-template"
+        $diagArtifact = Join-Path $transferRoot "diagnostic"
+        $diagBuildRoot = Join-Path $transferRoot "diagnostic-build"
+        $diagReport = Join-Path $transferRoot "diagnostic-report.json"
+        $packageRoot = Join-Path $transferRoot "transfer-package"
+        Remove-Item $transferRoot -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force $packageRoot | Out-Null
 
         Invoke-NwNative "cmake" @(
@@ -249,32 +252,86 @@ try {
         Assert-NwSameValue "complete_distribution_bytes" $expectedArtifact.complete_distribution_bytes $common.artifact.complete_distribution_bytes
         Write-Host "[NW10 CORRECTNESS] COMMON_ARTIFACT=EXACT_MATCH"
 
-        $portableSource = Join-Path $repo "tools/nw10/portable_correctness_main.cpp"
         Invoke-NwNative "cmake" @(
-            "--preset", "nw07-release",
-            "-B", $runnerBuild,
-            "-DNW10_COMPACT_PACKAGE=ON",
-            "-DNW05_FROZEN_EMBEDDED_SPECIALIZATION=OFF",
-            "-DNW05_GENERATED_PLAYER_SOURCE=$portableSource"
-        ) "Portable correctness runner configure failed"
+            "--preset", "nw07-diagnostics",
+            "-B", $diagTemplate
+        ) "Diagnostic template configure failed"
         Invoke-NwNative "cmake" @(
-            "--build", $runnerBuild,
-            "--target", "nw05_generated_player",
+            "--build", $diagTemplate,
+            "--target", "nw_procedural_image_player",
             "--parallel", "2"
-        ) "Portable correctness runner build failed"
-
-        $runnerTemplate = Join-Path $runnerBuild "nw05-generated/nw05_generated_player.exe"
-        $runnerExe = Join-Path $packageRoot "portable-correctness.exe"
-        $transferJson = Join-Path $packageRoot "transfer.json"
+        ) "Diagnostic template build failed"
+        $diagTemplateExe = Join-Path $diagTemplate "staging/procedural_image_player/nw_procedural_image_player.exe"
         Invoke-NwNative $python @(
-            "tools/nw10_portable_correctness.py",
+            "tools/nw10_common_correctness.py", "build-diagnostic",
+            "--output", $diagArtifact,
             "--expected-package", $commonArtifact,
-            "--template-executable", $runnerTemplate,
-            "--output-executable", $runnerExe,
-            "--metadata", $transferJson
-        ) "Portable correctness transfer assembly failed"
+            "--player-template", $diagTemplateExe,
+            "--dxc", $dxc,
+            "--build-root", $diagBuildRoot,
+            "--report", $diagReport
+        ) "Diagnostic sibling export failed"
 
-        Copy-Item (Join-Path $repo "tools/nw10/run-portable-correctness-capture.ps1") (Join-Path $packageRoot "run-capture.ps1") -Force
+        $diag = Get-Content -Raw $diagReport | ConvertFrom-Json
+        Assert-NwSameValue "diagnostic package_sha256" $expectedArtifact.package_sha256 $diag.common_artifact.package_sha256
+        Assert-NwSameValue "diagnostic artifact_key" $expectedArtifact.artifact_key $diag.common_artifact.artifact_key
+        if ($diag.capture_controls_required -ne $true) {
+            throw "Diagnostic sibling does not have capture controls."
+        }
+
+        $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+        $diagExeSource = Join-Path $diagArtifact "$stem.exe"
+        $diagExeName = "nw10-correctness-diagnostic.exe"
+        $diagExeTarget = Join-Path $packageRoot $diagExeName
+        Copy-Item $diagExeSource $diagExeTarget -Force
+        $diagExeSha = (Get-FileHash -Algorithm SHA256 $diagExeTarget).Hash.ToLowerInvariant()
+        Assert-NwSameValue "diagnostic executable sha256" $diag.diagnostic_executable_sha256 $diagExeSha
+
+        $transfer = [ordered]@{
+            format = "nw10-correctness-diagnostic-transfer"
+            version = 1
+            task = "NW-10"
+            target_tier = $TargetTier
+            capture_protocol = "nw07-correctness-capture.v1"
+            common_artifact = [ordered]@{
+                artifact_key = [string]$diag.common_artifact.artifact_key
+                package_sha256 = [string]$diag.common_artifact.package_sha256
+                manifest_sha256 = [string]$diag.common_artifact.manifest_sha256
+                profile_id = [string]$diag.common_artifact.profile_id
+                requirements_digest = [string]$diag.common_artifact.requirements_digest
+                final_executable_sha256 = [string]$diag.final_executable_sha256
+            }
+            diagnostic_sibling = [ordered]@{
+                file = $diagExeName
+                executable_sha256 = [string]$diag.diagnostic_executable_sha256
+                executable_bytes = [int64]$diag.diagnostic_executable_bytes
+                manifest_sha256 = [string]$diag.diagnostic_manifest_sha256
+                dependencies = @($diag.diagnostic_dependencies)
+                separate_from_final_executable = $true
+                same_common_package = $true
+                release_manifest_reused = $false
+                capture_controls_required = $true
+            }
+            capture = [ordered]@{
+                fixed_ticks = @(0,240000,480000,720000,959999)
+                loop_boundary_ticks = @(0,960000)
+                ticks = @(0,240000,480000,720000,959999,960000)
+                expected_bytes_per_capture = 33177600
+                format = "rgba32f"
+            }
+            privacy = [ordered]@{
+                local_paths_included = $false
+                raw_capture_bytes_embedded = $false
+            }
+        }
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText(
+            (Join-Path $packageRoot "transfer.json"),
+            (($transfer | ConvertTo-Json -Depth 12) + [Environment]::NewLine),
+            $utf8NoBom
+        )
+        Copy-Item (Join-Path $repo "tools/nw10/run-transferred-correctness-capture.ps1") (Join-Path $packageRoot "run-capture.ps1") -Force
+
         $fileRows = @()
         foreach ($file in Get-ChildItem $packageRoot -File | Sort-Object Name) {
             $fileRows += [ordered]@{
@@ -284,19 +341,24 @@ try {
             }
         }
         $bundleManifest = [ordered]@{
-            format = "nw10-portable-correctness-input-bundle"
+            format = "nw10-correctness-diagnostic-input-bundle"
             version = 1
             task = "NW-10"
             target_tier = $TargetTier
             files = $fileRows
         }
-        $bundleManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $packageRoot "bundle-manifest.json") -Encoding UTF8
+        [System.IO.File]::WriteAllText(
+            (Join-Path $packageRoot "bundle-manifest.json"),
+            (($bundleManifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
+            $utf8NoBom
+        )
 
-        $zip = Join-Path $root ("nw10-portable-correctness-" + $TargetTier + ".zip")
+        $zip = Join-Path $root ("nw10-correctness-transfer-" + $TargetTier + ".zip")
         Remove-Item $zip -Force -ErrorAction SilentlyContinue
         Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zip -CompressionLevel Optimal
-        Write-Host "[NW10 CORRECTNESS] PORTABLE_BUNDLE=$zip"
+        Write-Host "[NW10 CORRECTNESS] TRANSFER_BUNDLE=$zip"
         Write-Host "[NW10 CORRECTNESS] TARGET_TOOLCHAIN_REQUIRED=False"
+        Write-Host "[NW10 CORRECTNESS] TARGET_DEBUG_CRT_REQUIRED=True"
         return
     }
 

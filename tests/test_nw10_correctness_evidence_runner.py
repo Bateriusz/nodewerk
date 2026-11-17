@@ -79,40 +79,32 @@ def test_correctness_compare_runs_privacy_audit() -> None:
     assert "Assert-NwPrivacy -JsonObject $comparison" in compare_block
 
 
-def test_correctness_runner_supports_toolchain_free_portable_target_bundle() -> None:
+def test_correctness_runner_supports_prebuilt_diagnostic_transfer() -> None:
     text = (
         REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
     ).read_text(encoding="utf-8")
-    assert "[switch]$PreparePortableBundle" in text
-    assert "portable_correctness_main.cpp" in text
-    assert "nw10_portable_correctness.py" in text
-    assert "run-portable-correctness-capture.ps1" in text
+    assert "[switch]$PrepareTransferBundle" in text
+    assert '"nw07-diagnostics"' in text
+    assert '"build-diagnostic"' in text
+    assert "run-transferred-correctness-capture.ps1" in text
     assert "TARGET_TOOLCHAIN_REQUIRED=False" in text
+    assert "TARGET_DEBUG_CRT_REQUIRED=True" in text
 
 
-def test_standalone_portable_capture_has_no_build_tool_dependency() -> None:
+def test_transferred_capture_requires_no_build_toolchain() -> None:
     text = (
-        REPO_ROOT / "tools" / "nw10" / "run-portable-correctness-capture.ps1"
+        REPO_ROOT / "tools" / "nw10" / "run-transferred-correctness-capture.ps1"
     ).read_text(encoding="utf-8").lower()
-    for forbidden in ("cmake ", "dxc.exe", "enter-nwbuildenvironment", "& git ", "python.exe", "python "):
+    for forbidden in (
+        "cmake ",
+        "dxc.exe",
+        "enter-nwbuildenvironment",
+        "& git ",
+        "python.exe",
+        "python ",
+    ):
         assert forbidden not in text
+    assert "--capture-tick" in text
+    assert "--frames 1" in text
     assert "get-filehash" in text
-    assert "portable-correctness.exe" not in text or "portable_runner.file" in text
-
-
-def test_portable_capture_runner_uses_exact_presented_rgba32f_readback() -> None:
-    text = (
-        REPO_ROOT / "tools" / "nw10" / "portable_correctness_main.cpp"
-    ).read_text(encoding="utf-8")
-    assert "readbackPresentedOutput" in text
-    assert "1920ull * 1080ull * 4ull * sizeof(float)" in text
-    assert "NW10_RUNTIME_IMPLEMENTATION_MASK" in text
-    assert "NW10_PACKAGE_SHA" in text
-
-
-def test_standalone_portable_capture_writes_json_without_utf8_bom() -> None:
-    text = (
-        REPO_ROOT / "tools" / "nw10" / "run-portable-correctness-capture.ps1"
-    ).read_text(encoding="utf-8")
-    assert "UTF8Encoding($false)" in text
-    assert "WriteAllText" in text
+    assert "utf8encoding($false)" in text

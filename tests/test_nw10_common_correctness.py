@@ -169,3 +169,53 @@ def test_verify_capture_manifest_rejects_transferred_file_corruption(tmp_path: P
     (captures / f"tick_{correctness.ALL_TICKS[2]}.rgba32f").write_bytes(b"corrupt")
     with pytest.raises(ValueError, match="size mismatch|SHA-256 mismatch"):
         correctness._verify_capture_manifest(record, captures)
+
+
+def test_compare_recomputes_loop_boundaries_from_raw_captures(
+    tmp_path: Path, monkeypatch
+) -> None:
+    common = {"package_sha256": "same"}
+    def record(tier: str, status: str) -> dict:
+        return {
+            "tier": tier,
+            "status": status,
+            "common_artifact": common,
+            "hardware": {},
+            "captures": [
+                {
+                    "tick": tick,
+                    "file": f"tick_{tick}.rgba32f",
+                    "bytes": 4,
+                    "sha256": "ignored",
+                }
+                for tick in correctness.ALL_TICKS
+            ],
+            "loop_boundary": {"status": "captured_pending_numeric_validation"},
+        }
+
+    ada_record = tmp_path / "ada.json"
+    blackwell_record = tmp_path / "blackwell.json"
+    ada_record.write_text(json.dumps(record("ada", "captured_reference")), encoding="utf-8")
+    blackwell_record.write_text(
+        json.dumps(record("blackwell", "captured_candidate")), encoding="utf-8"
+    )
+    monkeypatch.setattr(correctness, "_verify_capture_manifest", lambda *_args: None)
+    calls = []
+    def fake_compare(left: Path, right: Path) -> dict[str, float]:
+        calls.append((left.name, right.name))
+        return {"maximum_error": 0.0, "maximum_relative_error": 0.0}
+    monkeypatch.setattr(correctness, "_compare_rgba32f", fake_compare)
+    result = correctness.compare(
+        ada_record,
+        blackwell_record,
+        ada_capture_dir=tmp_path / "ada",
+        blackwell_capture_dir=tmp_path / "blackwell",
+        output=tmp_path / "out.json",
+    )
+    assert result["status"] == "verified"
+    assert result["ada"]["loop_boundary"]["status"] == "passed"
+    assert result["blackwell"]["loop_boundary"]["status"] == "passed"
+    assert (
+        f"tick_{correctness.nw07_contract.LOOP_BOUNDARY_TICKS[1]}.rgba32f"
+        in {name for pair in calls for name in pair}
+    )
