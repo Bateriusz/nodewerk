@@ -624,6 +624,64 @@ def test_mock_dxc_requires_explicit_test_payload_opt_in(tmp_path: Path) -> None:
     assert "mock" in result.detail.lower()
 
 
+
+def test_nw02_digest_compiler_preference_uses_native_windows_toolchain_first() -> None:
+    assert compiler._nw02_digest_compiler_names("nt")[:2] == ("clang-cl", "cl")
+    assert compiler._nw02_digest_compiler_names("posix")[:3] == (
+        "c++",
+        "g++",
+        "clang++",
+    )
+
+
+def test_nw02_digest_helper_falls_back_after_compiler_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(compiler, "_NW02_DIGEST_BINARY", None)
+    monkeypatch.setattr(
+        compiler,
+        "_nw02_digest_compiler_names",
+        lambda host_os=None: ("clang-cl", "c++"),
+    )
+    monkeypatch.setattr(
+        compiler.shutil,
+        "which",
+        lambda name: f"/fake/{name}",
+    )
+    monkeypatch.setattr(
+        compiler.tempfile,
+        "gettempdir",
+        lambda: str(tmp_path),
+    )
+
+    calls: list[str] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(Path(command[0]).name)
+        if calls == ["clang-cl"]:
+            raise subprocess.TimeoutExpired(command, timeout)
+
+        output_index = command.index("-o") + 1
+        output = Path(command[output_index])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"digest-cli")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(compiler.subprocess, "run", fake_run)
+
+    binary = compiler._ensure_nw02_digest_binary()
+
+    assert binary is not None
+    assert binary.is_file()
+    assert calls == ["clang-cl", "c++"]
+
 def test_semantic_digest_matches_nw02_canonical_cli() -> None:
     binary = compiler._ensure_nw02_digest_binary()
     if binary is None:
