@@ -509,6 +509,9 @@ def test_console_summary_omits_raw_samples() -> None:
     import nw07_capture as capture_module
 
     capture = _capture()
+    capture["validation"] = evidence.validate_perf_capture(
+        capture, _bound(), artifact_identity=_identity()
+    )
     summary = capture_module._console_summary(capture)
     assert summary["status"] is None or summary["status"] == capture.get("status")
     assert summary["validation_status"] == "verified"
