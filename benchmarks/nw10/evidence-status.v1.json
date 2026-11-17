@@ -1,10 +1,14 @@
 {
-  "ada_correctness": "pending_unverified",
-  "blackwell_correctness": "pending_unverified",
+  "ada_correctness": "verified",
+  "blackwell_correctness": "verified",
   "clean_system": "pending_unverified",
   "contract_evidence": "verified_by_pytest",
-  "evidence_status": "performance_and_compact_verified_correctness_pending",
+  "evidence_status": "performance_compact_and_correctness_verified_system_pending",
   "files": [
+    {
+      "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
+      "sha256": "b9eae9f51198f86789f3c32f11a38cb692d4cd7c95e1ecf772c115a70d9b1b96"
+    },
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
       "sha256": "744a45e5d1073d8521377cf3334b4363ca26811a0320eef28415e469549ded1f"
@@ -40,7 +44,7 @@
     "sha256": "a3b2133e94dff980cbcfcf9f72b4042bbf5ff7292c26793ce721b6e6b1676f34",
     "status": "verified_preserved"
   },
-  "physical_evidence": "performance_verified",
+  "physical_evidence": "performance_and_correctness_verified",
   "reference_capture": "verified_reference_capture",
   "startup": "pending_unverified",
   "task": "NW-10",
@@ -54,5 +58,13 @@
     "minimum_measured_candidate_bytes": 219710,
     "minimum_validated_runnable_bytes": 222058,
     "validated_mode": "canonical_fallback"
+  },
+  "correctness_evidence": {
+    "status": "verified",
+    "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
+    "sha256": "b9eae9f51198f86789f3c32f11a38cb692d4cd7c95e1ecf772c115a70d9b1b96",
+    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
+    "worst_absolute_error": 0,
+    "worst_relative_error": 0
   }
 }
