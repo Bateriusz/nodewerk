@@ -1,0 +1,60 @@
+{
+  "ada": {
+    "hardware": {
+      "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+      "classified_tier": "ada",
+      "device_form_factor": "desktop"
+    },
+    "status": "verified"
+  },
+  "blackwell": {
+    "hardware": {
+      "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+      "classified_tier": "blackwell",
+      "device_form_factor": "desktop",
+      "driver_version": "32.0.16.1088"
+    },
+    "status": "verified"
+  },
+  "capture_protocol": "nw07-correctness-capture.v1",
+  "common_artifact": {
+    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1"
+  },
+  "comparison": {
+    "absolute_required": true,
+    "absolute_tolerance": 0.0001,
+    "ada_loop_boundary_status": "passed",
+    "blackwell_loop_boundary_status": "passed",
+    "fixed_tick_status": "passed",
+    "fixed_ticks": [
+      0,
+      240000,
+      480000,
+      720000,
+      959999
+    ],
+    "loop_boundary_ticks": [
+      0,
+      960000
+    ],
+    "relative_tolerance": 0.0001,
+    "worst_absolute_error": 0.0,
+    "worst_relative_error": 0.0
+  },
+  "format": "nw10-common-artifact-correctness-summary",
+  "privacy": {
+    "local_paths_included": false,
+    "raw_capture_bytes_embedded": false,
+    "stdout_stderr_included": false
+  },
+  "source": {
+    "execution_kind": "physical_cross_hardware",
+    "implementation_head": "05519fe22a0e42360deb4a2fa1f578842b8028bd",
+    "mode": "compare",
+    "raw_capture_manifests_tracked": false,
+    "tool": "tools/nw10/run-correctness-evidence.ps1"
+  },
+  "status": "verified",
+  "task": "NW-10",
+  "version": 1
+}
