@@ -117,6 +117,50 @@ def test_demo_compiles_through_existing_package_path_with_local_shader_specializ
     assert artifact.executable_bytes is None
 
 
+
+
+def test_release_demo_uses_normal_generated_player_after_nw09(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+    sentinel = object()
+
+    def fake_export_graph(
+        graph: Path,
+        output: Path,
+        *,
+        settings: nw05_export.ExportSettings,
+        report_path: Path | None = None,
+        dxc_executable: str | None = None,
+        optimization: str = "O2",
+        **_: object,
+    ) -> object:
+        captured["graph"] = graph
+        captured["output"] = output
+        captured["settings"] = settings
+        captured["report_path"] = report_path
+        captured["dxc_executable"] = dxc_executable
+        captured["optimization"] = optimization
+        return sentinel
+
+    monkeypatch.setattr(nw05_export, "export_graph", fake_export_graph)
+
+    result = demo.export_demo(
+        tmp_path / "artifact",
+        player_template=tmp_path / "template.exe",
+        dxc=tmp_path / "dxc.exe",
+        build_root=tmp_path / "generated-player",
+        report_path=tmp_path / "report.json",
+        contracts_only=False,
+    )
+
+    assert result is sentinel
+    settings = captured["settings"]
+    assert isinstance(settings, nw05_export.ExportSettings)
+    assert settings.frozen_embedded_specialization is False
+    assert settings.player_template.endswith("template.exe")
+    assert settings.specialized_build_root.endswith("generated-player")
+
 def test_demo_does_not_replace_the_canonical_nw07_proof() -> None:
     canonical = nw03.load_graph(CANONICAL_NW07)
     experimental = nw03.load_graph(GRAPH)
