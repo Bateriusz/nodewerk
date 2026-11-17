@@ -160,7 +160,7 @@ python -m pytest -q tests/test_nw10_*.py
 ```powershell
 pwsh ./tools/nw01/bootstrap-windows.ps1 -Ci
 pwsh ./tools/nw01/enter-build-env.ps1
-cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+cmake --preset nw07-release -DNW10_COMPACT_PACKAGE=ON -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
 cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
 
 $template = "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
@@ -180,6 +180,11 @@ the compact package and the 32-byte manifest binding. `embedded_package.cpp`
 expands the compact package to canonical bytes before calling the existing
 `PackagePlayer` package decoder. The generated player verifies the canonical
 package SHA-256 and the manifest binding before GPU initialization.
+
+The compact decoder is opt-in via `-DNW10_COMPACT_PACKAGE=ON`. The canonical
+NW-07 release build leaves it at the default `OFF`, so the existing 256 KiB
+proof closure and dependency accounting are preserved unchanged. NW-10 compact
+proof/intro artifacts build the template with the option enabled.
 
 No executable packer is used. In particular, Crinkler is not invoked and its
 x64 support is not assumed. The only compression mode considered for the

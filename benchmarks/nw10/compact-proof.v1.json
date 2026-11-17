@@ -1015,7 +1015,7 @@
     "proof_compact_bytes": 4475
   },
   "nw10_build_inputs": {
-    "CMakeLists.txt": "bc06487143c3b8624c477554532fe22086bc1ee439d86ee9d3f6b87a2831327d",
+    "CMakeLists.txt": "f23ef6a52fe0ba3dd2ff0d62cd642524930ad82872aff42685f3dfddc49e4bcc",
     "CMakePresets.json": "739675ece10175933506cab88c1bd1e1458e0df24f6819af6b05fbfcf79bb43f",
     "benchmarks/toolchain-manifest.v1.json": "db69fcc46d6c2ac4003cfff52c37e7c9b6fdbbe7762c0615d2b69dcfa4e449e3",
     "cmake/BuildProfiles.cmake": "c1f65c63c709d06aa571f10d1ecab51f84625e9057fca728492e24ec2bcabcde",
@@ -1057,7 +1057,7 @@
     "src/player/d3d12_bootstrap.h": "53ddddc823711f0490a15d4f252c7b11f4ed803dba4da313a8f7b8c2bbe435c8",
     "src/player/diagnostics.cpp": "42e5a542988329d394bca607b2409f481db3985ef612ccaac401b2620e01ed2d",
     "src/player/diagnostics.h": "7b02c602e09adf5a5ebe3dbd66c5d3bb7e63dc922fd6ddb68dec345db00ba836",
-    "src/player/embedded_package.cpp": "1b932523faec030f966653670e243d12224593e265e2e90040bb321aeac6908e",
+    "src/player/embedded_package.cpp": "e8bbfa3937b8e8d274a9ab9d079fab1c7c86adad93d7229ac4ad4c6cef6d18e4",
     "src/player/embedded_package.h": "795331711a1a5f788870a059690c4f8aed82d4d22dca755e8ae13e3999461990",
     "src/player/exit_codes.h": "c6f73023c735268f2ece983151d17e1b33917a0512147d3d6fe0c2e3daa891cb",
     "src/player/nw07_capture_controls.h": "ca273f969833ed4206a5f780c03c004fc66b569fa1a47f5da20a7fd737722543",
@@ -1075,7 +1075,7 @@
     "tools/nw03_compiler.py": "e40067b93663e52011672868e5a342aa571ed38ccdd83d2358f286d757f45adb",
     "tools/nw03_oracle.py": "872267f76516b4d26d11cef51c1d300dc0e4a9340a90fff3d9d28412c418e71b",
     "tools/nw04_fixture.py": "57ce70c05581879d5c890516858d3f55831d38706d9d5f4d2cbcc4c77ff38d00",
-    "tools/nw05_export.py": "772defddaf45c1a18f66fac755318f48207af5e1d14632f0854f11c1e42cd041",
+    "tools/nw05_export.py": "3a43fd851c8898ae069c9b1a23e9f5fe59dc5179eaf4f272c65a5369d30734a3",
     "tools/nw05_optimizer.py": "9142bfdff5a5c35026c610e33b2c834a1ec99070e6f350e276ee3a32a6401512",
     "tools/nw05_schedule.py": "3c47db7ec2c5ea8672e6ccbc63e6bc9b512902270d2db35b6a78a7d233468974",
     "tools/nw06_export.py": "51224c05dc3e93983104704759773ae6a3b61e18ea34c76d28085058a6e506f9",
@@ -1086,12 +1086,12 @@
     "tools/nw10_compact.py": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
     "tools/nw10_evidence.py": "f5856f48da47661375c22174d7780b7bbb8af40e71f57c0afd78847ee5523222",
-    "tools/nw10_intro.py": "a4ac0c17c886132bb69ceaee8e416ae760fc050f6f433a72d63491f68fa9afae",
-    "tools/nw10_proof.py": "03b3b49bcc8744c5e16b837fc7e8dada438d055b752654b309b333b8d05d80b3",
+    "tools/nw10_intro.py": "94f3bfb4d5ad2b7e3a8670b50ba99a4e49a0275d038feaf0a7b664fbb69d556c",
+    "tools/nw10_proof.py": "07c8475d25fc323f35d53e88ffe265368c0cfc240ded4e447599e8711d04849d",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:981e10ce7025e7a3471a658ced5c69d5d9bd88f9ff723f2746f2980df319f544",
+  "nw10_build_inputs_digest": "sha256:v1:f6ceb9829691959b4cd18a20cd07ff4e3e413b4feb5f6c6ff1cfbe120c9a27fe",
   "packaging_modes": [
     {
       "clean_system_checked": false,
@@ -1687,7 +1687,7 @@
       }
     },
     "report_path": "benchmarks/nw10/proof-export-report.v1.json",
-    "report_sha256": "edd86a979209631cc22b718563bd8783621c82fa960380677533f974dabacc61",
+    "report_sha256": "429469a0ae192171f120a26324e1ac219d3b997b64eefcecdc6e9daef197eba8",
     "reproducibility": {
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",

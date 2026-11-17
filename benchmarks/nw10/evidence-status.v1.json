@@ -7,7 +7,7 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "30657c17a9963fe2b5347660b1cb505b1d88fd01a487c0da239678c07bc52380"
+      "sha256": "df029377ca26a3453d75ea9217cc2013bfcdf3ed4e87947eee37721cea313bc5"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
@@ -15,7 +15,7 @@
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
-      "sha256": "edd86a979209631cc22b718563bd8783621c82fa960380677533f974dabacc61"
+      "sha256": "429469a0ae192171f120a26324e1ac219d3b997b64eefcecdc6e9daef197eba8"
     },
     {
       "path": "benchmarks/nw10/intro-export-report.v1.json",

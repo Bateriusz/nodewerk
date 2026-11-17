@@ -1,6 +1,8 @@
 #include "embedded_package.h"
 
+#if NW10_COMPACT_PACKAGE
 #include "package/nw_compact.h"
+#endif
 #include "package/nwp_format.h"
 
 #include <array>
@@ -146,6 +148,8 @@ bool ParseEmbeddedPackage(const std::uint8_t* executable,
                        footer + 60u)) {
         return false;
     }
+    bool expanded_compact = false;
+#if NW10_COMPACT_PACKAGE
     if (package::IsCompactPackage(package_bytes,
                                   static_cast<std::size_t>(package_size))) {
         std::string compact_error;
@@ -158,7 +162,10 @@ bool ParseEmbeddedPackage(const std::uint8_t* executable,
         }
         package->bytes = package->expanded.data();
         package->size = package->expanded.size();
-    } else {
+        expanded_compact = true;
+    }
+#endif
+    if (!expanded_compact) {
         package->bytes = package_bytes;
         package->size = static_cast<std::size_t>(package_size);
     }

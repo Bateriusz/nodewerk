@@ -78,7 +78,7 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:2894ddfab25bba13009cadf5c9593bb08b58189630aa3e20a5cbc697bd62d572",
+  "build_inputs_digest": "sha256:v1:3b0b58fdb52535cfab7707bac6f8c79eee65ef82bcf08fb3658a07ba69db9720",
   "build_inputs_provenance": {
     "superseded_digests": [
       "sha256:v1:d9ad24057ae7c273ad4c757dafc5d3b54047fcb360b8845a6413136b78c232ab"

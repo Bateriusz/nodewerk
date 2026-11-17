@@ -1348,6 +1348,7 @@ def _template_build_configuration(template_path: Path) -> dict[str, str]:
             "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
             "NW_USE_INBOX_UCRT",
             "NW07_CAPTURE_CONTROLS",
+            "NW10_COMPACT_PACKAGE",
         }:
             values[key] = value
     if values.get("NW_ENFORCE_PINNED_TOOLCHAIN", "").upper() != "ON":
@@ -1425,6 +1426,7 @@ def _build_specialized_player(
         "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
         "NW_USE_INBOX_UCRT",
         "NW07_CAPTURE_CONTROLS",
+        "NW10_COMPACT_PACKAGE",
     ):
         if name in inherited:
             value = inherited[name]

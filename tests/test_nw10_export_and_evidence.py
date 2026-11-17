@@ -238,6 +238,8 @@ def test_dependency_and_build_input_accounting_cover_the_compact_decoder() -> No
     assert "tools/nw10_proof.py" in pinned
     cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     assert "src/package/nw_compact.cpp" in cmake
+    assert "NW10_COMPACT_PACKAGE" in cmake
+    assert "if(NW10_COMPACT_PACKAGE)" in cmake
     assert "cabinet" in cmake
     embedded = (
         REPO_ROOT / "src" / "player" / "embedded_package.cpp"

@@ -76,7 +76,10 @@ jobs:
         shell: pwsh
         run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
       - name: Configure release player template
-        run: cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+        run: >-
+          cmake --preset nw07-release
+          -DNW10_COMPACT_PACKAGE=ON
+          -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
       - name: Build release player template
         run: cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
       - name: Export canonical NW-07 proof and compact candidate

@@ -63,6 +63,24 @@ def _template(directory: Path, size: int = 256) -> Path:
     return path
 
 
+def _require_compact_player_template(template: Path) -> None:
+    try:
+        configuration = nw05_export._template_build_configuration(template)
+    except Exception as exc:
+        raise ProofError(
+            f"compact export requires a readable pinned player build tree: {exc}"
+        ) from exc
+    if str(configuration.get("NW10_COMPACT_PACKAGE", "")).strip().upper() not in {
+        "ON",
+        "1",
+        "TRUE",
+    }:
+        raise ProofError(
+            "release compact export requires the player template to be built "
+            "with -DNW10_COMPACT_PACKAGE=ON"
+        )
+
+
 def _artifact_paths(directory: Path) -> tuple[Path, Path, Path]:
     stem = nw05_export._profile_file_stem(nwp.COMMON_PROFILE_ID)
     package = directory / f"{stem}.nwp"
@@ -153,6 +171,8 @@ def export_proof(
         raise ProofError(
             "release proof export requires --player-template and --dxc"
         )
+    else:
+        _require_compact_player_template(template)
     try:
         if reproducibility:
             repro = nw07_export.export_reproducibility(
