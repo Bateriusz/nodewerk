@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import nw07_contract as nw07_contract  # noqa: E402
 import nw07_evidence as nw07_evidence  # noqa: E402
 import nw10_perf_preservation as preservation  # noqa: E402
+from schema_validator import validate_instance  # noqa: E402
 import nw10_perf_candidate as candidate  # noqa: E402
 import nw04_fixture  # noqa: E402
 
@@ -288,3 +289,15 @@ def test_publish_rejects_private_path_and_promotes_only_performance_status(
     source.write_text(json.dumps(poisoned), encoding="utf-8")
     with pytest.raises(ValueError, match="user-profile path"):
         preservation.publish_public_evidence(source, destination, status_path)
+
+
+def test_preservation_schema_accepts_float_relative_alert_threshold() -> None:
+    schema = json.loads(
+        (REPO_ROOT / "schemas" / "nw10-performance-preservation.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    bound, before, after, candidate = _fixture()
+    public = preservation.validate_preservation(before, after, bound, candidate)
+    assert public["comparison"]["relative_alert_threshold_percent"] == 10.0
+    validate_instance(public, schema, schema)

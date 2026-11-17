@@ -83,7 +83,9 @@
           "type": "number"
         },
         "relative_alert_threshold_percent": {
-          "const": 10
+          "type": "number",
+          "minimum": 10,
+          "maximum": 10
         },
         "relative_regression_alert": {
           "type": "boolean"
