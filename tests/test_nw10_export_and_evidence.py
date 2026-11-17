@@ -18,6 +18,12 @@ import nw10_proof as proof  # noqa: E402
 from schema_validator import validate_file_against_schema  # noqa: E402
 
 
+def _canonical_text_sha256(path: Path) -> str:
+    return hashlib.sha256(
+        path.read_bytes().replace(b"\r\n", b"\n")
+    ).hexdigest()
+
+
 def test_proof_export_uses_the_canonical_nw07_graph_and_export_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -188,7 +194,7 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     assert status["contract_evidence"] == "verified_by_pytest"
     for item in status["files"]:
         path = REPO_ROOT / item["path"]
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
+        assert _canonical_text_sha256(path) == item["sha256"]
 
 
 def test_historical_nw07_digest_is_attributable_not_erased() -> None:

@@ -32,7 +32,11 @@ EVIDENCE_VERSION = 1
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Evidence files are text JSON.  Hash canonical LF bytes so a Windows
+    # checkout with CRLF conversion records the same identity as POSIX CI.
+    return hashlib.sha256(
+        path.read_bytes().replace(b"\r\n", b"\n")
+    ).hexdigest()
 
 
 def _sanitize_paths(value: Any, root: Path) -> Any:
@@ -48,6 +52,12 @@ def _sanitize_paths(value: Any, root: Path) -> Any:
                       "<nw10-temporary-root>", text)
         return text
     return value
+
+
+def _write_text_lf(path: Path, text: str) -> None:
+    # Keep archived evidence byte-identical across Windows and POSIX checkouts.
+    with path.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
 
 
 def build_evidence(output_directory: Path | str) -> dict[str, Any]:
@@ -71,7 +81,8 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
         )
         archived_proof_report = output / "proof-export-report.v1.json"
         archived_intro_report = output / "intro-export-report.v1.json"
-        archived_proof_report.write_text(
+        _write_text_lf(
+            archived_proof_report,
             json.dumps(
                 _sanitize_paths(
                     json.loads(proof_report_path.read_text(encoding="utf-8")),
@@ -81,9 +92,9 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                 sort_keys=True,
             )
             + "\n",
-            encoding="utf-8",
         )
-        archived_intro_report.write_text(
+        _write_text_lf(
+            archived_intro_report,
             json.dumps(
                 _sanitize_paths(
                     json.loads(intro_report_path.read_text(encoding="utf-8")),
@@ -93,7 +104,6 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                 sort_keys=True,
             )
             + "\n",
-            encoding="utf-8",
         )
         decoder = compact.measure_host_decoder_code_bytes()
         nw10_inputs = contract.compute_build_inputs()
@@ -114,9 +124,7 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
             "nw10_build_inputs": nw10_inputs,
             "toolchain": {
                 "manifest": "benchmarks/toolchain-manifest.v1.json",
-                "manifest_sha256": hashlib.sha256(
-                    toolchain_path.read_bytes()
-                ).hexdigest(),
+                "manifest_sha256": _sha256(toolchain_path),
                 "pinned_dependencies": toolchain_pins,
             },
             "commands": {
@@ -295,11 +303,12 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
         proof_path = output / "compact-proof.v1.json"
         intro_path = output / "intro-profile.v1.json"
         status_path = output / "evidence-status.v1.json"
-        proof_path.write_text(
+        _write_text_lf(
+            proof_path,
             json.dumps(evidence, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
         )
-        intro_path.write_text(
+        _write_text_lf(
+            intro_path,
             json.dumps(
                 {
                     "format": "nw10-intro-profile",
@@ -316,9 +325,9 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                 sort_keys=True,
             )
             + "\n",
-            encoding="utf-8",
         )
-        status_path.write_text(
+        _write_text_lf(
+            status_path,
             json.dumps(
                 {
                     "format": "nw10-evidence-status",
@@ -358,7 +367,6 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                 sort_keys=True,
             )
             + "\n",
-            encoding="utf-8",
         )
     return evidence
 
