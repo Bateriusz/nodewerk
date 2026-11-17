@@ -295,7 +295,13 @@ def export_demo(
             player_template=str(player_template),
             specialized_build_root=str(build_root) if build_root is not None else "",
             present_sync_interval=0,
-            frozen_embedded_specialization=True,
+            # PR #30 originally used the NW-07 frozen 256 KiB specialization.
+            # On the post-NW-09 runtime that mode intentionally strips large
+            # parts of the generic capability/resource planner and is no longer
+            # the right build for this downloadable showcase.  Use the normal
+            # generated player with an embedded package instead: it preserves
+            # the same package/runtime path without demo-specific size stripping.
+            frozen_embedded_specialization=False,
             include_optional_artifacts=False,
             allow_optional_profiles=False,
         )
