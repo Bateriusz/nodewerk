@@ -334,7 +334,7 @@ def main() -> int:
     for name, _, filename in EXAMPLES:
         path = args.output_dir / name / filename
         print(f"{name}: {path} sha256={_sha256(path)}")
-    tunnel = output_directory = args.output_dir / ASTEROID_TUNNEL_NAME / ASTEROID_TUNNEL_FILENAME
+    tunnel = args.output_dir / ASTEROID_TUNNEL_NAME / ASTEROID_TUNNEL_FILENAME
     print(f"{ASTEROID_TUNNEL_NAME}: {tunnel} sha256={_sha256(tunnel)}")
     return 0
 
