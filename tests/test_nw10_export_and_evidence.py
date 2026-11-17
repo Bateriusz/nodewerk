@@ -198,7 +198,20 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         / "performance-preservation-rtx4060ti.v1.json"
     )
     if performance_path.is_file():
-        assert status["evidence_status"] == "performance_verified_correctness_pending"
+        compact_physical_path = (
+            REPO_ROOT
+            / "benchmarks"
+            / "nw10"
+            / "windows-compact-feasibility.v1.json"
+        )
+        if compact_physical_path.is_file():
+            assert (
+                status["evidence_status"]
+                == "performance_and_compact_verified_correctness_pending"
+            )
+            assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
+        else:
+            assert status["evidence_status"] == "performance_verified_correctness_pending"
         assert status["physical_evidence"] == "performance_verified"
         assert status["reference_capture"] == "verified_reference_capture"
         assert status["frame_time"] == "verified_preserved"
