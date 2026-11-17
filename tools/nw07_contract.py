@@ -142,6 +142,8 @@ PINNED_BUILD_INPUTS = (
     "shaders/nw06/nw06_tonemap_cs.hlsl",
     "src/package/nwp_format.cpp",
     "src/package/nwp_format.h",
+    "src/package/nw_compact.cpp",
+    "src/package/nw_compact.h",
     "src/platform/win32_window.cpp",
     "src/platform/win32_window.h",
     "src/player/capability_check.cpp",

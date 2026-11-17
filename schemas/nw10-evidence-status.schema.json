@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-evidence-status.schema.json",
+  "title": "Nodewerk NW-10 evidence status",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "evidence_status",
+    "contract_evidence",
+    "physical_evidence",
+    "reference_capture",
+    "ada_correctness",
+    "blackwell_correctness",
+    "clean_system",
+    "startup",
+    "memory",
+    "frame_time"
+  ],
+  "properties": {
+    "format": { "const": "nw10-evidence-status" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-10" },
+    "evidence_status": { "type": "string" },
+    "reference_capture": { "const": "pending_reference_capture" },
+    "contract_evidence": { "type": "string" },
+    "physical_evidence": { "type": "string" }
+  }
+}

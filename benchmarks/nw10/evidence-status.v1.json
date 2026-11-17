@@ -1,0 +1,34 @@
+{
+  "ada_correctness": "pending_unverified",
+  "blackwell_correctness": "pending_unverified",
+  "clean_system": "pending_unverified",
+  "contract_evidence": "verified_by_pytest",
+  "evidence_status": "pending_physical_windows_capture",
+  "files": [
+    {
+      "path": "benchmarks/nw10/compact-proof.v1.json",
+      "sha256": "800b3606d36993eb2a0bb8b7ee5e998bc2c453f08b17b64fcf09022d89608495"
+    },
+    {
+      "path": "benchmarks/nw10/intro-profile.v1.json",
+      "sha256": "24301eb0df1edd2cd1537e8d79ffe880ef085f03dce6636e47a38c46073f8880"
+    },
+    {
+      "path": "benchmarks/nw10/proof-export-report.v1.json",
+      "sha256": "eb138bf0dc9014ddb81f70dc4b7e45ec5b74cfb0308526c2d1b75ac4c6df358d"
+    },
+    {
+      "path": "benchmarks/nw10/intro-export-report.v1.json",
+      "sha256": "d54679a051413ad3a4eb8604fd3b0c7126d7b4d20d7b154e48773640cfd7e139"
+    }
+  ],
+  "format": "nw10-evidence-status",
+  "frame_time": "pending_unverified",
+  "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+  "memory": "pending_unverified",
+  "physical_evidence": "pending",
+  "reference_capture": "pending_reference_capture",
+  "startup": "pending_unverified",
+  "task": "NW-10",
+  "version": 1
+}

@@ -26,6 +26,9 @@ struct EmbeddedPackage {
     // keep those pointers from outliving their backing storage.  A move
     // transfers the buffer and leaves the slices valid.
     std::vector<std::uint8_t> image;
+    // NW-10 compact containers are expanded to the exact canonical `.nwp`
+    // bytes at load time.  This buffer owns the expanded package.
+    std::vector<std::uint8_t> expanded;
     const std::uint8_t* bytes = nullptr;
     std::size_t size = 0u;
     const std::uint8_t* manifest = nullptr;

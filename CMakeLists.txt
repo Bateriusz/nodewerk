@@ -87,6 +87,7 @@ else()
 endif()
 
 set(NW_PLAYER_BOOTSTRAP_SOURCES
+    src/package/nw_compact.cpp
     src/player/diagnostics.cpp
     src/player/capability_check.cpp
     src/player/d3d12_bootstrap.cpp
@@ -136,6 +137,7 @@ if(NOT WIN32)
     )
 
     add_library(nw_package_format_frozen_host_compile OBJECT
+        src/package/nw_compact.cpp
         src/package/nwp_format.cpp
     )
     target_include_directories(nw_package_format_frozen_host_compile PRIVATE
@@ -166,6 +168,7 @@ add_dependencies(nw_player_bootstrap nw_offline_display_shader)
 
 if(WIN32)
     target_link_libraries(nw_player_bootstrap PUBLIC
+        cabinet
         d3d12
         dxgi
         user32
@@ -223,6 +226,7 @@ if(WIN32)
 endif()
 
 add_library(nw_package STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
+    src/package/nw_compact.cpp
     src/package/nwp_format.cpp
 )
 target_include_directories(nw_package PUBLIC
@@ -235,6 +239,7 @@ target_compile_features(nw_package PUBLIC cxx_std_20)
 # flags as the bootstrap archive).  Authoring-side warning policy is disabled
 # for this archive only; NW-03's package implementation is not player code.
 add_library(nw_package_player STATIC
+    src/package/nw_compact.cpp
     src/package/nwp_format.cpp
 )
 target_include_directories(nw_package_player PUBLIC
@@ -260,6 +265,7 @@ endif()
 # loads arbitrary presentation sizes, so it must keep the full decoder while
 # still linking the frozen player implementation.
 add_library(nw_package_player_diagnostic STATIC
+    src/package/nw_compact.cpp
     src/package/nwp_format.cpp
 )
 target_include_directories(nw_package_player_diagnostic PUBLIC
@@ -338,6 +344,7 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
     add_dependencies(nw05_player_bootstrap nw_offline_display_shader)
     if(WIN32)
         target_link_libraries(nw05_player_bootstrap PUBLIC
+            cabinet
             d3d12
             dxgi
             user32
@@ -382,6 +389,7 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
         add_dependencies(nw05_player_bootstrap_diagnostic nw_offline_display_shader)
         if(WIN32)
             target_link_libraries(nw05_player_bootstrap_diagnostic PUBLIC
+                cabinet
                 d3d12
                 dxgi
                 user32

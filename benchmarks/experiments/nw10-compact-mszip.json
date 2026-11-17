@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "nw10-compact-container-mszip",
+  "category": "compact_profile",
+  "status": "retained_in_baseline",
+  "verification_status": "unverified",
+  "substituted_silently": false,
+  "reproducible_command": "NODEWERK_NW03_TEST_DIGEST=1 python tools/nw10_evidence.py --output-dir benchmarks/nw10",
+  "configuration": {
+    "toolchain_id": "structural-test-payload",
+    "profile_name": "nwc.container.v1+mszip",
+    "compiler_flags": [
+      "/O1",
+      "/Os",
+      "/EHs-c-",
+      "/GR-",
+      "/GS",
+      "/guard:cf"
+    ],
+    "linker_flags": [
+      "/OPT:REF",
+      "/OPT:ICF=4",
+      "/DYNAMICBASE",
+      "/HIGHENTROPYVA",
+      "/NXCOMPAT",
+      "/CETCOMPAT",
+      "/guard:cf"
+    ],
+    "security_mitigations_retained": true
+  },
+  "initialization_and_cleanup_obligations": [
+    {
+      "obligation_id": "bounded_decode_before_gpu",
+      "phase": "initialization",
+      "description": "Compact payloads are bounded, checksum-verified, expanded to canonical .nwp bytes, and validated by the existing decoder before any GPU resource or pipeline is created.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "clean_system_mszip_inbox",
+      "phase": "runtime",
+      "description": "The MSZIP decoder uses the Windows inbox Compression API; clean-system startup and dependency verification remain pending on the exact target.",
+      "satisfied": false
+    },
+    {
+      "obligation_id": "retain_security_mitigations",
+      "phase": "cleanup",
+      "description": "CFG, NX, ASLR, CET, and stack cookies remain enabled; no mitigation was disabled to reduce bytes.",
+      "satisfied": true
+    }
+  ],
+  "measurements": {
+    "fixture_id": "nw07-production-contract-only",
+    "total_distributed_bytes": null,
+    "delta_vs_release_baseline_bytes": null,
+    "notes": "Contract-only structural DXIL measurement using the canonical NW-07 graph/export path recorded 4,475 bytes complete distribution versus 18,008 bytes canonical (4,093-byte MSZIP container versus 17,626-byte package). The exact Windows x64 release artifact, decoder code contribution, clean-system startup, and physical frame-time evidence remain pending; those contract-only bytes are not release evidence."
+  },
+  "diagnostics": {
+    "exit_code": null,
+    "error_code": "NONE",
+    "summary": "The existing Windows inbox MSZIP decompressor was selected for the contract-only compact payload because it was smaller than stored, zlib, bzip2, and lzma candidates after complete-container overhead.",
+    "preservation_statement": "The contract-only numbers and the pending physical status are retained together; the experiment is never presented as physical 64 KiB proof."
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "Windows x64 release artifact bytes",
+      "reason": "The pinned Windows toolchain and DXC are not installed on this Linux worktree."
+    },
+    {
+      "metric": "decoder code contribution in the release PE",
+      "reason": "Only the exact Windows x64 link can attribute the decoder's contribution; no host proxy is substituted."
+    },
+    {
+      "metric": "clean-system startup and dependency checks",
+      "reason": "A clean Windows target host is required and remains pending."
+    },
+    {
+      "metric": "nw07_perf_ref_v1 GPU/CPU p99",
+      "reason": "The exact reference capture and bindings are unavailable."
+    }
+  ]
+}

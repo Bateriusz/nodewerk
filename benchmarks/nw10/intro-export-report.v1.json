@@ -1,0 +1,807 @@
+{
+  "alternatives": {
+    "canonical_complete_distribution_bytes": 4346,
+    "compact_complete_distribution_bytes": 2089,
+    "compression_increases_distribution": false,
+    "minimum_measured_candidate_bytes": 2089
+  },
+  "canonical_artifact": {
+    "artifact_key": "sha256:v1:96a110a9b6b68f70f7605e16811c7743d548da559a01d7277f68a8bd18e8bd5c",
+    "executable_bytes": 4346,
+    "executable_sha256": "70d2a8a7f603665921e93e17cf6fb8a2e66e69595243280c356866db86e57a25",
+    "link_manifest": {
+      "artifact_identity": "sha256:v1:96a110a9b6b68f70f7605e16811c7743d548da559a01d7277f68a8bd18e8bd5c",
+      "artifact_profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+      "artifact_requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+      "dependencies_source": "package-phase-requirements",
+      "excluded": {
+        "authoring_infrastructure": [
+          "nw02-graph-parser",
+          "nw03-source-maps",
+          "nw03-reflection-tables",
+          "nodewerk-studio"
+        ],
+        "gpu_name_predicates": [],
+        "optional_implementations": [
+          "nw.camera.perspective",
+          "nw.curve.keyframes",
+          "nw.curve.sample",
+          "nw.light.directional",
+          "nw.material.describe",
+          "nw.proc.checker",
+          "nw.proc.hash_noise",
+          "nw.proc.palette",
+          "nw.proc.value_noise",
+          "nw.render.composite",
+          "nw.render.gbuffer",
+          "nw.scene.flat"
+        ],
+        "optional_profiles": [
+          "nw.optional.d3d12.wave_ops.v1"
+        ]
+      },
+      "feature_queries": [
+        {
+          "name": "D3D12_FEATURE_D3D12_OPTIONS",
+          "reason": "resource binding and heap tiers"
+        },
+        {
+          "name": "D3D12_FEATURE_FORMAT_SUPPORT",
+          "reason": "emitted DXGI format support"
+        },
+        {
+          "name": "D3D12_FEATURE_LEVELS",
+          "reason": "declared feature level 12_0"
+        },
+        {
+          "name": "D3D12_FEATURE_SHADER_MODEL",
+          "reason": "emitted cs_6_0 shaders"
+        },
+        {
+          "name": "ID3D12Device::GetResourceAllocationInfo",
+          "reason": "adapter-specific resource sizing and alias proof"
+        }
+      ],
+      "feature_requirements": {
+        "direct_queue_count": 1,
+        "enhanced_barriers": false,
+        "feature_level": "12_0",
+        "fp16_shader_ops": false,
+        "int64_shader_ops": false,
+        "mesh_shaders": false,
+        "ray_tracing": false,
+        "resource_binding_tier": 2,
+        "resource_heap_tier": 2,
+        "shader_model": "6_0",
+        "sm_6_6_direct_heap_indexing": false,
+        "wave_ops": false
+      },
+      "format": "nw05-player-link-manifest",
+      "formats": [
+        "DXGI_FORMAT_R32G32B32A32_FLOAT",
+        "DXGI_FORMAT_R32_UINT",
+        "DXGI_FORMAT_R8G8B8A8_UNORM"
+      ],
+      "image_oracle_sha256": "",
+      "image_oracle_status": "unavailable",
+      "ir_sha256": "sha256:v1:4f61c0957baad8071bfdc46d5275dd7c45e608d4b93ada58d51b4d41483d74de",
+      "limits": {
+        "max_buffer_bytes": 33177600,
+        "max_cbv_srv_uav_descriptors_per_frame": 2,
+        "max_compute_threads_per_group": 1024,
+        "max_root_signature_dword_cost": 6,
+        "max_sampler_descriptors_per_frame": 0,
+        "max_texture_2d_dimension": 256,
+        "swap_chain_buffer_count": 2
+      },
+      "link_metadata": {
+        "fp16_shader_ops": false,
+        "int64_shader_ops": false,
+        "memory_budget_bytes": 536870912,
+        "wave_ops": false
+      },
+      "manifest_sha256": "sha256:v1:93f90be9d9a3076ce62774c5bb1ffb1601da0648cd091258aa062aaa787c5cce",
+      "materialized_semantic_digest": "sha256:v1:9cbe19de4bb3c8863682d083ac690d5d081cd63887aa2cb4707a583c0d7ce21c",
+      "optional_artifact": false,
+      "optional_profile_id": "",
+      "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+      "reachable_content": {
+        "node_ids": [
+          "image",
+          "material_gpu",
+          "material_recipe",
+          "present",
+          "screen"
+        ],
+        "operators": [
+          "nw.render.fullscreen",
+          "nw.render.present",
+          "nw.residency.upload_texture",
+          "nw.shader.expr",
+          "nw.texture.procedural"
+        ],
+        "outputs": [
+          {
+            "kind": "present",
+            "node": "present",
+            "port": "out"
+          }
+        ],
+        "partitions": {
+          "compile-time": [],
+          "frame": [
+            "image",
+            "screen",
+            "present"
+          ],
+          "initialization": [
+            "material_recipe",
+            "material_gpu"
+          ]
+        }
+      },
+      "required_frame_instructions": [
+        "frame.barrier",
+        "frame.dispatch",
+        "frame.present",
+        "frame.set_descriptor_table",
+        "frame.set_root_constants",
+        "frame.set_root_signature",
+        "frame.set_timeline"
+      ],
+      "required_init_instructions": [
+        "init.create_pipeline",
+        "init.create_resource",
+        "init.create_root_signature",
+        "init.upload_resource"
+      ],
+      "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+      "resource_kinds": [
+        "buffer",
+        "texture2d"
+      ],
+      "retained": {
+        "code": [
+          "nw.render.fullscreen",
+          "nw.render.present",
+          "nw.residency.upload_texture",
+          "nw.shader.expr",
+          "nw.texture.procedural"
+        ],
+        "data": [
+          "package-resources",
+          "parameters",
+          "initialization",
+          "frame"
+        ],
+        "dependencies": [
+          "d3d12",
+          "dxgi",
+          "gdi32",
+          "kernel32",
+          "user32"
+        ],
+        "runtime_implementations": [
+          "player.display-r8g8b8a8",
+          "player.package-core",
+          "player.procedural-texture-format:DXGI_FORMAT_R8G8B8A8_UNORM",
+          "player.procedural-texture-upload"
+        ],
+        "shaders": [
+          {
+            "blob_bytes": 232,
+            "specialization_id": "CSMain:1",
+            "target": "cs_6_0"
+          }
+        ]
+      },
+      "runtime_requirements": {
+        "agility_sdk_required": false,
+        "direct_queue_count": 1,
+        "feature_level": "12_0",
+        "min_windows_build": 22631,
+        "resource_binding_tier": 2,
+        "resource_heap_tier": 2,
+        "runtime_dxc_dependency": false,
+        "runtime_slang_dependency": false,
+        "shader_model": "6_0"
+      },
+      "shader_targets": [
+        "cs_6_0"
+      ],
+      "shaders": [
+        {
+          "blob_bytes": 232,
+          "blob_sha256": "2285ae1f6263d6388c7ddbc79824610e41545028d498321f94e27f5bfb1595d4",
+          "execution_order": 0,
+          "execution_root": "image",
+          "hlsl_sha256": "494df646c53d473d480632e50fa95be123f16ffc9bffc7ab3d7930bbb9f17f17",
+          "output_region": 0,
+          "region_count": 1,
+          "root_node_ids": [
+            "image"
+          ],
+          "specialization_id": "image",
+          "target": "cs_6_0",
+          "unfused": false
+        }
+      ],
+      "texture_formats": [
+        "DXGI_FORMAT_R8G8B8A8_UNORM"
+      ],
+      "used_features": [
+        "D3D12_FEATURE_D3D12_OPTIONS",
+        "D3D12_FEATURE_FORMAT_SUPPORT",
+        "D3D12_FEATURE_LEVELS",
+        "D3D12_FEATURE_SHADER_MODEL",
+        "ID3D12Device::GetResourceAllocationInfo"
+      ],
+      "version": 1
+    },
+    "manifest_bytes": 6092,
+    "manifest_sha256": "fe773a107e50a6e4153299a4a813a022940227cee3bb548e1dc08a70f21739a0",
+    "package_bytes": 3964,
+    "package_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7"
+  },
+  "clean_system_validation": {
+    "requires": "clean Windows x64 target without developer tools",
+    "status": "pending_physical_windows_capture"
+  },
+  "compact_artifact": {
+    "codec_id": "nwc.codec.mszip.v1",
+    "decoded_package_bytes": 3964,
+    "decoded_package_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+    "encoded_package_bytes": 1707,
+    "encoded_package_sha256": "14c396b9ac12cd0e5986d9f40d95efd154b4df11c3edb5925b25440434b9cad4",
+    "executable_bytes": 2089,
+    "executable_sha256": "893a36ba0e196186d5f29da01b99ec3bad98c6aa8baa1eca9dfc8e7d5ad9c10f",
+    "layout_id": "nwc.layout.soa.v1",
+    "reference_records": 0,
+    "selected_executable_bytes": 2089,
+    "selected_executable_sha256": "893a36ba0e196186d5f29da01b99ec3bad98c6aa8baa1eca9dfc8e7d5ad9c10f",
+    "selected_mode": "compact"
+  },
+  "decision": {
+    "classification": "continue",
+    "physical_target_met": false,
+    "reason": "Contract-only export and compact payload round-trip are measured; physical Windows x64 startup, clean-system, visual, and frame-time validation remains pending.",
+    "target_bytes": 65536,
+    "target_met_on_contract_measurement": true,
+    "universal_64k_claim": false
+  },
+  "format": "nw10-intro-report",
+  "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+  "ledgers": {
+    "canonical": {
+      "all_required_bytes_accounted": true,
+      "artifact_kind": "restricted_intro",
+      "auxiliary_policy": "The runnable distribution is one executable. Rebuild/evidence JSON is optional and never required to execute; system DLLs are recorded as dependencies with zero distributed bytes.",
+      "baseline_complete_distribution_bytes": 4346,
+      "budget_tiers": {
+        "compact_target_bytes": 65536,
+        "compact_target_is_universal_feasibility_claim": false,
+        "larger_configured_budgets_supported": true,
+        "proof_bytes": 262144,
+        "standard_bytes": 1048576,
+        "stretch_bytes": 131072
+      },
+      "codec_id": "nwc.codec.stored.v1",
+      "complete_runnable_distribution_bytes": 4346,
+      "components": {
+        "auxiliary_file_bytes": 36010,
+        "auxiliary_files": {
+          "link-manifest.json": 6092,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
+          "size-report.json": 4832
+        },
+        "canonical_package_bytes": 3964,
+        "decoder_code_bytes": null,
+        "decoder_source_bytes": 10849,
+        "embedded_footer_bytes": 92,
+        "embedded_manifest_binding_bytes": 32,
+        "encoded_package_bytes": 3964,
+        "optional_auxiliary_files": {
+          "link-manifest.json": 6092,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
+          "size-report.json": 4832
+        },
+        "player_image_bytes": 258,
+        "required_auxiliary_files": {},
+        "shader_payload_bytes": 232
+      },
+      "compression_rejected_for_increasing_distribution": false,
+      "decoded_package_bound_bytes": 3964,
+      "dependencies": [
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "d3d12"
+        },
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "dxgi"
+        },
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "gdi32"
+        },
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "kernel32"
+        },
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "user32"
+        }
+      ],
+      "distribution_delta_bytes": 0,
+      "evidence_status": "informational_contract_only",
+      "format": "nw10-byte-ledger",
+      "layout_id": "nwc.layout.canonical.v1",
+      "packaging_tool": {
+        "identity": "tools/nw10_compact.py",
+        "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+      },
+      "selected_executable_bytes": 4346,
+      "task": "NW-10",
+      "version": 1,
+      "within_compact_target": true,
+      "within_proof": true,
+      "within_standard": true,
+      "within_stretch": true
+    },
+    "compact": {
+      "all_required_bytes_accounted": true,
+      "artifact_kind": "restricted_intro",
+      "auxiliary_policy": "The runnable distribution is one executable. Rebuild/evidence JSON is optional and never required to execute; system DLLs are recorded as dependencies with zero distributed bytes.",
+      "baseline_complete_distribution_bytes": 4346,
+      "budget_tiers": {
+        "compact_target_bytes": 65536,
+        "compact_target_is_universal_feasibility_claim": false,
+        "larger_configured_budgets_supported": true,
+        "proof_bytes": 262144,
+        "standard_bytes": 1048576,
+        "stretch_bytes": 131072
+      },
+      "codec_id": "nwc.codec.mszip.v1",
+      "complete_runnable_distribution_bytes": 2089,
+      "components": {
+        "auxiliary_file_bytes": 36010,
+        "auxiliary_files": {
+          "link-manifest.json": 6092,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
+          "size-report.json": 4832
+        },
+        "canonical_package_bytes": 3964,
+        "decoder_code_bytes": null,
+        "decoder_source_bytes": 10849,
+        "embedded_footer_bytes": 92,
+        "embedded_manifest_binding_bytes": 32,
+        "encoded_package_bytes": 1707,
+        "optional_auxiliary_files": {
+          "link-manifest.json": 6092,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
+          "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
+          "size-report.json": 4832
+        },
+        "player_image_bytes": 258,
+        "required_auxiliary_files": {},
+        "shader_payload_bytes": 232
+      },
+      "compression_rejected_for_increasing_distribution": false,
+      "decoded_package_bound_bytes": 3964,
+      "dependencies": [
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "d3d12"
+        },
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "dxgi"
+        },
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "gdi32"
+        },
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "kernel32"
+        },
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "user32"
+        }
+      ],
+      "distribution_delta_bytes": -2257,
+      "evidence_status": "informational_contract_only",
+      "format": "nw10-byte-ledger",
+      "layout_id": "nwc.layout.soa.v1",
+      "packaging_tool": {
+        "identity": "tools/nw10_compact.py",
+        "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+      },
+      "selected_executable_bytes": 2089,
+      "task": "NW-10",
+      "version": 1,
+      "within_compact_target": true,
+      "within_proof": true,
+      "within_standard": true,
+      "within_stretch": true
+    }
+  },
+  "measurements": {
+    "compression_candidates": [
+      {
+        "codec": "nwc.codec.stored.v1",
+        "complete_container_bytes": 4256,
+        "payload_bytes": 4192,
+        "player_supported": true
+      },
+      {
+        "codec": "candidate.zlib.raw",
+        "complete_container_bytes": 1720,
+        "payload_bytes": 1656,
+        "player_supported": false
+      },
+      {
+        "codec": "candidate.bzip2",
+        "complete_container_bytes": 1923,
+        "payload_bytes": 1859,
+        "player_supported": false
+      },
+      {
+        "codec": "candidate.lzma",
+        "complete_container_bytes": 1680,
+        "payload_bytes": 1616,
+        "player_supported": false
+      },
+      {
+        "codec": "nwc.codec.mszip.v1",
+        "complete_container_bytes": 1716,
+        "payload_bytes": 1652,
+        "player_supported": true
+      }
+    ],
+    "decoder_code_bytes": null,
+    "decoder_code_status": "pending_physical_windows",
+    "delta_references": {
+      "aos_with_references_bytes": 4256,
+      "aos_without_references_bytes": 4256,
+      "chunk_size": 256,
+      "delta_complete_bytes_saved": 0,
+      "delta_records": 16,
+      "layout_advantage_soa_over_aos_bytes": 16,
+      "raw_records": 16,
+      "reference_records": 0,
+      "referenced_bytes_saved": 0,
+      "soa_with_references_bytes": 4240
+    },
+    "layouts": {
+      "alternatives": [
+        {
+          "codec_id": "nwc.codec.stored.v1",
+          "container_bytes": 4192,
+          "decoded_bytes": 3964,
+          "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+          "encoded_bytes": 4256,
+          "encoded_sha256": "60920212c0c203c9ed49b492c205e16dd63fdd841d54c67e29dd40e0e6585e29",
+          "format": "nwc.container.v1",
+          "layout_id": "nwc.layout.canonical.v1",
+          "payload_bytes": 4192,
+          "record_count": 16,
+          "reference_count": 0
+        },
+        {
+          "codec_id": "nwc.codec.stored.v1",
+          "container_bytes": 4192,
+          "decoded_bytes": 3964,
+          "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+          "encoded_bytes": 4256,
+          "encoded_sha256": "aabb220c475674a80eaa376d7040e405eb5a1d2cc219286596c0e7ae70ef0915",
+          "format": "nwc.container.v1",
+          "layout_id": "nwc.layout.aos.v1",
+          "payload_bytes": 4192,
+          "record_count": 16,
+          "reference_count": 0
+        },
+        {
+          "codec_id": "nwc.codec.stored.v1",
+          "container_bytes": 4176,
+          "decoded_bytes": 3964,
+          "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+          "encoded_bytes": 4240,
+          "encoded_sha256": "2122852c57d42211bef3d4b313db6541883913d4d1a730842258643fd836bab5",
+          "format": "nwc.container.v1",
+          "layout_id": "nwc.layout.soa.v1",
+          "payload_bytes": 4176,
+          "record_count": 16,
+          "reference_count": 0
+        }
+      ],
+      "selected": "nwc.layout.soa.v1"
+    },
+    "measurement_protocol": {
+      "application_pipeline_cache": false,
+      "fresh_process_per_run": true,
+      "performance_contract": "nw07_perf_ref_v1",
+      "performance_protocol": "nw07-perf-run.v1",
+      "run_seconds": 60,
+      "runs": 3,
+      "status": "pending_physical_windows_capture",
+      "warmup_seconds": 5
+    },
+    "package": {
+      "frame_instructions": [
+        "frame.set_timeline",
+        "frame.set_root_signature",
+        "frame.set_root_constants",
+        "frame.set_descriptor_table",
+        "frame.set_descriptor_table",
+        "frame.barrier",
+        "frame.dispatch",
+        "frame.barrier",
+        "frame.present"
+      ],
+      "init_instructions": [
+        "init.create_resource",
+        "init.create_resource",
+        "init.create_resource",
+        "init.create_root_signature",
+        "init.upload_resource",
+        "init.upload_resource",
+        "init.create_pipeline"
+      ],
+      "package_bytes": 3964,
+      "package_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+      "parameter_bytes": 28,
+      "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+      "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+      "resource_bytes": 33440000,
+      "shader_bytes": 232
+    },
+    "parameter_packing": {
+      "adoption_status": "eligible_but_not_integrated",
+      "alternatives": [
+        {
+          "adopted": false,
+          "canonical_bytes": 595,
+          "delta_bytes": 0,
+          "maximum_absolute_error": 0.0,
+          "packed_bytes": 595,
+          "parameter_layout_id": "nwc.params.canonical.v1",
+          "value_encoding": "canonical",
+          "within_numeric_tolerance": true
+        },
+        {
+          "adopted": false,
+          "canonical_bytes": 595,
+          "delta_bytes": -310,
+          "maximum_absolute_error": 0.0,
+          "packed_bytes": 285,
+          "parameter_layout_id": "nwc.params.varint-stringtable.v1",
+          "value_encoding": "canonical",
+          "within_numeric_tolerance": true
+        },
+        {
+          "adopted": false,
+          "canonical_bytes": 595,
+          "delta_bytes": -324,
+          "maximum_absolute_error": 1296971168.0,
+          "packed_bytes": 271,
+          "parameter_layout_id": "nwc.params.float16.v1",
+          "value_encoding": "f16",
+          "within_numeric_tolerance": false
+        },
+        {
+          "adopted": false,
+          "canonical_bytes": 595,
+          "delta_bytes": -324,
+          "maximum_absolute_error": 1297036663.999878,
+          "packed_bytes": 271,
+          "parameter_layout_id": "nwc.params.q16.v1",
+          "value_encoding": "q16",
+          "within_numeric_tolerance": false
+        }
+      ],
+      "declared_tolerance": {
+        "absolute": 1e-05,
+        "mode": "absolute_or_relative",
+        "relative": 0.0001
+      },
+      "eligible": [
+        {
+          "adopted": false,
+          "canonical_bytes": 595,
+          "delta_bytes": -310,
+          "maximum_absolute_error": 0.0,
+          "packed_bytes": 285,
+          "parameter_layout_id": "nwc.params.varint-stringtable.v1",
+          "value_encoding": "canonical",
+          "within_numeric_tolerance": true
+        }
+      ],
+      "selected": "nwc.params.canonical.v1"
+    },
+    "physical_evidence": {
+      "p99_cpu_submit_ms": null,
+      "p99_gpu_frame_time_ms": null,
+      "peak_engine_committed_gpu_bytes": null,
+      "reason": "Physical measurements require the exact Windows x64 artifact and the frozen nw07_perf_ref_v1 capture environment.",
+      "startup_decode_memory_bytes": null,
+      "startup_ms": null,
+      "status": "pending_physical_windows_capture",
+      "visual_error": {
+        "image_absolute": null,
+        "image_relative": null,
+        "numeric_absolute": null,
+        "numeric_relative": null
+      }
+    },
+    "selected_codec": {
+      "candidates": [
+        {
+          "codec_id": "nwc.codec.stored.v1",
+          "container_bytes": 4192,
+          "decoded_bytes": 3964,
+          "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+          "encoded_bytes": 4256,
+          "encoded_sha256": "aabb220c475674a80eaa376d7040e405eb5a1d2cc219286596c0e7ae70ef0915",
+          "format": "nwc.container.v1",
+          "layout_id": "nwc.layout.aos.v1",
+          "payload_bytes": 4192,
+          "record_count": 16,
+          "reference_count": 0
+        },
+        {
+          "codec_id": "nwc.codec.mszip.v1",
+          "container_bytes": 4192,
+          "decoded_bytes": 3964,
+          "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+          "encoded_bytes": 1716,
+          "encoded_sha256": "ad428cf1821504e627227ef40ba62dcbfff986f2faaed665f9a9252e958571bb",
+          "format": "nwc.container.v1",
+          "layout_id": "nwc.layout.aos.v1",
+          "payload_bytes": 1652,
+          "record_count": 16,
+          "reference_count": 0
+        }
+      ],
+      "compression_increases_distribution": false,
+      "selected": {
+        "codec_id": "nwc.codec.mszip.v1",
+        "container_bytes": 4192,
+        "decoded_bytes": 3964,
+        "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+        "encoded_bytes": 1716,
+        "encoded_sha256": "ad428cf1821504e627227ef40ba62dcbfff986f2faaed665f9a9252e958571bb",
+        "format": "nwc.container.v1",
+        "layout_id": "nwc.layout.aos.v1",
+        "payload_bytes": 1652,
+        "record_count": 16,
+        "reference_count": 0
+      },
+      "selected_codec_id": "nwc.codec.mszip.v1"
+    },
+    "shaders": {
+      "duplicate_root_signature_bytes": 0,
+      "duplicate_shader_bytes": 0,
+      "fusion": "established NW-05 fusion decisions preserved; no unmeasured extra fusion applied",
+      "requires_new_shader_semantics": false,
+      "root_signature_count": 1,
+      "shader_count": 1,
+      "unique_root_signature_blobs": 1,
+      "unique_shader_blobs": 1
+    }
+  },
+  "memory_validation": {
+    "ceiling_bytes": 536870912,
+    "status": "pending_physical_windows_capture"
+  },
+  "performance_validation": {
+    "contract_id": "nw07_perf_ref_v1",
+    "protocol": "nw07-perf-run.v1",
+    "run_seconds": 60,
+    "runs": 3,
+    "status": "pending_physical_windows_capture",
+    "warmup_seconds": 5
+  },
+  "planning_provenance": "270d298f1b037548e0ab4808b2c123c12ddcc4e6",
+  "profile": {
+    "audio": false,
+    "capture_protocol": "nw07-correctness-capture.v1",
+    "evidence_status": "informational_contract_only",
+    "external_assets": false,
+    "features": [
+      "sphere_sdf",
+      "torus_sdf",
+      "sdf_composition",
+      "seeded_procedural_material",
+      "camera_curve",
+      "aces_tonemapping",
+      "fixed_tick_replay"
+    ],
+    "fixed_tick_replay": true,
+    "frame_rate_hz": 60,
+    "graph": "fixtures/nw10/restricted_intro.nwgraph",
+    "graph_sha256": "01970a8fdcfed044e15a81a68b39386295e8e6c980981cd2f03d844c3cfa5ec8",
+    "hardware_ray_tracing_required": false,
+    "height": 1080,
+    "loop_seconds": 20,
+    "loop_ticks": 960000,
+    "mesh_pipeline": false,
+    "numeric_image_tolerances": {
+      "image": {
+        "absolute": 0.0001,
+        "mode": "absolute_required",
+        "relative": 0.0001
+      },
+      "numeric": {
+        "absolute": 1e-05,
+        "mode": "absolute_or_relative",
+        "relative": 0.0001
+      }
+    },
+    "operators": [
+      "nw.render.fullscreen",
+      "nw.render.present",
+      "nw.residency.upload_texture",
+      "nw.shader.expr",
+      "nw.texture.procedural"
+    ],
+    "performance_contract": "nw07_perf_ref_v1",
+    "performance_protocol": "nw07-perf-run.v1",
+    "physical_measurements": "pending_physical_windows_capture",
+    "profile_id": "nw10.intro.sdf20.v1",
+    "runtime_dxc": false,
+    "shader": "shaders/nw10/nw10_sdf_intro_cs.hlsl",
+    "shader_sha256": "8b76e09a323282bd34b89154de1332e8482ff2a358dfd3b571aa5a051500ce55",
+    "ticks_per_second": 48000,
+    "width": 1920
+  },
+  "release_grade": false,
+  "startup_validation": {
+    "ceiling_ms": 2000.0,
+    "protocol": "nw07-startup.v1",
+    "status": "pending_physical_windows_capture"
+  },
+  "success": true,
+  "task": "NW-10",
+  "test_payload": true,
+  "version": 1,
+  "visual_validation": {
+    "protocol": "nw07-correctness-capture.v1",
+    "status": "pending_physical_windows_capture",
+    "tolerances": {
+      "image": {
+        "absolute": 0.0001,
+        "mode": "absolute_required",
+        "relative": 0.0001
+      },
+      "numeric": {
+        "absolute": 1e-05,
+        "mode": "absolute_or_relative",
+        "relative": 0.0001
+      }
+    }
+  }
+}

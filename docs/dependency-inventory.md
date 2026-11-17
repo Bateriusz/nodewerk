@@ -16,6 +16,7 @@ To prevent hidden deployment overhead or uncounted redistributables from distort
      - `d3d12.dll` — Inbox Direct3D 12 runtime loader (Feature Level `12_0` / Shader Model `6.0` baseline)
      - `dxgi.dll` — Inbox DXGI 1.6 adapter enumeration and flip-model swapchain runtime
      - `ucrtbase.dll` — Inbox Universal C Runtime (shipped as part of the Windows OS since Windows 10/11)
+     - `cabinet.dll` — Inbox Windows Compression API used by the bounded NW-10 MSZIP compact-package decoder
    - `api-ms-win-crt-*.dll` — Inbox UCRT API-set forwarders, canonicalized to `ucrtbase.dll` for closure comparison
    - **Installed Display-Driver Components** (installed by the user's graphics driver package and loaded dynamically by `d3d12.dll`):
      - `nvwgf2umx.dll` — NVIDIA D3D12 user-mode driver

@@ -35,6 +35,8 @@
     "shaders/nw06/nw06_tonemap_cs.hlsl",
     "src/package/nwp_format.cpp",
     "src/package/nwp_format.h",
+    "src/package/nw_compact.cpp",
+    "src/package/nw_compact.h",
     "src/platform/win32_window.cpp",
     "src/platform/win32_window.h",
     "src/player/capability_check.cpp",
@@ -76,7 +78,13 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:d9ad24057ae7c273ad4c757dafc5d3b54047fcb360b8845a6413136b78c232ab",
+  "build_inputs_digest": "sha256:v1:f712c23ab49a5910be4dd996452421f17948eb6682034d638d5ac648737c089b",
+  "build_inputs_provenance": {
+    "superseded_digests": [
+      "sha256:v1:d9ad24057ae7c273ad4c757dafc5d3b54047fcb360b8845a6413136b78c232ab"
+    ],
+    "reason": "NW-10 adds the bounded compact-package decoder to the player closure. The canonical graph, profile, quality settings, budgets, and evidence semantics are unchanged; the earlier digest remains attributable to prior artifacts."
+  },
   "loop": {
     "looping": true,
     "wrap": "modulo",

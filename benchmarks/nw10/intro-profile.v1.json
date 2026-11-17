@@ -1,0 +1,158 @@
+{
+  "artifact": {
+    "codec_id": "nwc.codec.mszip.v1",
+    "decoded_package_bytes": 3964,
+    "decoded_package_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+    "encoded_package_bytes": 1707,
+    "encoded_package_sha256": "14c396b9ac12cd0e5986d9f40d95efd154b4df11c3edb5925b25440434b9cad4",
+    "executable_bytes": 2089,
+    "executable_sha256": "893a36ba0e196186d5f29da01b99ec3bad98c6aa8baa1eca9dfc8e7d5ad9c10f",
+    "layout_id": "nwc.layout.soa.v1",
+    "reference_records": 0,
+    "selected_executable_bytes": 2089,
+    "selected_executable_sha256": "893a36ba0e196186d5f29da01b99ec3bad98c6aa8baa1eca9dfc8e7d5ad9c10f",
+    "selected_mode": "compact"
+  },
+  "audio": false,
+  "capture_protocol": "nw07-correctness-capture.v1",
+  "evidence_status": "informational_contract_only",
+  "external_assets": false,
+  "features": [
+    "sphere_sdf",
+    "torus_sdf",
+    "sdf_composition",
+    "seeded_procedural_material",
+    "camera_curve",
+    "aces_tonemapping",
+    "fixed_tick_replay"
+  ],
+  "fixed_tick_replay": true,
+  "format": "nw10-intro-profile",
+  "frame_rate_hz": 60,
+  "graph": "fixtures/nw10/restricted_intro.nwgraph",
+  "graph_sha256": "01970a8fdcfed044e15a81a68b39386295e8e6c980981cd2f03d844c3cfa5ec8",
+  "hardware_ray_tracing_required": false,
+  "height": 1080,
+  "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+  "ledger": {
+    "all_required_bytes_accounted": true,
+    "artifact_kind": "restricted_intro",
+    "auxiliary_policy": "The runnable distribution is one executable. Rebuild/evidence JSON is optional and never required to execute; system DLLs are recorded as dependencies with zero distributed bytes.",
+    "baseline_complete_distribution_bytes": 4346,
+    "budget_tiers": {
+      "compact_target_bytes": 65536,
+      "compact_target_is_universal_feasibility_claim": false,
+      "larger_configured_budgets_supported": true,
+      "proof_bytes": 262144,
+      "standard_bytes": 1048576,
+      "stretch_bytes": 131072
+    },
+    "codec_id": "nwc.codec.mszip.v1",
+    "complete_runnable_distribution_bytes": 2089,
+    "components": {
+      "auxiliary_file_bytes": 36010,
+      "auxiliary_files": {
+        "link-manifest.json": 6092,
+        "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
+        "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+        "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
+        "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
+        "size-report.json": 4832
+      },
+      "canonical_package_bytes": 3964,
+      "decoder_code_bytes": null,
+      "decoder_source_bytes": 10849,
+      "embedded_footer_bytes": 92,
+      "embedded_manifest_binding_bytes": 32,
+      "encoded_package_bytes": 1707,
+      "optional_auxiliary_files": {
+        "link-manifest.json": 6092,
+        "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
+        "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+        "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
+        "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4832,
+        "size-report.json": 4832
+      },
+      "player_image_bytes": 258,
+      "required_auxiliary_files": {},
+      "shader_payload_bytes": 232
+    },
+    "compression_rejected_for_increasing_distribution": false,
+    "decoded_package_bound_bytes": 3964,
+    "dependencies": [
+      {
+        "distributed_bytes": 0,
+        "kind": "windows_inbox",
+        "name": "d3d12"
+      },
+      {
+        "distributed_bytes": 0,
+        "kind": "windows_inbox",
+        "name": "dxgi"
+      },
+      {
+        "distributed_bytes": 0,
+        "kind": "windows_inbox",
+        "name": "gdi32"
+      },
+      {
+        "distributed_bytes": 0,
+        "kind": "windows_inbox",
+        "name": "kernel32"
+      },
+      {
+        "distributed_bytes": 0,
+        "kind": "windows_inbox",
+        "name": "user32"
+      }
+    ],
+    "distribution_delta_bytes": -2257,
+    "evidence_status": "informational_contract_only",
+    "format": "nw10-byte-ledger",
+    "layout_id": "nwc.layout.soa.v1",
+    "packaging_tool": {
+      "identity": "tools/nw10_compact.py",
+      "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+    },
+    "selected_executable_bytes": 2089,
+    "task": "NW-10",
+    "version": 1,
+    "within_compact_target": true,
+    "within_proof": true,
+    "within_standard": true,
+    "within_stretch": true
+  },
+  "loop_seconds": 20,
+  "loop_ticks": 960000,
+  "mesh_pipeline": false,
+  "numeric_image_tolerances": {
+    "image": {
+      "absolute": 0.0001,
+      "mode": "absolute_required",
+      "relative": 0.0001
+    },
+    "numeric": {
+      "absolute": 1e-05,
+      "mode": "absolute_or_relative",
+      "relative": 0.0001
+    }
+  },
+  "operators": [
+    "nw.render.fullscreen",
+    "nw.render.present",
+    "nw.residency.upload_texture",
+    "nw.shader.expr",
+    "nw.texture.procedural"
+  ],
+  "performance_contract": "nw07_perf_ref_v1",
+  "performance_protocol": "nw07-perf-run.v1",
+  "physical_measurements": "pending_physical_windows_capture",
+  "profile_id": "nw10.intro.sdf20.v1",
+  "runtime_dxc": false,
+  "shader": "shaders/nw10/nw10_sdf_intro_cs.hlsl",
+  "shader_sha256": "8b76e09a323282bd34b89154de1332e8482ff2a358dfd3b571aa5a051500ce55",
+  "task": "NW-10",
+  "ticks_per_second": 48000,
+  "version": 1,
+  "width": 1920
+}
