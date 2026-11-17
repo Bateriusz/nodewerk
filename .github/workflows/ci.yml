@@ -244,29 +244,7 @@ jobs:
             exit 1
           }
           $env:NW03_PREBUILT_DIGEST_CLI = $graphCli.FullName
-          @'
-import hashlib
-import os
-import shutil
-import tempfile
-from pathlib import Path
-
-sources = [
-    Path("src/graph/nw_graph.cpp"),
-    Path("src/graph/nw_graph_cli.cpp"),
-]
-digest = hashlib.sha256()
-for source in sources:
-    digest.update(source.read_bytes())
-target = (
-    Path(tempfile.gettempdir())
-    / ("nw03-nw02-digest-" + digest.hexdigest()[:16])
-    / "nw_graph_cli.exe"
-)
-target.parent.mkdir(parents=True, exist_ok=True)
-shutil.copy2(Path(os.environ["NW03_PREBUILT_DIGEST_CLI"]), target)
-print(f"Prepared canonical NW-02 digest helper: {target}")
-'@ | python -
+          python -c "import hashlib, os, shutil, tempfile; from pathlib import Path; sources=[Path('src/graph/nw_graph.cpp'), Path('src/graph/nw_graph_cli.cpp')]; digest=hashlib.sha256(); [digest.update(source.read_bytes()) for source in sources]; target=Path(tempfile.gettempdir()) / ('nw03-nw02-digest-' + digest.hexdigest()[:16]) / 'nw_graph_cli.exe'; target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(Path(os.environ['NW03_PREBUILT_DIGEST_CLI']), target); print(f'Prepared canonical NW-02 digest helper: {target}')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $fixture = Join-Path $PWD "build/clang-cl-dev/staging/package_player/nw_package_player_fixture.exe"
