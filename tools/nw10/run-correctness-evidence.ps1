@@ -2,8 +2,8 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet("", "ada", "blackwell")]
-    [string]$Tier = "",
+    [ValidateSet("ada", "blackwell")]
+    [string]$Tier,
     [switch]$Compare,
     [switch]$Bundle,
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
@@ -172,7 +172,7 @@ try {
     Set-Location $repo
 
     if ($Compare) {
-        if (-not [string]::IsNullOrWhiteSpace($Tier)) {
+        if ($PSBoundParameters.ContainsKey("Tier")) {
             throw "-Compare cannot be combined with -Tier."
         }
         foreach ($pair in @(
@@ -213,6 +213,18 @@ try {
         if ($comparison.privacy.local_paths_included -ne $false) {
             throw "Comparison unexpectedly exposes local paths."
         }
+        $comparePrivacyTokens = New-Object System.Collections.Generic.List[string]
+        foreach ($token in @($env:USERNAME, $env:USERPROFILE, $ForbidToken)) {
+            $value = [string]$token
+            if (
+                -not [string]::IsNullOrWhiteSpace($value) -and
+                -not $comparePrivacyTokens.Contains($value)
+            ) {
+                $comparePrivacyTokens.Add($value)
+            }
+        }
+        Assert-NwPrivacy -JsonObject $comparison -Tokens $comparePrivacyTokens
+        Write-Host "[NW10 CORRECTNESS] PRIVACY=PASS"
         Write-Host "[NW10 CORRECTNESS] STATUS=$($comparison.status)"
         Write-Host "[NW10 CORRECTNESS] WORST_ABS=$($comparison.comparison.worst_absolute_error)"
         Write-Host "[NW10 CORRECTNESS] WORST_REL=$($comparison.comparison.worst_relative_error)"
@@ -220,7 +232,7 @@ try {
         return
     }
 
-    if ([string]::IsNullOrWhiteSpace($Tier)) {
+    if (-not $PSBoundParameters.ContainsKey("Tier")) {
         throw "Capture mode requires -Tier ada or -Tier blackwell."
     }
     if (-not $IsWindows) {

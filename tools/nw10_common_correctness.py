@@ -4,8 +4,9 @@
 This tool deliberately does not claim NW-07 release-capture certification.
 NW-10 acceptance requires common-artifact correctness coverage on representative
 desktop Ada and Blackwell.  The diagnostic sibling is a separate executable
-with capture controls enabled, while the package/manifest/artifact key must
-match the final common artifact exactly.
+with capture controls enabled.  Its canonical package/profile identity must
+match the final common artifact exactly; its diagnostic-only link manifest and
+dependency closure are intentionally separate from the frozen release EXE.
 
 Raw RGBA32F files stay outside tracked evidence.  A later cross-hardware
 comparison can compare Blackwell captures against the retained Ada reference.
@@ -421,6 +422,35 @@ def capture(
     return record
 
 
+def _verify_capture_manifest(
+    record: Mapping[str, Any], capture_dir: Path
+) -> None:
+    rows = record.get("captures")
+    if not isinstance(rows, list) or len(rows) != len(ALL_TICKS):
+        raise ValueError("correctness record has an incomplete capture manifest")
+    expected_ticks = list(ALL_TICKS)
+    observed_ticks = [int(row.get("tick", -1)) for row in rows if isinstance(row, Mapping)]
+    if observed_ticks != expected_ticks:
+        raise ValueError(
+            f"correctness capture ticks changed: expected={expected_ticks}, "
+            f"observed={observed_ticks}"
+        )
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("correctness capture manifest row is invalid")
+        tick = int(row["tick"])
+        expected_name = f"tick_{tick}.rgba32f"
+        if row.get("file") != expected_name:
+            raise ValueError(f"correctness capture filename changed for tick {tick}")
+        path = capture_dir / expected_name
+        if not path.is_file():
+            raise ValueError(f"correctness raw capture is missing for tick {tick}")
+        if path.stat().st_size != int(row.get("bytes", -1)):
+            raise ValueError(f"correctness raw capture size mismatch for tick {tick}")
+        if _sha256(path) != str(row.get("sha256", "")):
+            raise ValueError(f"correctness raw capture SHA-256 mismatch for tick {tick}")
+
+
 def compare(
     ada_record_path: Path,
     blackwell_record_path: Path,
@@ -433,8 +463,14 @@ def compare(
     blackwell = json.loads(blackwell_record_path.read_text(encoding="utf-8"))
     if ada.get("tier") != "ada" or blackwell.get("tier") != "blackwell":
         raise ValueError("comparison requires Ada reference and Blackwell candidate")
+    if ada.get("status") != "captured_reference":
+        raise ValueError("Ada correctness record is not a captured reference")
+    if blackwell.get("status") != "captured_candidate":
+        raise ValueError("Blackwell correctness record is not a captured candidate")
     if ada.get("common_artifact") != blackwell.get("common_artifact"):
         raise ValueError("Ada and Blackwell captures do not name the same common artifact")
+    _verify_capture_manifest(ada, ada_capture_dir)
+    _verify_capture_manifest(blackwell, blackwell_capture_dir)
     per_tick: list[dict[str, Any]] = []
     worst_absolute = 0.0
     worst_relative = 0.0

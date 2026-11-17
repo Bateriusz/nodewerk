@@ -11,7 +11,7 @@ def test_correctness_runner_reproduces_and_binds_common_artifact() -> None:
     ).read_text(encoding="utf-8")
     lowered = text.lower()
 
-    assert 'validateset("", "ada", "blackwell")' in lowered
+    assert 'validateset("ada", "blackwell")' in lowered
     assert "[switch]$compare" in lowered
     assert "[switch]$bundle" in lowered
     assert "enter-nwbuildenvironment" in lowered
@@ -69,3 +69,11 @@ def test_correctness_runner_compare_requires_both_hardware_sets() -> None:
     ):
         assert parameter in text
     assert "Cross-hardware correctness comparison is not verified." in text
+
+
+def test_correctness_compare_runs_privacy_audit() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
+    ).read_text(encoding="utf-8")
+    compare_block = text[text.index('if ($Compare)'):]
+    assert "Assert-NwPrivacy -JsonObject $comparison" in compare_block

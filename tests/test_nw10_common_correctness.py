@@ -146,3 +146,26 @@ def test_diagnostic_identity_requires_its_own_manifest_binding(
     )
     with pytest.raises(ValueError, match="diagnostic manifest"):
         correctness._diagnostic_identity(tmp_path)
+
+
+def test_verify_capture_manifest_rejects_transferred_file_corruption(tmp_path: Path) -> None:
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    rows = []
+    for tick in correctness.ALL_TICKS:
+        path = captures / f"tick_{tick}.rgba32f"
+        payload = (str(tick).encode("ascii") + b"x")
+        path.write_bytes(payload)
+        rows.append(
+            {
+                "tick": tick,
+                "file": path.name,
+                "bytes": len(payload),
+                "sha256": correctness._sha256(path),
+            }
+        )
+    record = {"captures": rows}
+    correctness._verify_capture_manifest(record, captures)
+    (captures / f"tick_{correctness.ALL_TICKS[2]}.rgba32f").write_bytes(b"corrupt")
+    with pytest.raises(ValueError, match="size mismatch|SHA-256 mismatch"):
+        correctness._verify_capture_manifest(record, captures)
