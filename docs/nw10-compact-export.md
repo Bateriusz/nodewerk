@@ -10,6 +10,7 @@
 - **Performance contract:** `nw07_perf_ref_v1` (`nw07-perf-run.v1`)
 - **Evidence:** `benchmarks/nw10/compact-proof.v1.json`,
   `benchmarks/nw10/intro-profile.v1.json`,
+  `benchmarks/nw10/common-artifact-correctness.v1.json`,
   `benchmarks/nw10/evidence-status.v1.json`, plus the archived
   `proof-export-report.v1.json` and `intro-export-report.v1.json` raw reports.
 
@@ -31,10 +32,12 @@ Contract-only exports with structural DXIL payloads measure:
 
 These numbers validate the accounting, decoder, and deterministic export
 paths. They are **not** Windows release artifacts and are not physical 64 KiB
-proof. The exact Windows x64 executable, startup time, clean-system startup,
-GPU frame time, CPU submit time, startup/decode memory, Ada/Blackwell visuals,
-and dependency closure remain explicitly pending. The decision is
-**continue**, not a universal feasibility or impossibility claim.
+proof. Matched physical performance preservation is verified, and common-artifact
+correctness is verified on representative desktop Ada (RTX 4060 Ti) and
+Blackwell (RTX 5070 Ti) hardware with zero observed cross-hardware error at the
+required fixed ticks. Clean-system startup, startup/decode memory, and remaining
+linker-elimination evidence are still pending. The decision is **continue**, not
+a universal feasibility or impossibility claim.
 
 ### Hosted Windows feasibility result
 
@@ -50,9 +53,11 @@ the NW-10 decision at **continue** when the fallback remains valid.
 
 A compact candidate that fails runtime validation is never counted as an
 achieved size result. Its stdout/stderr, exit code, measured byte count, and
-dependency evidence are archived with the Windows CI evidence. Clean-system
-and matched physical performance/correctness certification remain separate
-pending evidence under the inherited NW-07 protocol.
+dependency evidence are archived with the Windows CI evidence. Matched physical
+performance and Ada/Blackwell correctness are now verified under the inherited
+NW-07 protocol; clean-system startup and memory evidence remain separate pending
+work. Raw RGBA32F captures stay outside Git, while the privacy-safe verified
+summary is tracked in `benchmarks/nw10/common-artifact-correctness.v1.json`.
 
 ## Preserved architecture
 
@@ -219,10 +224,11 @@ tools, and protocol. The five-second warm-up and three independent uncapped
 60-second runs in fresh processes are mandatory. A failed run cannot be hidden
 by aggregation.
 
-Missing exact reference capture remains pending. An RTX 4060 Ti on another
-host, another Ada GPU, Blackwell hardware, faster hardware, stale artifacts, or
-synthetic tests cannot certify preservation; such results are informational or
-unverified.
+The exact RTX 4060 Ti reference capture used for the matched performance
+comparison is verified. Representative physical correctness has also been
+verified across RTX 4060 Ti (Ada) and RTX 5070 Ti (Blackwell). A different host,
+another Ada GPU, faster hardware, stale artifacts, or synthetic tests still
+cannot substitute for the matched `nw07_perf_ref_v1` performance evidence.
 
 Clean-system deployment commands (exact final artifact; separate from the
 synthetic pytest gates):
@@ -273,6 +279,7 @@ measurements, and result status.
 - byte ledgers, tier preservation, and compression rejection;
 - restricted intro profile boundaries and excluded features;
 - performance-evidence classification and physical-pending semantics;
+- tracked Ada/Blackwell correctness summary and privacy boundaries;
 - static evidence/schema validation and archived artifact hashes.
 
 The full repository test suite and the existing NW-07 contract verification
