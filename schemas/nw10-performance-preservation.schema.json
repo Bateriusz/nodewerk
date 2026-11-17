@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-performance-preservation.schema.json",
+  "title": "Nodewerk NW-10 matched performance-preservation evidence",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "performance_contract",
+    "performance_protocol",
+    "reference_binding_id",
+    "reference_binding_digest",
+    "status",
+    "reasons",
+    "matched_environment",
+    "reference_environment",
+    "before",
+    "after",
+    "comparison",
+    "privacy"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw10-performance-preservation"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "performance_contract": {
+      "const": "nw07_perf_ref_v1"
+    },
+    "performance_protocol": {
+      "const": "nw07-perf-run.v1"
+    },
+    "reference_binding_id": {
+      "type": "string",
+      "pattern": "^nw07_perf_ref_v1@sha256:v1:[0-9a-f]{64}$"
+    },
+    "reference_binding_digest": {
+      "type": "string",
+      "pattern": "^sha256:v1:[0-9a-f]{64}$"
+    },
+    "status": {
+      "const": "verified_preserved"
+    },
+    "reasons": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "matched_environment": {
+      "const": true
+    },
+    "before": {
+      "$ref": "#/$defs/capture"
+    },
+    "after": {
+      "$ref": "#/$defs/capture"
+    },
+    "comparison": {
+      "type": "object",
+      "required": [
+        "same_canonical_package_sha256",
+        "gpu_worst_p99_delta_percent",
+        "cpu_worst_p99_delta_percent",
+        "relative_alert_threshold_percent",
+        "relative_regression_alert",
+        "absolute_gate_operator",
+        "absolute_gate_ms",
+        "faster_substitute_used"
+      ],
+      "properties": {
+        "same_canonical_package_sha256": {
+          "const": true
+        },
+        "gpu_worst_p99_delta_percent": {
+          "type": "number"
+        },
+        "cpu_worst_p99_delta_percent": {
+          "type": "number"
+        },
+        "relative_alert_threshold_percent": {
+          "const": 10
+        },
+        "relative_regression_alert": {
+          "type": "boolean"
+        },
+        "absolute_gate_operator": {
+          "const": "<"
+        },
+        "absolute_gate_ms": {
+          "const": 16.67
+        },
+        "faster_substitute_used": {
+          "const": false
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "raw_samples_included",
+        "process_ids_included",
+        "stdout_stderr_included",
+        "local_paths_included",
+        "whitelist_generated"
+      ],
+      "properties": {
+        "raw_samples_included": {
+          "const": false
+        },
+        "process_ids_included": {
+          "const": false
+        },
+        "stdout_stderr_included": {
+          "const": false
+        },
+        "local_paths_included": {
+          "const": false
+        },
+        "whitelist_generated": {
+          "const": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "capture": {
+      "type": "object",
+      "required": [
+        "capture_id",
+        "artifact",
+        "runs",
+        "worst_gpu_p99_ms",
+        "worst_cpu_submit_p99_ms"
+      ],
+      "properties": {
+        "capture_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact": {
+          "type": "object",
+          "required": [
+            "artifact_key",
+            "package_sha256",
+            "manifest_sha256",
+            "executable_sha256",
+            "complete_distribution_bytes"
+          ],
+          "properties": {
+            "artifact_key": {
+              "type": "string"
+            },
+            "package_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "manifest_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "executable_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "complete_distribution_bytes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "runs": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "required": [
+              "run_index",
+              "status",
+              "gpu_p99_ms",
+              "gpu_sample_count",
+              "cpu_p99_ms",
+              "cpu_sample_count"
+            ],
+            "properties": {
+              "run_index": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3
+              },
+              "status": {
+                "const": "passed"
+              },
+              "gpu_p99_ms": {
+                "type": "number",
+                "exclusiveMaximum": 16.67
+              },
+              "gpu_sample_count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "cpu_p99_ms": {
+                "type": "number",
+                "exclusiveMaximum": 16.67
+              },
+              "cpu_sample_count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "worst_gpu_p99_ms": {
+          "type": "number",
+          "exclusiveMaximum": 16.67
+        },
+        "worst_cpu_submit_p99_ms": {
+          "type": "number",
+          "exclusiveMaximum": 16.67
+        }
+      }
+    }
+  }
+}

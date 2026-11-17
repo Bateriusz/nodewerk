@@ -190,8 +190,34 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         current_inputs
     )
     status = json.loads(status_path.read_text(encoding="utf-8"))
-    assert status["evidence_status"] == "pending_physical_windows_capture"
     assert status["contract_evidence"] == "verified_by_pytest"
+    performance_path = (
+        REPO_ROOT
+        / "benchmarks"
+        / "nw10"
+        / "performance-preservation-rtx4060ti.v1.json"
+    )
+    if performance_path.is_file():
+        assert status["evidence_status"] == "performance_verified_correctness_pending"
+        assert status["physical_evidence"] == "performance_verified"
+        assert status["reference_capture"] == "verified_reference_capture"
+        assert status["frame_time"] == "verified_preserved"
+        preservation = json.loads(performance_path.read_text(encoding="utf-8"))
+        assert preservation["format"] == "nw10-performance-preservation"
+        assert preservation["status"] == "verified_preserved"
+        assert preservation["matched_environment"] is True
+        assert preservation["comparison"]["same_canonical_package_sha256"] is True
+        assert preservation["comparison"]["faster_substitute_used"] is False
+        assert preservation["privacy"]["raw_samples_included"] is False
+        assert preservation["privacy"]["local_paths_included"] is False
+        validate_file_against_schema(
+            performance_path,
+            REPO_ROOT / "schemas" / "nw10-performance-preservation.schema.json",
+        )
+    else:
+        assert status["evidence_status"] == "pending_physical_windows_capture"
+        assert status["reference_capture"] == "pending_reference_capture"
+        assert status["frame_time"] == "pending_unverified"
     for item in status["files"]:
         path = REPO_ROOT / item["path"]
         assert _canonical_text_sha256(path) == item["sha256"]

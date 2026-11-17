@@ -232,3 +232,59 @@ def test_after_candidate_retains_over_proof_ceiling_without_relaxing_it(
     assert report["size_classification"]["retained_for_performance_comparison_only"] is True
     assert report["size_classification"]["within_standard_tier"] is True
     assert (tmp_path / "after" / "nw_common_d3d12_fl12_0_sm6_0_v1.exe").is_file()
+
+
+def test_publish_rejects_private_path_and_promotes_only_performance_status(
+    tmp_path: Path,
+) -> None:
+    bound, before, after, candidate = _fixture()
+    public = preservation.validate_preservation(before, after, bound, candidate)
+    source = tmp_path / "public.json"
+    source.write_text(json.dumps(public), encoding="utf-8")
+    destination = tmp_path / "repo" / "benchmarks" / "nw10" / "performance.json"
+    status_path = tmp_path / "repo" / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "format": "nw10-evidence-status",
+                "version": 1,
+                "task": "NW-10",
+                "evidence_status": "pending_physical_windows_capture",
+                "contract_evidence": "verified_by_pytest",
+                "physical_evidence": "pending",
+                "reference_capture": "pending_reference_capture",
+                "ada_correctness": "pending_unverified",
+                "blackwell_correctness": "pending_unverified",
+                "clean_system": "pending_unverified",
+                "startup": "pending_unverified",
+                "memory": "pending_unverified",
+                "frame_time": "pending_unverified",
+                "files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_root = preservation.REPO_ROOT
+    preservation.REPO_ROOT = tmp_path / "repo"
+    try:
+        status = preservation.publish_public_evidence(
+            source, destination, status_path
+        )
+    finally:
+        preservation.REPO_ROOT = old_root
+    assert status["evidence_status"] == "performance_verified_correctness_pending"
+    assert status["physical_evidence"] == "performance_verified"
+    assert status["reference_capture"] == "verified_reference_capture"
+    assert status["frame_time"] == "verified_preserved"
+    assert status["ada_correctness"] == "pending_unverified"
+    assert status["blackwell_correctness"] == "pending_unverified"
+    assert status["startup"] == "pending_unverified"
+    assert status["memory"] == "pending_unverified"
+    assert destination.is_file()
+
+    poisoned = copy.deepcopy(public)
+    poisoned["reference_environment"]["host"]["motherboard"] = r"C:\Users\alice\secret"
+    source.write_text(json.dumps(poisoned), encoding="utf-8")
+    with pytest.raises(ValueError, match="user-profile path"):
+        preservation.publish_public_evidence(source, destination, status_path)

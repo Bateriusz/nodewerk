@@ -376,6 +376,138 @@ def validate_preservation(
     return public
 
 
+def _canonical_text_sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _validate_public_for_publish(
+    public: Mapping[str, Any],
+    *,
+    forbid_tokens: list[str] | None = None,
+) -> None:
+    _scan_public_payload(public, list(forbid_tokens or []))
+    if public.get("format") != FORMAT or public.get("version") != VERSION:
+        raise ValueError("public evidence has an unexpected format/version")
+    if public.get("task") != nw10_contract.TASK:
+        raise ValueError("public evidence is not NW-10")
+    if public.get("performance_contract") != nw10_contract.PERF_CONTRACT_ID:
+        raise ValueError("public evidence changed the performance contract")
+    if public.get("performance_protocol") != nw10_contract.PERF_PROTOCOL_ID:
+        raise ValueError("public evidence changed the performance protocol")
+    if public.get("status") != "verified_preserved":
+        raise ValueError("public evidence is not verified_preserved")
+    if list(public.get("reasons") or []):
+        raise ValueError("verified public evidence still contains failure reasons")
+    if public.get("matched_environment") is not True:
+        raise ValueError("public evidence is not a matched before/after environment")
+
+    comparison = public.get("comparison")
+    if not isinstance(comparison, Mapping):
+        raise ValueError("public evidence has no comparison object")
+    if comparison.get("same_canonical_package_sha256") is not True:
+        raise ValueError("before/after canonical package identity is not preserved")
+    if comparison.get("faster_substitute_used") is not False:
+        raise ValueError("a faster substitute cannot certify preservation")
+    if comparison.get("absolute_gate_operator") != "<":
+        raise ValueError("performance gate operator is not strict '<'")
+    if float(comparison.get("absolute_gate_ms", -1)) != float(
+        nw07_contract.FRAME_TIME_THRESHOLD_MS
+    ):
+        raise ValueError("performance gate threshold changed")
+
+    privacy = public.get("privacy")
+    if not isinstance(privacy, Mapping):
+        raise ValueError("public evidence has no privacy declaration")
+    expected_privacy = {
+        "raw_samples_included": False,
+        "process_ids_included": False,
+        "stdout_stderr_included": False,
+        "local_paths_included": False,
+        "whitelist_generated": True,
+    }
+    for key, expected in expected_privacy.items():
+        if privacy.get(key) is not expected:
+            raise ValueError(f"public evidence privacy flag {key!r} is invalid")
+
+    for label in ("before", "after"):
+        section = public.get(label)
+        if not isinstance(section, Mapping):
+            raise ValueError(f"public evidence is missing {label!r}")
+        gpu = float(section.get("worst_gpu_p99_ms", float("inf")))
+        cpu = float(section.get("worst_cpu_submit_p99_ms", float("inf")))
+        if not gpu < nw07_contract.FRAME_TIME_THRESHOLD_MS:
+            raise ValueError(f"{label} GPU p99 does not pass the frozen gate")
+        if not cpu < nw07_contract.FRAME_TIME_THRESHOLD_MS:
+            raise ValueError(f"{label} CPU-submit p99 does not pass the frozen gate")
+        runs = section.get("runs")
+        if not isinstance(runs, list) or len(runs) != nw07_contract.PERF_RUN_COUNT:
+            raise ValueError(f"{label} evidence does not contain three run summaries")
+        if any(
+            not isinstance(run, Mapping) or run.get("status") != "passed"
+            for run in runs
+        ):
+            raise ValueError(f"{label} evidence contains a non-passing run")
+
+
+def publish_public_evidence(
+    source: Path,
+    destination: Path,
+    status_path: Path,
+    *,
+    forbid_tokens: list[str] | None = None,
+) -> dict[str, Any]:
+    public = _load_json(source)
+    _validate_public_for_publish(public, forbid_tokens=list(forbid_tokens or []))
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(public, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    status = _load_json(status_path)
+    if status.get("format") != "nw10-evidence-status":
+        raise ValueError("NW-10 evidence-status file has an unexpected format")
+    status["evidence_status"] = "performance_verified_correctness_pending"
+    status["physical_evidence"] = "performance_verified"
+    status["reference_capture"] = "verified_reference_capture"
+    status["frame_time"] = "verified_preserved"
+    status["performance_preservation"] = {
+        "status": "verified_preserved",
+        "path": destination.relative_to(REPO_ROOT).as_posix(),
+        "sha256": _canonical_text_sha256(destination),
+        "reference_binding_id": public.get("reference_binding_id"),
+    }
+    files = status.setdefault("files", [])
+    if not isinstance(files, list):
+        raise ValueError("NW-10 evidence-status files field is not a list")
+    destination_rel = destination.relative_to(REPO_ROOT).as_posix()
+    files[:] = [
+        item
+        for item in files
+        if not (
+            isinstance(item, Mapping)
+            and item.get("path") == destination_rel
+        )
+    ]
+    files.append(
+        {
+            "path": destination_rel,
+            "sha256": _canonical_text_sha256(destination),
+        }
+    )
+    files.sort(key=lambda item: str(item.get("path", "")) if isinstance(item, Mapping) else "")
+    status_path.write_text(
+        json.dumps(status, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return status
+
+
 def collect_after(args: argparse.Namespace) -> dict[str, Any]:
     before_record = _load_json(Path(args.before_evidence))
     before = _capture_from_record(before_record, args.before_capture_id)
@@ -444,6 +576,23 @@ def main(argv: list[str] | None = None) -> int:
     collect.add_argument("--public-evidence", required=True)
     collect.add_argument("--forbid-token", action="append", default=[])
 
+    publish = sub.add_parser("publish")
+    publish.add_argument("--public-evidence", required=True)
+    publish.add_argument(
+        "--destination",
+        default=str(
+            REPO_ROOT
+            / "benchmarks"
+            / "nw10"
+            / "performance-preservation-rtx4060ti.v1.json"
+        ),
+    )
+    publish.add_argument(
+        "--status-file",
+        default=str(REPO_ROOT / "benchmarks" / "nw10" / "evidence-status.v1.json"),
+    )
+    publish.add_argument("--forbid-token", action="append", default=[])
+
     compare = sub.add_parser("compare")
     compare.add_argument("--before-evidence", required=True)
     compare.add_argument("--before-capture-id", required=True)
@@ -458,6 +607,27 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "collect-after":
             public = collect_after(args)
+        elif args.command == "publish":
+            status = publish_public_evidence(
+                Path(args.public_evidence),
+                Path(args.destination),
+                Path(args.status_file),
+                forbid_tokens=list(args.forbid_token or []),
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": "published",
+                        "destination": args.destination,
+                        "evidence_status": status.get("evidence_status"),
+                        "reference_capture": status.get("reference_capture"),
+                        "frame_time": status.get("frame_time"),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
         else:
             before = _capture_from_record(
                 _load_json(Path(args.before_evidence)), args.before_capture_id

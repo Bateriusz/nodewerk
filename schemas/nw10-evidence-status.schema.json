@@ -19,12 +19,66 @@
     "frame_time"
   ],
   "properties": {
-    "format": { "const": "nw10-evidence-status" },
-    "version": { "const": 1 },
-    "task": { "const": "NW-10" },
-    "evidence_status": { "type": "string" },
-    "reference_capture": { "const": "pending_reference_capture" },
-    "contract_evidence": { "type": "string" },
-    "physical_evidence": { "type": "string" }
+    "format": {
+      "const": "nw10-evidence-status"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "evidence_status": {
+      "enum": [
+        "pending_physical_windows_capture",
+        "performance_verified_correctness_pending"
+      ]
+    },
+    "reference_capture": {
+      "enum": [
+        "pending_reference_capture",
+        "verified_reference_capture"
+      ]
+    },
+    "contract_evidence": {
+      "type": "string"
+    },
+    "physical_evidence": {
+      "enum": [
+        "pending",
+        "performance_verified"
+      ]
+    },
+    "frame_time": {
+      "enum": [
+        "pending_unverified",
+        "verified_preserved"
+      ]
+    },
+    "performance_preservation": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "reference_binding_id"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified_preserved"
+        },
+        "path": {
+          "const": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "reference_binding_id": {
+          "type": "string",
+          "pattern": "^nw07_perf_ref_v1@sha256:v1:[0-9a-f]{64}$"
+        }
+      }
+    }
   }
 }
