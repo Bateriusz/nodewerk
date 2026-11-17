@@ -3029,16 +3029,30 @@ def export_graph(
         stateful_geometry = nw09_export.present_geometry(document)
         render_width = stateful_geometry[0] if stateful_geometry else 1280
         render_height = stateful_geometry[1] if stateful_geometry else 720
-        physical = schedule.realize_physical_aliases(
-            logical_schedule,
-            package,
-            allocation_query=allocation_query,
-            adapter_identity=adapter_identity,
-            frames_in_flight=settings.frames_in_flight,
-            allow_simulated_allocation=allow_test_payloads,
-            player_width=render_width,
-            player_height=render_height,
-        )
+        # Match the established production export contract: publishing an
+        # artifact must not require an adapter to be present on the export
+        # host.  Without an explicit allocation query, record a conservative
+        # pending realization and let PackagePlayer perform the real adapter
+        # allocation query before runtime placement.  Test payloads may still
+        # use the deterministic simulated realization.
+        if allocation_query is None and not allow_test_payloads:
+            physical = schedule.pending_physical_realization(
+                logical_schedule,
+                adapter_identity="pending-native-adapter",
+                player_width=render_width,
+                player_height=render_height,
+            )
+        else:
+            physical = schedule.realize_physical_aliases(
+                logical_schedule,
+                package,
+                allocation_query=allocation_query,
+                adapter_identity=adapter_identity,
+                frames_in_flight=settings.frames_in_flight,
+                allow_simulated_allocation=allow_test_payloads,
+                player_width=render_width,
+                player_height=render_height,
+            )
         template_path = (
             Path(settings.player_template)
             if settings.player_template
