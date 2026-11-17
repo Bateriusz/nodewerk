@@ -145,7 +145,7 @@ jobs:
           python -m pytest -v tests/test_nw09_review_fixes.py::test_real_generated_stateful_player_launches_with_link_metadata
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build and smoke-test runnable NW-09 examples
+      - name: Build and smoke-test runnable NW-09 examples and Asteroid Tunnel
         shell: pwsh
         run: |
           $template = "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
@@ -158,7 +158,7 @@ jobs:
           python tools/nw09_ci_examples.py --player-template $template --output-dir $output --dxc $dxc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Upload runnable NW-09 examples
+      - name: Upload runnable NW-09 examples and Asteroid Tunnel
         uses: actions/upload-artifact@v4
         with:
           name: nw09-examples-${{ github.sha }}
