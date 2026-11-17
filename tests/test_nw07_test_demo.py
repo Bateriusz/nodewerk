@@ -40,6 +40,13 @@ def test_demo_graph_stays_inside_the_existing_nw07_operator_vocabulary() -> None
     assert (report["render_width"], report["render_height"]) == (1920, 1080)
     assert set(report["operators"]) == set(demo.ALLOWED_OPERATORS)
     assert len(report["demo_shader_specialization"]) == 3
+    assert report["nw09_visual_extensions"] == {
+        "fixed_step_ticks": 400,
+        "fixed_step_hz": 120,
+        "seeded_particle_instances": 128,
+        "temporal_echo_instances": 128,
+        "uses_history_abi": False,
+    }
 
     document = nw03.load_graph(GRAPH)
     optimized = optimizer.optimize_graph(document)
@@ -145,20 +152,51 @@ def test_demo_loop_timeline_closes_exactly_after_one_segment() -> None:
 
 
 def test_tunnel_specialization_keeps_rings_distinct_and_corridor_open() -> None:
-    instances_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_instances_cs.hlsl").read_text(encoding="utf-8")
-    vertex_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_scene_vs.hlsl").read_text(encoding="utf-8")
+    instances_shader = (
+        REPO_ROOT
+        / "shaders"
+        / "nw07_test_demo"
+        / "nw07_test_demo_instances_cs.hlsl"
+    ).read_text(encoding="utf-8")
+    vertex_shader = (
+        REPO_ROOT
+        / "shaders"
+        / "nw07_test_demo"
+        / "nw07_test_demo_scene_vs.hlsl"
+    ).read_text(encoding="utf-8")
+    pixel_shader = (
+        REPO_ROOT
+        / "shaders"
+        / "nw07_test_demo"
+        / "nw07_test_demo_scene_ps.hlsl"
+    ).read_text(encoding="utf-8")
 
-    assert "min(512u" in instances_shader
-    assert "InstanceCount / 2u" in instances_shader
+    # Structural tunnel and hazard corridor remain bounded and deterministic.
+    assert "min(384u" in instances_shader
     assert "lane_u < 0.08" in instances_shader
     assert "lerp(0.56, 0.88" in instances_shader
     assert "float tube = 0.015;" in vertex_shader
     assert "float sway_x = 0.16" in vertex_shader
-    assert "float instance_center_z = LoadFloat(offset + 56u);" in vertex_shader
-    assert "float local_world_z = world.z - instance_center_z;" in vertex_shader
+    assert "float3 instance_center = base_center;" in vertex_shader
     assert "world.z = wrapped_center_z + local_world_z;" in vertex_shader
-    assert "world.z = WrapCentered(world.z - camera_z, TUNNEL_LENGTH);" not in vertex_shader
 
-    pixel_shader = (REPO_ROOT / "shaders" / "nw07_test_demo" / "nw07_test_demo_scene_ps.hlsl").read_text(encoding="utf-8")
-    assert "HashUnit(input.instance_seed) * 0.35" not in pixel_shader
-    assert "Every tunnel ring uses the same stable shading" in pixel_shader
+    # NW-09A visual extensions: 128 seeded particle records and 128 temporal
+    # echo records at the canonical 1024-instance budget.
+    assert "particle_count = min(128u" in instances_shader
+    assert "echo_count = min(128u" in instances_shader
+    assert "StoreUniformTransform(offset, scale, tx, ty, tz, seed, 3u);" in instances_shader
+    assert "source_seed" in instances_shader
+    assert "4u);" in instances_shader
+
+    # Motion is quantized to NW-09's 120 Hz fixed step (400 ticks at 48 kHz).
+    assert "NW09_FIXED_STEP_TICKS = 400u" in vertex_shader
+    assert "simulation_tick = wrapped_tick / NW09_FIXED_STEP_TICKS" in vertex_shader
+    assert "temporal_age_steps = 6u + (instance_seed % 18u)" in vertex_shader
+    assert "BuildParticleStreak" in vertex_shader
+
+    # Particle emission and delayed echoes are visually distinct and feed the
+    # existing bloom/tonemap path; no new runtime or History ABI is introduced.
+    assert "input.instance_flags == 3u" in pixel_shader
+    assert "input.instance_flags == 4u" in pixel_shader
+    assert "simulation_tick = Tick / NW09_FIXED_STEP_TICKS" in pixel_shader
+    assert "clip(coverage - 0.62)" in pixel_shader
