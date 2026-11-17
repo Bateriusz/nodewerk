@@ -167,11 +167,24 @@ def _artifact_summary(capture: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _walk_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            yield str(key)
+            yield from _walk_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _walk_strings(item)
+
+
 def _scan_public_payload(value: Mapping[str, Any], forbid_tokens: list[str]) -> None:
-    text = json.dumps(value, sort_keys=True, ensure_ascii=False)
-    if _WINDOWS_USER_PATH.search(text) or _UNIX_HOME_PATH.search(text):
-        raise ValueError("public evidence contains a local user-profile path")
-    folded = text.casefold()
+    strings = list(_walk_strings(value))
+    for item in strings:
+        if _WINDOWS_USER_PATH.search(item) or _UNIX_HOME_PATH.search(item):
+            raise ValueError("public evidence contains a local user-profile path")
+    folded = "\n".join(strings).casefold()
     for token in forbid_tokens:
         token = token.strip()
         if token and token.casefold() in folded:
