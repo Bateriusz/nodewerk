@@ -35,7 +35,7 @@ RELATIVE_ALERT_PERCENT = 10.0
 _ALLOWED_AFTER_VALIDATION_REASONS = {
     "capture does not reference the exact final artifact",
 }
-_WINDOWS_USER_PATH = re.compile(r"(?i)[A-Z]:\\\\Users\\\\[^\\\\\"\s]+")
+_WINDOWS_USER_PATH = re.compile(r"(?i)[A-Z]:\\Users\\[^\\\"\\s]+")
 _UNIX_HOME_PATH = re.compile(r"(?i)/home/[^/\"\s]+")
 
 
