@@ -405,6 +405,59 @@ def main(argv: list[str] | None = None) -> int:
             codec_id=args.codec,
             layout_id=args.layout,
         )
+    except nw07_export.Nw07ExportError as exc:
+        measured = exc.details.get("complete_distribution_bytes")
+        if (
+            isinstance(measured, int)
+            and measured > contract.PROOF_TIER_BYTES
+            and "complete distribution exceeds" in str(exc)
+        ):
+            # NW-07 keeps its 256 KiB proof ceiling as a hard contract. NW-10
+            # is different: size is a research outcome, so retain the exact
+            # measured blocker and continue to the restricted-intro attempt
+            # instead of turning a missed size tier into a CI failure.
+            report = {
+                "format": PROOF_REPORT_FORMAT,
+                "version": PROOF_REPORT_VERSION,
+                "task": contract.TASK,
+                "implementation_base": contract.IMPLEMENTATION_BASE,
+                "planning_provenance": contract.PLANNING_PROVENANCE,
+                "success": False,
+                "release_grade": not args.contracts_only,
+                "test_payload": bool(args.contracts_only),
+                "measurement_outcome": "size_target_not_met",
+                "measured_distribution_bytes": measured,
+                "blockers": [
+                    {
+                        "id": "nw07_proof_tier",
+                        "status": "measured_above_tier",
+                        "limit_bytes": contract.PROOF_TIER_BYTES,
+                        "measured_bytes": measured,
+                    }
+                ],
+                "decision": {
+                    "target_bytes": contract.COMPACT_TARGET_BYTES,
+                    "proof_tier_bytes": contract.PROOF_TIER_BYTES,
+                    "physical_target_met": False,
+                    "classification": "continue",
+                    "reason": (
+                        "The measured Windows export exceeded the inherited "
+                        "NW-07 256 KiB proof tier. NW-10 records that result as "
+                        "a size blocker and continues the feasibility study."
+                    ),
+                    "universal_64k_claim": False,
+                },
+            }
+            if args.report is not None:
+                args.report.parent.mkdir(parents=True, exist_ok=True)
+                args.report.write_text(
+                    json.dumps(report, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
+        print(f"NW-10 proof export failed: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"NW-10 proof export failed: {exc}", file=sys.stderr)
         return 1

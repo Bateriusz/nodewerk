@@ -7,7 +7,7 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "df029377ca26a3453d75ea9217cc2013bfcdf3ed4e87947eee37721cea313bc5"
+      "sha256": "62d93ec95e24aa6315eff44bdce57f335b47e693c875457cec41080b2d691220"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",

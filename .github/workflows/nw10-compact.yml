@@ -30,15 +30,21 @@ jobs:
           -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
       - name: Compile compact decoder in the frozen host path
         run: cmake --build build/nw10-frozen-host --target nw07_frozen_host_compile --parallel 2
-      - name: Run NW-10 contract tests
-        run: python -m pytest -q tests/test_nw10_*.py
       - name: Regenerate deterministic contract evidence
         env:
           NODEWERK_NW03_TEST_DIGEST: "1"
+        run: python tools/nw10_evidence.py --output-dir build/nw10-evidence
+      - name: Upload regenerated contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-regenerated-contract-evidence
+          path: build/nw10-evidence/**
+      - name: Run NW-10 contract tests
+        run: python -m pytest -q tests/test_nw10_*.py
+      - name: Verify deterministic contract evidence matches archive
         run: |
-          python tools/nw10_evidence.py --output-dir build/nw10-evidence
           python - <<'PY'
-          import hashlib, json
           from pathlib import Path
           for name in ("compact-proof.v1.json", "intro-profile.v1.json", "evidence-status.v1.json"):
               built = Path("build/nw10-evidence") / name
@@ -104,24 +110,53 @@ jobs:
             --player-template $template `
             --dxc $dxc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Measure measured single-file sizes and dependency closure
+      - name: Measure single-file sizes and dependency closure
         shell: pwsh
         run: |
           $proof = Get-Content "$PWD/build/nw10-proof/report.json" | ConvertFrom-Json
           $intro = Get-Content "$PWD/build/nw10-intro/report.json" | ConvertFrom-Json
-          Write-Host ("NW-10 proof compact bytes: " + $proof.compact_candidate.selected_executable_bytes)
-          Write-Host ("NW-10 intro compact bytes: " + $intro.compact_artifact.selected_executable_bytes)
-          $exe = Get-ChildItem "$PWD/build/nw10-proof/compact/*.compact.exe" | Select-Object -First 1
-          if ($null -eq $exe) { Write-Error "Compact executable was not emitted"; exit 1 }
-          python tools/dependency_check.py --binary $exe.FullName > "$PWD/build/nw10-proof/dependency-closure.json"
+          $candidates = @()
+          if ($proof.success -eq $true) {
+            $proofBytes = [int64]$proof.compact_candidate.selected_executable_bytes
+            $candidates += $proofBytes
+            Write-Host ("NW-10 proof compact bytes: " + $proofBytes)
+          } else {
+            $proofBytes = [int64]$proof.measured_distribution_bytes
+            $candidates += $proofBytes
+            Write-Host ("NW-10 proof measured blocker bytes: " + $proofBytes)
+          }
+          $introBytes = [int64]$intro.compact_artifact.selected_executable_bytes
+          $candidates += $introBytes
+          Write-Host ("NW-10 intro compact bytes: " + $introBytes)
+          $minimum = ($candidates | Measure-Object -Minimum).Minimum
+          $outcome = [ordered]@{
+            target_bytes = 65536
+            minimum_measured_bytes = [int64]$minimum
+            target_met = ([int64]$minimum -le 65536)
+            classification = [string]$intro.decision.classification
+            proof_measured_bytes = $proofBytes
+            intro_measured_bytes = $introBytes
+            universal_64k_claim = $false
+          }
+          $outcome | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 "$PWD/build/nw10-windows-size-outcome.json"
+          $exe = Get-ChildItem "$PWD/build/nw10-proof/compact/*.compact.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $exe) {
+            $exe = Get-ChildItem "$PWD/build/nw10-intro/compact/*.compact.exe" | Select-Object -First 1
+          }
+          if ($null -eq $exe) { Write-Error "No measured compact executable was emitted"; exit 1 }
+          python tools/dependency_check.py --binary $exe.FullName > "$PWD/build/nw10-dependency-closure.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Smoke-run compact proof artifact
+      - name: Smoke-run measured compact artifact
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "$PWD/build/nw10-proof/compact/*.compact.exe" | Select-Object -First 1
+          $exe = Get-ChildItem "$PWD/build/nw10-proof/compact/*.compact.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $exe) {
+            $exe = Get-ChildItem "$PWD/build/nw10-intro/compact/*.compact.exe" | Select-Object -First 1
+          }
+          if ($null -eq $exe) { Write-Error "No measured compact executable was emitted"; exit 1 }
           $process = Start-Process -FilePath $exe.FullName -ArgumentList "--frames","2" -PassThru -Wait
           if ($process.ExitCode -ne 0) {
-            Write-Error "Compact proof executable failed with exit code $($process.ExitCode)"
+            Write-Error "Measured compact executable failed with exit code $($process.ExitCode)"
             exit $process.ExitCode
           }
       - name: Upload Windows NW-10 evidence
@@ -132,4 +167,6 @@ jobs:
           path: |
             build/nw10-proof/**
             build/nw10-intro/**
+            build/nw10-windows-size-outcome.json
+            build/nw10-dependency-closure.json
             ${{ runner.temp }}/nw10-bootstrap-provenance.json

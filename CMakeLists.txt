@@ -179,12 +179,14 @@ add_dependencies(nw_player_bootstrap nw_offline_display_shader)
 
 if(WIN32)
     target_link_libraries(nw_player_bootstrap PUBLIC
-        cabinet
         d3d12
         dxgi
         user32
         kernel32
     )
+    if(NW10_COMPACT_PACKAGE)
+        target_link_libraries(nw_player_bootstrap PUBLIC cabinet)
+    endif()
 endif()
 
 add_executable(nw_empty_player
@@ -360,14 +362,16 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
     )
     add_dependencies(nw05_player_bootstrap nw_offline_shaders)
     add_dependencies(nw05_player_bootstrap nw_offline_display_shader)
-    if(WIN32 AND NW10_COMPACT_PACKAGE)
+    if(WIN32)
         target_link_libraries(nw05_player_bootstrap PUBLIC
-            cabinet
             d3d12
             dxgi
             user32
             kernel32
         )
+        if(NW10_COMPACT_PACKAGE)
+            target_link_libraries(nw05_player_bootstrap PUBLIC cabinet)
+        endif()
     endif()
 
     # The frozen diagnostic fixture links the full external-package decoder.
@@ -406,14 +410,16 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
         )
         add_dependencies(nw05_player_bootstrap_diagnostic nw_offline_shaders)
         add_dependencies(nw05_player_bootstrap_diagnostic nw_offline_display_shader)
-        if(WIN32 AND NW10_COMPACT_PACKAGE)
+        if(WIN32)
             target_link_libraries(nw05_player_bootstrap_diagnostic PUBLIC
-                cabinet
                 d3d12
                 dxgi
                 user32
                 kernel32
             )
+            if(NW10_COMPACT_PACKAGE)
+                target_link_libraries(nw05_player_bootstrap_diagnostic PUBLIC cabinet)
+            endif()
         endif()
     endif()
 endif()

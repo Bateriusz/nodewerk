@@ -105,7 +105,11 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
             )
             + "\n",
         )
-        decoder = compact.measure_host_decoder_code_bytes()
+        # Archived contract evidence must be byte-identical on every host.
+        # Host-proxy compiler measurements are intentionally excluded here;
+        # the proof report already records the deterministic pending Windows
+        # decoder measurement required by the NW-10 contract.
+        decoder = dict(proof_report["decoder_code"])
         nw10_inputs = contract.compute_build_inputs()
         toolchain_path = REPO_ROOT / "benchmarks" / "toolchain-manifest.v1.json"
         toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))

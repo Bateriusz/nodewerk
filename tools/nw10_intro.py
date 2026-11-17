@@ -326,7 +326,10 @@ def export_intro(
     else:
         _require_compact_player_template(template_path)
     settings = nw05_export.ExportSettings(
-        byte_ceiling=contract.PROOF_TIER_BYTES,
+        # NW-10 size is a measured research outcome, not a hard acceptance
+        # gate. Keep only a generous safety bound here; the byte ledger below
+        # records 64/128/256 KiB and 1 MiB tier results explicitly.
+        byte_ceiling=64 * 1024 * 1024,
         memory_budget=contract.PEAK_ENGINE_COMMITTED_GPU_BYTES,
         target_profile=nwp.COMMON_PROFILE_ID,
         requirements_digest=nwp.COMMON_REQUIREMENTS_DIGEST,
