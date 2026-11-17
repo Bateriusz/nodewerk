@@ -32,7 +32,8 @@
       "enum": [
         "pending_physical_windows_capture",
         "performance_verified_correctness_pending",
-        "performance_and_compact_verified_correctness_pending"
+        "performance_and_compact_verified_correctness_pending",
+        "performance_compact_and_correctness_verified_system_pending"
       ]
     },
     "reference_capture": {
@@ -47,7 +48,8 @@
     "physical_evidence": {
       "enum": [
         "pending",
-        "performance_verified"
+        "performance_verified",
+        "performance_and_correctness_verified"
       ]
     },
     "frame_time": {
@@ -78,6 +80,41 @@
         "reference_binding_id": {
           "type": "string",
           "pattern": "^nw07_perf_ref_v1@sha256:v1:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "correctness_evidence": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "package_sha256",
+        "worst_absolute_error",
+        "worst_relative_error"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified"
+        },
+        "path": {
+          "const": "benchmarks/nw10/common-artifact-correctness.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "package_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "worst_absolute_error": {
+          "type": "number",
+          "minimum": 0
+        },
+        "worst_relative_error": {
+          "type": "number",
+          "minimum": 0
         }
       }
     },
