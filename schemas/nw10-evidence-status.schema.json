@@ -31,7 +31,8 @@
     "evidence_status": {
       "enum": [
         "pending_physical_windows_capture",
-        "performance_verified_correctness_pending"
+        "performance_verified_correctness_pending",
+        "performance_and_compact_verified_correctness_pending"
       ]
     },
     "reference_capture": {
@@ -77,6 +78,49 @@
         "reference_binding_id": {
           "type": "string",
           "pattern": "^nw07_perf_ref_v1@sha256:v1:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "compact_feasibility": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "source_run_id",
+        "target_met",
+        "minimum_measured_candidate_bytes",
+        "minimum_validated_runnable_bytes",
+        "validated_mode"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified_windows_runtime"
+        },
+        "path": {
+          "const": "benchmarks/nw10/windows-compact-feasibility.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "target_met": {
+          "const": false
+        },
+        "minimum_measured_candidate_bytes": {
+          "type": "integer",
+          "minimum": 65537
+        },
+        "minimum_validated_runnable_bytes": {
+          "type": "integer",
+          "minimum": 65537
+        },
+        "validated_mode": {
+          "const": "canonical_fallback"
         }
       }
     }

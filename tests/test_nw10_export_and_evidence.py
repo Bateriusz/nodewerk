@@ -290,3 +290,46 @@ def test_dependency_and_build_input_accounting_cover_the_compact_decoder() -> No
     assert "#include <compressapi.h>" not in decoder_source
     assert "CreateDecompressor" in decoder_source
     assert "kCompressAlgorithmMszip = 2u" in decoder_source
+
+
+def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_closed() -> None:
+    path = REPO_ROOT / "benchmarks" / "nw10" / "windows-compact-feasibility.v1.json"
+    validate_file_against_schema(
+        path, REPO_ROOT / "schemas" / "nw10-windows-compact-feasibility.schema.json"
+    )
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["target_bytes"] == 65_536
+    assert record["target_met"] is False
+    assert record["classification"] == "continue"
+    assert record["universal_64k_claim"] is False
+    assert record["measurements"]["minimum_measured_candidate_bytes"] == 219_710
+    assert record["compact_candidate"]["runtime_status"] == "rejected_runtime_failure"
+    assert record["compact_candidate"]["exit_code"] == 70
+    assert record["compact_candidate"]["failure_classification"] == "embedded_package_invalid"
+    assert record["compact_candidate"]["counted_as_validated_runnable"] is False
+    assert record["measurements"]["minimum_validated_runnable_bytes"] == 222_058
+    assert record["measurements"]["validated_mode"] == "canonical_fallback"
+    assert record["canonical_fallback"]["runtime_status"] == "validated_runnable"
+    assert record["canonical_fallback"]["exit_code"] == 0
+    assert record["canonical_fallback"]["dependency_closure"]["closure_verified"] is True
+    assert record["canonical_fallback"]["dependency_closure"]["sidecar_files"] == []
+    assert record["source"]["run_id"] == 44_181_057_725
+    assert record["privacy"]["raw_stdout_stderr_included"] is False
+    assert record["privacy"]["runner_paths_included"] is False
+    assert record["privacy"]["user_profile_paths_included"] is False
+    text = json.dumps(record).casefold()
+    for token in ("c:\\\\users\\\\", "/home/", "micha", "michal", "matyl"):
+        assert token not in text
+
+    status = json.loads(
+        (REPO_ROOT / "benchmarks" / "nw10" / "evidence-status.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert status["evidence_status"] == "performance_and_compact_verified_correctness_pending"
+    assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
+    assert status["compact_feasibility"]["target_met"] is False
+    assert status["compact_feasibility"]["minimum_measured_candidate_bytes"] == 219_710
+    assert status["compact_feasibility"]["minimum_validated_runnable_bytes"] == 222_058
+    assert status["ada_correctness"] == "pending_unverified"
+    assert status["blackwell_correctness"] == "pending_unverified"

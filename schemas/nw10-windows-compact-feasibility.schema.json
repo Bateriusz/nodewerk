@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-windows-compact-feasibility.schema.json",
+  "title": "Nodewerk NW-10 Windows compact feasibility evidence",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "target_bytes",
+    "target_met",
+    "classification",
+    "universal_64k_claim",
+    "source",
+    "measurements",
+    "compact_candidate",
+    "canonical_fallback",
+    "blocker",
+    "acceptance_linkage",
+    "privacy"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw10-windows-compact-feasibility"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "implementation_base": {
+      "const": "c7a73ce64a15973fc18b384543894e68ee2464e8"
+    },
+    "target_bytes": {
+      "const": 65536
+    },
+    "target_met": {
+      "const": false
+    },
+    "classification": {
+      "const": "continue"
+    },
+    "universal_64k_claim": {
+      "const": false
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "kind",
+        "workflow",
+        "run_id",
+        "head_sha",
+        "artifact_name",
+        "artifact_id",
+        "artifact_digest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "github_actions_windows_runtime"
+        },
+        "workflow": {
+          "const": "NW-10 Compact Export and Restricted Intro"
+        },
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "head_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "artifact_name": {
+          "const": "nw10-windows-compact-evidence"
+        },
+        "artifact_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifact_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "measurements": {
+      "type": "object",
+      "required": [
+        "proof_measured_bytes",
+        "minimum_measured_candidate_bytes",
+        "minimum_validated_runnable_bytes",
+        "validated_mode"
+      ],
+      "properties": {
+        "proof_measured_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum_measured_candidate_bytes": {
+          "type": "integer",
+          "minimum": 65537
+        },
+        "minimum_validated_runnable_bytes": {
+          "type": "integer",
+          "minimum": 65537
+        },
+        "validated_mode": {
+          "const": "canonical_fallback"
+        }
+      }
+    },
+    "compact_candidate": {
+      "type": "object",
+      "required": [
+        "bytes",
+        "sha256",
+        "runtime_status",
+        "exit_code",
+        "failure_classification",
+        "counted_as_validated_runnable"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "const": "rejected_runtime_failure"
+        },
+        "exit_code": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "failure_classification": {
+          "const": "embedded_package_invalid"
+        },
+        "counted_as_validated_runnable": {
+          "const": false
+        }
+      }
+    },
+    "canonical_fallback": {
+      "type": "object",
+      "required": [
+        "bytes",
+        "sha256",
+        "runtime_status",
+        "exit_code",
+        "link_manifest_verified",
+        "present_sync_interval",
+        "dependency_closure"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "const": "validated_runnable"
+        },
+        "exit_code": {
+          "const": 0
+        },
+        "link_manifest_verified": {
+          "const": true
+        },
+        "present_sync_interval": {
+          "const": 0
+        },
+        "dependency_closure": {
+          "type": "object",
+          "required": [
+            "closure_verified",
+            "sidecar_files",
+            "canonical_imports"
+          ],
+          "properties": {
+            "closure_verified": {
+              "const": true
+            },
+            "sidecar_files": {
+              "type": "array",
+              "maxItems": 0
+            },
+            "canonical_imports": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "exit_code",
+        "measured_bytes",
+        "reason"
+      ],
+      "properties": {
+        "id": {
+          "const": "compact_candidate_runtime"
+        },
+        "status": {
+          "const": "rejected"
+        }
+      }
+    },
+    "acceptance_linkage": {
+      "type": "object",
+      "required": [
+        "byte_ledger",
+        "dominant_costs_source",
+        "tested_alternatives_source",
+        "decision",
+        "true_64k_artifact_delivered"
+      ],
+      "properties": {
+        "byte_ledger": {
+          "const": "benchmarks/nw10/compact-proof.v1.json"
+        },
+        "decision": {
+          "const": "continue"
+        },
+        "true_64k_artifact_delivered": {
+          "const": false
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "raw_stdout_stderr_included",
+        "runner_paths_included",
+        "user_profile_paths_included",
+        "whitelist_generated"
+      ],
+      "properties": {
+        "raw_stdout_stderr_included": {
+          "const": false
+        },
+        "runner_paths_included": {
+          "const": false
+        },
+        "user_profile_paths_included": {
+          "const": false
+        },
+        "whitelist_generated": {
+          "const": true
+        }
+      }
+    }
+  }
+}
