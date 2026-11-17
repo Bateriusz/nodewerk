@@ -471,7 +471,25 @@ def publish_public_evidence(
     status = _load_json(status_path)
     if status.get("format") != "nw10-evidence-status":
         raise ValueError("NW-10 evidence-status file has an unexpected format")
-    status["evidence_status"] = "performance_verified_correctness_pending"
+    current_evidence_status = str(status.get("evidence_status", ""))
+    if current_evidence_status in {
+        "",
+        "pending_physical_windows_capture",
+        "performance_verified_correctness_pending",
+    }:
+        compact = status.get("compact_feasibility")
+        compact_verified = (
+            isinstance(compact, Mapping)
+            and compact.get("status") == "verified_windows_runtime"
+        )
+        status["evidence_status"] = (
+            "performance_and_compact_verified_correctness_pending"
+            if compact_verified
+            else "performance_verified_correctness_pending"
+        )
+    # A later evidence stage may have advanced the aggregate state beyond
+    # performance/compact. Re-running performance publication must never
+    # downgrade that progress.
     status["physical_evidence"] = "performance_verified"
     status["reference_capture"] = "verified_reference_capture"
     status["frame_time"] = "verified_preserved"

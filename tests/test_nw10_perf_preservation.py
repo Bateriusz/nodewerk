@@ -301,3 +301,91 @@ def test_preservation_schema_accepts_float_relative_alert_threshold() -> None:
     public = preservation.validate_preservation(before, after, bound, candidate)
     assert public["comparison"]["relative_alert_threshold_percent"] == 10.0
     validate_instance(public, schema, schema)
+
+
+def test_publish_preserves_existing_compact_progress(tmp_path: Path) -> None:
+    bound, before, after, candidate = _fixture()
+    public = preservation.validate_preservation(before, after, bound, candidate)
+    source = tmp_path / "public.json"
+    source.write_text(json.dumps(public), encoding="utf-8")
+    repo = tmp_path / "repo"
+    destination = repo / "benchmarks" / "nw10" / "performance.json"
+    status_path = repo / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "format": "nw10-evidence-status",
+                "version": 1,
+                "task": "NW-10",
+                "evidence_status": "performance_and_compact_verified_correctness_pending",
+                "contract_evidence": "verified_by_pytest",
+                "physical_evidence": "performance_verified",
+                "reference_capture": "verified_reference_capture",
+                "ada_correctness": "pending_unverified",
+                "blackwell_correctness": "pending_unverified",
+                "clean_system": "pending_unverified",
+                "startup": "pending_unverified",
+                "memory": "pending_unverified",
+                "frame_time": "verified_preserved",
+                "compact_feasibility": {
+                    "status": "verified_windows_runtime"
+                },
+                "files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_root = preservation.REPO_ROOT
+    preservation.REPO_ROOT = repo
+    try:
+        status = preservation.publish_public_evidence(
+            source, destination, status_path
+        )
+    finally:
+        preservation.REPO_ROOT = old_root
+    assert (
+        status["evidence_status"]
+        == "performance_and_compact_verified_correctness_pending"
+    )
+
+
+def test_publish_never_downgrades_unknown_later_evidence_state(tmp_path: Path) -> None:
+    bound, before, after, candidate = _fixture()
+    public = preservation.validate_preservation(before, after, bound, candidate)
+    source = tmp_path / "public.json"
+    source.write_text(json.dumps(public), encoding="utf-8")
+    repo = tmp_path / "repo"
+    destination = repo / "benchmarks" / "nw10" / "performance.json"
+    status_path = repo / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "format": "nw10-evidence-status",
+                "version": 1,
+                "task": "NW-10",
+                "evidence_status": "future_more_advanced_state",
+                "contract_evidence": "verified_by_pytest",
+                "physical_evidence": "performance_verified",
+                "reference_capture": "verified_reference_capture",
+                "ada_correctness": "verified",
+                "blackwell_correctness": "verified",
+                "clean_system": "pending_unverified",
+                "startup": "pending_unverified",
+                "memory": "pending_unverified",
+                "frame_time": "verified_preserved",
+                "files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_root = preservation.REPO_ROOT
+    preservation.REPO_ROOT = repo
+    try:
+        status = preservation.publish_public_evidence(
+            source, destination, status_path
+        )
+    finally:
+        preservation.REPO_ROOT = old_root
+    assert status["evidence_status"] == "future_more_advanced_state"
