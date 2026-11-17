@@ -246,3 +246,13 @@ def test_dependency_and_build_input_accounting_cover_the_compact_decoder() -> No
     assert "kCompactLayoutAos" in header
     assert "kCompactLayoutSoa" in header
     assert "kCompactMaxDecodedBytes" in header
+    decoder_source = (
+        REPO_ROOT / "src" / "package" / "nw_compact.cpp"
+    ).read_text(encoding="utf-8")
+    # Keep the compact decoder buildable in hosted clang-cl environments that
+    # do not propagate the SDK target-architecture macros through
+    # compressapi.h/winnt.h. The declaration-only shim preserves the inbox
+    # cabinet.dll ABI without introducing a replacement compressor.
+    assert "#include <compressapi.h>" not in decoder_source
+    assert "CreateDecompressor" in decoder_source
+    assert "kCompressAlgorithmMszip = 2u" in decoder_source

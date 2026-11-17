@@ -10,14 +10,23 @@
 #include <vector>
 
 #if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <compressapi.h>
-#include <windows.h>
+// Declare the small Windows Compression API surface we use without including
+// the SDK's compressapi.h/windows.h chain.  Some hosted clang-cl
+// configurations compile the player objects without the SDK target-architecture
+// macros that winnt.h requires; this keeps the compact decoder buildable while
+// preserving the same inbox cabinet.dll ABI.  This is a declaration-only shim,
+// not a replacement compressor.
+extern "C" {
+__declspec(dllimport) void* CreateDecompressor(
+    std::uint32_t algorithm, void* allocation_routines,
+    void** decompressor_handle);
+__declspec(dllimport) int Decompress(
+    void* decompressor_handle, const void* compressed_data,
+    std::size_t compressed_size, void* uncompressed_buffer,
+    std::size_t uncompressed_size, std::size_t* uncompressed_data_size);
+__declspec(dllimport) int CloseDecompressor(
+    void* decompressor_handle);
+}
 #pragma comment(lib, "cabinet.lib")
 #endif
 
@@ -38,6 +47,7 @@ constexpr std::uint8_t kRecordRaw = 0u;
 constexpr std::uint8_t kRecordReference = 1u;
 constexpr std::size_t kRecordAosSize = 14u;
 constexpr std::size_t kRecordSoaSize = 13u;
+constexpr std::uint32_t kCompressAlgorithmMszip = 2u;
 
 std::uint16_t ReadU16(const std::uint8_t* data) {
     return static_cast<std::uint16_t>(data[0]) |
@@ -62,18 +72,17 @@ bool CheckedMul(std::size_t left, std::size_t right, std::size_t limit,
 bool DecodeMszip(const std::uint8_t* payload, std::size_t payload_size,
                  std::size_t expected_size, std::vector<std::uint8_t>* output) {
 #if defined(_WIN32)
-    HANDLE decompressor = nullptr;
-    if (!CreateDecompressor(COMPRESS_ALGORITHM_MSZIP, nullptr, &decompressor)) {
+    void* decompressor = nullptr;
+    if (CreateDecompressor(kCompressAlgorithmMszip, nullptr, &decompressor) ==
+        nullptr) {
         return false;
     }
     output->assign(expected_size, 0u);
-    SIZE_T written = 0u;
-    const BOOL ok = Decompress(decompressor, payload,
-                               static_cast<SIZE_T>(payload_size),
-                               output->data(),
-                               static_cast<SIZE_T>(output->size()), &written);
+    std::size_t written = 0u;
+    const int ok = Decompress(decompressor, payload, payload_size,
+                              output->data(), output->size(), &written);
     CloseDecompressor(decompressor);
-    return ok != 0 && written == static_cast<SIZE_T>(expected_size);
+    return ok != 0 && written == expected_size;
 #else
     (void)payload;
     (void)payload_size;

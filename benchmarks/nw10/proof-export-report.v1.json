@@ -67,7 +67,7 @@
         },
         "canonical_package_bytes": 17626,
         "decoder_code_bytes": null,
-        "decoder_source_bytes": 10849,
+        "decoder_source_bytes": 11525,
         "embedded_footer_bytes": 92,
         "embedded_manifest_binding_bytes": 32,
         "encoded_package_bytes": 17626,
@@ -155,7 +155,7 @@
         },
         "canonical_package_bytes": 17626,
         "decoder_code_bytes": null,
-        "decoder_source_bytes": 10849,
+        "decoder_source_bytes": 11525,
         "embedded_footer_bytes": 92,
         "embedded_manifest_binding_bytes": 32,
         "encoded_package_bytes": 4093,
@@ -587,7 +587,7 @@
     "shaders/nw06/nw06_scene_vs.hlsl": "f0d909b5a20817508f885d7f8754f628dd95dfa3b6898066bff9a5f7e8af4300",
     "shaders/nw06/nw06_tonemap_cs.hlsl": "bf0da426af7140076f5e20eba2e0fc7b717e4bef1068b987a1f2c1fdc9462429",
     "shaders/nw10/nw10_sdf_intro_cs.hlsl": "8b76e09a323282bd34b89154de1332e8482ff2a358dfd3b571aa5a051500ce55",
-    "src/package/nw_compact.cpp": "130d7ac4260c75f2be56eed04f0e9b08f4ae2c5527d690378bd54fb06591f729",
+    "src/package/nw_compact.cpp": "09162d468a6a715aca74011727adfe661ba04a1d99afd093ffa4ad57e8f4d02d",
     "src/package/nw_compact.h": "9fca4faa57c6c22187864ca7c1bd2e4838fd0ac5e82100fdfd5dfbf9764a8b93",
     "src/package/nwp_format.cpp": "f1de9a1dde6c3a877eced60a8fa7e3192cf7ab1a8738d7d2ac62fdd9ce2286ed",
     "src/package/nwp_format.h": "95db908691ef077e5187a6d449c8be64d19d4b4a7b17ac678f41aecedd78314d",
@@ -637,7 +637,7 @@
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:016cfab399e1e68fdfad2c9f50d354f72c7ba2ee975cb8319be3d22a9e01329d",
+  "nw10_build_inputs_digest": "sha256:v1:6bdf80296019d1eb578da1e7aaba2d657287a0033631d74ef353fb3c5fb388dc",
   "performance_evidence": {
     "application_pipeline_cache": false,
     "classification": "pending_physical",
@@ -887,7 +887,7 @@
         "specialized_build_root": "<nw10-temporary-root>/.nw10-<temporary-dir>/repro/clean-a-build",
         "specialized_build_root_status": "requested_path_not_created"
       },
-      "digest": "sha256:v1:3cb8adec8127a924b7158d930c23a587fae7be2e35c0f7f4b0e9ec2c24fc5af6",
+      "digest": "sha256:v1:2894ddfab25bba13009cadf5c9593bb08b58189630aa3e20a5cbc697bd62d572",
       "files": {
         "CMakeLists.txt": "bc06487143c3b8624c477554532fe22086bc1ee439d86ee9d3f6b87a2831327d",
         "CMakePresets.json": "739675ece10175933506cab88c1bd1e1458e0df24f6819af6b05fbfcf79bb43f",
@@ -913,7 +913,7 @@
         "shaders/nw06/nw06_scene_ps.hlsl": "f263d0dee0ff7ebc89beeeb604b3ae9f495ef50d3d503b92f3888395089d1e91",
         "shaders/nw06/nw06_scene_vs.hlsl": "f0d909b5a20817508f885d7f8754f628dd95dfa3b6898066bff9a5f7e8af4300",
         "shaders/nw06/nw06_tonemap_cs.hlsl": "bf0da426af7140076f5e20eba2e0fc7b717e4bef1068b987a1f2c1fdc9462429",
-        "src/package/nw_compact.cpp": "130d7ac4260c75f2be56eed04f0e9b08f4ae2c5527d690378bd54fb06591f729",
+        "src/package/nw_compact.cpp": "09162d468a6a715aca74011727adfe661ba04a1d99afd093ffa4ad57e8f4d02d",
         "src/package/nw_compact.h": "9fca4faa57c6c22187864ca7c1bd2e4838fd0ac5e82100fdfd5dfbf9764a8b93",
         "src/package/nwp_format.cpp": "f1de9a1dde6c3a877eced60a8fa7e3192cf7ab1a8738d7d2ac62fdd9ce2286ed",
         "src/package/nwp_format.h": "95db908691ef077e5187a6d449c8be64d19d4b4a7b17ac678f41aecedd78314d",
@@ -958,7 +958,7 @@
         "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
         "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
       },
-      "frozen_digest": "sha256:v1:3cb8adec8127a924b7158d930c23a587fae7be2e35c0f7f4b0e9ec2c24fc5af6",
+      "frozen_digest": "sha256:v1:2894ddfab25bba13009cadf5c9593bb08b58189630aa3e20a5cbc697bd62d572",
       "matches_frozen_digest": true,
       "optimization": "O2",
       "player_template_bytes": 258,
@@ -972,7 +972,7 @@
         "windows_min_build": 22631
       }
     },
-    "build_inputs_digest": "sha256:v1:3cb8adec8127a924b7158d930c23a587fae7be2e35c0f7f4b0e9ec2c24fc5af6",
+    "build_inputs_digest": "sha256:v1:2894ddfab25bba13009cadf5c9593bb08b58189630aa3e20a5cbc697bd62d572",
     "clean_build_directories": [
       "<nw10-temporary-root>/.nw10-<temporary-dir>/repro/clean-a",
       "<nw10-temporary-root>/.nw10-<temporary-dir>/repro/clean-b"
@@ -1009,7 +1009,7 @@
     "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
     "release_grade": false,
     "reproducibility": {
-      "build_inputs_digest": "sha256:v1:3cb8adec8127a924b7158d930c23a587fae7be2e35c0f7f4b0e9ec2c24fc5af6",
+      "build_inputs_digest": "sha256:v1:2894ddfab25bba13009cadf5c9593bb08b58189630aa3e20a5cbc697bd62d572",
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",
         "executable_sha256": "1401bd0f2c35cb9297069406d73338262cb570e0a6899fc9cf3e098cb56202c5",
