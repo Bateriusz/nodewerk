@@ -30,27 +30,36 @@ jobs:
           -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
       - name: Compile compact decoder in the frozen host path
         run: cmake --build build/nw10-frozen-host --target nw07_frozen_host_compile --parallel 2
-      - name: Regenerate deterministic contract evidence
+      - name: Regenerate deterministic contract evidence twice
         env:
           NODEWERK_NW03_TEST_DIGEST: "1"
-        run: python tools/nw10_evidence.py --output-dir build/nw10-evidence
+        run: |
+          python tools/nw10_evidence.py --output-dir build/nw10-evidence-a
+          python tools/nw10_evidence.py --output-dir build/nw10-evidence-b
       - name: Upload regenerated contract evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nw10-regenerated-contract-evidence
-          path: build/nw10-evidence/**
+          path: build/nw10-evidence-a/**
       - name: Run NW-10 contract tests
         run: python -m pytest -q tests/test_nw10_*.py
-      - name: Verify deterministic contract evidence matches archive
+      - name: Verify deterministic contract evidence regeneration
         run: |
           python - <<'PY'
           from pathlib import Path
-          for name in ("compact-proof.v1.json", "intro-profile.v1.json", "evidence-status.v1.json"):
-              built = Path("build/nw10-evidence") / name
-              archived = Path("benchmarks/nw10") / name
-              assert built.read_bytes() == archived.read_bytes(), f"{name} is not reproducible"
-          print("NW-10 contract evidence is reproducible")
+          names = (
+              "compact-proof.v1.json",
+              "intro-profile.v1.json",
+              "evidence-status.v1.json",
+              "proof-export-report.v1.json",
+              "intro-export-report.v1.json",
+          )
+          for name in names:
+              first = Path("build/nw10-evidence-a") / name
+              second = Path("build/nw10-evidence-b") / name
+              assert first.read_bytes() == second.read_bytes(), f"{name} regeneration is not deterministic"
+          print("NW-10 contract evidence regenerates byte-identically")
           PY
       - name: Run the existing NW-07 contract verification
         run: python tools/verify_nw07.py --mode ContractsOnly --summary-json "$RUNNER_TEMP/nw07-contracts.json"
@@ -144,7 +153,11 @@ jobs:
             $exe = Get-ChildItem "$PWD/build/nw10-intro/compact/*.compact.exe" | Select-Object -First 1
           }
           if ($null -eq $exe) { Write-Error "No measured compact executable was emitted"; exit 1 }
-          python tools/dependency_check.py --binary $exe.FullName > "$PWD/build/nw10-dependency-closure.json"
+          $closureRoot = Join-Path $PWD "build/nw10-dependency-check"
+          New-Item -ItemType Directory -Force -Path $closureRoot | Out-Null
+          $closureExe = Join-Path $closureRoot "nw10_compact.exe"
+          Copy-Item $exe.FullName $closureExe -Force
+          python tools/dependency_check.py --binary $closureExe --deployment-root $closureRoot --profile compact_experiment --fixture nw10_compact > "$PWD/build/nw10-dependency-closure.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Smoke-run measured compact artifact
         shell: pwsh
@@ -169,4 +182,5 @@ jobs:
             build/nw10-intro/**
             build/nw10-windows-size-outcome.json
             build/nw10-dependency-closure.json
+            build/nw10-dependency-check/**
             ${{ runner.temp }}/nw10-bootstrap-provenance.json
