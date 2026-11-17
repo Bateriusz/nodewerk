@@ -201,10 +201,15 @@ $zip = Join-Path $output ("nw10-correctness-" + $Tier + "-bundle.zip")
 Remove-Item $zip -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $zip -CompressionLevel Optimal
 
+$rawBytes = [int64]0
+foreach ($row in $rows) {
+    $rawBytes += [int64]$row["bytes"]
+}
+
 Write-Host "[NW10 TRANSFER] STATUS=$status"
 Write-Host "[NW10 TRANSFER] TIER=$Tier"
 Write-Host "[NW10 TRANSFER] GPU=$adapter"
 Write-Host "[NW10 TRANSFER] DRIVER=$($values["NW05_DRIVER"])"
 Write-Host "[NW10 TRANSFER] CAPTURES=$($rows.Count)"
-Write-Host "[NW10 TRANSFER] RAW_BYTES=$(($rows | Measure-Object -Property bytes -Sum).Sum)"
+Write-Host "[NW10 TRANSFER] RAW_BYTES=$rawBytes"
 Write-Host "[NW10 TRANSFER] RESULT_BUNDLE=$zip"
