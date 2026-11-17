@@ -145,6 +145,27 @@ jobs:
           python -m pytest -v tests/test_nw09_review_fixes.py::test_real_generated_stateful_player_launches_with_link_metadata
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Build and smoke-test runnable NW-09 examples and Asteroid Tunnel
+        shell: pwsh
+        run: |
+          $template = "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template -PathType Leaf)) {
+            Write-Error "NW-09A generated-player template is unavailable: $template"
+            exit 1
+          }
+          $dxc = (Get-Command dxc -ErrorAction Stop).Source
+          $output = Join-Path $env:RUNNER_TEMP "nw09-examples"
+          python tools/nw09_ci_examples.py --player-template $template --output-dir $output --dxc $dxc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload runnable NW-09 examples and Asteroid Tunnel
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw09-examples-${{ github.sha }}
+          path: ${{ runner.temp }}/nw09-examples/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload NW-01 build-check evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -208,7 +229,24 @@ jobs:
         shell: pwsh
         run: |
           cmake --preset clang-cl-dev
-          cmake --build build/clang-cl-dev --target nw_package_player_fixture nodewerkc
+          cmake --build build/clang-cl-dev --target nw_package_player_fixture nodewerkc nw_graph_cli
+
+          # nw03_compiler.py intentionally keeps its frozen NW-07 compiler
+          # discovery contract. On GitHub's Windows image, generic "c++" maps
+          # to MinGW and can take longer than the helper's 120 s timeout.
+          # Prebuild the exact canonical digest CLI with the pinned clang-cl
+          # CMake toolchain and stage it at the cache path that nw03_compiler
+          # already recognizes. This avoids changing any frozen NW-07 input.
+          $graphCli = Get-ChildItem "build/clang-cl-dev" -Filter "nw_graph_cli.exe" -Recurse |
+            Select-Object -First 1
+          if ($null -eq $graphCli) {
+            Write-Error "Pinned nw_graph_cli.exe was not built."
+            exit 1
+          }
+          $env:NW03_PREBUILT_DIGEST_CLI = $graphCli.FullName
+          python -c "import hashlib, os, shutil, tempfile; from pathlib import Path; sources=[Path('src/graph/nw_graph.cpp'), Path('src/graph/nw_graph_cli.cpp')]; digest=hashlib.sha256(); [digest.update(source.read_bytes()) for source in sources]; target=Path(tempfile.gettempdir()) / ('nw03-nw02-digest-' + digest.hexdigest()[:16]) / 'nw_graph_cli.exe'; target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(Path(os.environ['NW03_PREBUILT_DIGEST_CLI']), target); print(f'Prepared canonical NW-02 digest helper: {target}')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           $fixture = Join-Path $PWD "build/clang-cl-dev/staging/package_player/nw_package_player_fixture.exe"
           if (-not (Test-Path $fixture -PathType Leaf)) {
             Write-Error "NW-04 player fixture was not built."
