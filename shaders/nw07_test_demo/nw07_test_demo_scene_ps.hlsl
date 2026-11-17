@@ -1,5 +1,11 @@
-// NW-07-test-demo branch-only orange/red tunnel and asteroid shading.
-// Uses the existing NW-06 material, noise and directional-light bindings.
+// Asteroid Tunnel showcase shading.
+//
+// NW-09A adds two bounded visual layers inside the existing raster pass:
+//   flags=3: bright seeded dust streaks updated on fixed 120 Hz steps
+//   flags=4: dithered delayed asteroid samples that read as temporal echoes
+//
+// Bloom/ACES remain the established NW-06/NW-07 post chain, so the new
+// emissive details naturally create short hot trails without a second runtime.
 
 cbuffer Nw06GraphicsParams : register(b0, space0)
 {
@@ -18,6 +24,7 @@ Buffer<uint> NwMaterials : register(t2, space0);
 Buffer<uint> NwLight : register(t4, space0);
 
 static const float TAU = 6.28318530717958647692;
+static const uint NW09_FIXED_STEP_TICKS = 400u;
 
 struct PSInput
 {
@@ -29,6 +36,7 @@ struct PSInput
     float3 camera_position : TEXCOORD4;
     nointerpolation uint instance_seed : TEXCOORD5;
     nointerpolation uint instance_flags : TEXCOORD6;
+    nointerpolation uint temporal_age_steps : TEXCOORD7;
 };
 
 uint HashU32(uint value)
@@ -79,9 +87,8 @@ float4 ScenePS(PSInput input) : SV_Target
 
     if (input.instance_flags == 1u)
     {
-        // Every tunnel ring uses the same stable shading. Do not introduce
-        // per-instance phase/noise here: at flight speed that turns into
-        // temporal moire and makes the tunnel look like changing patterns.
+        // Structural rings stay stable.  Temporal variation is confined to the
+        // new particle/echo layers so the tunnel never regresses into moire.
         float cross_section = 0.82 + 0.18 * cos(input.uv.y * TAU);
         float3 ring_base = float3(0.62, 0.035, 0.004);
         float3 ring_hot = float3(1.55, 0.19, 0.018);
@@ -92,8 +99,25 @@ float4 ScenePS(PSInput input) : SV_Target
         return float4(color, 1.0);
     }
 
-    // Asteroid/debris: warm rock, strong faceting and a bright rim so hazards
-    // remain readable at speed against the dark tunnel.
+    if (input.instance_flags == 3u)
+    {
+        // Seeded dust: a hot core with deterministic 120 Hz pulsation.  The
+        // existing bloom pass turns these small geometry streaks into glowing
+        // motion accents without adding any fullscreen demo-only pass.
+        uint simulation_tick = Tick / NW09_FIXED_STEP_TICKS;
+        float seed_phase = HashUnit(input.instance_seed ^ 0xd1b54a35u) * TAU;
+        float pulse =
+            0.68 + 0.32 * sin(float(simulation_tick) * 0.19 + seed_phase);
+        float core =
+            0.35 + 0.65 * pow(saturate(1.0 - abs(input.uv.y * 2.0 - 1.0)), 2.0);
+        float3 dust_color = lerp(
+            float3(1.8, 0.22, 0.025),
+            float3(3.4, 1.15, 0.24),
+            HashUnit(input.instance_seed ^ 0x94d049bbu));
+        return float4(dust_color * pulse * core, 1.0);
+    }
+
+    // Asteroid/debris base shading shared by live hazards and delayed echoes.
     float seed_tint = HashUnit(input.instance_seed ^ 0xa511e9b3u);
     float3 rock_a = float3(0.58, 0.075, 0.012);
     float3 rock_b = float3(1.05, 0.28, 0.045);
@@ -102,10 +126,32 @@ float4 ScenePS(PSInput input) : SV_Target
 
     float diffuse = 0.12 + 0.88 * ndotl;
     float rim = pow(1.0 - saturate(dot(normal, view_dir)), 2.7);
-    float3 color =
+    float3 asteroid_color =
         rock * diffuse * light_color
         + float3(1.8, 0.42, 0.055) * rim * 0.65
         + specular_term * float3(1.0, 0.42, 0.12);
 
-    return float4(color, 1.0);
+    if (input.instance_flags == 4u)
+    {
+        // No alpha-blending contract is added for the showcase.  Instead,
+        // stable screen-space dithering creates sparse ghost coverage while
+        // age attenuates the delayed sample.  Bloom integrates the surviving
+        // hot pixels into a convincing feedback-like trail.
+        uint2 pixel = uint2(input.position.xy);
+        uint dither_seed =
+            pixel.x * 0x9e3779b9u
+            ^ pixel.y * 0x85ebca6bu
+            ^ input.instance_seed;
+        float coverage = HashUnit(dither_seed);
+        clip(coverage - 0.62);
+
+        float age = saturate(float(input.temporal_age_steps) / 24.0);
+        float fade = lerp(0.34, 0.10, age);
+        float3 echo_color =
+            asteroid_color * fade
+            + float3(1.4, 0.18, 0.025) * rim * (0.22 * (1.0 - age));
+        return float4(echo_color, 1.0);
+    }
+
+    return float4(asteroid_color, 1.0);
 }
