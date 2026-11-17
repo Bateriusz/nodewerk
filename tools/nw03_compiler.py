@@ -1172,24 +1172,39 @@ def _apply_clamp01_normalisation(nodes: dict[str, GraphNode]) -> None:
                 node.params[name] = [" ".join(normalized)]
 
 
+def _nw02_digest_compiler_names() -> tuple[str, ...]:
+    """Return host-appropriate compiler preference for the digest helper.
+
+    Windows CI enters the pinned clang-cl/MSVC environment before package
+    generation. Prefer that toolchain over generic c++/g++ names, which can
+    resolve to the much slower GitHub-hosted MinGW installation.
+    """
+    if os.name == "nt":
+        return ("clang-cl", "cl", "clang++", "c++", "g++")
+    return ("c++", "g++", "clang++", "clang-cl", "cl")
+
+
 def _ensure_nw02_digest_binary() -> Path | None:
     """Build the authoritative NW-02 digest CLI once when a compiler exists."""
     global _NW02_DIGEST_BINARY
     if _NW02_DIGEST_BINARY is not None:
         return _NW02_DIGEST_BINARY or None  # type: ignore[return-value]
-    compiler = None
-    for name in ("c++", "g++", "clang++", "clang-cl", "cl"):
-        compiler = shutil.which(name)
-        if compiler:
-            break
-    if compiler is None:
+
+    compilers = [
+        resolved
+        for name in _nw02_digest_compiler_names()
+        if (resolved := shutil.which(name)) is not None
+    ]
+    if not compilers:
         _NW02_DIGEST_BINARY = False
         return None
+
     source_dir = REPO_ROOT / "src" / "graph"
     sources = [source_dir / "nw_graph.cpp", source_dir / "nw_graph_cli.cpp"]
     if not all(path.is_file() for path in sources):
         _NW02_DIGEST_BINARY = False
         return None
+
     digest = hashlib.sha256()
     for source in sources:
         digest.update(source.read_bytes())
@@ -1199,8 +1214,12 @@ def _ensure_nw02_digest_binary() -> Path | None:
     executable = output_dir / (
         "nw_graph_cli.exe" if os.name == "nt" else "nw_graph_cli"
     )
-    if not executable.is_file():
-        output_dir.mkdir(parents=True, exist_ok=True)
+    if executable.is_file():
+        _NW02_DIGEST_BINARY = executable
+        return executable
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for compiler in compilers:
         compiler_name = Path(compiler).name.lower()
         if compiler_name in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"}:
             command = [
@@ -1225,14 +1244,25 @@ def _ensure_nw02_digest_binary() -> Path | None:
                 "-o",
                 str(executable),
             ]
-        process = subprocess.run(
-            command, capture_output=True, text=True, check=False, timeout=120
-        )
-        if process.returncode != 0 or not executable.is_file():
-            _NW02_DIGEST_BINARY = False
-            return None
-    _NW02_DIGEST_BINARY = executable
-    return executable
+        try:
+            process = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            # A slow or wedged compiler must not make the canonical helper
+            # unavailable when another supported host compiler is present.
+            continue
+        if process.returncode == 0 and executable.is_file():
+            _NW02_DIGEST_BINARY = executable
+            return executable
+        executable.unlink(missing_ok=True)
+
+    _NW02_DIGEST_BINARY = False
+    return None
 
 
 def _native_nw02_digest(document: GraphDocument) -> str | None:
