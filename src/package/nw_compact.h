@@ -25,7 +25,7 @@ inline constexpr std::uint16_t kCompactLayoutAos = 2u;
 inline constexpr std::uint16_t kCompactLayoutSoa = 3u;
 inline constexpr std::size_t kCompactMaxContainerBytes = 64u * 1024u * 1024u;
 inline constexpr std::size_t kCompactMaxDecodedBytes = 4u * 64u * 1024u * 1024u;
-inline constexpr std::uint32_t kCompactMaxRecords = 1_048_576u;
+inline constexpr std::uint32_t kCompactMaxRecords = 1048576u;
 inline constexpr std::uint32_t kCompactMaxExpansionRatio = 256u;
 
 bool IsCompactPackage(const std::uint8_t* data, std::size_t size_bytes);
