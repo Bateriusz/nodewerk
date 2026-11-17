@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build and stage the two runnable NW-09 CI examples.
+"""Build, smoke-test, and stage the downloadable PR #34 showcase bundle.
 
-NW-09A intentionally reuses the production NW-05/NW-09 generated-player
-export path.  The resulting executables embed their .nwp package and link
-metadata, so the downloadable artifact needs no source checkout, DXC, or
-developer SDK at runtime.
+The bundle contains the two canonical NW-09 History examples plus the
+Asteroid Tunnel showcase imported from PR #30.  Every executable is produced
+through Nodewerk's existing generated-player export path and the exact staged
+bytes are launched before publication.
 """
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import replace
 from pathlib import Path
 from typing import Iterable
 
 import nw05_export
+import nw07_test_demo
 import nwp_package as nwp
 
 
@@ -28,6 +28,8 @@ DEFAULT_BYTE_CEILING = 64 * 1024 * 1024
 DEFAULT_MEMORY_BUDGET = 512 * 1024 * 1024
 SMOKE_TICK = 3200
 SMOKE_SIMULATION_TICK = SMOKE_TICK // 400
+ASTEROID_TUNNEL_NAME = "asteroid-tunnel"
+ASTEROID_TUNNEL_FILENAME = "asteroid-tunnel.exe"
 
 EXAMPLES = (
     (
@@ -44,7 +46,7 @@ EXAMPLES = (
 
 
 class ExampleBuildError(RuntimeError):
-    """Raised when an NW-09A artifact cannot be built or validated."""
+    """Raised when a downloadable showcase artifact cannot be validated."""
 
 
 def _sha256(path: Path) -> str:
@@ -66,14 +68,24 @@ def _parse_player_metrics(stdout: str) -> dict[str, str]:
     return metrics
 
 
-def _validate_smoke_stdout(stdout: str, *, example: str) -> None:
+def _validate_smoke_stdout(
+    stdout: str,
+    *,
+    example: str,
+    require_history: bool = True,
+) -> None:
     metrics = _parse_player_metrics(stdout)
     expected = {
         "NW05_LINK_MANIFEST_VERIFIED": "1",
         "NW05_EXPLICIT_TICK": str(SMOKE_TICK),
-        "NW05_HISTORY_SIMULATION_TICK": str(SMOKE_SIMULATION_TICK),
-        "NW05_HISTORY_PENDING_TICKS": "0",
     }
+    if require_history:
+        expected.update(
+            {
+                "NW05_HISTORY_SIMULATION_TICK": str(SMOKE_SIMULATION_TICK),
+                "NW05_HISTORY_PENDING_TICKS": "0",
+            }
+        )
     missing = [
         f"{key}={value}"
         for key, value in expected.items()
@@ -82,11 +94,16 @@ def _validate_smoke_stdout(stdout: str, *, example: str) -> None:
     if missing:
         raise ExampleBuildError(
             f"{example}: generated player did not report the required "
-            "NW-09 smoke-test markers: " + ", ".join(missing)
+            "smoke-test markers: " + ", ".join(missing)
         )
 
 
-def _smoke_launch(executable: Path, *, example: str) -> None:
+def _smoke_launch(
+    executable: Path,
+    *,
+    example: str,
+    require_history: bool = True,
+) -> None:
     completed = subprocess.run(
         [
             str(executable),
@@ -109,7 +126,11 @@ def _smoke_launch(executable: Path, *, example: str) -> None:
             f"{completed.returncode}: "
             + (completed.stderr.strip() or completed.stdout.strip())
         )
-    _validate_smoke_stdout(completed.stdout, example=example)
+    _validate_smoke_stdout(
+        completed.stdout,
+        example=example,
+        require_history=require_history,
+    )
 
 
 def _write_sha256_manifest(root: Path, files: Iterable[Path]) -> Path:
@@ -139,6 +160,52 @@ def _verify_sha256_manifest(root: Path, manifest: Path) -> None:
             )
 
 
+def _stage_asteroid_tunnel(
+    *,
+    temporary_root: Path,
+    staged_root: Path,
+    player_template: Path,
+    dxc_executable: Path,
+) -> Path:
+    export_root = temporary_root / "export-asteroid-tunnel"
+    report_path = temporary_root / "asteroid-tunnel-export-report.json"
+    result = nw07_test_demo.export_demo(
+        export_root,
+        player_template=player_template,
+        dxc=dxc_executable,
+        build_root=temporary_root / "build-asteroid-tunnel",
+        report_path=report_path,
+        contracts_only=False,
+    )
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    if artifact.executable_bytes is None or not artifact.executable_name:
+        raise ExampleBuildError(
+            "asteroid-tunnel: production export did not produce a generated player"
+        )
+    exported = export_root / artifact.executable_name
+    if not exported.is_file() or exported.stat().st_size == 0:
+        raise ExampleBuildError(
+            f"asteroid-tunnel: generated player is missing or empty: {exported}"
+        )
+
+    example_root = staged_root / ASTEROID_TUNNEL_NAME
+    example_root.mkdir()
+    staged = example_root / ASTEROID_TUNNEL_FILENAME
+    shutil.copyfile(exported, staged)
+    if staged.stat().st_size == 0:
+        raise ExampleBuildError("asteroid-tunnel: staged executable is empty")
+
+    # Smoke-test the exact bytes that will be uploaded.  Asteroid Tunnel is a
+    # stateless NW-07/NW-09A showcase, so it must verify link metadata and the
+    # explicit tick but must not claim to carry NW-09 History state.
+    _smoke_launch(
+        staged,
+        example=ASTEROID_TUNNEL_NAME,
+        require_history=False,
+    )
+    return staged
+
+
 def build_examples(
     *,
     player_template: Path,
@@ -146,7 +213,7 @@ def build_examples(
     dxc_executable: Path,
 ) -> None:
     if os.name != "nt":
-        raise ExampleBuildError("NW-09A runnable examples require Windows")
+        raise ExampleBuildError("downloadable showcase examples require Windows")
 
     player_template = player_template.resolve()
     dxc_executable = dxc_executable.resolve()
@@ -203,15 +270,23 @@ def build_examples(
             if staged.stat().st_size == 0:
                 raise ExampleBuildError(f"{name}: staged executable is empty")
 
-            # Smoke-test the exact bytes that will be uploaded.
-            _smoke_launch(staged, example=name)
+            _smoke_launch(staged, example=name, require_history=True)
             staged_executables.append(staged)
+
+        staged_executables.append(
+            _stage_asteroid_tunnel(
+                temporary_root=temporary_root,
+                staged_root=staged_root,
+                player_template=player_template,
+                dxc_executable=dxc_executable,
+            )
+        )
 
         manifest = _write_sha256_manifest(staged_root, staged_executables)
         _verify_sha256_manifest(staged_root, manifest)
 
-        # Do not expose a partial artifact directory.  Publication occurs only
-        # after both exports and both smoke tests have succeeded.
+        # Never expose a partial bundle. Publication occurs only after both
+        # History examples and Asteroid Tunnel have built and smoke-launched.
         if output_directory.exists():
             shutil.rmtree(output_directory)
         shutil.copytree(staged_root, output_directory)
@@ -219,7 +294,9 @@ def build_examples(
             output_directory, output_directory / "SHA256SUMS.txt"
         )
 
-    for _, _, filename in EXAMPLES:
+    expected = [filename for _, _, filename in EXAMPLES]
+    expected.append(ASTEROID_TUNNEL_FILENAME)
+    for filename in expected:
         matches = list(output_directory.rglob(filename))
         if len(matches) != 1 or matches[0].stat().st_size == 0:
             raise ExampleBuildError(
@@ -229,7 +306,7 @@ def build_examples(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build, smoke-test, and stage runnable NW-09 examples"
+        description="Build and smoke-test the PR #34 downloadable showcase bundle"
     )
     parser.add_argument("--player-template", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
@@ -245,14 +322,20 @@ def main() -> int:
             output_directory=args.output_dir,
             dxc_executable=args.dxc,
         )
-    except (ExampleBuildError, nw05_export.ExportError) as exc:
-        print(f"NW-09A example build failed: {exc}")
+    except (
+        ExampleBuildError,
+        nw05_export.ExportError,
+        nw07_test_demo.DemoContractError,
+    ) as exc:
+        print(f"showcase bundle build failed: {exc}")
         return 1
 
-    print(f"NW-09A examples staged at {args.output_dir.resolve()}")
+    print(f"showcase bundle staged at {args.output_dir.resolve()}")
     for name, _, filename in EXAMPLES:
         path = args.output_dir / name / filename
         print(f"{name}: {path} sha256={_sha256(path)}")
+    tunnel = output_directory = args.output_dir / ASTEROID_TUNNEL_NAME / ASTEROID_TUNNEL_FILENAME
+    print(f"{ASTEROID_TUNNEL_NAME}: {tunnel} sha256={_sha256(tunnel)}")
     return 0
 
 
