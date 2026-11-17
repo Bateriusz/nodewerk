@@ -77,3 +77,34 @@ def test_correctness_compare_runs_privacy_audit() -> None:
     ).read_text(encoding="utf-8")
     compare_block = text[text.index('if ($Compare)'):]
     assert "Assert-NwPrivacy -JsonObject $comparison" in compare_block
+
+
+def test_correctness_runner_supports_toolchain_free_portable_target_bundle() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
+    ).read_text(encoding="utf-8")
+    assert "[switch]$PreparePortableBundle" in text
+    assert "portable_correctness_main.cpp" in text
+    assert "nw10_portable_correctness.py" in text
+    assert "run-portable-correctness-capture.ps1" in text
+    assert "TARGET_TOOLCHAIN_REQUIRED=False" in text
+
+
+def test_standalone_portable_capture_has_no_build_tool_dependency() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-portable-correctness-capture.ps1"
+    ).read_text(encoding="utf-8").lower()
+    for forbidden in ("cmake", "dxc", "visual studio", "enter-nwbuildenvironment", "git ", "python"):
+        assert forbidden not in text
+    assert "get-filehash" in text
+    assert "portable-correctness.exe" not in text or "portable_runner.file" in text
+
+
+def test_portable_capture_runner_uses_exact_presented_rgba32f_readback() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "portable_correctness_main.cpp"
+    ).read_text(encoding="utf-8")
+    assert "readbackPresentedOutput" in text
+    assert "1920ull * 1080ull * 4ull * sizeof(float)" in text
+    assert "NW10_RUNTIME_IMPLEMENTATION_MASK" in text
+    assert "NW10_PACKAGE_SHA" in text
