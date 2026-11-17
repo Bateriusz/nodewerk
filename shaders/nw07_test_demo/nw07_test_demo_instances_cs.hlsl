@@ -1,5 +1,13 @@
-// NW-07-test-demo branch-only tunnel/obstacle instance generator.
-// Reuses the NW-06 instance root signature and dense 80-byte records.
+// Asteroid Tunnel showcase instance generator.
+//
+// The first generation of the demo split 1024 instances between tunnel ribs
+// and asteroid hazards.  NW-09A keeps the same bounded instance table but
+// reserves deterministic slices for two temporal visual extensions:
+//   flags=3: seeded dust particles animated at NW-09's fixed 120 Hz cadence
+//   flags=4: delayed asteroid echo instances used for feedback-like trails
+//
+// This remains a showcase-only shader specialization.  It does not alter the
+// canonical NW-06/NW-07 instance operator or NW-09 History contracts.
 
 cbuffer Nw06InstanceParams : register(b0, space0)
 {
@@ -48,6 +56,41 @@ void StoreUniformTransform(
     NwInstances.Store4(offset + 64u, uint4(0u, seed, flags, 0u));
 }
 
+void HazardPlacement(
+    uint seed,
+    float placement_radius,
+    float scale_min,
+    float scale_max,
+    out float tx,
+    out float ty,
+    out float tz,
+    out float scale)
+{
+    float radial_u = HashUnit(seed ^ 0x51ed270bu);
+    float angle_u = HashUnit(seed ^ 0x9e3779b9u);
+    float depth_u = HashUnit(seed ^ 0x85ebca6bu);
+    float scale_u = HashUnit(seed ^ 0xc2b2ae35u);
+    float lane_u = HashUnit(seed ^ 0x27d4eb2fu);
+
+    float angle = angle_u * TAU;
+
+    // Keep the central flight corridor mostly clear.
+    float radius;
+    if (lane_u < 0.08)
+    {
+        radius = placement_radius * lerp(0.18, 0.42, sqrt(radial_u));
+    }
+    else
+    {
+        radius = placement_radius * lerp(0.56, 0.88, sqrt(radial_u));
+    }
+
+    tx = cos(angle) * radius;
+    ty = sin(angle) * radius;
+    tz = depth_u * TUNNEL_LENGTH;
+    scale = lerp(scale_min, scale_max, scale_u);
+}
+
 [numthreads(64, 1, 1)]
 void GenerateInstancesCS(uint3 dispatch_id : SV_DispatchThreadID)
 {
@@ -57,10 +100,17 @@ void GenerateInstancesCS(uint3 dispatch_id : SV_DispatchThreadID)
         return;
     }
 
-    // Half of the table is the visible tunnel structure. With the canonical
-    // demo count (1024), this gives 512 evenly spaced rings and 512 hazards.
-    // The lower ring density avoids high-frequency temporal moire during flight.
-    uint ring_count = min(512u, max(128u, InstanceCount / 2u));
+    // At the canonical 1024-instance budget this resolves to:
+    //   384 structural ribs
+    //   384 asteroid hazards
+    //   128 NW-09-inspired seeded dust particles
+    //   128 fixed-step temporal asteroid echoes
+    uint ring_count = min(384u, max(1u, (InstanceCount * 3u) / 8u));
+    uint remaining = InstanceCount - ring_count;
+    uint particle_count = min(128u, remaining / 4u);
+    uint echo_count = min(128u, (remaining - particle_count) / 3u);
+    uint hazard_count = InstanceCount - ring_count - particle_count - echo_count;
+
     uint seed = InstanceSeed + index;
     uint offset = index * 80u;
 
@@ -77,43 +127,69 @@ void GenerateInstancesCS(uint3 dispatch_id : SV_DispatchThreadID)
             seed,
             1u);
     }
-    else
+    else if (index < ring_count + hazard_count)
     {
-        uint obstacle_index = index - ring_count;
-        float radial_u = HashUnit(seed ^ 0x51ed270bu);
-        float angle_u = HashUnit(seed ^ 0x9e3779b9u);
-        float depth_u = HashUnit(seed ^ 0x85ebca6bu);
-        float scale_u = HashUnit(seed ^ 0xc2b2ae35u);
-        float lane_u = HashUnit(seed ^ 0x27d4eb2fu);
-
-        float angle = angle_u * TAU;
-
-        // Keep the centre of the tunnel visibly open.  Most hazards live in a
-        // broad band near the walls; only a small deterministic subset enters
-        // the central flight corridor.
-        float radius;
-        if (lane_u < 0.08)
-        {
-            radius = PlacementRadius * lerp(0.18, 0.42, sqrt(radial_u));
-        }
-        else
-        {
-            radius = PlacementRadius * lerp(0.56, 0.88, sqrt(radial_u));
-        }
-
-        float tx = cos(angle) * radius;
-        float ty = sin(angle) * radius;
-        float tz = depth_u * TUNNEL_LENGTH;
-        float scale = lerp(ScaleMin, ScaleMax, scale_u);
-
-        StoreUniformTransform(
-            offset,
-            scale,
+        float tx;
+        float ty;
+        float tz;
+        float scale;
+        HazardPlacement(
+            seed,
+            PlacementRadius,
+            ScaleMin,
+            ScaleMax,
             tx,
             ty,
             tz,
-            seed + obstacle_index * 17u,
-            2u);
+            scale);
+        StoreUniformTransform(offset, scale, tx, ty, tz, seed, 2u);
+    }
+    else if (index < ring_count + hazard_count + particle_count)
+    {
+        // Seeded particle dust is concentrated inside the flight corridor.
+        // The VS advances these records in explicit 400-timeline-tick steps.
+        float radial_u = HashUnit(seed ^ 0x243f6a88u);
+        float angle = HashUnit(seed ^ 0xb7e15162u) * TAU;
+        float radius = PlacementRadius * lerp(0.08, 0.48, sqrt(radial_u));
+        float tx = cos(angle) * radius;
+        float ty = sin(angle) * radius;
+        float tz = HashUnit(seed ^ 0x9e3779b9u) * TUNNEL_LENGTH;
+        float scale = lerp(0.075, 0.145, HashUnit(seed ^ 0x85ebca6bu));
+        StoreUniformTransform(offset, scale, tx, ty, tz, seed, 3u);
+    }
+    else
+    {
+        // Echo records deliberately duplicate deterministic hazards.  Their VS
+        // position/spin is sampled several fixed simulation steps in the past,
+        // producing a feedback-like trail without changing NW-09 History ABI.
+        uint echo_index =
+            index - (ring_count + hazard_count + particle_count);
+        uint source_index = hazard_count != 0u
+            ? (echo_index % hazard_count)
+            : 0u;
+        uint source_seed = InstanceSeed + ring_count + source_index;
+
+        float tx;
+        float ty;
+        float tz;
+        float scale;
+        HazardPlacement(
+            source_seed,
+            PlacementRadius,
+            ScaleMin,
+            ScaleMax,
+            tx,
+            ty,
+            tz,
+            scale);
+        StoreUniformTransform(
+            offset,
+            scale * 1.025,
+            tx,
+            ty,
+            tz,
+            source_seed,
+            4u);
     }
 
     if (index == 0u)
