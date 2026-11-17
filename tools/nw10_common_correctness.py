@@ -53,10 +53,101 @@ def _identity(path: Path) -> dict[str, Any]:
     return nw07_export.inspect_artifact_directory(path)
 
 
+def _diagnostic_identity(path: Path) -> dict[str, Any]:
+    """Inspect a dev diagnostic sibling without applying release-only rules.
+
+    NW-07's inspect_artifact_directory intentionally expects the frozen release
+    executable to embed only the SHA-256 binding of its published manifest.
+    A capture-enabled dev sibling instead embeds its complete diagnostic link
+    manifest and has a different dependency closure (debug CRT/PDB).  That
+    difference is expected and must not be mistaken for a common-package
+    mismatch.
+    """
+    stem = nw05_export._profile_file_stem(nw07_contract.PROFILE_ID)
+    package_path = path / f"{stem}.nwp"
+    manifest_path = path / f"{stem}.manifest.json"
+    executable_path = path / f"{stem}.exe"
+    for label, candidate in (
+        ("package", package_path),
+        ("manifest", manifest_path),
+        ("executable", executable_path),
+    ):
+        if not candidate.is_file():
+            raise ValueError(f"diagnostic sibling {label} is unavailable: {candidate}")
+
+    package_bytes = package_path.read_bytes()
+    manifest_bytes = manifest_path.read_bytes()
+    executable_bytes = executable_path.read_bytes()
+    inspection = nwp.inspect_package_bytes(package_bytes, allow_dev=False)
+    if not inspection.valid or inspection.package is None:
+        raise ValueError("diagnostic sibling package is not a valid release package")
+    package = inspection.package
+    if package.capability.profile_id != nw07_contract.PROFILE_ID:
+        raise ValueError("diagnostic sibling changed the common profile")
+    if package.capability.requirements_digest != nw07_contract.REQUIREMENTS_DIGEST:
+        raise ValueError("diagnostic sibling changed the requirements digest")
+
+    embedded_package, embedded_manifest = nw05_export.extract_embedded_package(
+        executable_bytes
+    )
+    if embedded_package != package_bytes:
+        raise ValueError("diagnostic executable does not embed the published package")
+    if embedded_manifest != manifest_bytes:
+        raise ValueError(
+            "diagnostic executable manifest binding does not match its published "
+            "diagnostic manifest"
+        )
+
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
+    if manifest.get("profile_id") != nw07_contract.PROFILE_ID:
+        raise ValueError("diagnostic manifest changed the common profile")
+    if manifest.get("requirements_digest") != nw07_contract.REQUIREMENTS_DIGEST:
+        raise ValueError("diagnostic manifest changed the requirements digest")
+    declared_manifest_sha = str(manifest.get("manifest_sha256", ""))
+    manifest_without_digest = {
+        key: value for key, value in manifest.items() if key != "manifest_sha256"
+    }
+    computed_manifest_sha = "sha256:v1:" + hashlib.sha256(
+        nwp.canonical_json_bytes(manifest_without_digest)
+    ).hexdigest()
+    if declared_manifest_sha != computed_manifest_sha:
+        raise ValueError("diagnostic manifest self-digest is invalid")
+
+    declared_dependencies = sorted(
+        str(item).lower()
+        for item in manifest.get("retained", {}).get("dependencies", [])
+    )
+    actual_dependencies = sorted(
+        str(item).lower()
+        for item in nw05_export._pe_runtime_dependencies(executable_bytes)
+    )
+    if declared_dependencies != actual_dependencies:
+        raise ValueError(
+            "diagnostic manifest dependency closure does not match the executable"
+        )
+
+    return {
+        "artifact_key": str(manifest.get("artifact_identity", "")),
+        "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "manifest_declared_sha256": declared_manifest_sha,
+        "executable_sha256": hashlib.sha256(executable_bytes).hexdigest(),
+        "executable_bytes": len(executable_bytes),
+        "profile_id": package.capability.profile_id,
+        "requirements_digest": package.capability.requirements_digest,
+        "dependencies": actual_dependencies,
+    }
+
+
 def _require_same_common_artifact(
     expected: Mapping[str, Any], observed: Mapping[str, Any]
 ) -> None:
-    for field in ("artifact_key", "package_sha256", "manifest_sha256"):
+    for field in (
+        "artifact_key",
+        "package_sha256",
+        "profile_id",
+        "requirements_digest",
+    ):
         if expected.get(field) != observed.get(field):
             raise ValueError(
                 f"diagnostic sibling changed common-artifact field {field}: "
@@ -100,7 +191,7 @@ def build_diagnostic(
         dxc_executable=dxc_executable,
         optimization="O2",
     )
-    observed = _identity(output)
+    observed = _diagnostic_identity(output)
     _require_same_common_artifact(expected, observed)
 
     stem = nw05_export._profile_file_stem(nw07_contract.PROFILE_ID)
@@ -115,13 +206,17 @@ def build_diagnostic(
         "version": 1,
         "status": "built",
         "common_artifact": {
-            "artifact_key": observed["artifact_key"],
-            "package_sha256": observed["package_sha256"],
-            "manifest_sha256": observed["manifest_sha256"],
+            "artifact_key": expected["artifact_key"],
+            "package_sha256": expected["package_sha256"],
+            "manifest_sha256": expected["manifest_sha256"],
+            "profile_id": expected["profile_id"],
+            "requirements_digest": expected["requirements_digest"],
         },
         "final_executable_sha256": expected["executable_sha256"],
         "diagnostic_executable_sha256": observed["executable_sha256"],
         "diagnostic_executable_bytes": observed["executable_bytes"],
+        "diagnostic_manifest_sha256": observed["manifest_sha256"],
+        "diagnostic_dependencies": observed["dependencies"],
         "capture_controls_required": True,
         "capture_protocol": nw07_contract.CORRECTNESS_CAPTURE_PROTOCOL,
     }
@@ -194,7 +289,7 @@ def capture(
     output: Path,
 ) -> dict[str, Any]:
     expected = _identity(expected_package)
-    observed = _identity(package)
+    observed = _diagnostic_identity(package)
     _require_same_common_artifact(expected, observed)
     if not diagnostic_executable.is_file():
         raise ValueError("diagnostic executable is unavailable")
@@ -284,12 +379,18 @@ def capture(
             "artifact_key": expected["artifact_key"],
             "package_sha256": expected["package_sha256"],
             "manifest_sha256": expected["manifest_sha256"],
+            "profile_id": expected["profile_id"],
+            "requirements_digest": expected["requirements_digest"],
             "final_executable_sha256": expected["executable_sha256"],
         },
         "diagnostic_sibling": {
             "executable_sha256": observed["executable_sha256"],
             "executable_bytes": observed["executable_bytes"],
+            "manifest_sha256": observed["manifest_sha256"],
+            "dependencies": observed["dependencies"],
             "separate_from_final_executable": True,
+            "same_common_package": True,
+            "release_manifest_reused": False,
         },
         "hardware": {
             **hardware,

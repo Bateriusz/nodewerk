@@ -37,18 +37,22 @@ def test_probe_rejects_missing_identity() -> None:
         correctness._parse_probe("NW05_ADAPTER=NVIDIA GeForce RTX 4060 Ti\n")
 
 
-def test_same_common_artifact_allows_only_executable_to_differ() -> None:
+def test_same_common_artifact_allows_diagnostic_manifest_and_executable_to_differ() -> None:
     expected = {
         "artifact_key": "a",
         "package_sha256": "b",
-        "manifest_sha256": "c",
+        "manifest_sha256": "release-manifest",
         "executable_sha256": "release",
+        "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+        "requirements_digest": "requirements",
     }
     observed = {
         "artifact_key": "a",
         "package_sha256": "b",
-        "manifest_sha256": "c",
+        "manifest_sha256": "diagnostic-manifest",
         "executable_sha256": "diagnostic",
+        "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+        "requirements_digest": "requirements",
     }
     correctness._require_same_common_artifact(expected, observed)
     observed["package_sha256"] = "changed"
@@ -83,3 +87,62 @@ def test_cross_hardware_comparison_requires_same_artifact(tmp_path: Path, monkey
             blackwell_capture_dir=tmp_path / "blackwell",
             output=tmp_path / "public.json",
         )
+
+
+def test_diagnostic_identity_requires_its_own_manifest_binding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+    import hashlib
+
+    stem = correctness.nw05_export._profile_file_stem(
+        correctness.nw07_contract.PROFILE_ID
+    )
+    package_bytes = b"same-common-package"
+    manifest = {
+        "profile_id": correctness.nw07_contract.PROFILE_ID,
+        "requirements_digest": correctness.nw07_contract.REQUIREMENTS_DIGEST,
+        "artifact_identity": "sha256:v1:common-artifact",
+        "retained": {"dependencies": ["kernel32.dll", "vcruntime140d.dll"]},
+    }
+    manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
+        correctness.nwp.canonical_json_bytes(manifest)
+    ).hexdigest()
+    manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
+    executable_bytes = b"MZ-diagnostic"
+    (tmp_path / f"{stem}.nwp").write_bytes(package_bytes)
+    (tmp_path / f"{stem}.manifest.json").write_bytes(manifest_bytes)
+    (tmp_path / f"{stem}.exe").write_bytes(executable_bytes)
+
+    capability = SimpleNamespace(
+        profile_id=correctness.nw07_contract.PROFILE_ID,
+        requirements_digest=correctness.nw07_contract.REQUIREMENTS_DIGEST,
+    )
+    inspection = SimpleNamespace(
+        valid=True, package=SimpleNamespace(capability=capability)
+    )
+    monkeypatch.setattr(
+        correctness.nwp, "inspect_package_bytes", lambda *_args, **_kwargs: inspection
+    )
+    monkeypatch.setattr(
+        correctness.nw05_export,
+        "extract_embedded_package",
+        lambda _payload: (package_bytes, manifest_bytes),
+    )
+    monkeypatch.setattr(
+        correctness.nw05_export,
+        "_pe_runtime_dependencies",
+        lambda _payload: ["kernel32.dll", "vcruntime140d.dll"],
+    )
+    identity = correctness._diagnostic_identity(tmp_path)
+    assert identity["package_sha256"] == hashlib.sha256(package_bytes).hexdigest()
+    assert identity["manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+    assert identity["artifact_key"] == "sha256:v1:common-artifact"
+
+    monkeypatch.setattr(
+        correctness.nw05_export,
+        "extract_embedded_package",
+        lambda _payload: (package_bytes, b"different-manifest"),
+    )
+    with pytest.raises(ValueError, match="diagnostic manifest"):
+        correctness._diagnostic_identity(tmp_path)
