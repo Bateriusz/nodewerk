@@ -1172,14 +1172,14 @@ def _apply_clamp01_normalisation(nodes: dict[str, GraphNode]) -> None:
                 node.params[name] = [" ".join(normalized)]
 
 
-def _nw02_digest_compiler_names() -> tuple[str, ...]:
+def _nw02_digest_compiler_names(host_os: str | None = None) -> tuple[str, ...]:
     """Return host-appropriate compiler preference for the digest helper.
 
     Windows CI enters the pinned clang-cl/MSVC environment before package
     generation. Prefer that toolchain over generic c++/g++ names, which can
     resolve to the much slower GitHub-hosted MinGW installation.
     """
-    if os.name == "nt":
+    if (host_os or os.name) == "nt":
         return ("clang-cl", "cl", "clang++", "c++", "g++")
     return ("c++", "g++", "clang++", "clang-cl", "cl")
 
