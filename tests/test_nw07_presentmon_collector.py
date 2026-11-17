@@ -59,3 +59,14 @@ def test_metric_value_rejects_negative_or_nonfinite_values() -> None:
             collector._metric_value(value)
     assert collector._metric_value("NA") is None
     assert collector._metric_value("") is None
+
+
+def test_write_samples_uses_real_line_breaks(tmp_path: Path) -> None:
+    path = tmp_path / "samples.txt"
+    collector._write_samples(path, [1.25, 2.5, 3.75])
+    assert path.read_text(encoding="utf-8") == "1.250000000\n2.500000000\n3.750000000\n"
+    assert [float(line) for line in path.read_text(encoding="utf-8").splitlines()] == [
+        1.25,
+        2.5,
+        3.75,
+    ]

@@ -64,7 +64,7 @@ def extract_samples(
 
 def _write_samples(path: Path, values: Sequence[float]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(f"{value:.9f}\\n" for value in values), encoding="utf-8")
+    path.write_text("".join(f"{value:.9f}\n" for value in values), encoding="utf-8")
 
 
 def _sha256_file(path: Path) -> str:
