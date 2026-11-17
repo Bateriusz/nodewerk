@@ -98,6 +98,7 @@ def run_presentmon(
         "--timed",
         str(run_seconds),
         "--terminate_after_timed",
+        "--terminate_on_proc_exit",
         "--output_file",
         str(csv_path),
         "--no_console_stats",
