@@ -1,6 +1,15 @@
-// NW-07-test-demo branch-only forward tunnel camera and geometry deformation.
-// Keeps the NW-06 graphics bindings unchanged so the normal package/player path
-// can execute this specialization without a second runtime.
+// Asteroid Tunnel showcase forward camera and geometry deformation.
+//
+// flags:
+//   1 = structural tunnel rib
+//   2 = asteroid hazard
+//   3 = seeded fixed-step dust particle
+//   4 = delayed temporal echo of a hazard
+//
+// The particle/echo motion intentionally quantizes to NW-09's fixed 120 Hz
+// cadence (400 timeline ticks at 48 kHz).  This shader does not create a second
+// History implementation; it visualizes the same temporal ideas inside the
+// showcase while real History remains covered by the NW-09 example artifacts.
 
 cbuffer Nw06GraphicsParams : register(b0, space0)
 {
@@ -20,6 +29,7 @@ Buffer<uint> NwCamera : register(t3, space0);
 static const float PI = 3.14159265358979323846;
 static const float TAU = 6.28318530717958647692;
 static const float TUNNEL_LENGTH = 96.0;
+static const uint NW09_FIXED_STEP_TICKS = 400u;
 
 struct VSInput
 {
@@ -39,6 +49,7 @@ struct VSOutput
     float3 camera_position : TEXCOORD4;
     nointerpolation uint instance_seed : TEXCOORD5;
     nointerpolation uint instance_flags : TEXCOORD6;
+    nointerpolation uint temporal_age_steps : TEXCOORD7;
 };
 
 uint LoadUInt(uint byte_offset)
@@ -92,6 +103,11 @@ float WrapCentered(float value, float period)
     return value - period * floor((value + 0.5 * period) / period);
 }
 
+float WrapPositive(float value, float period)
+{
+    return value - period * floor(value / period);
+}
+
 float4x4 Perspective(float fov_degrees, float aspect, float near_plane, float far_plane)
 {
     float f = 1.0 / tan(radians(fov_degrees) * 0.5);
@@ -138,9 +154,6 @@ void BuildAsteroid(
     float v = input.uv.y * TAU;
     float seed_phase = HashUnit(seed ^ 0x68bc21ebu) * TAU;
 
-    // The source mesh remains the legal NW-07 torus.  Its near-closed centre
-    // plus low topology and deterministic multi-frequency displacement makes
-    // it read as irregular asteroid/debris rather than a clean ring.
     float lump =
         1.0
         + 0.18 * sin(3.0 * u + seed_phase)
@@ -157,6 +170,24 @@ void BuildAsteroid(
 
     local_position = RotateZ(RotateY(RotateX(local_position, ax), ay), az);
     local_normal = normalize(RotateZ(RotateY(RotateX(local_normal, ax), ay), az));
+}
+
+void BuildParticleStreak(
+    VSInput input,
+    uint seed,
+    out float3 local_position,
+    out float3 local_normal)
+{
+    // Reuse the legal source torus but squash its cross-section and stretch it
+    // along Z so the same indexed mesh becomes a luminous dust streak.
+    float seed_phase = HashUnit(seed ^ 0x1b873593u) * TAU;
+    float3 stretched = float3(
+        input.position.x * 0.22,
+        input.position.y * 0.22,
+        input.position.z * 4.4);
+    local_position = RotateZ(stretched, seed_phase);
+    local_normal = normalize(
+        RotateZ(float3(input.normal.x, input.normal.y, input.normal.z * 0.25), seed_phase));
 }
 
 VSOutput SceneVS(VSInput input)
@@ -177,33 +208,83 @@ VSOutput SceneVS(VSInput input)
         ? float(wrapped_tick) / float(loop_ticks)
         : 0.0;
 
+    uint simulation_tick = wrapped_tick / NW09_FIXED_STEP_TICKS;
+    uint temporal_age_steps = 0u;
+    float geometry_phase = phase;
+
+    if (instance_flags == 4u && loop_ticks != 0u)
+    {
+        temporal_age_steps = 6u + (instance_seed % 18u);
+        uint lag_ticks = temporal_age_steps * NW09_FIXED_STEP_TICKS;
+        uint delayed_tick =
+            (wrapped_tick + loop_ticks - (lag_ticks % loop_ticks)) % loop_ticks;
+        geometry_phase = float(delayed_tick) / float(loop_ticks);
+    }
+
     float3 local_position;
     float3 local_normal;
     if (instance_flags == 1u)
     {
         BuildTunnelRib(input.uv, local_position, local_normal);
     }
+    else if (instance_flags == 3u)
+    {
+        BuildParticleStreak(input, instance_seed, local_position, local_normal);
+    }
     else
     {
-        BuildAsteroid(input, instance_seed, phase, local_position, local_normal);
+        BuildAsteroid(input, instance_seed, geometry_phase, local_position, local_normal);
     }
 
     float4 world4 = mul(float4(local_position, 1.0), transform);
     float3 world = world4.xyz;
     float3 world_normal = normalize(mul(float4(local_normal, 0.0), transform).xyz);
 
+    float3 base_center = float3(
+        LoadFloat(offset + 48u),
+        LoadFloat(offset + 52u),
+        LoadFloat(offset + 56u));
+    float3 instance_center = base_center;
+    float3 local_world = world - base_center;
+
+    if (instance_flags == 3u)
+    {
+        // Deterministic seeded particle integration at exactly 120 Hz.  The
+        // position changes only when simulation_tick changes, mirroring NW-09's
+        // explicit fixed-step behavior rather than presentation frame rate.
+        float velocity =
+            lerp(0.045, 0.082, HashUnit(instance_seed ^ 0x94d049bbu));
+        float particle_step = float(simulation_tick);
+        instance_center.z =
+            WrapPositive(base_center.z + particle_step * velocity, TUNNEL_LENGTH);
+
+        float drift_phase =
+            particle_step * lerp(0.035, 0.075, HashUnit(instance_seed ^ 0x369dea0fu))
+            + HashUnit(instance_seed ^ 0x7f4a7c15u) * TAU;
+        instance_center.x += 0.18 * sin(drift_phase);
+        instance_center.y += 0.14 * cos(drift_phase * 1.17 + 0.7);
+        world = instance_center + local_world;
+    }
+    else if (instance_flags == 4u && loop_ticks != 0u)
+    {
+        // A delayed sample of the same deterministic hazard position.  Since
+        // the camera advances one 96-unit segment per loop, older samples lie
+        // slightly farther ahead and form a short history trail.
+        float lag_distance =
+            (float(temporal_age_steps * NW09_FIXED_STEP_TICKS)
+             / float(loop_ticks)) * TUNNEL_LENGTH;
+        instance_center.z = base_center.z + lag_distance;
+        world = instance_center + local_world;
+    }
+
     // Infinite periodic tunnel: wrap the INSTANCE CENTRE, never individual
-    // vertices.  Per-vertex wrapping tears triangles when an asteroid crosses
-    // the segment seam, producing screen-length "shooting rays".
+    // vertices.  This preserves triangle continuity at the segment seam.
     float camera_z = phase * TUNNEL_LENGTH;
-    float instance_center_z = LoadFloat(offset + 56u);
-    float local_world_z = world.z - instance_center_z;
+    float local_world_z = world.z - instance_center.z;
     float wrapped_center_z =
-        WrapCentered(instance_center_z - camera_z, TUNNEL_LENGTH);
+        WrapCentered(instance_center.z - camera_z, TUNNEL_LENGTH);
     world.z = wrapped_center_z + local_world_z;
 
-    // Small periodic weave and bank create the "ship through tunnel" sensation
-    // while the scene remains a pure function of absolute tick.
     float sway_x = 0.16 * sin(phase * TAU * 2.0);
     float sway_y = 0.10 * sin(phase * TAU * 3.0 + 0.8);
     float aim_x = 0.055 * sin(phase * TAU * 2.0 + 0.65);
@@ -226,5 +307,6 @@ VSOutput SceneVS(VSInput input)
     output.camera_position = eye;
     output.instance_seed = instance_seed;
     output.instance_flags = instance_flags;
+    output.temporal_age_steps = temporal_age_steps;
     return output;
 }
