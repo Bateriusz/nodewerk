@@ -1103,6 +1103,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         "collected_at_utc": _utc_now(),
     }
 
+    print("[NW07 PERF] presentation probe", flush=True)
     try:
         probe = subprocess.run(
             [str(executable), "--frames", "1"],
@@ -1141,6 +1142,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             args, identity, failure=record["failure"], collection=record
         )
 
+    print(f"[NW07 PERF] warm-up: {contract.WARMUP_SECONDS}s", flush=True)
     # One frozen five-second warm-up, ended before teardown so process
     # termination never extends the measured window.
     warmup_started = _utc_now()
@@ -1172,6 +1174,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         "stdout": warmup_stdout[-2000:],
         "stderr": warmup_stderr[-2000:],
     }
+    print("[NW07 PERF] warm-up complete", flush=True)
     if warmup_exited_early:
         record["failure"] = (
             "release executable exited before the five-second warm-up completed"
@@ -1185,6 +1188,11 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
 
     failure: str | None = None
     for index in range(1, contract.PERF_RUN_COUNT + 1):
+        print(
+            f"[NW07 PERF] run {index}/{contract.PERF_RUN_COUNT}: "
+            f"{contract.PERF_RUN_SECONDS}s",
+            flush=True,
+        )
         try:
             player = _start_player(executable, player_args)
         except OSError as exc:
@@ -1250,6 +1258,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         collector_exit = (
             collector_completed.returncode if collector_completed is not None else None
         )
+        print(f"[NW07 PERF] run {index}/{contract.PERF_RUN_COUNT}: collector finished", flush=True)
         timing = {
             "warmup_started_utc": warmup_started,
             "warmup_ended_utc": warmup_ended,
