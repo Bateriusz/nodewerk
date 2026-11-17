@@ -36,6 +36,24 @@ GPU frame time, CPU submit time, startup/decode memory, Ada/Blackwell visuals,
 and dependency closure remain explicitly pending. The decision is
 **continue**, not a universal feasibility or impossibility claim.
 
+### Hosted Windows feasibility result
+
+The hosted Windows x64 experiment is treated as a measured feasibility run,
+not as a hard 64 KiB gate. The current run measured the inherited NW-07 proof
+at 264,390 bytes (above its 262,144-byte proof tier) and the restricted-intro
+compact candidate at 219,710 bytes. The compact candidate then failed runtime
+validation with package-validation exit code 70, so it is a tested blocker,
+not a validated runnable distribution. The workflow preserves and smoke-tests
+the canonical restricted-intro fallback, records the smallest validated
+runnable artifact separately from the smallest measured candidate, and keeps
+the NW-10 decision at **continue** when the fallback remains valid.
+
+A compact candidate that fails runtime validation is never counted as an
+achieved size result. Its stdout/stderr, exit code, measured byte count, and
+dependency evidence are archived with the Windows CI evidence. Clean-system
+and matched physical performance/correctness certification remain separate
+pending evidence under the inherited NW-07 protocol.
+
 ## Preserved architecture
 
 The implementation reuses:

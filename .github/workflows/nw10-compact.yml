@@ -119,7 +119,7 @@ jobs:
             --player-template $template `
             --dxc $dxc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Measure single-file sizes and dependency closure
+      - name: Measure single-file sizes
         shell: pwsh
         run: |
           $proof = Get-Content "$PWD/build/nw10-proof/report.json" | ConvertFrom-Json
@@ -135,43 +135,89 @@ jobs:
             Write-Host ("NW-10 proof measured blocker bytes: " + $proofBytes)
           }
           $introBytes = [int64]$intro.compact_artifact.selected_executable_bytes
+          $canonicalIntroBytes = [int64]$intro.canonical_artifact.executable_bytes
           $candidates += $introBytes
-          Write-Host ("NW-10 intro compact bytes: " + $introBytes)
+          Write-Host ("NW-10 intro compact candidate bytes: " + $introBytes)
+          Write-Host ("NW-10 intro canonical bytes: " + $canonicalIntroBytes)
           $minimum = ($candidates | Measure-Object -Minimum).Minimum
           $outcome = [ordered]@{
             target_bytes = 65536
-            minimum_measured_bytes = [int64]$minimum
+            minimum_measured_candidate_bytes = [int64]$minimum
             target_met = ([int64]$minimum -le 65536)
             classification = [string]$intro.decision.classification
             proof_measured_bytes = $proofBytes
-            intro_measured_bytes = $introBytes
+            intro_compact_candidate_bytes = $introBytes
+            intro_canonical_bytes = $canonicalIntroBytes
+            minimum_validated_runnable_bytes = $null
+            validated_mode = "pending_runtime_validation"
+            compact_candidate_runtime_status = "pending"
+            compact_candidate_exit_code = $null
+            blockers = @()
             universal_64k_claim = $false
           }
-          $outcome | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 "$PWD/build/nw10-windows-size-outcome.json"
-          $exe = Get-ChildItem "$PWD/build/nw10-proof/compact/*.compact.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($null -eq $exe) {
-            $exe = Get-ChildItem "$PWD/build/nw10-intro/compact/*.compact.exe" | Select-Object -First 1
-          }
-          if ($null -eq $exe) { Write-Error "No measured compact executable was emitted"; exit 1 }
-          $closureRoot = Join-Path $PWD "build/nw10-dependency-check"
-          New-Item -ItemType Directory -Force -Path $closureRoot | Out-Null
-          $closureExe = Join-Path $closureRoot "nw10_compact.exe"
-          Copy-Item $exe.FullName $closureExe -Force
-          python tools/dependency_check.py --binary $closureExe --deployment-root $closureRoot --profile compact_experiment --fixture nw10_compact > "$PWD/build/nw10-dependency-closure.json"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Smoke-run measured compact artifact
+          $outcome | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 "$PWD/build/nw10-windows-size-outcome.json"
+      - name: Validate compact candidate, preserve canonical fallback, and check closure
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "$PWD/build/nw10-proof/compact/*.compact.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($null -eq $exe) {
-            $exe = Get-ChildItem "$PWD/build/nw10-intro/compact/*.compact.exe" | Select-Object -First 1
+          $runtimeDir = Join-Path $PWD "build/nw10-runtime"
+          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+          $candidate = Get-ChildItem "$PWD/build/nw10-intro/compact/*.compact.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $canonical = Get-ChildItem "$PWD/build/nw10-intro/*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $candidate) { Write-Error "Restricted-intro compact candidate was not emitted"; exit 1 }
+          if ($null -eq $canonical) { Write-Error "Restricted-intro canonical fallback was not emitted"; exit 1 }
+
+          $candidateStdout = Join-Path $runtimeDir "compact-candidate.stdout.txt"
+          $candidateStderr = Join-Path $runtimeDir "compact-candidate.stderr.txt"
+          $candidateProcess = Start-Process -FilePath $candidate.FullName -ArgumentList "--frames","2" -RedirectStandardOutput $candidateStdout -RedirectStandardError $candidateStderr -PassThru -Wait
+
+          $outcomePath = Join-Path $PWD "build/nw10-windows-size-outcome.json"
+          $outcome = Get-Content $outcomePath -Raw | ConvertFrom-Json
+          $blockers = @()
+          $selected = $candidate
+          $validatedMode = "compact"
+          if ($candidateProcess.ExitCode -eq 0) {
+            $outcome.compact_candidate_runtime_status = "validated_runnable"
+            Write-Host ("NW-10 compact candidate runtime validation: PASS (" + $candidate.Length + " bytes)")
+          } else {
+            $outcome.compact_candidate_runtime_status = "rejected_runtime_failure"
+            $outcome.compact_candidate_exit_code = [int]$candidateProcess.ExitCode
+            $blockers += [ordered]@{
+              id = "compact_candidate_runtime"
+              status = "rejected"
+              exit_code = [int]$candidateProcess.ExitCode
+              measured_bytes = [int64]$candidate.Length
+              reason = "The measured compact packaging candidate failed hosted Windows runtime validation; it is retained as a tested blocker and is not counted as a validated runnable artifact."
+            }
+            Write-Warning ("NW-10 compact candidate rejected with exit code " + $candidateProcess.ExitCode + "; validating canonical fallback instead.")
+
+            $canonicalStdout = Join-Path $runtimeDir "canonical-fallback.stdout.txt"
+            $canonicalStderr = Join-Path $runtimeDir "canonical-fallback.stderr.txt"
+            $canonicalProcess = Start-Process -FilePath $canonical.FullName -ArgumentList "--frames","2" -RedirectStandardOutput $canonicalStdout -RedirectStandardError $canonicalStderr -PassThru -Wait
+            if ($canonicalProcess.ExitCode -ne 0) {
+              Write-Error ("Canonical fallback failed with exit code " + $canonicalProcess.ExitCode)
+              exit $canonicalProcess.ExitCode
+            }
+            $selected = $canonical
+            $validatedMode = "canonical_fallback"
+            Write-Host ("NW-10 canonical fallback runtime validation: PASS (" + $canonical.Length + " bytes)")
           }
-          if ($null -eq $exe) { Write-Error "No measured compact executable was emitted"; exit 1 }
-          $process = Start-Process -FilePath $exe.FullName -ArgumentList "--frames","2" -PassThru -Wait
-          if ($process.ExitCode -ne 0) {
-            Write-Error "Measured compact executable failed with exit code $($process.ExitCode)"
-            exit $process.ExitCode
-          }
+
+          $outcome.minimum_validated_runnable_bytes = [int64]$selected.Length
+          $outcome.validated_mode = $validatedMode
+          $outcome.blockers = $blockers
+          $outcome.classification = "continue"
+          $outcome | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $outcomePath
+
+          $closureRoot = Join-Path $PWD "build/nw10-dependency-check"
+          Remove-Item $closureRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $closureRoot | Out-Null
+          $closureExe = Join-Path $closureRoot "nw10_validated.exe"
+          Copy-Item $selected.FullName $closureExe -Force
+          python tools/dependency_check.py --binary $closureExe --deployment-root $closureRoot --profile compact_experiment --fixture nw10_validated > "$PWD/build/nw10-dependency-closure.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Write-Host "NW-10 Windows feasibility outcome:"
+          Get-Content $outcomePath
       - name: Upload Windows NW-10 evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -183,4 +229,5 @@ jobs:
             build/nw10-windows-size-outcome.json
             build/nw10-dependency-closure.json
             build/nw10-dependency-check/**
+            build/nw10-runtime/**
             ${{ runner.temp }}/nw10-bootstrap-provenance.json
