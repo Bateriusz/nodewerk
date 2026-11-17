@@ -63,6 +63,7 @@ def test_same_common_artifact_allows_diagnostic_manifest_and_executable_to_diffe
 def test_cross_hardware_comparison_requires_same_artifact(tmp_path: Path, monkeypatch) -> None:
     ada = {
         "tier": "ada",
+        "status": "captured_reference",
         "common_artifact": {"package_sha256": "a"},
         "hardware": {},
         "captures": [],
@@ -70,6 +71,7 @@ def test_cross_hardware_comparison_requires_same_artifact(tmp_path: Path, monkey
     }
     blackwell = {
         "tier": "blackwell",
+        "status": "captured_candidate",
         "common_artifact": {"package_sha256": "b"},
         "hardware": {},
         "captures": [],
