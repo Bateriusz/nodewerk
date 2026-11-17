@@ -1,165 +1,106 @@
-# NW-07-test-demo — Asteroid Tunnel
+# Asteroid Tunnel showcase
 
-> **Branch-only experiment — DO NOT MERGE INTO `main`.**
->
-> This production is a visual showcase built on the post-NW-07 graph/package/player
-> path.  It is intentionally isolated from the canonical NW-07 proof.
+Asteroid Tunnel is a 24-second seamless 1920x1080 Nodewerk showcase carried
+forward from PR #30 and included in the downloadable PR #34 CI bundle.
 
-## Concept
+It remains isolated from the canonical NW-07 proof: the normal NW-06/NW-07
+shader files are not replaced.  The export helper temporarily installs three
+showcase-specific shader specializations and restores the canonical shader table
+after export.
 
-**Asteroid Tunnel** is a 24-second seamless 1920x1080 loop inspired by the feel
-of classic Amiga bonus-tunnel sequences: fast forward motion, dark red/orange
-industrial ribs, bright segmented panels, strong bloom, and asteroid-like
-hazards crossing the flight path.
+## Visual design
 
-The scene keeps the NW-07 operator vocabulary and normal `.nwgraph` authoring
-surface, but the branch-only export helper installs three **demo-specific shader
-specializations** during this export only:
-
-- `nw07_test_demo_instances_cs.hlsl` — divides 1,024 instances into repeating
-  tunnel ribs and deterministic asteroid/debris hazards;
-- `nw07_test_demo_scene_vs.hlsl` — converts the absolute-tick loop into true
-  forward travel through a 96-unit repeating tunnel segment, with periodic
-  weave and bank;
-- `nw07_test_demo_scene_ps.hlsl` — gives the tunnel hot red/orange segmented
-  lighting and the obstacles warm faceted rock shading.
-
-The normal NW-06/NW-07 shader files are not modified or replaced.  The helper
-temporarily swaps the three fixed shader records only while exporting this demo
-and restores the canonical tuple in a `finally` block.
-
-## Scene structure
-
-The graph uses:
+The scene keeps the established NW-07 graph/package/player path:
 
 - 1,024 deterministic instances;
-- a 4.6-unit tunnel radius;
-- 512 thicker, evenly spaced tunnel rings;
-- 512 small asteroid-like hazards/debris pieces;
-- a low-poly near-closed 24x8 torus as the legal NW-07 source topology;
+- a 4.6-unit, 96-unit-long repeating tunnel;
+- low-poly asteroid/debris hazards;
 - five-octave seeded value noise;
-- a warm directional light;
-- deterministic asteroid rotation driven by the existing twist parameter;
+- warm directional lighting;
 - half-resolution bloom;
 - ACES tonemapping;
 - a 24-second / 1,152,000-tick stateless loop.
 
-The source torus is deliberately almost closed (`major_radius=0.75`,
-`minor_radius=0.68`). Tunnel rings are reconstructed analytically from the
-mesh UVs with a 0.015 local tube cross-section and 512 evenly spaced rings over
-the 96-unit segment. This lower spatial frequency avoids temporal moire while
-keeping each torus visibly separate and substantial. Hazards keep the chunky
-low-poly topology and receive seeded multi-frequency deformation and rotation.
+NW-09A extends the original PR #30 visual with two bounded temporal layers while
+preserving the existing runtime and package contracts.
 
-The tunnel shading is identical for every ring: no per-ring random phase or
-segmented panel offset is applied. This deliberately removes the rapidly
-changing spoke/pattern effect seen with the denser 1024-ring version.
+At the canonical 1,024-instance budget the showcase uses approximately:
 
-The hazard scale is limited to 0.06–0.22. About 92% of hazards are biased into
-the outer 56–88% of the tunnel radius; only 8% enter a narrower central band.
-This keeps a readable flight corridor while still allowing occasional hazards
-to cross the player's line of travel.
+- 384 structural tunnel ribs;
+- 384 ordinary asteroid hazards;
+- 128 seeded dust/streak particle instances;
+- 128 delayed temporal-echo asteroid instances.
 
-## Loop model
+The particle positions advance only on 400-timeline-tick boundaries, matching
+NW-09's 120 Hz fixed-step cadence at 48,000 timeline ticks per second.  Particle
+velocity and drift are deterministic functions of the explicit instance seed.
 
-The static generated content occupies one 96-unit segment.  The specialized
-vertex shader advances the camera phase by one complete segment over exactly
-1,152,000 ticks, then wraps object depth around the camera.
+Temporal echoes duplicate deterministic asteroid records and render the same
+hazard several fixed simulation steps in the past.  Stable screen-space
+dithering reduces their coverage and the existing bloom pass integrates the
+surviving hot pixels into an afterimage-like trail.
 
-At tick 1,152,000 the shader evaluates the same wrapped phase as tick 0. Camera
-weave, banking, obstacle rotation and segment placement are all functions of
-the same absolute tick, so no frame-delta state is required.
-
-Segment wrapping is performed on the instance centre, not per vertex. This
-keeps every asteroid and ring rigid while it crosses the 96-unit seam and
-prevents triangles from stretching across the whole tunnel as screen-length
-"shooting rays".
+These two layers deliberately do **not** introduce a second History
+implementation.  The real NW-09 History scheduler, ping-pong state, checkpoint,
+and feedback-image contracts continue to be exercised by the canonical
+`particles_seeded.nwgraph` and `feedback_rect.nwgraph` examples in the same
+CI artifact.  Asteroid Tunnel only visualizes the same fixed-step/seeded/
+feedback ideas inside its showcase-only shader specialization.
 
 ## Files
 
-- `fixtures/nw07-test-demo/orbital_vortex.nwgraph` — production graph; the
-  historical path is retained even though the visual concept is now Asteroid
-  Tunnel.
+- `fixtures/nw07-test-demo/orbital_vortex.nwgraph`
 - `shaders/nw07_test_demo/nw07_test_demo_instances_cs.hlsl`
 - `shaders/nw07_test_demo/nw07_test_demo_scene_vs.hlsl`
 - `shaders/nw07_test_demo/nw07_test_demo_scene_ps.hlsl`
-- `tools/nw07_test_demo.py` — validation and export wrapper.
-- `tests/test_nw07_test_demo.py` — isolation and export regression coverage.
+- `tools/nw07_test_demo.py`
+- `tests/test_nw07_test_demo.py`
 
 The canonical `fixtures/nw07/production_loop.nwgraph` and
 `shaders/nw06/*` remain untouched.
 
-## Validate
+## CI artifact
+
+PR #34 builds and smoke-tests the exact executable that is uploaded.  The
+combined GitHub Actions artifact contains:
+
+```text
+nw09-examples-<commit>/
+  particles/
+    nw09-particles.exe
+  feedback/
+    nw09-feedback.exe
+  asteroid-tunnel/
+    asteroid-tunnel.exe
+  SHA256SUMS.txt
+```
+
+The SHA-256 manifest covers all three runnable executables.  Publication occurs
+only after all three exports and smoke tests succeed.
+
+## Local validation
 
 From the repository root:
 
 ```powershell
 python .\tools\nw07_test_demo.py --validate-only
-```
-
-Contracts-only export:
-
-```powershell
-python .\tools\nw07_test_demo.py --contracts-only --output .\build\nw07-test-demo\contracts --report .\build\nw07-test-demo\contracts-report.json
-```
-
-Tests:
-
-```powershell
 python -m pytest -q .\tests\test_nw07_test_demo.py
 ```
 
-## Local Windows release export
-
-Enter the pinned build environment and build the existing release player
-template first:
+A local Windows release export still uses the existing generated-player path:
 
 ```powershell
-pwsh .\tools\nw01\enter-build-env.ps1 -InteractiveShell
+python .\tools\nw07_test_demo.py `
+  --output .\build\nw07-test-demo\artifact `
+  --report .\build\nw07-test-demo\export-report.json `
+  --player-template .\build\nw07-release\staging\procedural_image_player\nw_procedural_image_player.exe `
+  --dxc C:\Tools\dxc-1.8.2407\bin\x64\dxc.exe `
+  --build-root .\build\nw07-test-demo\specialized-build
 ```
 
-Inside that shell:
+## Scope boundary
 
-```powershell
-cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON; cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
-```
-
-Then export the demo:
-
-```powershell
-python .\tools\nw07_test_demo.py --output .\build\nw07-test-demo\artifact --report .\build\nw07-test-demo\export-report.json --player-template .\build\nw07-release\staging\procedural_image_player\nw_procedural_image_player.exe --dxc C:\Tools\dxc-1.8.2407\bin\x64\dxc.exe --build-root .\build\nw07-test-demo\specialized-build
-```
-
-Run:
-
-```powershell
-.\build\nw07-test-demo\artifact\nw_common_d3d12_fl12_0_sm6_0_v1.exe
-```
-
-## CI downloadable executable
-
-The Windows release job also exports this demo through `tools/nw07_test_demo.py`
-and uploads a dedicated GitHub Actions artifact named:
-
-`nw07-test-demo-windows-exe`
-
-It contains the standalone Windows x64 executable under the artifact directory,
-plus the demo export report. This is separate from the canonical
-`nw07-windows-build-checks` artifact.
-
-## Scope
-
-This is deliberately not a general nodewerk feature.  It does not add a new
-operator, graph format, package format, player, or mergeable runtime API.
-Instead, it demonstrates a branch-local production specialization needed
-because the current NW-07 camera and instance generator cannot express a true
-forward tunnel flight by graph parameters alone.
-
-If this visual direction later becomes a supported nodewerk authoring feature,
-the correct follow-up is a separate architectural task with explicit operator
-contracts — not merging these demo shaders into `main`.
-
-## Branch policy
-
-Keep this implementation on `experiment/NW-07-test-demo`.  The pull request is
-only a review/CI surface.  **Do not merge it into `main`.**
+This showcase does not add a new operator, graph format, package format, player,
+or History ABI.  The special shaders exist only to express the forward tunnel,
+seeded dust, and temporal-echo visual direction without expanding canonical
+Nodewerk semantics.
