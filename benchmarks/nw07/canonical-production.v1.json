@@ -78,12 +78,13 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:6eb9f6342bf67ea8884b72ae6800e799b271afbbbd57cf5ee791923976849b73",
+  "build_inputs_digest": "sha256:v1:8e050b388703e599c011eab83b9f9299034035939aec6e4f77f085eba06dba7c",
   "build_inputs_provenance": {
     "superseded_digests": [
-      "sha256:v1:d9ad24057ae7c273ad4c757dafc5d3b54047fcb360b8845a6413136b78c232ab"
+      "sha256:v1:d9ad24057ae7c273ad4c757dafc5d3b54047fcb360b8845a6413136b78c232ab",
+      "sha256:v1:6eb9f6342bf67ea8884b72ae6800e799b271afbbbd57cf5ee791923976849b73"
     ],
-    "reason": "NW-10 adds the bounded compact-package decoder to the player closure. The canonical graph, profile, quality settings, budgets, and evidence semantics are unchanged; the earlier digest remains attributable to prior artifacts."
+    "reason": "The current digest preserves the NW-10 compact-decoder closure and corrects the still-unbound nw07_perf_ref_v1 RTX 4060 Ti PCI device identity from the erroneous 0x2805 value to the verified NW-01 physical baseline value 0x2803 before first certification. The canonical graph, profile, quality settings, budgets, and evidence methodology are unchanged; superseded digests remain attributable to prior artifacts."
   },
   "loop": {
     "looping": true,
@@ -194,7 +195,7 @@
     "stretch_distribution_bytes_ceiling": 131072,
     "stretch_is_mandatory_gate": false,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000.0
+    "process_start_to_first_present_ms_ceiling": 2000
   },
   "fixed_tick_evaluation": {
     "ticks": [
@@ -244,7 +245,7 @@
   },
   "image_tolerances": {
     "numeric": {
-      "absolute": 1e-05,
+      "absolute": 0.00001,
       "relative": 0.0001,
       "mode": "absolute_or_relative"
     },
@@ -255,19 +256,19 @@
     },
     "per_device": {
       "desktop_ada_representative": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_representative": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_development_series": {
-        "numeric_absolute": 1e-05,
+        "numeric_absolute": 0.00001,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
