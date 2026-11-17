@@ -145,6 +145,27 @@ jobs:
           python -m pytest -v tests/test_nw09_review_fixes.py::test_real_generated_stateful_player_launches_with_link_metadata
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Build and smoke-test runnable NW-09 examples
+        shell: pwsh
+        run: |
+          $template = "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template -PathType Leaf)) {
+            Write-Error "NW-09A generated-player template is unavailable: $template"
+            exit 1
+          }
+          $dxc = (Get-Command dxc -ErrorAction Stop).Source
+          $output = Join-Path $env:RUNNER_TEMP "nw09-examples"
+          python tools/nw09_ci_examples.py --player-template $template --output-dir $output --dxc $dxc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload runnable NW-09 examples
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw09-examples-${{ github.sha }}
+          path: ${{ runner.temp }}/nw09-examples/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload NW-01 build-check evidence
         if: always()
         uses: actions/upload-artifact@v4
