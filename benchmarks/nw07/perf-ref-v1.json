@@ -12,7 +12,7 @@
     "board": {
       "model": "NVIDIA GeForce RTX 4060 Ti",
       "vendor_id": 4318,
-      "device_id": 10245,
+      "device_id": 10243,
       "subsystem_vendor_id": null,
       "subsystem_device_id": null,
       "vram_mib": 8192,
