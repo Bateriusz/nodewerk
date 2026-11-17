@@ -14,6 +14,8 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import nw07_contract as nw07_contract  # noqa: E402
 import nw07_evidence as nw07_evidence  # noqa: E402
 import nw10_perf_preservation as preservation  # noqa: E402
+import nw10_perf_candidate as candidate  # noqa: E402
+import nw04_fixture  # noqa: E402
 
 
 PERF_REF = REPO_ROOT / "benchmarks" / "nw07" / "perf-ref-v1.json"
@@ -195,3 +197,38 @@ def test_public_evidence_rejects_local_user_profile_paths() -> None:
 def test_public_evidence_rejects_explicit_privacy_tokens() -> None:
     with pytest.raises(ValueError, match="forbidden privacy token"):
         preservation._scan_public_payload({"bad": "private-login"}, ["PRIVATE-LOGIN"])
+
+
+def test_after_candidate_retains_over_proof_ceiling_without_relaxing_it(
+    tmp_path: Path,
+) -> None:
+    toolchain = tmp_path / "toolchain"
+    toolchain.mkdir()
+    template = toolchain / "template.exe"
+    template.write_bytes(b"MZ" + b"\\0" * 262144)
+    dxc = toolchain / "mock_dxc.py"
+    container = nw04_fixture.make_dxil_container()
+    dxc.write_text(
+        "import sys\\n"
+        "from pathlib import Path\\n"
+        "if '--version' in sys.argv:\\n"
+        "    print('dxcompiler.dll: 1.8 - 1.8.2407.12')\\n"
+        "    sys.exit(0)\\n"
+        "fo = Path(sys.argv[sys.argv.index('-Fo') + 1])\\n"
+        "fo.parent.mkdir(parents=True, exist_ok=True)\\n"
+        f"fo.write_bytes(bytes.fromhex({container.hex()!r}))\\n",
+        encoding="utf-8",
+    )
+    report = candidate.build_candidate(
+        tmp_path / "after",
+        player_template=template,
+        dxc_executable=str(dxc),
+        report_path=tmp_path / "after-report.json",
+        allow_test_payloads=True,
+    )
+    assert report["comparison_role"] == "after_common_artifact"
+    assert report["size_classification"]["within_nw07_proof_ceiling"] is False
+    assert report["size_classification"]["nw07_proof_ceiling_is_not_relaxed"] is True
+    assert report["size_classification"]["retained_for_performance_comparison_only"] is True
+    assert report["size_classification"]["within_standard_tier"] is True
+    assert (tmp_path / "after" / "nw_common_d3d12_fl12_0_sm6_0_v1.exe").is_file()
