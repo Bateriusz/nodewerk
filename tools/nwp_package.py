@@ -39,9 +39,15 @@ MAGIC = b"NWPKG1\n\x00"
 FORMAT_NAME = "nwp"
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
+# NW-09 adds an explicitly versioned, optional stateful-content extension.
+# Stateless exports continue to emit exactly version 1.0 bytes.
+VERSION_MINOR_STATEFUL = 1
+STATEFUL_EXTENSION_FLAG = 2
 HEADER_SIZE = 64
 SECTION_ENTRY_SIZE = 32
 CHECKSUM_SIZE = 32
+# CKPT section header: u16 version + u16 flags + u32 record count.
+_CHECKPOINT_SECTION_HEADER_BYTES = 8
 CHECKSUM_ALGORITHM_SHA256 = 1
 
 SECTION_CAPABILITY = "CAP "
@@ -52,6 +58,12 @@ SECTION_PARAMETERS = "PARM"
 SECTION_SHADERS = "SHDR"
 SECTION_ROOT_SIGNATURES = "RSIG"
 SECTION_DEV = "DEVC"
+SECTION_HISTORY = "HIST"
+SECTION_CHECKPOINTS = "CKPT"
+# The stateful package minor remains 1.  This is the HIST *record* version:
+# version 2 carries the exact packed initial-state bytes so a packaged player
+# can fill the declared state resource without reinterpreting authoring text.
+HISTORY_RECORD_VERSION = 2
 
 ROOT_SIGNATURE_DXBC_MAGIC = b"DXBC"
 ROOT_SIGNATURE_CHUNK = b"RTS0"
@@ -66,7 +78,10 @@ REQUIRED_RELEASE_SECTIONS = (
     SECTION_ROOT_SIGNATURES,
     SECTION_SHADERS,
 )
-KNOWN_SECTIONS = frozenset(REQUIRED_RELEASE_SECTIONS + (SECTION_DEV,))
+STATEFUL_EXTENSION_SECTIONS = (SECTION_HISTORY, SECTION_CHECKPOINTS)
+KNOWN_SECTIONS = frozenset(
+    REQUIRED_RELEASE_SECTIONS + (SECTION_DEV,) + STATEFUL_EXTENSION_SECTIONS
+)
 
 COMMON_PROFILE_ID = "nw.common.d3d12.fl12_0.sm6_0.v1"
 COMMON_REQUIREMENTS_DIGEST = (
@@ -258,6 +273,7 @@ INSTRUCTION_CONTRACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "init.create_root_signature": ("initialization", ("root_signature_ref",)),
     "init.create_pipeline": ("initialization", ("shader_ref", "root_signature_ref")),
     "init.upload_resource": ("initialization", ("resource_ref",)),
+    "init.upload_history_state": ("initialization", ("resource_ref", "u32")),
     "init.set_root_signature": ("initialization", ("root_signature_ref",)),
     "init.set_root_constants": ("initialization", ("u32", "resource_ref", "u32")),
     "init.set_descriptor_table": (
@@ -274,6 +290,10 @@ INSTRUCTION_CONTRACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "frame.set_descriptor_table": ("frame", ("u32", "string", "resource_ref")),
     "frame.barrier": ("frame", ("u32", "resource_ref")),
     "frame.dispatch": ("frame", ("u32", "u32", "u32", "shader_ref")),
+    "frame.simulation_step": (
+        "frame",
+        ("u32", "u32", "u32", "shader_ref", "u32"),
+    ),
     "frame.draw": ("frame", ("u32", "u32")),
     "frame.copy_buffer": ("frame", ("resource_ref", "resource_ref", "u64")),
     "frame.set_timeline": ("frame", ("u32", "u64")),
@@ -596,6 +616,112 @@ class ShaderRecord:
         }
 
 
+@dataclass(frozen=True)
+class HistoryRecord:
+    """NW-09 History declaration carried by the optional ``HIST`` section.
+
+    This is an additive v1.1 extension.  A package without History records is
+    byte-for-byte the v1.0 container and links no History execution support.
+    """
+
+    state_id: int
+    node_id: str
+    operator_id: str
+    state_type: str
+    initial_value: str
+    reset_policy: str
+    step_rate_hz: int
+    state_layout_hash: str
+    values_per_element: int
+    element_count: int
+    current_resource_id: int
+    previous_resource_id: int
+    frames_in_flight: int = 2
+    initial_state: bytes = b""
+    flags: int = 0
+
+    @property
+    def state_bytes(self) -> int:
+        return self.values_per_element * self.element_count * 4
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "state_id": self.state_id,
+            "node_id": self.node_id,
+            "operator_id": self.operator_id,
+            "state_type": self.state_type,
+            "initial_value": self.initial_value,
+            "reset_policy": self.reset_policy,
+            "step_rate_hz": self.step_rate_hz,
+            "timeline_ticks_per_step": (
+                48_000 // self.step_rate_hz if self.step_rate_hz else 0
+            ),
+            "state_layout_hash": self.state_layout_hash,
+            "values_per_element": self.values_per_element,
+            "element_count": self.element_count,
+            "state_bytes": self.state_bytes,
+            "state_format": "DXGI_FORMAT_R32_UINT",
+            "state_component_type": "float32",
+            "state_component_bytes": 4,
+            "initial_state_bytes": len(self.initial_state),
+            "initial_state_sha256": sha256_hex(self.initial_state),
+            "current_resource_id": self.current_resource_id,
+            "previous_resource_id": self.previous_resource_id,
+            "frames_in_flight": self.frames_in_flight,
+            "flags": self.flags,
+        }
+
+
+@dataclass(frozen=True)
+class ReleaseCheckpointRecord:
+    """Optional packaged release checkpoint with an explicit byte cost."""
+
+    checkpoint_id: int
+    label: str
+    tick: int
+    simulation_tick: int
+    semantic_digest: str
+    state_layout_hash: str
+    capability_profile_id: str
+    capability_requirements_digest: str
+    payload: bytes
+    state_count: int
+    flags: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        # Report the cost of the *actual serialized record* rather than a
+        # hand-estimated payload+label heuristic.  The CKPT record carries the
+        # label and payload length prefixes plus four semantic/capability
+        # digests and their length prefixes; omitting them understated export
+        # accounting.  The per-record cost also names the CKPT section header
+        # and directory-entry overhead explicitly so callers can reconcile it
+        # with ``release_checkpoint_section_byte_cost``.
+        encoded_record_bytes = (
+            len(_encode_checkpoints([self])) - _CHECKPOINT_SECTION_HEADER_BYTES
+        )
+        section_overhead_bytes = (
+            _CHECKPOINT_SECTION_HEADER_BYTES + SECTION_ENTRY_SIZE
+        )
+        return {
+            "checkpoint_id": self.checkpoint_id,
+            "label": self.label,
+            "tick": self.tick,
+            "simulation_tick": self.simulation_tick,
+            "semantic_digest": self.semantic_digest,
+            "state_layout_hash": self.state_layout_hash,
+            "capability_profile_id": self.capability_profile_id,
+            "capability_requirements_digest": self.capability_requirements_digest,
+            "payload_sha256": sha256_hex(self.payload),
+            "payload_bytes": len(self.payload),
+            "state_count": self.state_count,
+            "encoded_record_bytes": encoded_record_bytes,
+            "checkpoint_section_overhead_bytes": section_overhead_bytes,
+            "byte_cost": encoded_record_bytes + section_overhead_bytes,
+            "flags": self.flags,
+            "portable_gpu_state_claim": False,
+        }
+
+
 @dataclass
 class NwpPackage:
     capability: CapabilityRecord = field(default_factory=CapabilityRecord)
@@ -605,13 +731,27 @@ class NwpPackage:
     parameters: list[ParameterRecord] = field(default_factory=list)
     shaders: list[ShaderRecord] = field(default_factory=list)
     root_signatures: list[RootSignatureRecord] = field(default_factory=list)
+    history: tuple[HistoryRecord, ...] = ()
+    release_checkpoints: tuple[ReleaseCheckpointRecord, ...] = ()
     dev_metadata: bytes | None = None
     flags: int = 1  # bit 0: release package
 
+    @property
+    def version_minor(self) -> int:
+        return (
+            VERSION_MINOR_STATEFUL
+            if self.history or self.release_checkpoints
+            else VERSION_MINOR
+        )
+
+    @property
+    def stateful(self) -> bool:
+        return bool(self.history or self.release_checkpoints)
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "format": FORMAT_NAME,
-            "version": {"major": VERSION_MAJOR, "minor": VERSION_MINOR},
+            "version": {"major": VERSION_MAJOR, "minor": self.version_minor},
             "capability": self.capability.to_dict(),
             "resources": [item.to_dict() for item in self.resources],
             "initialization": [item.to_dict() for item in self.initialization],
@@ -622,6 +762,23 @@ class NwpPackage:
             "flags": self.flags,
             "contains_authoring_metadata": bool(self.dev_metadata),
         }
+        # A History-free package has exactly the pre-NW-09 inspection surface.
+        # The stateful extension is additive and appears only when its sections
+        # are actually present.
+        if self.stateful:
+            payload["stateful_extension"] = {
+                "present": self.stateful,
+                "section_version": VERSION_MINOR_STATEFUL,
+                "history": [item.to_dict() for item in self.history],
+                "checkpoints": [
+                    item.to_dict() for item in self.release_checkpoints
+                ],
+                "checkpoint_byte_cost": release_checkpoint_section_byte_cost(
+                    self.release_checkpoints
+                ),
+                "portable_gpu_state_replay": False,
+            }
+        return payload
 
 
 @dataclass(frozen=True)
@@ -634,10 +791,15 @@ class Inspection:
     package_sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        version_minor = (
+            self.package.version_minor
+            if self.package is not None
+            else VERSION_MINOR
+        )
         result: dict[str, Any] = {
             "valid": self.valid,
             "format": FORMAT_NAME,
-            "version": {"major": VERSION_MAJOR, "minor": VERSION_MINOR},
+            "version": {"major": VERSION_MAJOR, "minor": version_minor},
             "size_bytes": self.size_bytes,
             "checksum": {
                 "algorithm": "sha256",
@@ -2588,7 +2750,8 @@ def _validate_instructions(
                 elif (
                     operand.type == "u32"
                     and operand_index in (0, 1, 2)
-                    and instruction.opcode in {"frame.dispatch", "init.dispatch"}
+                    and instruction.opcode
+                    in {"frame.dispatch", "frame.simulation_step", "init.dispatch"}
                 ):
                     if operand.value == 0 or operand.value > 65535:
                         error(
@@ -2703,14 +2866,21 @@ def _validate_instructions(
                                     f"parameter {root_parameter} that does not bind resource "
                                     f"'{resource.name}' in the active root signature",
                                 )
-            if phase_name == "frame" and instruction.opcode == "frame.dispatch":
-                shader_operand = instruction.operands[-1]
+            if phase_name == "frame" and instruction.opcode in {
+                "frame.dispatch",
+                "frame.simulation_step",
+            }:
+                shader_operand = (
+                    instruction.operands[-1]
+                    if instruction.opcode == "frame.dispatch"
+                    else instruction.operands[3]
+                )
                 if shader_operand.type == "shader_ref":
                     shader = shader_by_id.get(shader_operand.value)
                     if shader is not None and shader.target != "cs_6_0":
                         error(
                             "package_dispatch_shader_target",
-                            f"frame.dispatch requires a compute shader target, "
+                            f"{instruction.opcode} requires a compute shader target, "
                             f"got '{shader.target}'",
                         )
                     pipeline_root = pipeline_roots.get(shader_operand.value)
@@ -3440,11 +3610,19 @@ def _validate_cross_references(
                 if operand.type == "shader_ref"
             )
     dispatched_shaders = {
-        instruction.operands[-1].value
+        (
+            instruction.operands[-1].value
+            if instruction.opcode == "frame.dispatch"
+            else instruction.operands[3].value
+        )
         for instruction in frame
-        if instruction.opcode == "frame.dispatch"
+        if instruction.opcode in {"frame.dispatch", "frame.simulation_step"}
         and instruction.operands
-        and instruction.operands[-1].type == "shader_ref"
+        and (
+            instruction.operands[-1].type == "shader_ref"
+            if instruction.opcode == "frame.dispatch"
+            else instruction.operands[3].type == "shader_ref"
+        )
     }
     init_dispatched_shaders = {
         instruction.operands[-1].value
@@ -3537,12 +3715,497 @@ def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
                 section=SECTION_DEV,
             )
         )
+    diagnostics.extend(_validate_stateful_extension(package))
+    return diagnostics
+
+
+def _validate_stateful_extension(
+    package: NwpPackage,
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    if not package.stateful:
+        return diagnostics
+    if package.flags & 1 and package.dev_metadata is not None:
+        diagnostics.append(
+            package_diagnostic(
+                "package_release_authoring_metadata",
+                "stateful release packages must not embed authoring metadata",
+                section=SECTION_DEV,
+            )
+        )
+    resource_ids = {resource.resource_id for resource in package.resources}
+    resources_by_id = {
+        resource.resource_id: resource for resource in package.resources
+    }
+    state_ids: set[int] = set()
+    node_ids: set[str] = set()
+    for record in package.history:
+        if record.state_id in state_ids:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_duplicate_state_id",
+                    f"duplicate History state id {record.state_id}",
+                    section=SECTION_HISTORY,
+                )
+            )
+        state_ids.add(record.state_id)
+        if record.node_id in node_ids:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_duplicate_node",
+                    f"duplicate History node '{record.node_id}'",
+                    section=SECTION_HISTORY,
+                )
+            )
+        node_ids.add(record.node_id)
+        if record.step_rate_hz != 120:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_step_rate",
+                    "History step rate must be exactly 120 Hz",
+                    section=SECTION_HISTORY,
+                )
+            )
+        if record.reset_policy not in {"on-loop", "on-seek", "never", "manual"}:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_reset_policy",
+                    f"unknown History reset policy '{record.reset_policy}'",
+                    section=SECTION_HISTORY,
+                )
+            )
+        expected_state_type = {
+            "nw.particles.system": "nw.particles.v1",
+            "nw.feedback.image": "nw.feedback.image.v1",
+        }.get(record.operator_id)
+        if expected_state_type is None:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_operator",
+                    f"History record '{record.node_id}' uses operator "
+                    f"'{record.operator_id}' with no History schema",
+                    section=SECTION_HISTORY,
+                )
+            )
+        elif record.state_type != expected_state_type:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_state_type",
+                    f"History state type '{record.state_type}' does not belong "
+                    f"to operator '{record.operator_id}' (expected "
+                    f"'{expected_state_type}')",
+                    section=SECTION_HISTORY,
+                )
+            )
+        if record.values_per_element <= 0 or record.element_count <= 0:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_layout",
+                    f"History record '{record.node_id}' declares an empty state "
+                    "layout",
+                    section=SECTION_HISTORY,
+                )
+            )
+        elif len(record.initial_state) != record.state_bytes:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_initial_state",
+                    f"History record '{record.node_id}' carries "
+                    f"{len(record.initial_state)} initial-state bytes, expected "
+                    f"{record.state_bytes}",
+                    section=SECTION_HISTORY,
+                )
+            )
+        if record.current_resource_id == record.previous_resource_id:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_ping_pong_alias",
+                    "History current/previous resources must be distinct",
+                    section=SECTION_HISTORY,
+                )
+            )
+        for resource_id in (
+            record.current_resource_id,
+            record.previous_resource_id,
+        ):
+            if resource_id and resource_id not in resource_ids:
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_history_resource",
+                        f"History state references unknown resource {resource_id}",
+                        section=SECTION_HISTORY,
+                    )
+                )
+        if package.flags & 1 and record.frames_in_flight < 2:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_frames_in_flight",
+                    "stateful release packages require at least two frames in flight",
+                    section=SECTION_HISTORY,
+                )
+            )
+        for resource_id in (
+            record.current_resource_id,
+            record.previous_resource_id,
+        ):
+            resource = resources_by_id.get(resource_id)
+            if resource is None:
+                continue
+            if resource.kind != "buffer" or resource.format != "DXGI_FORMAT_R32_UINT":
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_history_state_format",
+                        f"History state resource {resource_id} must be a raw "
+                        "DXGI_FORMAT_R32_UINT buffer",
+                        section=SECTION_HISTORY,
+                    )
+                )
+            if resource.size_bytes != record.state_bytes:
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_history_state_layout",
+                        f"History state resource {resource_id} is "
+                        f"{resource.size_bytes} bytes but the declared layout "
+                        f"is {record.state_bytes} bytes",
+                        section=SECTION_HISTORY,
+                    )
+                )
+    uploads: dict[int, set[int]] = {}
+    for instruction in package.initialization:
+        if (
+            instruction.opcode == "init.upload_history_state"
+            and len(instruction.operands) == 2
+            and instruction.operands[0].type == "resource_ref"
+            and instruction.operands[1].type == "u32"
+        ):
+            uploads.setdefault(int(instruction.operands[1].value), set()).add(
+                int(instruction.operands[0].value)
+            )
+    for record in package.history:
+        required = {record.current_resource_id, record.previous_resource_id}
+        if uploads.get(record.state_id, set()) != required:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_initial_upload",
+                    f"History state {record.state_id} must upload its declared "
+                    "initial bytes into both ping-pong resources",
+                    section=SECTION_HISTORY,
+                )
+            )
+    if package.history:
+        history_state_ids = {record.state_id for record in package.history}
+        for instruction in package.frame:
+            if (
+                instruction.opcode == "frame.simulation_step"
+                and len(instruction.operands) == 5
+                and instruction.operands[4].type == "u32"
+                and int(instruction.operands[4].value) not in history_state_ids
+            ):
+                diagnostics.append(
+                    package_diagnostic(
+                        "package_history_dispatch",
+                        "frame.simulation_step references an unknown History "
+                        "state id",
+                        section=SECTION_FRAME,
+                    )
+                )
+        history_dispatches = sum(
+            1
+            for instruction in package.frame
+            if instruction.opcode in {"frame.dispatch", "frame.simulation_step"}
+        )
+        if history_dispatches < len(package.history):
+            diagnostics.append(
+                package_diagnostic(
+                    "package_history_dispatch",
+                    "stateful package must dispatch one simulation shader for "
+                    "every History declaration",
+                    section=SECTION_FRAME,
+                )
+            )
+    checkpoint_ids: set[int] = set()
+    for record in package.release_checkpoints:
+        if record.checkpoint_id in checkpoint_ids:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_checkpoint_duplicate_id",
+                    f"duplicate checkpoint id {record.checkpoint_id}",
+                    section=SECTION_CHECKPOINTS,
+                )
+            )
+        checkpoint_ids.add(record.checkpoint_id)
+        if record.capability_profile_id != package.capability.profile_id:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_checkpoint_capability",
+                    "packaged checkpoint capability profile does not match the package",
+                    section=SECTION_CHECKPOINTS,
+                )
+            )
+        if record.capability_requirements_digest != package.capability.requirements_digest:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_checkpoint_capability",
+                    "packaged checkpoint requirements digest does not match the package",
+                    section=SECTION_CHECKPOINTS,
+                )
+            )
+        if len(record.payload) > MAX_BLOB_BYTES:
+            diagnostics.append(
+                package_diagnostic(
+                    "package_checkpoint_payload",
+                    "packaged checkpoint payload exceeds the bounded blob limit",
+                    section=SECTION_CHECKPOINTS,
+                )
+            )
     return diagnostics
 
 
 # ---------------------------------------------------------------------------
 # Container writer / reader
 # ---------------------------------------------------------------------------
+
+
+def _encode_history(records: Sequence[HistoryRecord]) -> bytes:
+    writer = _Writer()
+    writer.u16(HISTORY_RECORD_VERSION)
+    writer.u16(0)
+    writer.u32(len(records))
+    for record in records:
+        writer.u32(record.state_id)
+        writer.string(record.node_id)
+        writer.string(record.operator_id)
+        writer.string(record.state_type)
+        writer.string(record.initial_value)
+        writer.string(record.reset_policy)
+        writer.u32(record.step_rate_hz)
+        writer.string(record.state_layout_hash)
+        writer.u32(record.values_per_element)
+        writer.u64(record.element_count)
+        writer.u32(record.current_resource_id)
+        writer.u32(record.previous_resource_id)
+        writer.u32(record.frames_in_flight)
+        writer.bytes(record.initial_state)
+        writer.u32(record.flags)
+    return bytes(writer.buffer)
+
+
+def _decode_history(
+    payload: bytes, diagnostics: list[dict[str, Any]]
+) -> tuple[HistoryRecord, ...] | None:
+    reader = _Reader(payload, diagnostics, SECTION_HISTORY)
+    version = reader.u16()
+    flags = reader.u16()
+    count = reader.u32()
+    if version is None or flags is None or count is None:
+        return None
+    if version not in (1, HISTORY_RECORD_VERSION):
+        diagnostics.append(
+            package_diagnostic(
+                "package_unknown_section_version",
+                f"HIST section version {version} is not supported",
+                section=SECTION_HISTORY,
+            )
+        )
+        return None
+    if flags != 0:
+        diagnostics.append(
+            package_diagnostic(
+                "package_section_flags",
+                "HIST section flags must be zero",
+                section=SECTION_HISTORY,
+            )
+        )
+    if count > MAX_RECORD_COUNT:
+        diagnostics.append(
+            package_diagnostic(
+                "package_decode_limit",
+                "HIST record count exceeds the bounded record limit",
+                section=SECTION_HISTORY,
+            )
+        )
+        return None
+    records: list[HistoryRecord] = []
+    for _ in range(count):
+        state_id = reader.u32()
+        node_id = reader.string()
+        operator_id = reader.string()
+        state_type = reader.string()
+        initial_value = reader.string()
+        reset_policy = reader.string()
+        step_rate_hz = reader.u32()
+        state_layout_hash = reader.string()
+        values_per_element = reader.u32()
+        element_count = reader.u64()
+        current_resource_id = reader.u32()
+        previous_resource_id = reader.u32()
+        frames_in_flight = reader.u32()
+        initial_state = (
+            reader.bytes() if version >= HISTORY_RECORD_VERSION else b""
+        )
+        record_flags = reader.u32()
+        if None in (
+            state_id,
+            node_id,
+            operator_id,
+            state_type,
+            initial_value,
+            reset_policy,
+            step_rate_hz,
+            state_layout_hash,
+            values_per_element,
+            element_count,
+            current_resource_id,
+            previous_resource_id,
+            frames_in_flight,
+            initial_state,
+            record_flags,
+        ):
+            return None
+        records.append(
+            HistoryRecord(
+                state_id=int(state_id),
+                node_id=str(node_id),
+                operator_id=str(operator_id),
+                state_type=str(state_type),
+                initial_value=str(initial_value),
+                reset_policy=str(reset_policy),
+                step_rate_hz=int(step_rate_hz),
+                state_layout_hash=str(state_layout_hash),
+                values_per_element=int(values_per_element),
+                element_count=int(element_count),
+                current_resource_id=int(current_resource_id),
+                previous_resource_id=int(previous_resource_id),
+                frames_in_flight=int(frames_in_flight),
+                initial_state=bytes(initial_state),
+                flags=int(record_flags),
+            )
+        )
+    if reader.remaining != 0:
+        diagnostics.append(
+            package_diagnostic(
+                "package_section_trailing_bytes",
+                f"HIST section has {reader.remaining} unexplained trailing bytes",
+                section=SECTION_HISTORY,
+            )
+        )
+        return None
+    return tuple(records)
+
+
+def _encode_checkpoints(records: Sequence[ReleaseCheckpointRecord]) -> bytes:
+    writer = _Writer()
+    writer.u16(VERSION_MINOR_STATEFUL)
+    writer.u16(0)
+    writer.u32(len(records))
+    for record in records:
+        writer.u32(record.checkpoint_id)
+        writer.string(record.label)
+        writer.u64(record.tick)
+        writer.u64(record.simulation_tick)
+        writer.string(record.semantic_digest)
+        writer.string(record.state_layout_hash)
+        writer.string(record.capability_profile_id)
+        writer.string(record.capability_requirements_digest)
+        writer.u32(record.state_count)
+        writer.u32(record.flags)
+        writer.bytes(record.payload)
+    return bytes(writer.buffer)
+
+
+def release_checkpoint_section_byte_cost(
+    records: Sequence[ReleaseCheckpointRecord],
+) -> int:
+    """Return the exact stored bytes of the optional CKPT section.
+
+    The value is the serialized CKPT payload (header plus every record) plus
+    the package section-directory entry that points at it.  An empty record
+    list costs nothing because the section is omitted entirely.
+    """
+
+    if not records:
+        return 0
+    return len(_encode_checkpoints(records)) + SECTION_ENTRY_SIZE
+
+
+def _decode_checkpoints(
+    payload: bytes, diagnostics: list[dict[str, Any]]
+) -> tuple[ReleaseCheckpointRecord, ...] | None:
+    reader = _Reader(payload, diagnostics, SECTION_CHECKPOINTS)
+    version = reader.u16()
+    flags = reader.u16()
+    count = reader.u32()
+    if version is None or flags is None or count is None:
+        return None
+    if version != VERSION_MINOR_STATEFUL:
+        diagnostics.append(
+            package_diagnostic(
+                "package_unknown_section_version",
+                f"CKPT section version {version} is not supported",
+                section=SECTION_CHECKPOINTS,
+            )
+        )
+        return None
+    if flags != 0:
+        diagnostics.append(
+            package_diagnostic(
+                "package_section_flags",
+                "CKPT section flags must be zero",
+                section=SECTION_CHECKPOINTS,
+            )
+        )
+    records: list[ReleaseCheckpointRecord] = []
+    for _ in range(count):
+        checkpoint_id = reader.u32()
+        label = reader.string()
+        tick = reader.u64()
+        simulation_tick = reader.u64()
+        semantic_digest = reader.string()
+        state_layout_hash = reader.string()
+        profile_id = reader.string()
+        requirements_digest = reader.string()
+        state_count = reader.u32()
+        record_flags = reader.u32()
+        blob = reader.bytes()
+        if None in (
+            checkpoint_id,
+            label,
+            tick,
+            simulation_tick,
+            semantic_digest,
+            state_layout_hash,
+            profile_id,
+            requirements_digest,
+            state_count,
+            record_flags,
+            blob,
+        ):
+            return None
+        records.append(
+            ReleaseCheckpointRecord(
+                checkpoint_id=int(checkpoint_id),
+                label=str(label),
+                tick=int(tick),
+                simulation_tick=int(simulation_tick),
+                semantic_digest=str(semantic_digest),
+                state_layout_hash=str(state_layout_hash),
+                capability_profile_id=str(profile_id),
+                capability_requirements_digest=str(requirements_digest),
+                payload=bytes(blob),
+                state_count=int(state_count),
+                flags=int(record_flags),
+            )
+        )
+    if reader.remaining != 0:
+        diagnostics.append(
+            package_diagnostic(
+                "package_section_trailing_bytes",
+                f"CKPT section has {reader.remaining} unexplained trailing bytes",
+                section=SECTION_CHECKPOINTS,
+            )
+        )
+        return None
+    return tuple(records)
 
 
 def encode_package(package: NwpPackage) -> bytes:
@@ -3570,6 +4233,12 @@ def encode_package(package: NwpPackage) -> bytes:
         SECTION_ROOT_SIGNATURES: _encode_root_signatures(package.root_signatures),
         SECTION_SHADERS: _encode_shaders(package.shaders),
     }
+    if package.history:
+        sections[SECTION_HISTORY] = _encode_history(package.history)
+    if package.release_checkpoints:
+        sections[SECTION_CHECKPOINTS] = _encode_checkpoints(
+            package.release_checkpoints
+        )
     if package.dev_metadata is not None:
         sections[SECTION_DEV] = package.dev_metadata
 
@@ -3587,6 +4256,10 @@ def encode_package(package: NwpPackage) -> bytes:
     }
     if package.dev_metadata is not None:
         record_counts[SECTION_DEV] = 0
+    if package.history:
+        record_counts[SECTION_HISTORY] = len(package.history)
+    if package.release_checkpoints:
+        record_counts[SECTION_CHECKPOINTS] = len(package.release_checkpoints)
     for name, payload in sections.items():
         if len(payload) > MAX_SECTION_BYTES:
             raise PackageValidationError(
@@ -3620,14 +4293,18 @@ def encode_package(package: NwpPackage) -> bytes:
             )
         )
 
+    stateful = bool(package.history or package.release_checkpoints)
+    header_flags = int(package.flags)
+    if stateful:
+        header_flags |= STATEFUL_EXTENSION_FLAG
     header = bytearray(
         struct.pack(
             "<8sHHIIIQQIIQQ",
             MAGIC,
             VERSION_MAJOR,
-            VERSION_MINOR,
+            VERSION_MINOR_STATEFUL if stateful else VERSION_MINOR,
             HEADER_SIZE,
-            package.flags,
+            header_flags,
             0,
             HEADER_SIZE,
             total_size,
@@ -3729,11 +4406,13 @@ def decode_package(
                 offset=8,
             )
         )
-    if minor != VERSION_MINOR:
+    if minor not in (VERSION_MINOR, VERSION_MINOR_STATEFUL):
         raise PackageValidationError(
             package_diagnostic(
                 "package_version_unknown",
-                f"unknown .nwp minor version {minor}; this reader implements {VERSION_MINOR}",
+                f"unknown .nwp minor version {minor}; this reader implements "
+                f"{VERSION_MINOR} and the explicit stateful extension "
+                f"{VERSION_MINOR_STATEFUL}",
                 offset=10,
             )
         )
@@ -3979,6 +4658,16 @@ def decode_package(
         payloads[SECTION_ROOT_SIGNATURES], diagnostics
     )
     shaders = _decode_shaders(payloads[SECTION_SHADERS], diagnostics)
+    history = (
+        _decode_history(payloads[SECTION_HISTORY], diagnostics)
+        if SECTION_HISTORY in payloads
+        else ()
+    )
+    release_checkpoints = (
+        _decode_checkpoints(payloads[SECTION_CHECKPOINTS], diagnostics)
+        if SECTION_CHECKPOINTS in payloads
+        else ()
+    )
     dev_metadata = (
         _decode_dev_metadata(payloads[SECTION_DEV], diagnostics)
         if SECTION_DEV in payloads
@@ -3993,6 +4682,23 @@ def decode_package(
     assert parameters is not None
     assert root_signatures is not None
     assert shaders is not None
+    assert history is not None
+    assert release_checkpoints is not None
+    stateful_present = bool(history or release_checkpoints)
+    if bool(flags & STATEFUL_EXTENSION_FLAG) != stateful_present:
+        raise PackageValidationError(
+            package_diagnostic(
+                "package_stateful_extension_mismatch",
+                "stateful extension flag does not match HIST/CKPT section presence",
+            )
+        )
+    if (minor == VERSION_MINOR_STATEFUL) != stateful_present:
+        raise PackageValidationError(
+            package_diagnostic(
+                "package_stateful_extension_mismatch",
+                "stateful minor version does not match HIST/CKPT section presence",
+            )
+        )
     package = NwpPackage(
         capability=capability,
         resources=resources,
@@ -4001,6 +4707,8 @@ def decode_package(
         parameters=parameters,
         shaders=shaders,
         root_signatures=root_signatures,
+        history=history,
+        release_checkpoints=release_checkpoints,
         dev_metadata=dev_metadata,
         flags=flags,
     )
@@ -4015,6 +4723,10 @@ def decode_package(
     }
     if dev_metadata is not None:
         actual_counts[SECTION_DEV] = 0
+    if history:
+        actual_counts[SECTION_HISTORY] = len(history)
+    if release_checkpoints:
+        actual_counts[SECTION_CHECKPOINTS] = len(release_checkpoints)
     for name, _index, declared_records, offset, _size, _entry_offset in entries:
         if declared_records != actual_counts[name]:
             raise PackageValidationError(

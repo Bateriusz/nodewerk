@@ -80,6 +80,10 @@ struct AuthoringPassTiming {
         r"""    ExitCode shutdown();
 #if NW08_AUTHORING_RUNTIME
     AuthoringReloadResult reloadForAuthoringFromFile(const char* package_path);
+    // Reset temporal resources and the simulation counter together, then let
+    // the normal render path replay every tick from zero.  Authoring seeks
+    // never silently drop or skip simulation ticks.
+    ExitCode rewindHistoryForAuthoring();
     AuthoringAdapterIdentity authoringAdapterIdentity() const noexcept;
     const AuthoringReloadResult& authoring_reload_stats() const noexcept {
         return authoring_reload_stats_;
@@ -135,6 +139,38 @@ bool PackagePlayer::IsAuthoringRetainedResource(
     return std::find(authoring_retained_resource_ids_.begin(),
                      authoring_retained_resource_ids_.end(),
                      resource_id) != authoring_retained_resource_ids_.end();
+}
+
+ExitCode PackagePlayer::rewindHistoryForAuthoring() {
+    if (package_.history.empty()) {
+        return ExitCode::Success;
+    }
+    if (!initialized_ || platform_ == nullptr) {
+        return Fail(ExitCode::InvalidArguments, "history",
+                    "history_rewind_requires_initialization", "initialized",
+                    "true", "false", "rewindHistoryForAuthoring",
+                    "authoring History rewind requires a live initialized "
+                    "device");
+    }
+    // Seek replay through the same persistent authoring device: retire every
+    // submitted frame first, then rerun initialization.  Rerunning
+    // initialization re-uploads both ping-pong resources with the declared
+    // initial bytes and (in RunInitializationInstructions) rewinds the
+    // simulation counter as one atomic logical operation.  The subsequent
+    // render then replays tick 0..target in order through the ordinary frame
+    // schedule.
+    const ExitCode wait = WaitForAllFrames("authoring_history_rewind");
+    if (wait != ExitCode::Success) {
+        return wait;
+    }
+    authoring_reload_in_progress_ = true;
+    const ExitCode init = RunInitializationInstructions();
+    authoring_reload_in_progress_ = false;
+    if (init != ExitCode::Success) {
+        return init;
+    }
+    timeline_override_active_ = false;
+    return ExitCode::Success;
 }
 
 AuthoringAdapterIdentity PackagePlayer::authoringAdapterIdentity() const noexcept {
@@ -749,7 +785,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {""",
                 kFenceTimeoutMs);
             if (wait != ExitCode::Success) return wait;
 #endif
-        } else if (instruction.opcode == "init.upload_resource") {""",
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "init.upload_history_state") {""",
         r"""            const ExitCode wait = WaitForFenceValue(
                 state->fence, fence_value, state->fence_event,
                 kFenceTimeoutMs);
@@ -782,7 +819,8 @@ ExitCode PackagePlayer::RunInitializationInstructions() {""",
             ++authoring_dispatch_index;
 #endif
 #endif
-        } else if (instruction.opcode == "init.upload_resource") {""",
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "init.upload_history_state") {""",
         "authoring init dispatch execution accounting",
     )
     cpp = replace_once(
@@ -834,12 +872,12 @@ ExitCode PackagePlayer::RunInitializationInstructions() {""",
     )
     cpp = replace_once(
         cpp,
-        r"""    std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
+        r"""    // NW08 overlay insertion point: per-frame pass timing begins here.
     for (const auto& op : frame_ops_) {""",
-        r"""    std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
-#if NW08_AUTHORING_RUNTIME
+        r"""#if NW08_AUTHORING_RUNTIME
     authoring_pass_timings_.clear();
 #endif
+    // NW08 overlay insertion point: per-frame pass timing begins here.
     for (const auto& op : frame_ops_) {
 #if NW08_AUTHORING_RUNTIME
         const auto authoring_pass_begin = std::chrono::steady_clock::now();

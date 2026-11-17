@@ -19,12 +19,27 @@
 #include <string_view>
 #include <vector>
 
+#ifndef NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#define NW05_FROZEN_EMBEDDED_SPECIALIZATION 0
+#endif
+
+#ifndef NW09_FORCE_STATEFUL_PACKAGE_MODEL
+#define NW09_FORCE_STATEFUL_PACKAGE_MODEL 0
+#endif
+
 namespace nw::package {
 
 inline constexpr std::array<std::uint8_t, 8> kMagic = {
     'N', 'W', 'P', 'K', 'G', '1', '\n', '\0'};
 inline constexpr std::uint16_t kVersionMajor = 1;
 inline constexpr std::uint16_t kVersionMinor = 0;
+// NW-09 explicit stateful-content extension.  Stateless packages continue to
+// emit kVersionMinor bytes exactly.
+inline constexpr std::uint16_t kVersionMinorStateful = 1;
+// HIST record layout version (the package minor remains 1).
+inline constexpr std::uint16_t kHistoryRecordVersion = 2;
+inline constexpr std::uint32_t kStatefulExtensionFlag = 2u;
+inline constexpr std::uint64_t kTimelineTicksPerSimulationTick = 400u;
 inline constexpr std::uint32_t kHeaderSize = 64;
 inline constexpr std::uint32_t kSectionEntrySize = 32;
 inline constexpr std::uint32_t kChecksumSize = 32;
@@ -37,6 +52,8 @@ inline constexpr std::string_view kSectionParameters = "PARM";
 inline constexpr std::string_view kSectionShaders = "SHDR";
 inline constexpr std::string_view kSectionRootSignatures = "RSIG";
 inline constexpr std::string_view kSectionDev = "DEVC";
+inline constexpr std::string_view kSectionHistory = "HIST";
+inline constexpr std::string_view kSectionCheckpoints = "CKPT";
 
 inline constexpr std::string_view kCommonProfileId =
     "nw.common.d3d12.fl12_0.sm6_0.v1";
@@ -227,6 +244,46 @@ struct ShaderRecord {
     std::uint32_t flags = 0;
 };
 
+// The size-specialized release omits NW-09 stateful model storage. Diagnostic
+// frozen fixtures explicitly force the full model so every translation unit on
+// that fixture boundary uses the same Package ABI as the full decoder.
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION || NW09_FORCE_STATEFUL_PACKAGE_MODEL
+struct HistoryRecord {
+    std::uint32_t state_id = 0;
+    std::string node_id;
+    std::string operator_id;
+    std::string state_type;
+    std::string initial_value;
+    std::string reset_policy;
+    std::uint32_t step_rate_hz = 120u;
+    std::string state_layout_hash;
+    std::uint32_t values_per_element = 0;
+    std::uint64_t element_count = 0;
+    std::uint32_t current_resource_id = 0;
+    std::uint32_t previous_resource_id = 0;
+    std::uint32_t frames_in_flight = 2u;
+    // Exact packed little-endian float32 initial state.  The declared
+    // values_per_element/element_count layout and the state resource byte
+    // size both equal initial_state.size().
+    std::vector<std::uint8_t> initial_state;
+    std::uint32_t flags = 0;
+};
+
+struct ReleaseCheckpointRecord {
+    std::uint32_t checkpoint_id = 0;
+    std::string label;
+    std::uint64_t tick = 0;
+    std::uint64_t simulation_tick = 0;
+    std::string semantic_digest;
+    std::string state_layout_hash;
+    std::string capability_profile_id;
+    std::string capability_requirements_digest;
+    std::uint32_t state_count = 0;
+    std::uint32_t flags = 0;
+    std::vector<std::uint8_t> payload;
+};
+#endif
+
 struct Package {
     CapabilityRecord capability;
     std::vector<ResourceDescriptor> resources;
@@ -235,6 +292,10 @@ struct Package {
     std::vector<ParameterRecord> parameters;
     std::vector<ShaderRecord> shaders;
     std::vector<RootSignatureRecord> root_signatures;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION || NW09_FORCE_STATEFUL_PACKAGE_MODEL
+    std::vector<HistoryRecord> history;
+    std::vector<ReleaseCheckpointRecord> release_checkpoints;
+#endif
     std::optional<std::vector<std::uint8_t>> dev_metadata;
     std::uint32_t flags = 1u;
 };

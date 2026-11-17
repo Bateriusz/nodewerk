@@ -76,6 +76,12 @@ NO_SHADER_IDENTITY = sha256_value(
 # lost-device condition, never a recoverable layout mismatch.
 DEVICE_REMOVED_EXIT_CODE = 51
 
+# Mirrors nw::package::kTimelineTicksPerSimulationTick.  The authoring session
+# only needs it to decide whether a scrub target precedes the last committed
+# simulation tick and therefore requires the explicit History rewind/replay
+# boundary.
+HISTORY_TIMELINE_TICKS_PER_SIMULATION_TICK = 400
+
 
 class PreviewError(RuntimeError):
     """Raised when preview execution cannot produce a valid frame."""
@@ -821,6 +827,7 @@ class AuthoringRuntimeSession:
         self._stats_path: Path | None = None
         self._device_running = False
         self._just_reinitialized = False
+        self._last_render_tick: int | None = None
         self._lock = threading.RLock()
 
     # -- state ------------------------------------------------------------
@@ -913,6 +920,7 @@ class AuthoringRuntimeSession:
                     # creation.  A resolution change is therefore a real
                     # device-instance recreation, not a package reload.
                     self._stop_process()
+                    self._last_render_tick = None
                     self._epoch = max(0, self._epoch + 1)
                     self._package_sha = ""
                     self._device_running = False
@@ -962,6 +970,10 @@ class AuthoringRuntimeSession:
                         # not change: unchanged physical realizations remain live.
                         self._package_sha = bundle.package_sha256
                         self._hot_reloads += 1
+                        # A hot reload reruns initialization (including the
+                        # initial History upload and simulation-counter
+                        # rewind), so the backward-scrub detector starts clean.
+                        self._last_render_tick = None
                         self._capture_dir = capture_dir
                         self._stats_path = stats_path
                         return self.device_epoch
@@ -987,6 +999,7 @@ class AuthoringRuntimeSession:
                 self._lost = False
                 self._capture_dir = capture_dir
                 self._stats_path = stats_path
+                self._last_render_tick = None
                 self._start_process(
                     bundle,
                     width=width,
@@ -1024,6 +1037,7 @@ class AuthoringRuntimeSession:
             self._lost = False
             self._device_running = False
             self._just_reinitialized = True
+            self._last_render_tick = None
             self._package_sha = ""
             self._identity = HostDeviceIdentity.unavailable(
                 "runtime device reinitialized; awaiting first render"
@@ -1035,6 +1049,7 @@ class AuthoringRuntimeSession:
             self._lost = True
             self._reservations.clear()
             self._device_running = False
+            self._last_render_tick = None
             if self._process is not None and self._process.poll() is None:
                 try:
                     self._write("lose-device")
@@ -1133,6 +1148,38 @@ class AuthoringRuntimeSession:
         capture_dir: Path,
         stats_path: Path,
     ) -> dict[str, Any]:
+        if (
+            self._last_render_tick is not None
+            and tick // HISTORY_TIMELINE_TICKS_PER_SIMULATION_TICK
+            < self._last_render_tick
+            // HISTORY_TIMELINE_TICKS_PER_SIMULATION_TICK
+        ):
+            # A backward authoring scrub must reset temporal resources and the
+            # simulation counter together, then replay through the ordinary
+            # render request.  This is the existing persistent runtime, not a
+            # second timeline or playback engine.
+            self._write("rewind")
+            rewind_response = self._read_response(timeout=300.0)
+            if not rewind_response.get("ok", False):
+                exit_code = int(rewind_response.get("exit_code", 1) or 1)
+                if (
+                    bool(rewind_response.get("device_removed"))
+                    or exit_code == DEVICE_REMOVED_EXIT_CODE
+                ):
+                    self._lost = True
+                    error = DeviceLostError(
+                        "authoring runtime device was removed during History "
+                        f"rewind (exit {exit_code})"
+                    )
+                    error.device_epoch = self.device_epoch
+                    self._stop_process()
+                    raise error
+                raise RuntimeSessionError(
+                    "authoring runtime History rewind failed "
+                    f"(exit {exit_code}): "
+                    + json.dumps(rewind_response, sort_keys=True)
+                )
+        self._last_render_tick = tick
         self._write(f"render {tick}")
         response = self._read_response(timeout=300.0)
         self._renders += 1
@@ -3058,6 +3105,25 @@ class PreviewPipeline:
             key = node_inputs.device_realization_key(
                 self.device.generation
             ).key
+            if node.frequency == "history" or node.history is not None:
+                # Temporal state is an external-input recurrence, never a pure
+                # frame-independent cached output.  Bind the key to the exact
+                # simulation tick and committed state digest so a history
+                # realization cannot be reused as a stateless cache entry.
+                key = sha256_value(
+                    {
+                        "domain": "nw09.preview.temporal-realization.v1",
+                        "base_key": key,
+                        "node_id": node_id,
+                        "tick": int(job.tick),
+                        "state_layout_hash": (
+                            node.history.state_layout_hash()
+                            if node.history is not None
+                            else ""
+                        ),
+                        "state_digest": frame.content_digest,
+                    }
+                )
             rows.append(
                 _NodeRealization(
                     node_id=node_id,

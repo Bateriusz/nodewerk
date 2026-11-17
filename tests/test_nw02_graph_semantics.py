@@ -419,7 +419,13 @@ def test_operator_registry_declarations_are_complete(cli_binary: Path) -> None:
         if operator["explicit_residency_conversion"]:
             saw_conversion = True
         if operator["kind"] == "gpu_pass":
-            assert set(operator["frequency"]) <= {"initialization", "frame"}
+            # NW-09 adds explicit fixed-step temporal history state to the
+            # established GPU-pass frequency vocabulary.
+            assert set(operator["frequency"]) <= {
+                "initialization",
+                "history",
+                "frame",
+            }
         if operator["kind"] == "pure_shader_expr":
             assert operator["shader_operations"]
 

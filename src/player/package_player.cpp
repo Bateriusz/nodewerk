@@ -294,7 +294,38 @@ bool TextureSeedForResource(const package::Package& pkg,
 
 std::uint64_t MaximumInitialUploadBytes(const package::Package& pkg) {
     std::uint64_t maximum = 0u;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    std::uint64_t maximum_history_state = 0u;
+    for (const auto& history : pkg.history) {
+        maximum_history_state =
+            std::max<std::uint64_t>(maximum_history_state,
+                                    history.initial_state.size());
+    }
+    if (maximum_history_state != 0u) {
+        const std::uint64_t stride =
+            RoundUp(maximum_history_state, kFrameUploadAlignment);
+        if (stride <=
+            std::numeric_limits<std::uint64_t>::max() /
+                std::max<std::size_t>(1u, pkg.history.size())) {
+            maximum = std::max(
+                maximum,
+                stride * static_cast<std::uint64_t>(pkg.history.size()));
+        }
+    }
+#endif
     for (const auto& instruction : pkg.initialization) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        if (instruction.opcode == "init.upload_history_state" &&
+            instruction.operands.size() == 2u &&
+            instruction.operands[1].type == package::OperandType::U32) {
+            for (const auto& history : pkg.history) {
+                if (history.state_id == instruction.operands[1].u32) {
+                    maximum = std::max<std::uint64_t>(
+                        maximum, history.initial_state.size());
+                }
+            }
+        }
+#endif
         if (instruction.opcode != "init.upload_resource" ||
             instruction.operands.empty() ||
             instruction.operands[0].type !=
@@ -1139,6 +1170,9 @@ PackagePlayer::PackagePlayer(const PlayerConfig& config) : config_(config) {
     frames_in_flight_ = std::clamp(config.frames_in_flight, 1u, kMaxFramesInFlight);
     width_ = config.width;
     height_ = config.height;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    history_work_cap_ = config.history_work_cap;
+#endif
 }
 
 PackagePlayer::~PackagePlayer() { shutdown(); }
@@ -1407,6 +1441,12 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                     op.time_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
                 }
+                if (parameter.name == "nw09.simulation_tick" &&
+                    parameter_bytes >= 4u &&
+                    op.simulation_tick_byte_offset < 0) {
+                    op.simulation_tick_byte_offset =
+                        static_cast<std::int32_t>(byte_offset);
+                }
                 if (parameter_bytes == declared_bytes &&
                     op.parameter_count <
                         package::kMaxRootSignatureDwordCost) {
@@ -1562,6 +1602,21 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
     present_source_width_ = 0u;
     present_source_height_ = 0u;
     present_source_geometry_explicit_ = false;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    history_loop_ticks_ = 0u;
+    for (const auto& parameter : package_.parameters) {
+        if ((parameter.name == "nw09.loop_ticks" ||
+             parameter.name == "nw09_loop_ticks") &&
+            parameter.type == "uint" &&
+            parameter.value.size() == sizeof(std::uint32_t)) {
+            std::uint32_t loop_ticks = 0u;
+            std::memcpy(&loop_ticks, parameter.value.data(),
+                        sizeof(loop_ticks));
+            history_loop_ticks_ = loop_ticks;
+            break;
+        }
+    }
+#endif
     for (const auto& instruction : package_.frame) {
         bool known = true;
         FrameOp::Type type = FrameOp::Type::Present;
@@ -1587,6 +1642,10 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
             type = FrameOp::Type::Barrier;
         } else if (instruction.opcode == "frame.dispatch") {
             type = FrameOp::Type::Dispatch;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "frame.simulation_step") {
+            type = FrameOp::Type::SimulationStep;
+#endif
         } else if (instruction.opcode == "frame.draw") {
             type = FrameOp::Type::Draw;
         } else if (instruction.opcode == "frame.copy_buffer") {
@@ -1773,6 +1832,12 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                 if (parameter.name == "time" && parameter_bytes >= 4u &&
                     op.time_byte_offset < 0) {
                     op.time_byte_offset =
+                        static_cast<std::int32_t>(byte_offset);
+                }
+                if (parameter.name == "nw09.simulation_tick" &&
+                    parameter_bytes >= 4u &&
+                    op.simulation_tick_byte_offset < 0) {
+                    op.simulation_tick_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
                 }
                 const bool full_parameter_fits =
@@ -2027,6 +2092,103 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                      "signature");
                 return false;
             }
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (type == FrameOp::Type::SimulationStep) {
+            if (instruction.operands.size() != 5u) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand_count", "operand_count", "5",
+                     std::to_string(instruction.operands.size()), "frame_plan",
+                     "frame.simulation_step operand count is invalid");
+                return false;
+            }
+            if (instruction.operands[0].type != package::OperandType::U32 ||
+                instruction.operands[1].type != package::OperandType::U32 ||
+                instruction.operands[2].type != package::OperandType::U32 ||
+                instruction.operands[3].type !=
+                    package::OperandType::ShaderRef ||
+                instruction.operands[4].type != package::OperandType::U32) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_operand", "operand_types",
+                     "u32,u32,u32,shader_ref,u32", "invalid", "frame_plan",
+                     "frame.simulation_step operand types are invalid");
+                return false;
+            }
+            op.group_x = instruction.operands[0].u32;
+            op.group_y = instruction.operands[1].u32;
+            op.group_z = instruction.operands[2].u32;
+            op.shader_id = instruction.operands[3].u32;
+            op.history_state_id = instruction.operands[4].u32;
+            if (op.group_x == 0u || op.group_y == 0u || op.group_z == 0u ||
+                op.group_x > 65535u || op.group_y > 65535u ||
+                op.group_z > 65535u) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_dispatch_bounds", "dispatch_groups",
+                     "1..65535",
+                     std::to_string(op.group_x) + "x" +
+                         std::to_string(op.group_y) + "x" +
+                         std::to_string(op.group_z),
+                     "frame_plan",
+                     "frame.simulation_step group dimensions are out of "
+                     "bounds");
+                return false;
+            }
+            bool state_found = false;
+            for (const auto& history : package_.history) {
+                if (history.state_id == op.history_state_id) {
+                    state_found = true;
+                    break;
+                }
+            }
+            if (!state_found) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_reference", "history_state_id",
+                     std::to_string(op.history_state_id), "missing",
+                     "frame_plan",
+                     "frame.simulation_step references a missing History "
+                     "state");
+                return false;
+            }
+            const package::ShaderRecord* step_shader = nullptr;
+            for (const auto& candidate : package_.shaders) {
+                if (candidate.shader_id == op.shader_id) {
+                    step_shader = &candidate;
+                    break;
+                }
+            }
+            if (step_shader == nullptr || !has_active_root_signature ||
+                step_shader->root_signature_id != active_root_signature_id) {
+                Fail(ExitCode::PackageValidationFailed, "package_validation",
+                     "package_instruction_root_signature", "shader_id",
+                     std::to_string(op.shader_id), "matching active root",
+                     "frame_plan",
+                     "frame.simulation_step shader does not match the active "
+                     "root signature");
+                return false;
+            }
+            op.descriptor_resource = active_descriptor_resource;
+            for (std::size_t root = 0u;
+                 root < active_descriptor_resources.size(); ++root) {
+                if (!active_descriptor_valid[root]) continue;
+                const std::uint32_t resource_id =
+                    active_descriptor_resources[root];
+                bool duplicate = false;
+                for (std::uint32_t index = 0u;
+                     index < op.descriptor_resource_count; ++index) {
+                    if (op.descriptor_resources[index] == resource_id) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate && op.descriptor_resource_count <
+                                      op.descriptor_resources.size()) {
+                    const std::uint32_t entry =
+                        op.descriptor_resource_count++;
+                    op.descriptor_resources[entry] = resource_id;
+                    op.descriptor_resource_is_srv[entry] =
+                        active_descriptor_is_srv[root];
+                }
+            }
+#endif
         } else if (NW06_IF_RASTER(type == FrameOp::Type::SetGraphicsPipeline)) {
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
             if (instruction.operands.size() != 1u ||
@@ -4061,6 +4223,142 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                 kFenceTimeoutMs);
             if (wait != ExitCode::Success) return wait;
 #endif
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "init.upload_history_state") {
+            if (!require_operands(instruction, 2u) ||
+                instruction.operands[0].type !=
+                    package::OperandType::ResourceRef ||
+                instruction.operands[1].type != package::OperandType::U32) {
+                return last_exit_;
+            }
+            const std::uint32_t resource_id = instruction.operands[0].u32;
+            const package::HistoryRecord* history = nullptr;
+            for (const auto& candidate : package_.history) {
+                if (candidate.state_id == instruction.operands[1].u32) {
+                    history = &candidate;
+                    break;
+                }
+            }
+            if (history == nullptr) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation", "history_state_missing",
+                            "state_id", std::to_string(instruction.operands[1].u32),
+                            "missing", "init.upload_history_state",
+                            "initial-state upload references an unknown History "
+                            "state");
+            }
+            PlatformState::ResourceSlot* slot = nullptr;
+            for (auto& candidate : state->resources) {
+                if (candidate.resource_id == resource_id) {
+                    slot = &candidate;
+                    break;
+                }
+            }
+            if (slot == nullptr || slot->resource == nullptr ||
+                history->initial_state.empty()) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_upload_missing", "resource_id",
+                            std::to_string(resource_id), "missing",
+                            "init.upload_history_state",
+                            "history state resource or initial bytes are missing");
+            }
+            const std::uint64_t upload_bytes = history->initial_state.size();
+            if (state->frames.empty() || state->frames[0].upload == nullptr ||
+                state->frames[0].upload_size < upload_bytes) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "frame_upload_ring_unavailable", "upload_bytes",
+                            std::to_string(upload_bytes),
+                            state->frames.empty() ||
+                                    state->frames[0].upload == nullptr
+                                ? "unavailable"
+                                : std::to_string(
+                                      state->frames[0].upload_size),
+                            "init.upload_history_state",
+                            "per-frame upload ring is too small for the "
+                            "history initial state");
+            }
+            auto& frame = state->frames[0];
+            if (frame.fence_value != 0u) {
+                const ExitCode wait = WaitForFenceValue(
+                    state->fence, frame.fence_value, state->fence_event,
+                    kFenceTimeoutMs);
+                if (wait != ExitCode::Success) return wait;
+                frame.fence_value = 0u;
+                ++stats_.upload_reuse_waits;
+            }
+            void* mapped = nullptr;
+            D3D12_RANGE read_range{0u, 0u};
+            if (FAILED(frame.upload->Map(0u, &read_range, &mapped)) ||
+                mapped == nullptr) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_upload_map_failed", "mapped", "available",
+                            "unavailable", "init.upload_history_state",
+                            "history initial-state Map failed");
+            }
+            std::memcpy(mapped, history->initial_state.data(),
+                        history->initial_state.size());
+            D3D12_RANGE write_range{0u,
+                                    static_cast<SIZE_T>(upload_bytes)};
+            frame.upload->Unmap(0u, &write_range);
+            if (frame.command_list == nullptr || frame.allocator == nullptr) {
+                return Fail(ExitCode::CommandListRecordingFailed,
+                            "command_list", "upload_command_list_unavailable",
+                            "command_list", "created", "unavailable",
+                            "init.upload_history_state",
+                            "frame command list/allocator is unavailable");
+            }
+            if (FAILED(frame.allocator->Reset()) ||
+                FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
+                return Fail(ExitCode::CommandListRecordingFailed,
+                            "command_list", "command_list_reset_failed",
+                            "reset", "succeeded", "failed",
+                            "init.upload_history_state",
+                            "command list reset failed for history upload");
+            }
+            D3D12_RESOURCE_BARRIER to_copy{};
+            to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            to_copy.Transition.pResource = slot->resource;
+            to_copy.Transition.StateBefore = slot->state;
+            to_copy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            to_copy.Transition.Subresource =
+                D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            frame.command_list->ResourceBarrier(1u, &to_copy);
+            frame.command_list->CopyBufferRegion(
+                slot->resource, 0u, frame.upload, 0u, upload_bytes);
+            const package::ResourceDescriptor* uploaded =
+                FindPackageResource(package_, resource_id);
+            if (uploaded == nullptr) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation", "history_upload_resource",
+                            "resource_id", std::to_string(resource_id),
+                            "missing", "init.upload_history_state",
+                            "history state resource descriptor is missing");
+            }
+            const D3D12_RESOURCE_STATES final_state =
+                WorkingStateForUsage(*uploaded);
+            D3D12_RESOURCE_BARRIER to_work = to_copy;
+            to_work.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            to_work.Transition.StateAfter = final_state;
+            frame.command_list->ResourceBarrier(1u, &to_work);
+            slot->state = final_state;
+            if (FAILED(frame.command_list->Close())) {
+                return Fail(ExitCode::CommandListRecordingFailed,
+                            "command_list", "command_list_close_failed",
+                            "closed", "closed", "failed",
+                            "init.upload_history_state",
+                            "history upload command list close failed");
+            }
+            ID3D12CommandList* lists[] = {frame.command_list};
+            state->queue->ExecuteCommandLists(1u, lists);
+            const std::uint64_t fence_value = next_fence_value_++;
+            if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+                return Fail(ExitCode::GpuSubmissionFailed, "gpu_execution",
+                            "queue_signal_failed", "signal", "succeeded",
+                            "failed", "init.upload_history_state",
+                            "history upload queue Signal failed");
+            }
+            frame.fence_value = fence_value;
+#endif
         } else if (instruction.opcode == "init.upload_resource") {
             if (!require_operands(instruction, 1u)) {
                 return last_exit_;
@@ -4394,6 +4692,32 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         std::to_string(instruction.operands[0].u32),
                         "simulated failure", "init.create_pipeline",
                         "deterministic pipeline creation failure seam");
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        } else if (instruction.opcode == "init.upload_history_state") {
+            if (!require_operands(instruction, 2u) ||
+                instruction.operands[0].type !=
+                    package::OperandType::ResourceRef ||
+                instruction.operands[1].type != package::OperandType::U32) {
+                return last_exit_;
+            }
+            const package::HistoryRecord* history = nullptr;
+            for (const auto& candidate : package_.history) {
+                if (candidate.state_id == instruction.operands[1].u32) {
+                    history = &candidate;
+                    break;
+                }
+            }
+            if (history == nullptr || history->initial_state.empty() ||
+                FindPackageResource(package_, instruction.operands[0].u32) ==
+                    nullptr) {
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation", "history_upload_missing",
+                            "state_id",
+                            std::to_string(instruction.operands[1].u32),
+                            "missing", "init.upload_history_state",
+                            "history initial-state upload is incomplete");
+            }
+#endif
         } else if (instruction.opcode == "init.upload_resource") {
             // Initialization owns frame slot 0's upload ring, matching the
             // native path.
@@ -4405,6 +4729,18 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
         }
     }
     NoteEngineAllocation(0u, 0u, false, true, false);
+#endif
+    // Initialization (including the NW-08 authoring hot-reload path) is the
+    // authoritative reset boundary for temporal state.  The initial-state
+    // bytes were just re-uploaded into both ping-pong resources, so the
+    // simulation counter must be rewound with them.  Leaving it at a previous
+    // preview's tick makes the next render execute zero steps and present the
+    // new package's initial state.
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    history_simulation_tick_ = 0u;
+    history_pending_ticks_ = 0u;
+    history_steps_executed_ = 0u;
+    history_loop_resets_ = 0u;
 #endif
     return ExitCode::Success;
 }
@@ -4492,6 +4828,8 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     bool package_has_constants = false;
     std::uint32_t package_constant_root = 0u;
     std::uint32_t package_constant_count = 0u;
+    std::int32_t package_time_byte_offset = -1;
+    std::int32_t package_simulation_tick_byte_offset = -1;
     std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
         package_constant_values{};
     std::array<D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -4500,6 +4838,299 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     std::array<bool, package::kMaxRootSignatureDwordCost>
         package_table_valid{};
     std::vector<bool> alias_barrier_emitted(plan_.alias_barriers.size(), false);
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    bool history_schedule_done = false;
+    auto record_history_schedule = [&]() -> ExitCode {
+        if (package_.history.empty()) return ExitCode::Success;
+        const std::uint64_t target_sim =
+            tick / package::kTimelineTicksPerSimulationTick;
+        if (target_sim < history_simulation_tick_) {
+            return Fail(ExitCode::InvalidArguments, "history",
+                        "history_backward_seek_requires_reinitialization",
+                        "simulation_tick",
+                        std::to_string(history_simulation_tick_),
+                        std::to_string(target_sim), "renderAtTick",
+                        "device playback cannot rewind History state without "
+                        "an explicit reinitialization/checkpoint restore");
+        }
+        const std::uint64_t required = target_sim - history_simulation_tick_;
+        const std::uint64_t processed =
+            history_work_cap_ == 0u
+                ? required
+                : std::min<std::uint64_t>(required, history_work_cap_);
+        std::vector<const FrameOp*> steps;
+        for (const auto& candidate : frame_ops_) {
+            if (candidate.type == FrameOp::Type::SimulationStep) {
+                steps.push_back(&candidate);
+            }
+        }
+        auto find_slot = [&](std::uint32_t resource_id)
+            -> PlatformState::ResourceSlot* {
+            for (auto& slot : state->resources) {
+                if (slot.resource_id == resource_id) return &slot;
+            }
+            return nullptr;
+        };
+        auto transition = [&](PlatformState::ResourceSlot* slot,
+                              D3D12_RESOURCE_STATES after) -> bool {
+            if (slot == nullptr || slot->resource == nullptr) return false;
+            if (slot->state != after) {
+                D3D12_RESOURCE_BARRIER barrier{};
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Transition.pResource = slot->resource;
+                barrier.Transition.StateBefore = slot->state;
+                barrier.Transition.StateAfter = after;
+                barrier.Transition.Subresource =
+                    D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                list->ResourceBarrier(1u, &barrier);
+                slot->state = after;
+            }
+            return true;
+        };
+        const std::uint64_t loop_sim_ticks =
+            history_loop_ticks_ != 0u &&
+                    history_loop_ticks_ %
+                            package::kTimelineTicksPerSimulationTick ==
+                        0u
+                ? history_loop_ticks_ /
+                      package::kTimelineTicksPerSimulationTick
+                : 0u;
+        auto reset_history_state =
+            [&](const package::HistoryRecord* history,
+                PlatformState::ResourceSlot* current,
+                PlatformState::ResourceSlot* previous) -> ExitCode {
+            const std::size_t state_bytes = history->initial_state.size();
+            std::uint64_t reset_stride = 0u;
+            for (const auto& candidate : package_.history) {
+                reset_stride = std::max<std::uint64_t>(
+                    reset_stride, candidate.initial_state.size());
+            }
+            reset_stride = RoundUp(reset_stride, kFrameUploadAlignment);
+            const std::uint64_t reset_offset =
+                reset_stride * static_cast<std::uint64_t>(
+                                   history->state_id == 0u
+                                       ? 0u
+                                       : history->state_id - 1u);
+            if (frame.upload == nullptr ||
+                reset_offset > frame.upload_size ||
+                state_bytes > frame.upload_size - reset_offset) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_reset_upload_unavailable", "state_bytes",
+                            std::to_string(state_bytes),
+                            frame.upload == nullptr
+                                ? "unavailable"
+                                : std::to_string(frame.upload_size),
+                            "renderAtTick",
+                            "loop reset requires the history upload ring");
+            }
+            if (frame.fence_value != 0u) {
+                const ExitCode wait = WaitForFenceValue(
+                    state->fence, frame.fence_value, state->fence_event,
+                    kFenceTimeoutMs);
+                if (wait != ExitCode::Success) return wait;
+                frame.fence_value = 0u;
+                ++stats_.upload_reuse_waits;
+            }
+            void* mapped = nullptr;
+            D3D12_RANGE read_range{0u, 0u};
+            if (FAILED(frame.upload->Map(0u, &read_range, &mapped)) ||
+                mapped == nullptr) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_reset_map_failed", "mapped", "available",
+                            "unavailable", "renderAtTick",
+                            "loop-reset upload Map failed");
+            }
+            std::memcpy(
+                static_cast<std::uint8_t*>(mapped) +
+                    static_cast<std::size_t>(reset_offset),
+                history->initial_state.data(), state_bytes);
+            D3D12_RANGE write_range{
+                static_cast<SIZE_T>(reset_offset),
+                static_cast<SIZE_T>(reset_offset + state_bytes)};
+            frame.upload->Unmap(0u, &write_range);
+            if (!transition(current, D3D12_RESOURCE_STATE_COPY_DEST) ||
+                !transition(previous, D3D12_RESOURCE_STATE_COPY_DEST)) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_reset_transition_failed", "resources",
+                            "available", "missing", "renderAtTick",
+                            "loop-reset transition failed");
+            }
+            list->CopyBufferRegion(current->resource, 0u, frame.upload,
+                                   reset_offset,
+                                   static_cast<UINT>(state_bytes));
+            list->CopyBufferRegion(previous->resource, 0u, frame.upload,
+                                   reset_offset,
+                                   static_cast<UINT>(state_bytes));
+            if (!transition(current,
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS) ||
+                !transition(previous,
+                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)) {
+                return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                            "history_reset_restore_failed", "resources",
+                            "available", "missing", "renderAtTick",
+                            "loop-reset restore failed");
+            }
+            return ExitCode::Success;
+        };
+        for (std::uint64_t iteration = 0u; iteration < processed; ++iteration) {
+            const std::uint64_t next_tick =
+                history_simulation_tick_ + iteration + 1u;
+            const bool loop_boundary =
+                loop_sim_ticks > 0u && next_tick % loop_sim_ticks == 0u;
+            for (const FrameOp* step : steps) {
+                const package::HistoryRecord* history = nullptr;
+                for (const auto& candidate : package_.history) {
+                    if (candidate.state_id == step->history_state_id) {
+                        history = &candidate;
+                        break;
+                    }
+                }
+                if (history == nullptr) {
+                    return Fail(ExitCode::PackageValidationFailed,
+                                "package_validation", "history_state_missing",
+                                "history_state_id",
+                                std::to_string(step->history_state_id),
+                                "missing", "renderAtTick",
+                                "History simulation step has no state record");
+                }
+                PlatformState::ResourceSlot* current =
+                    find_slot(history->current_resource_id);
+                PlatformState::ResourceSlot* previous =
+                    find_slot(history->previous_resource_id);
+                if (current == nullptr || previous == nullptr) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "history_state_resource_missing",
+                                "history_state_id",
+                                std::to_string(history->state_id), "missing",
+                                "renderAtTick",
+                                "History ping-pong resources are unavailable");
+                }
+                if (loop_boundary &&
+                    history->reset_policy == "on-loop") {
+                    const ExitCode reset_code = reset_history_state(
+                        history, current, previous);
+                    if (reset_code != ExitCode::Success) return reset_code;
+                    ++history_loop_resets_;
+                    continue;
+                }
+                if (!transition(current,
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS) ||
+                    !transition(previous,
+                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "history_transition_failed", "resources",
+                                "available", "missing", "renderAtTick",
+                                "History state transition failed");
+                }
+                if (package_root_signature != nullptr) {
+                    list->SetComputeRootSignature(package_root_signature);
+                }
+#if NW06_COMPILE_COMBINED_BINDINGS
+                const D3D12_GPU_DESCRIPTOR_HANDLE previous_handle =
+                    previous->has_srv_descriptor
+                        ? previous->srv_gpu_handle
+                        : previous->gpu_handle;
+#else
+                const D3D12_GPU_DESCRIPTOR_HANDLE previous_handle =
+                    previous->gpu_handle;
+#endif
+                list->SetComputeRootDescriptorTable(2u, previous_handle);
+                list->SetComputeRootDescriptorTable(1u, current->gpu_handle);
+                if (package_has_constants &&
+                    package_constant_count > 0u) {
+                    std::array<std::uint32_t,
+                               package::kMaxRootSignatureDwordCost>
+                        tick_values = package_constant_values;
+                    const std::uint64_t simulation_tick =
+                        history_simulation_tick_ + iteration + 1u;
+                    bool updated = false;
+                    if (package_time_byte_offset >= 0 &&
+                        static_cast<std::uint32_t>(
+                            package_time_byte_offset) + 4u <=
+                            package_constant_count * 4u) {
+                        const float tick_seconds = static_cast<float>(
+                            simulation_tick *
+                            package::kTimelineTicksPerSimulationTick);
+                        std::memcpy(
+                            reinterpret_cast<std::uint8_t*>(
+                                tick_values.data()) +
+                                package_time_byte_offset,
+                            &tick_seconds, sizeof(tick_seconds));
+                        updated = true;
+                    }
+                    if (package_simulation_tick_byte_offset >= 0 &&
+                        static_cast<std::uint32_t>(
+                            package_simulation_tick_byte_offset) + 4u <=
+                            package_constant_count * 4u) {
+                        // Publish the exact integer tick as raw 32-bit bits.
+                        // Consumers must read it with asuint instead of
+                        // dividing a float32 timeline value (which loses
+                        // low bits above 2^24).
+                        const std::uint32_t simulation_tick_bits =
+                            static_cast<std::uint32_t>(simulation_tick);
+                        std::memcpy(
+                            reinterpret_cast<std::uint8_t*>(
+                                tick_values.data()) +
+                                package_simulation_tick_byte_offset,
+                            &simulation_tick_bits,
+                            sizeof(simulation_tick_bits));
+                        updated = true;
+                    }
+                    if (updated) {
+                        list->SetComputeRoot32BitConstants(
+                            package_constant_root, package_constant_count,
+                            tick_values.data(), 0u);
+                    }
+                }
+                ID3D12PipelineState* pipeline = nullptr;
+                for (const auto& candidate : state->pipelines) {
+                    if (candidate.shader_id == step->shader_id) {
+                        pipeline = candidate.pipeline_state;
+                        break;
+                    }
+                }
+                if (pipeline == nullptr) {
+                    return Fail(ExitCode::PipelineStateCreationFailed,
+                                "pipeline", "history_pipeline_missing",
+                                "shader_id", std::to_string(step->shader_id),
+                                "missing", "renderAtTick",
+                                "History simulation pipeline was not created");
+                }
+                list->SetPipelineState(pipeline);
+                list->Dispatch(step->group_x, step->group_y, step->group_z);
+                ++history_steps_executed_;
+                D3D12_RESOURCE_BARRIER uav{};
+                uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                uav.UAV.pResource = current->resource;
+                list->ResourceBarrier(1u, &uav);
+                ++stats_.uav_barrier_count;
+                if (!transition(current, D3D12_RESOURCE_STATE_COPY_SOURCE) ||
+                    !transition(previous, D3D12_RESOURCE_STATE_COPY_DEST)) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "history_copy_transition_failed", "resources",
+                                "available", "missing", "renderAtTick",
+                                "History ping-pong copy transition failed");
+                }
+                list->CopyBufferRegion(
+                    previous->resource, 0u, current->resource, 0u,
+                    static_cast<UINT>(history->initial_state.size()));
+                if (!transition(previous,
+                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) ||
+                    !transition(current,
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS)) {
+                    return Fail(ExitCode::ResourceAllocationFailed, "resource",
+                                "history_copy_restore_failed", "resources",
+                                "available", "missing", "renderAtTick",
+                                "History ping-pong copy restore failed");
+                }
+            }
+        }
+        history_simulation_tick_ += processed;
+        history_pending_ticks_ = target_sim - history_simulation_tick_;
+        return ExitCode::Success;
+    };
+#endif
+    // NW08 overlay insertion point: per-frame pass timing begins here.
     for (const auto& op : frame_ops_) {
         if (state->package_heap != nullptr) {
             for (std::size_t alias_index = 0u;
@@ -4570,6 +5201,8 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     package_has_constants = false;
                     package_constant_root = 0u;
                     package_constant_count = 0u;
+                    package_time_byte_offset = -1;
+                    package_simulation_tick_byte_offset = -1;
                     package_table_valid.fill(false);
                 }
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
@@ -4610,6 +5243,8 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 op.parameter_tick_kinds[entry],
                                 timeline_value);
                             timeline_applied = true;
+                            package_time_byte_offset =
+                                op.parameter_offsets[entry];
                             break;
                         }
                     }
@@ -4621,6 +5256,14 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             reinterpret_cast<std::uint8_t*>(values.data()) +
                                 op.time_byte_offset,
                             &time_value, sizeof(time_value));
+                        package_time_byte_offset = op.time_byte_offset;
+                    }
+                    if (op.simulation_tick_byte_offset >= 0 &&
+                        static_cast<std::uint32_t>(
+                            op.simulation_tick_byte_offset) + 4u <=
+                            op.constant_count * 4u) {
+                        package_simulation_tick_byte_offset =
+                            op.simulation_tick_byte_offset;
                     }
 #if NW06_COMPILE_INDEXED_INSTANCED_INDIRECT
                     if (op.type == FrameOp::Type::SetGraphicsRootConstants) {
@@ -4919,6 +5562,27 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     arguments->resource, 0u, nullptr, 0u);
                 break;
 #endif
+            }
+#endif
+#if NW05_FROZEN_EMBEDDED_SPECIALIZATION
+            case FrameOp::Type::SimulationStep:
+                return Fail(ExitCode::PackageValidationFailed,
+                            "package_validation",
+                            "stateful_package_requires_full_player",
+                            "frame.simulation_step", "unsupported",
+                            "present", "renderAtTick",
+                            "the frozen release player has no History/checkpoint "
+                            "execution support");
+#else
+            case FrameOp::Type::SimulationStep: {
+                if (!history_schedule_done) {
+                    const ExitCode history_code = record_history_schedule();
+                    if (history_code != ExitCode::Success) {
+                        return history_code;
+                    }
+                    history_schedule_done = true;
+                }
+                break;
             }
 #endif
             case FrameOp::Type::Dispatch: {
@@ -5705,6 +6369,229 @@ ExitCode PackagePlayer::readbackPresentedOutput(
 #endif
 }
 
+
+ExitCode PackagePlayer::readbackDisplayOutput(
+    std::vector<std::uint8_t>* bytes) {
+    if (bytes == nullptr) {
+        return Fail(ExitCode::InvalidArguments, "readback",
+                    "display_readback_buffer_missing", "destination",
+                    "available", "null", "readback",
+                    "display readback destination is null");
+    }
+    bytes->clear();
+    if (!initialized_) {
+        return Fail(ExitCode::InvalidArguments, "readback",
+                    "display_readback_before_initialize", "initialized",
+                    "true", "false", "readback",
+                    "display readback requires an initialized player");
+    }
+#if defined(_WIN32)
+    PlatformState* state = platform_.get();
+    if (state == nullptr || state->device == nullptr ||
+        state->queue == nullptr || state->frames.empty() ||
+        state->display_texture == nullptr) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_platform_unavailable",
+                    "display_texture", "available", "unavailable",
+                    "readback",
+                    "display readback requires the native display texture");
+    }
+    const ExitCode drained = WaitForAllFrames("readback_display_image");
+    if (drained != ExitCode::Success) return drained;
+
+    const D3D12_RESOURCE_DESC texture_desc =
+        state->display_texture->GetDesc();
+    if (texture_desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+        texture_desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM ||
+        texture_desc.Width == 0u || texture_desc.Height == 0u ||
+        texture_desc.DepthOrArraySize != 1u || texture_desc.MipLevels != 1u) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_texture_invalid", "display_texture",
+                    "R8G8B8A8_UNORM 2D texture", "unexpected",
+                    "readback",
+                    "display readback requires the canonical player texture");
+    }
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT row_count = 0u;
+    UINT64 row_size = 0u;
+    UINT64 total_bytes = 0u;
+    state->device->GetCopyableFootprints(
+        &texture_desc, 0u, 1u, 0u, &footprint, &row_count, &row_size,
+        &total_bytes);
+    const std::uint64_t packed_row_bytes = texture_desc.Width * 4u;
+    if (total_bytes == 0u || row_count < texture_desc.Height ||
+        row_size < packed_row_bytes ||
+        footprint.Footprint.RowPitch < packed_row_bytes) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_footprint_invalid", "copy_footprint",
+                    "valid", "invalid", "readback",
+                    "display texture has an invalid copyable footprint");
+    }
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC readback_desc{};
+    readback_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    readback_desc.Width = total_bytes;
+    readback_desc.Height = 1u;
+    readback_desc.DepthOrArraySize = 1u;
+    readback_desc.MipLevels = 1u;
+    readback_desc.Format = DXGI_FORMAT_UNKNOWN;
+    readback_desc.SampleDesc.Count = 1u;
+    readback_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    const D3D12_RESOURCE_ALLOCATION_INFO readback_allocation =
+        state->device->GetResourceAllocationInfo(
+            0u, 1u, &readback_desc);
+    if (readback_allocation.SizeInBytes == 0u ||
+        readback_allocation.SizeInBytes == UINT64_MAX ||
+        readback_allocation.Alignment == 0u) {
+        return Fail(ExitCode::ResourceAllocationFailed, "memory",
+                    "display_readback_allocation_query_failed",
+                    "readback_allocation", "valid size/alignment",
+                    "unavailable", "readback",
+                    "could not query display readback allocation");
+    }
+
+    ID3D12Resource* readback = nullptr;
+    if (FAILED(state->device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &readback_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&readback))) ||
+        readback == nullptr) {
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_allocation_failed", "readback",
+                    "created", "failed", "readback",
+                    "display readback buffer allocation failed");
+    }
+    NoteEngineAllocation(readback_allocation.SizeInBytes, 0u, false, false,
+                         true);
+    auto release_now = [&]() {
+        if (readback != nullptr) readback->Release();
+        RemoveEngineResourceAllocation(readback_allocation.SizeInBytes);
+    };
+    auto defer_release = [&]() {
+        if (readback != nullptr) {
+            state->deferred_readbacks.emplace_back(
+                readback, readback_allocation.SizeInBytes);
+            readback = nullptr;
+        }
+        // Accounting remains live until the deferred release is retired.
+    };
+
+    auto& frame = state->frames[0];
+    if (frame.allocator == nullptr || frame.command_list == nullptr) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "display_readback_command_list_unavailable",
+                    "command_list", "available", "unavailable", "readback",
+                    "display readback command list is unavailable");
+    }
+    if (FAILED(frame.allocator->Reset()) ||
+        FAILED(frame.command_list->Reset(frame.allocator, nullptr))) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "display_readback_reset_failed", "reset", "succeeded",
+                    "failed", "readback",
+                    "display readback command list reset failed");
+    }
+
+    const D3D12_RESOURCE_STATES previous_state =
+        state->display_texture_state;
+    if (previous_state != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        D3D12_RESOURCE_BARRIER to_copy{};
+        to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        to_copy.Transition.pResource = state->display_texture;
+        to_copy.Transition.StateBefore = previous_state;
+        to_copy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        to_copy.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        frame.command_list->ResourceBarrier(1u, &to_copy);
+    }
+
+    D3D12_TEXTURE_COPY_LOCATION destination{};
+    destination.pResource = readback;
+    destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    destination.PlacedFootprint = footprint;
+    D3D12_TEXTURE_COPY_LOCATION source{};
+    source.pResource = state->display_texture;
+    source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    source.SubresourceIndex = 0u;
+    frame.command_list->CopyTextureRegion(
+        &destination, 0u, 0u, 0u, &source, nullptr);
+
+    if (previous_state != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        D3D12_RESOURCE_BARRIER restore{};
+        restore.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        restore.Transition.pResource = state->display_texture;
+        restore.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        restore.Transition.StateAfter = previous_state;
+        restore.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        frame.command_list->ResourceBarrier(1u, &restore);
+    }
+    if (FAILED(frame.command_list->Close())) {
+        release_now();
+        return Fail(ExitCode::CommandListRecordingFailed, "readback",
+                    "display_readback_close_failed", "closed", "closed",
+                    "failed", "readback",
+                    "display readback command list close failed");
+    }
+
+    ID3D12CommandList* lists[] = {frame.command_list};
+    state->queue->ExecuteCommandLists(1u, lists);
+    const std::uint64_t fence_value = next_fence_value_++;
+    if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+        defer_release();
+        return Fail(ExitCode::GpuSubmissionFailed, "readback",
+                    "display_readback_signal_failed", "signal",
+                    "succeeded", "failed", "readback",
+                    "display readback queue signal failed");
+    }
+    frame.fence_value = fence_value;
+    const ExitCode wait = WaitForFenceValue(
+        state->fence, fence_value, state->fence_event, kFenceTimeoutMs);
+    if (wait != ExitCode::Success) {
+        defer_release();
+        return wait;
+    }
+    frame.fence_value = 0u;
+
+    void* mapped = nullptr;
+    D3D12_RANGE range{0u, static_cast<SIZE_T>(total_bytes)};
+    if (FAILED(readback->Map(0u, &range, &mapped)) || mapped == nullptr) {
+        release_now();
+        return Fail(ExitCode::ResourceAllocationFailed, "readback",
+                    "display_readback_map_failed", "mapped", "available",
+                    "failed", "readback",
+                    "display readback buffer Map failed");
+    }
+
+    const std::size_t width =
+        static_cast<std::size_t>(texture_desc.Width);
+    const std::size_t height =
+        static_cast<std::size_t>(texture_desc.Height);
+    bytes->resize(width * height * 4u);
+    const auto* source_bytes =
+        static_cast<const std::uint8_t*>(mapped) + footprint.Offset;
+    for (std::size_t row = 0u; row < height; ++row) {
+        std::memcpy(
+            bytes->data() + row * width * 4u,
+            source_bytes + row * footprint.Footprint.RowPitch,
+            width * 4u);
+    }
+    D3D12_RANGE empty{0u, 0u};
+    readback->Unmap(0u, &empty);
+    release_now();
+    return ExitCode::Success;
+#else
+    return Fail(ExitCode::InvalidArguments, "readback",
+                "display_readback_requires_native_device", "device",
+                "D3D12", "unavailable", "readback",
+                "display readback is a native Windows qualification path");
+#endif
+}
+
 ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     if (initialized_ || initialization_count_ != 0u) {
         return Fail(ExitCode::InvalidArguments, "lifecycle",
@@ -5951,6 +6838,12 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     }
     initialized_ = true;
     initialization_count_ = 1u;
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    history_simulation_tick_ = 0u;
+    history_pending_ticks_ = 0u;
+    history_steps_executed_ = 0u;
+    history_loop_resets_ = 0u;
+#endif
     last_exit_ = ExitCode::Success;
     return ExitCode::Success;
 }
@@ -6504,12 +7397,62 @@ bool PackagePlayer::BuildFramePlanForTesting(const package::Package& pkg) {
 
 bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
     const std::uint64_t frame_tick = EffectiveTimelineTick(tick);
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    if (!package_.history.empty()) {
+        const std::uint64_t target_sim =
+            tick / package::kTimelineTicksPerSimulationTick;
+        if (target_sim < history_simulation_tick_) {
+            Fail(ExitCode::InvalidArguments, "history",
+                 "history_backward_seek_requires_reinitialization",
+                 "simulation_tick",
+                 std::to_string(history_simulation_tick_),
+                 std::to_string(target_sim), "renderAtTick",
+                 "device playback cannot rewind History state without "
+                 "an explicit reinitialization/checkpoint restore");
+            return false;
+        }
+        const std::uint64_t required = target_sim - history_simulation_tick_;
+        const std::uint64_t processed =
+            history_work_cap_ == 0u
+                ? required
+                : std::min<std::uint64_t>(required, history_work_cap_);
+        const std::uint64_t loop_sim_ticks =
+            history_loop_ticks_ != 0u &&
+                    history_loop_ticks_ %
+                            package::kTimelineTicksPerSimulationTick ==
+                        0u
+                ? history_loop_ticks_ /
+                      package::kTimelineTicksPerSimulationTick
+                : 0u;
+        for (std::uint64_t iteration = 0u; iteration < processed;
+             ++iteration) {
+            const std::uint64_t next_tick =
+                history_simulation_tick_ + iteration + 1u;
+            const bool boundary =
+                loop_sim_ticks > 0u && next_tick % loop_sim_ticks == 0u;
+            for (const auto& record : package_.history) {
+                if (boundary && record.reset_policy == "on-loop") {
+                    ++history_loop_resets_;
+                } else {
+                    ++history_steps_executed_;
+                }
+            }
+        }
+        history_simulation_tick_ += processed;
+        history_pending_ticks_ = target_sim - history_simulation_tick_;
+    }
+#endif
     bool timeline_override = timeline_override_active_;
     std::uint32_t timeline_parameter = timeline_parameter_id_;
     std::uint64_t timeline_value = timeline_tick_;
     last_root_constants_.fill(0u);
     last_root_constant_count_ = 0u;
     for (const auto& op : frame_ops_) {
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        if (op.type == FrameOp::Type::SimulationStep) {
+            continue;
+        }
+#endif
         if (op.type == FrameOp::Type::SetTimeline) {
             timeline_override = true;
             timeline_parameter = op.parameter_id;

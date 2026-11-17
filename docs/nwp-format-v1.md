@@ -62,16 +62,55 @@ are checked with overflow-safe arithmetic before any payload allocation.
 | :--- | :--- |
 | `CAP ` | Exactly one capability record: profile ID/digest, optional-profile identity, D3D12 feature level, shader model, resource binding/heap tiers, queues, limits, required DXGI formats, emitted shader targets, runtime/toolchain requirements, compiler/profile fingerprints, and exact required instruction opcodes. |
 | `RES ` | Bounded resource descriptors: id, semantic name, kind, DXGI format, usage, pass family, fixed binding slot/space, dimensions, byte size, flags. |
-| `INIT` | Initialization primitives (`init.create_resource`, `init.create_root_signature`, `init.upload_resource`, `init.create_pipeline`). |
-| `FRAM` | Frame primitives (`frame.set_root_signature`, `frame.set_root_constants`, `frame.set_descriptor_table`, `frame.dispatch`, `frame.barrier`, `frame.present`, and the other documented opcodes). |
+| `INIT` | Initialization primitives (`init.create_resource`, `init.create_root_signature`, `init.upload_resource`, `init.upload_history_state`, `init.create_pipeline`). |
+| `FRAM` | Frame primitives (`frame.set_root_signature`, `frame.set_root_constants`, `frame.set_descriptor_table`, `frame.dispatch`, `frame.simulation_step`, `frame.barrier`, `frame.present`, and the other documented opcodes). |
 | `PARM` | Parameter and timeline records: canonical values, phase, component count, frame range, step, interpolation. |
 | `SHDR` | Deduplicated complete DXIL shader blob table plus specialization records. |
 | `RSIG` | Deduplicated complete root-signature blob table plus fixed pass-family binding records. |
 | `DEVC` | Development-only sidecar metadata. It is rejected by the release reader and never written by release compilation. |
+| `HIST` | NW-09 stateful extension: History declarations with state type, initial value, reset policy, fixed 120 Hz step rate, state-layout hash, exact packed float32 initial-state bytes, and distinct current/previous ping-pong resource ids. `HIST` records use layout version 2 while the package minor remains `1`. |
+| `CKPT` | NW-09 optional packaged release checkpoints with explicit byte cost. Packaged/disk checkpoints are host-resident and make no portable GPU-state replay claim. |
 
 All seven release sections (`CAP`, `RES`, `INIT`, `FRAM`, `PARM`, `SHDR`,
 `RSIG`) are required exactly once. Unknown section IDs, duplicate sections,
 missing required sections, and `DEVC` in release mode are rejected.
+
+### NW-09 stateful extension
+
+History-free exports continue to emit exactly `.nwp` version `1.0` with the
+seven baseline sections and no new bytes. A document that declares NW-09
+History selects the explicit, additive stateful extension:
+
+* header minor version becomes `1`;
+* package `flags` bit 1 (`STATEFUL_EXTENSION_FLAG`) is set;
+* `HIST` is emitted when History records exist;
+* `CKPT` is emitted only when the caller explicitly requests packaged release
+  checkpoints.
+
+The extended reader accepts both `1.0` and `1.1`, rejects mismatched
+flag/version/section combinations, requires distinct current and previous state
+resources, and requires an exact 120 Hz step rate. Checkpoint compatibility is
+deterministic over checkpoint version, tick, semantic/state-layout hash, and
+capability-profile ID/digest. Packaged checkpoints report their serialized byte
+cost in the export report and package inspection. They are not a portable GPU
+state format.
+
+Each History state resource is a raw `DXGI_FORMAT_R32_UINT` buffer whose
+`size_bytes` is exactly `values_per_element * element_count * 4`. The `HIST`
+record carries the same number of packed little-endian float32 initial-state
+bytes. `init.upload_history_state` fills both ping-pong resources from that
+declared initial state, and the emitted compute dispatch writes the current
+resource from the previous resource. No state layout is inferred from a
+four-component texture format.
+
+`frame.simulation_step` is the stateful-only fixed-step boundary. Its operands
+are `(group_x, group_y, group_z, shader_ref, history_state_id)`. A packaged
+player processes every required 120 Hz simulation tick in order for each
+presentation frame, advancing state by exactly 400 timeline ticks per step. A
+configured work cap leaves outstanding steps pending and presents the last
+completed state rather than dropping ticks. `frame.copy_buffer` operands remain
+the established `(source, destination)` pair; History copies the just-written
+current state into the previous state.
 
 ## Capability record
 

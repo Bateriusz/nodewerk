@@ -630,6 +630,9 @@ std::string OperatorContractDigest(const OperatorSchema& schema) {
     writer.Bool(schema.produces_resource);
     writer.Bool(schema.explicit_readback);
     writer.Bool(schema.explicit_residency_conversion);
+    if (schema.produces_temporal_state) {
+        writer.String("nwgraph.temporal-state.v1");
+    }
     writer.Bool(schema.resource_descriptor.has_value());
     if (schema.resource_descriptor) {
         EncodeResourceDescriptor(writer, *schema.resource_descriptor);
@@ -756,6 +759,25 @@ std::optional<Frequency> ParseFrequency(std::string_view text) {
     if (text == "history") {
         return Frequency::History;
     }
+    return std::nullopt;
+}
+
+std::string_view ToString(HistoryResetPolicy policy) noexcept {
+    switch (policy) {
+    case HistoryResetPolicy::OnLoop: return "on-loop";
+    case HistoryResetPolicy::OnSeek: return "on-seek";
+    case HistoryResetPolicy::Never: return "never";
+    case HistoryResetPolicy::Manual: return "manual";
+    }
+    return "on-loop";
+}
+
+std::optional<HistoryResetPolicy> ParseHistoryResetPolicy(
+    std::string_view text) {
+    if (text == "on-loop") return HistoryResetPolicy::OnLoop;
+    if (text == "on-seek") return HistoryResetPolicy::OnSeek;
+    if (text == "never") return HistoryResetPolicy::Never;
+    if (text == "manual") return HistoryResetPolicy::Manual;
     return std::nullopt;
 }
 
@@ -1239,6 +1261,10 @@ const std::vector<Frequency>& FrameFrequency() {
 const std::vector<Frequency>& InitializationFrequency() {
     static const std::vector<Frequency> frequencies = {
         Frequency::Initialization};
+    return frequencies;
+}
+const std::vector<Frequency>& HistoryFrequency() {
+    static const std::vector<Frequency> frequencies = {Frequency::History};
     return frequencies;
 }
 
@@ -2009,6 +2035,54 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             RenderImageDescriptor())};
         schema.produces_resource = true;
         schema.resource_descriptor = RenderImageDescriptor();
+        registry.Register(std::move(schema));
+    }
+
+    // ---- NW-09 explicit temporal state ------------------------------------
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.particles.system", OperatorKind::GpuPass,
+            "Fixed-step seeded particle system with external previous state",
+            HistoryFrequency(), Frequency::History, "nw.lower.history.particles");
+        schema.outputs = {ResourcePort(
+            "out", LogicalType::RenderImage, Residency::Gpu,
+            RenderImageDescriptor())};
+        schema.params = {
+            IntParam("count", 8, true, 1.0, 65536.0, true),
+            IntParam("seed", 0, true, 0.0, 4294967295.0),
+            FloatParam("gravity", -0.5),
+            FloatParam("initial_velocity", 1.0, true, 0.0, 1.0e9),
+            IntParam("lifetime_ticks", 9600, true, 1.0, 1.0e9),
+            IntParam("width", 16, true, 1.0, 8192.0, true),
+            IntParam("height", 8, true, 1.0, 8192.0, true)};
+        schema.produces_resource = true;
+        schema.resource_descriptor = RenderImageDescriptor();
+        schema.produces_temporal_state = true;
+        schema.allowed_seed_behaviors = {
+            SeedBehavior::None, SeedBehavior::Explicit,
+            SeedBehavior::DerivedFromGraph};
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.feedback.image", OperatorKind::GpuPass,
+            "Fixed-step feedback image with external previous state",
+            HistoryFrequency(), Frequency::History, "nw.lower.history.feedback");
+        schema.outputs = {ResourcePort(
+            "out", LogicalType::RenderImage, Residency::Gpu,
+            RenderImageDescriptor())};
+        schema.params = {
+            IntParam("width", 16, true, 1.0, 8192.0, true),
+            IntParam("height", 8, true, 1.0, 8192.0, true),
+            IntParam("seed", 0, true, 0.0, 4294967295.0),
+            FloatParam("decay", 0.95, true, 0.0, 1.0),
+            FloatParam("gain", 0.5, true, 0.0, 1.0e9)};
+        schema.produces_resource = true;
+        schema.resource_descriptor = RenderImageDescriptor();
+        schema.produces_temporal_state = true;
+        schema.allowed_seed_behaviors = {
+            SeedBehavior::None, SeedBehavior::Explicit,
+            SeedBehavior::DerivedFromGraph};
         registry.Register(std::move(schema));
     }
 
@@ -3614,6 +3688,68 @@ ParseResult ParseGraphText(std::string_view text,
             } else {
                 node.has_declared_seed_behavior = true;
             }
+        } else if (directive == "history") {
+            if (current_node == std::string::npos) {
+                DiagnosticSource source;
+                source.line = line_number;
+                result.diagnostics.push_back(MakeDiagnostic(
+                    DiagnosticCode::ParseError,
+                    "'history' must follow a node declaration", source));
+                if (line_end == std::string_view::npos) break;
+                continue;
+            }
+            NodeDefinition& node = document.nodes[current_node];
+            DiagnosticSource source;
+            source.line = line_number;
+            source.node_id = node.id;
+            std::map<std::string, std::string> fields;
+            bool malformed = false;
+            for (std::size_t i = 1u; i + 1u < tokens.size(); i += 2u) {
+                std::string key = tokens[i];
+                std::replace(key.begin(), key.end(), '_', '-');
+                fields[key] = tokens[i + 1u];
+            }
+            if (tokens.size() < 3u || (tokens.size() - 1u) % 2u != 0u) {
+                malformed = true;
+            }
+            for (const auto& field : fields) {
+                if (field.first != "state-type" &&
+                    field.first != "initial" &&
+                    field.first != "reset" &&
+                    field.first != "step-rate") {
+                    result.diagnostics.push_back(MakeDiagnostic(
+                        DiagnosticCode::ParseError,
+                        "unknown History field '" + field.first + "'", source));
+                    malformed = true;
+                }
+            }
+            if (malformed || fields.count("state-type") == 0u ||
+                fields.count("initial") == 0u ||
+                fields.count("reset") == 0u ||
+                fields.count("step-rate") == 0u) {
+                result.diagnostics.push_back(MakeDiagnostic(
+                    DiagnosticCode::ParseError,
+                    "expected 'history state-type <type> initial <value> "
+                    "reset <policy> step-rate <hz>'",
+                    source));
+                if (line_end == std::string_view::npos) break;
+                continue;
+            }
+            HistoryDeclaration declaration;
+            declaration.state_type = fields["state-type"];
+            declaration.initial_value = fields["initial"];
+            const auto policy = ParseHistoryResetPolicy(fields["reset"]);
+            std::uint32_t step_rate = 0;
+            if (!policy || !FromCharsU32(fields["step-rate"], step_rate)) {
+                result.diagnostics.push_back(MakeDiagnostic(
+                    DiagnosticCode::InvalidParameterValue,
+                    "malformed History reset policy or step rate", source));
+                if (line_end == std::string_view::npos) break;
+                continue;
+            }
+            declaration.reset_policy = *policy;
+            declaration.step_rate_hz = step_rate;
+            node.history = std::move(declaration);
         } else if (directive == "layout") {
             current_node = std::string::npos;
             if (tokens.size() < 4u) {
@@ -4252,6 +4388,13 @@ std::string BuildCanonicalText(
             << " frequency=" << ToString(node->frequency)
             << " residency=" << ToString(node->residency)
             << " seed=" << NodeSeedText(*node) << "\n";
+        if (node->history) {
+            out << "  history state-type " << node->history->state_type
+                << " initial " << EscapeQuoted(node->history->initial_value)
+                << " reset "
+                << ToString(node->history->reset_policy)
+                << " step-rate " << node->history->step_rate_hz << "\n";
+        }
         for (const auto& [name, value] : node->params) {
             out << "  param " << name << " " << ParamCanonicalText(value)
                 << "\n";
@@ -4349,11 +4492,63 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
             DiagnosticSource source;
             source.node_id = node.id;
             source.operator_id = node.operator_id;
-            diagnostics.push_back(MakeDiagnostic(
-                DiagnosticCode::HistoryNotSupported,
-                "history frequency is reserved for NW-09 and is not valid in "
-                "initial graph exports",
-                source));
+            if (!node.history) {
+                diagnostics.push_back(MakeDiagnostic(
+                    DiagnosticCode::HistoryNotSupported,
+                    "history frequency requires an explicit History "
+                    "declaration (state type, initial value, reset policy, "
+                    "and fixed step rate)",
+                    source));
+            } else if (!schema->produces_temporal_state) {
+                diagnostics.push_back(MakeDiagnostic(
+                    DiagnosticCode::UnsupportedFrequency,
+                    "operator '" + node.operator_id +
+                        "' has no History schema",
+                    source));
+            } else {
+                const HistoryDeclaration& history = *node.history;
+                if (history.state_type != "nw.particles.v1" &&
+                    history.state_type != "nw.feedback.image.v1") {
+                    diagnostics.push_back(MakeDiagnostic(
+                        DiagnosticCode::InvalidParameterValue,
+                        "unknown History state type '" + history.state_type + "'",
+                        source));
+                } else {
+                    const std::string expected =
+                        node.operator_id == "nw.particles.system"
+                            ? "nw.particles.v1"
+                            : node.operator_id == "nw.feedback.image"
+                                  ? "nw.feedback.image.v1"
+                                  : std::string();
+                    if (expected.empty()) {
+                        diagnostics.push_back(MakeDiagnostic(
+                            DiagnosticCode::HistoryNotSupported,
+                            "operator '" + node.operator_id +
+                                "' has no History state schema",
+                            source));
+                    } else if (history.state_type != expected) {
+                        diagnostics.push_back(MakeDiagnostic(
+                            DiagnosticCode::InvalidParameterValue,
+                            "History state type '" + history.state_type +
+                                "' does not belong to operator '" +
+                                node.operator_id + "' (expected '" + expected +
+                                "')",
+                            source));
+                    }
+                }
+                if (history.initial_value.empty()) {
+                    diagnostics.push_back(MakeDiagnostic(
+                        DiagnosticCode::InvalidParameterValue,
+                        "History declaration requires a non-empty initial value",
+                        source));
+                }
+                if (history.step_rate_hz != 120u) {
+                    diagnostics.push_back(MakeDiagnostic(
+                        DiagnosticCode::InvalidParameterValue,
+                        "NW-09 History requires a fixed 120 Hz step rate",
+                        source));
+                }
+            }
         } else {
             bool allowed = false;
             for (Frequency frequency : schema->frequency_policy.allowed) {
@@ -4371,6 +4566,15 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
                     "operator '" + node.operator_id + "' does not support "
                     "frequency '" +
                         std::string(ToString(node.frequency)) + "'",
+                    source));
+            }
+            if (node.history) {
+                DiagnosticSource source;
+                source.node_id = node.id;
+                source.operator_id = node.operator_id;
+                diagnostics.push_back(MakeDiagnostic(
+                    DiagnosticCode::InvalidParameterValue,
+                    "a History declaration requires frequency=history",
                     source));
             }
         }
@@ -4459,6 +4663,15 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
 
             const PortSpec* input_port = schema->FindInput(input.port);
             if (input_port == nullptr) {
+                if (node.frequency == Frequency::History &&
+                    input.port == "previous") {
+                    diagnostics.push_back(MakeDiagnostic(
+                        DiagnosticCode::OrdinaryCycle,
+                        "History previous-tick state is an external scheduler "
+                        "input and must not be authored as an ordinary graph edge",
+                        source));
+                    continue;
+                }
                 diagnostics.push_back(MakeDiagnostic(
                     DiagnosticCode::UnknownInputPort,
                     "operator '" + node.operator_id + "' has no input port '" +
@@ -4579,8 +4792,8 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
                     node.id + "." + input.port};
                 diagnostics.push_back(std::move(diagnostic));
             }
-            if (static_cast<int>(source_node.frequency) >
-                static_cast<int>(node.frequency)) {
+            if (FrequencyRank(source_node.frequency) >
+                FrequencyRank(node.frequency)) {
                 Diagnostic diagnostic = MakeDiagnostic(
                     DiagnosticCode::FrequencyTransition,
                     "node '" + node.id + "' runs at frequency '" +
@@ -4646,6 +4859,16 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
         writer.String(node.seed.behavior == SeedBehavior::ExplicitNodeId
                           ? node.seed.node_id
                           : std::string());
+        // NW-09 History declarations are semantic node content.  History-free
+        // nodes emit exactly the pre-NW-09 byte sequence (no extra record).
+        if (node.history) {
+            writer.String("nwgraph.history.v1");
+            writer.String(node.history->state_type);
+            writer.String(node.history->initial_value);
+            writer.String(
+                std::string(ToString(node.history->reset_policy)));
+            writer.U64(node.history->step_rate_hz);
+        }
         writer.MapHeader(static_cast<std::uint32_t>(node.params.size()));
         for (const auto& [name, value] : node.params) {
             writer.String(name);
@@ -4703,6 +4926,25 @@ const NodeDefinition* GraphSnapshot::FindNode(std::string_view id) const {
         return nullptr;
     }
     return &nodes_[found->second];
+}
+
+std::vector<HistoryExternalInput> HistoryExternalInputs(
+    const GraphDocument& document) {
+    std::vector<HistoryExternalInput> inputs;
+    for (const auto& node : document.nodes) {
+        if (node.frequency != Frequency::History || !node.history) {
+            continue;
+        }
+        HistoryExternalInput input;
+        input.node_id = node.id;
+        input.state_type = node.history->state_type;
+        inputs.push_back(std::move(input));
+    }
+    std::sort(inputs.begin(), inputs.end(),
+              [](const HistoryExternalInput& a, const HistoryExternalInput& b) {
+                  return a.node_id < b.node_id;
+              });
+    return inputs;
 }
 
 std::string GraphSnapshot::StructuralHash(std::string_view node_id) const {
@@ -4841,6 +5083,12 @@ std::string EmitDocumentText(const GraphDocument& document) {
             out << " residency=" << ToString(node->residency);
         }
         out << "\n";
+        if (node->history) {
+            out << "  history state-type " << node->history->state_type
+                << " initial " << EscapeQuoted(node->history->initial_value)
+                << " reset " << ToString(node->history->reset_policy)
+                << " step-rate " << node->history->step_rate_hz << "\n";
+        }
         for (const auto& [name, value] : node->params) {
             out << "  param " << name << " " << ParamCanonicalText(value)
                 << "\n";
@@ -4984,6 +5232,210 @@ std::uint32_t HashU32(std::uint32_t a, std::uint32_t b, std::uint32_t c) {
     h *= 0x846ca68bu;
     h ^= h >> 16u;
     return h;
+}
+
+std::map<std::string, std::string> ParseHistoryFields(
+    std::string_view text) {
+    std::map<std::string, std::string> fields;
+    auto trim = [](std::string& item) {
+        const auto first = item.find_first_not_of(" \t");
+        const auto last = item.find_last_not_of(" \t");
+        item = first == std::string::npos
+                   ? std::string()
+                   : item.substr(first, last - first + 1u);
+    };
+    std::size_t start = 0u;
+    while (start <= text.size()) {
+        const std::size_t end = text.find(';', start);
+        const std::string_view entry =
+            text.substr(start, end == std::string_view::npos
+                                   ? std::string_view::npos
+                                   : end - start);
+        const std::size_t equals = entry.find('=');
+        if (equals != std::string_view::npos) {
+            std::string key(entry.substr(0u, equals));
+            std::string value(entry.substr(equals + 1u));
+            trim(key);
+            trim(value);
+            fields[key] = value;
+        }
+        if (end == std::string_view::npos) break;
+        start = end + 1u;
+    }
+    return fields;
+}
+
+struct ParsedHistoryInitial {
+    std::map<std::string, std::string> fields;
+    std::vector<double> values;
+    bool explicit_values = false;
+};
+
+void SkipJsonSpace(std::string_view& text) {
+    while (!text.empty() &&
+           (text.front() == ' ' || text.front() == '\t' ||
+            text.front() == '\r' || text.front() == '\n')) {
+        text.remove_prefix(1u);
+    }
+}
+
+bool ParseJsonStringToken(std::string_view& text, std::string& out) {
+    SkipJsonSpace(text);
+    if (text.empty() || text.front() != '"') return false;
+    text.remove_prefix(1u);
+    out.clear();
+    while (!text.empty()) {
+        const char c = text.front();
+        text.remove_prefix(1u);
+        if (c == '"') return true;
+        if (c == '\\' && !text.empty()) {
+            const char escaped = text.front();
+            text.remove_prefix(1u);
+            out.push_back(escaped == 'n'   ? '\n'
+                          : escaped == 't' ? '\t'
+                          : escaped == 'r' ? '\r'
+                                           : escaped);
+        } else {
+            out.push_back(c);
+        }
+    }
+    return false;
+}
+
+bool ParseJsonNumberToken(std::string_view& text, std::string& out) {
+    SkipJsonSpace(text);
+    const std::size_t start = 0u;
+    std::size_t length = 0u;
+    while (length < text.size()) {
+        const char c = text[length];
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' ||
+            c == 'e' || c == 'E') {
+            ++length;
+            continue;
+        }
+        break;
+    }
+    if (length == 0u) return false;
+    out.assign(text.substr(start, length));
+    text.remove_prefix(length);
+    return true;
+}
+
+ParsedHistoryInitial ParseHistoryInitial(std::string_view text) {
+    ParsedHistoryInitial parsed;
+    while (!text.empty() &&
+           (text.front() == ' ' || text.front() == '\t' ||
+            text.front() == '\r' || text.front() == '\n')) {
+        text.remove_prefix(1u);
+    }
+    if (!text.empty() && text.front() == '[') {
+        text.remove_prefix(1u);
+        while (true) {
+            SkipJsonSpace(text);
+            if (text.empty()) break;
+            if (text.front() == ']') {
+                text.remove_prefix(1u);
+                parsed.explicit_values = true;
+                break;
+            }
+            std::string number;
+            if (!ParseJsonNumberToken(text, number)) break;
+            char* end = nullptr;
+            const double value = std::strtod(number.c_str(), &end);
+            if (end == number.c_str() || (end != nullptr && *end != '\0')) {
+                break;
+            }
+            parsed.values.push_back(value);
+            SkipJsonSpace(text);
+            if (!text.empty() && text.front() == ',') {
+                text.remove_prefix(1u);
+                continue;
+            }
+            if (!text.empty() && text.front() == ']') {
+                text.remove_prefix(1u);
+                parsed.explicit_values = true;
+                break;
+            }
+            break;
+        }
+        return parsed;
+    }
+    if (!text.empty() && text.front() == '{') {
+        text.remove_prefix(1u);
+        while (true) {
+            SkipJsonSpace(text);
+            if (text.empty()) break;
+            if (text.front() == '}') {
+                text.remove_prefix(1u);
+                break;
+            }
+            std::string key;
+            if (!ParseJsonStringToken(text, key)) break;
+            SkipJsonSpace(text);
+            if (text.empty() || text.front() != ':') break;
+            text.remove_prefix(1u);
+            SkipJsonSpace(text);
+            std::string value;
+            if (!text.empty() && text.front() == '"') {
+                if (!ParseJsonStringToken(text, value)) break;
+            } else if (!ParseJsonNumberToken(text, value)) {
+                break;
+            }
+            parsed.fields[key] = value;
+            SkipJsonSpace(text);
+            if (!text.empty() && text.front() == ',') {
+                text.remove_prefix(1u);
+                continue;
+            }
+            if (!text.empty() && text.front() == '}') {
+                text.remove_prefix(1u);
+                break;
+            }
+            break;
+        }
+        return parsed;
+    }
+    parsed.fields = ParseHistoryFields(text);
+    return parsed;
+}
+
+std::uint64_t HistoryFieldU64(
+    const std::map<std::string, std::string>& fields,
+    const std::string& name,
+    std::uint64_t fallback) {
+    const auto found = fields.find(name);
+    if (found == fields.end()) return fallback;
+    std::uint64_t parsed = 0;
+    if (!FromCharsU64(found->second, parsed)) return fallback;
+    return parsed;
+}
+
+double HistoryFieldDouble(
+    const std::map<std::string, std::string>& fields,
+    const std::string& name,
+    double fallback) {
+    const auto found = fields.find(name);
+    if (found == fields.end()) return fallback;
+    char* end = nullptr;
+    const double parsed = std::strtod(found->second.c_str(), &end);
+    if (end == found->second.c_str() || (end != nullptr && *end != '\0')) {
+        return fallback;
+    }
+    return parsed;
+}
+
+double HistoryUnitHash(std::initializer_list<std::uint64_t> values) {
+    std::uint32_t h = 0x9E3779B9u;
+    for (const std::uint64_t value : values) {
+        h ^= static_cast<std::uint32_t>(value) + 0x9E3779B9u +
+             (h << 6u) + (h >> 2u);
+    }
+    h ^= h >> 16u;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15u;
+    h *= 0x846CA68Bu;
+    h ^= h >> 16u;
+    return static_cast<double>(h >> 8u) / 16777216.0;
 }
 
 const EvaluationValue* FindInputValue(
@@ -5720,6 +6172,205 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         outputs["out"] = ImageOracle(snapshot, node, "out", evaluated);
         return true;
     }
+    if (op == "nw.particles.system" || op == "nw.feedback.image") {
+        // External previous-tick state is read here; the current-tick state is
+        // written into the caller-provided next-state map and becomes visible
+        // only after the whole simulation tick commits.
+        const std::string state_type =
+            node.history ? node.history->state_type : std::string();
+        const ParsedHistoryInitial initial = ParseHistoryInitial(
+            node.history ? node.history->initial_value : std::string());
+        const std::map<std::string, std::string>& fields = initial.fields;
+        std::uint64_t count = 0u;
+        std::uint64_t width = 0u;
+        std::uint64_t height = 0u;
+        std::uint32_t values_per_element = 0u;
+        if (state_type == "nw.particles.v1") {
+            values_per_element = 5u;
+            count = HistoryFieldU64(
+                fields, "count",
+                param("count") ? static_cast<std::uint64_t>(
+                                     param("count")->integer)
+                               : 8u);
+            if (count == 0u) count = 1u;
+            width = HistoryFieldU64(
+                fields, "width",
+                param("width") ? static_cast<std::uint64_t>(
+                                     param("width")->integer)
+                               : 16u);
+            height = HistoryFieldU64(
+                fields, "height",
+                param("height") ? static_cast<std::uint64_t>(
+                                      param("height")->integer)
+                                : 8u);
+            if (width == 0u) width = 1u;
+            if (height == 0u) height = 1u;
+        } else {
+            values_per_element = 4u;
+            width = HistoryFieldU64(
+                fields, "width",
+                param("width") ? static_cast<std::uint64_t>(
+                                     param("width")->integer)
+                               : 16u);
+            height = HistoryFieldU64(
+                fields, "height",
+                param("height") ? static_cast<std::uint64_t>(
+                                      param("height")->integer)
+                                : 8u);
+            if (width == 0u) width = 1u;
+            if (height == 0u) height = 1u;
+            count = width * height;
+        }
+        std::vector<double> values;
+        if (initial.explicit_values &&
+            initial.values.size() !=
+                static_cast<std::size_t>(count) * values_per_element) {
+            failure = EvalDiagnostic(
+                node, "History initial value array length " +
+                          std::to_string(initial.values.size()) +
+                          " does not match the declared state layout " +
+                          std::to_string(
+                              static_cast<std::size_t>(count) *
+                              values_per_element));
+            return false;
+        }
+        if (context.previous_history_state.count(node.id) != 0u) {
+            values =
+                context.previous_history_state.at(node.id).samples;
+        }
+        if (values.size() !=
+            static_cast<std::size_t>(count) * values_per_element) {
+            const std::size_t expected_values =
+                static_cast<std::size_t>(count) * values_per_element;
+            if (initial.explicit_values) {
+                values = initial.values;
+            } else {
+                values.assign(expected_values, 0.0);
+            }
+            const std::string mode = [&]() {
+                const auto found = fields.find("mode");
+                return found == fields.end() ? std::string("seeded")
+                                             : found->second;
+            }();
+            if (!initial.explicit_values && mode != "zero") {
+                const std::uint64_t seed = HistoryFieldU64(
+                    fields, "seed",
+                    param("seed") ? static_cast<std::uint64_t>(
+                                        param("seed")->integer)
+                                  : 0u);
+                if (state_type == "nw.particles.v1") {
+                    const double velocity = HistoryFieldDouble(
+                        fields, "initial_velocity",
+                        param("initial_velocity")
+                            ? param("initial_velocity")->number
+                            : 1.0);
+                    for (std::uint64_t index = 0u; index < count; ++index) {
+                        const std::size_t base =
+                            static_cast<std::size_t>(index) * 5u;
+                        const double speed =
+                            velocity *
+                            (0.5 + 0.5 * HistoryUnitHash({seed, index, 4u}));
+                        const double direction_x =
+                            2.0 * HistoryUnitHash({seed, index, 3u}) - 1.0;
+                        const double direction_y =
+                            2.0 * HistoryUnitHash({seed, index, 5u}) - 1.0;
+                        values[base] = HistoryUnitHash({seed, index, 1u});
+                        values[base + 1u] =
+                            HistoryUnitHash({seed, index, 2u});
+                        values[base + 2u] = speed * direction_x;
+                        values[base + 3u] = speed * direction_y;
+                        values[base + 4u] = 0.0;
+                    }
+                } else {
+                    for (std::size_t index = 0u; index < values.size();
+                         ++index) {
+                        values[index] =
+                            HistoryUnitHash({seed, index, 7u}) * 0.01;
+                    }
+                }
+            }
+        }
+        const std::uint64_t tick = context.simulation_tick;
+        if (state_type == "nw.particles.v1") {
+            const double gravity = HistoryFieldDouble(
+                fields, "gravity",
+                param("gravity") ? param("gravity")->number : -0.5);
+            const double dt = 1.0 / 120.0;
+            for (std::uint64_t index = 0u; index < count; ++index) {
+                const std::size_t base =
+                    static_cast<std::size_t>(index) * 5u;
+                double x = values[base];
+                double y = values[base + 1u];
+                double vx = values[base + 2u];
+                double vy = values[base + 3u];
+                double age = values[base + 4u];
+                vy += gravity * dt;
+                x += vx * dt;
+                y += vy * dt;
+                age += 1.0;
+                if (x < 0.0 || x >= static_cast<double>(width)) {
+                    vx = -vx;
+                    x = std::min(std::max(x, 0.0),
+                                 static_cast<double>(width - 1u));
+                }
+                if (y < 0.0 || y >= static_cast<double>(height)) {
+                    vy = -vy;
+                    y = std::min(std::max(y, 0.0),
+                                 static_cast<double>(height - 1u));
+                }
+                values[base] = x;
+                values[base + 1u] = y;
+                values[base + 2u] = vx;
+                values[base + 3u] = vy;
+                values[base + 4u] = age;
+            }
+        } else {
+            const double decay = HistoryFieldDouble(
+                fields, "decay",
+                param("decay") ? param("decay")->number : 0.95);
+            const double gain = HistoryFieldDouble(
+                fields, "gain",
+                param("gain") ? param("gain")->number : 0.5);
+            const std::uint64_t seed = HistoryFieldU64(
+                fields, "seed",
+                param("seed") ? static_cast<std::uint64_t>(
+                                    param("seed")->integer)
+                              : 0u);
+            for (std::uint64_t y = 0u; y < height; ++y) {
+                for (std::uint64_t x = 0u; x < width; ++x) {
+                    const std::size_t base =
+                        static_cast<std::size_t>(y * width + x) * 4u;
+                    const double injection =
+                        HistoryUnitHash({seed, tick, x, y, 11u});
+                    values[base] =
+                        decay * values[base] + gain * injection;
+                    values[base + 1u] =
+                        decay * values[base + 1u] +
+                        gain * (1.0 - injection);
+                    values[base + 2u] =
+                        decay * values[base + 2u] +
+                        gain * (0.5 + 0.5 * injection);
+                    values[base + 3u] = 1.0;
+                }
+            }
+        }
+        EvaluationValue current;
+        current.type = LogicalType::RenderImage;
+        current.residency = Residency::Gpu;
+        current.component_count = static_cast<std::uint32_t>(
+            std::min<std::size_t>(4u, values.size()));
+        for (std::uint32_t i = 0; i < current.component_count; ++i) {
+            current.numbers[i] = NormalizeZero(values[i]);
+        }
+        current.samples = values;
+        current.text = "history:" + node.operator_id + ":tick=" +
+                       std::to_string(tick);
+        outputs["out"] = current;
+        if (context.next_history_state != nullptr) {
+            (*context.next_history_state)[node.id] = current;
+        }
+        return true;
+    }
 
     failure = EvalDiagnostic(node,
                              "no CPU reference implementation for operator '" +
@@ -6013,8 +6664,8 @@ EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
         if (node == nullptr) {
             continue;
         }
-        if (static_cast<int>(node->frequency) >
-            static_cast<int>(context.frequency)) {
+        if (FrequencyRank(node->frequency) >
+            FrequencyRank(context.frequency)) {
             continue;
         }
         bool missing_input = false;
@@ -6053,12 +6704,15 @@ EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
 
         CacheEntry* entry = nullptr;
         std::size_t entry_index = 0;
+        const bool temporal = node->frequency == Frequency::History;
         auto& entries = entries_[node_id];
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            if (entries[i].key == key) {
-                entry = &entries[i];
-                entry_index = i;
-                break;
+        if (!temporal) {
+            for (std::size_t i = 0; i < entries.size(); ++i) {
+                if (entries[i].key == key) {
+                    entry = &entries[i];
+                    entry_index = i;
+                    break;
+                }
             }
         }
         if (entry != nullptr && !entry->invalid && !entry->corrupt) {
@@ -6101,11 +6755,11 @@ EvaluationResult GraphEvaluator::Evaluate(const EvaluationContext& context) {
             return result;
         }
 
-        if (entry != nullptr) {
+        if (entry != nullptr && !temporal) {
             entries[entry_index].outputs = outputs;
             entries[entry_index].invalid = false;
             entries[entry_index].corrupt = false;
-        } else {
+        } else if (!temporal) {
             CacheEntry created;
             created.key = key;
             created.outputs = outputs;

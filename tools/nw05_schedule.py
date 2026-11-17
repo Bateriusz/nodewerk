@@ -736,7 +736,7 @@ def build_logical_schedule(
                         state=_usage_state(usage),
                     )
                 )
-        elif opcode == "frame.dispatch":
+        elif opcode in {"frame.dispatch", "frame.simulation_step"}:
             for resource_id, usage in sorted(bound.items()):
                 if usage == "uav":
                     access = "write"
@@ -890,6 +890,15 @@ def build_logical_schedule(
     logical_resources: list[LogicalResource] = []
     duplication: list[tuple[int, int]] = []
     serialized: list[int] = []
+    temporal_resource_ids = {
+        resource_id
+        for record in getattr(package, "history", ())
+        for resource_id in (
+            record.current_resource_id,
+            record.previous_resource_id,
+        )
+        if resource_id
+    }
     for resource in package.resources:
         accesses = tuple(access_by_id.get(resource.resource_id, ()))
         frame_accesses = [item for item in accesses if item.phase == "frame"]
@@ -898,6 +907,12 @@ def build_logical_schedule(
         transient, reason = _looks_transient(
             resource, accesses, initialization_roots
         )
+        if resource.resource_id in temporal_resource_ids:
+            # NW-09 current/previous history state is persistent across ticks
+            # and frames.  It must never be placed in the transient alias pool
+            # while a concurrently live frame could still observe it.
+            transient = False
+            reason = "NW-09 history state resource is persistent across frames"
         persistent = not transient
         lifetime = ResourceLifetime(
             first_instruction=first_frame,
@@ -1015,6 +1030,7 @@ def _activation_frame(resource: LogicalResource, phase: str = "frame") -> int:
             continue
         if access.opcode in {
             "frame.dispatch",
+            "frame.simulation_step",
             "frame.copy_buffer",
             "frame.present",
         }:

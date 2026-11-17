@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw09-hardware-evidence.schema.json",
+  "title": "Nodewerk NW-09 cross-device temporal-state evidence",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "status",
+    "artifact",
+    "capability_profile",
+    "environment",
+    "devices",
+    "tolerances",
+    "semantic_predicates",
+    "portable_gpu_state_replay",
+    "physical_coverage_available"
+  ],
+  "properties": {
+    "format": { "const": "nw09-hardware-evidence" },
+    "version": { "const": 1 },
+    "status": { "enum": ["pending_unverified", "verified", "failed"] },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "package_sha256",
+        "semantic_digest",
+        "state_layout_hash",
+        "fixed_step_hz",
+        "timeline_ticks_per_simulation_tick"
+      ],
+      "properties": {
+        "package_sha256": { "type": ["string", "null"] },
+        "semantic_digest": { "type": ["string", "null"] },
+        "state_layout_hash": { "type": ["string", "null"] },
+        "fixed_step_hz": { "const": 120 },
+        "timeline_ticks_per_simulation_tick": { "const": 400 }
+      },
+      "additionalProperties": false
+    },
+    "capability_profile": {
+      "type": "object",
+      "required": ["profile_id", "requirements_digest"],
+      "properties": {
+        "profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
+        "requirements_digest": {
+          "const": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a"
+        }
+      },
+      "additionalProperties": false
+    },
+    "environment": {
+      "type": "object",
+      "required": ["windows_build", "driver_version", "toolchain_identity", "capture_protocol"],
+      "properties": {
+        "windows_build": { "type": ["integer", "null"] },
+        "driver_version": { "type": ["string", "null"] },
+        "toolchain_identity": { "type": ["string", "null"] },
+        "capture_protocol": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "devices": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["tier", "status"],
+        "properties": {
+          "tier": { "enum": ["desktop_ada", "desktop_blackwell"] },
+          "status": { "enum": ["pending_unverified", "verified", "failed"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "tolerances": {
+      "type": "object",
+      "required": ["numeric", "state"],
+      "additionalProperties": {
+        "type": "object",
+        "required": ["absolute", "relative"],
+        "properties": {
+          "absolute": { "type": "number", "minimum": 0 },
+          "relative": { "type": "number", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "semantic_predicates": {
+      "type": "object",
+      "required": [
+        "gpu_marketing_generation_is_not_a_predicate",
+        "exact_sku_is_not_a_predicate",
+        "checkpoint_compatibility_uses_profile_identity"
+      ],
+      "additionalProperties": { "type": "boolean" }
+    },
+    "portable_gpu_state_replay": { "const": false },
+    "physical_coverage_available": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

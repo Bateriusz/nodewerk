@@ -23,6 +23,7 @@ struct FixtureArgs {
     std::uint32_t frames = 60u;
     std::uint64_t tick_start = 0u;
     std::uint64_t tick_step = 1u;
+    std::uint32_t history_work_cap = 0u;
     std::uint32_t width = 1280u;
     std::uint32_t height = 720u;
     bool diagnostics = false;
@@ -30,6 +31,7 @@ struct FixtureArgs {
     bool allow_software_adapter = false;
     bool emit_benchmark_metrics = false;
     bool emit_image_hash = false;
+    bool emit_display_image_hash = false;
     bool validation = false;
     bool resize_sequence = false;
     bool simulate_minimize = false;
@@ -95,6 +97,11 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             if (++index >= argc || !ParseU64(argv[index], &args->tick_step)) {
                 return false;
             }
+        } else if (std::strcmp(arg, "--history-work-cap") == 0) {
+            if (++index >= argc ||
+                !ParseU32(argv[index], &args->history_work_cap)) {
+                return false;
+            }
         } else if (std::strcmp(arg, "--width") == 0) {
             if (++index >= argc || !ParseU32(argv[index], &args->width)) {
                 return false;
@@ -113,6 +120,8 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             args->emit_benchmark_metrics = true;
         } else if (std::strcmp(arg, "--emit-image-hash") == 0) {
             args->emit_image_hash = true;
+        } else if (std::strcmp(arg, "--emit-display-image-hash") == 0) {
+            args->emit_display_image_hash = true;
         } else if (std::strcmp(arg, "--validation") == 0) {
             args->validation = true;
         } else if (std::strcmp(arg, "--no-validation") == 0) {
@@ -170,10 +179,12 @@ int main(int argc, char** argv) {
         std::fprintf(
             stderr,
             "usage: nw_package_player_fixture --package <file.nwp> "
-            "[--frames N] [--tick-start N] [--tick-step N] [--width N] "
+            "[--frames N] [--tick-start N] [--tick-step N] "
+            "[--history-work-cap N] [--width N] "
             "[--height N] [--diagnostics] [--headless] "
             "[--allow-software-adapter] "
             "[--emit-benchmark-metrics] [--emit-image-hash] "
+            "[--emit-display-image-hash] "
             "[--resize-sequence] "
             "[--simulate-minimize] [--win32-minimize-restore] "
             "[--simulate-device-removal] "
@@ -201,6 +212,7 @@ int main(int argc, char** argv) {
     config.emit_benchmark_metrics = args.emit_benchmark_metrics;
     config.wait_for_gpu_each_frame = args.emit_benchmark_metrics;
     config.frames_in_flight = 2u;
+    config.history_work_cap = args.history_work_cap;
 
     std::printf("NW_PLAYER_FROZEN_SPECIALIZATION=%d\n",
                 nw::player::PackagePlayer::compiled_with_frozen_specialization()
@@ -644,6 +656,33 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(hash));
     }
 
+    if (args.emit_display_image_hash) {
+        std::vector<std::uint8_t> image;
+        const nw::player::ExitCode readback =
+            player.readbackDisplayOutput(&image);
+        if (readback != nw::player::ExitCode::Success) {
+            std::fprintf(stderr,
+                         "NW_PLAYER_DISPLAY_IMAGE_READBACK_FAILED=%d\n",
+                         static_cast<int>(readback));
+            const int reported = player.Report(true);
+            (void)player.shutdown();
+            return reported;
+        }
+        std::uint64_t hash = 1469598103934665603ULL;
+        std::uint64_t nonzero_bytes = 0u;
+        for (const std::uint8_t byte : image) {
+            if (byte != 0u) ++nonzero_bytes;
+            hash ^= static_cast<std::uint64_t>(byte);
+            hash *= 1099511628211ULL;
+        }
+        std::printf("NW_PLAYER_DISPLAY_IMAGE_BYTES=%llu\n",
+                    static_cast<unsigned long long>(image.size()));
+        std::printf("NW_PLAYER_DISPLAY_IMAGE_NONZERO_BYTES=%llu\n",
+                    static_cast<unsigned long long>(nonzero_bytes));
+        std::printf("NW_PLAYER_DISPLAY_IMAGE_FNV64=%016llx\n",
+                    static_cast<unsigned long long>(hash));
+    }
+
     const auto& stats = player.allocation_stats();
     std::printf("NW_PLAYER_PROFILE_ID=%s\n",
                 player.package().capability.profile_id.c_str());
@@ -667,6 +706,18 @@ int main(int argc, char** argv) {
                 player.present_source_height());
     std::printf("NW_PLAYER_PRESENT_SOURCE_EXPLICIT=%d\n",
                 player.present_source_geometry_explicit() ? 1 : 0);
+    std::printf("NW_PLAYER_HISTORY_SIMULATION_TICK=%llu\n",
+                static_cast<unsigned long long>(
+                    player.history_simulation_tick()));
+    std::printf("NW_PLAYER_HISTORY_PENDING_TICKS=%llu\n",
+                static_cast<unsigned long long>(
+                    player.history_pending_ticks()));
+    std::printf("NW_PLAYER_HISTORY_STEPS_EXECUTED=%llu\n",
+                static_cast<unsigned long long>(
+                    player.history_steps_executed()));
+    std::printf("NW_PLAYER_HISTORY_LOOP_RESETS=%llu\n",
+                static_cast<unsigned long long>(
+                    player.history_loop_resets()));
     std::printf("NW_PLAYER_RESIZE_COUNT=%llu\n",
                 static_cast<unsigned long long>(stats.resize_count));
     std::printf("NW_PLAYER_UPLOAD_REUSE_WAITS=%llu\n",

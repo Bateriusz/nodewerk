@@ -64,11 +64,44 @@ exported content.
 
 ## Frequency and residency
 
-Frequency ordering is `compile-time` < `initialization` < `frame`. A consumer
-may not run earlier than any producer (`frequency_transition`).
+Frequency ordering is `compile-time` < `initialization` < `history` < `frame`.
+A consumer may not run earlier than any producer (`frequency_transition`).
 
-`history` is parsed only so it can be rejected explicitly. It is reserved for
-NW-09 and is invalid in initial graph exports.
+`frequency=history` introduces NW-09 temporal state only when the node also
+carries an explicit `history` declaration:
+
+```text
+node particles nw.particles.system@1.0.0 frequency=history residency=gpu
+  history state-type nw.particles.v1 initial "mode=seeded;count=12;seed=424242" reset on-loop step-rate 120
+```
+
+The declaration contains exactly the semantic state type, initial value, reset
+policy (`on-loop`, `on-seek`, `never`, or `manual`), and fixed step rate. NW-09
+requires 120 Hz: at the authoritative 48,000 timeline ticks/second, every
+simulation tick is exactly 400 timeline ticks.
+
+The previous-tick value is an **external scheduler input**. A History node's
+own recurrence is not an ordinary graph edge, and authoring an explicit
+`previous` edge is rejected as an ordinary cycle. Only
+`nw.particles.system` and `nw.feedback.image` expose History schemas. A bare
+`frequency=history` declaration without a History schema is rejected with
+`history_not_supported`, preserving the pre-NW-09 diagnostic. A declaration on
+a non-history node is rejected with `invalid_history_declaration`. The state
+type is bound to the operator (`nw.particles.system` requires
+`nw.particles.v1`; `nw.feedback.image` requires `nw.feedback.image.v1`), and
+unknown History fields are rejected by both readers. The declared initial value
+is semantic content: `mode=zero` is a real zero state, and the seeded particle
+and feedback layouts are packed as float32 with five values per particle or
+four values per feedback element.
+Initial values may be `;`-separated key/value fields, a JSON object, or a JSON
+numeric array. The authoring reader, C++ CPU oracle, exporter, and packaged
+shader path all consume the same declaration rather than substituting node
+parameter defaults for an explicit initial value.
+
+Temporal state is never treated as a pure cached output. History nodes
+participate in the semantic node identity, but their values are not memoized
+as frame-independent constants; every fixed simulation tick is evaluated in
+order and committed atomically when the tick completes.
 
 Residency conversions are explicit. Render images are produced in `gpu`
 residency. CPU readback requires `nw.residency.gpu_to_cpu` or

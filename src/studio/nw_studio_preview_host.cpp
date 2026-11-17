@@ -460,6 +460,25 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
             std::fflush(stdout);
             continue;
         }
+        if (command == "rewind") {
+            // Explicit replay request from the authoring session: reset the
+            // History ping-pong resources and the simulation counter together
+            // before the following render replays from tick zero.
+            const nw::player::ExitCode rewound =
+                player->rewindHistoryForAuthoring();
+            const int exit_code = static_cast<int>(rewound);
+            std::printf(
+                "{\"event\":\"rewind\",\"ok\":%s,\"exit_code\":%d,"
+                "\"device_removed\":%s}\n",
+                rewound == nw::player::ExitCode::Success ? "true" : "false",
+                exit_code,
+                IsDeviceRemoved(exit_code) ? "true" : "false");
+            std::fflush(stdout);
+            if (IsDeviceRemoved(exit_code)) {
+                return exit_code;
+            }
+            continue;
+        }
         std::uint64_t tick = 0u;
         if (command.rfind("render ", 0u) == 0u) {
             const char* tick_text = command.c_str() + 7;
@@ -472,6 +491,39 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
             std::printf("{\"event\":\"error\",\"message\":\"unknown command\"}\n");
             std::fflush(stdout);
             continue;
+        }
+        // Timeline scrubbing may move backwards.  The device player rejects a
+        // backward History target because it cannot rewind in place; the
+        // persistent authoring host resets the ping-pong resources and the
+        // simulation counter together, then submits the same render request,
+        // which replays every required tick from zero in order.  This is the
+        // existing authoring runtime path (never a second graph/timeline).
+        if (!player->package().history.empty()) {
+            const std::uint64_t target_sim =
+                tick / nw::package::kTimelineTicksPerSimulationTick;
+            if (target_sim < player->history_simulation_tick()) {
+                const nw::player::ExitCode rewound =
+                    player->rewindHistoryForAuthoring();
+                if (rewound != nw::player::ExitCode::Success) {
+                    const int exit_code = static_cast<int>(rewound);
+                    const TimingSnapshot timing = CaptureTimings(*player);
+                    (void)WriteStats(options.stats_path, *player,
+                                     player->allocation_stats(),
+                                     player->using_aliased_plan(),
+                                     player->width(), player->height(), false,
+                                     session_renders, timing);
+                    std::printf(
+                        "{\"event\":\"render-failed\",\"ok\":false,\"tick\":%llu,"
+                        "\"exit_code\":%d,\"device_removed\":%s}\n",
+                        static_cast<unsigned long long>(tick), exit_code,
+                        IsDeviceRemoved(exit_code) ? "true" : "false");
+                    std::fflush(stdout);
+                    if (IsDeviceRemoved(exit_code)) {
+                        return exit_code;
+                    }
+                    continue;
+                }
+            }
         }
         const nw::player::ExitCode rendered = player->renderAtTick(tick);
         ++session_renders;

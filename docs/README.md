@@ -27,6 +27,8 @@ graph semantics and `.nwgraph` schema.
 18. [ADR-0007: NW-08 Authoring Editor Scope and Release Isolation](architecture/0007-nw08-authoring-editor.md)
 19. [NW-08 `nodewerk-studio` Authoring Editor](nw08-studio-authoring-editor.md)
 20. [NW-08A Presentation Geometry Correction and Windows Validation](nw08a-presentation-geometry-validation.md)
+21. [ADR-0008: NW-09 Explicit Temporal State Extension](architecture/0008-nw09-temporal-state.md)
+22. [NW-09 Explicit Temporal State (Particles and Feedback)](nw09-temporal-state.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -55,4 +57,7 @@ graph semantics and `.nwgraph` schema.
 - NW-07 Diagnostic Sibling-Build Overhead: [`benchmarks/nw07/diagnostic-overhead.v1.json`](../benchmarks/nw07/diagnostic-overhead.v1.json) (validated by [`schemas/nw07-diagnostic-overhead.schema.json`](../schemas/nw07-diagnostic-overhead.schema.json)); pending separate diagnostic measurement
 - NW-08 Studio Report Schema: [`schemas/nw08-studio-report.schema.json`](../schemas/nw08-studio-report.schema.json)
 - NW-08 Verification Summary Schema: [`schemas/nw08-verification.schema.json`](../schemas/nw08-verification.schema.json)
+- NW-09 Checkpoint Schema: [`schemas/nw09-checkpoint.schema.json`](../schemas/nw09-checkpoint.schema.json)
+- NW-09 Export Report Schema: [`schemas/nw09-export-report.schema.json`](../schemas/nw09-export-report.schema.json)
+- NW-09 Cross-Device Temporal-State Evidence: [`benchmarks/nw09/hardware-evidence.json`](../benchmarks/nw09/hardware-evidence.json) (validated by [`schemas/nw09-hardware-evidence.schema.json`](../schemas/nw09-hardware-evidence.schema.json)); pending until identical stateful artifacts are captured on representative Ada/Blackwell hardware.
 - Upstream Measured-Evidence Status: [`benchmarks/evidence-status.json`](../benchmarks/evidence-status.json) (complete for recorded Windows/RTX captures)

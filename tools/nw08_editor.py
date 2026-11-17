@@ -193,6 +193,14 @@ def emit_graph_text(document: nw03_compiler.GraphDocument) -> str:
         seed_tokens = node.params.get("__seed__")
         if seed_tokens:
             lines.append("  seed " + " ".join(str(token) for token in seed_tokens))
+        if node.history is not None:
+            lines.append(
+                "  history "
+                f"state-type {_quote_token(node.history.state_type)} "
+                f"initial {_quote_token(node.history.initial_value)} "
+                f"reset {_quote_token(node.history.reset_policy)} "
+                f"step-rate {node.history.step_rate_hz}"
+            )
         for port in sorted(node.inputs):
             source_node, source_port = node.inputs[port]
             lines.append(f"  input {port} {source_node}.{source_port}")
@@ -314,6 +322,8 @@ def structural_hashes(
             "selected_outputs": list(node.selected_outputs),
             "inputs": inputs,
         }
+        if node.history is not None:
+            payload["history"] = node.history.canonical_dict()
         hashes[node_id] = sha256_value(payload)
     return hashes
 

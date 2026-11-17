@@ -63,6 +63,10 @@ struct PlayerConfig {
     // checked after native allocation requirements are queried and before any
     // bulk resource creation.
     std::uint64_t memory_budget_bytes = 0u;
+    // Zero means process every required 120 Hz History tick in the current
+    // presentation frame.  A non-zero cap leaves outstanding ticks scheduled
+    // and presents the last completed tick instead of dropping work.
+    std::uint32_t history_work_cap = 0u;
 };
 
 struct PlayerDiagnostic {
@@ -119,6 +123,11 @@ public:
     // Reads back the exact resource target of frame.present.  Diagnostic/
     // qualification only; returns the bytes written by the package shader.
     ExitCode readbackPresentedOutput(std::vector<std::uint8_t>* bytes);
+    // Reads back the player-owned R8G8B8A8 display texture after the offline
+    // display pass has converted the package RGBA32F buffer.  This qualifies
+    // the actual buffer -> texture presentation stage without changing the
+    // established frame.present resource contract.
+    ExitCode readbackDisplayOutput(std::vector<std::uint8_t>* bytes);
     ExitCode resize(std::uint32_t width, std::uint32_t height);
     ExitCode shutdown();
 
@@ -140,6 +149,18 @@ public:
     std::uint64_t shutdown_count() const noexcept { return shutdown_count_; }
     std::uint64_t frames_rendered() const noexcept { return frames_rendered_; }
     std::uint64_t last_tick() const noexcept { return last_tick_; }
+    std::uint64_t history_simulation_tick() const noexcept {
+        return history_simulation_tick_;
+    }
+    std::uint64_t history_pending_ticks() const noexcept {
+        return history_pending_ticks_;
+    }
+    std::uint64_t history_steps_executed() const noexcept {
+        return history_steps_executed_;
+    }
+    std::uint64_t history_loop_resets() const noexcept {
+        return history_loop_resets_;
+    }
     std::uint32_t last_timeline_parameter_id() const noexcept {
         return timeline_parameter_id_;
     }
@@ -335,6 +356,7 @@ private:
             SetRenderTargets,
             Barrier,
             Dispatch,
+            SimulationStep,
             ExecuteIndirect,
             Draw,
             CopyBuffer,
@@ -359,6 +381,7 @@ private:
         std::array<bool, package::kMaxRootSignatureDwordCost>
             descriptor_resource_is_srv{};
         std::uint32_t shader_id = 0u;
+        std::uint32_t history_state_id = 0u;
         std::uint32_t group_x = 1u;
         std::uint32_t group_y = 1u;
         std::uint32_t group_z = 1u;
@@ -366,6 +389,7 @@ private:
         std::uint32_t barrier_state = 0u;
         std::uint32_t constant_count = 0u;
         std::int32_t time_byte_offset = -1;
+        std::int32_t simulation_tick_byte_offset = -1;
         std::uint64_t byte_count = 0u;
         std::uint64_t tick_value = 0u;
         std::uint32_t max_draw_count = 1u;
@@ -389,6 +413,12 @@ private:
     };
     std::vector<FrameOp> frame_ops_;
     std::vector<std::string> last_frame_order_;
+    std::uint32_t history_work_cap_ = 0u;
+    std::uint64_t history_loop_ticks_ = 0u;
+    std::uint64_t history_simulation_tick_ = 0u;
+    std::uint64_t history_pending_ticks_ = 0u;
+    std::uint64_t history_steps_executed_ = 0u;
+    std::uint64_t history_loop_resets_ = 0u;
     std::unique_ptr<PlatformState> platform_;
 
 #if NW_PLAYER_DIAGNOSTICS

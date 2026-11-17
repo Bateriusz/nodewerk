@@ -144,9 +144,10 @@ class ExportSettings:
     fusion_enabled: bool = True
     fusion_max_nodes: int = optimizer.DEFAULT_FUSION_MAX_NODES
     fusion_max_expression_bytes: int = optimizer.DEFAULT_FUSION_MAX_EXPRESSION_BYTES
+    packaged_checkpoint_ticks: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "byte_ceiling": self.byte_ceiling,
             "memory_budget": self.memory_budget,
             "quantization_tolerance": self.quantization_tolerance,
@@ -166,6 +167,13 @@ class ExportSettings:
             "fusion_max_nodes": self.fusion_max_nodes,
             "fusion_max_expression_bytes": self.fusion_max_expression_bytes,
         }
+        # History-free exports keep the exact NW-08A report surface.  The
+        # checkpoint request is an explicit stateful-only extension.
+        if self.packaged_checkpoint_ticks:
+            payload["packaged_checkpoint_ticks"] = list(
+                self.packaged_checkpoint_ticks
+            )
+        return payload
 
 
 @dataclass
@@ -750,7 +758,10 @@ def generate_player_source(
     runtime_implementations = {
         str(item) for item in retained.get("runtime_implementations", [])
     }
-    nw06_runtime = (
+    temporal_fixed_step = (
+        "player.nw09.fixed-step-timeline" in runtime_implementations
+    )
+    nw06_runtime = not temporal_fixed_step and (
         "player.nw06.absolute-tick-camera" in runtime_implementations
     )
     timeline = manifest.get("timeline", {})
@@ -772,7 +783,62 @@ def generate_player_source(
             "NW-06 generated playback requires the fixed 48,000 Hz rational "
             "timeline"
         )
-    if nw06_runtime:
+    if temporal_fixed_step:
+        if ticks_per_second != 48_000:
+            raise ExportError(
+                "NW-09 generated playback requires the fixed 48,000 Hz "
+                "absolute timeline"
+            )
+        clock_includes = (
+            "#include \"player/clock_provider.h\"\n"
+            "#include <chrono>\n"
+            "#include <cstdint>\n"
+            "#include <thread>\n"
+        )
+        # Presentation cadence never selects the simulation tick: every frame
+        # converts monotonic wall time to the established 48,000-Hz absolute
+        # timeline and the PackagePlayer processes every required fixed tick
+        # in order.  A slower/irregular presentation rate therefore lags
+        # presentation, it does not slow simulation.
+        playback_loop = (
+            "    const auto playback_start = std::chrono::steady_clock::now();\n"
+            "    std::uint64_t presented_frames = 0u;\n"
+            "    std::uint64_t last_timeline_tick = 0u;\n"
+            "    bool have_tick = false;\n"
+            "    while (!player.window_closed()) {\n"
+            "        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(\n"
+            "            std::chrono::steady_clock::now() - playback_start);\n"
+            "        if (elapsed.count() < 0) {\n"
+            "            std::fprintf(stderr, \"NW09_CLOCK_BACKWARDS\\n\");\n"
+            "            return 70;\n"
+            "        }\n"
+            "        std::uint64_t tick = 0u;\n"
+            "        if (!nw::player::CheckedTicksFromNanoseconds(\n"
+            "                static_cast<std::uint64_t>(elapsed.count()),\n"
+            f"                {ticks_per_second}u, &tick)) {{\n"
+            "            std::fprintf(stderr, \"NW09_CLOCK_OVERFLOW\\n\");\n"
+            "            return 70;\n"
+            "        }\n"
+            "        if (!have_tick || tick != last_timeline_tick) {\n"
+            "            have_tick = true;\n"
+            "            last_timeline_tick = tick;\n"
+            "            const auto frame = player.renderAtTick(tick);\n"
+            "            if (frame != nw::player::ExitCode::Success) {\n"
+            "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+            "                return static_cast<int>(frame);\n"
+            "#else\n"
+            "                return player.Report(true);\n"
+            "#endif\n"
+            "            }\n"
+            "            ++presented_frames;\n"
+            "            if (max_frames != 0 && presented_frames >= max_frames) {\n"
+            "                break;\n"
+            "            }\n"
+            "        }\n"
+            "        std::this_thread::sleep_for(std::chrono::milliseconds(1));\n"
+            "    }\n"
+        )
+    elif nw06_runtime:
         clock_includes = (
             "#include \"player/clock_provider.h\"\n"
             "#include <chrono>\n"
@@ -1039,6 +1105,13 @@ def generate_player_source(
         "    std::printf(\"NW05_UAV_BARRIERS=%llu\\n\", static_cast<unsigned long long>(player.allocation_stats().uav_barrier_count));\n"
         "    std::printf(\"NW05_VALIDATION_ENABLED=%d\\n\", player.validation_enabled() ? 1 : 0);\n"
         "#endif\n"
+        + (
+            "    std::printf(\"NW05_HISTORY_SIMULATION_TICK=%llu\\n\", static_cast<unsigned long long>(player.history_simulation_tick()));\n"
+            "    std::printf(\"NW05_HISTORY_PENDING_TICKS=%llu\\n\", static_cast<unsigned long long>(player.history_pending_ticks()));\n"
+            if temporal_fixed_step
+            else ""
+        )
+        +
         "    std::printf(\"NW05_PRESENT_SYNC_INTERVAL=%u\\n\", config.present_sync_interval);\n"
         "    const auto shutdown = player.shutdown();\n"
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
@@ -2892,6 +2965,437 @@ def export_graph(
             for profile_id in KNOWN_PROFILES
             if profile_id != nwp.COMMON_PROFILE_ID
         ]
+
+    if nw03.document_has_history(document):
+        if optional_profiles:
+            raise ExportError(
+                "stateful NW-09 artifacts currently support only the common "
+                "capability profile",
+                dependency_path=["capability_profile", "stateful_extension"],
+            )
+        if settings.frozen_embedded_specialization:
+            # The frozen player compiles out History execution and its package
+            # decoder accepts only minor version 0, while this export emits
+            # the stateful minor version 1 extension.  Producing such an
+            # executable would create an artifact that cannot load its own
+            # embedded package, so reject the incompatible configuration.
+            raise ExportError(
+                "stateful NW-09 export requires the non-frozen History-capable "
+                "player configuration",
+                [
+                    nwp.package_diagnostic(
+                        "stateful_frozen_player_incompatible",
+                        "frozen_embedded_specialization cannot load a "
+                        "version-minor-1 stateful package",
+                    )
+                ],
+                dependency_path=[
+                    "stateful_extension",
+                    "specialized_player",
+                    "frozen_embedded_specialization",
+                ],
+            )
+        # NW-09 stateful content is an explicit additive extension of the
+        # established package/exporter path.  History-free documents never
+        # enter this branch and keep the frozen NW-08A byte baseline.
+        import nw09_export  # local import keeps the stateless path dependency-free
+        import nw09_temporal
+
+        try:
+            package, stateful_report = nw09_export.build_stateful_package(
+                document,
+                allow_test_payloads=allow_test_payloads,
+                frames_in_flight=settings.frames_in_flight,
+                packaged_checkpoint_ticks=settings.packaged_checkpoint_ticks,
+                dxc_executable=dxc_executable,
+                optimization=optimization,
+                allow_unpinned_dxc=allow_unpinned_dxc,
+                cache_dir=str(cache_dir) if cache_dir is not None else None,
+            )
+            package_bytes = nwp.encode_package(package)
+            valid, diagnostics = nwp.validate_package_bytes(package_bytes)
+            if not valid:
+                raise nw09_export.StatefulExportError(
+                    "stateful package bytes did not round-trip", diagnostics
+                )
+        except nw09_export.StatefulExportError as exc:
+            raise ExportError(
+                str(exc), exc.diagnostics, dependency_path=["stateful_extension"]
+            ) from exc
+        package_path = output_directory / "common.nwp"
+        logical_schedule = schedule.build_logical_schedule(
+            package, frames_in_flight=settings.frames_in_flight
+        )
+        stateful_geometry = nw09_export.present_geometry(document)
+        render_width = stateful_geometry[0] if stateful_geometry else 1280
+        render_height = stateful_geometry[1] if stateful_geometry else 720
+        # Match the established production export contract: publishing an
+        # artifact must not require an adapter to be present on the export
+        # host.  Without an explicit allocation query, record a conservative
+        # pending realization and let PackagePlayer perform the real adapter
+        # allocation query before runtime placement.  Test payloads may still
+        # use the deterministic simulated realization.
+        if allocation_query is None and not allow_test_payloads:
+            physical = schedule.pending_physical_realization(
+                logical_schedule,
+                adapter_identity="pending-native-adapter",
+                player_width=render_width,
+                player_height=render_height,
+            )
+        else:
+            physical = schedule.realize_physical_aliases(
+                logical_schedule,
+                package,
+                allocation_query=allocation_query,
+                adapter_identity=adapter_identity,
+                frames_in_flight=settings.frames_in_flight,
+                allow_simulated_allocation=allow_test_payloads,
+                player_width=render_width,
+                player_height=render_height,
+            )
+        template_path = (
+            Path(settings.player_template)
+            if settings.player_template
+            else None
+        )
+        template_bytes = (
+            template_path.read_bytes()
+            if template_path is not None and template_path.is_file()
+            else b""
+        )
+        if not allow_test_payloads and not template_bytes:
+            raise ExportError(
+                "production NW-09 stateful export requires a configured "
+                "Windows player template so the generated specialized main "
+                "can be compiled and linked",
+                dependency_path=["stateful_extension", "specialized_player", "template"],
+            )
+        runtime_dependencies, dependency_source = _runtime_dependencies(
+            package, template_bytes
+        )
+        # Reuse the established generated-player link manifest (including its
+        # link_metadata contract) and add only the explicit stateful/temporal
+        # extension fields.  generate_player_source validates link_metadata at
+        # startup, so a hand-built manifest without it would make the
+        # generated executable exit with NW05_LINK_METADATA_INVALID.
+        optimized = optimizer.optimize_graph(document)
+        shader_rows = [
+            (f"{shader.entry_point}:{shader.shader_id}", shader.target, len(shader.blob))
+            for shader in package.shaders
+        ]
+        requires_aliasing = any(
+            bool(group.get("aliased"))
+            or (
+                bool(group.get("pending"))
+                and len(group.get("resource_ids", ())) > 1
+            )
+            for group in physical.alias_groups
+        )
+        manifest = optimizer.build_link_manifest(
+            optimized,
+            package=package,
+            shader_blobs=shader_rows,
+            profile_id=nwp.COMMON_PROFILE_ID,
+            requirements_digest=nwp.COMMON_REQUIREMENTS_DIGEST,
+            requires_aliasing=requires_aliasing,
+            runtime_dependencies=runtime_dependencies,
+            memory_budget_bytes=settings.memory_budget,
+        )
+        manifest["format"] = "nw09-stateful-link-manifest"
+        manifest["version"] = 1
+        manifest["stateful_extension"] = {
+            "package_minor": nwp.VERSION_MINOR_STATEFUL,
+            "sections": [nwp.SECTION_HISTORY]
+            + (
+                [nwp.SECTION_CHECKPOINTS]
+                if package.release_checkpoints
+                else []
+            ),
+            "history": [record.to_dict() for record in package.history],
+            "checkpoints": [
+                record.to_dict() for record in package.release_checkpoints
+            ],
+            "checkpoint_byte_cost": stateful_report[
+                "packaged_checkpoint_byte_cost"
+            ],
+            "portable_gpu_state_replay": False,
+        }
+        manifest["artifact_profile_id"] = nwp.COMMON_PROFILE_ID
+        manifest["artifact_requirements_digest"] = nwp.COMMON_REQUIREMENTS_DIGEST
+        manifest["artifact_identity"] = artifact_key(
+            nwp.COMMON_PROFILE_ID,
+            nwp.COMMON_REQUIREMENTS_DIGEST,
+            emitted_requirements(package),
+        )
+        manifest["fixed_step"] = stateful_report["fixed_step"]
+        manifest["present_geometry"] = stateful_report["present_geometry"]
+        manifest["timeline"] = {
+            "ticks_per_second": 48_000,
+            "frame_step_numerator": 1,
+            "frame_step_denominator": 1,
+            "duration_ticks": 0,
+            "mode": "absolute",
+        }
+        manifest["dependencies_source"] = dependency_source
+        retained = manifest.setdefault("retained", {})
+        runtime_implementations = set(
+            retained.get("runtime_implementations", [])
+        )
+        runtime_implementations.update(
+            {
+                "player.nw09.fixed-step-timeline",
+                "player.nw09.stateful-history",
+            }
+        )
+        retained["runtime_implementations"] = sorted(runtime_implementations)
+        retained["dependencies"] = list(runtime_dependencies)
+        link_metadata = manifest.setdefault("link_metadata", {})
+        link_metadata.update(
+            {
+                "wave_ops": bool(
+                    manifest.get("feature_requirements", {}).get(
+                        "wave_ops", False
+                    )
+                ),
+                "fp16_shader_ops": bool(
+                    manifest.get("feature_requirements", {}).get(
+                        "fp16_shader_ops", False
+                    )
+                ),
+                "int64_shader_ops": bool(
+                    manifest.get("feature_requirements", {}).get(
+                        "int64_shader_ops", False
+                    )
+                ),
+                "memory_budget_bytes": int(settings.memory_budget),
+            }
+        )
+        _refresh_manifest_sha256(manifest)
+        manifest_data = optimizer.manifest_bytes(manifest)
+        specialized_player_bytes: bytes | None = None
+        if template_bytes and not allow_test_payloads:
+            # Reuse the established specialized-player generation and import
+            # accounting instead of shipping a bare package.  The generated
+            # main drives the same PackagePlayer stateful schedule.
+            preliminary_source = generate_player_source(
+                package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+                manifest_sha256=manifest["manifest_sha256"],
+                manifest=manifest,
+                memory_budget_bytes=settings.memory_budget,
+                width=render_width,
+                height=render_height,
+                present_sync_interval=settings.present_sync_interval,
+            )
+            preliminary_player = _build_specialized_player(
+                template_path,
+                preliminary_source,
+                manifest,
+                nwp.COMMON_PROFILE_ID,
+                build_root_override=(
+                    Path(settings.specialized_build_root)
+                    if settings.specialized_build_root
+                    else None
+                ),
+                frozen_embedded_specialization=settings.frozen_embedded_specialization,
+            )
+            actual_dependencies = _pe_runtime_dependencies(preliminary_player)
+            manifest["retained"]["dependencies"] = actual_dependencies
+            manifest["dependencies_source"] = "specialized-pe-imports"
+            _refresh_manifest_sha256(manifest)
+            manifest_data = optimizer.manifest_bytes(manifest)
+            final_source = generate_player_source(
+                package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+                manifest_sha256=manifest["manifest_sha256"],
+                manifest=manifest,
+                memory_budget_bytes=settings.memory_budget,
+                width=render_width,
+                height=render_height,
+                present_sync_interval=settings.present_sync_interval,
+            )
+            specialized_player_bytes = _build_specialized_player(
+                template_path,
+                final_source,
+                manifest,
+                nwp.COMMON_PROFILE_ID,
+                build_root_override=(
+                    Path(settings.specialized_build_root)
+                    if settings.specialized_build_root
+                    else None
+                ),
+                frozen_embedded_specialization=settings.frozen_embedded_specialization,
+            )
+            final_dependencies = _pe_runtime_dependencies(specialized_player_bytes)
+            if final_dependencies != actual_dependencies:
+                raise ExportError(
+                    "specialized executable dependency closure changed after "
+                    "final manifest linkage",
+                    dependency_path=["stateful_extension", "specialized_player", "imports"],
+                )
+            runtime_dependencies = final_dependencies
+            dependency_source = "specialized-pe-imports"
+        executable_bytes: bytes | None = None
+        executable_name = ""
+        if template_bytes:
+            player_image = (
+                template_bytes
+                if allow_test_payloads
+                else specialized_player_bytes
+            )
+            if player_image is None:
+                raise ExportError(
+                    "specialized player image is unavailable",
+                    dependency_path=["stateful_extension", "specialized_player", "output"],
+                )
+            embedded_manifest_payload = (
+                hashlib.sha256(manifest_data).digest()
+                if settings.frozen_embedded_specialization
+                else manifest_data
+            )
+            executable_bytes = embed_package(
+                player_image, package_bytes, embedded_manifest_payload
+            )
+            executable_name = "common.exe"
+        schedule_data = json.dumps(
+            logical_schedule.to_dict(), indent=2, sort_keys=True
+        ).encode("utf-8")
+        aliases_data = json.dumps(
+            physical.to_dict(), indent=2, sort_keys=True
+        ).encode("utf-8")
+        player_source = generate_player_source(
+            package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+            manifest_sha256=manifest["manifest_sha256"],
+            manifest=manifest,
+            memory_budget_bytes=settings.memory_budget,
+            width=render_width,
+            height=render_height,
+            present_sync_interval=settings.present_sync_interval,
+        ).encode("utf-8")
+        size_report = analyze_package_size(
+            package,
+            package_bytes,
+            manifest_bytes=len(manifest_data),
+            executable_bytes=(
+                len(executable_bytes) if executable_bytes else 0
+            ),
+            player_template_bytes=(
+                len(specialized_player_bytes)
+                if specialized_player_bytes is not None
+                else len(template_bytes)
+            ),
+            byte_ceiling=settings.byte_ceiling,
+            runtime_dependencies=runtime_dependencies,
+            dependency_source=dependency_source,
+            artifact_files={
+                "link-manifest.json": len(manifest_data),
+                "common.schedule.json": len(schedule_data),
+                "common.aliases.json": len(aliases_data),
+                "common.player.cpp": len(player_source),
+            },
+        )
+        size_report["stateful"] = {
+            "package_minor": package.version_minor,
+            "history_bytes": sum(
+                record.state_bytes for record in package.history
+            ),
+            "checkpoint_byte_cost": stateful_report[
+                "packaged_checkpoint_byte_cost"
+            ],
+            "pending_retirement_bytes": stateful_report[
+                "pending_retirement_bytes"
+            ],
+            "portable_gpu_state_replay": False,
+        }
+        stateful_memory_bytes = (
+            int(physical.peak_bytes)
+            + int(stateful_report["pending_retirement_bytes"])
+            + int(stateful_report["packaged_checkpoint_byte_cost"])
+        )
+        size_report["stateful"]["accounted_memory_bytes"] = stateful_memory_bytes
+        size_report["stateful"]["memory_budget_bytes"] = settings.memory_budget
+        if stateful_memory_bytes > settings.memory_budget:
+            raise ExportError(
+                "stateful export exceeds the declared memory budget",
+                [
+                    nwp.package_diagnostic(
+                        "export_memory_budget_exceeded",
+                        "state/checkpoint allocation plus pending-retirement "
+                        "bytes exceed the memory budget",
+                    )
+                ],
+                dependency_path=["budget", "stateful_extension", "memory_budget"],
+            )
+        if not size_report["distribution"]["within_byte_ceiling"]:
+            raise ExportError(
+                "artifact 'common' exceeds the byte ceiling "
+                f"({size_report['distribution']['total_distributed_bytes']} > "
+                f"{settings.byte_ceiling})",
+                [
+                    nwp.package_diagnostic(
+                        "export_byte_ceiling_exceeded",
+                        "distributed bytes exceed the configured ceiling",
+                    )
+                ],
+                dependency_path=["budget", "stateful_extension", "byte_ceiling"],
+            )
+        # Only publish an artifact after every budget check succeeded, so a
+        # rejected export cannot leave a partially updated stateful closure.
+        output_directory.mkdir(parents=True, exist_ok=True)
+        _write_bytes(package_path, package_bytes)
+        _write_bytes(output_directory / "link-manifest.json", manifest_data)
+        _write_bytes(
+            output_directory / "common.schedule.json", schedule_data
+        )
+        _write_bytes(output_directory / "common.aliases.json", aliases_data)
+        _write_bytes(output_directory / "common.player.cpp", player_source)
+        if executable_bytes is not None:
+            _write_bytes(output_directory / executable_name, executable_bytes)
+        _write_bytes(
+            output_directory / "size-report.json",
+            json.dumps(size_report, indent=2, sort_keys=True).encode("utf-8"),
+        )
+        stateful_report.update(
+            {
+                "success": True,
+                "output_directory": str(output_directory),
+                "package_path": str(package_path),
+                "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
+                "package_bytes": len(package_bytes),
+                "size_report": size_report,
+                "manifest_sha256": manifest["manifest_sha256"],
+                "checkpoint_byte_cost": stateful_report[
+                    "packaged_checkpoint_byte_cost"
+                ],
+            }
+        )
+        if report_path is not None:
+            _write_bytes(
+                Path(report_path),
+                json.dumps(
+                    stateful_report, indent=2, sort_keys=True
+                ).encode("utf-8"),
+            )
+        artifact = ProfileArtifact(
+            profile_id=nwp.COMMON_PROFILE_ID,
+            requirements_digest=nwp.COMMON_REQUIREMENTS_DIGEST,
+            emitted_requirements=emitted_requirements(package),
+            artifact_key=manifest["artifact_identity"],
+            package_bytes=package_bytes,
+            package=package,
+            manifest=manifest,
+            logical_schedule=logical_schedule,
+            physical_realization=physical,
+            size_report=size_report,
+            executable_bytes=executable_bytes,
+            executable_name=executable_name,
+            generation_decisions=(),
+        )
+        return ExportResult(
+            output_directory=str(output_directory),
+            settings=settings,
+            artifacts={nwp.COMMON_PROFILE_ID: artifact},
+            report=stateful_report,
+            common_artifact_key=manifest["artifact_identity"],
+        )
 
     try:
         optimized = optimizer.optimize_graph(
