@@ -184,7 +184,12 @@ $record = [ordered]@{
     }
 }
 $recordPath = Join-Path $output "capture.json"
-$record | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $recordPath -Encoding UTF8
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText(
+    $recordPath,
+    (($record | ConvertTo-Json -Depth 12) + [Environment]::NewLine),
+    $utf8NoBom
+)
 
 $publicOutput = Join-Path $output "runner-output.txt"
 Remove-Item $publicOutput -Force -ErrorAction SilentlyContinue
@@ -209,7 +214,11 @@ $resultManifest = [ordered]@{
     tier = $Tier
     files = $fileRows
 }
-$resultManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundleRoot "bundle-manifest.json") -Encoding UTF8
+[System.IO.File]::WriteAllText(
+    (Join-Path $bundleRoot "bundle-manifest.json"),
+    (($resultManifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
+    $utf8NoBom
+)
 
 $zip = Join-Path $output ("nw10-correctness-" + $Tier + "-bundle.zip")
 Remove-Item $zip -Force -ErrorAction SilentlyContinue

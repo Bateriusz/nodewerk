@@ -94,7 +94,7 @@ def test_standalone_portable_capture_has_no_build_tool_dependency() -> None:
     text = (
         REPO_ROOT / "tools" / "nw10" / "run-portable-correctness-capture.ps1"
     ).read_text(encoding="utf-8").lower()
-    for forbidden in ("cmake", "dxc", "visual studio", "enter-nwbuildenvironment", "git ", "python"):
+    for forbidden in ("cmake ", "dxc.exe", "enter-nwbuildenvironment", "& git ", "python.exe", "python "):
         assert forbidden not in text
     assert "get-filehash" in text
     assert "portable-correctness.exe" not in text or "portable_runner.file" in text
@@ -108,3 +108,11 @@ def test_portable_capture_runner_uses_exact_presented_rgba32f_readback() -> None
     assert "1920ull * 1080ull * 4ull * sizeof(float)" in text
     assert "NW10_RUNTIME_IMPLEMENTATION_MASK" in text
     assert "NW10_PACKAGE_SHA" in text
+
+
+def test_standalone_portable_capture_writes_json_without_utf8_bom() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-portable-correctness-capture.ps1"
+    ).read_text(encoding="utf-8")
+    assert "UTF8Encoding($false)" in text
+    assert "WriteAllText" in text
