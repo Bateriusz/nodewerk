@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-system-validation.schema.json",
+  "title": "Nodewerk NW-10 physical system validation",
+  "type": "object",
+  "required": ["format", "version", "task", "status", "final_artifact", "startup", "memory", "clean_system", "privacy"],
+  "properties": {
+    "format": {"const": "nw10-system-validation"},
+    "version": {"const": 1},
+    "task": {"const": "NW-10"},
+    "status": {"const": "verified"},
+    "final_artifact": {
+      "type": "object",
+      "required": ["executable_sha256", "executable_bytes", "package_sha256", "manifest_sha256"],
+      "properties": {
+        "executable_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "executable_bytes": {"type": "integer", "minimum": 1},
+        "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "startup": {
+      "type": "object",
+      "required": ["status", "protocol", "execution_kind", "hardware", "cache_state", "warm_preparation", "cold_driver_cache_preparation", "measurement_method", "process_start_to_first_present_ms", "ceiling_ms"],
+      "properties": {
+        "status": {"const": "verified"},
+        "protocol": {"const": "nw07-startup.v1"},
+        "execution_kind": {"const": "physical"},
+        "process_start_to_first_present_ms": {"type": "number", "minimum": 0, "maximum": 2000},
+        "ceiling_ms": {"const": 2000.0},
+        "cache_state": {
+          "type": "object",
+          "required": ["kind", "application_pipeline_cache_used"],
+          "properties": {
+            "kind": {"enum": ["cold_driver_cache", "warm"]},
+            "application_pipeline_cache_used": {"const": false}
+          }
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "required": ["status", "execution_kind", "package_sha256", "peak_engine_committed_gpu_bytes", "ceiling_bytes", "post_initialization_allocation_violation", "measurement_source"],
+      "properties": {
+        "status": {"const": "verified"},
+        "execution_kind": {"const": "physical"},
+        "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "peak_engine_committed_gpu_bytes": {"type": "integer", "minimum": 0, "maximum": 536870912},
+        "ceiling_bytes": {"const": 536870912},
+        "post_initialization_allocation_violation": {"const": 0}
+      }
+    },
+    "clean_system": {
+      "type": "object",
+      "required": ["status", "execution_kind", "captured_at_utc", "source_result_bundle_sha256", "host", "hardware", "development_dependencies_present_on_path", "environment_cache_variables", "deployment", "scenarios"],
+      "properties": {
+        "status": {"const": "verified"},
+        "execution_kind": {"const": "physical"},
+        "source_result_bundle_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "development_dependencies_present_on_path": {"type": "array", "maxItems": 0},
+        "environment_cache_variables": {"type": "array", "maxItems": 0},
+        "deployment": {
+          "type": "object",
+          "required": ["only_runtime_executable", "sidecars", "executable_sha256", "executable_bytes", "forbidden_runtime_dependencies"],
+          "properties": {
+            "only_runtime_executable": {"const": true},
+            "sidecars": {"type": "array", "maxItems": 0},
+            "forbidden_runtime_dependencies": {"type": "array", "maxItems": 0},
+            "executable_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        "scenarios": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "required": ["scenario", "expected_exit_code", "observed_exit_code", "status", "timed_out"],
+            "properties": {
+              "scenario": {"enum": ["corrupt_payload", "deployed_startup", "missing_required_feature", "initialization_failure", "resize", "device_removal"]},
+              "status": {"const": "passed"},
+              "timed_out": {"const": false}
+            }
+          }
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": ["local_paths_included", "raw_stdout_stderr_included", "user_profile_paths_included", "raw_result_bundle_tracked"],
+      "properties": {
+        "local_paths_included": {"const": false},
+        "raw_stdout_stderr_included": {"const": false},
+        "user_profile_paths_included": {"const": false},
+        "raw_result_bundle_tracked": {"const": false}
+      }
+    }
+  }
+}
