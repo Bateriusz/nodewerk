@@ -263,6 +263,53 @@ Repeat the correctness command with `--tier blackwell`. A virtual machine is
 not sufficient; use `physical` or documented GPU passthrough semantics from the
 NW-07 contract.
 
+### Scripted physical-evidence publication
+
+Physical capture output stays under `build/` or in transfer ZIPs. Publication is
+fail-closed and writes only privacy-safe summaries under `benchmarks/nw10/`.
+
+Matched Ada performance remains the first step and already supports publication,
+schema validation, controlled staging, commit, and push:
+
+```powershell
+pwsh ./tools/nw10/run-performance-evidence.ps1 -Commit
+```
+
+After Ada and Blackwell correctness bundles have been captured, compare and
+publish them in one command. Raw RGBA32F captures and capture manifests are not
+tracked:
+
+```powershell
+pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare -AdaRecord build/nw10-correctness-scripted/ada/capture.json -AdaCaptures build/nw10-correctness-scripted/ada/captures -BlackwellRecord build/nw10-correctness-scripted/blackwell/capture.json -BlackwellCaptures build/nw10-correctness-scripted/blackwell/captures -Publish -Commit
+```
+
+The correctness publisher validates the cross-hardware comparison, removes raw
+capture material, audits user/profile paths and forbidden tokens, validates the
+published summary against
+`schemas/nw10-common-artifact-correctness.schema.json`, updates
+`evidence-status.v1.json`, stages only the two allowed tracked evidence files,
+and optionally pushes when `-Push` is explicitly supplied.
+
+Clean-system/system publication consumes the transferred physical result ZIP,
+fresh physical metrics JSON, and the exact final intro export report. It verifies
+every result-bundle file against the embedded manifest before publishing:
+
+```powershell
+pwsh ./tools/nw10/publish-system-evidence.ps1 -CleanSystemBundle build/nw10-clean-system-result.zip -Metrics build/nw10-system-metrics.json -IntroReport build/nw10-intro/report.json -Commit
+```
+
+The metrics JSON is the fresh collector output used by the NW-07/NW-10 physical
+capture path. Its `measurements` object must bind startup and engine-committed
+memory to the exact physical run and retain
+`post_initialization_allocation_violation=0`; missing or out-of-budget values
+fail publication. The system publisher extracts only sanitized host/GPU
+identity and scenario results from the clean-system ZIP. Raw stdout/stderr,
+local paths, and the result ZIP itself are never tracked.
+
+Both publishers require a clean tracked tree (build outputs are allowed), the
+expected `agent/NW-10` branch, schema-valid output, `git diff --check`, and
+an allowlist of staged evidence paths. `-Push` always requires `-Commit`.
+
 ## Byte-accounting policy
 
 A complete runnable distribution is exactly one executable. The package,
