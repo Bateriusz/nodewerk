@@ -1,9 +1,9 @@
 {
   "ada_correctness": "verified",
   "blackwell_correctness": "verified",
-  "clean_system": "pending_unverified",
+  "clean_system": "verified",
   "contract_evidence": "verified_by_pytest",
-  "evidence_status": "performance_compact_and_correctness_verified_system_pending",
+  "evidence_status": "verified_complete",
   "files": [
     {
       "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
@@ -30,6 +30,10 @@
       "sha256": "034f3883ca35451e9fe737c6ec1defed856cb6aebd043721ad7543131e9697b4"
     },
     {
+      "path": "benchmarks/nw10/system-validation.v1.json",
+      "sha256": "22bdfcdccd8955c30116078e5788424b6ed473671b77ea590027520a4a394340"
+    },
+    {
       "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
       "sha256": "fc9e52705ab333b850a9405b967fbfadefc39d8af4cf08a6d91df9edd3bceddb"
     }
@@ -37,16 +41,16 @@
   "format": "nw10-evidence-status",
   "frame_time": "verified_preserved",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
-  "memory": "pending_unverified",
+  "memory": "verified",
   "performance_preservation": {
     "path": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
     "reference_binding_id": "nw07_perf_ref_v1@sha256:v1:7ae69188e641ee9cebfa5c5b55c718a36eb271f202ca30ab4f89684c3284a075",
     "sha256": "a3b2133e94dff980cbcfcf9f72b4042bbf5ff7292c26793ce721b6e6b1676f34",
     "status": "verified_preserved"
   },
-  "physical_evidence": "performance_and_correctness_verified",
+  "physical_evidence": "performance_correctness_and_system_verified",
   "reference_capture": "verified_reference_capture",
-  "startup": "pending_unverified",
+  "startup": "verified",
   "task": "NW-10",
   "version": 1,
   "compact_feasibility": {
@@ -66,5 +70,12 @@
     "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
     "worst_absolute_error": 0,
     "worst_relative_error": 0
+  },
+  "system_validation": {
+    "status": "verified",
+    "path": "benchmarks/nw10/system-validation.v1.json",
+    "sha256": "22bdfcdccd8955c30116078e5788424b6ed473671b77ea590027520a4a394340",
+    "final_executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
+    "package_sha256": "e1b3187225908d340f7e3910b20459784e61466fa2c6eadb5d1782ae13db763b"
   }
 }
