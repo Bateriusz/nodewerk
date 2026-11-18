@@ -205,78 +205,39 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         / "nw10"
         / "performance-preservation-rtx4060ti.v1.json"
     )
-    if performance_path.is_file():
+    if status["evidence_status"] == "verified_complete":
+        assert performance_path.is_file()
         compact_physical_path = (
             REPO_ROOT
             / "benchmarks"
             / "nw10"
             / "windows-compact-feasibility.v1.json"
         )
-        if compact_physical_path.is_file():
-            assert (
-                status["evidence_status"]
-                == "verified_complete"
-            )
-            assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
-        else:
-            assert status["evidence_status"] == "performance_verified_correctness_pending"
+        assert compact_physical_path.is_file()
+        assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
         assert status["physical_evidence"] == "performance_correctness_and_system_verified"
         assert status["clean_system"] == "verified"
         assert status["startup"] == "verified"
         assert status["memory"] == "verified"
         system = json.loads(system_path.read_text(encoding="utf-8"))
         assert system["status"] == "verified"
-        assert system["final_artifact"]["executable_sha256"] == "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
-        assert system["startup"]["process_start_to_first_present_ms"] == 240.839
-        assert system["memory"]["peak_engine_committed_gpu_bytes"] == 42_926_080
-        assert system["clean_system"]["hardware"]["adapter_description"] == "NVIDIA GeForce RTX 5070 Ti"
-        assert system["privacy"]["local_paths_included"] is False
         pe_ledger = json.loads(pe_ledger_path.read_text(encoding="utf-8"))
         assert pe_ledger["status"] == "verified"
-        assert pe_ledger["final_artifact"]["executable_sha256"] == "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
-        assert pe_ledger["linker_elimination"]["complete_distribution_bytes_saved"] == 715_776
-        assert pe_ledger["compact_decoder"]["template_bytes_added"] == 3_584
         assert pe_ledger["conclusion"]["byte_ledger_complete"] is True
-        assert status["pe_ledger"]["status"] == "verified"
         assert status["reference_capture"] == "verified_reference_capture"
         assert status["frame_time"] == "verified_preserved"
-        correctness_path = (
-            REPO_ROOT
-            / "benchmarks"
-            / "nw10"
-            / "common-artifact-correctness.v1.json"
-        )
-        correctness = json.loads(correctness_path.read_text(encoding="utf-8"))
-        assert correctness["format"] == "nw10-common-artifact-correctness-summary"
-        assert correctness["status"] == "verified"
-        assert correctness["common_artifact"]["package_sha256"] == (
-            status["correctness_evidence"]["package_sha256"]
-        )
-        assert correctness["ada"]["status"] == "verified"
-        assert correctness["blackwell"]["status"] == "verified"
-        assert correctness["comparison"]["fixed_tick_status"] == "passed"
-        assert correctness["comparison"]["ada_loop_boundary_status"] == "passed"
-        assert correctness["comparison"]["blackwell_loop_boundary_status"] == "passed"
-        assert correctness["comparison"]["worst_absolute_error"] == 0.0
-        assert correctness["comparison"]["worst_relative_error"] == 0.0
-        assert correctness["privacy"]["raw_capture_bytes_embedded"] is False
-        assert correctness["privacy"]["local_paths_included"] is False
-        preservation = json.loads(performance_path.read_text(encoding="utf-8"))
-        assert preservation["format"] == "nw10-performance-preservation"
-        assert preservation["status"] == "verified_preserved"
-        assert preservation["matched_environment"] is True
-        assert preservation["comparison"]["same_canonical_package_sha256"] is True
-        assert preservation["comparison"]["faster_substitute_used"] is False
-        assert preservation["privacy"]["raw_samples_included"] is False
-        assert preservation["privacy"]["local_paths_included"] is False
-        validate_file_against_schema(
-            performance_path,
-            REPO_ROOT / "schemas" / "nw10-performance-preservation.schema.json",
-        )
     else:
         assert status["evidence_status"] == "pending_physical_windows_capture"
+        assert status["physical_evidence"] == "pending"
         assert status["reference_capture"] == "pending_reference_capture"
         assert status["frame_time"] == "pending_unverified"
+        assert status["clean_system"] == "pending_unverified"
+        assert status["startup"] == "pending_unverified"
+        assert status["memory"] == "pending_unverified"
+        assert (
+            status["superseded_physical_evidence"]["invalidated_executable_sha256"]
+            == "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+        )
     for item in status["files"]:
         path = REPO_ROOT / item["path"]
         assert _canonical_text_sha256(path) == item["sha256"]
@@ -385,10 +346,11 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
             encoding="utf-8"
         )
     )
-    assert status["evidence_status"] == "verified_complete"
-    assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
-    assert status["compact_feasibility"]["target_met"] is False
-    assert status["compact_feasibility"]["minimum_measured_candidate_bytes"] == 219_710
-    assert status["compact_feasibility"]["minimum_validated_runnable_bytes"] == 222_058
-    assert status["ada_correctness"] == "verified"
-    assert status["blackwell_correctness"] == "verified"
+    assert status["evidence_status"] == "pending_physical_windows_capture"
+    assert "compact_feasibility" not in status
+    assert status["ada_correctness"] == "pending_unverified"
+    assert status["blackwell_correctness"] == "pending_unverified"
+    assert (
+        status["superseded_physical_evidence"]["invalidated_executable_sha256"]
+        == record["canonical_fallback"]["sha256"]
+    )
