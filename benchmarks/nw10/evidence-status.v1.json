@@ -1,93 +1,30 @@
 {
-  "ada_correctness": "verified",
-  "blackwell_correctness": "verified",
-  "clean_system": "verified",
+  "ada_correctness": "pending_unverified",
+  "blackwell_correctness": "pending_unverified",
+  "clean_system": "pending_unverified",
   "contract_evidence": "verified_by_pytest",
-  "evidence_status": "verified_complete",
+  "evidence_status": "pending_physical_windows_capture",
   "files": [
     {
-      "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
-      "sha256": "b9eae9f51198f86789f3c32f11a38cb692d4cd7c95e1ecf772c115a70d9b1b96"
-    },
-    {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "9100a0e6d836c21a9a26138dcfcbed64d9b3b09416896d39956cd4ab307e09f7"
-    },
-    {
-      "path": "benchmarks/nw10/intro-export-report.v1.json",
-      "sha256": "e49c851cc08e83f131950e28199516386e37a6167583248dc54ff126f10844f5"
+      "sha256": "8ee9c855bc0d1840589370da60451300ca39a1ce013806b1eb0fd0a0163715b7"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "a6714d0f1e1e55f3d2a9dedd3babc98ba2b8dc58bd1693c41ea937eac13976a7"
-    },
-    {
-      "path": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
-      "sha256": "a3b2133e94dff980cbcfcf9f72b4042bbf5ff7292c26793ce721b6e6b1676f34"
-    },
-    {
-      "path": "benchmarks/nw10/proof-export-report.v1.json",
-      "sha256": "034f3883ca35451e9fe737c6ec1defed856cb6aebd043721ad7543131e9697b4"
-    },
-    {
-      "path": "benchmarks/nw10/system-validation.v1.json",
-      "sha256": "22bdfcdccd8955c30116078e5788424b6ed473671b77ea590027520a4a394340"
-    },
-    {
-      "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-      "sha256": "fc9e52705ab333b850a9405b967fbfadefc39d8af4cf08a6d91df9edd3bceddb"
-    },
-    {
-      "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
-      "sha256": "527321217bca6673ddbc4cec456d4ddffc3913cee4f39e759aa9ebddd4f34dce"
+      "sha256": "47cbf5d734ae602e05364aaaf0d9c045da490a1ef6c904f7019d609cd60787bb"
     }
   ],
   "format": "nw10-evidence-status",
-  "frame_time": "verified_preserved",
+  "frame_time": "pending_unverified",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
-  "memory": "verified",
-  "performance_preservation": {
-    "path": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
-    "reference_binding_id": "nw07_perf_ref_v1@sha256:v1:7ae69188e641ee9cebfa5c5b55c718a36eb271f202ca30ab4f89684c3284a075",
-    "sha256": "a3b2133e94dff980cbcfcf9f72b4042bbf5ff7292c26793ce721b6e6b1676f34",
-    "status": "verified_preserved"
+  "memory": "pending_unverified",
+  "physical_evidence": "pending",
+  "reference_capture": "pending_reference_capture",
+  "startup": "pending_unverified",
+  "superseded_physical_evidence": {
+    "invalidated_executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
+    "reason": "Previous physical/system evidence certified the invalid gradient placeholder artifact. Corrected SDF release evidence must be recaptured before NW-10 can return to verified_complete."
   },
-  "physical_evidence": "performance_correctness_and_system_verified",
-  "reference_capture": "verified_reference_capture",
-  "startup": "verified",
   "task": "NW-10",
-  "version": 1,
-  "compact_feasibility": {
-    "status": "verified_windows_runtime",
-    "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-    "sha256": "fc9e52705ab333b850a9405b967fbfadefc39d8af4cf08a6d91df9edd3bceddb",
-    "source_run_id": 44181057725,
-    "target_met": false,
-    "minimum_measured_candidate_bytes": 219710,
-    "minimum_validated_runnable_bytes": 222058,
-    "validated_mode": "canonical_fallback"
-  },
-  "correctness_evidence": {
-    "status": "verified",
-    "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
-    "sha256": "b9eae9f51198f86789f3c32f11a38cb692d4cd7c95e1ecf772c115a70d9b1b96",
-    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
-    "worst_absolute_error": 0,
-    "worst_relative_error": 0
-  },
-  "system_validation": {
-    "status": "verified",
-    "path": "benchmarks/nw10/system-validation.v1.json",
-    "sha256": "22bdfcdccd8955c30116078e5788424b6ed473671b77ea590027520a4a394340",
-    "final_executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
-    "package_sha256": "e1b3187225908d340f7e3910b20459784e61466fa2c6eadb5d1782ae13db763b"
-  },
-  "pe_ledger": {
-    "status": "verified",
-    "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
-    "sha256": "527321217bca6673ddbc4cec456d4ddffc3913cee4f39e759aa9ebddd4f34dce",
-    "final_executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
-    "linker_elimination_bytes_saved": 715776,
-    "compact_decoder_template_bytes_added": 3584
-  }
+  "version": 1
 }
