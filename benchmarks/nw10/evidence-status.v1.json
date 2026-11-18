@@ -11,7 +11,7 @@
     },
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "744a45e5d1073d8521377cf3334b4363ca26811a0320eef28415e469549ded1f"
+      "sha256": "9100a0e6d836c21a9a26138dcfcbed64d9b3b09416896d39956cd4ab307e09f7"
     },
     {
       "path": "benchmarks/nw10/intro-export-report.v1.json",
