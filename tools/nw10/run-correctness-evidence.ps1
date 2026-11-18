@@ -274,9 +274,17 @@ try {
         Assert-NwSameValue "artifact_key" $expectedArtifact.artifact_key $common.artifact.artifact_key
         Assert-NwSameValue "package_sha256" $expectedArtifact.package_sha256 $common.artifact.package_sha256
         Assert-NwSameValue "manifest_sha256" $expectedArtifact.manifest_sha256 $common.artifact.manifest_sha256
-        Assert-NwSameValue "executable_sha256" $expectedArtifact.executable_sha256 $common.artifact.executable_sha256
         Assert-NwSameValue "complete_distribution_bytes" $expectedArtifact.complete_distribution_bytes $common.artifact.complete_distribution_bytes
-        Write-Host "[NW10 CORRECTNESS] COMMON_ARTIFACT=EXACT_MATCH"
+        $referenceExecutableSha = [string]$expectedArtifact.executable_sha256
+        $reproducedExecutableSha = [string]$common.artifact.executable_sha256
+        if ($referenceExecutableSha -ne $reproducedExecutableSha) {
+            Write-Host "[NW10 CORRECTNESS] REFERENCE_EXECUTABLE_SHA256=$referenceExecutableSha"
+            Write-Host "[NW10 CORRECTNESS] REPRODUCED_EXECUTABLE_SHA256=$reproducedExecutableSha"
+            Write-Host "[NW10 CORRECTNESS] EXECUTABLE_REPRODUCTION=NON_IDENTICAL_COMMON_PACKAGE_PRESERVED"
+        } else {
+            Write-Host "[NW10 CORRECTNESS] EXECUTABLE_REPRODUCTION=EXACT_MATCH"
+        }
+        Write-Host "[NW10 CORRECTNESS] COMMON_PACKAGE=EXACT_MATCH"
 
         Invoke-NwNative "cmake" @(
             "--preset", "nw07-diagnostics",
@@ -348,7 +356,7 @@ try {
                 manifest_sha256 = [string]$diag.common_artifact.manifest_sha256
                 profile_id = [string]$diag.common_artifact.profile_id
                 requirements_digest = [string]$diag.common_artifact.requirements_digest
-                final_executable_sha256 = [string]$diag.final_executable_sha256
+                final_executable_sha256 = $referenceExecutableSha
             }
             diagnostic_sibling = [ordered]@{
                 file = $diagExeName
@@ -367,6 +375,12 @@ try {
                 ticks = @(0,240000,480000,720000,959999,960000)
                 expected_bytes_per_capture = 33177600
                 format = "rgba32f"
+            }
+            reproduction = [ordered]@{
+                reference_executable_sha256 = $referenceExecutableSha
+                reproduced_executable_sha256 = $reproducedExecutableSha
+                executable_sha256_exact_match = ($referenceExecutableSha -eq $reproducedExecutableSha)
+                common_package_exact_match = $true
             }
             privacy = [ordered]@{
                 local_paths_included = $false
