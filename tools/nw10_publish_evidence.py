@@ -128,9 +128,10 @@ def _artifact_from_intro_report(report: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _load_clean_bundle(path: Path) -> tuple[dict[str, Any], str]:
+def _load_clean_bundle(path: Path) -> tuple[dict[str, Any], str, dict[str, bytes]]:
     raw = path.read_bytes()
     bundle_sha = _sha256_bytes(raw)
+    retained: dict[str, bytes] = {}
     with zipfile.ZipFile(path, "r") as archive:
         names = archive.namelist()
         if "bundle-manifest.json" not in names:
@@ -157,6 +158,7 @@ def _load_clean_bundle(path: Path) -> tuple[dict[str, Any], str]:
                 raise ValueError(f"clean-system bundle size mismatch: {name}")
             if _sha256_bytes(data) != str(row.get("sha256", "")).lower():
                 raise ValueError(f"clean-system bundle hash mismatch: {name}")
+            retained[name] = data
         if "clean-system-report.json" not in names:
             raise ValueError("clean-system result bundle has no report")
         report = json.loads(
@@ -164,7 +166,39 @@ def _load_clean_bundle(path: Path) -> tuple[dict[str, Any], str]:
         )
     if not isinstance(report, dict):
         raise ValueError("clean-system report is not a JSON object")
-    return report, bundle_sha
+    return report, bundle_sha, retained
+
+
+def _runtime_hardware_from_bundle(files: Mapping[str, bytes]) -> dict[str, Any]:
+    values: dict[str, str] = {}
+    for name, data in files.items():
+        if not name.endswith(".stdout.txt"):
+            continue
+        text = data.decode("utf-8", errors="replace")
+        for line in text.splitlines():
+            if not line.startswith("NW_PLAYER_") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values.setdefault(key, value.strip())
+    result: dict[str, Any] = {}
+    mapping = {
+        "NW_PLAYER_ADAPTER_DESCRIPTION": "adapter_description",
+        "NW_PLAYER_ADAPTER_GENERATION": "adapter_generation",
+        "NW_PLAYER_DRIVER_VERSION": "driver_version",
+    }
+    for source, target in mapping.items():
+        if values.get(source):
+            result[target] = values[source]
+    for source, target in (
+        ("NW_PLAYER_ADAPTER_VENDOR_ID", "vendor_id"),
+        ("NW_PLAYER_ADAPTER_DEVICE_ID", "device_id"),
+    ):
+        if values.get(source):
+            try:
+                result[target] = int(values[source], 0)
+            except ValueError:
+                pass
+    return result
 
 
 def _clean_summary(
@@ -172,6 +206,7 @@ def _clean_summary(
     *,
     bundle_sha256: str,
     artifact: Mapping[str, Any],
+    runtime_hardware: Mapping[str, Any],
 ) -> dict[str, Any]:
     if report.get("verification_status") != "verified":
         raise ValueError("clean-system result is not verified")
@@ -218,13 +253,17 @@ def _clean_summary(
     probe = host.get("virtualization_probe")
     if not isinstance(probe, Mapping):
         raise ValueError("clean-system virtualization probe is absent")
-    hardware = report.get("artifact", {}).get("hardware")
-    if not isinstance(hardware, Mapping):
-        # The verified report records adapter identity in scenario/runtime output on
-        # older captures. New transferred captures may retain it directly on host.
-        hardware = host.get("hardware")
-    if not isinstance(hardware, Mapping):
-        hardware = {}
+    hardware = dict(runtime_hardware)
+    if not hardware:
+        artifact_record = report.get("artifact")
+        if isinstance(artifact_record, Mapping):
+            candidate = artifact_record.get("hardware")
+            if isinstance(candidate, Mapping):
+                hardware = dict(candidate)
+    if not hardware:
+        candidate = host.get("hardware")
+        if isinstance(candidate, Mapping):
+            hardware = dict(candidate)
     return {
         "status": "verified",
         "execution_kind": "physical",
@@ -432,11 +471,14 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
 def publish_system(args: argparse.Namespace) -> dict[str, Any]:
     intro = _load(Path(args.intro_report))
     artifact = _artifact_from_intro_report(intro)
-    clean_report, clean_bundle_sha = _load_clean_bundle(
+    clean_report, clean_bundle_sha, clean_files = _load_clean_bundle(
         Path(args.clean_system_bundle)
     )
     clean = _clean_summary(
-        clean_report, bundle_sha256=clean_bundle_sha, artifact=artifact
+        clean_report,
+        bundle_sha256=clean_bundle_sha,
+        artifact=artifact,
+        runtime_hardware=_runtime_hardware_from_bundle(clean_files),
     )
     metrics = _load(Path(args.metrics))
     metadata = metrics.get("metadata")
