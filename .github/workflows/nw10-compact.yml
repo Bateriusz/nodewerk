@@ -158,6 +158,28 @@ jobs:
             universal_64k_claim = $false
           }
           $outcome | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 "$PWD/build/nw10-windows-size-outcome.json"
+      - name: Diagnose SDF package through generic PackagePlayer fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $runtimeDir = Join-Path $PWD "build/nw10-runtime"
+          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+          $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+          $fixture = Join-Path $PWD "build/nw07-release/staging/package_player/nw_package_player_fixture.exe"
+          $package = Join-Path $PWD "build/nw10-intro/$stem.nwp"
+          if (-not (Test-Path $fixture -PathType Leaf)) { throw "PackagePlayer fixture missing: $fixture" }
+          if (-not (Test-Path $package -PathType Leaf)) { throw "SDF package missing: $package" }
+          $stdout = Join-Path $runtimeDir "sdf-generic-fixture.stdout.txt"
+          $stderr = Join-Path $runtimeDir "sdf-generic-fixture.stderr.txt"
+          $proc = Start-Process -FilePath $fixture -ArgumentList "--package",$package,"--frames","1","--tick-start","0","--tick-step","800","--width","1920","--height","1080","--emit-benchmark-metrics","--emit-image-hash" -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+          [ordered]@{
+            exit_code = [int]$proc.ExitCode
+            package_sha256 = (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
+            fixture_sha256 = (Get-FileHash -Algorithm SHA256 $fixture).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $runtimeDir "sdf-generic-fixture-result.json")
+          Write-Host "NW-10 generic PackagePlayer SDF diagnostic exit=$($proc.ExitCode)"
+          if (Test-Path $stdout) { Get-Content $stdout }
+          if (Test-Path $stderr) { Get-Content $stderr }
       - name: Validate compact candidate, preserve canonical fallback, and check closure
         shell: pwsh
         run: |
