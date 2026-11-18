@@ -84,7 +84,7 @@ float3 acesTonemap(float3 color)
     return saturate(numerator / max(denominator, 1.0e-5));
 }
 
-float4 sampleMaterial(float2 uv, float seed)
+float4 sampleMaterial(float2 uv)
 {
     uint width = 0u;
     uint height = 0u;
@@ -93,7 +93,7 @@ float4 sampleMaterial(float2 uv, float seed)
     {
         return float4(0.72, 0.78, 0.86, 1.0);
     }
-    float2 wrapped = frac(uv * 3.0 + seed * 0.137);
+    float2 wrapped = frac(uv * 3.0 + float2(0.173, 0.419));
     int2 texel = int2(min(wrapped * float2(width, height), float2(width, height) - 1.0));
     float4 value = nw_input.Load(int3(texel, 0));
     return lerp(float4(0.42, 0.52, 0.72, 1.0), value, 0.35);
@@ -156,7 +156,7 @@ void SDFIntroCS(uint3 dispatch_id : SV_DispatchThreadID)
         float3 normal = estimateNormal(p);
         float3 light_direction = normalize(float3(-0.4, -1.0, -0.3));
         float ndotl = saturate(dot(normal, -light_direction));
-        float3 material_color = sampleMaterial(uv + 0.05 * normal.xy, g_params[0].y).rgb;
+        float3 material_color = sampleMaterial(uv + 0.05 * normal.xy).rgb;
         float rim = pow(1.0 - saturate(dot(normal, -ray_direction)), 2.2);
         float3 diffuse = material_color * (0.18 + 0.82 * ndotl);
         float3 specular = float3(1.0, 0.93, 0.82) * pow(saturate(dot(normal, normalize(-light_direction - ray_direction))), 48.0) * 0.35;
