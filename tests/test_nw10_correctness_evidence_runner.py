@@ -104,6 +104,23 @@ def test_correctness_runner_supports_prebuilt_diagnostic_transfer() -> None:
     assert "TARGET_DEBUG_CRT_DEPENDENCIES=" in text
 
 
+def test_transfer_allows_non_identical_rebuilt_pe_when_common_package_matches() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
+    ).read_text(encoding="utf-8")
+    transfer_block = text[text.index("if ($PrepareTransferBundle)") : text.index("if ($Compare)")]
+
+    assert 'Assert-NwSameValue "artifact_key"' in transfer_block
+    assert 'Assert-NwSameValue "package_sha256"' in transfer_block
+    assert 'Assert-NwSameValue "manifest_sha256"' in transfer_block
+    assert 'Assert-NwSameValue "complete_distribution_bytes"' in transfer_block
+    assert 'Assert-NwSameValue "executable_sha256"' not in transfer_block
+    assert "REFERENCE_EXECUTABLE_SHA256=" in transfer_block
+    assert "REPRODUCED_EXECUTABLE_SHA256=" in transfer_block
+    assert "final_executable_sha256 = $referenceExecutableSha" in transfer_block
+    assert "common_package_exact_match = $true" in transfer_block
+
+
 def test_transferred_capture_requires_no_build_toolchain() -> None:
     text = (
         REPO_ROOT / "tools" / "nw10" / "run-transferred-correctness-capture.ps1"
