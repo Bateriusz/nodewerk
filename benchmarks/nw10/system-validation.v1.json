@@ -1,0 +1,136 @@
+{
+  "clean_system": {
+    "captured_at_utc": "2026-11-18T06:20:21.548812+00:00",
+    "deployment": {
+      "executable_bytes": 222058,
+      "executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
+      "forbidden_runtime_dependencies": [],
+      "only_runtime_executable": true,
+      "sidecars": []
+    },
+    "development_dependencies_present_on_path": [],
+    "environment_cache_variables": [],
+    "execution_kind": "physical",
+    "hardware": {
+      "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+      "adapter_generation": "blackwell",
+      "device_id": 11269,
+      "driver_version": "32.0.16.1088",
+      "vendor_id": 4318
+    },
+    "host": {
+      "architecture": "AMD64",
+      "clean_environment": true,
+      "hypervisor_present": true,
+      "manufacturer": "ASUSTeK COMPUTER INC.",
+      "model": "NUC13ANH-B",
+      "virtualization_based_security_status": 2,
+      "virtualization_indicators": [],
+      "windows_build": "10.0.26200"
+    },
+    "scenarios": [
+      {
+        "expected_exit_code": 70,
+        "observed_exit_code": 70,
+        "scenario": "corrupt_payload",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "scenario": "deployed_startup",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 23,
+        "observed_exit_code": 23,
+        "scenario": "missing_required_feature",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 42,
+        "observed_exit_code": 42,
+        "scenario": "initialization_failure",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "scenario": "resize",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 51,
+        "observed_exit_code": 51,
+        "scenario": "device_removal",
+        "status": "passed",
+        "timed_out": false
+      }
+    ],
+    "source_result_bundle_sha256": "8e038ca0a9661f343b1e6140e0ebfb0edad12ce309ef94289acc31889a5d5efa",
+    "status": "verified"
+  },
+  "final_artifact": {
+    "executable_bytes": 222058,
+    "executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
+    "manifest_sha256": "4a166b9fbe8244317b2c92a7d4dccf58d743a8bdde4a95b9370a78a488e27ae9",
+    "package_sha256": "e1b3187225908d340f7e3910b20459784e61466fa2c6eadb5d1782ae13db763b"
+  },
+  "format": "nw10-system-validation",
+  "memory": {
+    "accounting_scope": "Tracked engine resource plus upload allocation accounting. Runtime budget checks additionally guard descriptor and swap-chain allocation.",
+    "ceiling_bytes": 536870912,
+    "engine_cumulative_committed_bytes": 42926080,
+    "engine_resource_bytes": 42401792,
+    "engine_upload_bytes": 524288,
+    "execution_kind": "physical",
+    "frames": 1,
+    "hardware": {
+      "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+      "driver_version": "32.0.16.1088"
+    },
+    "measurement_source": "nw_package_player_fixture --emit-benchmark-metrics",
+    "package_sha256": "e1b3187225908d340f7e3910b20459784e61466fa2c6eadb5d1782ae13db763b",
+    "peak_engine_committed_gpu_bytes": 42926080,
+    "post_initialization_allocation_violation": 0,
+    "resolution": {
+      "height": 1080,
+      "width": 1920
+    },
+    "status": "verified"
+  },
+  "privacy": {
+    "local_paths_included": false,
+    "raw_result_bundle_tracked": false,
+    "raw_stdout_stderr_included": false,
+    "user_profile_paths_included": false
+  },
+  "startup": {
+    "cache_state": {
+      "application_pipeline_cache_used": false,
+      "kind": "warm"
+    },
+    "ceiling_ms": 2000.0,
+    "cold_driver_cache_preparation": "A reboot or equivalent driver-cache reset is required for a cold run; this recorded measurement is the contract-permitted warm run.",
+    "execution_kind": "physical",
+    "hardware": {
+      "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+      "driver_version": "32.0.16.1088"
+    },
+    "lower_bound_ms": 238.22,
+    "measurement_method": "PresentMon QPC first-present bound against the process-creation time window.",
+    "process_creation_window_ms": 2.619,
+    "process_start_to_first_present_ms": 240.839,
+    "protocol": "nw07-startup.v1",
+    "status": "verified",
+    "warm_preparation": "Executed the identical final artifact once to completion before the measured run."
+  },
+  "status": "verified",
+  "task": "NW-10",
+  "version": 1
+}
