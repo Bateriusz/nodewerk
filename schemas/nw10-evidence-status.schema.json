@@ -33,7 +33,8 @@
         "pending_physical_windows_capture",
         "performance_verified_correctness_pending",
         "performance_and_compact_verified_correctness_pending",
-        "performance_compact_and_correctness_verified_system_pending"
+        "performance_compact_and_correctness_verified_system_pending",
+        "verified_complete"
       ]
     },
     "reference_capture": {
@@ -49,8 +50,23 @@
       "enum": [
         "pending",
         "performance_verified",
-        "performance_and_correctness_verified"
+        "performance_and_correctness_verified",
+        "performance_correctness_and_system_verified"
       ]
+    },
+    "clean_system": {"enum": ["pending_unverified", "verified"]},
+    "startup": {"enum": ["pending_unverified", "verified"]},
+    "memory": {"enum": ["pending_unverified", "verified"]},
+    "system_validation": {
+      "type": "object",
+      "required": ["status", "path", "sha256", "final_executable_sha256", "package_sha256"],
+      "properties": {
+        "status": {"const": "verified"},
+        "path": {"const": "benchmarks/nw10/system-validation.v1.json"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "final_executable_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
     },
     "frame_time": {
       "enum": [
