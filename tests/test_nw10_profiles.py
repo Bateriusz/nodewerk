@@ -12,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import nw10_compact as compact  # noqa: E402
 import nw10_contract as contract  # noqa: E402
 import nw10_intro as intro  # noqa: E402
+import nwp_package as nwp  # noqa: E402
 
 
 def test_restricted_intro_profile_is_frozen_and_complete() -> None:
@@ -147,6 +148,12 @@ def test_intro_export_is_deterministic_and_keeps_physical_evidence_pending(
     assert first["decision"]["physical_target_met"] is False
     assert first["decision"]["universal_64k_claim"] is False
     assert first["decision"]["classification"] == "continue"
+    assert first["release_shader_binding"]["entry_point"] == "SDFIntroCS"
+    assert first["release_shader_binding"]["verified_in_package"] is True
+    packages = list((tmp_path / "first").glob("*.nwp"))
+    assert len(packages) == 1
+    package = nwp.decode_package(packages[0].read_bytes(), allow_dev=True)
+    assert [shader.entry_point for shader in package.shaders] == ["SDFIntroCS"]
     # Compression that increases total distribution is rejected rather than
     # relabelled as a win.
     compact_ledger = first["ledgers"]["compact"]
