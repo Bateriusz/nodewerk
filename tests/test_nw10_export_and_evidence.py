@@ -164,6 +164,7 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     evidence_path = REPO_ROOT / "benchmarks" / "nw10" / "compact-proof.v1.json"
     intro_path = REPO_ROOT / "benchmarks" / "nw10" / "intro-profile.v1.json"
     status_path = REPO_ROOT / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    system_path = REPO_ROOT / "benchmarks" / "nw10" / "system-validation.v1.json"
     validate_file_against_schema(
         evidence_path, REPO_ROOT / "schemas" / "nw10-compact-evidence.schema.json"
     )
@@ -172,6 +173,9 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     )
     validate_file_against_schema(
         status_path, REPO_ROOT / "schemas" / "nw10-evidence-status.schema.json"
+    )
+    validate_file_against_schema(
+        system_path, REPO_ROOT / "schemas" / "nw10-system-validation.schema.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["evidence_status"] == "informational_contract_only"
@@ -207,12 +211,22 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         if compact_physical_path.is_file():
             assert (
                 status["evidence_status"]
-                == "performance_compact_and_correctness_verified_system_pending"
+                == "verified_complete"
             )
             assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
         else:
             assert status["evidence_status"] == "performance_verified_correctness_pending"
-        assert status["physical_evidence"] == "performance_and_correctness_verified"
+        assert status["physical_evidence"] == "performance_correctness_and_system_verified"
+        assert status["clean_system"] == "verified"
+        assert status["startup"] == "verified"
+        assert status["memory"] == "verified"
+        system = json.loads(system_path.read_text(encoding="utf-8"))
+        assert system["status"] == "verified"
+        assert system["final_artifact"]["executable_sha256"] == "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+        assert system["startup"]["process_start_to_first_present_ms"] == 240.839
+        assert system["memory"]["peak_engine_committed_gpu_bytes"] == 42_926_080
+        assert system["clean_system"]["hardware"]["adapter_description"] == "NVIDIA GeForce RTX 5070 Ti"
+        assert system["privacy"]["local_paths_included"] is False
         assert status["reference_capture"] == "verified_reference_capture"
         assert status["frame_time"] == "verified_preserved"
         correctness_path = (
@@ -360,7 +374,7 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
             encoding="utf-8"
         )
     )
-    assert status["evidence_status"] == "performance_compact_and_correctness_verified_system_pending"
+    assert status["evidence_status"] == "verified_complete"
     assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
     assert status["compact_feasibility"]["target_met"] is False
     assert status["compact_feasibility"]["minimum_measured_candidate_bytes"] == 219_710
