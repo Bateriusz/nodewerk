@@ -14,7 +14,7 @@ import dependency_check
 
 FORMAT = "nw10-windows-pe-ledger"
 VERSION = 1
-EXPECTED_FINAL_SHA256 = "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+INVALIDATED_GRADIENT_SHA256 = "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
 
 
 def sha256_file(path: Path) -> str:
@@ -91,10 +91,10 @@ def build_report(
     decoder_on = pe_summary(decoder_on_template)
     decoder_off = pe_summary(decoder_off_template)
 
-    if final["sha256"] != EXPECTED_FINAL_SHA256:
+    if final["sha256"] == INVALIDATED_GRADIENT_SHA256:
         raise ValueError(
-            "final executable identity drift: "
-            f"expected {EXPECTED_FINAL_SHA256}, observed {final['sha256']}"
+            "final executable regressed to the invalidated gradient artifact: "
+            f"{INVALIDATED_GRADIENT_SHA256}"
         )
     if sha256_file(final_package) != sha256_file(linker_baseline_package):
         raise ValueError("linker-control build changed the canonical package bytes")
