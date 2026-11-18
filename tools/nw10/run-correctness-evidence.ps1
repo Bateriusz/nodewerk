@@ -286,6 +286,14 @@ try {
         if ($diag.capture_controls_required -ne $true) {
             throw "Diagnostic sibling does not have capture controls."
         }
+        $diagnosticDependencies = @(
+            foreach ($dependency in @($diag.diagnostic_dependencies)) {
+                if ($null -eq $dependency) { continue }
+                $dependencyName = ([string]$dependency).Trim().ToLowerInvariant()
+                if ([string]::IsNullOrWhiteSpace($dependencyName)) { continue }
+                $dependencyName
+            }
+        )
         $debugRuntimeDependencies = @()
         $knownDebugRuntimeDependencies = @(
             "msvcp140d.dll",
@@ -293,14 +301,13 @@ try {
             "vcruntime140_1d.dll",
             "ucrtbased.dll"
         )
-        foreach ($dependency in @($diag.diagnostic_dependencies)) {
-            $dependencyName = ([string]$dependency).ToLowerInvariant()
+        foreach ($dependencyName in $diagnosticDependencies) {
             if ($knownDebugRuntimeDependencies -contains $dependencyName) {
                 $debugRuntimeDependencies += $dependencyName
             }
         }
         if ($debugRuntimeDependencies.Count -gt 0) {
-            throw "Transfer diagnostic unexpectedly requires debug CRT: $($debugRuntimeDependencies -join ', ')"
+            Write-Host "[NW10 CORRECTNESS] TARGET_DEBUG_CRT_DEPENDENCIES=$($debugRuntimeDependencies -join ',')"
         }
 
         $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
@@ -330,7 +337,7 @@ try {
                 executable_sha256 = [string]$diag.diagnostic_executable_sha256
                 executable_bytes = [int64]$diag.diagnostic_executable_bytes
                 manifest_sha256 = [string]$diag.diagnostic_manifest_sha256
-                dependencies = @($diag.diagnostic_dependencies)
+                dependencies = $diagnosticDependencies
                 separate_from_final_executable = $true
                 same_common_package = $true
                 release_manifest_reused = $false
@@ -382,7 +389,7 @@ try {
         Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zip -CompressionLevel Optimal
         Write-Host "[NW10 CORRECTNESS] TRANSFER_BUNDLE=$zip"
         Write-Host "[NW10 CORRECTNESS] TARGET_TOOLCHAIN_REQUIRED=False"
-        Write-Host "[NW10 CORRECTNESS] TARGET_DEBUG_CRT_REQUIRED=False"
+        Write-Host "[NW10 CORRECTNESS] TARGET_DEBUG_CRT_REQUIRED=$($debugRuntimeDependencies.Count -gt 0)"
         return
     }
 
