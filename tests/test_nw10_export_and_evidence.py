@@ -164,6 +164,9 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     evidence_path = REPO_ROOT / "benchmarks" / "nw10" / "compact-proof.v1.json"
     intro_path = REPO_ROOT / "benchmarks" / "nw10" / "intro-profile.v1.json"
     status_path = REPO_ROOT / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    correctness_path = (
+        REPO_ROOT / "benchmarks" / "nw10" / "common-artifact-correctness.v1.json"
+    )
     system_path = REPO_ROOT / "benchmarks" / "nw10" / "system-validation.v1.json"
     pe_ledger_path = REPO_ROOT / "benchmarks" / "nw10" / "windows-pe-ledger.v1.json"
     validate_file_against_schema(
@@ -174,6 +177,10 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     )
     validate_file_against_schema(
         status_path, REPO_ROOT / "schemas" / "nw10-evidence-status.schema.json"
+    )
+    validate_file_against_schema(
+        correctness_path,
+        REPO_ROOT / "schemas" / "nw10-common-artifact-correctness.schema.json",
     )
     validate_file_against_schema(
         system_path, REPO_ROOT / "schemas" / "nw10-system-validation.schema.json"
