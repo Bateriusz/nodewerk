@@ -7,11 +7,11 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "8ee9c855bc0d1840589370da60451300ca39a1ce013806b1eb0fd0a0163715b7"
+      "sha256": "72a79a9f3aaa3f99f4d76c36dff486ccdebe103879d464e83a9b7febea8239d0"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "47cbf5d734ae602e05364aaaf0d9c045da490a1ef6c904f7019d609cd60787bb"
+      "sha256": "a6714d0f1e1e55f3d2a9dedd3babc98ba2b8dc58bd1693c41ea937eac13976a7"
     }
   ],
   "format": "nw10-evidence-status",
