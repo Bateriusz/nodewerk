@@ -140,6 +140,29 @@ function Assert-NwSameValue {
     }
 }
 
+function Get-NwCurrentBranch {
+    $output = @(& git branch --show-current)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to determine current git branch."
+    }
+    if ($output.Count -eq 0 -or $null -eq $output[0]) {
+        return ""
+    }
+    return ([string]$output[0]).Trim()
+}
+
+function Assert-NwExpectedBranch {
+    param([AllowEmptyString()][string]$Expected)
+    $branch = Get-NwCurrentBranch
+    if (
+        -not [string]::IsNullOrWhiteSpace($Expected) -and
+        $branch -ne $Expected
+    ) {
+        throw "Expected branch '$Expected', current branch is '$branch'."
+    }
+    return $branch
+}
+
 function New-NwBundle {
     param(
         [Parameter(Mandatory)][string]$TierName,
@@ -191,10 +214,7 @@ try {
             throw "Correctness transfer bundle preparation is Windows-only."
         }
 
-        $branch = (& git branch --show-current).Trim()
-        if ($LASTEXITCODE -ne 0 -or $branch -ne $ExpectedBranch) {
-            throw "Expected branch '$ExpectedBranch', current branch is '$branch'."
-        }
+        [void](Assert-NwExpectedBranch -Expected $ExpectedBranch)
         Assert-NwCleanTrackedTree
 
         $referencePath = Resolve-NwRepoPath $ReferenceEvidence
@@ -457,10 +477,7 @@ try {
             throw "-Commit requires -Publish."
         }
         if ($Publish) {
-            $branch = (& git branch --show-current).Trim()
-            if ($LASTEXITCODE -ne 0 -or $branch -ne $ExpectedBranch) {
-                throw "Expected branch '$ExpectedBranch', current branch is '$branch'."
-            }
+            [void](Assert-NwExpectedBranch -Expected $ExpectedBranch)
             $publishArgs = @(
                 "tools/nw10_publish_evidence.py", "correctness",
                 "--comparison", $outputPath,
@@ -537,10 +554,7 @@ try {
         throw "Physical NW-10 correctness capture is Windows-only."
     }
 
-    $branch = (& git branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0 -or $branch -ne $ExpectedBranch) {
-        throw "Expected branch '$ExpectedBranch', current branch is '$branch'."
-    }
+    [void](Assert-NwExpectedBranch -Expected $ExpectedBranch)
     Assert-NwCleanTrackedTree
 
     $referencePath = Resolve-NwRepoPath $ReferenceEvidence
