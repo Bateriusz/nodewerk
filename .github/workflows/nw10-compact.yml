@@ -44,6 +44,27 @@ jobs:
           path: build/nw10-evidence-a/**
       - name: Run NW-10 contract tests
         run: python -m pytest -q tests/test_nw10_*.py
+      - name: Parse NW-10 evidence publisher PowerShell
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($path in @(
+            "tools/nw10/run-correctness-evidence.ps1",
+            "tools/nw10/publish-system-evidence.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              Write-Error ("PowerShell parse failed for " + $path + ": " + (($errors | ForEach-Object { $_.Message }) -join "; "))
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
       - name: Verify deterministic contract evidence regeneration
         run: |
           python - <<'PY'
