@@ -79,6 +79,18 @@ def test_correctness_compare_runs_privacy_audit() -> None:
     assert "Assert-NwPrivacy -JsonObject $comparison" in compare_block
 
 
+def test_correctness_runner_handles_detached_head_for_ci_transfer() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "function Get-NwCurrentBranch" in text
+    assert "function Assert-NwExpectedBranch" in text
+    assert '$output = @(& git branch --show-current)' in text
+    assert '[string]::IsNullOrWhiteSpace($Expected)' in text
+    assert "(& git branch --show-current).Trim()" not in text
+
+
 def test_correctness_runner_supports_prebuilt_diagnostic_transfer() -> None:
     text = (
         REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
