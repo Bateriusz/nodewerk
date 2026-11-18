@@ -3,7 +3,7 @@
   "blackwell_correctness": "pending_unverified",
   "clean_system": "pending_unverified",
   "contract_evidence": "verified_by_pytest",
-  "evidence_status": "pending_physical_windows_capture",
+  "evidence_status": "performance_verified_correctness_pending",
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
@@ -12,14 +12,24 @@
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
       "sha256": "a6714d0f1e1e55f3d2a9dedd3babc98ba2b8dc58bd1693c41ea937eac13976a7"
+    },
+    {
+      "path": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
+      "sha256": "c62561f439bdb7ecca8f470ed09a87a67986df1936ed46a7ef37711b8fc919fa"
     }
   ],
   "format": "nw10-evidence-status",
-  "frame_time": "pending_unverified",
+  "frame_time": "verified_preserved",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
   "memory": "pending_unverified",
-  "physical_evidence": "pending",
-  "reference_capture": "pending_reference_capture",
+  "performance_preservation": {
+    "path": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
+    "reference_binding_id": "nw07_perf_ref_v1@sha256:v1:7ae69188e641ee9cebfa5c5b55c718a36eb271f202ca30ab4f89684c3284a075",
+    "sha256": "c62561f439bdb7ecca8f470ed09a87a67986df1936ed46a7ef37711b8fc919fa",
+    "status": "verified_preserved"
+  },
+  "physical_evidence": "performance_verified",
+  "reference_capture": "verified_reference_capture",
   "startup": "pending_unverified",
   "superseded_physical_evidence": {
     "invalidated_executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
