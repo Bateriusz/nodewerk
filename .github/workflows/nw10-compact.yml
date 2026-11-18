@@ -220,6 +220,49 @@ jobs:
 
           Write-Host "NW-10 Windows feasibility outcome:"
           Get-Content $outcomePath
+      - name: Measure exact PE linker elimination and compact-decoder closure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+
+          cmake --preset nw07-release -B "$PWD/build/nw10-decoder-off" -DNW10_COMPACT_PACKAGE=OFF -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build "$PWD/build/nw10-decoder-off" --target nw_procedural_image_player --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $oldLink = $env:_LINK_
+          try {
+            $env:_LINK_ = "/OPT:NOREF /OPT:NOICF"
+            python tools/nw10_intro.py `
+              --output "$PWD/build/nw10-intro-link-control" `
+              --report "$PWD/build/nw10-intro-link-control-report.json" `
+              --player-template $template `
+              --dxc $dxc
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            if ($null -eq $oldLink) {
+              Remove-Item Env:_LINK_ -ErrorAction SilentlyContinue
+            } else {
+              $env:_LINK_ = $oldLink
+            }
+          }
+
+          python tools/nw10_pe_ledger.py `
+            --final-executable "$PWD/build/nw10-intro/$stem.exe" `
+            --linker-baseline-executable "$PWD/build/nw10-intro-link-control/$stem.exe" `
+            --decoder-on-template "$template" `
+            --decoder-off-template "$PWD/build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe" `
+            --final-package "$PWD/build/nw10-intro/$stem.nwp" `
+            --linker-baseline-package "$PWD/build/nw10-intro-link-control/$stem.nwp" `
+            --final-manifest "$PWD/build/nw10-intro/$stem.manifest.json" `
+            --linker-baseline-manifest "$PWD/build/nw10-intro-link-control/$stem.manifest.json" `
+            --output "$PWD/build/nw10-windows-pe-ledger.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content "$PWD/build/nw10-windows-pe-ledger.json"
+
       - name: Package clean-system transfer bundle
         shell: pwsh
         run: |
@@ -316,4 +359,6 @@ jobs:
             build/nw10-dependency-closure.json
             build/nw10-dependency-check/**
             build/nw10-runtime/**
+            build/nw10-windows-pe-ledger.json
+            build/nw10-intro-link-control-report.json
             ${{ runner.temp }}/nw10-bootstrap-provenance.json
