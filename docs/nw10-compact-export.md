@@ -12,7 +12,8 @@
   `benchmarks/nw10/intro-profile.v1.json`,
   `benchmarks/nw10/common-artifact-correctness.v1.json`,
   `benchmarks/nw10/evidence-status.v1.json`,
-  `benchmarks/nw10/system-validation.v1.json`, plus the archived
+  `benchmarks/nw10/system-validation.v1.json`,
+  `benchmarks/nw10/windows-pe-ledger.v1.json`, plus the archived
   `proof-export-report.v1.json` and `intro-export-report.v1.json` raw reports.
 
 ## Result and decision
@@ -37,8 +38,8 @@ proof. Matched physical performance preservation is verified, and common-artifac
 correctness is verified on representative desktop Ada (RTX 4060 Ti) and
 Blackwell (RTX 5070 Ti) hardware with zero observed cross-hardware error at the
 required fixed ticks. Clean-system deployment, startup, and engine-committed GPU-memory gates are now
-verified on physical Windows hardware. Remaining linker-elimination evidence is
-tracked separately from these system gates. The decision is **continue**, not
+verified on physical Windows hardware. Exact Windows PE linker elimination and
+compact-decoder closure costs are also measured and tracked in the final byte ledger. The decision is **continue**, not
 a universal feasibility or impossibility claim.
 
 ### Hosted Windows feasibility result
@@ -143,9 +144,11 @@ package:
 - **Shader specialization/fusion:** the established NW-05 fusion decisions are
   retained. No unmeasured extra fusion is applied and no new shader semantics
   are required.
-- **Linker elimination:** release PE section/symbol elimination is pending on
-  the exact Windows artifact; source-level estimates are not substituted for
-  bytes.
+- **Linker elimination:** measured on the exact Windows artifact against an
+  otherwise identical pinned control link with `/OPT:NOREF /OPT:NOICF`.
+  `/OPT:REF + /OPT:ICF=4` save 715,776 bytes in the complete distribution
+  (the same 715,776 bytes in the PE image). The largest raw-section savings are
+  588,288 bytes in `.text` and 90,112 bytes in `.rdata`.
 - **Compression:** stored, MSZIP, zlib, bzip2, and lzma are measured. Only
   player-supported stored/MSZIP encodings are selectable. Compression that
   increases the complete distributed bytes is rejected and the canonical
