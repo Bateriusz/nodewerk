@@ -59,7 +59,11 @@ float mapScene(float3 p)
 
     // Smooth sphere/torus composition with a bounded blend.
     float blend = 0.18;
-    float h = saturate(0.5 + 0.5 * (sphere - torus) / blend);
+    // Smooth union (min), not smooth intersection (max).  The sign here is
+    // intentional: h -> 1 when the sphere is closer and h -> 0 when the torus
+    // is closer, so the composed field cannot disappear merely because the two
+    // animated primitives stop overlapping.
+    float h = saturate(0.5 + 0.5 * (torus - sphere) / blend);
     return lerp(torus, sphere, h) - blend * h * (1.0 - h);
 }
 
