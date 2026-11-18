@@ -1,6 +1,6 @@
 # NW-10 transferred diagnostic correctness capture.
-# PowerShell 5.1 compatible. Requires Windows/D3D12 and the debug CRT used by
-# the bundled diagnostic EXE. No compiler, CMake, DXC, Python, git, or repo.
+# PowerShell 5.1 compatible. Requires only Windows/D3D12 and the files in this
+# transfer bundle. No compiler, CMake, DXC, Python, git, repo, or debug CRT.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)]
