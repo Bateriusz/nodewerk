@@ -415,7 +415,10 @@ def test_physical_clean_host_accepts_vbs_hypervisor_without_vm_markers(
     assert host["clean_environment"] is True
     report = _report()
     report["host"] = host
-    assert clean_system.validate_report(report)["status"] == "verified"
+    result = clean_system.validate_report(report)
+    assert result["status"] == "pending_unverified"
+    assert not any("hypervisor" in reason for reason in result["reasons"])
+    assert not any("physical clean-system host" in reason for reason in result["reasons"])
 
 
 def test_physical_clean_host_rejects_unexplained_hypervisor_without_vm_markers(
