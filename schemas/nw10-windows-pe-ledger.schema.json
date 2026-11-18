@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-windows-pe-ledger.schema.json",
+  "title": "Nodewerk NW-10 exact Windows PE byte ledger",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "status",
+    "source",
+    "final_artifact",
+    "linker_elimination",
+    "compact_decoder",
+    "conclusion",
+    "privacy"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw10-windows-pe-ledger"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "status": {
+      "const": "verified"
+    },
+    "final_artifact": {
+      "type": "object",
+      "required": [
+        "executable_sha256",
+        "executable_bytes",
+        "package_sha256",
+        "manifest_sha256",
+        "pe_image_file_bytes",
+        "overlay_bytes",
+        "sections"
+      ],
+      "properties": {
+        "executable_sha256": {
+          "const": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+        },
+        "executable_bytes": {
+          "const": 222058
+        },
+        "package_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "linker_elimination": {
+      "type": "object",
+      "required": [
+        "status",
+        "complete_distribution_bytes_saved",
+        "pe_image_bytes_saved",
+        "control_executable_bytes",
+        "canonical_package_identical"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified"
+        },
+        "complete_distribution_bytes_saved": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pe_image_bytes_saved": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "canonical_package_identical": {
+          "const": true
+        }
+      }
+    },
+    "compact_decoder": {
+      "type": "object",
+      "required": [
+        "status",
+        "decoder_on_template_bytes",
+        "decoder_off_template_bytes",
+        "template_bytes_added",
+        "pe_image_bytes_added",
+        "runtime_import_added"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified"
+        },
+        "template_bytes_added": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pe_image_bytes_added": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "runtime_import_added": {
+          "const": "cabinet.dll"
+        }
+      }
+    },
+    "conclusion": {
+      "type": "object",
+      "required": [
+        "byte_ledger_complete",
+        "linker_elimination_measured_on_exact_windows_artifact",
+        "decoder_cost_measured_on_pinned_windows_template",
+        "universal_64k_claim"
+      ],
+      "properties": {
+        "byte_ledger_complete": {
+          "const": true
+        },
+        "linker_elimination_measured_on_exact_windows_artifact": {
+          "const": true
+        },
+        "decoder_cost_measured_on_pinned_windows_template": {
+          "const": true
+        },
+        "universal_64k_claim": {
+          "const": false
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "local_paths_included",
+        "pdb_paths_included",
+        "raw_linker_map_included"
+      ],
+      "properties": {
+        "local_paths_included": {
+          "const": false
+        },
+        "pdb_paths_included": {
+          "const": false
+        },
+        "raw_linker_map_included": {
+          "const": false
+        }
+      }
+    }
+  }
+}
