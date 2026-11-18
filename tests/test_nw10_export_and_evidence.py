@@ -165,6 +165,7 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     intro_path = REPO_ROOT / "benchmarks" / "nw10" / "intro-profile.v1.json"
     status_path = REPO_ROOT / "benchmarks" / "nw10" / "evidence-status.v1.json"
     system_path = REPO_ROOT / "benchmarks" / "nw10" / "system-validation.v1.json"
+    pe_ledger_path = REPO_ROOT / "benchmarks" / "nw10" / "windows-pe-ledger.v1.json"
     validate_file_against_schema(
         evidence_path, REPO_ROOT / "schemas" / "nw10-compact-evidence.schema.json"
     )
@@ -176,6 +177,9 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     )
     validate_file_against_schema(
         system_path, REPO_ROOT / "schemas" / "nw10-system-validation.schema.json"
+    )
+    validate_file_against_schema(
+        pe_ledger_path, REPO_ROOT / "schemas" / "nw10-windows-pe-ledger.schema.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["evidence_status"] == "informational_contract_only"
@@ -227,6 +231,13 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         assert system["memory"]["peak_engine_committed_gpu_bytes"] == 42_926_080
         assert system["clean_system"]["hardware"]["adapter_description"] == "NVIDIA GeForce RTX 5070 Ti"
         assert system["privacy"]["local_paths_included"] is False
+        pe_ledger = json.loads(pe_ledger_path.read_text(encoding="utf-8"))
+        assert pe_ledger["status"] == "verified"
+        assert pe_ledger["final_artifact"]["executable_sha256"] == "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+        assert pe_ledger["linker_elimination"]["complete_distribution_bytes_saved"] == 715_776
+        assert pe_ledger["compact_decoder"]["template_bytes_added"] == 3_584
+        assert pe_ledger["conclusion"]["byte_ledger_complete"] is True
+        assert status["pe_ledger"]["status"] == "verified"
         assert status["reference_capture"] == "verified_reference_capture"
         assert status["frame_time"] == "verified_preserved"
         correctness_path = (
