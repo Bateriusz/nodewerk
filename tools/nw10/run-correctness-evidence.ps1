@@ -18,7 +18,13 @@ param(
     [string]$AdaCaptures = "",
     [string]$BlackwellRecord = "",
     [string]$BlackwellCaptures = "",
-    [string]$CompareOutput = "build/nw10-correctness-comparison.json"
+    [string]$CompareOutput = "build/nw10-correctness-comparison.json",
+    [switch]$Publish,
+    [switch]$Commit,
+    [switch]$Push,
+    [string]$PublishedOutput = "benchmarks/nw10/common-artifact-correctness.v1.json",
+    [string]$StatusFile = "benchmarks/nw10/evidence-status.v1.json",
+    [string]$CommitMessage = "NW-10: publish Ada/Blackwell correctness evidence"
 )
 
 Set-StrictMode -Version Latest
@@ -420,6 +426,84 @@ try {
         Write-Host "[NW10 CORRECTNESS] WORST_ABS=$($comparison.comparison.worst_absolute_error)"
         Write-Host "[NW10 CORRECTNESS] WORST_REL=$($comparison.comparison.worst_relative_error)"
         Write-Host "[NW10 CORRECTNESS] OUTPUT=$outputPath"
+
+        if ($Push -and -not $Commit) {
+            throw "-Push requires -Commit."
+        }
+        if ($Commit -and -not $Publish) {
+            throw "-Commit requires -Publish."
+        }
+        if ($Publish) {
+            $branch = (& git branch --show-current).Trim()
+            if ($LASTEXITCODE -ne 0 -or $branch -ne $ExpectedBranch) {
+                throw "Expected branch '$ExpectedBranch', current branch is '$branch'."
+            }
+            $publishArgs = @(
+                "tools/nw10_publish_evidence.py", "correctness",
+                "--comparison", $outputPath,
+                "--destination", $PublishedOutput,
+                "--status-file", $StatusFile
+            )
+            foreach ($token in $comparePrivacyTokens) {
+                $publishArgs += @("--forbid-token", $token)
+            }
+            Invoke-NwNative $python $publishArgs "NW-10 correctness publication failed"
+            Invoke-NwNative $python @(
+                "tools/schema_validator.py",
+                "--repo-root", $repo,
+                "--document", (Resolve-NwRepoPath $PublishedOutput),
+                "--schema", (Join-Path $repo "schemas/nw10-common-artifact-correctness.schema.json")
+            ) "Published correctness schema validation failed"
+            Invoke-NwNative $python @(
+                "tools/schema_validator.py",
+                "--repo-root", $repo,
+                "--document", (Resolve-NwRepoPath $StatusFile),
+                "--schema", (Join-Path $repo "schemas/nw10-evidence-status.schema.json")
+            ) "Evidence-status schema validation failed"
+            Invoke-NwNative "git" @("diff", "--check") "git diff --check failed"
+
+            $allowed = @($PublishedOutput.Replace('\','/'), $StatusFile.Replace('\','/'))
+            $changed = @(& git status --porcelain --untracked-files=all)
+            if ($LASTEXITCODE -ne 0) { throw "git status failed after publication." }
+            $unexpected = @()
+            foreach ($line in $changed) {
+                if ([string]::IsNullOrWhiteSpace([string]$line)) { continue }
+                $path = ([string]$line).Substring(3).Trim('"').Replace('\','/')
+                if ($path.StartsWith("build/", [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+                if ($allowed -notcontains $path) { $unexpected += [string]$line }
+            }
+            if ($unexpected.Count -gt 0) {
+                throw "Publication changed unexpected paths: $($unexpected -join '; ')"
+            }
+
+            Write-Host "[NW10 CORRECTNESS] PUBLISH=PASS"
+            Write-Host "[NW10 CORRECTNESS] TRACKED=$PublishedOutput"
+            if ($Commit) {
+                Invoke-NwNative "git" (@("add", "--") + $allowed) "staging correctness evidence failed"
+                Invoke-NwNative "git" @("diff", "--cached", "--check") "staged correctness diff check failed"
+                $staged = @(& git diff --cached --name-only)
+                if ($LASTEXITCODE -ne 0) { throw "Unable to inspect staged correctness evidence." }
+                $unexpectedStaged = @($staged | Where-Object { $allowed -notcontains $_ })
+                if ($unexpectedStaged.Count -gt 0) {
+                    throw "Unexpected staged paths: $($unexpectedStaged -join ', ')"
+                }
+                if ($staged.Count -eq 0) {
+                    Write-Host "[NW10 CORRECTNESS] COMMIT=SKIPPED_NO_CHANGES"
+                } else {
+                    Invoke-NwNative "git" @("commit", "-m", $CommitMessage) "NW-10 correctness evidence commit failed"
+                    $commitSha = (& git rev-parse HEAD).Trim()
+                    Write-Host "[NW10 CORRECTNESS] COMMIT=$commitSha"
+                    if ($Push) {
+                        Invoke-NwNative "git" @("push", "origin", $ExpectedBranch) "NW-10 correctness evidence push failed"
+                        Write-Host "[NW10 CORRECTNESS] PUSH=PASS"
+                    }
+                }
+            } else {
+                Write-Host "[NW10 CORRECTNESS] COMMIT=NOT_REQUESTED"
+            }
+        } else {
+            Write-Host "[NW10 CORRECTNESS] PUBLISH=NOT_REQUESTED"
+        }
         return
     }
 
