@@ -30,14 +30,6 @@ option(NW_USE_INBOX_UCRT
     "Link release players to the Windows inbox UCRT while keeping the MSVC C++/compiler runtime static"
     OFF)
 
-option(NW10_LINKER_ELIMINATION_CONTROL
-    "NW-10 measurement-only release control: disable /OPT:REF and /OPT:ICF without changing security mitigations"
-    OFF)
-if(NW10_LINKER_ELIMINATION_CONTROL AND NOT NW_BUILD_PROFILE STREQUAL "release")
-    message(FATAL_ERROR
-        "NW10_LINKER_ELIMINATION_CONTROL is a release-only NW-10 evidence control")
-endif()
-
 # NW-07 capture controls are only available in the diagnostic sibling build.
 # The release executable must never contain capture hooks, timing queries, or
 # diagnostic tooling; keeping the option dev-only makes that a configure-time
@@ -142,19 +134,11 @@ function(nw_apply_player_profile target_name)
                 target_compile_options(${target_name} PRIVATE /GL)
                 target_link_options(${target_name} PRIVATE /LTCG)
             endif()
-            if(NW10_LINKER_ELIMINATION_CONTROL)
-                target_link_options(${target_name} PRIVATE
-                    /OPT:NOREF
-                    /OPT:NOICF
-                    /PDBALTPATH:%_PDB%
-                )
-            else()
-                target_link_options(${target_name} PRIVATE
-                    /OPT:REF
-                    /OPT:ICF=4
-                    /PDBALTPATH:%_PDB%
-                )
-            endif()
+            target_link_options(${target_name} PRIVATE
+                /OPT:REF
+                /OPT:ICF=4
+                /PDBALTPATH:%_PDB%
+            )
             if(NW_USE_INBOX_UCRT)
                 # Windows 11 supplies ucrtbase.dll as an inbox component and
                 # the release dependency contract explicitly allowlists it.
