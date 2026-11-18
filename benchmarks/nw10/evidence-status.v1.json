@@ -36,6 +36,10 @@
     {
       "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
       "sha256": "fc9e52705ab333b850a9405b967fbfadefc39d8af4cf08a6d91df9edd3bceddb"
+    },
+    {
+      "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
+      "sha256": "527321217bca6673ddbc4cec456d4ddffc3913cee4f39e759aa9ebddd4f34dce"
     }
   ],
   "format": "nw10-evidence-status",
@@ -77,5 +81,13 @@
     "sha256": "22bdfcdccd8955c30116078e5788424b6ed473671b77ea590027520a4a394340",
     "final_executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
     "package_sha256": "e1b3187225908d340f7e3910b20459784e61466fa2c6eadb5d1782ae13db763b"
+  },
+  "pe_ledger": {
+    "status": "verified",
+    "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
+    "sha256": "527321217bca6673ddbc4cec456d4ddffc3913cee4f39e759aa9ebddd4f34dce",
+    "final_executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
+    "linker_elimination_bytes_saved": 715776,
+    "compact_decoder_template_bytes_added": 3584
   }
 }
