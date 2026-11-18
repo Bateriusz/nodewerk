@@ -95,8 +95,10 @@ jobs:
           cmake --preset nw07-release
           -DNW10_COMPACT_PACKAGE=ON
           -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
-      - name: Build release player template
-        run: cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+      - name: Build release player template and clean-system fixture
+        run: |
+          cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+          cmake --build --preset nw07-release --target nw_package_player_fixture --parallel 2
       - name: Export canonical NW-07 proof and compact candidate
         shell: pwsh
         run: |
@@ -218,6 +220,90 @@ jobs:
 
           Write-Host "NW-10 Windows feasibility outcome:"
           Get-Content $outcomePath
+      - name: Package clean-system transfer bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $outcome = Get-Content "$PWD/build/nw10-windows-size-outcome.json" -Raw | ConvertFrom-Json
+          if ([string]$outcome.validated_mode -ne "canonical_fallback") {
+            throw "Clean-system transfer currently requires the validated canonical fallback."
+          }
+
+          $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+          $artifactRoot = Join-Path $PWD "build/nw10-intro"
+          $finalExe = Join-Path $artifactRoot "$stem.exe"
+          $package = Join-Path $artifactRoot "$stem.nwp"
+          $manifest = Join-Path $artifactRoot "$stem.manifest.json"
+          $fixture = Join-Path $PWD "build/nw07-release/staging/package_player/nw_package_player_fixture.exe"
+          foreach ($path in @($finalExe, $package, $manifest, $fixture)) {
+            if (-not (Test-Path $path -PathType Leaf)) {
+              throw "Clean-system transfer input is missing: $path"
+            }
+          }
+
+          $expectedFinalSha = "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+          $actualFinalSha = (Get-FileHash -Algorithm SHA256 $finalExe).Hash.ToLowerInvariant()
+          if ($actualFinalSha -ne $expectedFinalSha) {
+            throw "Frozen NW-10 final executable drifted: expected=$expectedFinalSha actual=$actualFinalSha"
+          }
+
+          $transfer = Join-Path $PWD "build/nw10-clean-system-transfer"
+          Remove-Item $transfer -Recurse -Force -ErrorAction SilentlyContinue
+          $deployment = Join-Path $transfer "deployment"
+          $packageRoot = Join-Path $transfer "package"
+          $fixtureRoot = Join-Path $transfer "fixture"
+          $verifierRoot = Join-Path $transfer "verifier"
+          New-Item -ItemType Directory -Force $deployment,$packageRoot,$fixtureRoot,$verifierRoot | Out-Null
+
+          Copy-Item $finalExe (Join-Path $deployment "$stem.exe") -Force
+          Copy-Item $finalExe (Join-Path $packageRoot "$stem.exe") -Force
+          Copy-Item $package (Join-Path $packageRoot "$stem.nwp") -Force
+          Copy-Item $manifest (Join-Path $packageRoot "$stem.manifest.json") -Force
+          Copy-Item $fixture (Join-Path $fixtureRoot "nw_package_player_fixture.exe") -Force
+          Copy-Item "$PWD/tools" (Join-Path $verifierRoot "tools") -Recurse -Force
+          Copy-Item "$PWD/benchmarks" (Join-Path $verifierRoot "benchmarks") -Recurse -Force
+          Copy-Item "$PWD/schemas" (Join-Path $verifierRoot "schemas") -Recurse -Force
+          Copy-Item "$PWD/fixtures" (Join-Path $verifierRoot "fixtures") -Recurse -Force
+          Copy-Item "$PWD/shaders" (Join-Path $verifierRoot "shaders") -Recurse -Force
+          Copy-Item "$PWD/tools/nw10/run-transferred-clean-system.ps1" (Join-Path $transfer "run-clean-system.ps1") -Force
+
+          $transferFull = [System.IO.Path]::GetFullPath($transfer).TrimEnd('\','/')
+          $fileRows = @()
+          foreach ($file in Get-ChildItem $transfer -File -Recurse | Sort-Object FullName) {
+            $fileFull = [System.IO.Path]::GetFullPath($file.FullName)
+            $relative = $fileFull.Substring($transferFull.Length).TrimStart('\','/').Replace('\','/')
+            $fileRows += [ordered]@{
+              path = $relative
+              bytes = [int64]$file.Length
+              sha256 = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            }
+          }
+          $bundle = [ordered]@{
+            format = "nw10-clean-system-transfer"
+            version = 1
+            task = "NW-10"
+            source_commit = $env:GITHUB_SHA
+            final_executable_sha256 = $actualFinalSha
+            final_executable_bytes = [int64](Get-Item $finalExe).Length
+            package_sha256 = (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
+            files = $fileRows
+          }
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText(
+            (Join-Path $transfer "bundle-manifest.json"),
+            (($bundle | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
+            $utf8NoBom
+          )
+          Write-Host "[NW10 CLEAN] TRANSFER_READY=$transfer"
+          Write-Host "[NW10 CLEAN] FINAL_EXE_SHA256=$actualFinalSha"
+
+      - name: Upload NW-10 clean-system transfer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-clean-system-transfer
+          path: build/nw10-clean-system-transfer/**
+          if-no-files-found: error
+
       - name: Upload Windows NW-10 evidence
         if: always()
         uses: actions/upload-artifact@v4
