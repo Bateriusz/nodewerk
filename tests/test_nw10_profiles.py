@@ -37,6 +37,13 @@ def test_restricted_intro_profile_is_frozen_and_complete() -> None:
     assert record["performance_protocol"] == "nw07-perf-run.v1"
 
 
+def test_restricted_intro_shader_uses_smooth_union_not_intersection() -> None:
+    shader = (REPO_ROOT / contract.INTRO_SHADER).read_text(encoding="utf-8")
+    assert "float h = saturate(0.5 + 0.5 * (torus - sphere) / blend);" in shader
+    assert "float h = saturate(0.5 + 0.5 * (sphere - torus) / blend);" not in shader
+    assert "return lerp(torus, sphere, h) - blend * h * (1.0 - h);" in shader
+
+
 def test_intro_operator_set_excludes_audio_mesh_and_hardware_rt() -> None:
     record = intro.validate_intro_graph()
     operators = set(record["operators"])
