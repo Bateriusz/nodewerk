@@ -178,6 +178,66 @@ def _intro_generated_shader(document: nw03.GraphDocument) -> nw03.GeneratedShade
     )
 
 
+def _intro_player_source(
+    *,
+    package_sha256: str,
+    manifest: Mapping[str, Any],
+    memory_budget_bytes: int,
+    width: int,
+    height: int,
+    present_sync_interval: int,
+) -> str:
+    source = nw05_export.generate_player_source(
+        package_sha256=package_sha256,
+        manifest_sha256=str(manifest["manifest_sha256"]),
+        manifest=manifest,
+        memory_budget_bytes=memory_budget_bytes,
+        width=width,
+        height=height,
+        present_sync_interval=present_sync_interval,
+    )
+    generic_loop = (
+        "    for (std::uint64_t tick = 0; max_frames == 0 || tick < max_frames; ++tick) {\n"
+        "        const auto frame = player.renderAtTick(tick);\n"
+        "        if (frame != nw::player::ExitCode::Success) return player.Report(true);\n"
+        "        if (player.window_closed()) break;\n"
+        "    }\n"
+    )
+    wall_clock_loop = (
+        "    const auto nw10_playback_start = std::chrono::steady_clock::now();\n"
+        "    std::uint64_t nw10_presented_frames = 0u;\n"
+        "    while (!player.window_closed()) {\n"
+        "        const auto nw10_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(\n"
+        "            std::chrono::steady_clock::now() - nw10_playback_start).count();\n"
+        "        if (nw10_elapsed_us < 0) {\n"
+        "            std::fprintf(stderr, \"NW10_CLOCK_BACKWARDS\\n\");\n"
+        "            return 70;\n"
+        "        }\n"
+        "        std::uint64_t tick =\n"
+        "            (static_cast<std::uint64_t>(nw10_elapsed_us) * 48ULL) / 1000ULL;\n"
+        f"        tick %= {contract.LOOP_TICKS}ULL;\n"
+        "        const auto frame = player.renderAtTick(tick);\n"
+        "        if (frame != nw::player::ExitCode::Success) {\n"
+        "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        "            return static_cast<int>(frame);\n"
+        "#else\n"
+        "            return player.Report(true);\n"
+        "#endif\n"
+        "        }\n"
+        "        ++nw10_presented_frames;\n"
+        "        if (max_frames != 0 && nw10_presented_frames >= max_frames) break;\n"
+        "#ifdef _WIN32\n"
+        "        ::Sleep(1u);\n"
+        "#endif\n"
+        "    }\n"
+    )
+    if source.count(generic_loop) != 1:
+        raise IntroContractError(
+            "generated player no longer exposes the expected generic playback loop"
+        )
+    return source.replace(generic_loop, wall_clock_loop)
+
+
 def _mock_dxc(directory: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     dxc = directory / "mock_dxc.py"
@@ -349,7 +409,43 @@ def export_intro(
             )
         manifest_bytes = manifest_path.read_bytes()
         manifest_record = json.loads(manifest_bytes.decode("utf-8"))
+        stem = nw05_export._profile_file_stem(nwp.COMMON_PROFILE_ID)
+        intro_player_source = _intro_player_source(
+            package_sha256=hashlib.sha256(package_bytes).hexdigest(),
+            manifest=manifest_record,
+            memory_budget_bytes=contract.PEAK_ENGINE_COMMITTED_GPU_BYTES,
+            width=contract.OUTPUT_WIDTH,
+            height=contract.OUTPUT_HEIGHT,
+            present_sync_interval=0,
+        )
+        (canonical / f"{stem}.player.cpp").write_text(
+            intro_player_source, encoding="utf-8", newline="\n"
+        )
         canonical_executable = executable_path.read_bytes()
+        if not contracts_only:
+            rebuilt_player = nw05_export._build_specialized_player(
+                template_path,
+                intro_player_source,
+                manifest_record,
+                nwp.COMMON_PROFILE_ID,
+                build_root_override=staging / "nw10-playback-build",
+                frozen_embedded_specialization=True,
+            )
+            actual_dependencies = nw05_export._pe_runtime_dependencies(rebuilt_player)
+            expected_dependencies = sorted(
+                str(item)
+                for item in manifest_record.get("retained", {}).get("dependencies", [])
+            )
+            if actual_dependencies != expected_dependencies:
+                raise IntroContractError(
+                    "NW-10 wall-clock player changed the specialized PE dependency closure"
+                )
+            canonical_executable = nw05_export.embed_package(
+                rebuilt_player,
+                package_bytes,
+                hashlib.sha256(manifest_bytes).digest(),
+            )
+            executable_path.write_bytes(canonical_executable)
         dependencies = [
             {
                 "name": str(name),
@@ -380,7 +476,6 @@ def export_intro(
         ):
             if path.is_file():
                 shutil.copy2(path, compact_dir / path.name)
-        stem = nw05_export._profile_file_stem(nwp.COMMON_PROFILE_ID)
         (compact_dir / f"{stem}.compact.nwc").write_bytes(encoded.bytes)
         (compact_dir / f"{stem}.compact.exe").write_bytes(compact_executable)
         package_summary = compact.package_summary(package_bytes)
@@ -434,6 +529,16 @@ def export_intro(
                 "entry_point": intro_shader.entry_point,
                 "hlsl_sha256": intro_shader.hlsl_sha256,
                 "verified_in_package": True,
+            },
+            "playback_timeline": {
+                "mode": "wall_clock_absolute_ticks",
+                "ticks_per_second": contract.TICKS_PER_SECOND,
+                "loop_ticks": contract.LOOP_TICKS,
+                "loop_seconds": contract.LOOP_SECONDS,
+                "nominal_frame_step_ticks": (
+                    contract.TICKS_PER_SECOND // contract.FRAME_RATE_HZ
+                ),
+                "generated_player_verified": True,
             },
             "canonical_artifact": {
                 "executable_bytes": len(canonical_executable),
