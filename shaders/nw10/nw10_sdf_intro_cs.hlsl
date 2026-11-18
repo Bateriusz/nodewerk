@@ -45,7 +45,7 @@ float2 rotate2(float2 v, float angle)
 float mapScene(float3 p)
 {
     // One absolute-tick camera curve: a full revolution over the 20 s loop.
-    float time_seconds = g_params[0].x;
+    float time_seconds = g_params[0].x / (float)NW_TICKS_PER_SECOND;
     float phase = time_seconds * (NW_PI * 2.0 / 20.0);
     float3 sphere_point = p;
     sphere_point.xz = rotate2(sphere_point.xz, -phase);
@@ -111,7 +111,7 @@ void SDFIntroCS(uint3 dispatch_id : SV_DispatchThreadID)
 
     // Camera curves over the frozen 20-second loop.  The phase is derived from
     // the absolute tick, never accumulated frame deltas.
-    float time_seconds = g_params[0].x;
+    float time_seconds = g_params[0].x / (float)NW_TICKS_PER_SECOND;
     float phase = time_seconds * (NW_PI * 2.0 / 20.0);
     float camera_radius = 4.1 + 0.35 * sin(phase * 2.0);
     float3 eye = float3(
