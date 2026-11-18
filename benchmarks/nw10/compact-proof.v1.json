@@ -1091,7 +1091,7 @@
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:ee592f105acacd3a8980a75562b108ef56a92f7e5cc71bfbe2f642613a0592c1",
+  "nw10_build_inputs_digest": "sha256:v1:9abc90d122513d526b26485d6fcdf1ec1a6754d460f90046eecf967ac1685655",
   "packaging_modes": [
     {
       "clean_system_checked": false,
