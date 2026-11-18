@@ -11,7 +11,8 @@
 - **Evidence:** `benchmarks/nw10/compact-proof.v1.json`,
   `benchmarks/nw10/intro-profile.v1.json`,
   `benchmarks/nw10/common-artifact-correctness.v1.json`,
-  `benchmarks/nw10/evidence-status.v1.json`, plus the archived
+  `benchmarks/nw10/evidence-status.v1.json`,
+  `benchmarks/nw10/system-validation.v1.json`, plus the archived
   `proof-export-report.v1.json` and `intro-export-report.v1.json` raw reports.
 
 ## Result and decision
@@ -35,8 +36,9 @@ paths. They are **not** Windows release artifacts and are not physical 64 KiB
 proof. Matched physical performance preservation is verified, and common-artifact
 correctness is verified on representative desktop Ada (RTX 4060 Ti) and
 Blackwell (RTX 5070 Ti) hardware with zero observed cross-hardware error at the
-required fixed ticks. Clean-system startup, startup/decode memory, and remaining
-linker-elimination evidence are still pending. The decision is **continue**, not
+required fixed ticks. Clean-system deployment, startup, and engine-committed GPU-memory gates are now
+verified on physical Windows hardware. Remaining linker-elimination evidence is
+tracked separately from these system gates. The decision is **continue**, not
 a universal feasibility or impossibility claim.
 
 ### Hosted Windows feasibility result
@@ -55,8 +57,8 @@ A compact candidate that fails runtime validation is never counted as an
 achieved size result. Its stdout/stderr, exit code, measured byte count, and
 dependency evidence are archived with the Windows CI evidence. Matched physical
 performance and Ada/Blackwell correctness are now verified under the inherited
-NW-07 protocol; clean-system startup and memory evidence remain separate pending
-work. Raw RGBA32F captures stay outside Git, while the privacy-safe verified
+NW-07 protocol; clean-system, startup, and memory evidence are verified and tracked in
+`benchmarks/nw10/system-validation.v1.json`. Raw RGBA32F captures stay outside Git, while the privacy-safe verified
 summary is tracked in `benchmarks/nw10/common-artifact-correctness.v1.json`.
 
 ## Preserved architecture
