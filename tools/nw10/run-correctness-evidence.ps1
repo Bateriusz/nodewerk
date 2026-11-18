@@ -259,10 +259,8 @@ try {
         Write-Host "[NW10 CORRECTNESS] COMMON_ARTIFACT=EXACT_MATCH"
 
         Invoke-NwNative "cmake" @(
-            "--preset", "nw07-release",
-            "-B", $diagTemplate,
-            "-DNW07_CAPTURE_CONTROLS=ON",
-            "-DNW_ENFORCE_PINNED_TOOLCHAIN=ON"
+            "--preset", "nw07-diagnostics",
+            "-B", $diagTemplate
         ) "Transfer diagnostic template configure failed"
         Invoke-NwNative "cmake" @(
             "--build", $diagTemplate,
