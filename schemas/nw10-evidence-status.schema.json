@@ -99,6 +99,25 @@
         }
       }
     },
+    "pe_ledger": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "final_executable_sha256",
+        "linker_elimination_bytes_saved",
+        "compact_decoder_template_bytes_added"
+      ],
+      "properties": {
+        "status": {"const": "verified"},
+        "path": {"const": "benchmarks/nw10/windows-pe-ledger.v1.json"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "final_executable_sha256": {"const": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"},
+        "linker_elimination_bytes_saved": {"type": "integer", "minimum": 1},
+        "compact_decoder_template_bytes_added": {"type": "integer", "minimum": 1}
+      }
+    },
     "correctness_evidence": {
       "type": "object",
       "required": [
