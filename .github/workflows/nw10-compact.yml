@@ -428,6 +428,22 @@ jobs:
           path: build/nw10-correctness-scripted/transfer-blackwell/transfer-package/**
           if-no-files-found: error
 
+      - name: Package Ada correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -TargetTier ada `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Ada correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-ada
+          path: build/nw10-correctness-scripted/transfer-ada/transfer-package/**
+          if-no-files-found: error
+
       - name: Upload Windows NW-10 evidence
         if: always()
         uses: actions/upload-artifact@v4
