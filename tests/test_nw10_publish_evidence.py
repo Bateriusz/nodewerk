@@ -314,11 +314,11 @@ def test_blackwell_transfer_bundle_is_runtime_only_and_published_by_ci() -> None
         REPO_ROOT / ".github" / "workflows" / "nw10-compact.yml"
     ).read_text(encoding="utf-8")
 
-    assert '"--preset", "nw07-release"' in wrapper
-    assert '"-DNW07_CAPTURE_CONTROLS=ON"' in wrapper
-    assert "TARGET_DEBUG_CRT_REQUIRED=False" in wrapper
-    assert "Transfer diagnostic unexpectedly requires debug CRT" in wrapper
-    assert "No compiler, CMake, DXC, Python, git, repo, or debug CRT." in transferred
+    assert '"--preset", "nw07-diagnostics"' in wrapper
+    assert "TARGET_DEBUG_CRT_REQUIRED=$($debugRuntimeDependencies.Count -gt 0)" in wrapper
+    assert "TARGET_DEBUG_CRT_DEPENDENCIES=" in wrapper
+    assert "Requires Windows/D3D12 and the debug CRT used by" in transferred
+    assert "No compiler, CMake, DXC, Python, git, or repo." in transferred
     assert "Package Blackwell correctness transfer bundle" in workflow
     assert "nw10-correctness-transfer-blackwell" in workflow
     assert "transfer-blackwell/transfer-package/**" in workflow
