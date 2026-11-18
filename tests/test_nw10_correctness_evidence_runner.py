@@ -88,7 +88,9 @@ def test_correctness_runner_supports_prebuilt_diagnostic_transfer() -> None:
     assert '"build-diagnostic"' in text
     assert "run-transferred-correctness-capture.ps1" in text
     assert "TARGET_TOOLCHAIN_REQUIRED=False" in text
-    assert "TARGET_DEBUG_CRT_REQUIRED=True" in text
+    assert "TARGET_DEBUG_CRT_REQUIRED=False" in text
+    assert '"-DNW07_CAPTURE_CONTROLS=ON"' in text
+    assert "Transfer diagnostic unexpectedly requires debug CRT" in text
 
 
 def test_transferred_capture_requires_no_build_toolchain() -> None:
