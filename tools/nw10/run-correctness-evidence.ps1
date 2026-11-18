@@ -288,7 +288,14 @@ try {
         }
         $debugRuntimeDependencies = @(
             $diag.diagnostic_dependencies | Where-Object {
-                $_ -match '(?i)^(?:msvcp\d+d|vcruntime\d*(?:_\d+)?d|ucrtbased)\.dll
+                $_ -match '(?i)^(?:msvcp\d+d|vcruntime\d*(?:_\d+)?d|ucrtbased)\.dll$'
+            }
+        )
+        if ($debugRuntimeDependencies.Count -gt 0) {
+            throw "Transfer diagnostic unexpectedly requires debug CRT: $($debugRuntimeDependencies -join ', ')"
+        }
+
+        $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
         $diagExeSource = Join-Path $diagArtifact "$stem.exe"
         $diagExeName = "nw10-correctness-diagnostic.exe"
         $diagExeTarget = Join-Path $packageRoot $diagExeName
