@@ -178,26 +178,6 @@ def _intro_generated_shader(document: nw03.GraphDocument) -> nw03.GeneratedShade
     )
 
 
-class _IntroShaderOverride:
-    def __init__(self, document: nw03.GraphDocument):
-        self.document = document
-        self.original = nw03.lower_to_fused_hlsl
-
-    def __enter__(self) -> "_IntroShaderOverride":
-        original = self.original
-        shader = _intro_generated_shader(self.document)
-
-        def lower(document: nw03.GraphDocument, *args: Any, **kwargs: Any):
-            del document, args, kwargs
-            return [shader], []
-
-        nw03.lower_to_fused_hlsl = lower  # type: ignore[assignment]
-        return self
-
-    def __exit__(self, exc_type, exc, traceback) -> None:
-        nw03.lower_to_fused_hlsl = self.original  # type: ignore[assignment]
-
-
 def _mock_dxc(directory: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     dxc = directory / "mock_dxc.py"
@@ -342,18 +322,31 @@ def export_intro(
         allow_optional_profiles=False,
     )
     try:
-        with _IntroShaderOverride(document):
-            result = nw05_export.export_graph(
-                root / contract.INTRO_GRAPH,
-                canonical,
-                settings=settings,
-                report_path=staging / "canonical-report.json",
-                dxc_executable=dxc,
-                optimization="O2",
-                allow_test_payloads=contracts_only,
-            )
+        intro_shader = _intro_generated_shader(document)
+        result = nw05_export.export_graph(
+            root / contract.INTRO_GRAPH,
+            canonical,
+            settings=settings,
+            report_path=staging / "canonical-report.json",
+            dxc_executable=dxc,
+            optimization="O2",
+            allow_test_payloads=contracts_only,
+            generated_shaders_override=(intro_shader,),
+        )
         package_path, manifest_path, executable_path = _artifact_paths(canonical)
         package_bytes = package_path.read_bytes()
+        compiled_package = nwp.decode_package(
+            package_bytes, allow_dev=contracts_only
+        )
+        sdf_entries = [
+            shader.entry_point
+            for shader in compiled_package.shaders
+            if shader.entry_point == "SDFIntroCS"
+        ]
+        if sdf_entries != ["SDFIntroCS"]:
+            raise IntroContractError(
+                "release intro package does not contain exactly one SDFIntroCS shader"
+            )
         manifest_bytes = manifest_path.read_bytes()
         manifest_record = json.loads(manifest_bytes.decode("utf-8"))
         canonical_executable = executable_path.read_bytes()
@@ -436,6 +429,12 @@ def export_intro(
             "release_grade": not contracts_only,
             "test_payload": bool(contracts_only),
             "profile": profile,
+            "release_shader_binding": {
+                "specialization_id": intro_shader.specialization_id,
+                "entry_point": intro_shader.entry_point,
+                "hlsl_sha256": intro_shader.hlsl_sha256,
+                "verified_in_package": True,
+            },
             "canonical_artifact": {
                 "executable_bytes": len(canonical_executable),
                 "executable_sha256": hashlib.sha256(canonical_executable).hexdigest(),
