@@ -277,6 +277,8 @@ def test_feasibility_accepts_decoder_off_size_blocked_report_without_artifact() 
 def test_feasibility_reproducibly_selects_prior_valid_ledger_when_current_is_pending() -> None:
     prior = {
         "format": "nw10-windows-pe-ledger",
+        "version": 1,
+        "task": "NW-10",
         "final_artifact": {
             "executable_sha256": "9" * 64,
             "executable_bytes": 240_702,
@@ -298,11 +300,61 @@ def test_feasibility_reproducibly_selects_prior_valid_ledger_when_current_is_pen
         run_id=1,
         head_sha="1" * 40,
         prior_valid_ledger=prior,
+        prior_valid_ledger_path="benchmarks/nw10/windows-pe-ledger.v1.json",
     )
     validate_instance(record, _schema(), _schema())
     assert record["prior_valid_artifact"]["executable_sha256"] == "9" * 64
     assert record["selected_artifact"]["sha256"] == "9" * 64
     assert record["selected_artifact"]["source"] == "prior_valid_artifact"
+    assert record["selected_artifact"]["ledger"] == (
+        "benchmarks/nw10/windows-pe-ledger.v1.json"
+    )
+
+
+def test_feasibility_rejects_malformed_or_unattributed_prior_ledger() -> None:
+    prior = {
+        "format": "nw10-windows-pe-ledger",
+        "version": 1,
+        "task": "NW-10",
+        "final_artifact": {
+            "executable_sha256": "9" * 64,
+            "executable_bytes": 240_702,
+            "runtime_status": "validated_runnable",
+        },
+        "conclusion": {"byte_ledger_complete": True},
+    }
+    kwargs = dict(
+        outcome=_outcome(
+            minimum_validated_runnable_bytes=None,
+            validated_mode="canonical_fallback_pending_physical",
+            compact_candidate_runtime_status="pending_runtime_validation",
+            compact_candidate_exit_code=-1073741819,
+            canonical_fallback_exit_code=-1073741819,
+        ),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        prior_valid_ledger=prior,
+    )
+    with pytest.raises(ValueError, match="provenance path is required"):
+        feasibility.build_feasibility(**kwargs)
+
+    prior["format"] = "wrong"
+    with pytest.raises(ValueError, match="unexpected format"):
+        feasibility.build_feasibility(
+            **kwargs,
+            prior_valid_ledger_path="benchmarks/nw10/windows-pe-ledger.v1.json",
+        )
+
+    prior["format"] = "nw10-windows-pe-ledger"
+    prior["final_artifact"]["executable_sha256"] = "g" * 64
+    with pytest.raises(ValueError, match="SHA-256 is malformed"):
+        feasibility.build_feasibility(
+            **kwargs,
+            prior_valid_ledger_path="benchmarks/nw10/windows-pe-ledger.v1.json",
+        )
+
 
 def test_feasibility_requires_measured_release_decoder_off_proof() -> None:
     proof = _proof()
@@ -347,3 +399,6 @@ def test_workflow_binds_feasibility_to_the_uploaded_artifact_identity() -> None:
     assert "--runtime-status $runtimeStatus" in workflow
     assert "--runtime-exit-code $runtimeExitCode" in workflow
     assert "--prior-valid-ledger" in workflow
+    assert "Bind PE ledger to the uploaded artifact identity" in workflow
+    assert "--bind-source-report" in workflow
+    assert "nw10-windows-pe-ledger-bound.json" in workflow
