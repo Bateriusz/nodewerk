@@ -13,6 +13,8 @@
   `benchmarks/nw10/common-artifact-correctness.v1.json`,
   `benchmarks/nw10/evidence-status.v1.json`,
   `benchmarks/nw10/system-validation.v1.json`,
+  `benchmarks/nw10/reused-physical-evidence.v1.json`,
+  `benchmarks/nw10/windows-compact-feasibility.v1.json`, and
   `benchmarks/nw10/windows-pe-ledger.v1.json`, plus the archived
   `proof-export-report.v1.json` and `intro-export-report.v1.json` raw reports.
 
@@ -34,36 +36,49 @@ Contract-only exports with structural DXIL payloads measure:
 
 These numbers validate the accounting, decoder, and deterministic export
 paths. They are **not** Windows release artifacts and are not physical 64 KiB
-proof. Physical performance preservation, packed/unpacked Ada and Blackwell
-correctness, clean-system startup, and engine-committed GPU-memory evidence are
-**pending**. The exact `nw07_perf_ref_v1` reference capture and its bindings are
-unavailable, and the previously tracked performance, cross-hardware
-correctness, and system summaries were withdrawn because they did not satisfy
-the frozen matching rules. The decision is **continue**, not a universal
-feasibility or impossibility claim.
+proof. Existing physical Ada/Blackwell correctness, clean-system, startup, and
+engine-committed GPU-memory measurements are retained in
+`benchmarks/nw10/reused-physical-evidence.v1.json` rather than being discarded
+or re-captured. The exact `nw07_perf_ref_v1` reference capture and its bindings
+remain unavailable, so performance preservation is still **pending** and no
+faster substitute hardware is used to certify it. The decision is **continue**,
+not a universal feasibility or impossibility claim.
+
+The reuse record is intentionally explicit about two limitations. The historic
+correctness run did not record a second, separately rendered packed capture
+set; packed/unpacked correctness is therefore established compositionally:
+the shipped C++ decoder is parity/fuzz tested to reconstruct the exact
+canonical package bytes, and that exact decoded package was physically captured
+on representative desktop Ada and Blackwell with zero measured image error.
+Also, the clean-system run was performed on the RTX 5070 Ti NUC13 while the
+startup/memory metrics were measured on the RTX 4060 Ti desktop. Those hosts
+are recorded separately; the evidence does **not** pretend they were one
+environment. The legacy NUC13 capture did not record its Windows build, so no
+value is inferred for it.
 
 ### Hosted Windows feasibility result
 
 The hosted Windows x64 experiment is treated as a measured feasibility run,
-not as a hard 64 KiB gate. The archived run measured the supposedly inherited
-NW-07 proof at 264,390 bytes and the restricted-intro compact candidate at
-227,715 bytes. That proof number is **invalid as a canonical baseline**: it was
-linked from the decoder-ON template and therefore included the 3,584-byte
-compact decoder in a 262,144-byte proof tier. The workflow now builds a
-separate `NW10_COMPACT_PACKAGE=OFF` template for the canonical proof and rejects
-a decoder-off canonical proof above 262,144 bytes. The archived run is retained
-only as an attributed, superseded measurement; its `proof_measured_bytes` is
-null and its status is `invalid_decoder_on_baseline`. The compact candidate
-failed runtime validation with package-validation exit code 70, so it remains
-a tested blocker, not a validated runnable distribution.
+not as a hard 64 KiB gate. Current run `44535528801` measures the decoder-OFF
+canonical NW-07 proof at **260,294 bytes**, inside the frozen 262,144-byte proof
+tier. The restricted-intro compact candidate measures **228,181 bytes** and the
+canonical fallback **237,118 bytes**. The hosted runner exits both GPU runtime
+probes with `0xC0000005`; because that host is non-certifying for this physical
+GPU requirement, both outcomes remain `pending_runtime_validation` rather than
+being mislabeled as compact-package failures. Dependency closure and the
+single-file/link-manifest checks still pass.
 
-A compact candidate that fails runtime validation is never counted as an
-achieved size result. Its stdout/stderr, exit code, measured byte count, and
-dependency evidence are archived with the Windows CI evidence. Certification
-remains pending while the exact reference capture and bindings are unavailable.
-`benchmarks/nw10/system-validation.v1.json` and
-`benchmarks/nw10/common-artifact-correctness.v1.json` are explicit pending
-records; they do not claim physical verification.
+The same run publishes a current PE ledger for the 237,118-byte restricted
+intro. It measures a **4,096-byte** compact-decoder template cost (3,584 bytes
+in `.text`, 512 bytes in `.rdata`) and the only added runtime import is
+`cabinet.dll`. The current evidence artifact is retained as GitHub Actions
+artifact `14536032623` with digest
+`sha256:ac35ac00ebea17183787dad4ede0956b92f93a32bbbcaf2a33acf1e6b9b0c7a2`.
+
+Physical correctness and system measurements are represented separately from
+this hosted feasibility result. Their reuse and current-head transfer bindings
+are recorded in `reused-physical-evidence.v1.json`; the exact performance
+reference capture remains pending.
 
 The Windows workflow constructs `build/nw10-windows-compact-feasibility.json`
 with `tools/nw10_feasibility.py` and schema-validates it in both outcomes: a
@@ -156,9 +171,9 @@ package:
   are required.
 - **Linker elimination:** measured in the archived Windows run against an
   otherwise identical pinned control link with `/OPT:NOREF /OPT:NOICF`.
-  `/OPT:REF + /OPT:ICF=4` save 726,528 bytes in the complete distribution
-  (the same 726,528 bytes in the PE image). The largest raw-section savings are
-  594,432 bytes in `.text` and 94,208 bytes in `.rdata`.
+  `/OPT:REF + /OPT:ICF=4` save 723,456 bytes in the complete distribution
+  (the same 723,456 bytes in the PE image). The largest raw-section savings are
+  592,384 bytes in `.text` and 93,696 bytes in `.rdata`.
 - **Compression:** stored, MSZIP, zlib, bzip2, and lzma are measured. Only
   player-supported stored/MSZIP encodings are selectable. Compression that
   increases the complete distributed bytes is rejected and the canonical
