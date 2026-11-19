@@ -230,32 +230,56 @@ def export_proof(
         if contracts_only:
             compact_template_executable = canonical_executable
         else:
-            # The compact candidate must be linked from the otherwise
-            # identical decoder-ON template.  Re-run the repository-owned
-            # export with that template; the canonical payload must be
-            # byte-identical to the decoder-OFF baseline.
-            compact_base = staging / "compact-base"
-            nw07_export.export_production(
-                compact_base,
-                player_template=template,
-                dxc_executable=dxc,
-                report_path=staging / "compact-base-report.json",
-                allow_test_payloads=False,
-                # The decoder-ON candidate is the research artifact; the
-                # canonical decoder-OFF baseline above is the tier gate.
-                allow_complete_distribution_over_proof_tier=True,
-            )
-            base_package, base_manifest, base_executable = _artifact_paths(
-                compact_base
-            )
-            if (
-                base_package.read_bytes() != package_bytes
-                or base_manifest.read_bytes() != manifest_bytes
-            ):
+            # The compact candidate changes only the player image.  Re-exporting
+            # the whole production through a decoder-ON template would
+            # legitimately change the PE dependency closure (cabinet.dll) and
+            # therefore the generated link manifest.  That would make package
+            # identity and packaging identity drift together.  Instead, keep
+            # the already-validated decoder-OFF package + manifest frozen and
+            # rebuild only the specialized player with compact decoding enabled.
+            stem = nw05_export._profile_file_stem(nwp.COMMON_PROFILE_ID)
+            player_source_path = canonical / f"{stem}.player.cpp"
+            if not player_source_path.is_file():
                 raise ProofError(
-                    "decoder-ON export changed the canonical package or manifest"
+                    "canonical proof did not retain its specialized player source"
                 )
-            compact_template_executable = base_executable.read_bytes()
+            compact_player = nw05_export._build_specialized_player(
+                template,
+                player_source_path.read_text(encoding="utf-8"),
+                manifest_record,
+                nwp.COMMON_PROFILE_ID,
+                build_root_override=staging / "compact-base-build",
+                frozen_embedded_specialization=True,
+            )
+            canonical_dependencies = sorted(
+                {
+                    str(name).lower().removesuffix(".dll")
+                    for name in manifest_record.get("retained", {}).get(
+                        "dependencies", []
+                    )
+                }
+            )
+            if "cabinet" in canonical_dependencies:
+                raise ProofError(
+                    "decoder-OFF canonical proof unexpectedly depends on cabinet.dll"
+                )
+            compact_dependencies = nw05_export._pe_runtime_dependencies(
+                compact_player
+            )
+            expected_compact_dependencies = sorted(
+                {*canonical_dependencies, "cabinet"}
+            )
+            if compact_dependencies != expected_compact_dependencies:
+                raise ProofError(
+                    "decoder-ON player changed dependency closure beyond cabinet.dll: "
+                    f"expected {expected_compact_dependencies}, "
+                    f"observed {compact_dependencies}"
+                )
+            compact_template_executable = nw05_export.embed_package(
+                compact_player,
+                package_bytes,
+                hashlib.sha256(manifest_bytes).digest(),
+            )
         compact_executable, encoded = _compact_executable(
             compact_template_executable,
             package_bytes,
