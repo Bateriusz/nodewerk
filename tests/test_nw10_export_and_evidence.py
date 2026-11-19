@@ -310,9 +310,12 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     reuse = json.loads(reuse_path.read_text(encoding="utf-8"))
     assert reuse["current_head_transfer"]["packed_unpacked_correctness"]["direct_separate_packed_gpu_capture_recorded"] is False
     assert reuse["physical_measurements"]["system"]["same_physical_host"] is False
+    assert reuse["current_head_transfer"]["system_artifact_transfer"]["current_executable_sha256"] == system["current_artifact"]["executable_sha256"]
+    assert reuse["current_head_transfer"]["system_artifact_transfer"]["current_package_sha256"] == system["current_artifact"]["package_sha256"]
+    assert reuse["current_head_transfer"]["packed_unpacked_correctness"]["physical_runtime_package_sha256"] == correctness["common_artifact"]["package_sha256"]
     pe_ledger = json.loads(pe_ledger_path.read_text(encoding="utf-8"))
     assert pe_ledger["status"] == "verified"
-    assert pe_ledger["source"]["workflow_run_id"] == 44535528801
+    assert pe_ledger["source"]["workflow_run_id"] == 44542203189
     assert pe_ledger["conclusion"]["byte_ledger_complete"] is True
 
     assert (
@@ -428,8 +431,8 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
     assert record["canonical_fallback"]["dependency_closure"]["closure_verified"] is True
     assert record["canonical_fallback"]["dependency_closure"]["sidecar_files"] == []
     assert "cabinet.dll" not in record["canonical_fallback"]["dependency_closure"]["canonical_imports"]
-    assert record["source"]["run_id"] == 44535528801
-    assert record["source"]["head_sha"] == "d8ea821f1a562ee31ca1515d9cc3cb15423ad910"
+    assert record["source"]["run_id"] == 44542203189
+    assert record["source"]["head_sha"] == "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee"
     assert record["privacy"]["raw_stdout_stderr_included"] is False
     assert record["privacy"]["runner_paths_included"] is False
     assert record["privacy"]["user_profile_paths_included"] is False
