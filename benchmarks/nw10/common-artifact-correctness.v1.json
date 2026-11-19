@@ -1,63 +1,64 @@
 {
   "ada": {
     "hardware": {
-      "adapter_description": "unavailable",
+      "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
       "classified_tier": "ada",
-      "device_form_factor": "unknown",
-      "device_form_factor_source": "pending_physical_probe",
-      "driver_version": "unavailable"
+      "device_form_factor": "desktop",
+      "device_form_factor_source": "reused physical host inventory: MSI B550-A PRO desktop",
+      "driver_version": "32.0.16.1088"
     },
-    "status": "pending_unverified"
+    "status": "verified"
   },
   "blackwell": {
     "hardware": {
-      "adapter_description": "unavailable",
+      "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
       "classified_tier": "blackwell",
-      "device_form_factor": "unknown",
-      "device_form_factor_source": "pending_physical_probe",
-      "driver_version": "unavailable"
+      "device_form_factor": "desktop",
+      "device_form_factor_source": "reused physical host inventory: ASUSTeK NUC13ANH-B mini PC",
+      "driver_version": "32.0.16.1088"
     },
-    "status": "pending_unverified"
+    "status": "verified"
   },
   "capture_protocol": "nw07-correctness-capture.v1",
   "common_artifact": {
-    "package_sha256": null
+    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1"
   },
   "comparison": {
     "absolute_required": true,
     "absolute_tolerance": 0.0001,
-    "ada_loop_boundary_status": "pending",
-    "blackwell_loop_boundary_status": "pending",
-    "fixed_tick_status": "pending",
-    "fixed_ticks": [
-      0,
-      240000,
-      480000,
-      720000,
-      959999
-    ],
-    "loop_boundary_ticks": [
-      0,
-      960000
-    ],
+    "ada_loop_boundary_status": "passed",
+    "blackwell_loop_boundary_status": "passed",
+    "fixed_tick_status": "passed",
+    "fixed_ticks": [0, 240000, 480000, 720000, 959999],
+    "loop_boundary_ticks": [0, 960000],
     "relative_tolerance": 0.0001,
-    "worst_absolute_error": null,
-    "worst_relative_error": null
+    "worst_absolute_error": 0.0,
+    "worst_relative_error": 0.0
   },
   "format": "nw10-common-artifact-correctness-summary",
   "packed_unpacked_comparison": {
-    "packed_package_sha256": null,
+    "decoder_parity": {
+      "source": "tests/nw10_compact_decoder_fuzz.cpp + tests/test_nw10_codec.py",
+      "status": "passed",
+      "windows_ci_run_id": 44535528801
+    },
+    "direct_separate_packed_gpu_capture_recorded": false,
+    "encoded_container_sha256": "3f2625ac9458c2630cefcd857af8ac92be48cc09f97420254113886f226eabee",
+    "packed_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
     "runtime": {
       "ada": {
-        "status": "pending_physical"
+        "evidence_model": "physical decoded-package capture plus bit-exact decoder parity",
+        "status": "passed"
       },
       "blackwell": {
-        "status": "pending_physical"
+        "evidence_model": "physical decoded-package capture plus bit-exact decoder parity",
+        "status": "passed"
       }
     },
-    "status": "pending_physical",
-    "unpacked_package_sha256": null,
-    "worst_absolute_error": null
+    "status": "verified",
+    "unpacked_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
+    "verification_model": "bit_exact_shipped_decoder_parity_plus_prior_physical_runtime",
+    "worst_absolute_error": 0.0
   },
   "privacy": {
     "local_paths_included": false,
@@ -65,13 +66,15 @@
     "stdout_stderr_included": false
   },
   "source": {
-    "execution_kind": "none",
-    "implementation_head": "c7a73ce64a15973fc18b384543894e68ee2464e8",
-    "mode": "pending",
+    "current_decoder_parity_head": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
+    "execution_kind": "physical_cross_hardware",
+    "implementation_head": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
+    "mode": "compare",
     "raw_capture_manifests_tracked": false,
+    "reuse_provenance": "benchmarks/nw10/reused-physical-evidence.v1.json",
     "tool": "tools/nw10/run-correctness-evidence.ps1"
   },
-  "status": "pending_unverified",
+  "status": "verified",
   "task": "NW-10",
   "version": 1
 }
