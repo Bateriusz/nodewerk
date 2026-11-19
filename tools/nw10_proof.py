@@ -530,12 +530,19 @@ def main(argv: list[str] | None = None) -> int:
             # is different: size is a research outcome, so retain the exact
             # measured blocker and continue to the restricted-intro attempt
             # instead of turning a missed size tier into a CI failure.
+            current_inputs = contract.compute_build_inputs()
             report = {
                 "format": PROOF_REPORT_FORMAT,
                 "version": PROOF_REPORT_VERSION,
                 "task": contract.TASK,
                 "implementation_base": contract.IMPLEMENTATION_BASE,
                 "planning_provenance": contract.PLANNING_PROVENANCE,
+                "nw10_build_inputs": current_inputs,
+                "nw10_build_inputs_digest": contract.build_inputs_digest(current_inputs),
+                "templates": {
+                    "canonical_decoder_off": True,
+                    "compact_decoder_on": True,
+                },
                 "success": False,
                 "release_grade": not args.contracts_only,
                 "test_payload": bool(args.contracts_only),
