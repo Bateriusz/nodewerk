@@ -815,6 +815,48 @@ def test_contract_evidence_regeneration_rejects_unbound_verified_flags(
     assert regenerated["startup"] == "pending_unverified"
     assert regenerated["memory"] == "pending_unverified"
 
+def test_physical_status_preservation_requires_matching_file_hashes(
+    tmp_path: Path,
+) -> None:
+    import nw10_evidence
+
+    evidence_root = tmp_path / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    correctness_path = evidence_root / "common-artifact-correctness.v1.json"
+    correctness_path.write_text('{"status":"verified"}\n', encoding="utf-8")
+    current_head = "1" * 40
+    relative = "benchmarks/nw10/common-artifact-correctness.v1.json"
+    status = {
+        "source_head_sha": current_head,
+        "evidence_status": "correctness_verified_system_pending",
+        "physical_evidence": "correctness_verified",
+        "ada_correctness": "verified",
+        "blackwell_correctness": "verified",
+        "correctness_evidence": {
+            "status": "verified",
+            "path": relative,
+            "sha256": "0" * 64,
+        },
+        "files": [{"path": relative, "sha256": "0" * 64}],
+    }
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is False
+    )
+
+    digest = nw10_evidence._sha256(correctness_path)
+    status["correctness_evidence"]["sha256"] = digest
+    status["files"][0]["sha256"] = digest
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is True
+    )
+
+
 def test_reused_physical_evidence_regeneration_does_not_promote_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
