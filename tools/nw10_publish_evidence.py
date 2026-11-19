@@ -1029,6 +1029,7 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
         "hardware": {
             "adapter_description": adapter,
             "driver_version": driver,
+            "windows_build": metrics_windows_build,
         },
         "cache_state": {
             "kind": cache_kind,
@@ -1057,6 +1058,7 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
         "hardware": {
             "adapter_description": adapter,
             "driver_version": driver,
+            "windows_build": metrics_windows_build,
         },
         "package_sha256": artifact["package_sha256"],
         "peak_engine_committed_gpu_bytes": peak_gpu,
