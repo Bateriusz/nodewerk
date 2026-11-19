@@ -17,6 +17,43 @@ VERSION = 1
 INVALIDATED_GRADIENT_SHA256 = "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
 
 
+def normalize_artifact_digest(value: str) -> str:
+    digest = str(value).strip().lower()
+    if digest.startswith("sha256:"):
+        digest = digest[len("sha256:"):]
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise ValueError("artifact digest must be sha256:<64 lowercase hex>")
+    return "sha256:" + digest
+
+
+def bind_artifact_source(
+    report: dict[str, Any],
+    *,
+    artifact_name: str,
+    artifact_id: int,
+    artifact_digest: str,
+) -> dict[str, Any]:
+    if report.get("format") != FORMAT or report.get("version") != VERSION:
+        raise ValueError("PE ledger report has an unexpected format or version")
+    if not artifact_name.strip():
+        raise ValueError("artifact name is required")
+    if artifact_id <= 0:
+        raise ValueError("artifact id must be positive")
+    digest = normalize_artifact_digest(artifact_digest)
+    target = report.get("current_attempt")
+    if isinstance(target, Mapping):
+        source = target.get("source")
+    else:
+        source = report.get("source")
+    if not isinstance(source, dict):
+        raise ValueError("PE ledger source object is missing")
+    source["artifact_name"] = artifact_name
+    source["artifact_id"] = artifact_id
+    source["artifact_digest"] = digest
+    source["artifact_retained"] = True
+    return report
+
+
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -338,14 +375,14 @@ def build_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--final-executable", type=Path, required=True)
-    parser.add_argument("--linker-baseline-executable", type=Path, required=True)
-    parser.add_argument("--decoder-on-template", type=Path, required=True)
-    parser.add_argument("--decoder-off-template", type=Path, required=True)
-    parser.add_argument("--final-package", type=Path, required=True)
-    parser.add_argument("--linker-baseline-package", type=Path, required=True)
-    parser.add_argument("--final-manifest", type=Path, required=True)
-    parser.add_argument("--linker-baseline-manifest", type=Path, required=True)
+    parser.add_argument("--final-executable", type=Path)
+    parser.add_argument("--linker-baseline-executable", type=Path)
+    parser.add_argument("--decoder-on-template", type=Path)
+    parser.add_argument("--decoder-off-template", type=Path)
+    parser.add_argument("--final-package", type=Path)
+    parser.add_argument("--linker-baseline-package", type=Path)
+    parser.add_argument("--final-manifest", type=Path)
+    parser.add_argument("--linker-baseline-manifest", type=Path)
     parser.add_argument(
         "--runtime-status",
         choices=(
@@ -359,8 +396,64 @@ def main() -> int:
     parser.add_argument("--prior-valid-ledger", type=Path)
     parser.add_argument("--source-head-sha")
     parser.add_argument("--workflow-run-id", type=int)
+    parser.add_argument("--bind-source-report", type=Path)
+    parser.add_argument("--artifact-name")
+    parser.add_argument("--artifact-id", type=int)
+    parser.add_argument("--artifact-digest")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+
+    if args.bind_source_report is not None:
+        if (
+            not args.artifact_name
+            or args.artifact_id is None
+            or not args.artifact_digest
+        ):
+            parser.error(
+                "--bind-source-report requires --artifact-name, --artifact-id, "
+                "and --artifact-digest"
+            )
+        report = json.loads(args.bind_source_report.read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            parser.error("--bind-source-report must contain a JSON object")
+        report = bind_artifact_source(
+            report,
+            artifact_name=args.artifact_name,
+            artifact_id=args.artifact_id,
+            artifact_digest=args.artifact_digest,
+        )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            json.dumps(
+                {
+                    "status": report.get("status"),
+                    "artifact_id": args.artifact_id,
+                    "artifact_digest": normalize_artifact_digest(
+                        args.artifact_digest
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    required_paths = {
+        "--final-executable": args.final_executable,
+        "--linker-baseline-executable": args.linker_baseline_executable,
+        "--decoder-on-template": args.decoder_on_template,
+        "--decoder-off-template": args.decoder_off_template,
+        "--final-package": args.final_package,
+        "--linker-baseline-package": args.linker_baseline_package,
+        "--final-manifest": args.final_manifest,
+        "--linker-baseline-manifest": args.linker_baseline_manifest,
+    }
+    missing = [name for name, value in required_paths.items() if value is None]
+    if missing:
+        parser.error("measurement mode requires " + ", ".join(missing))
 
     prior_valid_ledger = (
         json.loads(args.prior_valid_ledger.read_text(encoding="utf-8"))
