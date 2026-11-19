@@ -39,7 +39,7 @@
     "link_manifest_verified": true,
     "present_sync_interval": 0,
     "runtime_status": "pending_runtime_validation",
-    "sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0"
+    "sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8"
   },
   "classification": "continue",
   "compact_candidate": {
@@ -49,7 +49,7 @@
     "exit_code_hex": "0xC0000005",
     "failure_classification": "non_certifying_hosted_failure",
     "runtime_status": "pending_runtime_validation",
-    "sha256": "7209659422ab719d6cb41e9579e255c3625cd16bebb5a3215bcdbb04dc8de630"
+    "sha256": "7d6ce07ba27ac73797d04c9f8e4ea5783c02ca35cbf365697fe693e898b9cd5c"
   },
   "format": "nw10-windows-compact-feasibility",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
@@ -68,14 +68,14 @@
     "whitelist_generated": true
   },
   "source": {
-    "artifact_digest": "sha256:ac35ac00ebea17183787dad4ede0956b92f93a32bbbcaf2a33acf1e6b9b0c7a2",
-    "artifact_id": 14536032623,
+    "artifact_digest": "sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4",
+    "artifact_id": 14540370510,
     "artifact_name": "nw10-windows-compact-evidence",
     "artifact_retained": true,
-    "head_sha": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
+    "head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
     "kind": "github_actions_windows_runtime",
     "measurement_tool": "tools/nw10_feasibility.py",
-    "run_id": 44535528801,
+    "run_id": 44542203189,
     "workflow": "NW-10 Compact Export and Restricted Intro"
   },
   "target_bytes": 65536,
