@@ -362,5 +362,217 @@
         }
       }
     }
+  },
+  "if": {
+    "properties": {
+      "status": {
+        "const": "verified"
+      }
+    },
+    "required": [
+      "status"
+    ]
+  },
+  "then": {
+    "properties": {
+      "source_head_sha": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "common_artifact": {
+        "properties": {
+          "package_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "ada": {
+        "properties": {
+          "status": {
+            "const": "verified"
+          }
+        }
+      },
+      "blackwell": {
+        "properties": {
+          "status": {
+            "const": "verified"
+          }
+        }
+      },
+      "comparison": {
+        "properties": {
+          "fixed_tick_status": {
+            "const": "passed"
+          },
+          "ada_loop_boundary_status": {
+            "const": "passed"
+          },
+          "blackwell_loop_boundary_status": {
+            "const": "passed"
+          },
+          "worst_absolute_error": {
+            "type": "number",
+            "minimum": 0
+          },
+          "worst_relative_error": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "packed_unpacked_comparison": {
+        "properties": {
+          "status": {
+            "const": "verified"
+          },
+          "direct_separate_packed_gpu_capture_recorded": {
+            "const": true
+          },
+          "packed_package_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "unpacked_package_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "worst_absolute_error": {
+            "type": "number",
+            "minimum": 0
+          },
+          "runtime": {
+            "properties": {
+              "ada": {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              },
+              "blackwell": {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "source": {
+        "properties": {
+          "mode": {
+            "const": "compare"
+          },
+          "execution_kind": {
+            "const": "physical_cross_hardware"
+          },
+          "implementation_head": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        }
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "source_head_sha": {
+        "type": "null"
+      },
+      "common_artifact": {
+        "properties": {
+          "package_sha256": {
+            "type": "null"
+          }
+        }
+      },
+      "ada": {
+        "properties": {
+          "status": {
+            "const": "pending_unverified"
+          }
+        }
+      },
+      "blackwell": {
+        "properties": {
+          "status": {
+            "const": "pending_unverified"
+          }
+        }
+      },
+      "comparison": {
+        "properties": {
+          "fixed_tick_status": {
+            "const": "pending"
+          },
+          "ada_loop_boundary_status": {
+            "const": "pending"
+          },
+          "blackwell_loop_boundary_status": {
+            "const": "pending"
+          },
+          "worst_absolute_error": {
+            "type": "null"
+          },
+          "worst_relative_error": {
+            "type": "null"
+          }
+        }
+      },
+      "packed_unpacked_comparison": {
+        "properties": {
+          "status": {
+            "const": "pending_physical"
+          },
+          "direct_separate_packed_gpu_capture_recorded": {
+            "const": false
+          },
+          "packed_package_sha256": {
+            "type": "null"
+          },
+          "unpacked_package_sha256": {
+            "type": "null"
+          },
+          "worst_absolute_error": {
+            "type": "null"
+          },
+          "runtime": {
+            "properties": {
+              "ada": {
+                "properties": {
+                  "status": {
+                    "const": "pending_physical"
+                  }
+                }
+              },
+              "blackwell": {
+                "properties": {
+                  "status": {
+                    "const": "pending_physical"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "source": {
+        "properties": {
+          "mode": {
+            "const": "pending"
+          },
+          "execution_kind": {
+            "const": "none"
+          },
+          "implementation_head": {
+            "type": "null"
+          }
+        }
+      }
+    }
   }
 }

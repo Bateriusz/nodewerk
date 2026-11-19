@@ -124,5 +124,61 @@
         "null"
       ]
     }
+  },
+  "if": {
+    "properties": {
+      "status": {
+        "const": "verified"
+      }
+    },
+    "required": [
+      "status"
+    ]
+  },
+  "then": {
+    "properties": {
+      "source_head_sha": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "final_artifact": {
+        "type": "object"
+      },
+      "startup": {
+        "type": "object"
+      },
+      "memory": {
+        "type": "object"
+      },
+      "clean_system": {
+        "type": "object"
+      },
+      "windows_build": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "source_head_sha": {
+        "type": "null"
+      },
+      "final_artifact": {
+        "type": "null"
+      },
+      "startup": {
+        "type": "null"
+      },
+      "memory": {
+        "type": "null"
+      },
+      "clean_system": {
+        "type": "null"
+      },
+      "windows_build": {
+        "type": "null"
+      }
+    }
   }
 }

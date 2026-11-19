@@ -515,6 +515,37 @@ def test_compact_feasibility_schema_supports_a_valid_success_branch() -> None:
     validate_instance(success, schema, schema)
 
 
+def test_nw10_schemas_structurally_bind_verified_physical_evidence() -> None:
+    from schema_validator import validate_instance, SchemaValidationError
+
+    system_schema = json.loads(
+        (REPO_ROOT / "schemas" / "nw10-system-validation.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    system = json.loads(
+        (REPO_ROOT / "benchmarks" / "nw10/system-validation.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    system["status"] = "verified"
+    with pytest.raises(SchemaValidationError):
+        validate_instance(system, system_schema, system_schema)
+
+    correctness_schema = json.loads(
+        (REPO_ROOT / "schemas" / "nw10-common-artifact-correctness.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    correctness = json.loads(
+        (REPO_ROOT / "benchmarks" / "nw10/common-artifact-correctness.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    correctness["status"] = "verified"
+    with pytest.raises(SchemaValidationError):
+        validate_instance(correctness, correctness_schema, correctness_schema)
+
 def test_verified_system_validation_cannot_omit_measurements(tmp_path: Path) -> None:
     record = {
         "format": "nw10-system-validation",

@@ -68,6 +68,15 @@ def validate_instance(
         target = _resolve_ref(schema["$ref"], root_schema)
         validate_instance(instance, target, root_schema, path)
         return
+    if "if" in schema:
+        condition_matches = True
+        try:
+            validate_instance(instance, schema["if"], root_schema, path)
+        except SchemaValidationError:
+            condition_matches = False
+        branch = schema.get("then") if condition_matches else schema.get("else")
+        if isinstance(branch, dict):
+            validate_instance(instance, branch, root_schema, path)
 
     if "type" in schema:
         expected = schema["type"]
