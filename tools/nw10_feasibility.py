@@ -62,6 +62,24 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
+def _normalize_artifact_digest(value: str) -> str:
+    digest = str(value).strip().lower()
+    if not digest:
+        return ""
+    if digest.startswith("sha256:"):
+        hex_digest = digest[len("sha256:"):]
+    else:
+        hex_digest = digest
+    if len(hex_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in hex_digest
+    ):
+        raise ValueError(
+            "artifact digest must be a SHA-256 digest as 64 hex characters "
+            "or sha256:<64 hex characters>"
+        )
+    return "sha256:" + hex_digest
+
+
 def _proof_artifact(report: Mapping[str, Any]) -> Mapping[str, Any]:
     artifact = report.get("canonical_artifact")
     if not isinstance(artifact, Mapping):
@@ -218,8 +236,9 @@ def build_feasibility(
     }
     if artifact_id is not None:
         source["artifact_id"] = int(artifact_id)
-    if artifact_digest:
-        source["artifact_digest"] = artifact_digest
+    normalized_artifact_digest = _normalize_artifact_digest(artifact_digest)
+    if normalized_artifact_digest:
+        source["artifact_digest"] = normalized_artifact_digest
 
     record: dict[str, Any] = {
         "format": FORMAT,
