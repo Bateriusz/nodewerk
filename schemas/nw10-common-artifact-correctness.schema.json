@@ -282,6 +282,36 @@
                     "passed",
                     "pending_physical"
                   ]
+                },
+                "unpacked_executable_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "packed_executable_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "encoded_container_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "codec_id": {
+                  "type": "string"
+                },
+                "layout_id": {
+                  "type": "string"
+                },
+                "device_form_factor_source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "frames_per_tick": {
+                  "type": "integer",
+                  "const": 1
+                },
+                "present_sync_interval": {
+                  "type": "integer",
+                  "const": 0
                 }
               }
             },
@@ -296,6 +326,36 @@
                     "passed",
                     "pending_physical"
                   ]
+                },
+                "unpacked_executable_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "packed_executable_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "encoded_container_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "codec_id": {
+                  "type": "string"
+                },
+                "layout_id": {
+                  "type": "string"
+                },
+                "device_form_factor_source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "frames_per_tick": {
+                  "type": "integer",
+                  "const": 1
+                },
+                "present_sync_interval": {
+                  "type": "integer",
+                  "const": 0
                 }
               }
             }
@@ -303,6 +363,29 @@
         },
         "direct_separate_packed_gpu_capture_recorded": {
           "type": "boolean"
+        },
+        "codec_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "nwc.codec.stored.v1",
+            "nwc.codec.mszip.v1",
+            null
+          ]
+        },
+        "layout_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "nwc.layout.canonical.v1",
+            "nwc.layout.aos.v1",
+            "nwc.layout.soa.v1",
+            null
+          ]
         }
       }
     },
@@ -449,18 +532,57 @@
                   "status": {
                     "const": "passed"
                   }
-                }
+                },
+                "required": [
+                  "status",
+                  "unpacked_executable_sha256",
+                  "packed_executable_sha256",
+                  "encoded_container_sha256",
+                  "codec_id",
+                  "layout_id",
+                  "device_form_factor_source",
+                  "frames_per_tick",
+                  "present_sync_interval"
+                ]
               },
               "blackwell": {
                 "properties": {
                   "status": {
                     "const": "passed"
                   }
-                }
+                },
+                "required": [
+                  "status",
+                  "unpacked_executable_sha256",
+                  "packed_executable_sha256",
+                  "encoded_container_sha256",
+                  "codec_id",
+                  "layout_id",
+                  "device_form_factor_source",
+                  "frames_per_tick",
+                  "present_sync_interval"
+                ]
               }
             }
+          },
+          "codec_id": {
+            "enum": [
+              "nwc.codec.stored.v1",
+              "nwc.codec.mszip.v1"
+            ]
+          },
+          "layout_id": {
+            "enum": [
+              "nwc.layout.canonical.v1",
+              "nwc.layout.aos.v1",
+              "nwc.layout.soa.v1"
+            ]
           }
-        }
+        },
+        "required": [
+          "codec_id",
+          "layout_id"
+        ]
       },
       "source": {
         "properties": {
@@ -557,6 +679,12 @@
                 }
               }
             }
+          },
+          "codec_id": {
+            "type": "null"
+          },
+          "layout_id": {
+            "type": "null"
           }
         }
       },
