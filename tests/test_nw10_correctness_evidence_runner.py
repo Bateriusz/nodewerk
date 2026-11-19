@@ -15,12 +15,12 @@ def test_correctness_runner_reproduces_and_binds_common_artifact() -> None:
     assert "[switch]$compare" in lowered
     assert "[switch]$bundle" in lowered
     assert "enter-nwbuildenvironment" in lowered
-    assert "tools/nw10_perf_candidate.py" in text
+    assert "tools/nw07_export.py" in text
     assert "tools/nw10_common_correctness.py" in text
     assert '"build-diagnostic"' in text
     assert '"capture"' in text
     assert '"compare"' in text
-    assert "build/nw10-intro/report.json" in text
+    assert "build/nw10-proof/report.json" in text
     assert "Get-NwExpectedArtifact" in text
     assert "--packed-ada-captures" in text
     assert "--packed-blackwell-captures" in text
@@ -113,6 +113,9 @@ def test_transfer_allows_non_identical_rebuilt_pe_when_common_package_matches() 
     ).read_text(encoding="utf-8")
     transfer_block = text[text.index("if ($PrepareTransferBundle)") : text.index("if ($Compare)")]
 
+    assert '"-DNW10_COMPACT_PACKAGE=OFF"' in transfer_block
+    assert '"tools/nw07_export.py"' in transfer_block
+    assert '"tools/nw10_perf_candidate.py"' not in transfer_block
     assert 'Assert-NwSameValue "artifact_key"' in transfer_block
     assert 'Assert-NwSameValue "package_sha256"' in transfer_block
     assert 'Assert-NwSameValue "manifest_sha256"' in transfer_block
