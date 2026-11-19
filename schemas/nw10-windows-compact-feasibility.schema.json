@@ -104,7 +104,8 @@
           "enum": [
             "measured_decoder_off",
             "pending_decoder_off",
-            "invalid_decoder_on_baseline"
+            "invalid_decoder_on_baseline",
+            "measured_decoder_off_size_blocked"
           ]
         },
         "canonical_proof_within_tier": {
@@ -339,6 +340,82 @@
         },
         "whitelist_generated": {
           "const": true
+        }
+      }
+    },
+    "prior_valid_artifact": {
+      "type": "object",
+      "required": [
+        "executable_bytes",
+        "executable_sha256",
+        "runtime_status",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "executable_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "const": "validated_runnable"
+        },
+        "status": {
+          "const": "archived_prior_valid_fallback"
+        },
+        "source_head_sha": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "selected_artifact": {
+      "type": "object",
+      "required": [
+        "bytes",
+        "sha256",
+        "runtime_status",
+        "source",
+        "ledger",
+        "reason"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "enum": [
+            "validated_runnable",
+            "pending_runtime_validation"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ledger": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }
