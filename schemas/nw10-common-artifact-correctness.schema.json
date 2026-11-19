@@ -34,7 +34,10 @@
       ]
     },
     "source_head_sha": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "pattern": "^[0-9a-f]{40}$"
     },
     "capture_protocol": {
