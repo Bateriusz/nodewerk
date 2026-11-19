@@ -1029,7 +1029,7 @@
       "width": 1920
     },
     "report_path": "benchmarks/nw10/intro-export-report.v1.json",
-    "report_sha256": "57267bb302b268fb727ae006b6883d2e7252c787fe75ddaa25b0521bf062b584"
+    "report_sha256": "6e23b5a16b22668cca87627d3e724433cfda22cee483370e664a3b83e1babfab"
   },
   "minimum_measured_artifact": {
     "bytes": 2090,
@@ -1109,13 +1109,13 @@
     "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
     "tools/nw10_compact.py": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
-    "tools/nw10_evidence.py": "3406a751c16eb70cfe6f22e7039b4e2bbb3ece17954ee44c507e746c15550dfe",
+    "tools/nw10_evidence.py": "dd365da13c30839eeb0413b5be102b70c0ef4347b3af1fd03f6a69a6a92a6a50",
     "tools/nw10_intro.py": "b11505fa64b39e5fd37f6a3e98b4c34cf2ca020ea85c0d001795f663a4c0a6b8",
     "tools/nw10_proof.py": "6f071e4ae5e92c6d2202dd8937a39770b5c8792c8782aaf0af2378061f83f1d9",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:61d8d11b5d459094cbe3f820e98657345725c5be9ab676e6a4e3accb82c46ce2",
+  "nw10_build_inputs_digest": "sha256:v1:ae9ecd5f5ac56e5e7207b077b4201bdb6496b8210385adffa9a174edf2c6da3f",
   "packaging_modes": [
     {
       "clean_system_checked": false,
@@ -1729,7 +1729,7 @@
       }
     },
     "report_path": "benchmarks/nw10/proof-export-report.v1.json",
-    "report_sha256": "fdeb8c4da60af11715dfc0e2353da6ae6827d9f03ba093318722173620a6f67d",
+    "report_sha256": "8d83270c2523d4f8b82eff1eaf810efacedb2f06d41e731f5d7635b1ec75215e",
     "reproducibility": {
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",
