@@ -1305,14 +1305,16 @@ def build_byte_ledger(
 
     dependency_rows = [dict(item) for item in dependencies]
     dependency_names = {
-        str(item.get("name", "")).lower() for item in dependency_rows
+        str(item.get("name", "")).lower().removesuffix(".dll")
+        for item in dependency_rows
+        if str(item.get("name", "")).strip()
     }
     required_auxiliary: dict[str, int] = {}
-    if compact is not None and "cabinet.dll" not in dependency_names:
+    if compact is not None and "cabinet" not in dependency_names:
         # The player-supported MSZIP decoder is an inbox cabinet.dll caller.
-        # It is part of the compact artifact's runtime dependency closure even
-        # when the canonical package manifest was produced by a decoder-off
-        # build and therefore does not name it.
+        # Normalize DLL names before testing membership because PE import
+        # inspection reports "cabinet" while contract-only rows historically
+        # used "cabinet.dll".  They are one dependency, not two.
         dependency_rows.append(
             {
                 "name": "cabinet.dll",
@@ -1321,7 +1323,7 @@ def build_byte_ledger(
                 "required_by": "src/package/nw_compact.cpp",
             }
         )
-        dependency_names.add("cabinet.dll")
+        dependency_names.add("cabinet")
     dependency_rows.sort(key=lambda item: str(item.get("name", "")).lower())
 
     summed_components = (
