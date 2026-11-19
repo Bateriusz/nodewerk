@@ -46,6 +46,7 @@ def _outcome(**overrides) -> dict:
         "validated_mode": "compact",
         "compact_candidate_runtime_status": "validated_runnable",
         "compact_candidate_exit_code": 0,
+        "canonical_fallback_exit_code": None,
         "proof_compact_candidate_bytes": 65_000,
     }
     value.update(overrides)
@@ -86,6 +87,7 @@ def test_feasibility_failure_branch_keeps_canonical_fallback_and_continue() -> N
             validated_mode="canonical_fallback",
             compact_candidate_runtime_status="rejected_runtime_failure",
             compact_candidate_exit_code=70,
+            canonical_fallback_exit_code=0,
             proof_compact_candidate_bytes=227_715,
         ),
         proof=_proof(),
@@ -101,6 +103,68 @@ def test_feasibility_failure_branch_keeps_canonical_fallback_and_continue() -> N
     assert record["classification"] == "continue"
     assert record["compact_candidate"]["runtime_status"] == "rejected_runtime_failure"
     assert record["canonical_fallback"]["runtime_status"] == "validated_runnable"
+    assert record["canonical_fallback"]["exit_code"] == 0
+
+
+def test_hosted_access_violation_remains_pending_and_schema_valid() -> None:
+    access_violation = -1073741819
+    intro = _intro()
+    intro["ledgers"] = {
+        "canonical": {
+            "dependencies": [
+                {"name": "d3d12", "kind": "windows_inbox", "distributed_bytes": 0},
+                {"name": "dxgi", "kind": "windows_inbox", "distributed_bytes": 0},
+            ]
+        }
+    }
+    record = feasibility.build_feasibility(
+        outcome=_outcome(
+            minimum_measured_candidate_bytes=228_181,
+            minimum_validated_runnable_bytes=None,
+            validated_mode="canonical_fallback_pending_physical",
+            compact_candidate_runtime_status="pending_runtime_validation",
+            compact_candidate_exit_code=access_violation,
+            canonical_fallback_exit_code=access_violation,
+            intro_compact_candidate_bytes=228_181,
+            proof_compact_candidate_bytes=238_188,
+        ),
+        proof=_proof(),
+        intro=intro,
+        run_id=1,
+        head_sha="1" * 40,
+        artifact_id=2,
+        artifact_digest="sha256:" + "3" * 64,
+    )
+    schema = _schema()
+    validate_instance(record, schema, schema)
+    assert record["target_met"] is False
+    assert record["measurements"]["validated_mode"] == (
+        "canonical_fallback_pending_physical"
+    )
+    assert record["compact_candidate"]["runtime_status"] == "pending_runtime_validation"
+    assert record["compact_candidate"]["exit_code"] == access_violation
+    assert record["compact_candidate"]["exit_code_hex"] == "0xC0000005"
+    assert record["compact_candidate"]["failure_classification"] == (
+        "non_certifying_hosted_failure"
+    )
+    assert record["canonical_fallback"]["runtime_status"] == "pending_runtime_validation"
+    assert record["canonical_fallback"]["exit_code"] == access_violation
+    assert record["canonical_fallback"]["exit_code_hex"] == "0xC0000005"
+    assert record["canonical_fallback"]["dependency_closure"]["canonical_imports"] == [
+        "d3d12",
+        "dxgi",
+    ]
+    assert record["blocker"]["status"] == "pending_physical"
+
+
+def test_windows_exit_code_rejects_values_outside_signed_32_bit() -> None:
+    for value in (-(2**31) - 1, 2**31):
+        try:
+            feasibility._windows_exit_code(value)
+        except ValueError as exc:
+            assert "signed 32-bit" in str(exc)
+        else:
+            raise AssertionError("out-of-range Windows exit code was accepted")
 
 
 def test_feasibility_rejects_canonical_proof_above_the_frozen_tier() -> None:
