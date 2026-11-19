@@ -270,7 +270,10 @@ def test_publish_rejects_private_path_and_promotes_only_performance_status(
     preservation.REPO_ROOT = tmp_path / "repo"
     try:
         status = preservation.publish_public_evidence(
-            source, destination, status_path
+            source,
+            destination,
+            status_path,
+            implementation_head="a" * 40,
         )
     finally:
         preservation.REPO_ROOT = old_root
@@ -340,7 +343,10 @@ def test_publish_preserves_existing_compact_progress(tmp_path: Path) -> None:
     preservation.REPO_ROOT = repo
     try:
         status = preservation.publish_public_evidence(
-            source, destination, status_path
+            source,
+            destination,
+            status_path,
+            implementation_head="a" * 40,
         )
     finally:
         preservation.REPO_ROOT = old_root
@@ -384,7 +390,10 @@ def test_publish_never_downgrades_unknown_later_evidence_state(tmp_path: Path) -
     preservation.REPO_ROOT = repo
     try:
         status = preservation.publish_public_evidence(
-            source, destination, status_path
+            source,
+            destination,
+            status_path,
+            implementation_head="a" * 40,
         )
     finally:
         preservation.REPO_ROOT = old_root
