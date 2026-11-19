@@ -347,12 +347,74 @@ def test_packed_executable_verification_recomputes_container_identity(
         correctness._verify_packed_executable(record, record_path=record_path)
 
 
+def test_packed_result_bundle_manifest_binds_verification_file(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "bundle"
+    captures = root / "captures"
+    captures.mkdir(parents=True)
+    executable = root / "packed-diagnostic.exe"
+    executable.write_bytes(b"packed executable")
+    record = _capture_record(
+        "ada",
+        "captured_reference",
+        packaging_mode="packed",
+        diagnostic_sha256=correctness._sha256(executable),
+        encoded_container_sha256="2" * 64,
+    )
+    for capture in record["captures"]:
+        path = captures / capture["file"]
+        path.write_bytes(b"data")
+        capture["bytes"] = path.stat().st_size
+        capture["sha256"] = correctness._sha256(path)
+    record_path = root / "capture.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    files = []
+    for path in [record_path, executable, *sorted(captures.iterdir())]:
+        files.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "bytes": path.stat().st_size,
+                "sha256": correctness._sha256(path),
+            }
+        )
+    (root / "bundle-manifest.json").write_text(
+        json.dumps(
+            {
+                "format": "nw10-correctness-result-bundle",
+                "version": 1,
+                "task": "NW-10",
+                "tier": "ada",
+                "files": files,
+            }
+        ),
+        encoding="utf-8",
+    )
+    correctness._verify_result_bundle_manifest(
+        record,
+        record_path=record_path,
+        capture_dir=captures,
+    )
+
+    executable.write_bytes(b"tampered executable")
+    with pytest.raises(ValueError, match="size mismatch|SHA-256 mismatch"):
+        correctness._verify_result_bundle_manifest(
+            record,
+            record_path=record_path,
+            capture_dir=captures,
+        )
+
+
 def test_packed_comparison_requires_manifests_and_packed_mode(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(correctness, "_verify_capture_manifest", lambda *_args: None)
     monkeypatch.setattr(
         correctness, "_verify_packed_executable", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        correctness, "_verify_result_bundle_manifest", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(
         correctness,

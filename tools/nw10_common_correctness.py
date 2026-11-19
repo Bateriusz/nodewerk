@@ -24,7 +24,7 @@ import shutil
 import struct
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -700,6 +700,102 @@ def _verify_capture_manifest(
             raise ValueError(f"correctness raw capture SHA-256 mismatch for tick {tick}")
 
 
+def _verify_result_bundle_manifest(
+    record: Mapping[str, Any],
+    *,
+    record_path: Path,
+    capture_dir: Path,
+) -> None:
+    root = record_path.parent.resolve()
+    if record_path.name != "capture.json":
+        raise ValueError("packed capture record must be the bundle capture.json")
+    if capture_dir.resolve() != (root / "captures").resolve():
+        raise ValueError("packed capture directory is not the bundle captures directory")
+    manifest_path = root / "bundle-manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError("packed correctness result bundle manifest is missing")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, Mapping):
+        raise ValueError("packed correctness result bundle manifest is not an object")
+    if manifest.get("format") not in {
+        "nw10-correctness-result-bundle",
+        "nw10-correctness-transfer-bundle",
+    }:
+        raise ValueError("packed correctness result bundle format is invalid")
+    if manifest.get("version") != 1 or manifest.get("task") != "NW-10":
+        raise ValueError("packed correctness result bundle identity is invalid")
+    if manifest.get("tier") != record.get("tier"):
+        raise ValueError("packed correctness result bundle tier does not match capture")
+    rows = manifest.get("files")
+    if not isinstance(rows, list):
+        raise ValueError("packed correctness result bundle has no files ledger")
+    file_hashes: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("packed correctness result bundle file row is invalid")
+        relative = row.get("path")
+        digest = str(row.get("sha256", "")).lower()
+        if not isinstance(relative, str):
+            raise ValueError("packed correctness result bundle path is invalid")
+        normalized = relative.replace("\\", "/")
+        if normalized.startswith("/") or (len(normalized) >= 2 and normalized[1] == ":"):
+            raise ValueError("packed correctness result bundle path is absolute")
+        raw_parts = normalized.split("/")
+        if any(part in {"", ".", ".."} for part in raw_parts):
+            raise ValueError("packed correctness result bundle path escapes its root")
+        path = PurePosixPath(normalized)
+        if path.is_absolute():
+            raise ValueError("packed correctness result bundle path is absolute")
+        if normalized in file_hashes:
+            raise ValueError("packed correctness result bundle contains duplicate paths")
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            raise ValueError("packed correctness result bundle SHA-256 is malformed")
+        try:
+            expected_bytes = int(row.get("bytes", -1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("packed correctness result bundle byte count is invalid") from exc
+        if expected_bytes < 0:
+            raise ValueError("packed correctness result bundle byte count is invalid")
+        candidate = root.joinpath(*path.parts)
+        try:
+            candidate.resolve().relative_to(root)
+        except ValueError as exc:
+            raise ValueError("packed correctness result bundle path escapes its root") from exc
+        if not candidate.is_file():
+            raise ValueError(f"packed correctness result bundle file is missing: {normalized}")
+        if candidate.stat().st_size != expected_bytes:
+            raise ValueError(f"packed correctness result bundle size mismatch: {normalized}")
+        actual = _sha256(candidate)
+        if actual != digest:
+            raise ValueError(f"packed correctness result bundle SHA-256 mismatch: {normalized}")
+        file_hashes[normalized] = actual
+    diagnostic = record.get("diagnostic_sibling")
+    if not isinstance(diagnostic, Mapping):
+        raise ValueError("packed capture is missing diagnostic identity")
+    verification_file = diagnostic.get("verification_file")
+    if not isinstance(verification_file, str) or not verification_file:
+        raise ValueError("packed capture does not retain its diagnostic executable")
+    required = {"capture.json", verification_file}
+    captures = record.get("captures")
+    if not isinstance(captures, list):
+        raise ValueError("packed capture has no capture manifest")
+    for row in captures:
+        if not isinstance(row, Mapping) or not isinstance(row.get("file"), str):
+            raise ValueError("packed capture manifest row is invalid")
+        required.add("captures/" + str(row["file"]))
+    missing = sorted(required - set(file_hashes))
+    if missing:
+        raise ValueError(
+            "packed correctness result bundle manifest omits required files: "
+            + ", ".join(missing)
+        )
+    if file_hashes["capture.json"] != _sha256(record_path):
+        raise ValueError("packed capture.json is not bound by the result bundle manifest")
+    expected_executable_sha = str(diagnostic.get("executable_sha256", "")).lower()
+    if file_hashes[verification_file] != expected_executable_sha:
+        raise ValueError("packed diagnostic executable is not bound by the result bundle manifest")
+
+
 def _verify_packed_executable(
     record: Mapping[str, Any], *, record_path: Path
 ) -> None:
@@ -782,6 +878,11 @@ def _verify_capture_record(
             raise ValueError(f"{tier} packed capture has no supported codec identity")
         if diagnostic.get("layout_id") not in contract.KNOWN_LAYOUT_IDS:
             raise ValueError(f"{tier} packed capture has no supported layout identity")
+        _verify_result_bundle_manifest(
+            record,
+            record_path=record_path,
+            capture_dir=capture_dir,
+        )
         _verify_packed_executable(record, record_path=record_path)
     hardware = record.get("hardware")
     if not isinstance(hardware, Mapping):

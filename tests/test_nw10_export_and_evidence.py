@@ -16,6 +16,7 @@ import nw10_compact as compact  # noqa: E402
 import nw10_contract as contract  # noqa: E402
 import nw10_proof as proof  # noqa: E402
 import nw10_pe_ledger as pe_ledger  # noqa: E402
+import nw10_perf_preservation as perf_preservation  # noqa: E402
 from schema_validator import validate_file_against_schema, validate_instance  # noqa: E402
 
 
@@ -806,6 +807,111 @@ def test_verified_correctness_and_pe_ledger_cannot_claim_unmeasured_runtime(
         )
 
 
+def test_performance_publisher_binds_status_to_implementation_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(perf_preservation, "REPO_ROOT", tmp_path)
+    source = tmp_path / "build" / "performance.json"
+    destination = (
+        tmp_path / "benchmarks" / "nw10" / "performance-preservation.v1.json"
+    )
+    status_path = tmp_path / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    source.parent.mkdir(parents=True)
+    status_path.parent.mkdir(parents=True)
+    runs = [{"status": "passed"} for _ in range(3)]
+    public = {
+        "format": perf_preservation.FORMAT,
+        "version": perf_preservation.VERSION,
+        "task": "NW-10",
+        "performance_contract": contract.PERF_CONTRACT_ID,
+        "performance_protocol": contract.PERF_PROTOCOL_ID,
+        "reference_binding_id": "binding",
+        "status": "verified_preserved",
+        "reasons": [],
+        "matched_environment": True,
+        "before": {
+            "worst_gpu_p99_ms": 1.0,
+            "worst_cpu_submit_p99_ms": 1.0,
+            "runs": runs,
+        },
+        "after": {
+            "worst_gpu_p99_ms": 1.1,
+            "worst_cpu_submit_p99_ms": 1.1,
+            "runs": runs,
+        },
+        "comparison": {
+            "same_canonical_package_sha256": True,
+            "faster_substitute_used": False,
+            "absolute_gate_operator": "<",
+            "absolute_gate_ms": perf_preservation.nw07_contract.FRAME_TIME_THRESHOLD_MS,
+        },
+        "privacy": {
+            "raw_samples_included": False,
+            "process_ids_included": False,
+            "stdout_stderr_included": False,
+            "local_paths_included": False,
+            "whitelist_generated": True,
+        },
+    }
+    source.write_text(json.dumps(public), encoding="utf-8")
+    status_path.write_text(
+        json.dumps(
+            {
+                "format": "nw10-evidence-status",
+                "version": 1,
+                "task": "NW-10",
+                "evidence_status": "pending_physical_windows_capture",
+                "files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    head = "a" * 40
+    status = perf_preservation.publish_public_evidence(
+        source,
+        destination,
+        status_path,
+        implementation_head=head,
+    )
+    assert status["source_head_sha"] == head
+    entry = status["performance_preservation"]
+    assert entry["status"] == "verified_preserved"
+    assert entry["path"] == "benchmarks/nw10/performance-preservation.v1.json"
+    assert any(
+        row["path"] == entry["path"] and row["sha256"] == entry["sha256"]
+        for row in status["files"]
+    )
+
+
+def test_pe_ledger_rejects_malformed_prior_artifact_identity() -> None:
+    valid = {
+        "format": pe_ledger.FORMAT,
+        "version": pe_ledger.VERSION,
+        "task": "NW-10",
+        "final_artifact": {
+            "runtime_status": "validated_runnable",
+            "executable_sha256": "1" * 64,
+            "executable_bytes": 240_702,
+            "package_sha256": "2" * 64,
+            "manifest_sha256": "3" * 64,
+        },
+        "conclusion": {"byte_ledger_complete": True},
+        "linker_elimination": {},
+        "compact_decoder": {},
+    }
+    pe_ledger._validate_prior_valid_ledger(valid)
+
+    for field, value, message in (
+        ("executable_bytes", 0, "executable size"),
+        ("package_sha256", "not-a-digest", "package_sha256"),
+        ("manifest_sha256", "4" * 63, "manifest_sha256"),
+    ):
+        malformed = json.loads(json.dumps(valid))
+        malformed["final_artifact"][field] = value
+        with pytest.raises(ValueError, match=message):
+            pe_ledger._validate_prior_valid_ledger(malformed)
+
+
 def test_contract_evidence_regeneration_rejects_unbound_verified_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -893,6 +999,26 @@ def test_physical_status_preservation_requires_matching_file_hashes(
         )
         is True
     )
+
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"status":"verified"}\n', encoding="utf-8")
+    outside_digest = nw10_evidence._sha256(outside)
+    for escaped in (
+        str(outside),
+        "benchmarks/nw10/../../outside.json",
+        "benchmarks/other/outside.json",
+    ):
+        escaped_status = json.loads(json.dumps(status))
+        escaped_status["correctness_evidence"]["path"] = escaped
+        escaped_status["correctness_evidence"]["sha256"] = outside_digest
+        escaped_status["files"][0]["path"] = escaped
+        escaped_status["files"][0]["sha256"] = outside_digest
+        assert (
+            nw10_evidence._physical_evidence_is_current(
+                escaped_status, current_head, evidence_root
+            )
+            is False
+        )
 
     status["blackwell_correctness"] = "pending_unverified"
     assert (

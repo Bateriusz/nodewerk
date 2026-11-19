@@ -14,7 +14,7 @@ import json
 import os
 import re
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import sys
@@ -606,6 +606,20 @@ def _physical_evidence_is_current(
     if not required:
         return False
 
+    def normalized_evidence_path(value: str) -> str | None:
+        normalized = value.replace("\\", "/")
+        if re.match(r"^[A-Za-z]:", normalized) or normalized.startswith("/"):
+            return None
+        raw_parts = normalized.split("/")
+        if any(part in {"", ".", ".."} for part in raw_parts):
+            return None
+        path = PurePosixPath(normalized)
+        if path.is_absolute() or path.parts[:2] != ("benchmarks", "nw10"):
+            return None
+        if len(path.parts) < 3:
+            return None
+        return path.as_posix()
+
     file_hashes: dict[str, str] = {}
     rows = previous.get("files")
     if not isinstance(rows, list):
@@ -617,7 +631,9 @@ def _physical_evidence_is_current(
         digest = row.get("sha256")
         if not isinstance(relative, str) or not isinstance(digest, str):
             return False
-        normalized = relative.replace("\\", "/")
+        normalized = normalized_evidence_path(relative)
+        if normalized is None:
+            return False
         digest = digest.lower()
         if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             return False
@@ -625,7 +641,7 @@ def _physical_evidence_is_current(
             return False
         file_hashes[normalized] = digest
 
-    root = evidence_root or (REPO_ROOT / "benchmarks" / "nw10")
+    root = (evidence_root or (REPO_ROOT / "benchmarks" / "nw10")).resolve()
     for field in required:
         entry = previous.get(field)
         assert isinstance(entry, dict)
@@ -633,20 +649,24 @@ def _physical_evidence_is_current(
         digest = entry.get("sha256")
         if not isinstance(relative, str) or not isinstance(digest, str):
             return False
-        relative = relative.replace("\\", "/")
+        normalized = normalized_evidence_path(relative)
+        if normalized is None:
+            return False
         digest = digest.lower()
         if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             return False
-        if relative.startswith("benchmarks/nw10/"):
-            candidate = root / Path(relative).name
-        else:
-            candidate = REPO_ROOT / relative
+        parts = PurePosixPath(normalized).parts
+        candidate = root.joinpath(*parts[2:])
+        try:
+            candidate.resolve().relative_to(root)
+        except ValueError:
+            return False
         if not candidate.is_file():
             return False
         actual = _sha256(candidate)
         if actual != digest:
             return False
-        if file_hashes.get(relative) != actual:
+        if file_hashes.get(normalized) != actual:
             return False
     return True
 

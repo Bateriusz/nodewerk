@@ -215,34 +215,43 @@ def build_feasibility(
     canonical_exit = _windows_exit_code(outcome.get("canonical_fallback_exit_code"))
     intro_candidate = outcome.get("intro_compact_candidate_bytes")
     proof_candidate = outcome.get("proof_compact_candidate_bytes")
-    candidates = [
-        (int(value), label)
-        for value, label in ((intro_candidate, "intro"), (proof_candidate, "proof"))
-        if value is not None
-    ]
-    if candidates:
-        candidate_bytes, candidate_source = min(candidates)
-    else:
-        candidate_bytes, candidate_source = None, "none"
-    if candidate_source == "intro":
-        candidate_sha = str(compact_intro.get("executable_sha256", "")).lower()
-    else:
-        proof_candidate_record = proof.get("compact_candidate")
-        candidate_sha = (
-            str(proof_candidate_record.get("executable_sha256", "")).lower()
-            if isinstance(proof_candidate_record, Mapping)
-            else ""
-        )
-    if not candidate_sha:
-        candidate_sha = "0" * 64
-    candidate_size = int(candidate_bytes) if candidate_bytes is not None else 1
+    candidate_size = int(compact_intro.get("executable_bytes", 0))
+    candidate_sha = str(compact_intro.get("executable_sha256", "")).lower()
+    if candidate_size <= 0:
+        raise ValueError("intro compact candidate has no positive executable size")
+    if re.fullmatch(r"[0-9a-f]{64}", candidate_sha) is None:
+        raise ValueError("intro compact candidate executable SHA-256 is malformed")
+    if runtime_status == "validated_runnable":
+        if validated_mode != "compact" or validated_bytes is None:
+            raise ValueError(
+                "validated compact runtime status requires validated_mode=compact"
+            )
+        if intro_candidate is not None and int(intro_candidate) != candidate_size:
+            raise ValueError(
+                "outcome intro compact candidate size does not match the intro report"
+            )
+        if int(validated_bytes) != candidate_size:
+            raise ValueError(
+                "validated compact byte count does not match the intro candidate"
+            )
+        if compact_intro.get("selected_mode") != "compact":
+            raise ValueError("validated compact runtime is not selected in the intro report")
+        if int(compact_intro.get("selected_executable_bytes", -1)) != candidate_size:
+            raise ValueError(
+                "selected intro compact byte count does not match the validated candidate"
+            )
+        if str(compact_intro.get("selected_executable_sha256", "")).lower() != candidate_sha:
+            raise ValueError(
+                "selected intro compact SHA-256 does not match the validated candidate"
+            )
     target_met = bool(
         proof_within
+        and validated_mode == "compact"
         and validated_bytes is not None
         and int(validated_bytes) <= contract.COMPACT_TARGET_BYTES
         and runtime_status == "validated_runnable"
     )
-    true_64k = target_met and candidate_bytes is not None and int(candidate_bytes) <= 65536
+    true_64k = target_met
     canonical_runtime = (
         "validated_runnable"
         if validated_bytes is not None
@@ -266,11 +275,7 @@ def build_feasibility(
         failure_classification = "runtime_validation_missing"
 
     compact: dict[str, Any] = {
-        "bytes": (
-            int(validated_bytes)
-            if runtime_status == "validated_runnable" and validated_bytes is not None
-            else candidate_size
-        ),
+        "bytes": candidate_size,
         "sha256": candidate_sha,
         "runtime_status": (
             runtime_status

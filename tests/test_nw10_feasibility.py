@@ -29,6 +29,10 @@ def _proof() -> dict:
             "executable_bytes": 260_000,
             "executable_sha256": "a" * 64,
         },
+        "compact_candidate": {
+            "executable_bytes": 64_000,
+            "executable_sha256": "f" * 64,
+        },
     }
 
 
@@ -47,8 +51,11 @@ def _intro() -> dict:
             "manifest_sha256": "d" * 64,
         },
         "compact_artifact": {
+            "executable_bytes": 65_000,
+            "executable_sha256": "e" * 64,
             "selected_executable_bytes": 65_000,
             "selected_executable_sha256": "e" * 64,
+            "selected_mode": "compact",
         },
     }
 
@@ -61,6 +68,7 @@ def _outcome(**overrides) -> dict:
         "compact_candidate_runtime_status": "validated_runnable",
         "compact_candidate_exit_code": 0,
         "canonical_fallback_exit_code": None,
+        "intro_compact_candidate_bytes": 65_000,
         "proof_compact_candidate_bytes": 65_000,
     }
     value.update(overrides)
@@ -91,6 +99,30 @@ def test_feasibility_success_branch_is_schema_valid() -> None:
     assert record["classification"] == "complete"
     assert record["compact_candidate"]["runtime_status"] == "validated_runnable"
     assert record["acceptance_linkage"]["true_64k_artifact_delivered"] is True
+
+
+def test_validated_compact_identity_is_not_taken_from_smaller_proof_candidate() -> None:
+    proof = _proof()
+    proof["compact_candidate"]["executable_bytes"] = 60_000
+    proof["compact_candidate"]["executable_sha256"] = "9" * 64
+    record = feasibility.build_feasibility(
+        outcome=_outcome(
+            minimum_measured_candidate_bytes=60_000,
+            intro_compact_candidate_bytes=65_000,
+            proof_compact_candidate_bytes=60_000,
+            minimum_validated_runnable_bytes=65_000,
+            validated_mode="compact",
+        ),
+        proof=proof,
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+    )
+    assert record["measurements"]["minimum_measured_candidate_bytes"] == 60_000
+    assert record["compact_candidate"]["bytes"] == 65_000
+    assert record["compact_candidate"]["sha256"] == "e" * 64
+    assert record["selected_artifact"]["bytes"] == 65_000
+    assert record["selected_artifact"]["sha256"] == "e" * 64
 
 
 def test_feasibility_does_not_invent_unknown_artifact_identity() -> None:

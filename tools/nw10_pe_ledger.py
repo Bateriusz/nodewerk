@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -110,6 +111,46 @@ def section_deltas(baseline: dict[str, Any], optimized: dict[str, Any]) -> list[
             }
         )
     return rows
+
+
+def _validate_prior_valid_ledger(
+    ledger: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
+    if ledger.get("format") != FORMAT or ledger.get("version") != VERSION:
+        raise ValueError("prior valid PE ledger has an unexpected format or version")
+    if ledger.get("task") != "NW-10":
+        raise ValueError("prior valid PE ledger is not NW-10")
+    prior_final = ledger.get("final_artifact")
+    prior_conclusion = ledger.get("conclusion")
+    prior_linker = ledger.get("linker_elimination")
+    prior_decoder = ledger.get("compact_decoder")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (prior_final, prior_conclusion, prior_linker, prior_decoder)
+    ):
+        raise ValueError("prior valid PE ledger is structurally incomplete")
+    assert isinstance(prior_final, Mapping)
+    assert isinstance(prior_conclusion, Mapping)
+    assert isinstance(prior_linker, Mapping)
+    assert isinstance(prior_decoder, Mapping)
+    if prior_final.get("runtime_status") != "validated_runnable":
+        raise ValueError("prior PE ledger does not contain a validated runnable artifact")
+    if prior_conclusion.get("byte_ledger_complete") is not True:
+        raise ValueError("prior PE ledger does not contain a complete byte ledger")
+    prior_sha = str(prior_final.get("executable_sha256", "")).lower()
+    if re.fullmatch(r"[0-9a-f]{64}", prior_sha) is None:
+        raise ValueError("prior PE ledger executable SHA-256 is malformed")
+    try:
+        prior_bytes = int(prior_final.get("executable_bytes", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("prior PE ledger executable size is invalid") from exc
+    if prior_bytes <= 0:
+        raise ValueError("prior PE ledger executable size is invalid")
+    for field in ("package_sha256", "manifest_sha256"):
+        value = str(prior_final.get(field, "")).lower()
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError(f"prior PE ledger {field} is malformed")
+    return prior_final, prior_conclusion, prior_linker, prior_decoder
 
 
 def build_report(
@@ -287,26 +328,9 @@ def build_report(
     if runtime_status == "validated_runnable" or prior_valid_ledger is None:
         return current_report
 
-    if prior_valid_ledger.get("format") != FORMAT:
-        raise ValueError("prior valid PE ledger has an unexpected format")
-    prior_final = prior_valid_ledger.get("final_artifact")
-    prior_conclusion = prior_valid_ledger.get("conclusion")
-    prior_linker = prior_valid_ledger.get("linker_elimination")
-    prior_decoder = prior_valid_ledger.get("compact_decoder")
-    if not all(
-        isinstance(value, Mapping)
-        for value in (prior_final, prior_conclusion, prior_linker, prior_decoder)
-    ):
-        raise ValueError("prior valid PE ledger is structurally incomplete")
-    if prior_final.get("runtime_status") != "validated_runnable":
-        raise ValueError("prior PE ledger does not contain a validated runnable artifact")
-    if prior_conclusion.get("byte_ledger_complete") is not True:
-        raise ValueError("prior PE ledger does not contain a complete byte ledger")
-    prior_sha = str(prior_final.get("executable_sha256", "")).lower()
-    if len(prior_sha) != 64 or any(
-        ch not in "0123456789abcdef" for ch in prior_sha
-    ):
-        raise ValueError("prior PE ledger executable SHA-256 is malformed")
+    prior_final, prior_conclusion, prior_linker, prior_decoder = (
+        _validate_prior_valid_ledger(prior_valid_ledger)
+    )
 
     current_linker = dict(current_report["linker_elimination"])
     current_linker["status"] = "measured_superseded"

@@ -16,6 +16,7 @@ import argparse
 import copy
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -382,6 +383,20 @@ def _canonical_text_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
+def _git_head() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    value = completed.stdout.strip()
+    if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise ValueError("unable to resolve a valid current git HEAD")
+    return value
+
+
 def _validate_public_for_publish(
     public: Mapping[str, Any],
     *,
@@ -457,6 +472,7 @@ def publish_public_evidence(
     status_path: Path,
     *,
     forbid_tokens: list[str] | None = None,
+    implementation_head: str | None = None,
 ) -> dict[str, Any]:
     public = _load_json(source)
     _validate_public_for_publish(public, forbid_tokens=list(forbid_tokens or []))
@@ -471,6 +487,10 @@ def publish_public_evidence(
     status = _load_json(status_path)
     if status.get("format") != "nw10-evidence-status":
         raise ValueError("NW-10 evidence-status file has an unexpected format")
+    head = (implementation_head or _git_head()).strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40}", head) is None:
+        raise ValueError("implementation head must be a 40-character lowercase hex SHA")
+    status["source_head_sha"] = head
     current_evidence_status = str(status.get("evidence_status", ""))
     if current_evidence_status in {
         "",
@@ -610,6 +630,7 @@ def main(argv: list[str] | None = None) -> int:
         default=str(REPO_ROOT / "benchmarks" / "nw10" / "evidence-status.v1.json"),
     )
     publish.add_argument("--forbid-token", action="append", default=[])
+    publish.add_argument("--implementation-head")
 
     compare = sub.add_parser("compare")
     compare.add_argument("--before-evidence", required=True)
@@ -631,6 +652,7 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.destination),
                 Path(args.status_file),
                 forbid_tokens=list(args.forbid_token or []),
+                implementation_head=args.implementation_head,
             )
             print(
                 json.dumps(
