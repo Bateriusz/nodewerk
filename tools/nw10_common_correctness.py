@@ -194,6 +194,8 @@ def _diagnostic_identity(
     )
     encoded_sha256: str | None = None
     encoded_bytes: int | None = None
+    codec_id: str | None = None
+    layout_id: str | None = None
     if packaging_mode == "unpacked":
         if embedded_payload != package_bytes:
             raise ValueError(
@@ -211,6 +213,9 @@ def _diagnostic_identity(
             )
         encoded_sha256 = hashlib.sha256(embedded_payload).hexdigest()
         encoded_bytes = len(embedded_payload)
+        compact_header = compact.parse_header(embedded_payload)
+        codec_id = str(compact_header["codec_id"])
+        layout_id = str(compact_header["layout_id"])
     if embedded_manifest != manifest_bytes:
         raise ValueError(
             "diagnostic executable manifest binding does not match its published "
@@ -258,6 +263,8 @@ def _diagnostic_identity(
         "packaging_mode": packaging_mode,
         "encoded_container_sha256": encoded_sha256,
         "encoded_container_bytes": encoded_bytes,
+        "codec_id": codec_id,
+        "layout_id": layout_id,
     }
 
 
@@ -604,6 +611,8 @@ def capture(
             "packaging_mode": packaging_mode,
             "encoded_container_sha256": observed["encoded_container_sha256"],
             "encoded_container_bytes": observed["encoded_container_bytes"],
+            "codec_id": observed["codec_id"],
+            "layout_id": observed["layout_id"],
         },
         "hardware": {
             **hardware,
@@ -717,11 +726,34 @@ def _verify_capture_record(
     if packaging_mode == "packed":
         if not diagnostic.get("encoded_container_sha256"):
             raise ValueError(f"{tier} packed capture does not name its encoded container")
+        if diagnostic.get("codec_id") not in contract.PLAYER_SUPPORTED_CODEC_IDS:
+            raise ValueError(f"{tier} packed capture has no supported codec identity")
+        if diagnostic.get("layout_id") not in contract.KNOWN_LAYOUT_IDS:
+            raise ValueError(f"{tier} packed capture has no supported layout identity")
+    hardware = record.get("hardware")
+    if not isinstance(hardware, Mapping):
+        raise ValueError(f"{tier} {packaging_mode} hardware identity is missing")
+    if hardware.get("device_form_factor") != "desktop":
+        raise ValueError(f"{tier} {packaging_mode} capture is not a measured desktop")
+    form_factor_source = str(hardware.get("device_form_factor_source", ""))
+    if (
+        not form_factor_source
+        or form_factor_source in {"asserted", "pending_physical_probe", "unsupported_host"}
+        or "reused" in form_factor_source.casefold()
+        or "inventory" in form_factor_source.casefold()
+    ):
+        raise ValueError(
+            f"{tier} {packaging_mode} form factor was not measured by a chassis probe"
+        )
     runtime = record.get("runtime")
     if not isinstance(runtime, Mapping) or runtime.get("status") != "passed":
         raise ValueError(f"{tier} {packaging_mode} runtime capture did not pass")
     if int(runtime.get("capture_exit_code", -1)) != 0:
         raise ValueError(f"{tier} {packaging_mode} capture process did not exit zero")
+    if int(runtime.get("frames_per_tick", -1)) != 1:
+        raise ValueError(f"{tier} {packaging_mode} capture changed frames-per-tick")
+    if int(runtime.get("present_sync_interval", -1)) != 0:
+        raise ValueError(f"{tier} {packaging_mode} capture is not uncapped")
     _verify_capture_manifest(record, capture_dir)
 
 
@@ -893,6 +925,7 @@ def compare(
                 "device_id",
                 "classified_tier",
                 "device_form_factor",
+                "device_form_factor_source",
             ):
                 if packed_hardware.get(field) != unpacked_hardware.get(field):
                     raise ValueError(
@@ -921,6 +954,28 @@ def compare(
                 raise ValueError(f"packed {label} capture manifest is missing")
             if not capture_dir.is_dir():
                 raise ValueError(f"packed {label} capture directory is missing")
+        packed_codec_ids = {
+            str(
+                packed_records[label]
+                .get("diagnostic_sibling", {})
+                .get("codec_id", "")
+            )
+            for label in ("ada", "blackwell")
+        }
+        packed_layout_ids = {
+            str(
+                packed_records[label]
+                .get("diagnostic_sibling", {})
+                .get("layout_id", "")
+            )
+            for label in ("ada", "blackwell")
+        }
+        if len(packed_codec_ids) != 1 or "" in packed_codec_ids:
+            raise ValueError("packed captures do not share one explicit codec identity")
+        if len(packed_layout_ids) != 1 or "" in packed_layout_ids:
+            raise ValueError("packed captures do not share one explicit layout identity")
+        packed_codec_id = next(iter(packed_codec_ids))
+        packed_layout_id = next(iter(packed_layout_ids))
         common_package_sha = str(
             ada["common_artifact"].get("package_sha256", "")
         ).lower()
@@ -967,6 +1022,22 @@ def compare(
                     .get("diagnostic_sibling", {})
                     .get("encoded_container_sha256")
                 ),
+                "encoded_container_bytes": (
+                    packed_records[label]
+                    .get("diagnostic_sibling", {})
+                    .get("encoded_container_bytes")
+                ),
+                "codec_id": packed_codec_id,
+                "layout_id": packed_layout_id,
+                "device_form_factor_source": packed_records[label]
+                    .get("hardware", {})
+                    .get("device_form_factor_source"),
+                "frames_per_tick": packed_records[label]
+                    .get("runtime", {})
+                    .get("frames_per_tick"),
+                "present_sync_interval": packed_records[label]
+                    .get("runtime", {})
+                    .get("present_sync_interval"),
             }
             packed_worst = max(packed_worst, tier_worst)
         packed_ok = (
@@ -982,6 +1053,8 @@ def compare(
         packed_block = {
             "status": "verified" if packed_ok else "failed",
             "direct_separate_packed_gpu_capture_recorded": True,
+            "codec_id": packed_codec_id,
+            "layout_id": packed_layout_id,
             "packed_package_sha256": packed_package_sha256,
             "unpacked_package_sha256": unpacked_package_sha256,
             "worst_absolute_error": packed_worst,
@@ -993,6 +1066,8 @@ def compare(
         packed_block = {
             "status": "pending_physical",
             "direct_separate_packed_gpu_capture_recorded": False,
+            "codec_id": None,
+            "layout_id": None,
             "packed_package_sha256": None,
             "unpacked_package_sha256": None,
             "worst_absolute_error": None,
