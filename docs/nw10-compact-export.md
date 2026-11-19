@@ -353,10 +353,10 @@ pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare `
   -AdaCaptures build/nw10-correctness-scripted/ada/captures `
   -BlackwellRecord build/nw10-correctness-scripted/blackwell/capture.json `
   -BlackwellCaptures build/nw10-correctness-scripted/blackwell/captures `
-  -PackedAdaRecord build/nw10-packed/ada/capture.json `
-  -PackedAdaCaptures build/nw10-packed/ada/captures `
-  -PackedBlackwellRecord build/nw10-packed/blackwell/capture.json `
-  -PackedBlackwellCaptures build/nw10-packed/blackwell/captures `
+  -PackedAdaRecord build/nw10-correctness-scripted/ada-packed/capture.json `
+  -PackedAdaCaptures build/nw10-correctness-scripted/ada-packed/captures `
+  -PackedBlackwellRecord build/nw10-correctness-scripted/blackwell-packed/capture.json `
+  -PackedBlackwellCaptures build/nw10-correctness-scripted/blackwell-packed/captures `
   -PackedPackageSha256 <decoded-package-sha256> `
   -UnpackedPackageSha256 <decoded-package-sha256> `
   -Publish -Commit
