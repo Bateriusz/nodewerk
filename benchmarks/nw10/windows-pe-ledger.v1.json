@@ -4,27 +4,27 @@
   "task": "NW-10",
   "status": "verified",
   "source": {
-    "workflow_run_id": 44252375048,
+    "workflow_run_id": 44469176377,
     "measurement_tool": "tools/nw10_pe_ledger.py",
     "toolchain": "pinned NW-01 Windows MSVC/SDK environment",
     "linker_control_method": "MSVC _LINK_ appended /OPT:NOREF /OPT:NOICF to the otherwise identical release link",
     "decoder_control_method": "otherwise identical release template with NW10_COMPACT_PACKAGE=OFF"
   },
   "final_artifact": {
-    "executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
-    "executable_bytes": 222058,
-    "package_sha256": "e1b3187225908d340f7e3910b20459784e61466fa2c6eadb5d1782ae13db763b",
-    "manifest_sha256": "4a166b9fbe8244317b2c92a7d4dccf58d743a8bdde4a95b9370a78a488e27ae9",
-    "pe_image_file_bytes": 216576,
-    "overlay_bytes": 5482,
+    "executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "executable_bytes": 240702,
+    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
+    "manifest_sha256": "7e86671adc0073194d369ac92c0c745f71705a0bd0e599d007a5e379b423f0d1",
+    "pe_image_file_bytes": 208896,
+    "overlay_bytes": 31806,
     "sections": [
       {
         "name": ".text",
-        "raw_size_bytes": 175616
+        "raw_size_bytes": 171008
       },
       {
         "name": ".rdata",
-        "raw_size_bytes": 31232
+        "raw_size_bytes": 28160
       },
       {
         "name": ".data",
@@ -58,18 +58,18 @@
     "security_mitigations_preserved": true,
     "compact_decoder_preserved": true,
     "canonical_package_identical": true,
-    "control_executable_bytes": 937834,
-    "control_pe_image_file_bytes": 932352,
-    "complete_distribution_bytes_saved": 715776,
-    "pe_image_bytes_saved": 715776,
+    "control_executable_bytes": 967230,
+    "control_pe_image_file_bytes": 935424,
+    "complete_distribution_bytes_saved": 726528,
+    "pe_image_bytes_saved": 726528,
     "section_bytes_saved": [
       {
         "section": ".text",
-        "bytes_saved": 588288
+        "bytes_saved": 594432
       },
       {
         "section": ".rdata",
-        "bytes_saved": 90112
+        "bytes_saved": 94208
       },
       {
         "section": ".data",
@@ -77,7 +77,7 @@
       },
       {
         "section": ".pdata",
-        "bytes_saved": 32256
+        "bytes_saved": 32768
       },
       {
         "section": ".rsrc",

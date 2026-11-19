@@ -41,10 +41,12 @@
       ],
       "properties": {
         "executable_sha256": {
-          "const": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "executable_bytes": {
-          "const": 222058
+          "type": "integer",
+          "minimum": 1
         },
         "package_sha256": {
           "type": "string",

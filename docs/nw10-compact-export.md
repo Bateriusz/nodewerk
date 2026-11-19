@@ -47,7 +47,7 @@ a universal feasibility or impossibility claim.
 The hosted Windows x64 experiment is treated as a measured feasibility run,
 not as a hard 64 KiB gate. The current run measured the inherited NW-07 proof
 at 264,390 bytes (above its 262,144-byte proof tier) and the restricted-intro
-compact candidate at 219,710 bytes. The compact candidate then failed runtime
+compact candidate at 227,715 bytes. The compact candidate then failed runtime
 validation with package-validation exit code 70, so it is a tested blocker,
 not a validated runnable distribution. The workflow preserves and smoke-tests
 the canonical restricted-intro fallback, records the smallest validated
@@ -146,9 +146,9 @@ package:
   are required.
 - **Linker elimination:** measured on the exact Windows artifact against an
   otherwise identical pinned control link with `/OPT:NOREF /OPT:NOICF`.
-  `/OPT:REF + /OPT:ICF=4` save 715,776 bytes in the complete distribution
-  (the same 715,776 bytes in the PE image). The largest raw-section savings are
-  588,288 bytes in `.text` and 90,112 bytes in `.rdata`.
+  `/OPT:REF + /OPT:ICF=4` save 726,528 bytes in the complete distribution
+  (the same 726,528 bytes in the PE image). The largest raw-section savings are
+  594,432 bytes in `.text` and 94,208 bytes in `.rdata`.
 - **Compression:** stored, MSZIP, zlib, bzip2, and lzma are measured. Only
   player-supported stored/MSZIP encodings are selectable. Compression that
   increases the complete distributed bytes is rejected and the canonical

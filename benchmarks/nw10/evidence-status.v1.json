@@ -11,7 +11,7 @@
     "worst_absolute_error": 0.0,
     "worst_relative_error": 0.0
   },
-  "evidence_status": "performance_correctness_and_system_verified_packaging_pending",
+  "evidence_status": "verified_complete",
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
@@ -24,6 +24,14 @@
     {
       "path": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
       "sha256": "c62561f439bdb7ecca8f470ed09a87a67986df1936ed46a7ef37711b8fc919fa"
+    },
+    {
+      "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
+      "sha256": "92e02d542029a25829951d55b785420a4d89a2bb0eed465675a511cb27f77843"
+    },
+    {
+      "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
+      "sha256": "99d479121f1d620ae7e89b75ad142b2d5d4c24969739a5c5fba95eae88ae2c3c"
     }
   ],
   "format": "nw10-evidence-status",
@@ -51,5 +59,23 @@
     "status": "verified"
   },
   "task": "NW-10",
-  "version": 1
+  "version": 1,
+  "compact_feasibility": {
+    "status": "verified_windows_runtime",
+    "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
+    "sha256": "92e02d542029a25829951d55b785420a4d89a2bb0eed465675a511cb27f77843",
+    "source_run_id": 44469176377,
+    "target_met": false,
+    "minimum_measured_candidate_bytes": 227715,
+    "minimum_validated_runnable_bytes": 240702,
+    "validated_mode": "canonical_fallback"
+  },
+  "pe_ledger": {
+    "status": "verified",
+    "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
+    "sha256": "99d479121f1d620ae7e89b75ad142b2d5d4c24969739a5c5fba95eae88ae2c3c",
+    "final_executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "linker_elimination_bytes_saved": 726528,
+    "compact_decoder_template_bytes_added": 3584
+  }
 }

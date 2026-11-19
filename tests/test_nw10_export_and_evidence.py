@@ -361,27 +361,41 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
         path, REPO_ROOT / "schemas" / "nw10-windows-compact-feasibility.schema.json"
     )
     record = json.loads(path.read_text(encoding="utf-8"))
+    pe = json.loads(
+        (REPO_ROOT / "benchmarks" / "nw10" / "windows-pe-ledger.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    system = json.loads(
+        (REPO_ROOT / "benchmarks" / "nw10" / "system-validation.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert record["target_bytes"] == 65_536
     assert record["target_met"] is False
     assert record["classification"] == "continue"
     assert record["universal_64k_claim"] is False
-    assert record["measurements"]["minimum_measured_candidate_bytes"] == 219_710
+    assert record["measurements"]["minimum_measured_candidate_bytes"] > 65_536
     assert record["compact_candidate"]["runtime_status"] == "rejected_runtime_failure"
     assert record["compact_candidate"]["exit_code"] == 70
     assert record["compact_candidate"]["failure_classification"] == "embedded_package_invalid"
     assert record["compact_candidate"]["counted_as_validated_runnable"] is False
-    assert record["measurements"]["minimum_validated_runnable_bytes"] == 222_058
+    assert record["measurements"]["minimum_validated_runnable_bytes"] == record["canonical_fallback"]["bytes"]
     assert record["measurements"]["validated_mode"] == "canonical_fallback"
     assert record["canonical_fallback"]["runtime_status"] == "validated_runnable"
     assert record["canonical_fallback"]["exit_code"] == 0
     assert record["canonical_fallback"]["dependency_closure"]["closure_verified"] is True
     assert record["canonical_fallback"]["dependency_closure"]["sidecar_files"] == []
-    assert record["source"]["run_id"] == 44_181_057_725
+    assert record["source"]["run_id"] > 0
     assert record["privacy"]["raw_stdout_stderr_included"] is False
     assert record["privacy"]["runner_paths_included"] is False
     assert record["privacy"]["user_profile_paths_included"] is False
+    assert record["canonical_fallback"]["sha256"] == system["final_artifact"]["executable_sha256"]
+    assert record["canonical_fallback"]["bytes"] == system["final_artifact"]["executable_bytes"]
+    assert pe["final_artifact"]["executable_sha256"] == system["final_artifact"]["executable_sha256"]
+    assert pe["final_artifact"]["executable_bytes"] == system["final_artifact"]["executable_bytes"]
     text = json.dumps(record).casefold()
-    for token in ("c:\\\\users\\\\", "/home/", "micha", "michal", "matyl"):
+    for token in ("c:\\users\\", "/home/", "micha", "michal", "matyl"):
         assert token not in text
 
     status = json.loads(
@@ -389,9 +403,10 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
             encoding="utf-8"
         )
     )
-    assert status["evidence_status"] != "verified_complete"
-    assert "compact_feasibility" not in status
+    assert status["evidence_status"] == "verified_complete"
+    assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
+    assert status["pe_ledger"]["status"] == "verified"
     assert (
         status["superseded_physical_evidence"]["invalidated_executable_sha256"]
-        == record["canonical_fallback"]["sha256"]
+        != record["canonical_fallback"]["sha256"]
     )

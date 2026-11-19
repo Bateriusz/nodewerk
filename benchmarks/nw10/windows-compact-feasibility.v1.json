@@ -9,12 +9,12 @@
   "blocker": {
     "exit_code": 70,
     "id": "compact_candidate_runtime",
-    "measured_bytes": 219710,
+    "measured_bytes": 227715,
     "reason": "The compact packaging candidate failed Windows runtime validation and is retained only as a tested blocker; it is not counted as a validated runnable artifact.",
     "status": "rejected"
   },
   "canonical_fallback": {
-    "bytes": 222058,
+    "bytes": 240702,
     "dependency_closure": {
       "canonical_imports": [
         "cabinet.dll",
@@ -31,39 +31,38 @@
     "exit_code": 0,
     "link_manifest_verified": true,
     "present_sync_interval": 0,
-    "runtime_implementation_mask": 3,
     "runtime_status": "validated_runnable",
-    "sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+    "sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e"
   },
   "classification": "continue",
   "compact_candidate": {
-    "bytes": 219710,
+    "bytes": 227715,
     "counted_as_validated_runnable": false,
     "exit_code": 70,
     "failure_classification": "embedded_package_invalid",
     "runtime_status": "rejected_runtime_failure",
-    "sha256": "c5b7064be651631bbadeaaf91006b0219234f684201fbab8276fde6ff42c5fce"
+    "sha256": "d7cb20c1a560858042d22a12021c960e1c02773321943d71b57bc2f5b4913c1a"
   },
   "format": "nw10-windows-compact-feasibility",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
   "measurements": {
-    "minimum_measured_candidate_bytes": 219710,
-    "minimum_validated_runnable_bytes": 222058,
+    "minimum_measured_candidate_bytes": 227715,
+    "minimum_validated_runnable_bytes": 240702,
     "proof_measured_bytes": 264390,
     "validated_mode": "canonical_fallback"
   },
   "payload_identity": {
     "canonical_package": {
-      "bytes": 5358,
-      "sha256": "e1b3187225908d340f7e3910b20459784e61466fa2c6eadb5d1782ae13db763b"
+      "bytes": 31682,
+      "sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
     },
     "compact_container": {
-      "bytes": 3010,
-      "sha256": "dffacefe0d1034c9b6aea85545ed2c6cce2ee491b28365bc8fad03c02a728a51"
+      "bytes": 18695,
+      "sha256": "d8072f034524180db5399a44ff5ec17bd9fa84a1e2e3491ea7988692d09b0e5a"
     },
     "manifest": {
-      "bytes": 6370,
-      "sha256": "4a166b9fbe8244317b2c92a7d4dccf58d743a8bdde4a95b9370a78a488e27ae9"
+      "bytes": 6536,
+      "sha256": "7e86671adc0073194d369ac92c0c745f71705a0bd0e599d007a5e379b423f0d1"
     }
   },
   "privacy": {
@@ -73,12 +72,12 @@
     "whitelist_generated": true
   },
   "source": {
-    "artifact_digest": "sha256:0465b2b3dcb39b05a0a91c13d104e65fbb051afdb61e659a456b2474a3acfb5f",
-    "artifact_id": 14372363500,
+    "artifact_digest": "sha256:a82cc4daf5ce8afef210b985b502d8351b2a7b94bbbd0845fc0241c0cf3b4ab4",
+    "artifact_id": 14504311306,
     "artifact_name": "nw10-windows-compact-evidence",
-    "head_sha": "6e0bdff01dcdbb97facdc83f5701e55e0782f0a7",
+    "head_sha": "bc8556be5788f3017ce32b6921b38fbfac455716",
     "kind": "github_actions_windows_runtime",
-    "run_id": 44181057725,
+    "run_id": 44469176377,
     "workflow": "NW-10 Compact Export and Restricted Intro"
   },
   "target_bytes": 65536,
