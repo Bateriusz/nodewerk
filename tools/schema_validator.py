@@ -658,9 +658,13 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 raise SchemaValidationError(
                     f"{doc_path}: clean_system deployment is not a single executable"
                 )
-            if deployment.get("sidecars") not in (None, [], ()):
+            if deployment.get("sidecars") != []:
                 raise SchemaValidationError(
-                    f"{doc_path}: clean_system deployment requires sidecar files"
+                    f"{doc_path}: clean_system deployment must contain no sidecars"
+                )
+            if deployment.get("forbidden_runtime_dependencies") != []:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system deployment contains forbidden runtime dependencies"
                 )
             if deployment.get("executable_sha256") != final_artifact.get(
                 "executable_sha256"
@@ -677,24 +681,48 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     "final artifact"
                 )
             scenarios = clean.get("scenarios")
-            if not isinstance(scenarios, list) or len(scenarios) != 6:
+            frozen_scenarios = {
+                "corrupt_payload": 70,
+                "deployed_startup": 0,
+                "missing_required_feature": 23,
+                "initialization_failure": 42,
+                "resize": 0,
+                "device_removal": 51,
+            }
+            if not isinstance(scenarios, list) or len(scenarios) != len(frozen_scenarios):
                 raise SchemaValidationError(
                     f"{doc_path}: verified clean_system requires the frozen six "
                     "scenarios"
                 )
+            observed_names: set[str] = set()
             for row in scenarios:
                 if not isinstance(row, dict):
                     raise SchemaValidationError(
                         f"{doc_path}: clean_system scenario row is invalid"
                     )
+                name = row.get("scenario")
+                if name not in frozen_scenarios or name in observed_names:
+                    raise SchemaValidationError(
+                        f"{doc_path}: clean_system scenario set changed"
+                    )
+                observed_names.add(str(name))
+                expected_code = frozen_scenarios[str(name)]
+                if row.get("expected_exit_code") != expected_code:
+                    raise SchemaValidationError(
+                        f"{doc_path}: clean_system scenario expected exit code changed"
+                    )
+                if row.get("observed_exit_code") != expected_code:
+                    raise SchemaValidationError(
+                        f"{doc_path}: clean_system scenario observed exit code changed"
+                    )
                 if row.get("status") != "passed" or row.get("timed_out") is not False:
                     raise SchemaValidationError(
                         f"{doc_path}: clean_system scenario did not pass"
                     )
-                if row.get("observed_exit_code") != row.get("expected_exit_code"):
-                    raise SchemaValidationError(
-                        f"{doc_path}: clean_system scenario exit code changed"
-                    )
+            if observed_names != set(frozen_scenarios):
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system scenario set is incomplete"
+                )
             clean_hardware = clean.get("hardware", {})
             startup = instance["startup"]
             memory = instance["memory"]
