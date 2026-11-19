@@ -7,7 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import dependency_check
 
@@ -87,6 +87,9 @@ def build_report(
     linker_baseline_manifest: Path,
     runtime_status: str = "validated_runnable",
     runtime_exit_code: int | None = 0,
+    prior_valid_ledger: Mapping[str, Any] | None = None,
+    source_head_sha: str | None = None,
+    workflow_run_id: int | None = None,
 ) -> dict[str, Any]:
     if runtime_status not in {
         "validated_runnable",
@@ -131,7 +134,7 @@ def build_report(
         raise ValueError(
             "decoder-on template did not add the expected cabinet.dll import"
         )
-    return {
+    current_report = {
         "format": FORMAT,
         "version": VERSION,
         "task": "NW-10",
@@ -233,6 +236,104 @@ def build_report(
             "pdb_paths_included": False,
         },
     }
+    if source_head_sha is not None:
+        if len(source_head_sha) != 40 or any(
+            ch not in "0123456789abcdef" for ch in source_head_sha.lower()
+        ):
+            raise ValueError("source head SHA must be 40 lowercase hex characters")
+        current_report["source"]["head_sha"] = source_head_sha.lower()
+    if workflow_run_id is not None:
+        if workflow_run_id <= 0:
+            raise ValueError("workflow run id must be positive")
+        current_report["source"]["workflow_run_id"] = workflow_run_id
+
+    if runtime_status == "validated_runnable" or prior_valid_ledger is None:
+        return current_report
+
+    if prior_valid_ledger.get("format") != FORMAT:
+        raise ValueError("prior valid PE ledger has an unexpected format")
+    prior_final = prior_valid_ledger.get("final_artifact")
+    prior_conclusion = prior_valid_ledger.get("conclusion")
+    prior_linker = prior_valid_ledger.get("linker_elimination")
+    prior_decoder = prior_valid_ledger.get("compact_decoder")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (prior_final, prior_conclusion, prior_linker, prior_decoder)
+    ):
+        raise ValueError("prior valid PE ledger is structurally incomplete")
+    if prior_final.get("runtime_status") != "validated_runnable":
+        raise ValueError("prior PE ledger does not contain a validated runnable artifact")
+    if prior_conclusion.get("byte_ledger_complete") is not True:
+        raise ValueError("prior PE ledger does not contain a complete byte ledger")
+    prior_sha = str(prior_final.get("executable_sha256", "")).lower()
+    if len(prior_sha) != 64 or any(
+        ch not in "0123456789abcdef" for ch in prior_sha
+    ):
+        raise ValueError("prior PE ledger executable SHA-256 is malformed")
+
+    current_linker = dict(current_report["linker_elimination"])
+    current_linker["status"] = "measured_superseded"
+    current_decoder = dict(current_report["compact_decoder"])
+    current_decoder["status"] = "measured_superseded"
+    current_attempt = {
+        "measured_artifact": current_report["final_artifact"],
+        "linker_elimination": current_linker,
+        "compact_decoder": current_decoder,
+        "runtime": {
+            "status": runtime_status,
+            "exit_code": runtime_exit_code,
+            "counted_as_validated_runnable": False,
+        },
+        "source": current_report["source"],
+        "archived_reason": (
+            "The current measured artifact is retained as attributable PE "
+            "evidence but was not validated runnable, so the last complete "
+            "validated ledger remains selected."
+        ),
+    }
+
+    prior_source = prior_valid_ledger.get("source")
+    selected_source = (
+        dict(prior_source) if isinstance(prior_source, Mapping) else {
+            "measurement_tool": "tools/nw10_pe_ledger.py"
+        }
+    )
+    result = {
+        "format": FORMAT,
+        "version": VERSION,
+        "task": "NW-10",
+        "status": "archived_superseded",
+        "measurement_status": "archived_superseded",
+        "archived_reason": (
+            "The current artifact did not pass runtime validation. The last "
+            "validated runnable artifact and its complete PE ledger are retained "
+            "as the selected distribution; the current measurement is recorded "
+            "separately in current_attempt."
+        ),
+        "source": selected_source,
+        "final_artifact": dict(prior_final),
+        "linker_elimination": dict(prior_linker),
+        "compact_decoder": dict(prior_decoder),
+        "conclusion": {
+            **dict(prior_conclusion),
+            "byte_ledger_complete": True,
+            "current_head_artifact_validated": False,
+            "selected_artifact_retained_from": str(
+                selected_source.get("head_sha")
+                or selected_source.get("retained_from_commit")
+                or "prior_valid_ledger"
+            ),
+            "universal_64k_claim": False,
+        },
+        "current_attempt": current_attempt,
+        "privacy": {
+            "local_paths_included": False,
+            "raw_linker_map_included": False,
+            "pdb_paths_included": False,
+        },
+    }
+    return result
+
 
 
 def main() -> int:
@@ -255,9 +356,17 @@ def main() -> int:
         default="validated_runnable",
     )
     parser.add_argument("--runtime-exit-code", type=int, default=0)
+    parser.add_argument("--prior-valid-ledger", type=Path)
+    parser.add_argument("--source-head-sha")
+    parser.add_argument("--workflow-run-id", type=int)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
+    prior_valid_ledger = (
+        json.loads(args.prior_valid_ledger.read_text(encoding="utf-8"))
+        if args.prior_valid_ledger is not None
+        else None
+    )
     report = build_report(
         final_executable=args.final_executable,
         linker_baseline_executable=args.linker_baseline_executable,
@@ -269,6 +378,9 @@ def main() -> int:
         linker_baseline_manifest=args.linker_baseline_manifest,
         runtime_status=args.runtime_status,
         runtime_exit_code=args.runtime_exit_code,
+        prior_valid_ledger=prior_valid_ledger,
+        source_head_sha=args.source_head_sha,
+        workflow_run_id=args.workflow_run_id,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
