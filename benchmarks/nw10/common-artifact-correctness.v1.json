@@ -3,7 +3,8 @@
     "hardware": {
       "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
       "classified_tier": "ada",
-      "device_form_factor": "desktop"
+      "device_form_factor": "desktop",
+      "driver_version": "32.0.16.1088"
     },
     "status": "verified"
   },
@@ -49,7 +50,7 @@
   },
   "source": {
     "execution_kind": "physical_cross_hardware",
-    "implementation_head": "05519fe22a0e42360deb4a2fa1f578842b8028bd",
+    "implementation_head": "64e02a63a779181166dc45ee3f4b183c5bdf279a",
     "mode": "compare",
     "raw_capture_manifests_tracked": false,
     "tool": "tools/nw10/run-correctness-evidence.ps1"

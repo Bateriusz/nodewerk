@@ -1,9 +1,17 @@
 {
-  "ada_correctness": "pending_unverified",
-  "blackwell_correctness": "pending_unverified",
+  "ada_correctness": "verified",
+  "blackwell_correctness": "verified",
   "clean_system": "pending_unverified",
   "contract_evidence": "verified_by_pytest",
-  "evidence_status": "performance_verified_correctness_pending",
+  "correctness_evidence": {
+    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
+    "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
+    "sha256": "2b4f7af00bf13d259231751f149221b89cfd06c09041f1e8197ed5bb7fa965d3",
+    "status": "verified",
+    "worst_absolute_error": 0.0,
+    "worst_relative_error": 0.0
+  },
+  "evidence_status": "performance_and_correctness_verified_system_pending",
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
@@ -28,7 +36,7 @@
     "sha256": "c62561f439bdb7ecca8f470ed09a87a67986df1936ed46a7ef37711b8fc919fa",
     "status": "verified_preserved"
   },
-  "physical_evidence": "performance_verified",
+  "physical_evidence": "performance_and_correctness_verified",
   "reference_capture": "verified_reference_capture",
   "startup": "pending_unverified",
   "superseded_physical_evidence": {
