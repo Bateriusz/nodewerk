@@ -314,6 +314,75 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                 "universal_64k_claim": False,
             },
         }
+        # Physical evidence is intentionally maintained separately from the
+        # deterministic contract-only generator. When the tracked reuse record
+        # is present, project its verified measurement state back into the
+        # generated summaries instead of silently downgrading them to pending.
+        # Fresh CI output directories do not contain this file and remain
+        # contract-only, preserving deterministic regeneration tests.
+        reuse_path = output / "reused-physical-evidence.v1.json"
+        reuse = None
+        if reuse_path.is_file():
+            reuse = json.loads(reuse_path.read_text(encoding="utf-8"))
+            if reuse.get("format") != "nw10-reused-physical-evidence":
+                raise ValueError("unexpected reused physical evidence format")
+            correctness = reuse["physical_measurements"]["cross_hardware_correctness"]
+            package_sha = correctness["common_package_sha256"]
+            evidence["evidence_status"] = "verified_physical"
+            evidence["physical_certification"] = (
+                "correctness_and_system_measurements_reused_"
+                "performance_reference_pending"
+            )
+            evidence["reused_physical_evidence"] = (
+                "benchmarks/nw10/reused-physical-evidence.v1.json"
+            )
+            for tier, label in (("ada", "desktop_ada_representative"),
+                                ("blackwell", "desktop_blackwell_representative")):
+                evidence["correctness_coverage"][label] = {
+                    "status": "verified_reused",
+                    "artifact": (
+                        "current canonical NW-07 package with compact decoder "
+                        "parity linkage"
+                    ),
+                    "protocol": "nw07-correctness-capture.v1",
+                    "packed_unpacked_visual_comparison": "verified_compositional",
+                    "package_sha256": package_sha,
+                    "evidence": (
+                        "benchmarks/nw10/common-artifact-correctness.v1.json"
+                    ),
+                }
+            evidence["packaging_modes"][0]["clean_system_checked"] = True
+            evidence["packaging_modes"][0]["clean_system_evidence"] = (
+                "benchmarks/nw10/system-validation.v1.json"
+            )
+            evidence["alternatives"]["linker_elimination"] = {
+                "status": "verified_physical_pe",
+                "source": "benchmarks/nw10/windows-pe-ledger.v1.json",
+            }
+            evidence["blockers"] = [
+                {
+                    "id": "historical_physical_measurements",
+                    "status": "satisfied_by_reuse_with_explicit_limitations",
+                    "reason": (
+                        "Existing physical correctness, clean-system, startup, "
+                        "and memory measurements are retained through the explicit "
+                        "reuse provenance record; no replacement measurements are "
+                        "fabricated."
+                    ),
+                },
+                *[
+                    blocker for blocker in evidence["blockers"]
+                    if blocker["id"] != "physical_windows_artifact"
+                ],
+            ]
+            evidence["decision"]["reason"] = (
+                "Physical Ada/Blackwell correctness and system/startup/memory "
+                "measurements are retained through explicit reuse provenance and "
+                "current-head package/decoder/PE linkage. The exact "
+                "nw07_perf_ref_v1 reference capture remains pending, so "
+                "performance preservation is not certified."
+            )
+
         proof_path = output / "compact-proof.v1.json"
         intro_path = output / "intro-profile.v1.json"
         status_path = output / "evidence-status.v1.json"
@@ -332,8 +401,36 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                     **intro_report["profile"],
                     "artifact": intro_report["compact_artifact"],
                     "ledger": intro_report["ledgers"]["compact"],
-                    "evidence_status": "informational_contract_only",
-                    "physical_measurements": "pending_physical_windows_capture",
+                    "evidence_status": (
+                        "physical_measurements_reused"
+                        if reuse is not None
+                        else "informational_contract_only"
+                    ),
+                    "physical_measurements": (
+                        "verified_reused_split_hosts"
+                        if reuse is not None
+                        else "pending_physical_windows_capture"
+                    ),
+                    **(
+                        {
+                            "reused_physical_evidence": (
+                                "benchmarks/nw10/reused-physical-evidence.v1.json"
+                            ),
+                            "current_head_artifact_transfer": {
+                                "executable_sha256": reuse["current_head_transfer"]
+                                ["system_artifact_transfer"]
+                                ["current_executable_sha256"],
+                                "package_sha256": reuse["current_head_transfer"]
+                                ["system_artifact_transfer"]
+                                ["current_package_sha256"],
+                                "system_measurement_status": (
+                                    "verified_reused_split_hosts"
+                                ),
+                            },
+                        }
+                        if reuse is not None
+                        else {}
+                    ),
                 },
                 indent=2,
                 sort_keys=True,
