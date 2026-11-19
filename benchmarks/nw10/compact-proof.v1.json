@@ -596,7 +596,7 @@
         "layout_id": "nwc.layout.canonical.v1",
         "packaging_tool": {
           "identity": "tools/nw10_compact.py",
-          "version": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711"
+          "version": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367"
         },
         "selected_executable_bytes": 4350,
         "task": "NW-10",
@@ -694,7 +694,7 @@
         "layout_id": "nwc.layout.soa.v1",
         "packaging_tool": {
           "identity": "tools/nw10_compact.py",
-          "version": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711"
+          "version": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367"
         },
         "selected_executable_bytes": 2090,
         "task": "NW-10",
@@ -1025,7 +1025,7 @@
       "width": 1920
     },
     "report_path": "benchmarks/nw10/intro-export-report.v1.json",
-    "report_sha256": "2edaf488e1011658d17e87dc3ad1ca9837e72dc532f4d719fde1eb8dd0bdd9af"
+    "report_sha256": "57267bb302b268fb727ae006b6883d2e7252c787fe75ddaa25b0521bf062b584"
   },
   "minimum_measured_artifact": {
     "bytes": 2090,
@@ -1103,7 +1103,7 @@
     "tools/nw06_timeline.py": "c481aafaf948387dfc4eea36f712385d970d3dcc182e6f56c8b49d4b1217a81e",
     "tools/nw07_contract.py": "592cd0ca9be755dec18586c9b9b8e5ee140bee4fbd5c914815f02c17a549af21",
     "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
-    "tools/nw10_compact.py": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711",
+    "tools/nw10_compact.py": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
     "tools/nw10_evidence.py": "3406a751c16eb70cfe6f22e7039b4e2bbb3ece17954ee44c507e746c15550dfe",
     "tools/nw10_intro.py": "b11505fa64b39e5fd37f6a3e98b4c34cf2ca020ea85c0d001795f663a4c0a6b8",
@@ -1111,7 +1111,7 @@
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:8174ae87553bf59fa38f5a35a485d9be2fe298435eccf3514251039f7ca449f5",
+  "nw10_build_inputs_digest": "sha256:v1:61d8d11b5d459094cbe3f820e98657345725c5be9ab676e6a4e3accb82c46ce2",
   "packaging_modes": [
     {
       "clean_system_checked": false,
@@ -1274,7 +1274,7 @@
         "layout_id": "nwc.layout.canonical.v1",
         "packaging_tool": {
           "identity": "tools/nw10_compact.py",
-          "version": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711"
+          "version": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367"
         },
         "selected_executable_bytes": 18008,
         "task": "NW-10",
@@ -1372,7 +1372,7 @@
         "layout_id": "nwc.layout.soa.v1",
         "packaging_tool": {
           "identity": "tools/nw10_compact.py",
-          "version": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711"
+          "version": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367"
         },
         "selected_executable_bytes": 4475,
         "task": "NW-10",
@@ -1725,7 +1725,7 @@
       }
     },
     "report_path": "benchmarks/nw10/proof-export-report.v1.json",
-    "report_sha256": "4c4f78664043069e4224759251b5639b597adbbf6bced6ee0225ef88e1d9c16e",
+    "report_sha256": "fdeb8c4da60af11715dfc0e2353da6ae6827d9f03ba093318722173620a6f67d",
     "reproducibility": {
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",
