@@ -1,17 +1,129 @@
 {
-  "clean_system": null,
-  "final_artifact": null,
+  "artifact_transfer": {
+    "executable_identity_exact": false,
+    "package_identity_exact": true,
+    "source_head_sha": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
+    "status": "verified_package_identity_executable_rebuilt",
+    "verification_model": "same_release_package_with_current_head_pe_and_dependency_validation",
+    "workflow_artifact_digest": "sha256:ac35ac00ebea17183787dad4ede0956b92f93a32bbbcaf2a33acf1e6b9b0c7a2",
+    "workflow_artifact_id": 14536032623,
+    "workflow_run_id": 44535528801
+  },
+  "clean_system": {
+    "captured_at_utc": "2026-11-19T06:30:45.682639+00:00",
+    "deployment": {
+      "executable_bytes": 240702,
+      "executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+      "forbidden_runtime_dependencies": [],
+      "only_runtime_executable": true,
+      "sidecars": []
+    },
+    "development_dependencies_present_on_path": [],
+    "environment_cache_variables": [],
+    "execution_kind": "physical",
+    "hardware": {
+      "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+      "adapter_generation": "blackwell",
+      "device_id": 11269,
+      "driver_version": "32.0.16.1088",
+      "vendor_id": 4318
+    },
+    "host": {
+      "architecture": "AMD64",
+      "clean_environment": true,
+      "hypervisor_present": true,
+      "manufacturer": "ASUSTeK COMPUTER INC.",
+      "model": "NUC13ANH-B",
+      "virtualization_based_security_status": 2,
+      "virtualization_indicators": [],
+      "windows_build": null,
+      "windows_build_status": "not_recorded_by_legacy_capture_tool"
+    },
+    "scenarios": [
+      {"expected_exit_code": 70, "observed_exit_code": 70, "scenario": "corrupt_payload", "status": "passed", "timed_out": false},
+      {"expected_exit_code": 0, "observed_exit_code": 0, "scenario": "deployed_startup", "status": "passed", "timed_out": false},
+      {"expected_exit_code": 23, "observed_exit_code": 23, "scenario": "missing_required_feature", "status": "passed", "timed_out": false},
+      {"expected_exit_code": 42, "observed_exit_code": 42, "scenario": "initialization_failure", "status": "passed", "timed_out": false},
+      {"expected_exit_code": 0, "observed_exit_code": 0, "scenario": "resize", "status": "passed", "timed_out": false},
+      {"expected_exit_code": 51, "observed_exit_code": 51, "scenario": "device_removal", "status": "passed", "timed_out": false}
+    ],
+    "source_result_bundle_sha256": "d7dabd5a093271fbdb6a213e58a379b9ca03b7206d19e38f1846762a7b64bc04",
+    "status": "verified"
+  },
+  "current_artifact": {
+    "executable_bytes": 237118,
+    "executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "manifest_sha256": "802a629c542e08b6b03854647ef5d13f1965bcc1cc436093f22193162117f36e",
+    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
+  },
+  "environment_consistency": {
+    "clean_system_host": "RTX 5070 Ti / ASUSTeK NUC13ANH-B",
+    "reason": "Historical measurements were performed on two physical hosts. The record preserves both measurements and does not collapse them into one environment.",
+    "same_physical_host": false,
+    "single_host_clean_startup_memory_demonstrated": false,
+    "startup_memory_host": "RTX 4060 Ti / MSI B550-A PRO desktop"
+  },
+  "final_artifact": {
+    "executable_bytes": 237118,
+    "executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "manifest_sha256": "802a629c542e08b6b03854647ef5d13f1965bcc1cc436093f22193162117f36e",
+    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
+  },
   "format": "nw10-system-validation",
-  "memory": null,
+  "measured_artifact": {
+    "executable_bytes": 240702,
+    "executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "manifest_sha256": "7e86671adc0073194d369ac92c0c745f71705a0bd0e599d007a5e379b423f0d1",
+    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
+  },
+  "memory": {
+    "accounting_scope": "Tracked engine resource plus upload allocation accounting. Runtime budget checks additionally guard descriptor and swap-chain allocation.",
+    "ceiling_bytes": 536870912,
+    "engine_cumulative_committed_bytes": 42926080,
+    "engine_resource_bytes": 42401792,
+    "engine_upload_bytes": 524288,
+    "execution_kind": "physical",
+    "frames": 1,
+    "hardware": {
+      "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+      "driver_version": "32.0.16.1088",
+      "windows_build": "10.0.26300"
+    },
+    "measured_executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "measurement_source": "nw_package_player_fixture --emit-benchmark-metrics",
+    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
+    "peak_engine_committed_gpu_bytes": 42926080,
+    "post_initialization_allocation_violation": 0,
+    "resolution": {"height": 1080, "width": 1920},
+    "status": "verified"
+  },
   "privacy": {
     "local_paths_included": false,
     "raw_result_bundle_tracked": false,
     "raw_stdout_stderr_included": false,
     "user_profile_paths_included": false
   },
-  "reason": "No single physical environment has measured clean-system startup, engine-committed GPU memory, and the clean deployment for the exact final artifact. Previously tracked values mixed RTX 5070 Ti clean-system evidence with RTX 4060 Ti startup/memory measurements and omitted the windows build binding; they were not certifiable and were withdrawn.",
-  "startup": null,
-  "status": "pending_unverified",
+  "reuse_provenance": "benchmarks/nw10/reused-physical-evidence.v1.json",
+  "startup": {
+    "cache_state": {"application_pipeline_cache_used": false, "kind": "warm"},
+    "ceiling_ms": 2000.0,
+    "cold_driver_cache_preparation": "A reboot or equivalent driver-cache reset is required for a cold run; this recorded measurement is the contract-permitted warm run.",
+    "execution_kind": "physical",
+    "hardware": {
+      "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+      "driver_version": "32.0.16.1088",
+      "windows_build": "10.0.26300"
+    },
+    "lower_bound_ms": 323.492,
+    "measured_executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "measurement_method": "PresentMon QPC first-present bound against the process-creation time window.",
+    "process_creation_window_ms": 10.405,
+    "process_start_to_first_present_ms": 333.898,
+    "protocol": "nw07-startup.v1",
+    "status": "verified",
+    "warm_preparation": "Executed the identical measured artifact once to completion before the measured run."
+  },
+  "status": "verified_reused_split_hosts",
   "task": "NW-10",
   "version": 1,
   "windows_build": null
