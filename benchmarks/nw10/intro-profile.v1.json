@@ -121,7 +121,7 @@
     "layout_id": "nwc.layout.soa.v1",
     "packaging_tool": {
       "identity": "tools/nw10_compact.py",
-      "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
+      "version": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711"
     },
     "selected_executable_bytes": 2090,
     "task": "NW-10",

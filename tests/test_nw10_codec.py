@@ -80,7 +80,10 @@ def test_delta_references_are_deterministic_and_backward_only() -> None:
 def test_mszip_handles_incompressible_and_multiblock_inputs() -> None:
     payload = bytes((index * 37 + 11) & 0xFF for index in range(100_000))
     encoded = compact.mszip_compress(payload)
-    assert encoded[:2] == b"CK"
+    if sys.platform != "win32":
+        # The deterministic contract encoder uses CAB-style CK blocks; the
+        # Windows packaging path uses the inbox Compression API directly.
+        assert encoded[:2] == b"CK"
     assert compact.mszip_decompress(
         encoded, max_output_bytes=len(payload)
     ) == payload

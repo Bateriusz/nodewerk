@@ -139,7 +139,7 @@ def _checked_mul(left: int, right: int, limit: int, what: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def mszip_compress(data: bytes, *, level: int = 9) -> bytes:
+def _zlib_mszip_compress(data: bytes, *, level: int = 9) -> bytes:
     """Deterministic MSZIP framing (per-block raw DEFLATE with 'CK' headers)."""
     output = bytearray()
     for start in range(0, len(data), MSZIP_BLOCK_BYTES):
@@ -151,7 +151,7 @@ def mszip_compress(data: bytes, *, level: int = 9) -> bytes:
     return bytes(output)
 
 
-def mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
+def _zlib_mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
     """Bounded decoder for the deterministic MSZIP framing produced above."""
     output = bytearray()
     cursor = 0
@@ -197,6 +197,175 @@ def mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
                 offset=cursor,
             )
     return bytes(output)
+
+
+_WINDOWS_CABINET: Any = None
+_WINDOWS_CABINET_FAILED = False
+_COMPRESS_ALGORITHM_MSZIP = 2
+_ERROR_INSUFFICIENT_BUFFER = 122
+
+
+def _windows_cabinet() -> Any:
+    """Load the inbox Compression API used by the Windows player."""
+    global _WINDOWS_CABINET, _WINDOWS_CABINET_FAILED
+    if _WINDOWS_CABINET is not None:
+        return _WINDOWS_CABINET
+    if _WINDOWS_CABINET_FAILED or sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        library = ctypes.WinDLL("cabinet", use_last_error=True)
+        library.CreateCompressor.argtypes = [
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        library.CreateCompressor.restype = wintypes.BOOL
+        library.Compress.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        library.Compress.restype = wintypes.BOOL
+        library.CloseCompressor.argtypes = [ctypes.c_void_p]
+        library.CloseCompressor.restype = wintypes.BOOL
+        library.CreateDecompressor.argtypes = [
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        library.CreateDecompressor.restype = wintypes.BOOL
+        library.Decompress.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        library.Decompress.restype = wintypes.BOOL
+        library.CloseDecompressor.argtypes = [ctypes.c_void_p]
+        library.CloseDecompressor.restype = wintypes.BOOL
+        _WINDOWS_CABINET = library
+        return library
+    except (OSError, AttributeError):
+        _WINDOWS_CABINET_FAILED = True
+        return None
+
+
+def _windows_mszip_compress(data: bytes) -> bytes:
+    import ctypes
+
+    library = _windows_cabinet()
+    if library is None:
+        raise CompactCodecError(
+            "compact_codec_unavailable_or_malformed",
+            "Windows inbox MSZIP compressor is unavailable",
+        )
+    handle = ctypes.c_void_p()
+    if not library.CreateCompressor(
+        _COMPRESS_ALGORITHM_MSZIP, None, ctypes.byref(handle)
+    ):
+        raise CompactCodecError(
+            "compact_codec_unavailable_or_malformed",
+            "CreateCompressor failed for MSZIP",
+        )
+    try:
+        capacity = max(len(data) + 65_536, 65_536)
+        for _attempt in range(4):
+            output = ctypes.create_string_buffer(capacity)
+            written = ctypes.c_size_t(0)
+            ok = library.Compress(
+                handle,
+                ctypes.c_char_p(data),
+                len(data),
+                ctypes.cast(output, ctypes.c_void_p),
+                capacity,
+                ctypes.byref(written),
+            )
+            if ok:
+                return output.raw[: written.value]
+            if ctypes.get_last_error() == _ERROR_INSUFFICIENT_BUFFER:
+                capacity = max(written.value, capacity * 2)
+                continue
+            break
+        raise CompactCodecError(
+            "compact_codec_unavailable_or_malformed",
+            "Windows inbox MSZIP compression failed",
+        )
+    finally:
+        library.CloseCompressor(handle)
+
+
+def _windows_mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
+    import ctypes
+
+    library = _windows_cabinet()
+    if library is None:
+        raise CompactCodecError(
+            "compact_codec_unavailable_or_malformed",
+            "Windows inbox MSZIP decompressor is unavailable",
+        )
+    handle = ctypes.c_void_p()
+    if not library.CreateDecompressor(
+        _COMPRESS_ALGORITHM_MSZIP, None, ctypes.byref(handle)
+    ):
+        raise CompactCodecError(
+            "compact_codec_unavailable_or_malformed",
+            "CreateDecompressor failed for MSZIP",
+        )
+    try:
+        capacities = [max(max_output_bytes, 1)]
+        if max_output_bytes < MSZIP_BLOCK_BYTES:
+            capacities.append(MSZIP_BLOCK_BYTES)
+        last_error = 0
+        for capacity in capacities:
+            output = ctypes.create_string_buffer(capacity)
+            written = ctypes.c_size_t(0)
+            ok = library.Decompress(
+                handle,
+                ctypes.c_char_p(data),
+                len(data),
+                ctypes.cast(output, ctypes.c_void_p),
+                capacity,
+                ctypes.byref(written),
+            )
+            if ok:
+                if written.value < max_output_bytes:
+                    raise CompactCodecError(
+                        "compact_codec_malformed",
+                        "MSZIP output is shorter than the declared container",
+                    )
+                # Some API builds report a full 32 KiB final block.  The
+                # declared container size is authoritative; the reconstructed
+                # bytes still pass the container bounds and SHA-256 checks.
+                return output.raw[:max_output_bytes]
+            last_error = ctypes.get_last_error()
+        raise CompactCodecError(
+            "compact_codec_unavailable_or_malformed",
+            f"Windows inbox MSZIP decompression failed (error {last_error})",
+        )
+    finally:
+        library.CloseDecompressor(handle)
+
+
+def mszip_compress(data: bytes, *, level: int = 9) -> bytes:
+    """Use the player's inbox MSZIP codec on Windows; deterministic zlib elsewhere."""
+    if sys.platform == "win32":
+        return _windows_mszip_compress(data)
+    return _zlib_mszip_compress(data, level=level)
+
+
+def mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
+    """Decode with the same codec family used to produce the payload."""
+    if sys.platform == "win32":
+        return _windows_mszip_decompress(data, max_output_bytes=max_output_bytes)
+    return _zlib_mszip_decompress(data, max_output_bytes=max_output_bytes)
 
 
 def compress_payload(codec: int, payload: bytes) -> bytes:

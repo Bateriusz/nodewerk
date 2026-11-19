@@ -363,7 +363,7 @@
       "layout_id": "nwc.layout.canonical.v1",
       "packaging_tool": {
         "identity": "tools/nw10_compact.py",
-        "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
+        "version": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711"
       },
       "selected_executable_bytes": 4350,
       "task": "NW-10",
@@ -461,7 +461,7 @@
       "layout_id": "nwc.layout.soa.v1",
       "packaging_tool": {
         "identity": "tools/nw10_compact.py",
-        "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
+        "version": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711"
       },
       "selected_executable_bytes": 2090,
       "task": "NW-10",
@@ -812,7 +812,7 @@
     "tools/nw06_timeline.py": "c481aafaf948387dfc4eea36f712385d970d3dcc182e6f56c8b49d4b1217a81e",
     "tools/nw07_contract.py": "592cd0ca9be755dec18586c9b9b8e5ee140bee4fbd5c914815f02c17a549af21",
     "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
-    "tools/nw10_compact.py": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41",
+    "tools/nw10_compact.py": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
     "tools/nw10_evidence.py": "3406a751c16eb70cfe6f22e7039b4e2bbb3ece17954ee44c507e746c15550dfe",
     "tools/nw10_intro.py": "8f823433521a6d33c1dff632038be54327495a58a5d7ba2c3fc58aa790ba2857",
@@ -820,7 +820,7 @@
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:288680765b3803a86edb4abb048c55d4512160ee93686836a2cf3b35b08d9e16",
+  "nw10_build_inputs_digest": "sha256:v1:77753d3b31146671a0e011d612c1278df7f3811b329ff84a543f038b0720ae86",
   "performance_validation": {
     "contract_id": "nw07_perf_ref_v1",
     "protocol": "nw07-perf-run.v1",
