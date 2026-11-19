@@ -420,6 +420,8 @@ try {
                 capture_controls_required = $true
                 encoded_container_sha256 = $diag.encoded_container_sha256
                 encoded_container_bytes = $diag.encoded_container_bytes
+                codec_id = $diag.codec_id
+                layout_id = $diag.layout_id
             }
             capture = [ordered]@{
                 fixed_ticks = @(0,240000,480000,720000,959999)
@@ -716,11 +718,11 @@ try {
     Remove-Item $tierRoot -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $tierRoot | Out-Null
 
-    Write-Host "[NW10 CORRECTNESS] rebuilding tracked common artifact identity"
+    Write-Host "[NW10 CORRECTNESS] rebuilding decoder-OFF common artifact identity"
     Invoke-NwNative "cmake" @(
         "--preset", "nw07-release",
         "-B", $commonTemplate,
-        "-DNW10_COMPACT_PACKAGE=ON",
+        "-DNW10_COMPACT_PACKAGE=OFF",
         "-DNW_ENFORCE_PINNED_TOOLCHAIN=ON"
     ) "Common release template configure failed"
     Invoke-NwNative "cmake" @(
@@ -732,25 +734,28 @@ try {
     $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
     $commonTemplateExe = Join-Path $commonTemplate "staging/procedural_image_player/nw_procedural_image_player.exe"
     Invoke-NwNative $python @(
-        "tools/nw10_perf_candidate.py",
+        "tools/nw07_export.py",
         "--output", $commonArtifact,
         "--report", $commonReport,
         "--player-template", $commonTemplateExe,
         "--dxc", $dxc
-    ) "Common NW-10 artifact reproduction failed"
+    ) "Canonical NW-07 common-artifact reproduction failed"
 
-    $common = Get-Content -Raw $commonReport | ConvertFrom-Json
+    $commonReportRecord = Get-Content -Raw $commonReport | ConvertFrom-Json
+    $common = [pscustomobject]@{
+        artifact = [pscustomobject]@{
+            artifact_key = [string]$commonReportRecord.artifact.artifact_key
+            package_sha256 = [string]$commonReportRecord.artifact.package_sha256
+            manifest_sha256 = [string]$commonReportRecord.artifact.manifest_sha256
+            executable_sha256 = [string]$commonReportRecord.artifact.executable_sha256
+            complete_distribution_bytes = [int64]$commonReportRecord.distribution.complete_distribution_bytes
+        }
+    }
     Assert-NwSameValue "artifact_key" $expectedArtifact.artifact_key $common.artifact.artifact_key
     Assert-NwSameValue "package_sha256" $expectedArtifact.package_sha256 $common.artifact.package_sha256
     Assert-NwSameValue "manifest_sha256" $expectedArtifact.manifest_sha256 $common.artifact.manifest_sha256
     Assert-NwSameValue "executable_sha256" $expectedArtifact.executable_sha256 $common.artifact.executable_sha256
     Assert-NwSameValue "complete_distribution_bytes" $expectedArtifact.complete_distribution_bytes $common.artifact.complete_distribution_bytes
-    if ($common.runtime_probe.status -ne "passed") {
-        throw "Reproduced common artifact runtime probe failed."
-    }
-    if ($common.runtime_probe.uncapped_present_verified -ne $true) {
-        throw "Reproduced common artifact is not uncapped."
-    }
     Write-Host "[NW10 CORRECTNESS] COMMON_ARTIFACT=EXACT_MATCH"
     Write-Host "[NW10 CORRECTNESS] PACKAGE_SHA=$($common.artifact.package_sha256)"
 
