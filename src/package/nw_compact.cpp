@@ -17,7 +17,7 @@
 // preserving the same inbox cabinet.dll ABI.  This is a declaration-only shim,
 // not a replacement compressor.
 extern "C" {
-__declspec(dllimport) void* CreateDecompressor(
+__declspec(dllimport) int CreateDecompressor(
     std::uint32_t algorithm, void* allocation_routines,
     void** decompressor_handle);
 __declspec(dllimport) int Decompress(
@@ -27,7 +27,9 @@ __declspec(dllimport) int Decompress(
 __declspec(dllimport) int CloseDecompressor(
     void* decompressor_handle);
 }
+#if defined(_MSC_VER)
 #pragma comment(lib, "cabinet.lib")
+#endif
 #endif
 
 namespace nw::package {
@@ -69,27 +71,67 @@ bool CheckedMul(std::size_t left, std::size_t right, std::size_t limit,
     return true;
 }
 
-bool DecodeMszip(const std::uint8_t* payload, std::size_t payload_size,
-                 std::size_t expected_size, std::vector<std::uint8_t>* output) {
+bool TryWindowsMszip(const std::uint8_t* payload, std::size_t payload_size,
+                     std::size_t expected_size, std::size_t capacity,
+                     std::vector<std::uint8_t>* output) {
 #if defined(_WIN32)
     void* decompressor = nullptr;
     if (CreateDecompressor(kCompressAlgorithmMszip, nullptr, &decompressor) ==
-        nullptr) {
+        0) {
         return false;
     }
-    output->assign(expected_size, 0u);
+    std::vector<std::uint8_t> buffer(capacity, 0u);
     std::size_t written = 0u;
     const int ok = Decompress(decompressor, payload, payload_size,
-                              output->data(), output->size(), &written);
+                              buffer.data(), buffer.size(), &written);
     CloseDecompressor(decompressor);
-    return ok != 0 && written == expected_size;
+    if (ok == 0 || written < expected_size) return false;
+    // The declared container size is authoritative.  Some API builds report a
+    // full 32 KiB block even for the final short block; the extra bytes are not
+    // part of the container and are rejected by the post-decode bounds/checksum.
+    output->assign(
+        buffer.begin(),
+        buffer.begin() + static_cast<std::ptrdiff_t>(expected_size));
+    return true;
 #else
     (void)payload;
     (void)payload_size;
     (void)expected_size;
+    (void)capacity;
     (void)output;
     return false;
 #endif
+}
+
+bool DecodeMszip(const std::uint8_t* payload, std::size_t payload_size,
+                 std::size_t expected_size, std::vector<std::uint8_t>* output) {
+    // CAB/MSZIP framing prefixes each 32 KiB block with "CK".  Some Windows
+    // Compression API builds accept the prefixed block directly while others
+    // expect the raw DEFLATE stream; the API has also varied in whether the
+    // destination capacity must be the exact decoded size or one full 32 KiB
+    // block.  All variants remain bounded and deterministic, and the
+    // reconstructed container is still checked for bounds and SHA-256.
+    const std::size_t capacities[2] = {
+        expected_size,
+        expected_size < 32768u ? std::size_t{32768u} : std::size_t{0u},
+    };
+    for (std::size_t capacity : capacities) {
+        if (capacity == 0u) continue;
+        if (TryWindowsMszip(payload, payload_size, expected_size, capacity,
+                            output)) {
+            return true;
+        }
+    }
+    if (payload_size >= 2u && payload[0] == 'C' && payload[1] == 'K') {
+        for (std::size_t capacity : capacities) {
+            if (capacity == 0u) continue;
+            if (TryWindowsMszip(payload + 2u, payload_size - 2u,
+                                expected_size, capacity, output)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void SetError(std::string* error, const char* message) {

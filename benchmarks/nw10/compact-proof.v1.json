@@ -545,7 +545,7 @@
           "compact_player_image_bytes": null,
           "decoder_code_bytes": null,
           "decoder_code_included_in_player_image": false,
-          "decoder_source_bytes": 11525,
+          "decoder_source_bytes": 13375,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
           "encoded_package_bytes": 3968,
@@ -637,7 +637,7 @@
           "compact_player_image_bytes": 258,
           "decoder_code_bytes": null,
           "decoder_code_included_in_player_image": false,
-          "decoder_source_bytes": 11525,
+          "decoder_source_bytes": 13375,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
           "encoded_package_bytes": 1708,
@@ -1025,7 +1025,7 @@
       "width": 1920
     },
     "report_path": "benchmarks/nw10/intro-export-report.v1.json",
-    "report_sha256": "5284f45c26413da5322b47dcf1ac68441ded8d10031824b42b2d609de5c79e54"
+    "report_sha256": "968e563657369afe5b6367a0403e9c58174a3aedacbc065d87251d0e99a4cc4c"
   },
   "minimum_measured_artifact": {
     "bytes": 2090,
@@ -1061,7 +1061,7 @@
     "shaders/nw06/nw06_scene_vs.hlsl": "f0d909b5a20817508f885d7f8754f628dd95dfa3b6898066bff9a5f7e8af4300",
     "shaders/nw06/nw06_tonemap_cs.hlsl": "bf0da426af7140076f5e20eba2e0fc7b717e4bef1068b987a1f2c1fdc9462429",
     "shaders/nw10/nw10_sdf_intro_cs.hlsl": "da7dd456316936a40ac8a2309a9b0069c3c79ee5508903ac5261b70e439d87de",
-    "src/package/nw_compact.cpp": "09162d468a6a715aca74011727adfe661ba04a1d99afd093ffa4ad57e8f4d02d",
+    "src/package/nw_compact.cpp": "bd1c3437d7246e8a21e09f64277fda7b05716b7fe19c844d1ffc60395c14ce69",
     "src/package/nw_compact.h": "9fca4faa57c6c22187864ca7c1bd2e4838fd0ac5e82100fdfd5dfbf9764a8b93",
     "src/package/nwp_format.cpp": "f1de9a1dde6c3a877eced60a8fa7e3192cf7ab1a8738d7d2ac62fdd9ce2286ed",
     "src/package/nwp_format.h": "95db908691ef077e5187a6d449c8be64d19d4b4a7b17ac678f41aecedd78314d",
@@ -1111,7 +1111,7 @@
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:c1a333d35bbef6f33f1ccccc492c9eb08ddc6873273f8ce7e190ac0d1b941543",
+  "nw10_build_inputs_digest": "sha256:v1:288680765b3803a86edb4abb048c55d4512160ee93686836a2cf3b35b08d9e16",
   "packaging_modes": [
     {
       "clean_system_checked": false,
@@ -1223,7 +1223,7 @@
           "compact_player_image_bytes": null,
           "decoder_code_bytes": null,
           "decoder_code_included_in_player_image": false,
-          "decoder_source_bytes": 11525,
+          "decoder_source_bytes": 13375,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
           "encoded_package_bytes": 17626,
@@ -1315,7 +1315,7 @@
           "compact_player_image_bytes": 258,
           "decoder_code_bytes": null,
           "decoder_code_included_in_player_image": false,
-          "decoder_source_bytes": 11525,
+          "decoder_source_bytes": 13375,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
           "encoded_package_bytes": 4093,
@@ -1725,7 +1725,7 @@
       }
     },
     "report_path": "benchmarks/nw10/proof-export-report.v1.json",
-    "report_sha256": "18de5a3c5b786246a15513457c47bc3524c1d55b8e6dad11d39f95fd9cf02f6e",
+    "report_sha256": "1e52cfc7217a8b90cae2304b5dab858f1a0c7b1333b3178729288cdb0399083f",
     "reproducibility": {
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",

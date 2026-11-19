@@ -7,19 +7,19 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "5cc7d38d6226c0367cc7b668bec2eb852014ae7cf29837cbb49219111d663449"
+      "sha256": "760544e32248e469857b75650789db1dde2c87ca4199816732e4252d428d6199"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "e10c9d564b195b8d161f3f5611816d69dd968117974b0072a6e45da53a3abe5a"
+      "sha256": "d4539e494bbff4781aa43225e565437c6249bf3a45fd4f4c5dd50a1451f36ddc"
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
-      "sha256": "18de5a3c5b786246a15513457c47bc3524c1d55b8e6dad11d39f95fd9cf02f6e"
+      "sha256": "1e52cfc7217a8b90cae2304b5dab858f1a0c7b1333b3178729288cdb0399083f"
     },
     {
       "path": "benchmarks/nw10/intro-export-report.v1.json",
-      "sha256": "5284f45c26413da5322b47dcf1ac68441ded8d10031824b42b2d609de5c79e54"
+      "sha256": "968e563657369afe5b6367a0403e9c58174a3aedacbc065d87251d0e99a4cc4c"
     },
     {
       "path": "benchmarks/nw10/common-artifact-correctness.v1.json",

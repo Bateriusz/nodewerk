@@ -365,6 +365,7 @@ int main(int argc, char** argv) {
     decoded.clear();
     error.clear();
     if (!Decode(mszip, &decoded, &error) || !Same(decoded, canonical)) {
+        std::fprintf(stderr, "MSZIP decoder error: %s\n", error.c_str());
         failures.Fail("python MSZIP container did not decode identically");
     }
 #endif
