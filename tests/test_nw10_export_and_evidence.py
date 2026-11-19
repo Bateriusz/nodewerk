@@ -641,6 +641,7 @@ def _verified_system_record() -> dict:
             "deployment": {
                 "only_runtime_executable": True,
                 "sidecars": [],
+                "forbidden_runtime_dependencies": [],
                 "executable_sha256": artifact["executable_sha256"],
                 "executable_bytes": artifact["executable_bytes"],
             },
@@ -671,6 +672,33 @@ def test_verified_system_validation_binds_every_measurement(tmp_path: Path) -> N
     record["startup"]["hardware"]["driver_version"] = "unavailable"
     path.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(Exception, match="driver does not match"):
+        validate_file_against_schema(path, schema)
+
+
+def test_verified_system_validation_freezes_scenarios_and_dependencies(
+    tmp_path: Path,
+) -> None:
+    schema = REPO_ROOT / "schemas" / "nw10-system-validation.schema.json"
+    path = tmp_path / "system.json"
+
+    record = _verified_system_record()
+    record["clean_system"]["scenarios"][0]["expected_exit_code"] = 0
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="expected exit code changed"):
+        validate_file_against_schema(path, schema)
+
+    record = _verified_system_record()
+    record["clean_system"]["scenarios"][0]["scenario"] = "renamed_scenario"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="scenario set changed"):
+        validate_file_against_schema(path, schema)
+
+    record = _verified_system_record()
+    record["clean_system"]["deployment"]["forbidden_runtime_dependencies"] = [
+        "developer-only.dll"
+    ]
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="forbidden runtime dependencies"):
         validate_file_against_schema(path, schema)
 
 
@@ -743,7 +771,7 @@ def test_verified_correctness_and_pe_ledger_cannot_claim_unmeasured_runtime(
         )
 
 
-def test_contract_evidence_regeneration_is_not_destructive(
+def test_contract_evidence_regeneration_rejects_unbound_verified_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import nw10_evidence
@@ -776,12 +804,14 @@ def test_contract_evidence_regeneration_is_not_destructive(
     regenerated = json.loads(
         (output / "evidence-status.v1.json").read_text(encoding="utf-8")
     )
-    assert regenerated["evidence_status"] == status["evidence_status"]
-    assert regenerated["reference_capture"] == "verified_reference_capture"
-    assert regenerated["ada_correctness"] == "verified"
-    assert regenerated["clean_system"] == "verified"
-    assert regenerated["files"]
-
+    assert regenerated["evidence_status"] == "pending_physical_windows_capture"
+    assert regenerated["physical_evidence"] == "pending"
+    assert regenerated["reference_capture"] == "pending_reference_capture"
+    assert regenerated["ada_correctness"] == "pending_unverified"
+    assert regenerated["blackwell_correctness"] == "pending_unverified"
+    assert regenerated["clean_system"] == "pending_unverified"
+    assert regenerated["startup"] == "pending_unverified"
+    assert regenerated["memory"] == "pending_unverified"
 
 def test_reused_physical_evidence_regeneration_does_not_promote_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
