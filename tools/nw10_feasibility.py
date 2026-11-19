@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -62,6 +63,53 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
+def _repo_relative_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            "prior valid ledger must be inside the repository for public provenance"
+        ) from exc
+
+
+def _validate_prior_valid_ledger(
+    ledger: Mapping[str, Any], *, provenance_path: str
+) -> tuple[Mapping[str, Any], Mapping[str, Any], str | None]:
+    if ledger.get("format") != "nw10-windows-pe-ledger":
+        raise ValueError("prior valid ledger has an unexpected format")
+    if ledger.get("version") != 1 or ledger.get("task") != "NW-10":
+        raise ValueError("prior valid ledger has an unexpected version or task")
+    if not provenance_path or provenance_path.startswith("/") or re.match(
+        r"^[A-Za-z]:", provenance_path
+    ):
+        raise ValueError("prior valid ledger provenance path must be repository-relative")
+    final = ledger.get("final_artifact")
+    conclusion = ledger.get("conclusion")
+    if not isinstance(final, Mapping) or not isinstance(conclusion, Mapping):
+        raise ValueError("prior valid ledger is structurally incomplete")
+    if final.get("runtime_status") != "validated_runnable":
+        raise ValueError("prior valid ledger does not contain a runnable artifact")
+    if conclusion.get("byte_ledger_complete") is not True:
+        raise ValueError("prior valid ledger does not contain a complete byte ledger")
+    executable_sha = str(final.get("executable_sha256", "")).lower()
+    if re.fullmatch(r"[0-9a-f]{64}", executable_sha) is None:
+        raise ValueError("prior valid ledger executable SHA-256 is malformed")
+    for field in ("package_sha256", "manifest_sha256"):
+        value = final.get(field)
+        if value is not None and re.fullmatch(r"[0-9a-f]{64}", str(value).lower()) is None:
+            raise ValueError(f"prior valid ledger {field} is malformed")
+    if int(final.get("executable_bytes", 0)) <= 0:
+        raise ValueError("prior valid ledger executable size is invalid")
+    source = ledger.get("source")
+    prior_head: str | None = None
+    if isinstance(source, Mapping) and source.get("head_sha") is not None:
+        prior_head = str(source.get("head_sha")).lower()
+        if re.fullmatch(r"[0-9a-f]{40}", prior_head) is None:
+            raise ValueError("prior valid ledger source head is malformed")
+    return final, conclusion, prior_head
+
+
 def _normalize_artifact_digest(value: str) -> str:
     digest = str(value).strip().lower()
     if not digest:
@@ -106,6 +154,7 @@ def build_feasibility(
     artifact_id: int | None = None,
     artifact_digest: str = "",
     prior_valid_ledger: Mapping[str, Any] | None = None,
+    prior_valid_ledger_path: str | None = None,
 ) -> dict[str, Any]:
     if proof.get("test_payload") is True or intro.get("test_payload") is True:
         raise ValueError("feasibility publication requires release-grade reports")
@@ -372,50 +421,41 @@ def build_feasibility(
         record["blockers"] = blockers
 
     if prior_valid_ledger is not None:
-        prior_final = prior_valid_ledger.get("final_artifact")
-        prior_conclusion = prior_valid_ledger.get("conclusion")
-        if (
-            isinstance(prior_final, Mapping)
-            and isinstance(prior_conclusion, Mapping)
-            and prior_final.get("runtime_status") == "validated_runnable"
-            and prior_conclusion.get("byte_ledger_complete") is True
-        ):
-            prior_sha = str(prior_final.get("executable_sha256", "")).lower()
-            prior_bytes = int(prior_final.get("executable_bytes", 0))
-            if len(prior_sha) != 64 or prior_bytes <= 0:
-                raise ValueError("prior valid ledger has an invalid artifact identity")
-            prior_source = prior_valid_ledger.get("source")
-            prior_head = (
-                str(prior_source.get("head_sha"))
-                if isinstance(prior_source, Mapping)
-                and prior_source.get("head_sha")
-                else None
+        if prior_valid_ledger_path is None:
+            raise ValueError(
+                "prior valid ledger provenance path is required with prior_valid_ledger"
             )
-            record["prior_valid_artifact"] = {
-                "executable_bytes": prior_bytes,
-                "executable_sha256": prior_sha,
+        prior_final, _prior_conclusion, prior_head = _validate_prior_valid_ledger(
+            prior_valid_ledger,
+            provenance_path=prior_valid_ledger_path,
+        )
+        prior_sha = str(prior_final["executable_sha256"]).lower()
+        prior_bytes = int(prior_final["executable_bytes"])
+        record["prior_valid_artifact"] = {
+            "executable_bytes": prior_bytes,
+            "executable_sha256": prior_sha,
+            "runtime_status": "validated_runnable",
+            "status": "archived_prior_valid_fallback",
+            "source_head_sha": prior_head,
+            "reason": (
+                "The current measurement is not yet a validated runnable "
+                "replacement, so the last complete runnable ledger remains "
+                "available without being represented as current-head evidence."
+            ),
+        }
+        if not target_met and validated_bytes is None:
+            record["selected_artifact"] = {
+                "bytes": prior_bytes,
+                "sha256": prior_sha,
                 "runtime_status": "validated_runnable",
-                "status": "archived_prior_valid_fallback",
-                "source_head_sha": prior_head,
+                "source": "prior_valid_artifact",
+                "ledger": prior_valid_ledger_path,
                 "reason": (
-                    "The current measurement is not yet a validated runnable "
-                    "replacement, so the last complete runnable ledger remains "
-                    "available without being represented as current-head evidence."
+                    "No current artifact has completed runtime validation; "
+                    "select the last validated runnable distribution until "
+                    "new physical evidence is published."
                 ),
             }
-            if not target_met and validated_bytes is None:
-                record["selected_artifact"] = {
-                    "bytes": prior_bytes,
-                    "sha256": prior_sha,
-                    "runtime_status": "validated_runnable",
-                    "source": "prior_valid_artifact",
-                    "ledger": "benchmarks/nw10/windows-pe-ledger.v1.json",
-                    "reason": (
-                        "No current artifact has completed runtime validation; "
-                        "select the last validated runnable distribution until "
-                        "new physical evidence is published."
-                    ),
-                }
 
     if "selected_artifact" not in record:
         if validated_bytes is not None and validated_mode == "compact":
@@ -472,6 +512,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.prior_valid_ledger is not None
         else None
     )
+    prior_valid_ledger_path = (
+        _repo_relative_path(args.prior_valid_ledger)
+        if args.prior_valid_ledger is not None
+        else None
+    )
     record = build_feasibility(
         outcome=_load(args.outcome),
         proof=_load(args.proof_report),
@@ -482,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         artifact_id=args.artifact_id,
         artifact_digest=args.artifact_digest,
         prior_valid_ledger=prior_valid_ledger,
+        prior_valid_ledger_path=prior_valid_ledger_path,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
