@@ -52,7 +52,9 @@
   },
   "format": "nw10-common-artifact-correctness-summary",
   "packed_unpacked_comparison": {
+    "codec_id": null,
     "direct_separate_packed_gpu_capture_recorded": false,
+    "layout_id": null,
     "packed_package_sha256": null,
     "runtime": {
       "ada": {
