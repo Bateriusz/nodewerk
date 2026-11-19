@@ -61,6 +61,16 @@ $output = [System.IO.Path]::GetFullPath((Join-Path $here $OutputRoot))
 $captures = Join-Path $output "captures"
 Remove-Item $output -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $captures | Out-Null
+$verificationFile = $null
+if ($packagingMode -eq "packed") {
+    $verificationFile = "packed-diagnostic.exe"
+    $verificationPath = Join-Path $output $verificationFile
+    Copy-Item $exe $verificationPath -Force
+    $verificationSha = (Get-FileHash -Algorithm SHA256 $verificationPath).Hash.ToLowerInvariant()
+    if ($verificationSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLowerInvariant()) {
+        throw "Retained packed diagnostic executable SHA-256 changed"
+    }
+}
 
 $probeOutput = @(& $exe --frames 1 2>&1)
 $probeExit = $LASTEXITCODE
@@ -167,6 +177,7 @@ $record = [ordered]@{
         encoded_container_bytes = $transfer.diagnostic_sibling.encoded_container_bytes
         codec_id = $transfer.diagnostic_sibling.codec_id
         layout_id = $transfer.diagnostic_sibling.layout_id
+        verification_file = $verificationFile
     }
     hardware = [ordered]@{
         adapter_description = $adapter
@@ -213,6 +224,9 @@ $bundleRoot = Join-Path $output "bundle"
 New-Item -ItemType Directory -Force $bundleRoot | Out-Null
 Copy-Item $recordPath (Join-Path $bundleRoot "capture.json") -Force
 Copy-Item $captures (Join-Path $bundleRoot "captures") -Recurse -Force
+if ($packagingMode -eq "packed") {
+    Copy-Item (Join-Path $output $verificationFile) (Join-Path $bundleRoot $verificationFile) -Force
+}
 $fileRows = @()
 foreach ($file in Get-ChildItem $bundleRoot -File -Recurse | Sort-Object FullName) {
     $fileRows += [ordered]@{
