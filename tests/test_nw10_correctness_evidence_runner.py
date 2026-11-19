@@ -20,7 +20,10 @@ def test_correctness_runner_reproduces_and_binds_common_artifact() -> None:
     assert '"build-diagnostic"' in text
     assert '"capture"' in text
     assert '"compare"' in text
-    assert "performance-preservation-rtx4060ti.v1.json" in text
+    assert "build/nw10-intro/report.json" in text
+    assert "Get-NwExpectedArtifact" in text
+    assert "--packed-ada-captures" in text
+    assert "--packed-blackwell-captures" in text
     assert 'Assert-NwSameValue "artifact_key"' in text
     assert 'Assert-NwSameValue "package_sha256"' in text
     assert 'Assert-NwSameValue "manifest_sha256"' in text

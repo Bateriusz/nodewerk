@@ -34,33 +34,43 @@ Contract-only exports with structural DXIL payloads measure:
 
 These numbers validate the accounting, decoder, and deterministic export
 paths. They are **not** Windows release artifacts and are not physical 64 KiB
-proof. Matched physical performance preservation is verified, and common-artifact
-correctness is verified on representative desktop Ada (RTX 4060 Ti) and
-Blackwell (RTX 5070 Ti) hardware with zero observed cross-hardware error at the
-required fixed ticks. Clean-system deployment, startup, and engine-committed GPU-memory gates are now
-verified on physical Windows hardware. Exact Windows PE linker elimination and
-compact-decoder closure costs are also measured and tracked in the final byte ledger. The decision is **continue**, not
-a universal feasibility or impossibility claim.
+proof. Physical performance preservation, packed/unpacked Ada and Blackwell
+correctness, clean-system startup, and engine-committed GPU-memory evidence are
+**pending**. The exact `nw07_perf_ref_v1` reference capture and its bindings are
+unavailable, and the previously tracked performance, cross-hardware
+correctness, and system summaries were withdrawn because they did not satisfy
+the frozen matching rules. The decision is **continue**, not a universal
+feasibility or impossibility claim.
 
 ### Hosted Windows feasibility result
 
 The hosted Windows x64 experiment is treated as a measured feasibility run,
-not as a hard 64 KiB gate. The current run measured the inherited NW-07 proof
-at 264,390 bytes (above its 262,144-byte proof tier) and the restricted-intro
-compact candidate at 227,715 bytes. The compact candidate then failed runtime
-validation with package-validation exit code 70, so it is a tested blocker,
-not a validated runnable distribution. The workflow preserves and smoke-tests
-the canonical restricted-intro fallback, records the smallest validated
-runnable artifact separately from the smallest measured candidate, and keeps
-the NW-10 decision at **continue** when the fallback remains valid.
+not as a hard 64 KiB gate. The archived run measured the supposedly inherited
+NW-07 proof at 264,390 bytes and the restricted-intro compact candidate at
+227,715 bytes. That proof number is **invalid as a canonical baseline**: it was
+linked from the decoder-ON template and therefore included the 3,584-byte
+compact decoder in a 262,144-byte proof tier. The workflow now builds a
+separate `NW10_COMPACT_PACKAGE=OFF` template for the canonical proof and rejects
+a decoder-off canonical proof above 262,144 bytes. The archived run is retained
+only as an attributed, superseded measurement; its `proof_measured_bytes` is
+null and its status is `invalid_decoder_on_baseline`. The compact candidate
+failed runtime validation with package-validation exit code 70, so it remains
+a tested blocker, not a validated runnable distribution.
 
 A compact candidate that fails runtime validation is never counted as an
 achieved size result. Its stdout/stderr, exit code, measured byte count, and
-dependency evidence are archived with the Windows CI evidence. Matched physical
-performance and Ada/Blackwell correctness are now verified under the inherited
-NW-07 protocol; clean-system, startup, and memory evidence are verified and tracked in
-`benchmarks/nw10/system-validation.v1.json`. Raw RGBA32F captures stay outside Git, while the privacy-safe verified
-summary is tracked in `benchmarks/nw10/common-artifact-correctness.v1.json`.
+dependency evidence are archived with the Windows CI evidence. Certification
+remains pending while the exact reference capture and bindings are unavailable.
+`benchmarks/nw10/system-validation.v1.json` and
+`benchmarks/nw10/common-artifact-correctness.v1.json` are explicit pending
+records; they do not claim physical verification.
+
+The Windows workflow constructs `build/nw10-windows-compact-feasibility.json`
+with `tools/nw10_feasibility.py` and schema-validates it in both outcomes: a
+validated at-most-65,536-byte artifact yields `target_met=true` and
+`classification=complete`; a larger or failed candidate yields
+`classification=continue`, a tested blocker, and the minimum measured
+candidate/validated sizes. Neither branch is a universal feasibility claim.
 
 ## Preserved architecture
 
@@ -144,7 +154,7 @@ package:
 - **Shader specialization/fusion:** the established NW-05 fusion decisions are
   retained. No unmeasured extra fusion is applied and no new shader semantics
   are required.
-- **Linker elimination:** measured on the exact Windows artifact against an
+- **Linker elimination:** measured in the archived Windows run against an
   otherwise identical pinned control link with `/OPT:NOREF /OPT:NOICF`.
   `/OPT:REF + /OPT:ICF=4` save 726,528 bytes in the complete distribution
   (the same 726,528 bytes in the PE image). The largest raw-section savings are
@@ -183,6 +193,9 @@ NODEWERK_NW03_TEST_DIGEST=1 python tools/nw10_evidence.py \
 python -m pytest -q tests/test_nw10_*.py
 ```
 
+This regeneration is non-destructive: it refreshes the contract evidence and
+file hashes and never downgrades an existing tracked physical status.
+
 ### Windows release export
 
 ```powershell
@@ -191,14 +204,22 @@ pwsh ./tools/nw01/enter-build-env.ps1
 cmake --preset nw07-release -DNW10_COMPACT_PACKAGE=ON -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
 cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
 
+# Canonical NW-07 baseline: decoder OFF so the proof tier excludes NW-10 code.
+cmake --preset nw07-release -B build/nw07-release-decoder-off \
+  -DNW10_COMPACT_PACKAGE=OFF -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+cmake --build build/nw07-release-decoder-off --target nw_procedural_image_player --parallel 2
+
 $template = "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+$canonicalTemplate = "build/nw07-release-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
 $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
 
 python tools/nw10_proof.py --output build/nw10-proof `
+  --canonical-player-template $canonicalTemplate `
   --player-template $template --dxc $dxc `
   --report build/nw10-proof/report.json
 
 python tools/nw10_intro.py --output build/nw10-intro `
+  --canonical-player-template $canonicalTemplate `
   --player-template $template --dxc $dxc `
   --report build/nw10-intro/report.json
 ```
@@ -211,8 +232,10 @@ package SHA-256 and the manifest binding before GPU initialization.
 
 The compact decoder is opt-in via `-DNW10_COMPACT_PACKAGE=ON`. The canonical
 NW-07 release build leaves it at the default `OFF`, so the existing 256 KiB
-proof closure and dependency accounting are preserved unchanged. NW-10 compact
-proof/intro artifacts build the template with the option enabled.
+proof closure and dependency accounting are preserved unchanged. The canonical
+proof/intro baselines are measured from the decoder-OFF template; only the
+compact candidates are linked from the decoder-ON template. A canonical proof
+above 262,144 bytes fails the export instead of silently redefining the tier.
 
 No executable packer is used. In particular, Crinkler is not invoked and its
 x64 support is not assumed. The only compression mode considered for the
@@ -229,11 +252,13 @@ tools, and protocol. The five-second warm-up and three independent uncapped
 60-second runs in fresh processes are mandatory. A failed run cannot be hidden
 by aggregation.
 
-The exact RTX 4060 Ti reference capture used for the matched performance
-comparison is verified. Representative physical correctness has also been
-verified across RTX 4060 Ti (Ada) and RTX 5070 Ti (Blackwell). A different host,
-another Ada GPU, faster hardware, stale artifacts, or synthetic tests still
-cannot substitute for the matched `nw07_perf_ref_v1` performance evidence.
+The exact RTX 4060 Ti reference capture is **not bound**: the frozen contract
+still records `binding_status: pending_reference_capture` and device identity
+`10245`. A different device identity is a new reference and requires a fresh
+exact-board capture and contract revision. Representative desktop Ada and
+Blackwell packed/unpacked correctness is also pending; a different host,
+another Ada GPU, faster hardware, stale artifacts, or synthetic tests cannot
+substitute for the matched `nw07_perf_ref_v1` evidence.
 
 Clean-system deployment commands (exact final artifact; separate from the
 synthetic pytest gates):
@@ -268,8 +293,11 @@ NW-07 contract.
 Physical capture output stays under `build/` or in transfer ZIPs. Publication is
 fail-closed and writes only privacy-safe summaries under `benchmarks/nw10/`.
 
-Matched Ada performance remains the first step and already supports publication,
-schema validation, controlled staging, commit, and push:
+Matched Ada performance remains the first step. The publication tooling
+supports schema validation, controlled staging, commit, and push, but it cannot
+create the missing exact reference capture. The frozen contract is still
+unbound, so publication remains pending until a fresh exact-board capture is
+available:
 
 ```powershell
 pwsh ./tools/nw10/run-performance-evidence.ps1 -Commit
@@ -290,6 +318,11 @@ published summary against
 `evidence-status.v1.json`, stages only the two allowed tracked evidence files,
 and optionally pushes when `-Push` is explicitly supplied.
 
+The comparison must include a verified packed/unpacked artifact comparison and
+a measured desktop chassis for both tiers. The publisher rejects asserted
+desktop values, pending packed/unpacked comparisons, redefined fixed ticks,
+non-frozen tolerances, and test-payload or non-release reports.
+
 Clean-system/system publication consumes the transferred physical result ZIP,
 fresh physical metrics JSON, and the exact final intro export report. It verifies
 every result-bundle file against the embedded manifest before publishing:
@@ -302,7 +335,10 @@ The metrics JSON is the fresh collector output used by the NW-07/NW-10 physical
 capture path. Its `measurements` object must bind startup and engine-committed
 memory to the exact physical run and retain
 `post_initialization_allocation_violation=0`; missing or out-of-budget values
-fail publication. The system publisher extracts only sanitized host/GPU
+fail publication. Its `metadata` must also name the exact
+`executable_sha256`, `package_sha256`, `execution_kind`, `windows_build`,
+`adapter_description`, and `driver_version`, all matching the clean-system
+result bundle. The system publisher extracts only sanitized host/GPU
 identity and scenario results from the clean-system ZIP. Raw stdout/stderr,
 local paths, and the result ZIP itself are never tracked.
 
@@ -319,6 +355,13 @@ System DLLs are not counted as distributed application bytes but are recorded
 as dependencies. Every compared artifact retains its source revision, frozen
 configuration, toolchain identity, build command, hashes, byte ledger, raw
 measurements, and result status.
+
+The compact ledger always records `cabinet.dll` as a required inbox dependency
+and `decoder_code_bytes` as a subset of the player image. When the exact
+MSVC/x64 decoder contribution has not been measured, the ledger sets
+`all_required_bytes_accounted=false` and names `decoder_code_bytes` in
+`unaccounted_components`; it never reports a complete ledger with an unknown
+decoder cost.
 
 ## Regression coverage
 

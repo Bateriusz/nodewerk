@@ -1,32 +1,34 @@
 {
   "ada": {
     "hardware": {
-      "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+      "adapter_description": "unavailable",
       "classified_tier": "ada",
-      "device_form_factor": "desktop",
-      "driver_version": "32.0.16.1088"
+      "device_form_factor": "unknown",
+      "device_form_factor_source": "pending_physical_probe",
+      "driver_version": "unavailable"
     },
-    "status": "verified"
+    "status": "pending_unverified"
   },
   "blackwell": {
     "hardware": {
-      "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+      "adapter_description": "unavailable",
       "classified_tier": "blackwell",
-      "device_form_factor": "desktop",
-      "driver_version": "32.0.16.1088"
+      "device_form_factor": "unknown",
+      "device_form_factor_source": "pending_physical_probe",
+      "driver_version": "unavailable"
     },
-    "status": "verified"
+    "status": "pending_unverified"
   },
   "capture_protocol": "nw07-correctness-capture.v1",
   "common_artifact": {
-    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1"
+    "package_sha256": null
   },
   "comparison": {
     "absolute_required": true,
     "absolute_tolerance": 0.0001,
-    "ada_loop_boundary_status": "passed",
-    "blackwell_loop_boundary_status": "passed",
-    "fixed_tick_status": "passed",
+    "ada_loop_boundary_status": "pending",
+    "blackwell_loop_boundary_status": "pending",
+    "fixed_tick_status": "pending",
     "fixed_ticks": [
       0,
       240000,
@@ -39,23 +41,37 @@
       960000
     ],
     "relative_tolerance": 0.0001,
-    "worst_absolute_error": 0.0,
-    "worst_relative_error": 0.0
+    "worst_absolute_error": null,
+    "worst_relative_error": null
   },
   "format": "nw10-common-artifact-correctness-summary",
+  "packed_unpacked_comparison": {
+    "packed_package_sha256": null,
+    "runtime": {
+      "ada": {
+        "status": "pending_physical"
+      },
+      "blackwell": {
+        "status": "pending_physical"
+      }
+    },
+    "status": "pending_physical",
+    "unpacked_package_sha256": null,
+    "worst_absolute_error": null
+  },
   "privacy": {
     "local_paths_included": false,
     "raw_capture_bytes_embedded": false,
     "stdout_stderr_included": false
   },
   "source": {
-    "execution_kind": "physical_cross_hardware",
-    "implementation_head": "64e02a63a779181166dc45ee3f4b183c5bdf279a",
-    "mode": "compare",
+    "execution_kind": "none",
+    "implementation_head": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+    "mode": "pending",
     "raw_capture_manifests_tracked": false,
     "tool": "tools/nw10/run-correctness-evidence.ps1"
   },
-  "status": "verified",
+  "status": "pending_unverified",
   "task": "NW-10",
   "version": 1
 }

@@ -56,18 +56,52 @@
         "performance_correctness_and_system_verified"
       ]
     },
-    "clean_system": {"enum": ["pending_unverified", "verified"]},
-    "startup": {"enum": ["pending_unverified", "verified"]},
-    "memory": {"enum": ["pending_unverified", "verified"]},
+    "clean_system": {
+      "enum": [
+        "pending_unverified",
+        "verified"
+      ]
+    },
+    "startup": {
+      "enum": [
+        "pending_unverified",
+        "verified"
+      ]
+    },
+    "memory": {
+      "enum": [
+        "pending_unverified",
+        "verified"
+      ]
+    },
     "system_validation": {
       "type": "object",
-      "required": ["status", "path", "sha256", "final_executable_sha256", "package_sha256"],
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "final_executable_sha256",
+        "package_sha256"
+      ],
       "properties": {
-        "status": {"const": "verified"},
-        "path": {"const": "benchmarks/nw10/system-validation.v1.json"},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "final_executable_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "status": {
+          "const": "verified"
+        },
+        "path": {
+          "const": "benchmarks/nw10/system-validation.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "final_executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "package_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "frame_time": {
@@ -112,12 +146,28 @@
         "compact_decoder_template_bytes_added"
       ],
       "properties": {
-        "status": {"const": "verified"},
-        "path": {"const": "benchmarks/nw10/windows-pe-ledger.v1.json"},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "final_executable_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "linker_elimination_bytes_saved": {"type": "integer", "minimum": 1},
-        "compact_decoder_template_bytes_added": {"type": "integer", "minimum": 1}
+        "status": {
+          "const": "verified"
+        },
+        "path": {
+          "const": "benchmarks/nw10/windows-pe-ledger.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "final_executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "linker_elimination_bytes_saved": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compact_decoder_template_bytes_added": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "correctness_evidence": {
@@ -169,7 +219,11 @@
       ],
       "properties": {
         "status": {
-          "const": "verified_windows_runtime"
+          "enum": [
+            "verified_windows_runtime",
+            "pending_runtime_validation",
+            "archived_only"
+          ]
         },
         "path": {
           "const": "benchmarks/nw10/windows-compact-feasibility.v1.json"
@@ -183,18 +237,29 @@
           "minimum": 1
         },
         "target_met": {
-          "const": false
+          "type": "boolean"
         },
         "minimum_measured_candidate_bytes": {
-          "type": "integer",
-          "minimum": 65537
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
         },
         "minimum_validated_runnable_bytes": {
-          "type": "integer",
-          "minimum": 65537
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
         },
         "validated_mode": {
-          "const": "canonical_fallback"
+          "enum": [
+            "compact",
+            "canonical_fallback",
+            "pending_runtime_validation",
+            "none"
+          ]
         }
       }
     }

@@ -43,7 +43,7 @@
           "properties": {
             "model": { "const": "NVIDIA GeForce RTX 4060 Ti" },
             "vendor_id": { "const": 4318 },
-            "device_id": { "const": 10243 },
+            "device_id": { "const": 10245 },
             "vram_mib": { "const": 8192 }
           }
         },

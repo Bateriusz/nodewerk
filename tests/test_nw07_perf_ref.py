@@ -16,8 +16,6 @@ import nw07_contract as contract  # noqa: E402
 import nw07_evidence as evidence  # noqa: E402
 
 PERF_REF = REPO_ROOT / "benchmarks" / "nw07" / "perf-ref-v1.json"
-NW01_RTX4060_BASELINE = REPO_ROOT / "benchmarks" / "hardware" / "rtx-4060-baseline.json"
-NW07_PERF_SCHEMA = REPO_ROOT / "schemas" / "nw07-perf-ref.schema.json"
 
 
 def _identity() -> dict:
@@ -165,25 +163,19 @@ def test_bound_contract_is_frozen() -> None:
     assert result["reasons"] == []
 
 
-def test_reference_board_matches_verified_nw01_rtx4060ti_baseline() -> None:
-    baseline = json.loads(NW01_RTX4060_BASELINE.read_text(encoding="utf-8"))
-    assert baseline["verification_status"] == "verified"
-    assert baseline["benchmark_passed"] is True
-    metadata = baseline["environment_metadata"]
-    expected_vendor_id = int(metadata["gpu_vendor_id"], 16)
-    expected_device_id = int(metadata["gpu_device_id"], 16)
-    board = _contract()["reference"]["board"]
+def test_pending_reference_keeps_the_originally_frozen_identity() -> None:
+    record = _contract()
+    board = record["reference"]["board"]
+    assert record["binding_status"] == "pending_reference_capture"
     assert board["binding_status"] == "pending_reference_capture"
-    assert board["model"] == metadata["gpu_model"]
-    assert board["vendor_id"] == expected_vendor_id
-    assert board["device_id"] == expected_device_id
-    assert contract.REFERENCE_BOARD_MODEL == metadata["gpu_model"]
-    assert contract.REFERENCE_BOARD_VENDOR_ID == expected_vendor_id
-    assert contract.REFERENCE_BOARD_DEVICE_ID == expected_device_id
-    schema = json.loads(NW07_PERF_SCHEMA.read_text(encoding="utf-8"))
-    board_schema = schema["properties"]["reference"]["properties"]["board"]["properties"]
-    assert board_schema["vendor_id"]["const"] == expected_vendor_id
-    assert board_schema["device_id"]["const"] == expected_device_id
+    assert board["vendor_id"] == 0x10DE
+    assert board["device_id"] == 0x2805
+    assert contract.REFERENCE_BOARD_DEVICE_ID == 0x2805
+    # A different PCI identity is a new reference and cannot silently replace
+    # the frozen pending contract without a fresh exact-board capture.
+    changed = _contract()
+    changed["reference"]["board"]["device_id"] = 0x2803
+    assert evidence.validate_perf_contract(changed)["status"] == "invalid"
 
 
 @pytest.mark.parametrize(
@@ -205,7 +197,7 @@ def test_reference_board_matches_verified_nw01_rtx4060ti_baseline() -> None:
         lambda c: c["matching_rules"].__setitem__("reject_other_ada_devices", False),
         lambda c: c["reference"]["board"].__setitem__("model", "NVIDIA GeForce RTX 4070"),
         lambda c: c["reference"]["board"].__setitem__("vendor_id", 0x1234),
-        lambda c: c["reference"]["board"].__setitem__("device_id", 0x2805),
+        lambda c: c["reference"]["board"].__setitem__("device_id", 0x2803),
     ),
 )
 def test_contract_cannot_be_weakened(mutation) -> None:

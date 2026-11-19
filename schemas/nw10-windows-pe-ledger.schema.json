@@ -26,7 +26,10 @@
       "const": "NW-10"
     },
     "status": {
-      "const": "verified"
+      "enum": [
+        "verified",
+        "archived_superseded"
+      ]
     },
     "final_artifact": {
       "type": "object",

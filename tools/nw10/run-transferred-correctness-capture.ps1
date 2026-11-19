@@ -91,6 +91,24 @@ if ($Tier -eq "ada" -and $adapter -notmatch "RTX 40") {
     throw "Expected representative Ada/RTX 40-series adapter, observed '$adapter'"
 }
 
+$chassis = @(Get-CimInstance Win32_SystemEnclosure |
+    ForEach-Object { $_.ChassisTypes } | ForEach-Object { [int]$_ })
+$battery = $null
+try {
+    $battery = Get-CimInstance Win32_Battery -ErrorAction Stop
+} catch {}
+$desktopChassis = @(3, 4, 5, 6, 7, 15, 16, 35, 36)
+$laptopChassis = @(8, 9, 10, 11, 14, 30, 31, 32)
+$deviceFormFactor = "unknown"
+if ($chassis.Count -gt 0 -and -not ($chassis | Where-Object { $desktopChassis -notcontains $_ })) {
+    $deviceFormFactor = "desktop"
+} elseif ($null -ne $battery -or ($chassis | Where-Object { $laptopChassis -contains $_ })) {
+    $deviceFormFactor = "laptop"
+}
+if ($deviceFormFactor -ne "desktop") {
+    throw "Representative desktop correctness requires a measured desktop chassis, observed '$deviceFormFactor'"
+}
+
 $captureArgs = @("--capture-dir", $captures)
 foreach ($tick in @($transfer.capture.ticks)) {
     $captureArgs += @("--capture-tick", [string]$tick)
@@ -146,7 +164,10 @@ $record = [ordered]@{
         vendor_id = [int]$values["NW05_VENDOR_ID"]
         device_id = [int]$values["NW05_DEVICE_ID"]
         present_sync_interval = 0
-        device_form_factor = "desktop"
+        device_form_factor = $deviceFormFactor
+        device_form_factor_source = "win32_system_enclosure_and_battery"
+        chassis_types = @($chassis)
+        battery_present = ($null -ne $battery)
         classified_tier = $Tier
     }
     fixed_ticks = @($transfer.capture.fixed_ticks)

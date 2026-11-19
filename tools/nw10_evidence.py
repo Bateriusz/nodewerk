@@ -134,8 +134,18 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
             "commands": {
                 "contract_evidence": "NODEWERK_NW03_TEST_DIGEST=1 python tools/nw10_evidence.py --output-dir benchmarks/nw10",
                 "pytest": "python -m pytest -q tests/test_nw10_*.py",
-                "windows_proof": "python tools/nw10_proof.py --output build/nw10-proof --player-template <release-template> --dxc <pinned-dxc> --reproducibility",
-                "windows_intro": "python tools/nw10_intro.py --output build/nw10-intro --player-template <release-template> --dxc <pinned-dxc>",
+                "windows_proof": (
+                    "python tools/nw10_proof.py --output build/nw10-proof "
+                    "--canonical-player-template <decoder-off-template> "
+                    "--player-template <decoder-on-template> "
+                    "--dxc <pinned-dxc> --reproducibility"
+                ),
+                "windows_intro": (
+                    "python tools/nw10_intro.py --output build/nw10-intro "
+                    "--canonical-player-template <decoder-off-template> "
+                    "--player-template <decoder-on-template> "
+                    "--dxc <pinned-dxc>"
+                ),
             },
             "evidence_status": "informational_contract_only",
             "physical_certification": "pending_physical_windows_capture",
@@ -330,49 +340,106 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
             )
             + "\n",
         )
+        status_files = [
+            {
+                "path": "benchmarks/nw10/compact-proof.v1.json",
+                "sha256": _sha256(proof_path),
+            },
+            {
+                "path": "benchmarks/nw10/intro-profile.v1.json",
+                "sha256": _sha256(intro_path),
+            },
+            {
+                "path": "benchmarks/nw10/proof-export-report.v1.json",
+                "sha256": _sha256(archived_proof_report),
+            },
+            {
+                "path": "benchmarks/nw10/intro-export-report.v1.json",
+                "sha256": _sha256(archived_intro_report),
+            },
+        ]
+        known = {
+            "compact-proof.v1.json",
+            "intro-profile.v1.json",
+            "proof-export-report.v1.json",
+            "intro-export-report.v1.json",
+            "evidence-status.v1.json",
+        }
+        for sibling in sorted(output.glob("*.v1.json")):
+            if sibling.name in known:
+                continue
+            status_files.append(
+                {
+                    "path": f"benchmarks/nw10/{sibling.name}",
+                    "sha256": _sha256(sibling),
+                }
+            )
         _write_text_lf(
             status_path,
             json.dumps(
-                {
-                    "format": "nw10-evidence-status",
-                    "version": 1,
-                    "task": contract.TASK,
-                    "implementation_base": contract.IMPLEMENTATION_BASE,
-                    "evidence_status": "pending_physical_windows_capture",
-                    "contract_evidence": "verified_by_pytest",
-                    "physical_evidence": "pending",
-                    "reference_capture": "pending_reference_capture",
-                    "ada_correctness": "pending_unverified",
-                    "blackwell_correctness": "pending_unverified",
-                    "clean_system": "pending_unverified",
-                    "startup": "pending_unverified",
-                    "memory": "pending_unverified",
-                    "frame_time": "pending_unverified",
-                    "files": [
-                        {
-                            "path": "benchmarks/nw10/compact-proof.v1.json",
-                            "sha256": _sha256(proof_path),
-                        },
-                        {
-                            "path": "benchmarks/nw10/intro-profile.v1.json",
-                            "sha256": _sha256(intro_path),
-                        },
-                        {
-                            "path": "benchmarks/nw10/proof-export-report.v1.json",
-                            "sha256": _sha256(archived_proof_report),
-                        },
-                        {
-                            "path": "benchmarks/nw10/intro-export-report.v1.json",
-                            "sha256": _sha256(archived_intro_report),
-                        },
-                    ],
-                },
+                _merge_status(
+                    status_path,
+                    files=status_files,
+                ),
                 indent=2,
                 sort_keys=True,
             )
             + "\n",
         )
     return evidence
+
+
+_PHYSICAL_STATUS_FIELDS = (
+    "evidence_status",
+    "physical_evidence",
+    "reference_capture",
+    "ada_correctness",
+    "blackwell_correctness",
+    "clean_system",
+    "startup",
+    "memory",
+    "frame_time",
+    "system_validation",
+    "performance_preservation",
+    "correctness_evidence",
+    "compact_feasibility",
+    "pe_ledger",
+    "superseded_physical_evidence",
+)
+
+
+def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str, Any]:
+    """Regenerate contract evidence without silently deleting physical claims.
+
+    The documented contract-evidence command is run routinely.  It must never
+    downgrade a tracked status that records physical evidence.  It refreshes
+    the contract file hashes and keeps the existing physical state; a fresh
+    clean checkout with no status file starts from an explicit pending state.
+    """
+    status: dict[str, Any] = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "evidence_status": "pending_physical_windows_capture",
+        "contract_evidence": "verified_by_pytest",
+        "physical_evidence": "pending",
+        "reference_capture": "pending_reference_capture",
+        "ada_correctness": "pending_unverified",
+        "blackwell_correctness": "pending_unverified",
+        "clean_system": "pending_unverified",
+        "startup": "pending_unverified",
+        "memory": "pending_unverified",
+        "frame_time": "pending_unverified",
+    }
+    existing = status_path if status_path.is_file() else None
+    if existing is not None:
+        previous = json.loads(existing.read_text(encoding="utf-8"))
+        for field in _PHYSICAL_STATUS_FIELDS:
+            if field in previous:
+                status[field] = previous[field]
+    status["files"] = files
+    return status
 
 
 def _dominant_costs(report: dict[str, Any]) -> list[dict[str, Any]]:

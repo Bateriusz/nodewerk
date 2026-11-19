@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import random
+import shutil
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -213,3 +216,89 @@ def test_deterministic_mutation_fuzz_never_raises_or_allocates_unbounded() -> No
         valid, details = compact.validate_compact(bytes(candidate))
         assert valid is False or details["valid"] is True
         assert isinstance(details, dict)
+
+
+def test_shipped_cpp_decoder_matches_python_encoder_and_fuzzes_cleanly(
+    tmp_path: Path,
+) -> None:
+    compiler = os.environ.get("CXX") or shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+    if not compiler:
+        pytest.skip("no C++ compiler available for the shipped-decoder parity harness")
+    canonical = _package_bytes()
+    stored = compact.encode_compact(
+        canonical,
+        codec_id=contract.CODEC_STORED_ID,
+        layout_id=contract.LAYOUT_AOS_ID,
+        delta_references=True,
+    )
+    mszip = compact.encode_compact(
+        canonical,
+        codec_id=contract.CODEC_MSZIP_ID,
+        layout_id=contract.LAYOUT_SOA_ID,
+        delta_references=True,
+    )
+    (tmp_path / "canonical.bin").write_bytes(canonical)
+    (tmp_path / "stored.nwc").write_bytes(stored.bytes)
+    (tmp_path / "mszip.nwc").write_bytes(mszip.bytes)
+    binary = tmp_path / "nw10_compact_decoder_fuzz"
+    completed = subprocess.run(
+        [
+            compiler,
+            "-std=c++20",
+            "-I",
+            str(REPO_ROOT / "src"),
+            "-I",
+            str(REPO_ROOT / "src" / "package"),
+            str(REPO_ROOT / "tests" / "nw10_compact_decoder_fuzz.cpp"),
+            str(REPO_ROOT / "src" / "package" / "nw_compact.cpp"),
+            str(REPO_ROOT / "src" / "package" / "nwp_format.cpp"),
+            "-o",
+            str(binary),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    decoded = subprocess.run(
+        [
+            str(binary),
+            str(tmp_path / "canonical.bin"),
+            str(tmp_path / "stored.nwc"),
+            str(tmp_path / "mszip.nwc"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert decoded.returncode == 0, decoded.stderr
+
+
+def test_byte_ledger_is_complete_only_with_a_measured_decoder_cost() -> None:
+    canonical = _package_bytes()
+    encoded = compact.encode_compact(
+        canonical,
+        codec_id=contract.CODEC_MSZIP_ID,
+        layout_id=contract.LAYOUT_SOA_ID,
+    )
+    canonical_player = 200
+    decoder = 512
+    ledger = compact.build_byte_ledger(
+        artifact_kind="canonical_nw07_proof",
+        canonical_executable_bytes=len(canonical) + 32 + 92 + canonical_player,
+        canonical_package_bytes=len(canonical),
+        manifest_bytes=1024,
+        compact=encoded,
+        compact_executable_bytes=(
+            len(encoded.bytes) + 32 + 92 + canonical_player + decoder
+        ),
+        decoder_code_bytes=decoder,
+        shader_bytes=0,
+        dependencies=[{"name": "d3d12", "kind": "windows_inbox"}],
+        evidence_status="informational_contract_only",
+    )
+    assert ledger["all_required_bytes_accounted"] is True
+    assert ledger["unaccounted_components"] == []
+    assert ledger["components"]["decoder_code_bytes"] == decoder
+    assert ledger["components"]["compact_player_image_bytes"] == canonical_player + decoder
+    assert "cabinet.dll" in {row["name"].lower() for row in ledger["dependencies"]}

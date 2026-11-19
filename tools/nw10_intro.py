@@ -264,21 +264,25 @@ def _template(directory: Path, size: int = 256) -> Path:
     return path
 
 
-def _require_compact_player_template(template: Path) -> None:
+def _require_compact_player_template(
+    template: Path, *, expected: bool = True, label: str = "compact"
+) -> None:
     try:
         configuration = nw05_export._template_build_configuration(template)
     except Exception as exc:
         raise IntroContractError(
-            f"compact export requires a readable pinned player build tree: {exc}"
+            f"{label} export requires a readable pinned player build tree: {exc}"
         ) from exc
-    if str(configuration.get("NW10_COMPACT_PACKAGE", "")).strip().upper() not in {
+    enabled = str(configuration.get("NW10_COMPACT_PACKAGE", "")).strip().upper() in {
         "ON",
         "1",
         "TRUE",
-    }:
+    }
+    if enabled != expected:
+        required = "ON" if expected else "OFF"
         raise IntroContractError(
-            "release compact export requires the player template to be built "
-            "with -DNW10_COMPACT_PACKAGE=ON"
+            f"release {label} export requires the player template to be built "
+            f"with -DNW10_COMPACT_PACKAGE={required}"
         )
 
 
@@ -298,7 +302,7 @@ def _artifact_paths(directory: Path) -> tuple[Path, Path, Path]:
 
 
 def _compact_executable(
-    canonical_executable: bytes,
+    compact_template_executable: bytes,
     package_bytes: bytes,
     manifest_bytes: bytes,
     *,
@@ -306,14 +310,20 @@ def _compact_executable(
     layout_id: str,
 ) -> tuple[bytes, compact.CompactEncoding]:
     embedded_package, embedded_manifest = nw05_export.extract_embedded_package(
-        canonical_executable
+        compact_template_executable
     )
     if embedded_package != package_bytes:
-        raise IntroContractError("canonical executable does not embed the package")
+        raise IntroContractError(
+            "compact-decoder executable does not embed the canonical package"
+        )
     if embedded_manifest != hashlib.sha256(manifest_bytes).digest():
-        raise IntroContractError("canonical executable manifest binding changed")
+        raise IntroContractError(
+            "compact-decoder executable manifest binding changed"
+        )
     total = len(package_bytes) + len(embedded_manifest) + nw05_export.EMBED_FOOTER_SIZE
-    template = canonical_executable[: len(canonical_executable) - total]
+    template = compact_template_executable[
+        : len(compact_template_executable) - total
+    ]
     if layout_id == "auto":
         layout_id = compact.measure_layouts(package_bytes)["selected"]
     if codec_id == "auto":
@@ -336,6 +346,7 @@ def export_intro(
     output: Path | str,
     *,
     player_template: Path | str | None = None,
+    canonical_player_template: Path | str | None = None,
     dxc_executable: str | None = None,
     report_path: Path | str | None = None,
     contracts_only: bool = False,
@@ -354,17 +365,27 @@ def export_intro(
     canonical = staging / "canonical"
     compact_dir = staging / "compact"
     template_path = Path(player_template) if player_template else None
+    canonical_template_path = (
+        Path(canonical_player_template)
+        if canonical_player_template
+        else template_path
+    )
     dxc = dxc_executable
     if contracts_only:
         toolchain = staging / "toolchain"
         dxc = str(_mock_dxc(toolchain))
         template_path = _template(toolchain)
-    elif template_path is None or dxc is None:
+        canonical_template_path = template_path
+    elif template_path is None or canonical_template_path is None or dxc is None:
         raise IntroContractError(
-            "release intro export requires --player-template and --dxc"
+            "release intro export requires --player-template, "
+            "--canonical-player-template, and --dxc"
         )
     else:
-        _require_compact_player_template(template_path)
+        _require_compact_player_template(template_path, expected=True, label="compact")
+        _require_compact_player_template(
+            canonical_template_path, expected=False, label="canonical baseline"
+        )
     settings = nw05_export.ExportSettings(
         # NW-10 size is a measured research outcome, not a hard acceptance
         # gate. Keep only a generous safety bound here; the byte ledger below
@@ -374,7 +395,7 @@ def export_intro(
         target_profile=nwp.COMMON_PROFILE_ID,
         requirements_digest=nwp.COMMON_REQUIREMENTS_DIGEST,
         frames_in_flight=2,
-        player_template=str(template_path),
+        player_template=str(canonical_template_path),
         specialized_build_root=str(staging / "native-build"),
         present_sync_interval=0,
         frozen_embedded_specialization=True,
@@ -424,7 +445,7 @@ def export_intro(
         canonical_executable = executable_path.read_bytes()
         if not contracts_only:
             rebuilt_player = nw05_export._build_specialized_player(
-                template_path,
+                canonical_template_path,
                 intro_player_source,
                 manifest_record,
                 nwp.COMMON_PROFILE_ID,
@@ -460,8 +481,29 @@ def export_intro(
             if path.is_file()
             and path not in {package_path, manifest_path, executable_path}
         }
+        if contracts_only:
+            compact_template_executable = canonical_executable
+            compact_source = "contract_only_mock"
+        else:
+            # Build the otherwise identical decoder-ON player and embed the
+            # already validated canonical package.  The compact candidate is
+            # then produced by replacing only that embedded payload.
+            compact_base_player = nw05_export._build_specialized_player(
+                template_path,
+                intro_player_source,
+                manifest_record,
+                nwp.COMMON_PROFILE_ID,
+                build_root_override=staging / "nw10-compact-build",
+                frozen_embedded_specialization=True,
+            )
+            compact_template_executable = nw05_export.embed_package(
+                compact_base_player,
+                package_bytes,
+                hashlib.sha256(manifest_bytes).digest(),
+            )
+            compact_source = "decoder_on_template_export"
         compact_executable, encoded = _compact_executable(
-            canonical_executable,
+            compact_template_executable,
             package_bytes,
             manifest_bytes,
             codec_id=codec_id,
@@ -479,6 +521,15 @@ def export_intro(
         (compact_dir / f"{stem}.compact.nwc").write_bytes(encoded.bytes)
         (compact_dir / f"{stem}.compact.exe").write_bytes(compact_executable)
         package_summary = compact.package_summary(package_bytes)
+        decoder = {
+            "source": contract.COMPACT_DECODER_SOURCE,
+            "status": "pending_physical_windows",
+            "bytes": None,
+            "reason": (
+                "The exact MSVC/x64 decoder contribution is measured from the "
+                "final Windows PE; host compiler sizes are not substituted."
+            ),
+        }
         canonical_ledger = compact.build_byte_ledger(
             artifact_kind="restricted_intro",
             canonical_executable_bytes=len(canonical_executable),
@@ -497,10 +548,24 @@ def export_intro(
             canonical_package_bytes=len(package_bytes),
             manifest_bytes=len(manifest_bytes),
             compact=encoded,
-            decoder_code_bytes=None,
+            compact_executable_bytes=len(compact_executable),
+            decoder_code_bytes=decoder["bytes"],
             shader_bytes=package_summary["shader_bytes"],
             auxiliary_files=optional_auxiliary,
-            dependencies=dependencies,
+            dependencies=(
+                dependencies
+                if contracts_only
+                else [
+                    {
+                        "name": str(name),
+                        "kind": "windows_inbox",
+                        "distributed_bytes": 0,
+                    }
+                    for name in nw05_export._pe_runtime_dependencies(
+                        compact_executable
+                    )
+                ]
+            ),
             evidence_status="informational_contract_only",
         )
         # The selected runnable executable is the smaller complete
@@ -514,12 +579,17 @@ def export_intro(
         (compact_dir / f"{stem}.exe").write_bytes(selected_executable)
         selected_sha256 = hashlib.sha256(selected_executable).hexdigest()
         measurement = compact.comprehensive_measurement(package_bytes)
+        measurement["decoder_code_bytes"] = decoder["bytes"]
+        measurement["decoder_code_status"] = decoder["status"]
+        nw10_inputs = contract.compute_build_inputs()
         report: dict[str, Any] = {
             "format": INTRO_REPORT_FORMAT,
             "version": INTRO_REPORT_VERSION,
             "task": contract.TASK,
             "implementation_base": contract.IMPLEMENTATION_BASE,
             "planning_provenance": contract.PLANNING_PROVENANCE,
+            "nw10_build_inputs_digest": contract.build_inputs_digest(nw10_inputs),
+            "nw10_build_inputs": nw10_inputs,
             "success": True,
             "release_grade": not contracts_only,
             "test_payload": bool(contracts_only),
@@ -573,6 +643,20 @@ def export_intro(
                 "compact": compact_ledger,
             },
             "measurements": measurement,
+            "decoder_code": decoder,
+            "templates": {
+                "canonical": (
+                    "contract_only_mock"
+                    if contracts_only
+                    else str(canonical_template_path)
+                ),
+                "compact": (
+                    "contract_only_mock" if contracts_only else str(template_path)
+                ),
+                "compact_source": compact_source,
+                "canonical_decoder_off": True,
+                "compact_decoder_on": True,
+            },
             "alternatives": {
                 "minimum_measured_candidate_bytes": min(
                     canonical_ledger["baseline_complete_distribution_bytes"],
@@ -656,6 +740,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "build" / "nw10-intro")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--player-template", type=Path)
+    parser.add_argument(
+        "--canonical-player-template",
+        type=Path,
+        help=(
+            "player template built with NW10_COMPACT_PACKAGE=OFF; used for the "
+            "canonical restricted-intro baseline"
+        ),
+    )
     parser.add_argument("--dxc")
     parser.add_argument("--contracts-only", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
@@ -678,6 +770,7 @@ def main(argv: list[str] | None = None) -> int:
         report = export_intro(
             args.output,
             player_template=args.player_template,
+            canonical_player_template=args.canonical_player_template,
             dxc_executable=args.dxc,
             report_path=args.report,
             contracts_only=args.contracts_only,

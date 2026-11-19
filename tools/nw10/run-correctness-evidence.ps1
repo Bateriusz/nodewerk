@@ -11,13 +11,17 @@ param(
     [string]$TargetTier,
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
     [string]$ExpectedBranch = "agent/NW-10",
-    [string]$ReferenceEvidence = "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
+    [string]$ReferenceEvidence = "build/nw10-intro/report.json",
     [string]$WorkRoot = "build/nw10-correctness-scripted",
     [string[]]$ForbidToken = @(),
     [string]$AdaRecord = "",
     [string]$AdaCaptures = "",
     [string]$BlackwellRecord = "",
     [string]$BlackwellCaptures = "",
+    [string]$PackedAdaCaptures = "",
+    [string]$PackedBlackwellCaptures = "",
+    [string]$PackedPackageSha256 = "",
+    [string]$UnpackedPackageSha256 = "",
     [string]$CompareOutput = "build/nw10-correctness-comparison.json",
     [switch]$Publish,
     [switch]$Commit,
@@ -50,6 +54,26 @@ function Resolve-NwRepoPath([string]$Value) {
         return [System.IO.Path]::GetFullPath($Value)
     }
     return [System.IO.Path]::GetFullPath((Join-Path $repo $Value))
+}
+
+function Get-NwExpectedArtifact($Reference) {
+    if ($Reference.status -eq "verified_preserved") {
+        return $Reference.after.artifact
+    }
+    if ($null -ne $Reference.canonical_artifact) {
+        if ($Reference.test_payload -eq $true -or $Reference.release_grade -ne $true) {
+            throw "Artifact report must be release-grade and not a test payload."
+        }
+        $artifact = $Reference.canonical_artifact
+        return [pscustomobject]@{
+            artifact_key = [string]$artifact.artifact_key
+            package_sha256 = [string]$artifact.package_sha256
+            manifest_sha256 = [string]$artifact.manifest_sha256
+            executable_sha256 = [string]$artifact.executable_sha256
+            complete_distribution_bytes = [int64]$artifact.executable_bytes
+        }
+    }
+    throw "Reference must be verified performance evidence or a release intro/export report."
 }
 
 function Get-NwJsonStrings($Value) {
@@ -219,10 +243,7 @@ try {
 
         $referencePath = Resolve-NwRepoPath $ReferenceEvidence
         $reference = Get-Content -Raw $referencePath | ConvertFrom-Json
-        if ($reference.status -ne "verified_preserved") {
-            throw "Tracked performance evidence is not verified_preserved."
-        }
-        $expectedArtifact = $reference.after.artifact
+        $expectedArtifact = Get-NwExpectedArtifact $reference
 
         $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
         if ($null -eq $pythonCommand) {
@@ -448,14 +469,31 @@ try {
         $python = $pythonCommand.Source
         $outputPath = Resolve-NwRepoPath $CompareOutput
 
-        Invoke-NwNative $python @(
+        $compareArguments = @(
             "tools/nw10_common_correctness.py", "compare",
             "--ada-record", (Resolve-NwRepoPath $AdaRecord),
             "--blackwell-record", (Resolve-NwRepoPath $BlackwellRecord),
             "--ada-captures", (Resolve-NwRepoPath $AdaCaptures),
             "--blackwell-captures", (Resolve-NwRepoPath $BlackwellCaptures),
             "--output", $outputPath
-        ) "NW-10 Ada/Blackwell correctness comparison failed"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($PackedAdaCaptures)) {
+            $compareArguments += @(
+                "--packed-ada-captures", (Resolve-NwRepoPath $PackedAdaCaptures)
+            )
+        }
+        if (-not [string]::IsNullOrWhiteSpace($PackedBlackwellCaptures)) {
+            $compareArguments += @(
+                "--packed-blackwell-captures", (Resolve-NwRepoPath $PackedBlackwellCaptures)
+            )
+        }
+        if (-not [string]::IsNullOrWhiteSpace($PackedPackageSha256)) {
+            $compareArguments += @("--packed-package-sha256", $PackedPackageSha256)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($UnpackedPackageSha256)) {
+            $compareArguments += @("--unpacked-package-sha256", $UnpackedPackageSha256)
+        }
+        Invoke-NwNative $python $compareArguments "NW-10 Ada/Blackwell correctness comparison failed"
 
         $comparison = Get-Content -Raw $outputPath | ConvertFrom-Json
         if ($comparison.status -ne "verified") {
@@ -576,10 +614,7 @@ try {
         throw "Tracked performance evidence is missing: $ReferenceEvidence"
     }
     $reference = Get-Content -Raw $referencePath | ConvertFrom-Json
-    if ($reference.status -ne "verified_preserved") {
-        throw "Tracked performance evidence is not verified_preserved."
-    }
-    $expectedArtifact = $reference.after.artifact
+    $expectedArtifact = Get-NwExpectedArtifact $reference
 
     $privacyTokens = New-Object System.Collections.Generic.List[string]
     foreach ($token in @($env:USERNAME, $env:USERPROFILE, $ForbidToken)) {

@@ -1,81 +1,58 @@
 {
-  "ada_correctness": "verified",
-  "blackwell_correctness": "verified",
-  "clean_system": "verified",
+  "ada_correctness": "pending_unverified",
+  "blackwell_correctness": "pending_unverified",
+  "clean_system": "pending_unverified",
   "contract_evidence": "verified_by_pytest",
-  "correctness_evidence": {
-    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
-    "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
-    "sha256": "2b4f7af00bf13d259231751f149221b89cfd06c09041f1e8197ed5bb7fa965d3",
-    "status": "verified",
-    "worst_absolute_error": 0.0,
-    "worst_relative_error": 0.0
-  },
-  "evidence_status": "verified_complete",
+  "evidence_status": "pending_physical_windows_capture",
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "72a79a9f3aaa3f99f4d76c36dff486ccdebe103879d464e83a9b7febea8239d0"
+      "sha256": "5cc7d38d6226c0367cc7b668bec2eb852014ae7cf29837cbb49219111d663449"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "a6714d0f1e1e55f3d2a9dedd3babc98ba2b8dc58bd1693c41ea937eac13976a7"
+      "sha256": "e10c9d564b195b8d161f3f5611816d69dd968117974b0072a6e45da53a3abe5a"
     },
     {
-      "path": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
-      "sha256": "c62561f439bdb7ecca8f470ed09a87a67986df1936ed46a7ef37711b8fc919fa"
+      "path": "benchmarks/nw10/proof-export-report.v1.json",
+      "sha256": "18de5a3c5b786246a15513457c47bc3524c1d55b8e6dad11d39f95fd9cf02f6e"
+    },
+    {
+      "path": "benchmarks/nw10/intro-export-report.v1.json",
+      "sha256": "5284f45c26413da5322b47dcf1ac68441ded8d10031824b42b2d609de5c79e54"
+    },
+    {
+      "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
+      "sha256": "6a4c78f675868463b018112b3edb3948733e7cc986d2fe3830d2a636a48a063e"
+    },
+    {
+      "path": "benchmarks/nw10/system-validation.v1.json",
+      "sha256": "6b7dc2fd952a0e69afa638fcf7898811085c3e36a0e7396e1f98e6c5a27ea64b"
     },
     {
       "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-      "sha256": "92e02d542029a25829951d55b785420a4d89a2bb0eed465675a511cb27f77843"
+      "sha256": "0bc341d3873ec522b3c161a508f9c998e4f3d188374688203e6ea958918adf81"
     },
     {
       "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
-      "sha256": "99d479121f1d620ae7e89b75ad142b2d5d4c24969739a5c5fba95eae88ae2c3c"
+      "sha256": "822e8b3301737ff5a0558ba857eb24978b96b24d818a0e182a556bf42512cdce"
     }
   ],
   "format": "nw10-evidence-status",
-  "frame_time": "verified_preserved",
+  "frame_time": "pending_unverified",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
-  "memory": "verified",
-  "performance_preservation": {
-    "path": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
-    "reference_binding_id": "nw07_perf_ref_v1@sha256:v1:7ae69188e641ee9cebfa5c5b55c718a36eb271f202ca30ab4f89684c3284a075",
-    "sha256": "c62561f439bdb7ecca8f470ed09a87a67986df1936ed46a7ef37711b8fc919fa",
-    "status": "verified_preserved"
-  },
-  "physical_evidence": "performance_correctness_and_system_verified",
-  "reference_capture": "verified_reference_capture",
-  "startup": "verified",
+  "memory": "pending_unverified",
+  "physical_evidence": "pending",
+  "reference_capture": "pending_reference_capture",
+  "startup": "pending_unverified",
   "superseded_physical_evidence": {
-    "invalidated_executable_sha256": "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb",
-    "reason": "Previous physical/system evidence certified the invalid gradient placeholder artifact. Corrected SDF release evidence must be recaptured before NW-10 can return to verified_complete."
-  },
-  "system_validation": {
-    "final_executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
-    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
-    "path": "benchmarks/nw10/system-validation.v1.json",
-    "sha256": "e3e2e4afcdde8f7acf2c3519ada2804a5a8deea0f0a7e692a1093273089bbc7b",
-    "status": "verified"
+    "reason": "The tracked reference binding had been changed from device_id 10245 to 10243 without a fresh exact-board capture, the packed/unpacked correctness comparison was still pending, and the system summary mixed two different GPUs. Those claims were withdrawn; certification remains pending until the exact nw07_perf_ref_v1 capture and bindings exist.",
+    "withdrawn_files": [
+      "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
+      "benchmarks/nw10/common-artifact-correctness.v1.json#verified",
+      "benchmarks/nw10/system-validation.v1.json#verified"
+    ]
   },
   "task": "NW-10",
-  "version": 1,
-  "compact_feasibility": {
-    "status": "verified_windows_runtime",
-    "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-    "sha256": "92e02d542029a25829951d55b785420a4d89a2bb0eed465675a511cb27f77843",
-    "source_run_id": 44469176377,
-    "target_met": false,
-    "minimum_measured_candidate_bytes": 227715,
-    "minimum_validated_runnable_bytes": 240702,
-    "validated_mode": "canonical_fallback"
-  },
-  "pe_ledger": {
-    "status": "verified",
-    "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
-    "sha256": "99d479121f1d620ae7e89b75ad142b2d5d4c24969739a5c5fba95eae88ae2c3c",
-    "final_executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
-    "linker_elimination_bytes_saved": 726528,
-    "compact_decoder_template_bytes_added": 3584
-  }
+  "version": 1
 }

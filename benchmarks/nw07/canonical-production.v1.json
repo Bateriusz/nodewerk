@@ -78,14 +78,15 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:ad8fa6d383f37232e824f75f7774dcdfb33dea4eca34416397640f5d89a0d744",
+  "build_inputs_digest": "sha256:v1:fd452ecf2f54eb529fcfb75738bcd57b9c3478919a703f8d727d2bd04f3c8d81",
   "build_inputs_provenance": {
     "superseded_digests": [
       "sha256:v1:d9ad24057ae7c273ad4c757dafc5d3b54047fcb360b8845a6413136b78c232ab",
       "sha256:v1:6eb9f6342bf67ea8884b72ae6800e799b271afbbbd57cf5ee791923976849b73",
-      "sha256:v1:8e050b388703e599c011eab83b9f9299034035939aec6e4f77f085eba06dba7c"
+      "sha256:v1:8e050b388703e599c011eab83b9f9299034035939aec6e4f77f085eba06dba7c",
+      "sha256:v1:ad8fa6d383f37232e824f75f7774dcdfb33dea4eca34416397640f5d89a0d744"
     ],
-    "reason": "The current digest preserves the existing NW-07 canonical graph, profile, quality settings, budgets, and evidence methodology while incorporating the NW-10 fix that makes an explicit release shader specialization survive the NW-05 fullscreen/selective-lowering path. The prior exporter path silently substituted the graph placeholder shader for the restricted NW-10 SDF intro; changing tools/nw05_export.py is therefore an implementation-correctness fix to a pinned build input, not a relaxation of any NW-07 contract. Superseded digests remain attributable to prior artifacts."
+    "reason": "The current digest preserves the existing NW-07 canonical graph, profile, quality settings, budgets, and evidence methodology while incorporating the NW-10 fix that makes an explicit release shader specialization survive the NW-05 fullscreen/selective-lowering path. The prior exporter path silently substituted the graph placeholder shader for the restricted NW-10 SDF intro; changing tools/nw05_export.py is therefore an implementation-correctness fix to a pinned build input, not a relaxation of any NW-07 contract. Superseded digests remain attributable to prior artifacts. The NW-10 revision adds an opt-in decoder-fuzz CMake target and a decoder-OFF canonical template path, which changes the pinned build input digest without changing the canonical production graph, quality profile, budgets, or evidence methodology."
   },
   "loop": {
     "looping": true,

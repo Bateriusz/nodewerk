@@ -15,7 +15,7 @@ import nwp_package as nwp  # noqa: E402
 import nw10_compact as compact  # noqa: E402
 import nw10_contract as contract  # noqa: E402
 import nw10_proof as proof  # noqa: E402
-from schema_validator import validate_file_against_schema  # noqa: E402
+from schema_validator import validate_file_against_schema, validate_instance  # noqa: E402
 
 
 def _canonical_text_sha256(path: Path) -> str:
@@ -102,7 +102,11 @@ def test_ledgers_attribute_every_required_component_and_preserve_tiers(
     monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
     report = proof.export_proof(tmp_path / "proof", contracts_only=True)
     ledger = report["ledgers"]["compact"]
-    assert ledger["all_required_bytes_accounted"] is True
+    # Contract-only evidence cannot measure the exact Windows decoder code.
+    # The ledger must say so instead of claiming complete accounting.
+    assert ledger["all_required_bytes_accounted"] is False
+    assert "decoder_code_bytes" in ledger["unaccounted_components"]
+    assert report["ledgers"]["canonical"]["all_required_bytes_accounted"] is True
     assert ledger["components"]["decoder_source_bytes"] and (
         ledger["components"]["decoder_source_bytes"] > 0
     )
@@ -117,6 +121,10 @@ def test_ledgers_attribute_every_required_component_and_preserve_tiers(
     assert ledger["within_standard"] is True
     assert ledger["packaging_tool"]["identity"] == "tools/nw10_compact.py"
     assert len(ledger["packaging_tool"]["version"]) == 64
+    assert "cabinet.dll" in {
+        item["name"].lower() for item in ledger["dependencies"]
+    }
+    assert ledger["components"]["compact_player_image_bytes"] is not None
 
 
 def test_measurement_record_includes_every_required_alternative(
@@ -204,82 +212,49 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     assert evidence["nw10_build_inputs_digest"] == contract.build_inputs_digest(
         current_inputs
     )
+    proof_report_path = REPO_ROOT / "benchmarks" / "nw10" / "proof-export-report.v1.json"
+    intro_report_path = REPO_ROOT / "benchmarks" / "nw10" / "intro-export-report.v1.json"
+    proof_report = json.loads(proof_report_path.read_text(encoding="utf-8"))
+    intro_report = json.loads(intro_report_path.read_text(encoding="utf-8"))
+    assert proof_report["nw10_build_inputs"] == current_inputs
+    assert proof_report["nw10_build_inputs_digest"] == evidence["nw10_build_inputs_digest"]
+    assert intro_report["nw10_build_inputs"] == current_inputs
+    assert intro_report["nw10_build_inputs_digest"] == evidence["nw10_build_inputs_digest"]
+    assert _canonical_text_sha256(proof_report_path) == evidence["proof"]["report_sha256"]
+    assert _canonical_text_sha256(intro_report_path) == evidence["intro"]["report_sha256"]
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["contract_evidence"] == "verified_by_pytest"
-    performance_path = (
+    # The exact nw07_perf_ref_v1 capture/binding and packed-unpacked physical
+    # correctness comparison are unavailable, so no physical claim may be
+    # promoted.
+    assert status["evidence_status"] == "pending_physical_windows_capture"
+    assert status["physical_evidence"] == "pending"
+    assert status["reference_capture"] == "pending_reference_capture"
+    assert status["frame_time"] == "pending_unverified"
+    assert status["ada_correctness"] == "pending_unverified"
+    assert status["blackwell_correctness"] == "pending_unverified"
+    assert status["clean_system"] == "pending_unverified"
+    assert status["startup"] == "pending_unverified"
+    assert status["memory"] == "pending_unverified"
+    assert not (
         REPO_ROOT
         / "benchmarks"
         / "nw10"
         / "performance-preservation-rtx4060ti.v1.json"
-    )
-    evidence_state = status["evidence_status"]
-    if evidence_state == "verified_complete":
-        assert performance_path.is_file()
-        compact_physical_path = (
-            REPO_ROOT
-            / "benchmarks"
-            / "nw10"
-            / "windows-compact-feasibility.v1.json"
-        )
-        assert compact_physical_path.is_file()
-        assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
-        assert status["physical_evidence"] == "performance_correctness_and_system_verified"
-        assert status["clean_system"] == "verified"
-        assert status["startup"] == "verified"
-        assert status["memory"] == "verified"
-        assert status["ada_correctness"] == "verified"
-        assert status["blackwell_correctness"] == "verified"
-        system = json.loads(system_path.read_text(encoding="utf-8"))
-        assert system["status"] == "verified"
-        pe_ledger = json.loads(pe_ledger_path.read_text(encoding="utf-8"))
-        assert pe_ledger["status"] == "verified"
-        assert pe_ledger["conclusion"]["byte_ledger_complete"] is True
-        assert status["reference_capture"] == "verified_reference_capture"
-        assert status["frame_time"] == "verified_preserved"
-    elif evidence_state == "performance_correctness_and_system_verified_packaging_pending":
-        assert performance_path.is_file()
-        assert status["physical_evidence"] == "performance_correctness_and_system_verified"
-        assert status["reference_capture"] == "verified_reference_capture"
-        assert status["frame_time"] == "verified_preserved"
-        assert status["ada_correctness"] == "verified"
-        assert status["blackwell_correctness"] == "verified"
-        assert status["clean_system"] == "verified"
-        assert status["startup"] == "verified"
-        assert status["memory"] == "verified"
-    elif evidence_state == "performance_and_correctness_verified_system_pending":
-        assert performance_path.is_file()
-        assert status["physical_evidence"] == "performance_and_correctness_verified"
-        assert status["reference_capture"] == "verified_reference_capture"
-        assert status["frame_time"] == "verified_preserved"
-        assert status["ada_correctness"] == "verified"
-        assert status["blackwell_correctness"] == "verified"
-        assert status["clean_system"] == "pending_unverified"
-        assert status["startup"] == "pending_unverified"
-        assert status["memory"] == "pending_unverified"
-    elif evidence_state == "performance_verified_correctness_pending":
-        assert performance_path.is_file()
-        assert status["physical_evidence"] == "performance_verified"
-        assert status["reference_capture"] == "verified_reference_capture"
-        assert status["frame_time"] == "verified_preserved"
-        assert status["ada_correctness"] == "pending_unverified"
-        assert status["blackwell_correctness"] == "pending_unverified"
-        assert status["clean_system"] == "pending_unverified"
-        assert status["startup"] == "pending_unverified"
-        assert status["memory"] == "pending_unverified"
-    else:
-        assert evidence_state == "pending_physical_windows_capture"
-        assert status["physical_evidence"] == "pending"
-        assert status["reference_capture"] == "pending_reference_capture"
-        assert status["frame_time"] == "pending_unverified"
-        assert status["ada_correctness"] == "pending_unverified"
-        assert status["blackwell_correctness"] == "pending_unverified"
-        assert status["clean_system"] == "pending_unverified"
-        assert status["startup"] == "pending_unverified"
-        assert status["memory"] == "pending_unverified"
+    ).exists()
+    correctness = json.loads(correctness_path.read_text(encoding="utf-8"))
+    assert correctness["status"] == "pending_unverified"
+    assert correctness["packed_unpacked_comparison"]["status"] == "pending_physical"
+    system = json.loads(system_path.read_text(encoding="utf-8"))
+    assert system["status"] == "pending_unverified"
+    assert system["windows_build"] is None
+    pe_ledger = json.loads(pe_ledger_path.read_text(encoding="utf-8"))
+    assert pe_ledger["measurement_status"] == "archived_superseded"
+    assert pe_ledger["conclusion"]["byte_ledger_complete"] is True
 
     assert (
-        status["superseded_physical_evidence"]["invalidated_executable_sha256"]
-        == "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+        "withdrawn" in status["superseded_physical_evidence"]["reason"].casefold()
+        or "withdrawn" in json.dumps(status["superseded_physical_evidence"]).casefold()
     )
     for item in status["files"]:
         path = REPO_ROOT / item["path"]
@@ -375,6 +350,13 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
     assert record["target_met"] is False
     assert record["classification"] == "continue"
     assert record["universal_64k_claim"] is False
+    assert record["measurement_status"] == "archived_superseded"
+    assert record["measurements"]["proof_measured_bytes"] is None
+    assert (
+        record["measurements"]["proof_measurement_status"]
+        == "invalid_decoder_on_baseline"
+    )
+    assert record["measurements"]["canonical_proof_within_tier"] is False
     assert record["measurements"]["minimum_measured_candidate_bytes"] > 65_536
     assert record["compact_candidate"]["runtime_status"] == "rejected_runtime_failure"
     assert record["compact_candidate"]["exit_code"] == 70
@@ -386,14 +368,16 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
     assert record["canonical_fallback"]["exit_code"] == 0
     assert record["canonical_fallback"]["dependency_closure"]["closure_verified"] is True
     assert record["canonical_fallback"]["dependency_closure"]["sidecar_files"] == []
+    assert "cabinet.dll" in record["canonical_fallback"]["dependency_closure"]["canonical_imports"]
     assert record["source"]["run_id"] > 0
     assert record["privacy"]["raw_stdout_stderr_included"] is False
     assert record["privacy"]["runner_paths_included"] is False
     assert record["privacy"]["user_profile_paths_included"] is False
-    assert record["canonical_fallback"]["sha256"] == system["final_artifact"]["executable_sha256"]
-    assert record["canonical_fallback"]["bytes"] == system["final_artifact"]["executable_bytes"]
-    assert pe["final_artifact"]["executable_sha256"] == system["final_artifact"]["executable_sha256"]
-    assert pe["final_artifact"]["executable_bytes"] == system["final_artifact"]["executable_bytes"]
+    # The archived physical run is not bound to the current pending system
+    # evidence. It stays attributable through its own hashes only.
+    assert system["status"] == "pending_unverified"
+    assert pe["measurement_status"] == "archived_superseded"
+    assert pe["final_artifact"]["executable_sha256"] == record["canonical_fallback"]["sha256"]
     text = json.dumps(record).casefold()
     for token in ("c:\\users\\", "/home/", "micha", "michal", "matyl"):
         assert token not in text
@@ -403,10 +387,94 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
             encoding="utf-8"
         )
     )
-    assert status["evidence_status"] == "verified_complete"
-    assert status["compact_feasibility"]["status"] == "verified_windows_runtime"
-    assert status["pe_ledger"]["status"] == "verified"
-    assert (
-        status["superseded_physical_evidence"]["invalidated_executable_sha256"]
-        != record["canonical_fallback"]["sha256"]
+    assert status["evidence_status"] == "pending_physical_windows_capture"
+    assert status["reference_capture"] == "pending_reference_capture"
+
+
+def test_compact_feasibility_schema_supports_a_valid_success_branch() -> None:
+    import copy
+
+    schema = json.loads(
+        (REPO_ROOT / "schemas" / "nw10-windows-compact-feasibility.schema.json").read_text(
+            encoding="utf-8"
+        )
     )
+    record = json.loads(
+        (
+            REPO_ROOT / "benchmarks" / "nw10" / "windows-compact-feasibility.v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    success = copy.deepcopy(record)
+    success["target_met"] = True
+    success["classification"] = "complete"
+    success["measurements"] = {
+        "proof_measured_bytes": 260_000,
+        "proof_measurement_status": "measured_decoder_off",
+        "canonical_proof_within_tier": True,
+        "minimum_measured_candidate_bytes": 65_000,
+        "minimum_validated_runnable_bytes": 65_000,
+        "validated_mode": "compact",
+    }
+    success["compact_candidate"] = {
+        "bytes": 65_000,
+        "sha256": "a" * 64,
+        "runtime_status": "validated_runnable",
+        "exit_code": 0,
+        "failure_classification": "none",
+        "counted_as_validated_runnable": True,
+    }
+    success["canonical_fallback"] = {
+        "bytes": 65_001,
+        "sha256": "b" * 64,
+        "runtime_status": "validated_runnable",
+        "exit_code": 0,
+        "link_manifest_verified": True,
+        "present_sync_interval": 0,
+        "dependency_closure": {
+            "closure_verified": True,
+            "sidecar_files": [],
+            "canonical_imports": ["d3d12.dll", "cabinet.dll"],
+        },
+    }
+    success["acceptance_linkage"]["decision"] = "complete"
+    success["acceptance_linkage"]["true_64k_artifact_delivered"] = True
+    validate_instance(success, schema, schema)
+
+
+def test_contract_evidence_regeneration_is_not_destructive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nw10_evidence
+
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    output = tmp_path / "evidence"
+    output.mkdir()
+    status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "evidence_status": "performance_correctness_and_system_verified_packaging_pending",
+        "contract_evidence": "verified_by_pytest",
+        "physical_evidence": "performance_correctness_and_system_verified",
+        "reference_capture": "verified_reference_capture",
+        "ada_correctness": "verified",
+        "blackwell_correctness": "verified",
+        "clean_system": "verified",
+        "startup": "verified",
+        "memory": "verified",
+        "frame_time": "verified_preserved",
+        "files": [],
+    }
+    (output / "evidence-status.v1.json").write_text(
+        json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    nw10_evidence.build_evidence(output)
+    regenerated = json.loads(
+        (output / "evidence-status.v1.json").read_text(encoding="utf-8")
+    )
+    assert regenerated["evidence_status"] == status["evidence_status"]
+    assert regenerated["reference_capture"] == "verified_reference_capture"
+    assert regenerated["ada_correctness"] == "verified"
+    assert regenerated["clean_system"] == "verified"
+    assert regenerated["files"]

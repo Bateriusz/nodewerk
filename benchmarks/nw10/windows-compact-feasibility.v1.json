@@ -6,11 +6,16 @@
     "tested_alternatives_source": "benchmarks/nw10/compact-proof.v1.json#alternatives",
     "true_64k_artifact_delivered": false
   },
+  "archived_measurements": {
+    "minimum_measured_candidate_bytes": 227715,
+    "minimum_validated_runnable_bytes": 240702,
+    "proof_measured_bytes_decoder_on": 264390
+  },
   "blocker": {
     "exit_code": 70,
     "id": "compact_candidate_runtime",
     "measured_bytes": 227715,
-    "reason": "The compact packaging candidate failed Windows runtime validation and is retained only as a tested blocker; it is not counted as a validated runnable artifact.",
+    "reason": "The archived compact candidate failed Windows runtime validation and is retained only as a tested blocker; it is not a validated runnable artifact.",
     "status": "rejected"
   },
   "canonical_fallback": {
@@ -43,27 +48,18 @@
     "runtime_status": "rejected_runtime_failure",
     "sha256": "d7cb20c1a560858042d22a12021c960e1c02773321943d71b57bc2f5b4913c1a"
   },
+  "current_implementation_measurement": false,
   "format": "nw10-windows-compact-feasibility",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+  "measurement_status": "archived_superseded",
   "measurements": {
+    "canonical_proof_within_tier": false,
     "minimum_measured_candidate_bytes": 227715,
     "minimum_validated_runnable_bytes": 240702,
-    "proof_measured_bytes": 264390,
+    "note": "The archived run built the supposedly canonical NW-07 proof from the decoder-ON template. Its 264,390-byte proof measurement included the 3,584-byte compact decoder and exceeded the 262,144-byte proof tier. The canonical proof is therefore unmeasured under the required decoder-OFF baseline. The workflow now builds a separate decoder-OFF template and rejects a canonical proof above 262,144 bytes.",
+    "proof_measured_bytes": null,
+    "proof_measurement_status": "invalid_decoder_on_baseline",
     "validated_mode": "canonical_fallback"
-  },
-  "payload_identity": {
-    "canonical_package": {
-      "bytes": 31682,
-      "sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
-    },
-    "compact_container": {
-      "bytes": 18695,
-      "sha256": "d8072f034524180db5399a44ff5ec17bd9fa84a1e2e3491ea7988692d09b0e5a"
-    },
-    "manifest": {
-      "bytes": 6536,
-      "sha256": "7e86671adc0073194d369ac92c0c745f71705a0bd0e599d007a5e379b423f0d1"
-    }
   },
   "privacy": {
     "raw_stdout_stderr_included": false,
@@ -77,6 +73,7 @@
     "artifact_name": "nw10-windows-compact-evidence",
     "head_sha": "bc8556be5788f3017ce32b6921b38fbfac455716",
     "kind": "github_actions_windows_runtime",
+    "measurement_tool": "tools/nw10_proof.py with a decoder-ON template",
     "run_id": 44469176377,
     "workflow": "NW-10 Compact Export and Restricted Intro"
   },

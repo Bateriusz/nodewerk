@@ -29,6 +29,9 @@ option(NW06_COMPILE_TONEMAP "Compile tonemap path" ON)
 option(NW10_COMPACT_PACKAGE
     "Compile the opt-in NWC1 compact-package decoder into the player closure"
     OFF)
+option(NW10_BUILD_DECODER_TESTS
+    "Build the shipped compact-decoder fuzz and parity harness"
+    OFF)
 
 set(NW_COMPACT_PACKAGE_SOURCES)
 if(NW10_COMPACT_PACKAGE)
@@ -164,6 +167,23 @@ if(NOT WIN32)
             nw_package_format_frozen_host_compile
     )
 endif()
+
+if(NW10_BUILD_DECODER_TESTS)
+    add_executable(nw10_compact_decoder_fuzz
+        tests/nw10_compact_decoder_fuzz.cpp
+        src/package/nw_compact.cpp
+        src/package/nwp_format.cpp
+    )
+    target_include_directories(nw10_compact_decoder_fuzz PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+    )
+    nw_apply_player_profile(nw10_compact_decoder_fuzz)
+    if(WIN32)
+        target_link_libraries(nw10_compact_decoder_fuzz PRIVATE cabinet)
+    endif()
+endif()
+
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"

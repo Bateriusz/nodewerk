@@ -43,12 +43,39 @@ def test_artifact_publisher_rejects_invalidated_gradient() -> None:
     with pytest.raises(ValueError, match="invalidated gradient"):
         publisher._artifact_from_intro_report(
             {
+                "release_grade": True,
+                "test_payload": False,
                 "canonical_artifact": {
                     "executable_sha256": publisher.INVALIDATED_GRADIENT_SHA256,
                     "executable_bytes": 222058,
                     "package_sha256": "a" * 64,
                     "manifest_sha256": "b" * 64,
                 }
+            }
+        )
+
+
+def test_artifact_publisher_rejects_test_payload_and_non_release_intro() -> None:
+    artifact = {
+        "executable_sha256": "a" * 64,
+        "executable_bytes": 100,
+        "package_sha256": "b" * 64,
+        "manifest_sha256": "c" * 64,
+    }
+    with pytest.raises(ValueError, match="test payload"):
+        publisher._artifact_from_intro_report(
+            {
+                "release_grade": True,
+                "test_payload": True,
+                "canonical_artifact": artifact,
+            }
+        )
+    with pytest.raises(ValueError, match="release-grade"):
+        publisher._artifact_from_intro_report(
+            {
+                "release_grade": False,
+                "test_payload": False,
+                "canonical_artifact": artifact,
             }
         )
 
@@ -68,6 +95,8 @@ def test_correctness_publisher_strips_raw_capture_material(
             "hardware": {
                 "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
                 "device_form_factor": "desktop",
+                "device_form_factor_source": "win32_system_enclosure_and_battery",
+                "classified_tier": "ada",
                 "driver_version": "1.2.3",
             },
             "capture_manifest": [{"file": "tick_0.rgba32f", "sha256": "c" * 64}],
@@ -77,12 +106,15 @@ def test_correctness_publisher_strips_raw_capture_material(
             "hardware": {
                 "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
                 "device_form_factor": "desktop",
+                "device_form_factor_source": "win32_system_enclosure_and_battery",
+                "classified_tier": "blackwell",
                 "driver_version": "1.2.3",
             },
             "capture_manifest": [{"file": "tick_0.rgba32f", "sha256": "d" * 64}],
             "loop_boundary": {"status": "passed"},
         },
         "comparison": {
+            "fixed_ticks": [0, 240000, 480000, 720000, 959999],
             "per_tick": [
                 {"tick": tick, "status": "passed", "maximum_error": 0.0}
                 for tick in (0, 240000, 480000, 720000, 959999)
@@ -93,10 +125,25 @@ def test_correctness_publisher_strips_raw_capture_material(
             "relative_tolerance": 0.0001,
             "absolute_required": True,
         },
+        "packed_unpacked_comparison": {
+            "status": "verified",
+            "packed_package_sha256": "e" * 64,
+            "unpacked_package_sha256": "e" * 64,
+            "worst_absolute_error": 0.0,
+            "runtime": {
+                "ada": {"status": "passed"},
+                "blackwell": {"status": "passed"},
+            },
+        },
         "privacy": {
             "raw_capture_bytes_embedded": False,
             "local_paths_included": False,
             "stdout_stderr_included": False,
+        },
+        "source": {
+            "mode": "compare",
+            "execution_kind": "physical_cross_hardware",
+            "tool": "tools/nw10/run-correctness-evidence.ps1",
         },
     }
     comparison = tmp_path / "build" / "comparison.json"
@@ -126,6 +173,76 @@ def test_correctness_publisher_strips_raw_capture_material(
     assert status["ada_correctness"] == "verified"
     assert status["blackwell_correctness"] == "verified"
     assert status["correctness_evidence"]["package_sha256"] == "a" * 64
+    assert public["packed_unpacked_comparison"]["status"] == "verified"
+
+
+def test_correctness_publisher_rejects_asserted_desktop_and_pending_packed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(publisher, "REPO_ROOT", tmp_path)
+    source = {
+        "format": "nw10-common-artifact-correctness",
+        "status": "verified",
+        "capture_protocol": "nw07-correctness-capture.v1",
+        "common_artifact": {"package_sha256": "a" * 64},
+        "ada": {
+            "hardware": {
+                "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+                "device_form_factor": "desktop",
+                "device_form_factor_source": "asserted",
+                "classified_tier": "ada",
+            },
+            "loop_boundary": {"status": "passed"},
+        },
+        "blackwell": {
+            "hardware": {
+                "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+                "device_form_factor": "desktop",
+                "device_form_factor_source": "asserted",
+                "classified_tier": "blackwell",
+            },
+            "loop_boundary": {"status": "passed"},
+        },
+        "comparison": {
+            "fixed_ticks": [0, 240000, 480000, 720000, 959999],
+            "per_tick": [
+                {"tick": tick, "status": "passed"} for tick in (0, 240000, 480000, 720000, 959999)
+            ],
+            "worst_absolute_error": 0.0,
+            "worst_relative_error": 0.0,
+            "absolute_tolerance": 0.0001,
+            "relative_tolerance": 0.0001,
+            "absolute_required": True,
+        },
+        "packed_unpacked_comparison": {
+            "status": "pending_physical",
+            "worst_absolute_error": None,
+            "runtime": {},
+        },
+        "privacy": {
+            "raw_capture_bytes_embedded": False,
+            "local_paths_included": False,
+            "stdout_stderr_included": False,
+        },
+        "source": {
+            "mode": "compare",
+            "execution_kind": "physical_cross_hardware",
+            "tool": "tools/nw10/run-correctness-evidence.ps1",
+        },
+    }
+    comparison = tmp_path / "build" / "comparison.json"
+    status_path = tmp_path / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    _write_json(comparison, source)
+    _write_json(status_path, _base_status())
+    args = argparse.Namespace(
+        comparison=str(comparison),
+        destination="benchmarks/nw10/common-artifact-correctness.v1.json",
+        status_file="benchmarks/nw10/evidence-status.v1.json",
+        implementation_head="1" * 40,
+        forbid_token=[],
+    )
+    with pytest.raises(ValueError, match="packed/unpacked"):
+        publisher.publish_correctness(args)
 
 
 def test_system_publisher_verifies_bundle_and_can_complete_state(
@@ -139,7 +256,14 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
         "manifest_sha256": "3" * 64,
     }
     intro_report = tmp_path / "build" / "intro-report.json"
-    _write_json(intro_report, {"canonical_artifact": artifact})
+    _write_json(
+        intro_report,
+        {
+            "release_grade": True,
+            "test_payload": False,
+            "canonical_artifact": artifact,
+        },
+    )
 
     expected_codes = {
         "corrupt_payload": 70,
@@ -163,8 +287,16 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
             "virtualization_probe": {
                 "manufacturer": "ASUSTeK COMPUTER INC.",
                 "model": "NUC13ANH-B",
-                "hypervisor_present": True,
-                "virtualization_based_security_status": 2,
+                "product_vendor": "ASUSTeK COMPUTER INC.",
+                "product_name": "NUC13ANH-B",
+                "bios_manufacturer": "American Megatrends Inc.",
+                "bios_version": "NUC13ANBi.0058.2023.0613.1143",
+                "baseboard_manufacturer": "ASUSTeK COMPUTER INC.",
+                "baseboard_product": "NUC13ANH-B",
+                "hypervisor_present": False,
+                "virtualization_based_security_status": 0,
+                "hypervisor_explained_by_vbs": False,
+                "vm_markers": [],
             },
         },
         "deployment": {
@@ -228,8 +360,12 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
         metrics,
         {
             "metadata": {
-                "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+                "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
                 "driver_version": "32.0.16.1088",
+                "executable_sha256": artifact["executable_sha256"],
+                "package_sha256": artifact["package_sha256"],
+                "execution_kind": "physical",
+                "windows_build": "10.0.26200",
             },
             "measurements": {
                 "process_start_to_first_present_ms": 250.0,
@@ -293,7 +429,7 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
         "NVIDIA GeForce RTX 5070 Ti"
     )
     assert public["startup"]["hardware"]["adapter_description"] == (
-        "NVIDIA GeForce RTX 4060 Ti"
+        "NVIDIA GeForce RTX 5070 Ti"
     )
     assert public["memory"]["peak_engine_committed_gpu_bytes"] == 42_926_080
     status = json.loads(status_path.read_text(encoding="utf-8"))
@@ -322,3 +458,64 @@ def test_blackwell_transfer_bundle_is_runtime_only_and_published_by_ci() -> None
     assert "Package Blackwell correctness transfer bundle" in workflow
     assert "nw10-correctness-transfer-blackwell" in workflow
     assert "transfer-blackwell/transfer-package/**" in workflow
+
+
+def test_clean_summary_rejects_vm_markers_and_redefined_exit_codes() -> None:
+    artifact = {
+        "executable_sha256": "1" * 64,
+        "executable_bytes": 100,
+    }
+    report = {
+        "verification_status": "verified",
+        "host": {
+            "execution_kind": "physical",
+            "clean_environment": True,
+            "architecture": "AMD64",
+            "windows_build": "10.0.26200",
+            "development_dependencies_present_on_path": [],
+            "environment_cache_variables": [],
+            "virtualization_indicators": ["virtual machine"],
+            "virtualization_probe": {
+                "manufacturer": "Microsoft Corporation",
+                "model": "Virtual Machine",
+                "hypervisor_present": True,
+                "virtualization_based_security_status": 2,
+                "hypervisor_explained_by_vbs": True,
+                "vm_markers": ["virtual machine"],
+            },
+        },
+        "deployment": {
+            "only_runtime_executable": True,
+            "sidecars": [],
+            "forbidden_runtime_dependencies": [],
+            "executable_sha256": artifact["executable_sha256"],
+            "executable_bytes": artifact["executable_bytes"],
+        },
+        "scenarios": [
+            {
+                "scenario": name,
+                "expected_exit_code": code,
+                "observed_exit_code": code,
+                "status": "passed",
+                "timed_out": False,
+            }
+            for name, code in publisher.EXPECTED_SCENARIO_EXIT_CODES.items()
+        ],
+    }
+    with pytest.raises(ValueError, match="virtualization markers"):
+        publisher._clean_summary(
+            report,
+            bundle_sha256="a" * 64,
+            artifact=artifact,
+            runtime_hardware={"adapter_description": "NVIDIA GeForce RTX 5070 Ti"},
+        )
+    report["host"]["virtualization_indicators"] = []
+    report["host"]["virtualization_probe"]["vm_markers"] = []
+    report["scenarios"][0]["expected_exit_code"] = 0
+    with pytest.raises(ValueError, match="frozen expected exit code"):
+        publisher._clean_summary(
+            report,
+            bundle_sha256="a" * 64,
+            artifact=artifact,
+            runtime_hardware={"adapter_description": "NVIDIA GeForce RTX 5070 Ti"},
+        )

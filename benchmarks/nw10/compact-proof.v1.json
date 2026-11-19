@@ -186,8 +186,8 @@
   "commands": {
     "contract_evidence": "NODEWERK_NW03_TEST_DIGEST=1 python tools/nw10_evidence.py --output-dir benchmarks/nw10",
     "pytest": "python -m pytest -q tests/test_nw10_*.py",
-    "windows_intro": "python tools/nw10_intro.py --output build/nw10-intro --player-template <release-template> --dxc <pinned-dxc>",
-    "windows_proof": "python tools/nw10_proof.py --output build/nw10-proof --player-template <release-template> --dxc <pinned-dxc> --reproducibility"
+    "windows_intro": "python tools/nw10_intro.py --output build/nw10-intro --canonical-player-template <decoder-off-template> --player-template <decoder-on-template> --dxc <pinned-dxc>",
+    "windows_proof": "python tools/nw10_proof.py --output build/nw10-proof --canonical-player-template <decoder-off-template> --player-template <decoder-on-template> --dxc <pinned-dxc> --reproducibility"
   },
   "compact_target": {
     "bytes": 65536,
@@ -251,11 +251,11 @@
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
   "intro": {
     "canonical_artifact": {
-      "artifact_key": "sha256:v1:96a110a9b6b68f70f7605e16811c7743d548da559a01d7277f68a8bd18e8bd5c",
-      "executable_bytes": 4346,
-      "executable_sha256": "70d2a8a7f603665921e93e17cf6fb8a2e66e69595243280c356866db86e57a25",
+      "artifact_key": "sha256:v1:05a2188129a3b95206a54d4156905cfc8e1908c2d62f269151b9924180999ce0",
+      "executable_bytes": 4350,
+      "executable_sha256": "5bb9c1112b6316f8192d69e91507af206b6a8efa421a353508129824dee897b1",
       "link_manifest": {
-        "artifact_identity": "sha256:v1:96a110a9b6b68f70f7605e16811c7743d548da559a01d7277f68a8bd18e8bd5c",
+        "artifact_identity": "sha256:v1:05a2188129a3b95206a54d4156905cfc8e1908c2d62f269151b9924180999ce0",
         "artifact_profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
         "artifact_requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
         "dependencies_source": "package-phase-requirements",
@@ -327,8 +327,8 @@
           "DXGI_FORMAT_R32_UINT",
           "DXGI_FORMAT_R8G8B8A8_UNORM"
         ],
-        "image_oracle_sha256": "",
-        "image_oracle_status": "unavailable",
+        "image_oracle_sha256": "sha256:v1:c32b3be229574be73d367546e452e497ca9419913ee7887262426920418c4aeb",
+        "image_oracle_status": "available",
         "ir_sha256": "sha256:v1:4f61c0957baad8071bfdc46d5275dd7c45e608d4b93ada58d51b4d41483d74de",
         "limits": {
           "max_buffer_bytes": 33177600,
@@ -345,7 +345,7 @@
           "memory_budget_bytes": 536870912,
           "wave_ops": false
         },
-        "manifest_sha256": "sha256:v1:93f90be9d9a3076ce62774c5bb1ffb1601da0648cd091258aa062aaa787c5cce",
+        "manifest_sha256": "sha256:v1:63a0af853cfffdeefb31e07f979b89b8b1a5a1a92617dd947663214a5e80962a",
         "materialized_semantic_digest": "sha256:v1:9cbe19de4bb3c8863682d083ac690d5d081cd63887aa2cb4707a583c0d7ce21c",
         "optional_artifact": false,
         "optional_profile_id": "",
@@ -435,7 +435,7 @@
           "shaders": [
             {
               "blob_bytes": 232,
-              "specialization_id": "CSMain:1",
+              "specialization_id": "SDFIntroCS:1",
               "target": "cs_6_0"
             }
           ]
@@ -460,11 +460,15 @@
             "blob_sha256": "2285ae1f6263d6388c7ddbc79824610e41545028d498321f94e27f5bfb1595d4",
             "execution_order": 0,
             "execution_root": "image",
-            "hlsl_sha256": "494df646c53d473d480632e50fa95be123f16ffc9bffc7ab3d7930bbb9f17f17",
+            "hlsl_sha256": "da7dd456316936a40ac8a2309a9b0069c3c79ee5508903ac5261b70e439d87de",
             "output_region": 0,
             "region_count": 1,
             "root_node_ids": [
-              "image"
+              "material_recipe",
+              "material_gpu",
+              "image",
+              "screen",
+              "present"
             ],
             "specialization_id": "image",
             "target": "cs_6_0",
@@ -483,23 +487,23 @@
         ],
         "version": 1
       },
-      "manifest_bytes": 6092,
-      "manifest_sha256": "fe773a107e50a6e4153299a4a813a022940227cee3bb548e1dc08a70f21739a0",
-      "package_bytes": 3964,
-      "package_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7"
+      "manifest_bytes": 6256,
+      "manifest_sha256": "1048e0386441b949c3a14d420fe1328c7bfe61483ebf0b9bb650e1035b91f37b",
+      "package_bytes": 3968,
+      "package_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6"
     },
     "compact_artifact": {
       "codec_id": "nwc.codec.mszip.v1",
-      "decoded_package_bytes": 3964,
-      "decoded_package_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
-      "encoded_package_bytes": 1707,
-      "encoded_package_sha256": "14c396b9ac12cd0e5986d9f40d95efd154b4df11c3edb5925b25440434b9cad4",
-      "executable_bytes": 2089,
-      "executable_sha256": "893a36ba0e196186d5f29da01b99ec3bad98c6aa8baa1eca9dfc8e7d5ad9c10f",
+      "decoded_package_bytes": 3968,
+      "decoded_package_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+      "encoded_package_bytes": 1708,
+      "encoded_package_sha256": "30956531f935dea9d6ed20e71cb493937a1ddcf18f404430f733ee4fc31167b5",
+      "executable_bytes": 2090,
+      "executable_sha256": "d77cb166e51ad9dab97440b18325f0896ffd762634935891efd46b8254ef6e51",
       "layout_id": "nwc.layout.soa.v1",
       "reference_records": 0,
-      "selected_executable_bytes": 2089,
-      "selected_executable_sha256": "893a36ba0e196186d5f29da01b99ec3bad98c6aa8baa1eca9dfc8e7d5ad9c10f",
+      "selected_executable_bytes": 2090,
+      "selected_executable_sha256": "d77cb166e51ad9dab97440b18325f0896ffd762634935891efd46b8254ef6e51",
       "selected_mode": "compact"
     },
     "decision": {
@@ -515,7 +519,7 @@
         "all_required_bytes_accounted": true,
         "artifact_kind": "restricted_intro",
         "auxiliary_policy": "The runnable distribution is one executable. Rebuild/evidence JSON is optional and never required to execute; system DLLs are recorded as dependencies with zero distributed bytes.",
-        "baseline_complete_distribution_bytes": 4346,
+        "baseline_complete_distribution_bytes": 4350,
         "budget_tiers": {
           "compact_target_bytes": 65536,
           "compact_target_is_universal_feasibility_claim": false,
@@ -525,37 +529,40 @@
           "stretch_bytes": 131072
         },
         "codec_id": "nwc.codec.stored.v1",
-        "complete_runnable_distribution_bytes": 4346,
+        "complete_runnable_distribution_bytes": 4350,
         "components": {
-          "auxiliary_file_bytes": 36014,
+          "auxiliary_file_bytes": 36922,
           "auxiliary_files": {
-            "link-manifest.json": 6092,
+            "link-manifest.json": 6256,
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+            "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9791,
             "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
-            "size-report.json": 4834
+            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4840,
+            "size-report.json": 4840
           },
-          "canonical_package_bytes": 3964,
+          "canonical_package_bytes": 3968,
+          "canonical_player_image_bytes": 258,
+          "compact_player_image_bytes": null,
           "decoder_code_bytes": null,
+          "decoder_code_included_in_player_image": false,
           "decoder_source_bytes": 11525,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
-          "encoded_package_bytes": 3964,
+          "encoded_package_bytes": 3968,
           "optional_auxiliary_files": {
-            "link-manifest.json": 6092,
+            "link-manifest.json": 6256,
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+            "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9791,
             "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
-            "size-report.json": 4834
+            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4840,
+            "size-report.json": 4840
           },
           "player_image_bytes": 258,
           "required_auxiliary_files": {},
           "shader_payload_bytes": 232
         },
         "compression_rejected_for_increasing_distribution": false,
-        "decoded_package_bound_bytes": 3964,
+        "decoded_package_bound_bytes": 3968,
         "dependencies": [
           {
             "distributed_bytes": 0,
@@ -589,10 +596,11 @@
         "layout_id": "nwc.layout.canonical.v1",
         "packaging_tool": {
           "identity": "tools/nw10_compact.py",
-          "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+          "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
         },
-        "selected_executable_bytes": 4346,
+        "selected_executable_bytes": 4350,
         "task": "NW-10",
+        "unaccounted_components": [],
         "version": 1,
         "within_compact_target": true,
         "within_proof": true,
@@ -600,10 +608,10 @@
         "within_stretch": true
       },
       "compact": {
-        "all_required_bytes_accounted": true,
+        "all_required_bytes_accounted": false,
         "artifact_kind": "restricted_intro",
         "auxiliary_policy": "The runnable distribution is one executable. Rebuild/evidence JSON is optional and never required to execute; system DLLs are recorded as dependencies with zero distributed bytes.",
-        "baseline_complete_distribution_bytes": 4346,
+        "baseline_complete_distribution_bytes": 4350,
         "budget_tiers": {
           "compact_target_bytes": 65536,
           "compact_target_is_universal_feasibility_claim": false,
@@ -613,38 +621,47 @@
           "stretch_bytes": 131072
         },
         "codec_id": "nwc.codec.mszip.v1",
-        "complete_runnable_distribution_bytes": 2089,
+        "complete_runnable_distribution_bytes": 2090,
         "components": {
-          "auxiliary_file_bytes": 36014,
+          "auxiliary_file_bytes": 36922,
           "auxiliary_files": {
-            "link-manifest.json": 6092,
+            "link-manifest.json": 6256,
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+            "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9791,
             "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
-            "size-report.json": 4834
+            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4840,
+            "size-report.json": 4840
           },
-          "canonical_package_bytes": 3964,
+          "canonical_package_bytes": 3968,
+          "canonical_player_image_bytes": 258,
+          "compact_player_image_bytes": 258,
           "decoder_code_bytes": null,
+          "decoder_code_included_in_player_image": false,
           "decoder_source_bytes": 11525,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
-          "encoded_package_bytes": 1707,
+          "encoded_package_bytes": 1708,
           "optional_auxiliary_files": {
-            "link-manifest.json": 6092,
+            "link-manifest.json": 6256,
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9059,
+            "nw_common_d3d12_fl12_0_sm6_0_v1.player.cpp": 9791,
             "nw_common_d3d12_fl12_0_sm6_0_v1.schedule.json": 8845,
-            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4834,
-            "size-report.json": 4834
+            "nw_common_d3d12_fl12_0_sm6_0_v1.size.json": 4840,
+            "size-report.json": 4840
           },
           "player_image_bytes": 258,
           "required_auxiliary_files": {},
           "shader_payload_bytes": 232
         },
         "compression_rejected_for_increasing_distribution": false,
-        "decoded_package_bound_bytes": 3964,
+        "decoded_package_bound_bytes": 3968,
         "dependencies": [
+          {
+            "distributed_bytes": 0,
+            "kind": "windows_inbox",
+            "name": "cabinet.dll",
+            "required_by": "src/package/nw_compact.cpp"
+          },
           {
             "distributed_bytes": 0,
             "kind": "windows_inbox",
@@ -671,16 +688,19 @@
             "name": "user32"
           }
         ],
-        "distribution_delta_bytes": -2257,
+        "distribution_delta_bytes": -2260,
         "evidence_status": "informational_contract_only",
         "format": "nw10-byte-ledger",
         "layout_id": "nwc.layout.soa.v1",
         "packaging_tool": {
           "identity": "tools/nw10_compact.py",
-          "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+          "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
         },
-        "selected_executable_bytes": 2089,
+        "selected_executable_bytes": 2090,
         "task": "NW-10",
+        "unaccounted_components": [
+          "decoder_code_bytes"
+        ],
         "version": 1,
         "within_compact_target": true,
         "within_proof": true,
@@ -692,40 +712,40 @@
       "compression_candidates": [
         {
           "codec": "nwc.codec.stored.v1",
-          "complete_container_bytes": 4256,
-          "payload_bytes": 4192,
+          "complete_container_bytes": 4260,
+          "payload_bytes": 4196,
           "player_supported": true
         },
         {
           "codec": "candidate.zlib.raw",
-          "complete_container_bytes": 1720,
-          "payload_bytes": 1656,
+          "complete_container_bytes": 1719,
+          "payload_bytes": 1655,
           "player_supported": false
         },
         {
           "codec": "candidate.bzip2",
-          "complete_container_bytes": 1923,
-          "payload_bytes": 1859,
+          "complete_container_bytes": 1898,
+          "payload_bytes": 1834,
           "player_supported": false
         },
         {
           "codec": "candidate.lzma",
-          "complete_container_bytes": 1680,
-          "payload_bytes": 1616,
+          "complete_container_bytes": 1684,
+          "payload_bytes": 1620,
           "player_supported": false
         },
         {
           "codec": "nwc.codec.mszip.v1",
-          "complete_container_bytes": 1716,
-          "payload_bytes": 1652,
+          "complete_container_bytes": 1715,
+          "payload_bytes": 1651,
           "player_supported": true
         }
       ],
       "decoder_code_bytes": null,
       "decoder_code_status": "pending_physical_windows",
       "delta_references": {
-        "aos_with_references_bytes": 4256,
-        "aos_without_references_bytes": 4256,
+        "aos_with_references_bytes": 4260,
+        "aos_without_references_bytes": 4260,
         "chunk_size": 256,
         "delta_complete_bytes_saved": 0,
         "delta_records": 16,
@@ -733,46 +753,46 @@
         "raw_records": 16,
         "reference_records": 0,
         "referenced_bytes_saved": 0,
-        "soa_with_references_bytes": 4240
+        "soa_with_references_bytes": 4244
       },
       "layouts": {
         "alternatives": [
           {
             "codec_id": "nwc.codec.stored.v1",
-            "container_bytes": 4192,
-            "decoded_bytes": 3964,
-            "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
-            "encoded_bytes": 4256,
-            "encoded_sha256": "60920212c0c203c9ed49b492c205e16dd63fdd841d54c67e29dd40e0e6585e29",
+            "container_bytes": 4196,
+            "decoded_bytes": 3968,
+            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "encoded_bytes": 4260,
+            "encoded_sha256": "9af25e6f526cae20566124e813f13f7c9e4dd5fbca69e14ed5c012464f1d2924",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.canonical.v1",
-            "payload_bytes": 4192,
+            "payload_bytes": 4196,
             "record_count": 16,
             "reference_count": 0
           },
           {
             "codec_id": "nwc.codec.stored.v1",
-            "container_bytes": 4192,
-            "decoded_bytes": 3964,
-            "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
-            "encoded_bytes": 4256,
-            "encoded_sha256": "aabb220c475674a80eaa376d7040e405eb5a1d2cc219286596c0e7ae70ef0915",
+            "container_bytes": 4196,
+            "decoded_bytes": 3968,
+            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "encoded_bytes": 4260,
+            "encoded_sha256": "d4af2c2a955c36a03d9d34579f5eda3d6539c1a136ae7e03a36fa962ed7d1526",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.aos.v1",
-            "payload_bytes": 4192,
+            "payload_bytes": 4196,
             "record_count": 16,
             "reference_count": 0
           },
           {
             "codec_id": "nwc.codec.stored.v1",
-            "container_bytes": 4176,
-            "decoded_bytes": 3964,
-            "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
-            "encoded_bytes": 4240,
-            "encoded_sha256": "2122852c57d42211bef3d4b313db6541883913d4d1a730842258643fd836bab5",
+            "container_bytes": 4180,
+            "decoded_bytes": 3968,
+            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "encoded_bytes": 4244,
+            "encoded_sha256": "dd7faac4fef5442230b3d37689445f24ed41a166e8f8693028974a0ca167cb8a",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.soa.v1",
-            "payload_bytes": 4176,
+            "payload_bytes": 4180,
             "record_count": 16,
             "reference_count": 0
           }
@@ -810,8 +830,8 @@
           "init.upload_resource",
           "init.create_pipeline"
         ],
-        "package_bytes": 3964,
-        "package_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
+        "package_bytes": 3968,
+        "package_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
         "parameter_bytes": 28,
         "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
         "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
@@ -900,27 +920,27 @@
         "candidates": [
           {
             "codec_id": "nwc.codec.stored.v1",
-            "container_bytes": 4192,
-            "decoded_bytes": 3964,
-            "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
-            "encoded_bytes": 4256,
-            "encoded_sha256": "aabb220c475674a80eaa376d7040e405eb5a1d2cc219286596c0e7ae70ef0915",
+            "container_bytes": 4196,
+            "decoded_bytes": 3968,
+            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "encoded_bytes": 4260,
+            "encoded_sha256": "d4af2c2a955c36a03d9d34579f5eda3d6539c1a136ae7e03a36fa962ed7d1526",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.aos.v1",
-            "payload_bytes": 4192,
+            "payload_bytes": 4196,
             "record_count": 16,
             "reference_count": 0
           },
           {
             "codec_id": "nwc.codec.mszip.v1",
-            "container_bytes": 4192,
-            "decoded_bytes": 3964,
-            "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
-            "encoded_bytes": 1716,
-            "encoded_sha256": "ad428cf1821504e627227ef40ba62dcbfff986f2faaed665f9a9252e958571bb",
+            "container_bytes": 4196,
+            "decoded_bytes": 3968,
+            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "encoded_bytes": 1715,
+            "encoded_sha256": "a77ad9f30c26267ab618c207850b1ae450ceb3245e7587a277e7713d527e1f97",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.aos.v1",
-            "payload_bytes": 1652,
+            "payload_bytes": 1651,
             "record_count": 16,
             "reference_count": 0
           }
@@ -928,14 +948,14 @@
         "compression_increases_distribution": false,
         "selected": {
           "codec_id": "nwc.codec.mszip.v1",
-          "container_bytes": 4192,
-          "decoded_bytes": 3964,
-          "decoded_sha256": "61fde85dbed31b598365c10b959873537319c8d3fb02e8903aa3919da54918e7",
-          "encoded_bytes": 1716,
-          "encoded_sha256": "ad428cf1821504e627227ef40ba62dcbfff986f2faaed665f9a9252e958571bb",
+          "container_bytes": 4196,
+          "decoded_bytes": 3968,
+          "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+          "encoded_bytes": 1715,
+          "encoded_sha256": "a77ad9f30c26267ab618c207850b1ae450ceb3245e7587a277e7713d527e1f97",
           "format": "nwc.container.v1",
           "layout_id": "nwc.layout.aos.v1",
-          "payload_bytes": 1652,
+          "payload_bytes": 1651,
           "record_count": 16,
           "reference_count": 0
         },
@@ -1005,17 +1025,17 @@
       "width": 1920
     },
     "report_path": "benchmarks/nw10/intro-export-report.v1.json",
-    "report_sha256": "e49c851cc08e83f131950e28199516386e37a6167583248dc54ff126f10844f5"
+    "report_sha256": "5284f45c26413da5322b47dcf1ac68441ded8d10031824b42b2d609de5c79e54"
   },
   "minimum_measured_artifact": {
-    "bytes": 2089,
+    "bytes": 2090,
     "evidence_status": "informational_contract_only",
-    "intro_compact_bytes": 2089,
+    "intro_compact_bytes": 2090,
     "physical_result": null,
     "proof_compact_bytes": 4475
   },
   "nw10_build_inputs": {
-    "CMakeLists.txt": "ecc0f7c90c5d5c2712695b7a914bcd9ae04596ca7ceebb6d3f4db5f4853e72a5",
+    "CMakeLists.txt": "4c75aa788dbd79930b42288b985449a3a34e5c975f8a8cd7416064cf904ff833",
     "CMakePresets.json": "739675ece10175933506cab88c1bd1e1458e0df24f6819af6b05fbfcf79bb43f",
     "benchmarks/toolchain-manifest.v1.json": "db69fcc46d6c2ac4003cfff52c37e7c9b6fdbbe7762c0615d2b69dcfa4e449e3",
     "cmake/BuildProfiles.cmake": "c1f65c63c709d06aa571f10d1ecab51f84625e9057fca728492e24ec2bcabcde",
@@ -1081,17 +1101,17 @@
     "tools/nw06_export.py": "51224c05dc3e93983104704759773ae6a3b61e18ea34c76d28085058a6e506f9",
     "tools/nw06_procedural.py": "8c5fdd9ec85776679733df80c5012182ddf8084cf10b6abb6d0b76e5a9b867e4",
     "tools/nw06_timeline.py": "c481aafaf948387dfc4eea36f712385d970d3dcc182e6f56c8b49d4b1217a81e",
-    "tools/nw07_contract.py": "26a5b8abce5ebb51c4a1a9a9cd936a05a0570f6fdbfc7956c13c6d09b858546e",
-    "tools/nw07_export.py": "3b6371ccab796aa73ee66638c7b5eeceb2424d317e1dd114cd3acfd8538508fd",
-    "tools/nw10_compact.py": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde",
+    "tools/nw07_contract.py": "592cd0ca9be755dec18586c9b9b8e5ee140bee4fbd5c914815f02c17a549af21",
+    "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
+    "tools/nw10_compact.py": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
-    "tools/nw10_evidence.py": "a48257253f3f14df22d5fcfced9accdae07a11c24ff23652a769b5473e50e3f0",
-    "tools/nw10_intro.py": "7451506a9061a5e8807114a2b0e176dfb2e962bbec7ebe2df8c20009e1820ed3",
-    "tools/nw10_proof.py": "fbdabb32850b9f51472dff0bdbb89602f14d78e8d6593f9fa2150976614bf068",
+    "tools/nw10_evidence.py": "3406a751c16eb70cfe6f22e7039b4e2bbb3ece17954ee44c507e746c15550dfe",
+    "tools/nw10_intro.py": "8f823433521a6d33c1dff632038be54327495a58a5d7ba2c3fc58aa790ba2857",
+    "tools/nw10_proof.py": "7b94a0bccd3a6a1a7e1359c69a88819c05d1a31526fe1f95ec3ce8ef6632823b",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:411c060febc0e7ece5a0745af6e368ee9f14ea0e1dff4f89b5905a789cabd205",
+  "nw10_build_inputs_digest": "sha256:v1:c1a333d35bbef6f33f1ccccc492c9eb08ddc6873273f8ce7e190ac0d1b941543",
   "packaging_modes": [
     {
       "clean_system_checked": false,
@@ -1143,6 +1163,7 @@
   },
   "proof": {
     "canonical_artifact": {
+      "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",
       "executable_bytes": 18008,
       "executable_sha256": "1401bd0f2c35cb9297069406d73338262cb570e0a6899fc9cf3e098cb56202c5",
       "manifest_bytes": 14511,
@@ -1198,7 +1219,10 @@
             "size-report.json": 5176
           },
           "canonical_package_bytes": 17626,
+          "canonical_player_image_bytes": 258,
+          "compact_player_image_bytes": null,
           "decoder_code_bytes": null,
+          "decoder_code_included_in_player_image": false,
           "decoder_source_bytes": 11525,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
@@ -1250,10 +1274,11 @@
         "layout_id": "nwc.layout.canonical.v1",
         "packaging_tool": {
           "identity": "tools/nw10_compact.py",
-          "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+          "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
         },
         "selected_executable_bytes": 18008,
         "task": "NW-10",
+        "unaccounted_components": [],
         "version": 1,
         "within_compact_target": true,
         "within_proof": true,
@@ -1261,7 +1286,7 @@
         "within_stretch": true
       },
       "compact": {
-        "all_required_bytes_accounted": true,
+        "all_required_bytes_accounted": false,
         "artifact_kind": "canonical_nw07_proof",
         "auxiliary_policy": "The runnable distribution is one executable. Rebuild/evidence JSON is optional and never required to execute; system DLLs are recorded as dependencies with zero distributed bytes.",
         "baseline_complete_distribution_bytes": 18008,
@@ -1286,7 +1311,10 @@
             "size-report.json": 5176
           },
           "canonical_package_bytes": 17626,
+          "canonical_player_image_bytes": 258,
+          "compact_player_image_bytes": 258,
           "decoder_code_bytes": null,
+          "decoder_code_included_in_player_image": false,
           "decoder_source_bytes": 11525,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
@@ -1306,6 +1334,12 @@
         "compression_rejected_for_increasing_distribution": false,
         "decoded_package_bound_bytes": 17626,
         "dependencies": [
+          {
+            "distributed_bytes": 0,
+            "kind": "windows_inbox",
+            "name": "cabinet.dll",
+            "required_by": "src/package/nw_compact.cpp"
+          },
           {
             "distributed_bytes": 0,
             "kind": "windows_inbox",
@@ -1338,10 +1372,13 @@
         "layout_id": "nwc.layout.soa.v1",
         "packaging_tool": {
           "identity": "tools/nw10_compact.py",
-          "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+          "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
         },
         "selected_executable_bytes": 4475,
         "task": "NW-10",
+        "unaccounted_components": [
+          "decoder_code_bytes"
+        ],
         "version": 1,
         "within_compact_target": true,
         "within_proof": true,
@@ -1688,7 +1725,7 @@
       }
     },
     "report_path": "benchmarks/nw10/proof-export-report.v1.json",
-    "report_sha256": "034f3883ca35451e9fe737c6ec1defed856cb6aebd043721ad7543131e9697b4",
+    "report_sha256": "18de5a3c5b786246a15513457c47bc3524c1d55b8e6dad11d39f95fd9cf02f6e",
     "reproducibility": {
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",

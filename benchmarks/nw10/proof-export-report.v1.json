@@ -1,5 +1,6 @@
 {
   "canonical_artifact": {
+    "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",
     "executable_bytes": 18008,
     "executable_sha256": "1401bd0f2c35cb9297069406d73338262cb570e0a6899fc9cf3e098cb56202c5",
     "manifest_bytes": 14511,
@@ -66,7 +67,10 @@
           "size-report.json": 5176
         },
         "canonical_package_bytes": 17626,
+        "canonical_player_image_bytes": 258,
+        "compact_player_image_bytes": null,
         "decoder_code_bytes": null,
+        "decoder_code_included_in_player_image": false,
         "decoder_source_bytes": 11525,
         "embedded_footer_bytes": 92,
         "embedded_manifest_binding_bytes": 32,
@@ -118,10 +122,11 @@
       "layout_id": "nwc.layout.canonical.v1",
       "packaging_tool": {
         "identity": "tools/nw10_compact.py",
-        "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+        "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
       },
       "selected_executable_bytes": 18008,
       "task": "NW-10",
+      "unaccounted_components": [],
       "version": 1,
       "within_compact_target": true,
       "within_proof": true,
@@ -129,7 +134,7 @@
       "within_stretch": true
     },
     "compact": {
-      "all_required_bytes_accounted": true,
+      "all_required_bytes_accounted": false,
       "artifact_kind": "canonical_nw07_proof",
       "auxiliary_policy": "The runnable distribution is one executable. Rebuild/evidence JSON is optional and never required to execute; system DLLs are recorded as dependencies with zero distributed bytes.",
       "baseline_complete_distribution_bytes": 18008,
@@ -154,7 +159,10 @@
           "size-report.json": 5176
         },
         "canonical_package_bytes": 17626,
+        "canonical_player_image_bytes": 258,
+        "compact_player_image_bytes": 258,
         "decoder_code_bytes": null,
+        "decoder_code_included_in_player_image": false,
         "decoder_source_bytes": 11525,
         "embedded_footer_bytes": 92,
         "embedded_manifest_binding_bytes": 32,
@@ -174,6 +182,12 @@
       "compression_rejected_for_increasing_distribution": false,
       "decoded_package_bound_bytes": 17626,
       "dependencies": [
+        {
+          "distributed_bytes": 0,
+          "kind": "windows_inbox",
+          "name": "cabinet.dll",
+          "required_by": "src/package/nw_compact.cpp"
+        },
         {
           "distributed_bytes": 0,
           "kind": "windows_inbox",
@@ -206,10 +220,13 @@
       "layout_id": "nwc.layout.soa.v1",
       "packaging_tool": {
         "identity": "tools/nw10_compact.py",
-        "version": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde"
+        "version": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41"
       },
       "selected_executable_bytes": 4475,
       "task": "NW-10",
+      "unaccounted_components": [
+        "decoder_code_bytes"
+      ],
       "version": 1,
       "within_compact_target": true,
       "within_proof": true,
@@ -561,7 +578,7 @@
   },
   "nw07_perf_contract": "nw07_perf_ref_v1",
   "nw10_build_inputs": {
-    "CMakeLists.txt": "ecc0f7c90c5d5c2712695b7a914bcd9ae04596ca7ceebb6d3f4db5f4853e72a5",
+    "CMakeLists.txt": "4c75aa788dbd79930b42288b985449a3a34e5c975f8a8cd7416064cf904ff833",
     "CMakePresets.json": "739675ece10175933506cab88c1bd1e1458e0df24f6819af6b05fbfcf79bb43f",
     "benchmarks/toolchain-manifest.v1.json": "db69fcc46d6c2ac4003cfff52c37e7c9b6fdbbe7762c0615d2b69dcfa4e449e3",
     "cmake/BuildProfiles.cmake": "c1f65c63c709d06aa571f10d1ecab51f84625e9057fca728492e24ec2bcabcde",
@@ -586,7 +603,7 @@
     "shaders/nw06/nw06_scene_ps.hlsl": "f263d0dee0ff7ebc89beeeb604b3ae9f495ef50d3d503b92f3888395089d1e91",
     "shaders/nw06/nw06_scene_vs.hlsl": "f0d909b5a20817508f885d7f8754f628dd95dfa3b6898066bff9a5f7e8af4300",
     "shaders/nw06/nw06_tonemap_cs.hlsl": "bf0da426af7140076f5e20eba2e0fc7b717e4bef1068b987a1f2c1fdc9462429",
-    "shaders/nw10/nw10_sdf_intro_cs.hlsl": "8b76e09a323282bd34b89154de1332e8482ff2a358dfd3b571aa5a051500ce55",
+    "shaders/nw10/nw10_sdf_intro_cs.hlsl": "da7dd456316936a40ac8a2309a9b0069c3c79ee5508903ac5261b70e439d87de",
     "src/package/nw_compact.cpp": "09162d468a6a715aca74011727adfe661ba04a1d99afd093ffa4ad57e8f4d02d",
     "src/package/nw_compact.h": "9fca4faa57c6c22187864ca7c1bd2e4838fd0ac5e82100fdfd5dfbf9764a8b93",
     "src/package/nwp_format.cpp": "f1de9a1dde6c3a877eced60a8fa7e3192cf7ab1a8738d7d2ac62fdd9ce2286ed",
@@ -621,23 +638,23 @@
     "tools/nw03_compiler.py": "e40067b93663e52011672868e5a342aa571ed38ccdd83d2358f286d757f45adb",
     "tools/nw03_oracle.py": "872267f76516b4d26d11cef51c1d300dc0e4a9340a90fff3d9d28412c418e71b",
     "tools/nw04_fixture.py": "57ce70c05581879d5c890516858d3f55831d38706d9d5f4d2cbcc4c77ff38d00",
-    "tools/nw05_export.py": "3a43fd851c8898ae069c9b1a23e9f5fe59dc5179eaf4f272c65a5369d30734a3",
+    "tools/nw05_export.py": "bb2f176f16d8739a721027d60f48dbede318e7b4a3d637007c4941aed9c9e8ff",
     "tools/nw05_optimizer.py": "9142bfdff5a5c35026c610e33b2c834a1ec99070e6f350e276ee3a32a6401512",
     "tools/nw05_schedule.py": "3c47db7ec2c5ea8672e6ccbc63e6bc9b512902270d2db35b6a78a7d233468974",
     "tools/nw06_export.py": "51224c05dc3e93983104704759773ae6a3b61e18ea34c76d28085058a6e506f9",
     "tools/nw06_procedural.py": "8c5fdd9ec85776679733df80c5012182ddf8084cf10b6abb6d0b76e5a9b867e4",
     "tools/nw06_timeline.py": "c481aafaf948387dfc4eea36f712385d970d3dcc182e6f56c8b49d4b1217a81e",
-    "tools/nw07_contract.py": "26a5b8abce5ebb51c4a1a9a9cd936a05a0570f6fdbfc7956c13c6d09b858546e",
-    "tools/nw07_export.py": "3b6371ccab796aa73ee66638c7b5eeceb2424d317e1dd114cd3acfd8538508fd",
-    "tools/nw10_compact.py": "6383497d236a62a3f6d6718bba5f7b2eb41040f85c69f8f20016615fc44cccde",
+    "tools/nw07_contract.py": "592cd0ca9be755dec18586c9b9b8e5ee140bee4fbd5c914815f02c17a549af21",
+    "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
+    "tools/nw10_compact.py": "52fbee690d7cf803fba6ad0b6a5a7ace6acef536f1bc6f273cfd31e1b8768e41",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
-    "tools/nw10_evidence.py": "a48257253f3f14df22d5fcfced9accdae07a11c24ff23652a769b5473e50e3f0",
-    "tools/nw10_intro.py": "e787f0a791bb8f244ab15c1a0e011817cbe0fec3dd5d8df0e7dfc7ccc3c6c5a1",
-    "tools/nw10_proof.py": "fbdabb32850b9f51472dff0bdbb89602f14d78e8d6593f9fa2150976614bf068",
+    "tools/nw10_evidence.py": "3406a751c16eb70cfe6f22e7039b4e2bbb3ece17954ee44c507e746c15550dfe",
+    "tools/nw10_intro.py": "8f823433521a6d33c1dff632038be54327495a58a5d7ba2c3fc58aa790ba2857",
+    "tools/nw10_proof.py": "7b94a0bccd3a6a1a7e1359c69a88819c05d1a31526fe1f95ec3ce8ef6632823b",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:ee592f105acacd3a8980a75562b108ef56a92f7e5cc71bfbe2f642613a0592c1",
+  "nw10_build_inputs_digest": "sha256:v1:c1a333d35bbef6f33f1ccccc492c9eb08ddc6873273f8ce7e190ac0d1b941543",
   "performance_evidence": {
     "application_pipeline_cache": false,
     "classification": "pending_physical",
@@ -887,9 +904,9 @@
         "specialized_build_root": "<nw10-temporary-root>/.nw10-<temporary-dir>/repro/clean-a-build",
         "specialized_build_root_status": "requested_path_not_created"
       },
-      "digest": "sha256:v1:8e050b388703e599c011eab83b9f9299034035939aec6e4f77f085eba06dba7c",
+      "digest": "sha256:v1:fd452ecf2f54eb529fcfb75738bcd57b9c3478919a703f8d727d2bd04f3c8d81",
       "files": {
-        "CMakeLists.txt": "ecc0f7c90c5d5c2712695b7a914bcd9ae04596ca7ceebb6d3f4db5f4853e72a5",
+        "CMakeLists.txt": "4c75aa788dbd79930b42288b985449a3a34e5c975f8a8cd7416064cf904ff833",
         "CMakePresets.json": "739675ece10175933506cab88c1bd1e1458e0df24f6819af6b05fbfcf79bb43f",
         "benchmarks/toolchain-manifest.v1.json": "db69fcc46d6c2ac4003cfff52c37e7c9b6fdbbe7762c0615d2b69dcfa4e449e3",
         "cmake/BuildProfiles.cmake": "c1f65c63c709d06aa571f10d1ecab51f84625e9057fca728492e24ec2bcabcde",
@@ -947,18 +964,18 @@
         "tools/nw03_compiler.py": "e40067b93663e52011672868e5a342aa571ed38ccdd83d2358f286d757f45adb",
         "tools/nw03_oracle.py": "872267f76516b4d26d11cef51c1d300dc0e4a9340a90fff3d9d28412c418e71b",
         "tools/nw04_fixture.py": "57ce70c05581879d5c890516858d3f55831d38706d9d5f4d2cbcc4c77ff38d00",
-        "tools/nw05_export.py": "3a43fd851c8898ae069c9b1a23e9f5fe59dc5179eaf4f272c65a5369d30734a3",
+        "tools/nw05_export.py": "bb2f176f16d8739a721027d60f48dbede318e7b4a3d637007c4941aed9c9e8ff",
         "tools/nw05_optimizer.py": "9142bfdff5a5c35026c610e33b2c834a1ec99070e6f350e276ee3a32a6401512",
         "tools/nw05_schedule.py": "3c47db7ec2c5ea8672e6ccbc63e6bc9b512902270d2db35b6a78a7d233468974",
         "tools/nw06_export.py": "51224c05dc3e93983104704759773ae6a3b61e18ea34c76d28085058a6e506f9",
         "tools/nw06_procedural.py": "8c5fdd9ec85776679733df80c5012182ddf8084cf10b6abb6d0b76e5a9b867e4",
         "tools/nw06_timeline.py": "c481aafaf948387dfc4eea36f712385d970d3dcc182e6f56c8b49d4b1217a81e",
-        "tools/nw07_contract.py": "26a5b8abce5ebb51c4a1a9a9cd936a05a0570f6fdbfc7956c13c6d09b858546e",
-        "tools/nw07_export.py": "3b6371ccab796aa73ee66638c7b5eeceb2424d317e1dd114cd3acfd8538508fd",
+        "tools/nw07_contract.py": "592cd0ca9be755dec18586c9b9b8e5ee140bee4fbd5c914815f02c17a549af21",
+        "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
         "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
         "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
       },
-      "frozen_digest": "sha256:v1:8e050b388703e599c011eab83b9f9299034035939aec6e4f77f085eba06dba7c",
+      "frozen_digest": "sha256:v1:fd452ecf2f54eb529fcfb75738bcd57b9c3478919a703f8d727d2bd04f3c8d81",
       "matches_frozen_digest": true,
       "optimization": "O2",
       "player_template_bytes": 258,
@@ -972,7 +989,7 @@
         "windows_min_build": 22631
       }
     },
-    "build_inputs_digest": "sha256:v1:8e050b388703e599c011eab83b9f9299034035939aec6e4f77f085eba06dba7c",
+    "build_inputs_digest": "sha256:v1:fd452ecf2f54eb529fcfb75738bcd57b9c3478919a703f8d727d2bd04f3c8d81",
     "clean_build_directories": [
       "<nw10-temporary-root>/.nw10-<temporary-dir>/repro/clean-a",
       "<nw10-temporary-root>/.nw10-<temporary-dir>/repro/clean-b"
@@ -1009,7 +1026,7 @@
     "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
     "release_grade": false,
     "reproducibility": {
-      "build_inputs_digest": "sha256:v1:8e050b388703e599c011eab83b9f9299034035939aec6e4f77f085eba06dba7c",
+      "build_inputs_digest": "sha256:v1:fd452ecf2f54eb529fcfb75738bcd57b9c3478919a703f8d727d2bd04f3c8d81",
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",
         "executable_sha256": "1401bd0f2c35cb9297069406d73338262cb570e0a6899fc9cf3e098cb56202c5",
@@ -1038,6 +1055,12 @@
   },
   "success": true,
   "task": "NW-10",
+  "templates": {
+    "canonical": "contract_only_mock",
+    "canonical_decoder_off": true,
+    "compact": "contract_only_mock",
+    "compact_decoder_on": true
+  },
   "test_payload": true,
   "version": 1
 }

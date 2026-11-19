@@ -19,6 +19,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
+import nw07_clean_system as clean_system_contract
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATUS_PATH = Path("benchmarks/nw10/evidence-status.v1.json")
 CORRECTNESS_PATH = Path("benchmarks/nw10/common-artifact-correctness.v1.json")
@@ -28,6 +30,7 @@ INVALIDATED_GRADIENT_SHA256 = (
 )
 STARTUP_CEILING_MS = 2000.0
 MEMORY_CEILING_BYTES = 536_870_912
+EXPECTED_SCENARIO_EXIT_CODES = clean_system_contract.EXPECTED_SCENARIO_EXIT_CODES
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -100,9 +103,19 @@ def _git_head() -> str:
 
 
 def _artifact_from_intro_report(report: Mapping[str, Any]) -> dict[str, Any]:
+    if report.get("test_payload") is True:
+        raise ValueError("refusing to publish an intro report generated from test payloads")
+    if report.get("release_grade") is not True:
+        raise ValueError("refusing to publish a non-release-grade intro report")
     artifact = report.get("canonical_artifact")
     if not isinstance(artifact, Mapping):
         raise ValueError("intro report has no canonical_artifact")
+    compact = report.get("compact_artifact")
+    selected_mode = None
+    if isinstance(compact, Mapping):
+        selected_mode = compact.get("selected_mode")
+        if selected_mode not in {"canonical", "compact"}:
+            raise ValueError("intro report has no selected executable mode")
     required = (
         "executable_sha256",
         "executable_bytes",
@@ -112,11 +125,24 @@ def _artifact_from_intro_report(report: Mapping[str, Any]) -> dict[str, Any]:
     missing = [name for name in required if artifact.get(name) in (None, "")]
     if missing:
         raise ValueError("intro canonical artifact is incomplete: " + ", ".join(missing))
+    if selected_mode == "compact":
+        if not isinstance(compact, Mapping):
+            raise ValueError("intro report selected a missing compact artifact")
+        executable_sha256 = str(
+            compact.get("selected_executable_sha256", "")
+        ).lower()
+        executable_bytes = int(compact.get("selected_executable_bytes", 0))
+        selected_mode_value = "compact"
+    else:
+        executable_sha256 = str(artifact["executable_sha256"]).lower()
+        executable_bytes = int(artifact["executable_bytes"])
+        selected_mode_value = "canonical"
     result = {
-        "executable_sha256": str(artifact["executable_sha256"]).lower(),
-        "executable_bytes": int(artifact["executable_bytes"]),
+        "executable_sha256": executable_sha256,
+        "executable_bytes": executable_bytes,
         "package_sha256": str(artifact["package_sha256"]).lower(),
         "manifest_sha256": str(artifact["manifest_sha256"]).lower(),
+        "selected_mode": selected_mode_value,
     }
     for name in ("executable_sha256", "package_sha256", "manifest_sha256"):
         if not re.fullmatch(r"[0-9a-f]{64}", result[name]):
@@ -219,6 +245,12 @@ def _clean_summary(
         raise ValueError("clean-system report does not contain six scenarios")
     if host.get("execution_kind") != "physical":
         raise ValueError("clean-system evidence is not physical")
+    if str(host.get("architecture", "")).lower() not in {"amd64", "x86_64"}:
+        raise ValueError("clean-system evidence host is not x64")
+    if not str(host.get("windows_build") or "").strip():
+        raise ValueError("clean-system evidence host has no measured Windows build")
+    if str(host.get("os_build") or host.get("windows_build") or "").strip() == "":
+        raise ValueError("clean-system evidence host has no measured OS build")
     if host.get("clean_environment") is not True:
         raise ValueError("clean-system host is not clean")
     if host.get("development_dependencies_present_on_path") not in ([], tuple()):
@@ -235,24 +267,48 @@ def _clean_summary(
     for row in scenarios:
         if not isinstance(row, Mapping):
             raise ValueError("clean-system scenario row is invalid")
+        name = row.get("scenario")
+        if name not in EXPECTED_SCENARIO_EXIT_CODES:
+            raise ValueError(f"clean-system scenario is not frozen: {name}")
+        expected = EXPECTED_SCENARIO_EXIT_CODES[str(name)]
+        if row.get("expected_exit_code") != expected:
+            raise ValueError(
+                f"clean-system scenario {name} redefines the frozen expected exit code"
+            )
         if row.get("status") != "passed" or row.get("timed_out") is not False:
             raise ValueError(f"clean-system scenario failed: {row.get('scenario')}")
-        if row.get("observed_exit_code") != row.get("expected_exit_code"):
+        if row.get("observed_exit_code") != expected:
             raise ValueError(
                 f"clean-system scenario exit mismatch: {row.get('scenario')}"
             )
         rows.append(
             {
-                "scenario": row.get("scenario"),
-                "expected_exit_code": int(row.get("expected_exit_code")),
-                "observed_exit_code": int(row.get("observed_exit_code")),
+                "scenario": name,
+                "expected_exit_code": expected,
+                "observed_exit_code": expected,
                 "status": "passed",
                 "timed_out": False,
             }
         )
+    if sorted(str(row["scenario"]) for row in rows) != sorted(
+        EXPECTED_SCENARIO_EXIT_CODES
+    ):
+        raise ValueError("clean-system scenario set is not the frozen six")
     probe = host.get("virtualization_probe")
     if not isinstance(probe, Mapping):
         raise ValueError("clean-system virtualization probe is absent")
+    if probe.get("hypervisor_present") is True and not probe.get(
+        "hypervisor_explained_by_vbs"
+    ):
+        raise ValueError("clean-system host has an unexplained active hypervisor")
+    markers = list(host.get("vm_markers") or [])
+    markers.extend(host.get("virtualization_indicators") or [])
+    markers.extend(probe.get("vm_markers") or [])
+    if markers:
+        raise ValueError(
+            "clean-system host exposes virtualization markers: "
+            + ", ".join(sorted({str(item) for item in markers}))
+        )
     hardware = dict(runtime_hardware)
     if not hardware:
         artifact_record = report.get("artifact")
@@ -272,13 +328,19 @@ def _clean_summary(
         "host": {
             "manufacturer": probe.get("manufacturer"),
             "model": probe.get("model"),
+            "product_vendor": probe.get("product_vendor"),
+            "product_name": probe.get("product_name"),
             "architecture": host.get("architecture"),
             "windows_build": host.get("windows_build"),
             "hypervisor_present": probe.get("hypervisor_present"),
             "virtualization_based_security_status": probe.get(
                 "virtualization_based_security_status"
             ),
+            "hypervisor_explained_by_vbs": probe.get(
+                "hypervisor_explained_by_vbs"
+            ),
             "virtualization_indicators": host.get("virtualization_indicators", []),
+            "vm_markers": markers,
             "clean_environment": True,
         },
         "hardware": {
@@ -365,6 +427,15 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("unexpected correctness comparison format")
     if source.get("status") != "verified":
         raise ValueError("correctness comparison is not verified")
+    if source.get("test_payload") is True:
+        raise ValueError("refusing to publish test-payload correctness evidence")
+    source_meta = source.get("source")
+    if not isinstance(source_meta, Mapping):
+        raise ValueError("correctness comparison has no source provenance")
+    if source_meta.get("execution_kind") != "physical_cross_hardware":
+        raise ValueError(
+            "correctness comparison is not physical cross-hardware evidence"
+        )
     privacy = source.get("privacy")
     if not isinstance(privacy, Mapping):
         raise ValueError("correctness comparison has no privacy declaration")
@@ -379,11 +450,53 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
     comparison = source.get("comparison")
     if not all(isinstance(item, Mapping) for item in (common, ada, blackwell, comparison)):
         raise ValueError("correctness comparison structure is incomplete")
+    fixed_ticks = [0, 240000, 480000, 720000, 959999]
+    if comparison.get("fixed_ticks") not in (None, fixed_ticks):
+        raise ValueError("correctness comparison changed the frozen fixed ticks")
+    if comparison.get("absolute_tolerance") != 0.0001:
+        raise ValueError("correctness comparison changed the frozen image absolute tolerance")
+    if comparison.get("relative_tolerance") != 0.0001:
+        raise ValueError("correctness comparison changed the frozen image relative tolerance")
+    if comparison.get("absolute_required") is not True:
+        raise ValueError("correctness comparison must require absolute image error")
     per_tick = comparison.get("per_tick")
     if not isinstance(per_tick, list) or not per_tick:
         raise ValueError("correctness comparison has no per-tick rows")
+    if [int(row.get("tick", -1)) for row in per_tick if isinstance(row, Mapping)] != fixed_ticks:
+        raise ValueError("correctness comparison is missing an exact frozen fixed tick")
     if any(row.get("status") != "passed" for row in per_tick if isinstance(row, Mapping)):
         raise ValueError("correctness comparison contains failed fixed ticks")
+    worst_absolute = comparison.get("worst_absolute_error")
+    worst_relative = comparison.get("worst_relative_error")
+    if worst_absolute is None or worst_relative is None:
+        raise ValueError("correctness comparison omitted measured error values")
+    if float(worst_absolute) > 0.0001 or float(worst_relative) > 0.0001:
+        raise ValueError("correctness comparison exceeds the frozen image tolerances")
+    packed = source.get("packed_unpacked_comparison")
+    if not isinstance(packed, Mapping):
+        raise ValueError(
+            "correctness comparison has no packed/unpacked artifact comparison"
+        )
+    if packed.get("status") != "verified":
+        raise ValueError("packed/unpacked correctness comparison is not verified")
+    if str(packed.get("packed_package_sha256", "")).lower() != str(
+        packed.get("unpacked_package_sha256", "")
+    ).lower():
+        raise ValueError("packed and unpacked packages are not the same artifact")
+    packed_error = packed.get("worst_absolute_error")
+    if packed_error is None or float(packed_error) > 0.0001:
+        raise ValueError(
+            "packed/unpacked visual comparison exceeds the frozen image tolerance"
+        )
+    packed_runtime = packed.get("runtime")
+    if not isinstance(packed_runtime, Mapping):
+        raise ValueError("packed/unpacked runtime comparison is absent")
+    for tier in ("ada", "blackwell"):
+        entry = packed_runtime.get(tier)
+        if not isinstance(entry, Mapping) or entry.get("status") != "passed":
+            raise ValueError(
+                f"packed/unpacked {tier} runtime comparison did not pass"
+            )
     ada_loop = ada.get("loop_boundary")
     blackwell_loop = blackwell.get("loop_boundary")
     if not isinstance(ada_loop, Mapping) or not isinstance(blackwell_loop, Mapping):
@@ -395,10 +508,21 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
         hardware = row.get("hardware")
         if not isinstance(hardware, Mapping):
             raise ValueError(f"{tier} correctness hardware is missing")
+        if hardware.get("classified_tier") not in (None, tier):
+            raise ValueError(f"{tier} correctness hardware tier is inconsistent")
+        if str(hardware.get("device_form_factor", "")).lower() != "desktop":
+            raise ValueError(
+                f"{tier} correctness hardware was not measured as desktop"
+            )
+        if hardware.get("device_form_factor_source") in (None, "", "asserted"):
+            raise ValueError(
+                f"{tier} correctness form factor was asserted rather than probed"
+            )
         result = {
             "adapter_description": hardware.get("adapter_description"),
             "classified_tier": tier,
-            "device_form_factor": hardware.get("device_form_factor", "desktop"),
+            "device_form_factor": hardware.get("device_form_factor"),
+            "device_form_factor_source": hardware.get("device_form_factor_source"),
         }
         if hardware.get("driver_version"):
             result["driver_version"] = hardware.get("driver_version")
@@ -424,13 +548,25 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
             "loop_boundary_ticks": [0, 960000],
             "ada_loop_boundary_status": "passed",
             "blackwell_loop_boundary_status": "passed",
-            "worst_absolute_error": float(comparison.get("worst_absolute_error", 0.0)),
-            "worst_relative_error": float(
-                comparison.get("worst_relative_error", 0.0)
-            ),
+            "worst_absolute_error": float(worst_absolute),
+            "worst_relative_error": float(worst_relative),
             "absolute_tolerance": float(comparison.get("absolute_tolerance")),
             "relative_tolerance": float(comparison.get("relative_tolerance")),
             "absolute_required": bool(comparison.get("absolute_required")),
+        },
+        "packed_unpacked_comparison": {
+            "status": "verified",
+            "packed_package_sha256": str(
+                packed.get("packed_package_sha256")
+            ).lower(),
+            "unpacked_package_sha256": str(
+                packed.get("unpacked_package_sha256")
+            ).lower(),
+            "worst_absolute_error": float(packed_error),
+            "runtime": {
+                "ada": {"status": "passed"},
+                "blackwell": {"status": "passed"},
+            },
         },
         "privacy": {
             "raw_capture_bytes_embedded": False,
@@ -485,6 +621,33 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
     measurements = metrics.get("measurements")
     if not isinstance(metadata, Mapping) or not isinstance(measurements, Mapping):
         raise ValueError("metrics JSON requires metadata and measurements objects")
+    if str(metadata.get("executable_sha256", "")).lower() != artifact["executable_sha256"]:
+        raise ValueError(
+            "metrics JSON is not bound to the exact final intro executable"
+        )
+    if str(metadata.get("package_sha256", "")).lower() != artifact["package_sha256"]:
+        raise ValueError("metrics JSON is not bound to the exact final package")
+    if str(metadata.get("execution_kind", "physical")) != "physical":
+        raise ValueError("metrics JSON is not a physical measurement")
+    clean_hardware = clean.get("hardware", {})
+    metrics_adapter = str(metadata.get("adapter_description", ""))
+    if metrics_adapter != str(clean_hardware.get("adapter_description", "")):
+        raise ValueError(
+            "metrics hardware does not match the clean-system evidence host"
+        )
+    if str(metadata.get("driver_version", "")) != str(
+        clean_hardware.get("driver_version", "")
+    ):
+        raise ValueError(
+            "metrics driver does not match the clean-system evidence host"
+        )
+    metrics_windows_build = str(
+        metadata.get("windows_build") or metadata.get("os_build") or ""
+    )
+    if metrics_windows_build != str(clean.get("host", {}).get("windows_build", "")):
+        raise ValueError(
+            "metrics Windows build does not match the clean-system evidence host"
+        )
     startup_ms = float(measurements.get("process_start_to_first_present_ms"))
     peak_gpu = int(measurements.get("peak_engine_committed_gpu_bytes"))
     if startup_ms < 0 or startup_ms > STARTUP_CEILING_MS:
@@ -567,6 +730,12 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
         "task": "NW-10",
         "status": "verified",
         "final_artifact": artifact,
+        "windows_build": str(clean.get("host", {}).get("windows_build", "")),
+        "environment": {
+            "adapter_description": adapter,
+            "driver_version": driver,
+            "windows_build": str(clean.get("host", {}).get("windows_build", "")),
+        },
         "startup": startup,
         "memory": memory,
         "clean_system": clean,

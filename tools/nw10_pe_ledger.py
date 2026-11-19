@@ -116,45 +116,87 @@ def build_report(
     if decoder_delta < 0 or decoder_pe_delta < 0:
         raise ValueError("compact decoder ON build is unexpectedly smaller than decoder OFF control")
 
+    added_imports = sorted(
+        set(decoder_on["imports"]) - set(decoder_off["imports"])
+    )
+    if "cabinet.dll" not in added_imports:
+        raise ValueError(
+            "decoder-on template did not add the expected cabinet.dll import"
+        )
     return {
         "format": FORMAT,
         "version": VERSION,
         "task": "NW-10",
         "status": "verified",
+        "source": {
+            "measurement_tool": "tools/nw10_pe_ledger.py",
+            "linker_control_method": (
+                "MSVC _LINK_ appended /OPT:NOREF /OPT:NOICF to the otherwise "
+                "identical release link"
+            ),
+            "decoder_control_method": (
+                "otherwise identical release template with "
+                "NW10_COMPACT_PACKAGE=OFF"
+            ),
+        },
         "final_artifact": {
             "executable_sha256": final["sha256"],
             "executable_bytes": final["total_bytes"],
             "package_sha256": sha256_file(final_package),
             "manifest_sha256": sha256_file(final_manifest),
-            "pe": final,
+            "pe_image_file_bytes": final["pe_image_file_bytes"],
+            "overlay_bytes": final["overlay_bytes"],
+            "sections": [
+                {
+                    "name": row["name"],
+                    "raw_size_bytes": row["raw_size_bytes"],
+                }
+                for row in final["sections"]
+            ],
         },
         "linker_elimination": {
             "status": "verified",
-            "control": {
-                "changed_only": ["/OPT:REF -> /OPT:NOREF", "/OPT:ICF=4 -> /OPT:NOICF"],
-                "security_mitigations_preserved": True,
-                "ltcg_preserved": True,
-                "compact_decoder_preserved": True,
-                "canonical_package_sha256": sha256_file(linker_baseline_package),
-                "manifest_sha256": sha256_file(linker_baseline_manifest),
-                "pe": linker_baseline,
-            },
+            "optimized_options": ["/OPT:REF", "/OPT:ICF=4"],
+            "control_options": ["/OPT:NOREF", "/OPT:NOICF"],
+            "ltgc_preserved": True,
+            "security_mitigations_preserved": True,
+            "compact_decoder_preserved": True,
+            "canonical_package_identical": True,
+            "control_executable_bytes": linker_baseline["total_bytes"],
+            "control_pe_image_file_bytes": linker_baseline[
+                "pe_image_file_bytes"
+            ],
             "complete_distribution_bytes_saved": linker_saved,
             "pe_image_bytes_saved": linker_pe_saved,
-            "section_deltas": section_deltas(linker_baseline, final),
+            "section_bytes_saved": [
+                {
+                    "section": row["section"],
+                    "bytes_saved": row["bytes_saved"],
+                }
+                for row in section_deltas(linker_baseline, final)
+            ],
         },
         "compact_decoder": {
             "status": "verified",
-            "control": {
-                "changed_only": ["NW10_COMPACT_PACKAGE=ON -> OFF"],
-                "release_profile_preserved": True,
-                "linker_elimination_preserved": True,
-            },
-            "decoder_on_template": decoder_on,
-            "decoder_off_template": decoder_off,
+            "decoder_on_template_bytes": decoder_on["total_bytes"],
+            "decoder_off_template_bytes": decoder_off["total_bytes"],
             "template_bytes_added": decoder_delta,
             "pe_image_bytes_added": decoder_pe_delta,
-            "section_deltas": section_deltas(decoder_off, decoder_on),
+            "section_bytes_added": [
+                {
+                    "section": row["section"],
+                    "bytes_added": -row["bytes_saved"],
+                }
+                for row in section_deltas(decoder_off, decoder_on)
+            ],
+            "runtime_import_added": "cabinet.dll",
+            "runtime_imports_added": added_imports,
+        },
+        "conclusion": {
+            "byte_ledger_complete": True,
+            "linker_elimination_measured_on_exact_windows_artifact": True,
+            "decoder_cost_measured_on_pinned_windows_template": True,
+            "universal_64k_claim": False,
         },
         "privacy": {
             "local_paths_included": False,

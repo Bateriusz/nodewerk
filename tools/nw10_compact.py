@@ -1074,6 +1074,7 @@ def build_byte_ledger(
     canonical_package_bytes: int,
     manifest_bytes: int,
     compact: CompactEncoding | None,
+    compact_executable_bytes: int | None = None,
     decoder_code_bytes: int | None,
     shader_bytes: int,
     auxiliary_files: Mapping[str, int] | None = None,
@@ -1083,13 +1084,13 @@ def build_byte_ledger(
     auxiliary = dict(auxiliary_files or {})
     footer_bytes = 92
     manifest_binding_bytes = 32
-    player_image = (
+    canonical_player_image = (
         canonical_executable_bytes
         - canonical_package_bytes
         - manifest_binding_bytes
         - footer_bytes
     )
-    if player_image < 0:
+    if canonical_player_image < 0:
         raise CompactCodecError(
             "artifact_closure_invalid",
             "canonical executable is smaller than its package/manifest/footer",
@@ -1103,6 +1104,24 @@ def build_byte_ledger(
     decoder_source_bytes = (
         decoder_source.stat().st_size if decoder_source.is_file() else None
     )
+    if compact is not None and compact_executable_bytes is not None:
+        compact_player_image = (
+            compact_executable_bytes
+            - compact_payload
+            - manifest_binding_bytes
+            - footer_bytes
+        )
+        if compact_player_image < 0:
+            raise CompactCodecError(
+                "artifact_closure_invalid",
+                "compact executable is smaller than its package/manifest/footer",
+            )
+    else:
+        # Contract-only evidence does not build a separate decoder-on
+        # executable.  Report the canonical player image as the unmeasured
+        # placeholder and keep the ledger explicitly incomplete.
+        compact_player_image = canonical_player_image
+    player_image = compact_player_image if compact is not None else canonical_player_image
     compact_total = (
         player_image
         + compact_payload
@@ -1112,6 +1131,40 @@ def build_byte_ledger(
     within = compact_total <= canonical_total
     if not within:
         compact_total = canonical_total
+        player_image = canonical_player_image
+        compact_payload = canonical_package_bytes
+
+    dependency_rows = [dict(item) for item in dependencies]
+    dependency_names = {
+        str(item.get("name", "")).lower() for item in dependency_rows
+    }
+    required_auxiliary: dict[str, int] = {}
+    if compact is not None and "cabinet.dll" not in dependency_names:
+        # The player-supported MSZIP decoder is an inbox cabinet.dll caller.
+        # It is part of the compact artifact's runtime dependency closure even
+        # when the canonical package manifest was produced by a decoder-off
+        # build and therefore does not name it.
+        dependency_rows.append(
+            {
+                "name": "cabinet.dll",
+                "kind": "windows_inbox",
+                "distributed_bytes": 0,
+                "required_by": "src/package/nw_compact.cpp",
+            }
+        )
+        dependency_names.add("cabinet.dll")
+    dependency_rows.sort(key=lambda item: str(item.get("name", "")).lower())
+
+    summed_components = (
+        player_image
+        + (compact_payload if within else canonical_package_bytes)
+        + manifest_binding_bytes
+        + footer_bytes
+    )
+    decoder_accounted = compact is None or decoder_code_bytes is not None
+    unknown_components: list[str] = []
+    if compact is not None and decoder_code_bytes is None:
+        unknown_components.append("decoder_code_bytes")
     return {
         "format": "nw10-byte-ledger",
         "version": 1,
@@ -1125,16 +1178,23 @@ def build_byte_ledger(
         "selected_executable_bytes": compact_total,
         "components": {
             "player_image_bytes": player_image,
+            "canonical_player_image_bytes": canonical_player_image,
+            "compact_player_image_bytes": (
+                compact_player_image if compact is not None else None
+            ),
             "canonical_package_bytes": canonical_package_bytes,
             "encoded_package_bytes": compact_payload,
             "embedded_manifest_binding_bytes": manifest_binding_bytes,
             "embedded_footer_bytes": footer_bytes,
             "decoder_code_bytes": decoder_code_bytes,
+            "decoder_code_included_in_player_image": bool(
+                compact is not None and decoder_code_bytes is not None
+            ),
             "decoder_source_bytes": decoder_source_bytes,
             "shader_payload_bytes": shader_bytes,
             "auxiliary_files": dict(sorted(auxiliary.items())),
             "auxiliary_file_bytes": sum(auxiliary.values()),
-            "required_auxiliary_files": {},
+            "required_auxiliary_files": required_auxiliary,
             "optional_auxiliary_files": dict(sorted(auxiliary.items())),
         },
         "decoded_package_bound_bytes": (
@@ -1150,19 +1210,16 @@ def build_byte_ledger(
             if (REPO_ROOT / contract.PACKAGING_TOOL_ID).is_file()
             else "unavailable",
         },
-        "dependencies": list(dependencies),
+        "dependencies": dependency_rows,
         "auxiliary_policy": (
             "The runnable distribution is one executable. Rebuild/evidence JSON "
             "is optional and never required to execute; system DLLs are recorded "
             "as dependencies with zero distributed bytes."
         ),
         "all_required_bytes_accounted": (
-            player_image
-            + (compact_payload if within else canonical_package_bytes)
-            + manifest_binding_bytes
-            + footer_bytes
-            == compact_total
+            summed_components == compact_total and decoder_accounted
         ),
+        "unaccounted_components": unknown_components,
         "budget_tiers": contract.budget_tiers(),
         "within_compact_target": compact_total <= contract.COMPACT_TARGET_BYTES,
         "within_stretch": compact_total <= contract.STRETCH_TIER_BYTES,

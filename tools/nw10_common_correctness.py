@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import struct
 import subprocess
 import sys
@@ -44,6 +45,85 @@ EXPECTED_RGBA32F_BYTES = (
     * nw07_contract.OUTPUT_HEIGHT
     * nw07_contract.CAPTURE_BYTES_PER_PIXEL
 )
+
+_DESKTOP_CHASSIS_TYPES = {3, 4, 5, 6, 7, 15, 16, 35, 36}
+_LAPTOP_CHASSIS_TYPES = {8, 9, 10, 11, 14, 30, 31, 32}
+
+
+def _windows_device_form_factor_probe() -> dict[str, Any]:
+    """Measure chassis form factor instead of asserting desktop coverage."""
+    if platform.system() != "Windows":
+        return {
+            "device_form_factor": "unknown",
+            "device_form_factor_source": "unsupported_host",
+            "chassis_types": [],
+            "battery_present": None,
+        }
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        (
+            "$e=Get-CimInstance Win32_SystemEnclosure;"
+            "$bt=$null;try{$bt=Get-CimInstance Win32_Battery -ErrorAction Stop}catch{};"
+            "[pscustomobject]@{ChassisTypes=@($e.ChassisTypes);"
+            "BatteryPresent=($null -ne $bt)}|ConvertTo-Json -Compress"
+        ),
+    ]
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, text=True, timeout=15, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "device_form_factor": "unknown",
+            "device_form_factor_source": f"probe_error:{exc}",
+            "chassis_types": [],
+            "battery_present": None,
+        }
+    if completed.returncode != 0:
+        return {
+            "device_form_factor": "unknown",
+            "device_form_factor_source": "probe_failed",
+            "chassis_types": [],
+            "battery_present": None,
+        }
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {
+            "device_form_factor": "unknown",
+            "device_form_factor_source": "probe_malformed",
+            "chassis_types": [],
+            "battery_present": None,
+        }
+    raw_types = value.get("ChassisTypes") or []
+    if not isinstance(raw_types, list):
+        raw_types = [raw_types]
+    chassis_types: list[int] = []
+    for item in raw_types:
+        try:
+            chassis_types.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    battery = value.get("BatteryPresent")
+    if chassis_types and all(t in _DESKTOP_CHASSIS_TYPES for t in chassis_types):
+        factor = "desktop"
+    elif battery is True or any(t in _LAPTOP_CHASSIS_TYPES for t in chassis_types):
+        factor = "laptop"
+    else:
+        factor = "unknown"
+    return {
+        "device_form_factor": factor,
+        "device_form_factor_source": (
+            "win32_system_enclosure_and_battery"
+            if chassis_types
+            else "no_chassis_measurement"
+        ),
+        "chassis_types": chassis_types,
+        "battery_present": battery,
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -314,8 +394,15 @@ def capture(
     hardware = _parse_probe(probe.stdout)
     if hardware["present_sync_interval"] != 0:
         raise ValueError("diagnostic sibling is not uncapped")
+    form_factor = _windows_device_form_factor_probe()
+    if form_factor["device_form_factor"] != "desktop":
+        raise ValueError(
+            "representative desktop correctness requires a measured desktop "
+            f"chassis, observed {form_factor['device_form_factor']!r}"
+        )
     observed_tier = nw07_evidence.classify_hardware_tier(
-        hardware["adapter_description"], device_form_factor="desktop"
+        hardware["adapter_description"],
+        device_form_factor=form_factor["device_form_factor"],
     )
     if observed_tier != tier:
         raise ValueError(
@@ -395,7 +482,12 @@ def capture(
         },
         "hardware": {
             **hardware,
-            "device_form_factor": "desktop",
+            "device_form_factor": form_factor["device_form_factor"],
+            "device_form_factor_source": form_factor[
+                "device_form_factor_source"
+            ],
+            "chassis_types": form_factor["chassis_types"],
+            "battery_present": form_factor["battery_present"],
             "classified_tier": observed_tier,
         },
         "fixed_ticks": list(nw07_contract.REQUIRED_FIXED_TICKS),
@@ -411,6 +503,11 @@ def capture(
             "raw_capture_bytes_embedded": False,
             "local_paths_included": False,
             "stdout_stderr_included": False,
+        },
+        "source": {
+            "mode": "compare",
+            "execution_kind": "physical_cross_hardware",
+            "tool": "tools/nw10/run-correctness-evidence.ps1",
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -458,6 +555,10 @@ def compare(
     ada_capture_dir: Path,
     blackwell_capture_dir: Path,
     output: Path,
+    packed_ada_capture_dir: Path | None = None,
+    packed_blackwell_capture_dir: Path | None = None,
+    packed_package_sha256: str | None = None,
+    unpacked_package_sha256: str | None = None,
 ) -> dict[str, Any]:
     ada = json.loads(ada_record_path.read_text(encoding="utf-8"))
     blackwell = json.loads(blackwell_record_path.read_text(encoding="utf-8"))
@@ -469,6 +570,28 @@ def compare(
         raise ValueError("Blackwell correctness record is not a captured candidate")
     if ada.get("common_artifact") != blackwell.get("common_artifact"):
         raise ValueError("Ada and Blackwell captures do not name the same common artifact")
+    for label, record, expected_tier in (
+        ("ada", ada, "ada"),
+        ("blackwell", blackwell, "blackwell"),
+    ):
+        hardware = record.get("hardware")
+        if not isinstance(hardware, Mapping):
+            raise ValueError(f"{label} correctness hardware is missing")
+        if hardware.get("classified_tier") != expected_tier:
+            raise ValueError(f"{label} correctness hardware tier is wrong")
+        if hardware.get("device_form_factor") != "desktop":
+            raise ValueError(
+                f"{label} correctness hardware is not a measured desktop"
+            )
+        if hardware.get("device_form_factor_source") in (
+            None,
+            "",
+            "asserted",
+            "unsupported_host",
+        ):
+            raise ValueError(
+                f"{label} correctness form factor was not measured"
+            )
     _verify_capture_manifest(ada, ada_capture_dir)
     _verify_capture_manifest(blackwell, blackwell_capture_dir)
     ada_loop = _compare_rgba32f(
@@ -514,6 +637,52 @@ def compare(
         )
         else "failed"
     )
+    packed_block: dict[str, Any]
+    if packed_ada_capture_dir and packed_blackwell_capture_dir:
+        packed_worst = 0.0
+        packed_runtime: dict[str, Any] = {}
+        for label, unpacked_dir, packed_dir in (
+            ("ada", ada_capture_dir, packed_ada_capture_dir),
+            ("blackwell", blackwell_capture_dir, packed_blackwell_capture_dir),
+        ):
+            tier_worst = 0.0
+            for tick in ALL_TICKS:
+                result = _compare_rgba32f(
+                    packed_dir / f"tick_{tick}.rgba32f",
+                    unpacked_dir / f"tick_{tick}.rgba32f",
+                )
+                tier_worst = max(tier_worst, result["maximum_error"])
+            passed = tier_worst <= nw07_contract.IMAGE_ABSOLUTE_TOLERANCE
+            packed_runtime[label] = {
+                "status": "passed" if passed else "failed",
+                "worst_absolute_error": tier_worst,
+            }
+            packed_worst = max(packed_worst, tier_worst)
+        packed_ok = (
+            all(item["status"] == "passed" for item in packed_runtime.values())
+            and packed_package_sha256 is not None
+            and packed_package_sha256 == unpacked_package_sha256
+        )
+        packed_block = {
+            "status": "verified" if packed_ok else "failed",
+            "packed_package_sha256": packed_package_sha256,
+            "unpacked_package_sha256": unpacked_package_sha256,
+            "worst_absolute_error": packed_worst,
+            "runtime": packed_runtime,
+        }
+        if not packed_ok:
+            status = "failed"
+    else:
+        packed_block = {
+            "status": "pending_physical",
+            "packed_package_sha256": None,
+            "unpacked_package_sha256": None,
+            "worst_absolute_error": None,
+            "runtime": {
+                "ada": {"status": "pending_physical"},
+                "blackwell": {"status": "pending_physical"},
+            },
+        }
     public = {
         "format": "nw10-common-artifact-correctness",
         "version": 1,
@@ -539,6 +708,7 @@ def compare(
             "relative_tolerance": nw07_contract.IMAGE_RELATIVE_TOLERANCE,
             "absolute_required": True,
         },
+        "packed_unpacked_comparison": packed_block,
         "privacy": {
             "raw_capture_bytes_embedded": False,
             "local_paths_included": False,
@@ -579,6 +749,10 @@ def main(argv: list[str] | None = None) -> int:
     comp.add_argument("--blackwell-record", type=Path, required=True)
     comp.add_argument("--ada-captures", type=Path, required=True)
     comp.add_argument("--blackwell-captures", type=Path, required=True)
+    comp.add_argument("--packed-ada-captures", type=Path)
+    comp.add_argument("--packed-blackwell-captures", type=Path)
+    comp.add_argument("--packed-package-sha256")
+    comp.add_argument("--unpacked-package-sha256")
     comp.add_argument("--output", type=Path, required=True)
 
     args = parser.parse_args(argv)
@@ -614,6 +788,10 @@ def main(argv: list[str] | None = None) -> int:
                 ada_capture_dir=args.ada_captures,
                 blackwell_capture_dir=args.blackwell_captures,
                 output=args.output,
+                packed_ada_capture_dir=args.packed_ada_captures,
+                packed_blackwell_capture_dir=args.packed_blackwell_captures,
+                packed_package_sha256=args.packed_package_sha256,
+                unpacked_package_sha256=args.unpacked_package_sha256,
             )
     except Exception as exc:
         print(

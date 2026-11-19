@@ -63,21 +63,25 @@ def _template(directory: Path, size: int = 256) -> Path:
     return path
 
 
-def _require_compact_player_template(template: Path) -> None:
+def _require_compact_player_template(
+    template: Path, *, expected: bool = True, label: str = "compact"
+) -> None:
     try:
         configuration = nw05_export._template_build_configuration(template)
     except Exception as exc:
         raise ProofError(
-            f"compact export requires a readable pinned player build tree: {exc}"
+            f"{label} export requires a readable pinned player build tree: {exc}"
         ) from exc
-    if str(configuration.get("NW10_COMPACT_PACKAGE", "")).strip().upper() not in {
+    enabled = str(configuration.get("NW10_COMPACT_PACKAGE", "")).strip().upper() in {
         "ON",
         "1",
         "TRUE",
-    }:
+    }
+    if enabled != expected:
+        required = "ON" if expected else "OFF"
         raise ProofError(
-            "release compact export requires the player template to be built "
-            "with -DNW10_COMPACT_PACKAGE=ON"
+            f"release {label} export requires the player template to be built "
+            f"with -DNW10_COMPACT_PACKAGE={required}"
         )
 
 
@@ -97,7 +101,7 @@ def _artifact_paths(directory: Path) -> tuple[Path, Path, Path]:
 
 
 def _compact_executable(
-    canonical_executable: bytes,
+    compact_template_executable: bytes,
     package_bytes: bytes,
     manifest_bytes: bytes,
     *,
@@ -105,14 +109,16 @@ def _compact_executable(
     layout_id: str,
 ) -> tuple[bytes, compact.CompactEncoding]:
     embedded_package, embedded_manifest = nw05_export.extract_embedded_package(
-        canonical_executable
+        compact_template_executable
     )
     if embedded_package != package_bytes:
-        raise ProofError("canonical executable does not embed the package")
+        raise ProofError(
+            "compact-decoder template does not embed the canonical package"
+        )
     if embedded_manifest != hashlib.sha256(manifest_bytes).digest():
-        raise ProofError("canonical executable manifest binding changed")
+        raise ProofError("compact-decoder template manifest binding changed")
     total = len(package_bytes) + len(embedded_manifest) + nw05_export.EMBED_FOOTER_SIZE
-    template = canonical_executable[: len(canonical_executable) - total]
+    template = compact_template_executable[: len(compact_template_executable) - total]
     if layout_id == "auto":
         layout_id = compact.measure_layouts(package_bytes)["selected"]
     if codec_id == "auto":
@@ -146,6 +152,7 @@ def export_proof(
     output: Path | str,
     *,
     player_template: Path | str | None = None,
+    canonical_player_template: Path | str | None = None,
     dxc_executable: str | None = None,
     report_path: Path | str | None = None,
     contracts_only: bool = False,
@@ -162,22 +169,32 @@ def export_proof(
     canonical = staging / "canonical"
     compact_dir = staging / "compact"
     template = Path(player_template) if player_template else None
+    canonical_template = (
+        Path(canonical_player_template)
+        if canonical_player_template
+        else template
+    )
     dxc = dxc_executable
     if contracts_only:
         toolchain = staging / "toolchain"
         template = _template(toolchain)
+        canonical_template = template
         dxc = str(_mock_dxc(toolchain))
-    elif template is None or dxc is None:
+    elif template is None or canonical_template is None or dxc is None:
         raise ProofError(
-            "release proof export requires --player-template and --dxc"
+            "release proof export requires --player-template, "
+            "--canonical-player-template, and --dxc"
         )
     else:
-        _require_compact_player_template(template)
+        _require_compact_player_template(template, expected=True, label="compact")
+        _require_compact_player_template(
+            canonical_template, expected=False, label="canonical baseline"
+        )
     try:
         if reproducibility:
             repro = nw07_export.export_reproducibility(
                 staging / "repro",
-                player_template=template,
+                player_template=canonical_template,
                 dxc_executable=dxc,
                 allow_test_payloads=contracts_only,
             )
@@ -186,7 +203,7 @@ def export_proof(
             repro = None
             nw07_export.export_production(
                 canonical,
-                player_template=template,
+                player_template=canonical_template,
                 dxc_executable=dxc,
                 report_path=staging / "canonical-report.json",
                 allow_test_payloads=contracts_only,
@@ -210,8 +227,37 @@ def export_proof(
             if path.is_file()
             and path not in {package_path, manifest_path, executable_path}
         }
+        if contracts_only:
+            compact_template_executable = canonical_executable
+        else:
+            # The compact candidate must be linked from the otherwise
+            # identical decoder-ON template.  Re-run the repository-owned
+            # export with that template; the canonical payload must be
+            # byte-identical to the decoder-OFF baseline.
+            compact_base = staging / "compact-base"
+            nw07_export.export_production(
+                compact_base,
+                player_template=template,
+                dxc_executable=dxc,
+                report_path=staging / "compact-base-report.json",
+                allow_test_payloads=False,
+                # The decoder-ON candidate is the research artifact; the
+                # canonical decoder-OFF baseline above is the tier gate.
+                allow_complete_distribution_over_proof_tier=True,
+            )
+            base_package, base_manifest, base_executable = _artifact_paths(
+                compact_base
+            )
+            if (
+                base_package.read_bytes() != package_bytes
+                or base_manifest.read_bytes() != manifest_bytes
+            ):
+                raise ProofError(
+                    "decoder-ON export changed the canonical package or manifest"
+                )
+            compact_template_executable = base_executable.read_bytes()
         compact_executable, encoded = _compact_executable(
-            canonical_executable,
+            compact_template_executable,
             package_bytes,
             manifest_bytes,
             codec_id=codec_id,
@@ -246,15 +292,34 @@ def export_proof(
             canonical_package_bytes=len(package_bytes),
             manifest_bytes=len(manifest_bytes),
             compact=encoded,
+            compact_executable_bytes=len(compact_executable),
             decoder_code_bytes=decoder["bytes"],
             shader_bytes=sum(
                 len(shader.blob)
                 for shader in nwp.decode_package(package_bytes, allow_dev=False).shaders
             ),
             auxiliary_files=optional_auxiliary,
-            dependencies=dependencies,
+            dependencies=(
+                dependencies
+                if contracts_only
+                else [
+                    {
+                        "name": str(name),
+                        "kind": "windows_inbox",
+                        "distributed_bytes": 0,
+                    }
+                    for name in nw05_export._pe_runtime_dependencies(
+                        compact_executable
+                    )
+                ]
+            ),
             evidence_status="informational_contract_only",
         )
+        if not contracts_only and len(canonical_executable) > contract.PROOF_TIER_BYTES:
+            raise ProofError(
+                "canonical decoder-off NW-07 proof exceeds the preserved "
+                f"{contract.PROOF_TIER_BYTES}-byte complete-distribution ceiling"
+            )
         selected = (
             canonical_executable
             if compact_ledger["compression_rejected_for_increasing_distribution"]
@@ -281,12 +346,25 @@ def export_proof(
             "nw10_build_inputs_digest": contract.build_inputs_digest(nw10_inputs),
             "nw10_build_inputs": nw10_inputs,
             "canonical_artifact": {
+                "artifact_key": manifest_record.get("artifact_identity"),
                 "executable_bytes": len(canonical_executable),
                 "executable_sha256": hashlib.sha256(canonical_executable).hexdigest(),
                 "package_bytes": len(package_bytes),
                 "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
                 "manifest_bytes": len(manifest_bytes),
                 "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            },
+            "templates": {
+                "canonical": (
+                    "contract_only_mock"
+                    if contracts_only
+                    else str(canonical_template)
+                ),
+                "compact": (
+                    "contract_only_mock" if contracts_only else str(template)
+                ),
+                "canonical_decoder_off": True,
+                "compact_decoder_on": True,
             },
             "compact_candidate": {
                 "executable_bytes": len(compact_executable),
@@ -379,6 +457,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "build" / "nw10-proof")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--player-template", type=Path)
+    parser.add_argument(
+        "--canonical-player-template",
+        type=Path,
+        help=(
+            "player template built with NW10_COMPACT_PACKAGE=OFF; used for the "
+            "canonical NW-07 proof baseline"
+        ),
+    )
     parser.add_argument("--dxc")
     parser.add_argument("--contracts-only", action="store_true")
     parser.add_argument("--reproducibility", action="store_true")
@@ -398,6 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         report = export_proof(
             args.output,
             player_template=args.player_template,
+            canonical_player_template=args.canonical_player_template,
             dxc_executable=args.dxc,
             report_path=args.report,
             contracts_only=args.contracts_only,

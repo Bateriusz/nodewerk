@@ -199,5 +199,10 @@ def test_intro_report_is_json_serializable(tmp_path: Path, monkeypatch: pytest.M
     )
     report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert report["format"] == "nw10-intro-report"
-    assert report["ledgers"]["compact"]["all_required_bytes_accounted"] is True
+    assert report["ledgers"]["compact"]["all_required_bytes_accounted"] is False
+    assert "decoder_code_bytes" in report["ledgers"]["compact"]["unaccounted_components"]
+    assert "cabinet.dll" in {
+        item["name"].lower()
+        for item in report["ledgers"]["compact"]["dependencies"]
+    }
     assert report["ledgers"]["compact"]["budget_tiers"]["compact_target_bytes"] == 65_536

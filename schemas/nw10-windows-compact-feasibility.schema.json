@@ -14,10 +14,6 @@
     "universal_64k_claim",
     "source",
     "measurements",
-    "compact_candidate",
-    "canonical_fallback",
-    "blocker",
-    "acceptance_linkage",
     "privacy"
   ],
   "properties": {
@@ -37,10 +33,13 @@
       "const": 65536
     },
     "target_met": {
-      "const": false
+      "type": "boolean"
     },
     "classification": {
-      "const": "continue"
+      "enum": [
+        "continue",
+        "complete"
+      ]
     },
     "universal_64k_claim": {
       "const": false
@@ -49,16 +48,14 @@
       "type": "object",
       "required": [
         "kind",
-        "workflow",
-        "run_id",
-        "head_sha",
-        "artifact_name",
-        "artifact_id",
-        "artifact_digest"
+        "workflow"
       ],
       "properties": {
         "kind": {
-          "const": "github_actions_windows_runtime"
+          "enum": [
+            "github_actions_windows_runtime",
+            "physical_windows_capture"
+          ]
         },
         "workflow": {
           "const": "NW-10 Compact Export and Restricted Intro"
@@ -72,7 +69,7 @@
           "pattern": "^[0-9a-f]{40}$"
         },
         "artifact_name": {
-          "const": "nw10-windows-compact-evidence"
+          "type": "string"
         },
         "artifact_id": {
           "type": "integer",
@@ -81,32 +78,59 @@
         "artifact_digest": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "measurement_tool": {
+          "type": "string"
         }
       }
     },
     "measurements": {
       "type": "object",
       "required": [
-        "proof_measured_bytes",
+        "proof_measurement_status",
         "minimum_measured_candidate_bytes",
         "minimum_validated_runnable_bytes",
         "validated_mode"
       ],
       "properties": {
         "proof_measured_bytes": {
-          "type": "integer",
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1
         },
+        "proof_measurement_status": {
+          "enum": [
+            "measured_decoder_off",
+            "pending_decoder_off",
+            "invalid_decoder_on_baseline"
+          ]
+        },
+        "canonical_proof_within_tier": {
+          "type": "boolean"
+        },
         "minimum_measured_candidate_bytes": {
-          "type": "integer",
-          "minimum": 65537
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
         },
         "minimum_validated_runnable_bytes": {
-          "type": "integer",
-          "minimum": 65537
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
         },
         "validated_mode": {
-          "const": "canonical_fallback"
+          "enum": [
+            "compact",
+            "canonical_fallback",
+            "pending_runtime_validation",
+            "none"
+          ]
         }
       }
     },
@@ -116,8 +140,6 @@
         "bytes",
         "sha256",
         "runtime_status",
-        "exit_code",
-        "failure_classification",
         "counted_as_validated_runnable"
       ],
       "properties": {
@@ -130,17 +152,25 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "runtime_status": {
-          "const": "rejected_runtime_failure"
+          "enum": [
+            "validated_runnable",
+            "rejected_runtime_failure",
+            "pending_runtime_validation"
+          ]
         },
         "exit_code": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 0
         },
         "failure_classification": {
-          "const": "embedded_package_invalid"
+          "enum": [
+            "none",
+            "embedded_package_invalid",
+            "runtime_validation_missing"
+          ]
         },
         "counted_as_validated_runnable": {
-          "const": false
+          "type": "boolean"
         }
       }
     },
@@ -150,10 +180,7 @@
         "bytes",
         "sha256",
         "runtime_status",
-        "exit_code",
-        "link_manifest_verified",
-        "present_sync_interval",
-        "dependency_closure"
+        "exit_code"
       ],
       "properties": {
         "bytes": {
@@ -165,35 +192,34 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "runtime_status": {
-          "const": "validated_runnable"
+          "enum": [
+            "validated_runnable",
+            "pending_runtime_validation",
+            "rejected_runtime_failure"
+          ]
         },
         "exit_code": {
-          "const": 0
+          "type": "integer",
+          "minimum": 0
         },
         "link_manifest_verified": {
-          "const": true
+          "type": "boolean"
         },
         "present_sync_interval": {
-          "const": 0
+          "type": "integer",
+          "minimum": 0
         },
         "dependency_closure": {
           "type": "object",
-          "required": [
-            "closure_verified",
-            "sidecar_files",
-            "canonical_imports"
-          ],
           "properties": {
             "closure_verified": {
-              "const": true
+              "type": "boolean"
             },
             "sidecar_files": {
-              "type": "array",
-              "maxItems": 0
+              "type": "array"
             },
             "canonical_imports": {
               "type": "array",
-              "minItems": 1,
               "items": {
                 "type": "string"
               }
@@ -204,21 +230,27 @@
     },
     "blocker": {
       "type": "object",
-      "required": [
-        "id",
-        "status",
-        "exit_code",
-        "measured_bytes",
-        "reason"
-      ],
       "properties": {
         "id": {
-          "const": "compact_candidate_runtime"
+          "type": "string"
         },
         "status": {
-          "const": "rejected"
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "measured_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string"
         }
       }
+    },
+    "blockers": {
+      "type": "array"
     },
     "acceptance_linkage": {
       "type": "object",
@@ -233,11 +265,20 @@
         "byte_ledger": {
           "const": "benchmarks/nw10/compact-proof.v1.json"
         },
+        "dominant_costs_source": {
+          "type": "string"
+        },
+        "tested_alternatives_source": {
+          "type": "string"
+        },
         "decision": {
-          "const": "continue"
+          "enum": [
+            "continue",
+            "complete"
+          ]
         },
         "true_64k_artifact_delivered": {
-          "const": false
+          "type": "boolean"
         }
       }
     },

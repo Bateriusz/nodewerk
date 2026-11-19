@@ -123,22 +123,35 @@ jobs:
           cmake --preset nw07-release
           -DNW10_COMPACT_PACKAGE=ON
           -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+      - name: Configure decoder-off canonical template
+        run: >-
+          cmake --preset nw07-release
+          -B "$PWD/build/nw07-release-decoder-off"
+          -DNW10_COMPACT_PACKAGE=OFF
+          -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
       - name: Build release player template and clean-system fixture
         run: |
           cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
           cmake --build --preset nw07-release --target nw_package_player_fixture --parallel 2
+          cmake --build "$PWD/build/nw07-release-decoder-off" --target nw_procedural_image_player --parallel 2
       - name: Export canonical NW-07 proof and compact candidate
         shell: pwsh
         run: |
           $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          $canonicalTemplate = Join-Path $PWD "build/nw07-release-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
           if (-not (Test-Path $template -PathType Leaf)) {
             Write-Error "Release player template was not built: $template"
+            exit 1
+          }
+          if (-not (Test-Path $canonicalTemplate -PathType Leaf)) {
+            Write-Error "Decoder-off canonical player template was not built: $canonicalTemplate"
             exit 1
           }
           $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
           python tools/nw10_proof.py `
             --output "$PWD/build/nw10-proof" `
             --report "$PWD/build/nw10-proof/report.json" `
+            --canonical-player-template $canonicalTemplate `
             --player-template $template `
             --dxc $dxc `
             --reproducibility
@@ -146,6 +159,7 @@ jobs:
           python tools/nw10_intro.py `
             --output "$PWD/build/nw10-intro" `
             --report "$PWD/build/nw10-intro/report.json" `
+            --canonical-player-template $canonicalTemplate `
             --player-template $template `
             --dxc $dxc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -157,10 +171,16 @@ jobs:
           $candidates = @()
           if ($proof.success -eq $true) {
             $proofBytes = [int64]$proof.compact_candidate.selected_executable_bytes
+            $canonicalProofBytes = [int64]$proof.canonical_artifact.executable_bytes
             $candidates += $proofBytes
             Write-Host ("NW-10 proof compact bytes: " + $proofBytes)
+            Write-Host ("NW-10 canonical decoder-off proof bytes: " + $canonicalProofBytes)
+            if ($canonicalProofBytes -gt 262144) {
+              throw "Canonical decoder-off NW-07 proof exceeds the 262,144-byte proof tier: $canonicalProofBytes"
+            }
           } else {
             $proofBytes = [int64]$proof.measured_distribution_bytes
+            $canonicalProofBytes = $null
             $candidates += $proofBytes
             Write-Host ("NW-10 proof measured blocker bytes: " + $proofBytes)
           }
@@ -175,7 +195,9 @@ jobs:
             minimum_measured_candidate_bytes = [int64]$minimum
             target_met = ([int64]$minimum -le 65536)
             classification = [string]$intro.decision.classification
-            proof_measured_bytes = $proofBytes
+            proof_measured_bytes = $canonicalProofBytes
+            proof_compact_candidate_bytes = $proofBytes
+            proof_canonical_decoder_off_bytes = $canonicalProofBytes
             intro_compact_candidate_bytes = $introBytes
             intro_canonical_bytes = $canonicalIntroBytes
             minimum_validated_runnable_bytes = $null
@@ -285,6 +307,24 @@ jobs:
 
           Write-Host "NW-10 Windows feasibility outcome:"
           Get-Content $outcomePath
+
+      - name: Publish schema-valid compact feasibility record
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/nw10_feasibility.py `
+            --outcome "$PWD/build/nw10-windows-size-outcome.json" `
+            --proof-report "$PWD/build/nw10-proof/report.json" `
+            --intro-report "$PWD/build/nw10-intro/report.json" `
+            --output "$PWD/build/nw10-windows-compact-feasibility.json" `
+            --run-id $env:GITHUB_RUN_ID `
+            --head-sha $env:GITHUB_SHA `
+            --artifact-name "nw10-windows-compact-evidence"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/schema_validator.py `
+            --document "$PWD/build/nw10-windows-compact-feasibility.json" `
+            --schema "$PWD/schemas/nw10-windows-compact-feasibility.schema.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Measure exact PE linker elimination and compact-decoder closure
         shell: pwsh
         run: |
@@ -304,6 +344,7 @@ jobs:
             python tools/nw10_intro.py `
               --output "$PWD/build/nw10-intro-link-control" `
               --report "$PWD/build/nw10-intro-link-control-report.json" `
+              --canonical-player-template $canonicalTemplate `
               --player-template $template `
               --dxc $dxc
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -326,7 +367,31 @@ jobs:
             --linker-baseline-manifest "$PWD/build/nw10-intro-link-control/$stem.manifest.json" `
             --output "$PWD/build/nw10-windows-pe-ledger.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/schema_validator.py `
+            --document "$PWD/build/nw10-windows-pe-ledger.json" `
+            --schema "$PWD/schemas/nw10-windows-pe-ledger.schema.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-Content "$PWD/build/nw10-windows-pe-ledger.json"
+
+      - name: Fuzz and parity-test the shipped compact decoder
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake --preset nw07-release -B "$PWD/build/nw10-decoder-tests" `
+            -DNW10_BUILD_DECODER_TESTS=ON `
+            -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build "$PWD/build/nw10-decoder-tests" --target nw10_compact_decoder_fuzz --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw10_decoder_fixture.py --output "$PWD/build/nw10-decoder-tests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $fuzz = Get-ChildItem "$PWD/build/nw10-decoder-tests" -Filter nw10_compact_decoder_fuzz.exe -Recurse | Select-Object -First 1
+          if ($null -eq $fuzz) { throw "Compact decoder fuzz harness was not produced" }
+          & $fuzz.FullName `
+            "$PWD/build/nw10-decoder-tests/canonical.bin" `
+            "$PWD/build/nw10-decoder-tests/stored.nwc" `
+            "$PWD/build/nw10-decoder-tests/mszip.nwc"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package clean-system transfer bundle
         shell: pwsh
@@ -453,6 +518,7 @@ jobs:
             build/nw10-proof/**
             build/nw10-intro/**
             build/nw10-windows-size-outcome.json
+            build/nw10-windows-compact-feasibility.json
             build/nw10-dependency-closure.json
             build/nw10-dependency-check/**
             build/nw10-runtime/**

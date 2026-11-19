@@ -37,6 +37,29 @@ def test_probe_rejects_missing_identity() -> None:
         correctness._parse_probe("NW05_ADAPTER=NVIDIA GeForce RTX 4060 Ti\n")
 
 
+def test_device_form_factor_is_measured_from_chassis_and_battery(monkeypatch) -> None:
+    monkeypatch.setattr(correctness.platform, "system", lambda: "Windows")
+
+    def run(command, **_kwargs):
+        return correctness.subprocess.CompletedProcess(
+            command, 0, '{"ChassisTypes":[3],"BatteryPresent":false}', ""
+        )
+
+    monkeypatch.setattr(correctness.subprocess, "run", run)
+    probe = correctness._windows_device_form_factor_probe()
+    assert probe["device_form_factor"] == "desktop"
+    assert probe["device_form_factor_source"] == "win32_system_enclosure_and_battery"
+
+    monkeypatch.setattr(
+        correctness.subprocess,
+        "run",
+        lambda command, **_kwargs: correctness.subprocess.CompletedProcess(
+            command, 0, '{"ChassisTypes":[10],"BatteryPresent":true}', ""
+        ),
+    )
+    assert correctness._windows_device_form_factor_probe()["device_form_factor"] == "laptop"
+
+
 def test_same_common_artifact_allows_diagnostic_manifest_and_executable_to_differ() -> None:
     expected = {
         "artifact_key": "a",
@@ -182,7 +205,16 @@ def test_compare_recomputes_loop_boundaries_from_raw_captures(
             "tier": tier,
             "status": status,
             "common_artifact": common,
-            "hardware": {},
+            "hardware": {
+                "adapter_description": (
+                    "NVIDIA GeForce RTX 4060 Ti"
+                    if tier == "ada"
+                    else "NVIDIA GeForce RTX 5070 Ti"
+                ),
+                "classified_tier": tier,
+                "device_form_factor": "desktop",
+                "device_form_factor_source": "win32_system_enclosure_and_battery",
+            },
             "captures": [
                 {
                     "tick": tick,
@@ -217,6 +249,7 @@ def test_compare_recomputes_loop_boundaries_from_raw_captures(
     assert result["status"] == "verified"
     assert result["ada"]["loop_boundary"]["status"] == "passed"
     assert result["blackwell"]["loop_boundary"]["status"] == "passed"
+    assert result["packed_unpacked_comparison"]["status"] == "pending_physical"
     assert (
         f"tick_{correctness.nw07_contract.LOOP_BOUNDARY_TICKS[1]}.rgba32f"
         in {name for pair in calls for name in pair}

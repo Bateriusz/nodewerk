@@ -89,11 +89,17 @@ def _windows_virtualization_probe() -> dict[str, Any]:
         "-Command",
         (
             "$c=Get-CimInstance Win32_ComputerSystem;"
+            "$p=$null;try{$p=Get-CimInstance Win32_ComputerSystemProduct -ErrorAction Stop}catch{};"
+            "$b=$null;try{$b=Get-CimInstance Win32_BIOS -ErrorAction Stop}catch{};"
+            "$m=$null;try{$m=Get-CimInstance Win32_BaseBoard -ErrorAction Stop}catch{};"
             "$vbs=$null;"
             "try{$d=Get-CimInstance -Namespace root\\Microsoft\\Windows\\DeviceGuard "
             "-ClassName Win32_DeviceGuard -ErrorAction Stop;"
             "$vbs=$d.VirtualizationBasedSecurityStatus}catch{};"
             "[pscustomobject]@{Manufacturer=$c.Manufacturer;Model=$c.Model;"
+            "ProductVendor=$p.Vendor;ProductName=$p.Name;"
+            "BiosManufacturer=$b.Manufacturer;BiosVersion=$b.SMBIOSBIOSVersion;"
+            "BaseBoardManufacturer=$m.Manufacturer;BaseBoardProduct=$m.Product;"
             "HypervisorPresent=$c.HypervisorPresent;"
             "VirtualizationBasedSecurityStatus=$vbs}|ConvertTo-Json -Compress"
         ),
@@ -140,6 +146,14 @@ def _windows_virtualization_probe() -> dict[str, Any]:
         "available": True,
         "manufacturer": str(value.get("Manufacturer", "")),
         "model": str(value.get("Model", "")),
+        "product_vendor": str(value.get("ProductVendor", "") or ""),
+        "product_name": str(value.get("ProductName", "") or ""),
+        "bios_manufacturer": str(value.get("BiosManufacturer", "") or ""),
+        "bios_version": str(value.get("BiosVersion", "") or ""),
+        "baseboard_manufacturer": str(
+            value.get("BaseBoardManufacturer", "") or ""
+        ),
+        "baseboard_product": str(value.get("BaseBoardProduct", "") or ""),
         "hypervisor_present": bool(value.get("HypervisorPresent", False)),
         "virtualization_based_security_status": vbs_status,
         "error": "",
@@ -172,11 +186,18 @@ def clean_host_provenance(
         tail = os_build.rsplit(".", 1)[-1]
         build_number = int(tail) if tail.isdigit() else 0
     virtualization = _windows_virtualization_probe()
+    identity_fields = (
+        "manufacturer",
+        "model",
+        "product_vendor",
+        "product_name",
+        "bios_manufacturer",
+        "bios_version",
+        "baseboard_manufacturer",
+        "baseboard_product",
+    )
     identity_text = " ".join(
-        (
-            str(virtualization.get("manufacturer", "")),
-            str(virtualization.get("model", "")),
-        )
+        str(virtualization.get(field, "")) for field in identity_fields
     ).lower()
     vm_markers = (
         "virtual machine",
@@ -188,6 +209,13 @@ def clean_host_provenance(
         "parallels",
         "bochs",
         "openstack",
+        "hyper-v",
+        "innotek",
+        "bhyve",
+        "cloud hypervisor",
+        "amazon ec2",
+        "google compute engine",
+        "digitalocean",
     )
     virtualization_indicators = sorted(
         marker for marker in vm_markers if marker in identity_text
@@ -195,13 +223,42 @@ def clean_host_provenance(
     kind_valid = execution_kind in {"physical", "documented_gpu_passthrough"}
     hypervisor_present = virtualization.get("hypervisor_present")
     vbs_status = virtualization.get("virtualization_based_security_status")
-    hypervisor_is_explained = hypervisor_present is False or (
-        hypervisor_present is True and vbs_status == 2
+    physical_identity_fields = (
+        virtualization.get("manufacturer"),
+        virtualization.get("model"),
+        virtualization.get("product_vendor"),
+        virtualization.get("product_name"),
+        virtualization.get("bios_manufacturer"),
+        virtualization.get("baseboard_manufacturer"),
     )
+    generic_product_markers = (
+        "to be filled by o.e.m.",
+        "system product name",
+        "default string",
+        "not specified",
+        "not available",
+        "oem",
+    )
+    product_text = " ".join(
+        str(virtualization.get(field, "") or "")
+        for field in ("product_name", "baseboard_product", "bios_version")
+    ).lower()
+    generic_identity = any(
+        marker == product_text.strip() or marker in product_text
+        for marker in generic_product_markers
+    )
+    hypervisor_explained_by_vbs = (
+        hypervisor_present is True
+        and vbs_status == 2
+        and not virtualization_indicators
+        and all(bool(str(value or "").strip()) for value in physical_identity_fields)
+        and not generic_identity
+    )
+    no_unexplained_hypervisor = hypervisor_present is False or hypervisor_explained_by_vbs
     physical_evidence = (
         execution_kind == "physical"
         and virtualization.get("available") is True
-        and hypervisor_is_explained
+        and no_unexplained_hypervisor
         and bool(virtualization.get("manufacturer"))
         and bool(virtualization.get("model"))
         and not virtualization_indicators
@@ -233,6 +290,8 @@ def clean_host_provenance(
         "environment_cache_variables": cache_variables,
         "virtualization_probe": virtualization,
         "virtualization_indicators": virtualization_indicators,
+        "vm_markers": virtualization_indicators,
+        "hypervisor_explained_by_vbs": hypervisor_explained_by_vbs,
         "physical_host_evidence": physical_evidence,
         "clean_environment": clean_environment,
         "application_pipeline_cache_present": bool(cache_variables),
@@ -646,15 +705,78 @@ def validate_report(
                 reasons.append("physical clean-system host manufacturer/model is missing")
             hypervisor = probe.get("hypervisor_present")
             vbs_status = probe.get("virtualization_based_security_status")
-            if hypervisor is True and vbs_status != 2:
+            probe_markers = probe.get("vm_markers")
+            if not isinstance(probe_markers, list):
+                probe_markers = indicators if isinstance(indicators, list) else []
+            independent_identity = " ".join(
+                str(probe.get(field, "") or "")
+                for field in (
+                    "manufacturer",
+                    "model",
+                    "product_vendor",
+                    "product_name",
+                    "bios_manufacturer",
+                    "bios_version",
+                    "baseboard_manufacturer",
+                    "baseboard_product",
+                )
+            ).lower()
+            independent_markers = [
+                marker
+                for marker in (
+                    "virtual machine",
+                    "vmware",
+                    "virtualbox",
+                    "kvm",
+                    "qemu",
+                    "xen",
+                    "parallels",
+                    "bochs",
+                    "openstack",
+                    "hyper-v",
+                    "innotek",
+                    "bhyve",
+                    "cloud hypervisor",
+                    "amazon ec2",
+                    "google compute engine",
+                    "digitalocean",
+                )
+                if marker in independent_identity
+            ]
+            identity_complete = all(
+                bool(str(probe.get(field, "") or "").strip())
+                for field in (
+                    "manufacturer",
+                    "model",
+                    "product_vendor",
+                    "product_name",
+                    "bios_manufacturer",
+                    "baseboard_manufacturer",
+                )
+            )
+            explained_vbs = (
+                hypervisor is True
+                and vbs_status == 2
+                and not independent_markers
+                and identity_complete
+                and probe.get("hypervisor_explained_by_vbs") is True
+            )
+            if hypervisor is True and not explained_vbs:
                 host_failed = True
                 reasons.append(
-                    "physical clean-system host reports an unexplained active hypervisor"
+                    "physical clean-system host reports an unexplained active "
+                    "hypervisor without independent VM-marker evidence"
                 )
             elif hypervisor not in {True, False}:
                 host_pending = True
                 reasons.append(
                     "physical clean-system host hypervisor status was not probed"
+                )
+            if independent_markers:
+                host_failed = True
+                reasons.append(
+                    "physical clean-system host identity exposes VM markers: "
+                    + ", ".join(sorted(set(independent_markers)))
                 )
             if not isinstance(indicators, list):
                 host_pending = True

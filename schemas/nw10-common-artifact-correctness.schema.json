@@ -13,52 +13,134 @@
     "ada",
     "blackwell",
     "comparison",
+    "packed_unpacked_comparison",
     "privacy",
     "source"
   ],
   "properties": {
-    "format": {"const": "nw10-common-artifact-correctness-summary"},
-    "version": {"const": 1},
-    "task": {"const": "NW-10"},
-    "status": {"const": "verified"},
-    "capture_protocol": {"const": "nw07-correctness-capture.v1"},
+    "format": {
+      "const": "nw10-common-artifact-correctness-summary"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "status": {
+      "enum": [
+        "verified",
+        "pending_unverified"
+      ]
+    },
+    "capture_protocol": {
+      "const": "nw07-correctness-capture.v1"
+    },
     "common_artifact": {
       "type": "object",
-      "required": ["package_sha256"],
+      "required": [
+        "package_sha256"
+      ],
       "properties": {
-        "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "package_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "ada": {
       "type": "object",
-      "required": ["status", "hardware"],
+      "required": [
+        "status",
+        "hardware"
+      ],
       "properties": {
-        "status": {"const": "verified"},
+        "status": {
+          "enum": [
+            "verified",
+            "pending_unverified"
+          ]
+        },
         "hardware": {
           "type": "object",
-          "required": ["adapter_description", "classified_tier", "device_form_factor"],
+          "required": [
+            "adapter_description",
+            "classified_tier",
+            "device_form_factor",
+            "device_form_factor_source"
+          ],
           "properties": {
-            "adapter_description": {"type": "string", "minLength": 1},
-            "classified_tier": {"const": "ada"},
-            "device_form_factor": {"const": "desktop"},
-            "driver_version": {"type": "string"}
+            "adapter_description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "classified_tier": {
+              "const": "ada"
+            },
+            "device_form_factor": {
+              "enum": [
+                "desktop",
+                "laptop",
+                "unknown"
+              ]
+            },
+            "device_form_factor_source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "driver_version": {
+              "type": "string"
+            }
           }
         }
       }
     },
     "blackwell": {
       "type": "object",
-      "required": ["status", "hardware"],
+      "required": [
+        "status",
+        "hardware"
+      ],
       "properties": {
-        "status": {"const": "verified"},
+        "status": {
+          "enum": [
+            "verified",
+            "pending_unverified"
+          ]
+        },
         "hardware": {
           "type": "object",
-          "required": ["adapter_description", "classified_tier", "device_form_factor"],
+          "required": [
+            "adapter_description",
+            "classified_tier",
+            "device_form_factor",
+            "device_form_factor_source"
+          ],
           "properties": {
-            "adapter_description": {"type": "string", "minLength": 1},
-            "classified_tier": {"const": "blackwell"},
-            "device_form_factor": {"const": "desktop"},
-            "driver_version": {"type": "string"}
+            "adapter_description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "classified_tier": {
+              "const": "blackwell"
+            },
+            "device_form_factor": {
+              "enum": [
+                "desktop",
+                "laptop",
+                "unknown"
+              ]
+            },
+            "device_form_factor_source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "driver_version": {
+              "type": "string"
+            }
           }
         }
       }
@@ -80,17 +162,136 @@
       "properties": {
         "fixed_ticks": {
           "type": "array",
-          "const": [0, 240000, 480000, 720000, 959999]
+          "const": [
+            0,
+            240000,
+            480000,
+            720000,
+            959999
+          ]
         },
-        "fixed_tick_status": {"const": "passed"},
-        "loop_boundary_ticks": {"type": "array", "const": [0, 960000]},
-        "ada_loop_boundary_status": {"const": "passed"},
-        "blackwell_loop_boundary_status": {"const": "passed"},
-        "worst_absolute_error": {"type": "number", "minimum": 0},
-        "worst_relative_error": {"type": "number", "minimum": 0},
-        "absolute_tolerance": {"type": "number", "minimum": 0},
-        "relative_tolerance": {"type": "number", "minimum": 0},
-        "absolute_required": {"const": true}
+        "fixed_tick_status": {
+          "enum": [
+            "passed",
+            "pending"
+          ]
+        },
+        "loop_boundary_ticks": {
+          "type": "array",
+          "const": [
+            0,
+            960000
+          ]
+        },
+        "ada_loop_boundary_status": {
+          "enum": [
+            "passed",
+            "pending"
+          ]
+        },
+        "blackwell_loop_boundary_status": {
+          "enum": [
+            "passed",
+            "pending"
+          ]
+        },
+        "worst_absolute_error": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "worst_relative_error": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "absolute_tolerance": {
+          "const": 0.0001
+        },
+        "relative_tolerance": {
+          "const": 0.0001
+        },
+        "absolute_required": {
+          "const": true
+        }
+      }
+    },
+    "packed_unpacked_comparison": {
+      "type": "object",
+      "required": [
+        "status",
+        "worst_absolute_error",
+        "runtime"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "pending_physical"
+          ]
+        },
+        "packed_package_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "unpacked_package_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "worst_absolute_error": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "runtime": {
+          "type": "object",
+          "required": [
+            "ada",
+            "blackwell"
+          ],
+          "properties": {
+            "ada": {
+              "type": "object",
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "passed",
+                    "pending_physical"
+                  ]
+                }
+              }
+            },
+            "blackwell": {
+              "type": "object",
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "passed",
+                    "pending_physical"
+                  ]
+                }
+              }
+            }
+          }
+        }
       }
     },
     "privacy": {
@@ -101,9 +302,15 @@
         "stdout_stderr_included"
       ],
       "properties": {
-        "raw_capture_bytes_embedded": {"const": false},
-        "local_paths_included": {"const": false},
-        "stdout_stderr_included": {"const": false}
+        "raw_capture_bytes_embedded": {
+          "const": false
+        },
+        "local_paths_included": {
+          "const": false
+        },
+        "stdout_stderr_included": {
+          "const": false
+        }
       }
     },
     "source": {
@@ -116,11 +323,28 @@
         "raw_capture_manifests_tracked"
       ],
       "properties": {
-        "mode": {"const": "compare"},
-        "execution_kind": {"const": "physical_cross_hardware"},
-        "tool": {"const": "tools/nw10/run-correctness-evidence.ps1"},
-        "implementation_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-        "raw_capture_manifests_tracked": {"const": false}
+        "mode": {
+          "enum": [
+            "compare",
+            "pending"
+          ]
+        },
+        "execution_kind": {
+          "enum": [
+            "physical_cross_hardware",
+            "none"
+          ]
+        },
+        "tool": {
+          "const": "tools/nw10/run-correctness-evidence.ps1"
+        },
+        "implementation_head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "raw_capture_manifests_tracked": {
+          "const": false
+        }
       }
     }
   }
