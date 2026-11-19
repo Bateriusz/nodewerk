@@ -11,7 +11,7 @@ param(
     [string]$TargetTier,
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
     [string]$ExpectedBranch = "agent/NW-10",
-    [string]$ReferenceEvidence = "build/nw10-intro/report.json",
+    [string]$ReferenceEvidence = "build/nw10-proof/report.json",
     [string]$WorkRoot = "build/nw10-correctness-scripted",
     [string[]]$ForbidToken = @(),
     [string]$AdaRecord = "",
@@ -284,7 +284,7 @@ try {
         Invoke-NwNative "cmake" @(
             "--preset", "nw07-release",
             "-B", $commonTemplate,
-            "-DNW10_COMPACT_PACKAGE=ON",
+            "-DNW10_COMPACT_PACKAGE=OFF",
             "-DNW_ENFORCE_PINNED_TOOLCHAIN=ON"
         ) "Common release template configure failed"
         Invoke-NwNative "cmake" @(
@@ -295,14 +295,23 @@ try {
         $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
         $commonTemplateExe = Join-Path $commonTemplate "staging/procedural_image_player/nw_procedural_image_player.exe"
         Invoke-NwNative $python @(
-            "tools/nw10_perf_candidate.py",
+            "tools/nw07_export.py",
             "--output", $commonArtifact,
             "--report", $commonReport,
             "--player-template", $commonTemplateExe,
             "--dxc", $dxc
-        ) "Common NW-10 artifact reproduction failed"
+        ) "Canonical NW-07 common-artifact reproduction failed"
 
-        $common = Get-Content -Raw $commonReport | ConvertFrom-Json
+        $commonReportRecord = Get-Content -Raw $commonReport | ConvertFrom-Json
+        $common = [pscustomobject]@{
+            artifact = [pscustomobject]@{
+                artifact_key = [string]$commonReportRecord.artifact.artifact_key
+                package_sha256 = [string]$commonReportRecord.artifact.package_sha256
+                manifest_sha256 = [string]$commonReportRecord.artifact.manifest_sha256
+                executable_sha256 = [string]$commonReportRecord.artifact.executable_sha256
+                complete_distribution_bytes = [int64]$commonReportRecord.distribution.complete_distribution_bytes
+            }
+        }
         Assert-NwSameValue "artifact_key" $expectedArtifact.artifact_key $common.artifact.artifact_key
         Assert-NwSameValue "package_sha256" $expectedArtifact.package_sha256 $common.artifact.package_sha256
         Assert-NwSameValue "manifest_sha256" $expectedArtifact.manifest_sha256 $common.artifact.manifest_sha256
