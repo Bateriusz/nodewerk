@@ -143,3 +143,18 @@ def test_transferred_capture_requires_no_build_toolchain() -> None:
     assert "utf8encoding($false)" in text
     assert "measure-object -property bytes" not in text
     assert '$rawbytes += [int64]$row["bytes"]' in text
+
+
+def test_correctness_transfer_accepts_release_intro_without_status_field() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
+    ).read_text(encoding="utf-8")
+    expected_block = text[
+        text.index("function Get-NwExpectedArtifact")
+        : text.index("function Get-NwJsonStrings")
+    ]
+
+    assert 'Get-NwOptionalProperty $Reference "status"' in expected_block
+    assert 'Get-NwOptionalProperty $Reference "canonical_artifact"' in expected_block
+    assert "$Reference.status" not in expected_block
+    assert "$Reference.canonical_artifact" not in expected_block
