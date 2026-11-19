@@ -204,6 +204,7 @@ jobs:
             validated_mode = "pending_runtime_validation"
             compact_candidate_runtime_status = "pending"
             compact_candidate_exit_code = $null
+            canonical_fallback_exit_code = $null
             blockers = @()
             universal_64k_claim = $false
           }
@@ -252,6 +253,7 @@ jobs:
           $hostedRuntimeValidated = $false
           if ($candidateProcess.ExitCode -eq 0) {
             $outcome.compact_candidate_runtime_status = "validated_runnable"
+            $outcome.compact_candidate_exit_code = 0
             $hostedRuntimeValidated = $true
             Write-Host ("NW-10 compact candidate runtime validation: PASS (" + $candidate.Length + " bytes)")
           } else {
@@ -271,10 +273,13 @@ jobs:
             $canonicalProcess = Start-Process -FilePath $canonical.FullName -ArgumentList "--frames","2" -RedirectStandardOutput $canonicalStdout -RedirectStandardError $canonicalStderr -PassThru -Wait
             $selected = $canonical
             if ($canonicalProcess.ExitCode -eq 0) {
+              $outcome.canonical_fallback_exit_code = 0
               $hostedRuntimeValidated = $true
               $validatedMode = "canonical_fallback"
               Write-Host ("NW-10 canonical fallback hosted runtime validation: PASS (" + $canonical.Length + " bytes)")
             } else {
+              $outcome.canonical_fallback_exit_code = [int]$canonicalProcess.ExitCode
+              $outcome.compact_candidate_runtime_status = "pending_runtime_validation"
               $validatedMode = "canonical_fallback_pending_physical"
               $blockers += [ordered]@{
                 id = "hosted_canonical_runtime"
@@ -318,7 +323,7 @@ jobs:
             --intro-report "$PWD/build/nw10-intro/report.json" `
             --output "$PWD/build/nw10-windows-compact-feasibility.json" `
             --run-id $env:GITHUB_RUN_ID `
-            --head-sha $env:GITHUB_SHA `
+            --head-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
             --artifact-name "nw10-windows-compact-evidence"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/schema_validator.py `
@@ -455,7 +460,7 @@ jobs:
             format = "nw10-clean-system-transfer"
             version = 1
             task = "NW-10"
-            source_commit = $env:GITHUB_SHA
+            source_commit = "${{ github.event.pull_request.head.sha || github.sha }}"
             final_executable_sha256 = $actualFinalSha
             final_executable_bytes = [int64](Get-Item $finalExe).Length
             package_sha256 = (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
