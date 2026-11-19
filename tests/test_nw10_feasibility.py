@@ -79,6 +79,18 @@ def test_feasibility_success_branch_is_schema_valid() -> None:
     assert record["acceptance_linkage"]["true_64k_artifact_delivered"] is True
 
 
+def test_feasibility_does_not_invent_unknown_artifact_identity() -> None:
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+    )
+    assert "artifact_id" not in record["source"]
+    assert "artifact_digest" not in record["source"]
+
+
 def test_feasibility_failure_branch_keeps_canonical_fallback_and_continue() -> None:
     record = feasibility.build_feasibility(
         outcome=_outcome(
