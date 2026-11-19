@@ -10,6 +10,7 @@ import nw10_feasibility as feasibility  # noqa: E402
 import nw10_contract as contract  # noqa: E402
 from schema_validator import validate_instance  # noqa: E402
 import json  # noqa: E402
+import pytest  # noqa: E402
 
 
 def _proof() -> dict:
