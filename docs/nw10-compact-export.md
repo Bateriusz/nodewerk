@@ -59,7 +59,7 @@ value is inferred for it.
 ### Hosted Windows feasibility result
 
 The hosted Windows x64 experiment is treated as a measured feasibility run,
-not as a hard 64 KiB gate. Current run `44535528801` measures the decoder-OFF
+not as a hard 64 KiB gate. Current run `44542203189` measures the decoder-OFF
 canonical NW-07 proof at **260,294 bytes**, inside the frozen 262,144-byte proof
 tier. The restricted-intro compact candidate measures **228,181 bytes** and the
 canonical fallback **237,118 bytes**. The hosted runner exits both GPU runtime
@@ -72,8 +72,8 @@ The same run publishes a current PE ledger for the 237,118-byte restricted
 intro. It measures a **4,096-byte** compact-decoder template cost (3,584 bytes
 in `.text`, 512 bytes in `.rdata`) and the only added runtime import is
 `cabinet.dll`. The current evidence artifact is retained as GitHub Actions
-artifact `14536032623` with digest
-`sha256:ac35ac00ebea17183787dad4ede0956b92f93a32bbbcaf2a33acf1e6b9b0c7a2`.
+artifact `14540370510` with digest
+`sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4`.
 
 Physical correctness and system measurements are represented separately from
 this hosted feasibility result. Their reuse and current-head transfer bindings
