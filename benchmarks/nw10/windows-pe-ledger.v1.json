@@ -8,12 +8,30 @@
       "cabinet.dll"
     ],
     "section_bytes_added": [
-      {"bytes_added": 0, "section": ".data"},
-      {"bytes_added": 0, "section": ".pdata"},
-      {"bytes_added": 512, "section": ".rdata"},
-      {"bytes_added": 0, "section": ".reloc"},
-      {"bytes_added": 0, "section": ".rsrc"},
-      {"bytes_added": 3584, "section": ".text"}
+      {
+        "bytes_added": 0,
+        "section": ".data"
+      },
+      {
+        "bytes_added": 0,
+        "section": ".pdata"
+      },
+      {
+        "bytes_added": 512,
+        "section": ".rdata"
+      },
+      {
+        "bytes_added": 0,
+        "section": ".reloc"
+      },
+      {
+        "bytes_added": 0,
+        "section": ".rsrc"
+      },
+      {
+        "bytes_added": 3584,
+        "section": ".text"
+      }
     ],
     "status": "verified",
     "template_bytes_added": 4096
@@ -26,18 +44,36 @@
   },
   "final_artifact": {
     "executable_bytes": 237118,
-    "executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
     "manifest_sha256": "802a629c542e08b6b03854647ef5d13f1965bcc1cc436093f22193162117f36e",
     "overlay_bytes": 31806,
     "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
     "pe_image_file_bytes": 205312,
     "sections": [
-      {"name": ".text", "raw_size_bytes": 167936},
-      {"name": ".rdata", "raw_size_bytes": 27648},
-      {"name": ".data", "raw_size_bytes": 1024},
-      {"name": ".pdata", "raw_size_bytes": 6144},
-      {"name": ".rsrc", "raw_size_bytes": 512},
-      {"name": ".reloc", "raw_size_bytes": 1024}
+      {
+        "name": ".text",
+        "raw_size_bytes": 167936
+      },
+      {
+        "name": ".rdata",
+        "raw_size_bytes": 27648
+      },
+      {
+        "name": ".data",
+        "raw_size_bytes": 1024
+      },
+      {
+        "name": ".pdata",
+        "raw_size_bytes": 6144
+      },
+      {
+        "name": ".rsrc",
+        "raw_size_bytes": 512
+      },
+      {
+        "name": ".reloc",
+        "raw_size_bytes": 1024
+      }
     ]
   },
   "format": "nw10-windows-pe-ledger",
@@ -46,18 +82,42 @@
     "compact_decoder_preserved": true,
     "complete_distribution_bytes_saved": 723456,
     "control_executable_bytes": 960574,
-    "control_options": ["/OPT:NOREF", "/OPT:NOICF"],
+    "control_options": [
+      "/OPT:NOREF",
+      "/OPT:NOICF"
+    ],
     "control_pe_image_file_bytes": 928768,
     "ltgc_preserved": true,
-    "optimized_options": ["/OPT:REF", "/OPT:ICF=4"],
+    "optimized_options": [
+      "/OPT:REF",
+      "/OPT:ICF=4"
+    ],
     "pe_image_bytes_saved": 723456,
     "section_bytes_saved": [
-      {"bytes_saved": 4096, "section": ".data"},
-      {"bytes_saved": 32256, "section": ".pdata"},
-      {"bytes_saved": 93696, "section": ".rdata"},
-      {"bytes_saved": 1024, "section": ".reloc"},
-      {"bytes_saved": 0, "section": ".rsrc"},
-      {"bytes_saved": 592384, "section": ".text"}
+      {
+        "bytes_saved": 4096,
+        "section": ".data"
+      },
+      {
+        "bytes_saved": 32256,
+        "section": ".pdata"
+      },
+      {
+        "bytes_saved": 93696,
+        "section": ".rdata"
+      },
+      {
+        "bytes_saved": 1024,
+        "section": ".reloc"
+      },
+      {
+        "bytes_saved": 0,
+        "section": ".rsrc"
+      },
+      {
+        "bytes_saved": 592384,
+        "section": ".text"
+      }
     ],
     "security_mitigations_preserved": true,
     "status": "verified"
@@ -68,15 +128,15 @@
     "raw_linker_map_included": false
   },
   "source": {
-    "artifact_digest": "sha256:ac35ac00ebea17183787dad4ede0956b92f93a32bbbcaf2a33acf1e6b9b0c7a2",
-    "artifact_id": 14536032623,
+    "artifact_digest": "sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4",
+    "artifact_id": 14540370510,
     "artifact_name": "nw10-windows-compact-evidence",
     "artifact_retained": true,
     "decoder_control_method": "otherwise identical release template with NW10_COMPACT_PACKAGE=OFF",
-    "head_sha": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
+    "head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
     "linker_control_method": "MSVC _LINK_ appended /OPT:NOREF /OPT:NOICF to the otherwise identical release link",
     "measurement_tool": "tools/nw10_pe_ledger.py",
-    "workflow_run_id": 44535528801
+    "workflow_run_id": 44542203189
   },
   "status": "verified",
   "task": "NW-10",
