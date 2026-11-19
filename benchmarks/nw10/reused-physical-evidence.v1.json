@@ -102,12 +102,12 @@
     }
   },
   "current_head_transfer": {
-    "source_head_sha": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
-    "workflow_run_id": 44535528801,
+    "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+    "workflow_run_id": 44542203189,
     "workflow_artifact": {
       "name": "nw10-windows-compact-evidence",
-      "artifact_id": 14536032623,
-      "digest": "sha256:ac35ac00ebea17183787dad4ede0956b92f93a32bbbcaf2a33acf1e6b9b0c7a2"
+      "artifact_id": 14540370510,
+      "digest": "sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4"
     },
     "packed_unpacked_correctness": {
       "status": "verified_compositional",
@@ -116,8 +116,8 @@
       "encoded_container_sha256": "3f2625ac9458c2630cefcd857af8ac92be48cc09f97420254113886f226eabee",
       "decoded_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
       "physical_runtime_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
-      "canonical_executable_sha256": "25aa72cb089ccbefac46cdd7aad2e26a12f98e174aed4db874f27ae1d9abe046",
-      "compact_executable_sha256": "e614a2f2b19e0b75280b813ff642da55368b4e4b86dfc8aeaec2153f9a2d8ae3",
+      "canonical_executable_sha256": "298c1868853e6d841e1c8da0e62c1cdef957cd72be391a1bc23fc6096156af86",
+      "compact_executable_sha256": "0416878c36b581f2f49ac7b991f55189f45d655b901c3b7c15908a3e4eb3f702",
       "decoder_parity_and_fuzz_status": "passed_in_windows_ci",
       "physical_runtime_status": {
         "ada": "passed",
@@ -129,7 +129,7 @@
       "status": "package_identity_exact_executable_rebuilt",
       "verification_model": "same_release_package_with_current_head_pe_and_dependency_validation",
       "measured_executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
-      "current_executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+      "current_executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
       "measured_package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
       "current_package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
       "current_manifest_sha256": "802a629c542e08b6b03854647ef5d13f1965bcc1cc436093f22193162117f36e",
