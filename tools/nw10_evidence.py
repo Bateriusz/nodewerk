@@ -368,9 +368,12 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
             except json.JSONDecodeError:
                 previous_status = {}
         head = _git_head()
+        preserve_physical = _physical_evidence_is_current(
+            previous_status, head, output
+        )
         if (
-            previous_status.get("ada_correctness") != "verified"
-            and _record_status(
+            not preserve_physical
+            or _record_status(
                 output / "common-artifact-correctness.v1.json"
             )
             != "verified"
@@ -380,8 +383,8 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                 publisher.build_pending_correctness(),
             )
         if (
-            previous_status.get("clean_system") != "verified"
-            and _record_status(output / "system-validation.v1.json")
+            not preserve_physical
+            or _record_status(output / "system-validation.v1.json")
             != "verified"
         ):
             publisher._write(
@@ -493,7 +496,9 @@ def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str
             status["superseded_physical_evidence"] = previous[
                 "superseded_physical_evidence"
             ]
-        if _physical_evidence_is_current(previous, current_head):
+        if _physical_evidence_is_current(
+            previous, current_head, status_path.parent
+        ):
             for field in _PHYSICAL_STATUS_FIELDS:
                 if field in previous:
                     status[field] = previous[field]
@@ -516,36 +521,94 @@ def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str
 
 
 def _physical_evidence_is_current(
-    previous: dict[str, Any], current_head: str
+    previous: dict[str, Any],
+    current_head: str,
+    evidence_root: Path | None = None,
 ) -> bool:
-    """Only preserve physical state that is bound and still materialised.
+    """Preserve verified physical state only with a complete hash-bound chain.
 
-    A source-head string by itself is not proof.  The record must also avoid
-    the withdrawn reuse bridge, and any referenced correctness/system summaries
-    must exist with the recorded canonical-text hash.  Otherwise regeneration
-    resets physical state to pending instead of laundering stale evidence.
+    A matching source-head string is necessary but never sufficient. Every
+    physical claim must have its corresponding published summary, that summary
+    must still exist with the recorded canonical-text hash, and the same hash
+    must also be present in status.files. This prevents a hand-edited status
+    JSON from laundering a verified state through contract regeneration.
     """
     if not current_head or previous.get("source_head_sha") != current_head:
         return False
     if previous.get("reused_physical_evidence"):
         return False
-    for field in ("correctness_evidence", "system_validation"):
+
+    required: set[str] = set()
+    if (
+        previous.get("ada_correctness") == "verified"
+        or previous.get("blackwell_correctness") == "verified"
+    ):
+        required.add("correctness_evidence")
+    if any(
+        previous.get(field) == "verified"
+        for field in ("clean_system", "startup", "memory")
+    ):
+        required.add("system_validation")
+    if (
+        previous.get("reference_capture") == "verified_reference_capture"
+        or previous.get("frame_time") == "verified_preserved"
+    ):
+        required.add("performance_preservation")
+    compact = previous.get("compact_feasibility")
+    if isinstance(compact, dict) and compact.get("status") == "verified_windows_runtime":
+        required.add("compact_feasibility")
+    pe = previous.get("pe_ledger")
+    if isinstance(pe, dict) and pe.get("status") == "verified":
+        required.add("pe_ledger")
+
+    claims_physical = previous.get("physical_evidence") not in (None, "pending")
+    claims_complete = previous.get("evidence_status") not in (
+        None,
+        "pending_physical_windows_capture",
+    )
+    if (claims_physical or claims_complete) and not required:
+        return False
+    if not required:
+        return False
+
+    file_hashes: dict[str, str] = {}
+    rows = previous.get("files")
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        relative = row.get("path")
+        digest = row.get("sha256")
+        if isinstance(relative, str) and isinstance(digest, str):
+            file_hashes[relative.replace("\\", "/")] = digest.lower()
+
+    root = evidence_root or (REPO_ROOT / "benchmarks" / "nw10")
+    for field in required:
         entry = previous.get(field)
-        if entry is None:
-            continue
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or entry.get("status") not in (
+            "verified",
+            "verified_preserved",
+            "verified_windows_runtime",
+        ):
             return False
         relative = entry.get("path")
         digest = entry.get("sha256")
         if not isinstance(relative, str) or not isinstance(digest, str):
             return False
-        candidate = REPO_ROOT / relative
+        relative = relative.replace("\\", "/")
+        if relative.startswith("benchmarks/nw10/"):
+            candidate = root / Path(relative).name
+        else:
+            candidate = REPO_ROOT / relative
         if not candidate.is_file():
             return False
-        if _sha256(candidate) != digest:
+        actual = _sha256(candidate)
+        if actual != digest.lower():
+            return False
+        if file_hashes.get(relative) != actual:
             return False
     return True
-
 
 def _record_status(path: Path) -> str:
     if not path.is_file():
