@@ -403,6 +403,9 @@ jobs:
             --linker-baseline-manifest "$PWD/build/nw10-intro-link-control/$stem.manifest.json" `
             --runtime-status $runtimeStatus `
             --runtime-exit-code $runtimeExitCode `
+            --prior-valid-ledger "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json" `
+            --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
+            --workflow-run-id $env:GITHUB_RUN_ID `
             --output "$PWD/build/nw10-windows-pe-ledger.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/schema_validator.py `
@@ -612,7 +615,8 @@ jobs:
             --head-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
             --artifact-name "nw10-windows-compact-evidence" `
             --artifact-id "${{ steps.nw10_evidence_upload.outputs.artifact-id }}" `
-            --artifact-digest "${{ steps.nw10_evidence_upload.outputs.artifact-digest }}"
+            --artifact-digest "${{ steps.nw10_evidence_upload.outputs.artifact-digest }}" `
+            --prior-valid-ledger "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/schema_validator.py `
             --document "$PWD/build/nw10-windows-compact-feasibility-bound.json" `
