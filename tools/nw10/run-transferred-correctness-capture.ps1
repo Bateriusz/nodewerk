@@ -165,6 +165,8 @@ $record = [ordered]@{
         packaging_mode = $packagingMode
         encoded_container_sha256 = $transfer.diagnostic_sibling.encoded_container_sha256
         encoded_container_bytes = $transfer.diagnostic_sibling.encoded_container_bytes
+        codec_id = $transfer.diagnostic_sibling.codec_id
+        layout_id = $transfer.diagnostic_sibling.layout_id
     }
     hardware = [ordered]@{
         adapter_description = $adapter
