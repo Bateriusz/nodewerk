@@ -612,7 +612,7 @@
           "adopted": false,
           "canonical_bytes": 595,
           "delta_bytes": 0,
-          "maximum_absolute_error": 0.0,
+          "maximum_absolute_error": 0,
           "packed_bytes": 595,
           "parameter_layout_id": "nwc.params.canonical.v1",
           "value_encoding": "canonical",
@@ -622,7 +622,7 @@
           "adopted": false,
           "canonical_bytes": 595,
           "delta_bytes": -310,
-          "maximum_absolute_error": 0.0,
+          "maximum_absolute_error": 0,
           "packed_bytes": 285,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -632,7 +632,7 @@
           "adopted": false,
           "canonical_bytes": 595,
           "delta_bytes": -324,
-          "maximum_absolute_error": 1296971168.0,
+          "maximum_absolute_error": 1296971168,
           "packed_bytes": 271,
           "parameter_layout_id": "nwc.params.float16.v1",
           "value_encoding": "f16",
@@ -650,7 +650,7 @@
         }
       ],
       "declared_tolerance": {
-        "absolute": 1e-05,
+        "absolute": 0.00001,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       },
@@ -659,7 +659,7 @@
           "adopted": false,
           "canonical_bytes": 595,
           "delta_bytes": -310,
-          "maximum_absolute_error": 0.0,
+          "maximum_absolute_error": 0,
           "packed_bytes": 285,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -814,13 +814,13 @@
     "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
     "tools/nw10_compact.py": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
-    "tools/nw10_evidence.py": "3406a751c16eb70cfe6f22e7039b4e2bbb3ece17954ee44c507e746c15550dfe",
+    "tools/nw10_evidence.py": "dd365da13c30839eeb0413b5be102b70c0ef4347b3af1fd03f6a69a6a92a6a50",
     "tools/nw10_intro.py": "b11505fa64b39e5fd37f6a3e98b4c34cf2ca020ea85c0d001795f663a4c0a6b8",
     "tools/nw10_proof.py": "6f071e4ae5e92c6d2202dd8937a39770b5c8792c8782aaf0af2378061f83f1d9",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:61d8d11b5d459094cbe3f820e98657345725c5be9ab676e6a4e3accb82c46ce2",
+  "nw10_build_inputs_digest": "sha256:v1:ae9ecd5f5ac56e5e7207b077b4201bdb6496b8210385adffa9a174edf2c6da3f",
   "performance_validation": {
     "contract_id": "nw07_perf_ref_v1",
     "protocol": "nw07-perf-run.v1",
@@ -868,7 +868,7 @@
         "relative": 0.0001
       },
       "numeric": {
-        "absolute": 1e-05,
+        "absolute": 0.00001,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       }
@@ -898,7 +898,7 @@
     "verified_in_package": true
   },
   "startup_validation": {
-    "ceiling_ms": 2000.0,
+    "ceiling_ms": 2000,
     "protocol": "nw07-startup.v1",
     "status": "pending_physical_windows_capture"
   },
@@ -923,7 +923,7 @@
         "relative": 0.0001
       },
       "numeric": {
-        "absolute": 1e-05,
+        "absolute": 0.00001,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       }
