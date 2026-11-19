@@ -58,6 +58,9 @@ def _capture_record(
             "layout_id": (
                 "nwc.layout.soa.v1" if packaging_mode == "packed" else None
             ),
+            "verification_file": (
+                "packed-diagnostic.exe" if packaging_mode == "packed" else None
+            ),
         },
         "hardware": {
             "adapter_description": adapter,
@@ -302,10 +305,55 @@ def test_compare_recomputes_loop_boundaries_from_raw_captures(
     )
 
 
+def test_packed_executable_verification_recomputes_container_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    decoded = b"canonical package bytes"
+    payload = b"compact container bytes"
+    executable_bytes = b"captured packed executable"
+    executable = tmp_path / "packed-diagnostic.exe"
+    executable.write_bytes(executable_bytes)
+    record_path = tmp_path / "capture.json"
+    record = _capture_record(
+        "ada",
+        "captured_reference",
+        package_sha256=correctness.hashlib.sha256(decoded).hexdigest(),
+        packaging_mode="packed",
+        diagnostic_sha256=correctness.hashlib.sha256(executable_bytes).hexdigest(),
+        encoded_container_sha256=correctness.hashlib.sha256(payload).hexdigest(),
+    )
+    record["diagnostic_sibling"]["encoded_container_bytes"] = len(payload)
+
+    monkeypatch.setattr(
+        correctness.nw05_export,
+        "extract_embedded_package",
+        lambda _data: (payload, b"manifest"),
+    )
+    monkeypatch.setattr(correctness.compact, "is_compact_container", lambda _data: True)
+    monkeypatch.setattr(
+        correctness.compact,
+        "parse_header",
+        lambda _data: {
+            "codec_id": "nwc.codec.mszip.v1",
+            "layout_id": "nwc.layout.soa.v1",
+        },
+    )
+    monkeypatch.setattr(correctness.compact, "decode_compact", lambda _data: decoded)
+
+    correctness._verify_packed_executable(record, record_path=record_path)
+
+    record["diagnostic_sibling"]["encoded_container_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="encoded-container SHA-256"):
+        correctness._verify_packed_executable(record, record_path=record_path)
+
+
 def test_packed_comparison_requires_manifests_and_packed_mode(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(correctness, "_verify_capture_manifest", lambda *_args: None)
+    monkeypatch.setattr(
+        correctness, "_verify_packed_executable", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         correctness,
         "_compare_rgba32f",
