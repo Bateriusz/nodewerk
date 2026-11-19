@@ -188,6 +188,19 @@ def build_feasibility(
         "counted_as_validated_runnable": runtime_status == "validated_runnable",
     }
 
+    source: dict[str, Any] = {
+        "kind": "github_actions_windows_runtime",
+        "workflow": "NW-10 Compact Export and Restricted Intro",
+        "run_id": run_id,
+        "head_sha": head_sha,
+        "artifact_name": artifact_name,
+        "measurement_tool": "tools/nw10_feasibility.py",
+    }
+    if artifact_id is not None:
+        source["artifact_id"] = int(artifact_id)
+    if artifact_digest:
+        source["artifact_digest"] = artifact_digest
+
     record: dict[str, Any] = {
         "format": FORMAT,
         "version": 1,
@@ -197,16 +210,7 @@ def build_feasibility(
         "target_met": target_met,
         "classification": "complete" if target_met else "continue",
         "universal_64k_claim": False,
-        "source": {
-            "kind": "github_actions_windows_runtime",
-            "workflow": "NW-10 Compact Export and Restricted Intro",
-            "run_id": run_id,
-            "head_sha": head_sha,
-            "artifact_name": artifact_name,
-            "artifact_id": artifact_id or 1,
-            "artifact_digest": artifact_digest or "sha256:" + "0" * 64,
-            "measurement_tool": "tools/nw10_feasibility.py",
-        },
+        "source": source,
         "measurements": {
             "proof_measured_bytes": proof_bytes,
             "proof_measurement_status": "measured_decoder_off",
