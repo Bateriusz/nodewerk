@@ -225,22 +225,84 @@ def test_windows_exit_code_rejects_values_outside_signed_32_bit() -> None:
             raise AssertionError("out-of-range Windows exit code was accepted")
 
 
-def test_feasibility_rejects_canonical_proof_above_the_frozen_tier() -> None:
+def test_feasibility_records_canonical_proof_above_the_frozen_tier() -> None:
     proof = _proof()
     proof["canonical_artifact"]["executable_bytes"] = 262_145
-    try:
-        feasibility.build_feasibility(
-            outcome=_outcome(),
-            proof=proof,
-            intro=_intro(),
-            run_id=1,
-            head_sha="1" * 40,
-        )
-    except ValueError as exc:
-        assert "262,144" in str(exc)
-    else:
-        raise AssertionError("canonical proof above the tier was accepted")
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=proof,
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+    )
+    validate_instance(record, _schema(), _schema())
+    assert record["target_met"] is False
+    assert record["classification"] == "continue"
+    assert record["measurements"]["canonical_proof_within_tier"] is False
+    assert record["blocker"]["id"] == "canonical_proof_tier"
+    assert record["blocker"]["measured_bytes"] == 262_145
 
+
+def test_feasibility_accepts_decoder_off_size_blocked_report_without_artifact() -> None:
+    proof = _proof()
+    proof.pop("canonical_artifact")
+    proof.update(
+        {
+            "measurement_kind": "release_decoder_off_size_blocked",
+            "success": False,
+            "measurement_outcome": "size_target_not_met",
+            "measured_distribution_bytes": 270_000,
+        }
+    )
+    record = feasibility.build_feasibility(
+        outcome=_outcome(
+            minimum_validated_runnable_bytes=None,
+            validated_mode="none",
+            compact_candidate_runtime_status="pending_runtime_validation",
+        ),
+        proof=proof,
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+    )
+    validate_instance(record, _schema(), _schema())
+    assert record["classification"] == "continue"
+    assert record["measurements"]["proof_measured_bytes"] == 270_000
+    assert record["measurements"]["proof_measurement_status"] == (
+        "measured_decoder_off_size_blocked"
+    )
+    assert record["blockers"][0]["id"] == "canonical_proof_tier"
+
+
+def test_feasibility_reproducibly_selects_prior_valid_ledger_when_current_is_pending() -> None:
+    prior = {
+        "format": "nw10-windows-pe-ledger",
+        "final_artifact": {
+            "executable_sha256": "9" * 64,
+            "executable_bytes": 240_702,
+            "runtime_status": "validated_runnable",
+        },
+        "conclusion": {"byte_ledger_complete": True},
+        "source": {"head_sha": "8" * 40},
+    }
+    record = feasibility.build_feasibility(
+        outcome=_outcome(
+            minimum_validated_runnable_bytes=None,
+            validated_mode="canonical_fallback_pending_physical",
+            compact_candidate_runtime_status="pending_runtime_validation",
+            compact_candidate_exit_code=-1073741819,
+            canonical_fallback_exit_code=-1073741819,
+        ),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        prior_valid_ledger=prior,
+    )
+    validate_instance(record, _schema(), _schema())
+    assert record["prior_valid_artifact"]["executable_sha256"] == "9" * 64
+    assert record["selected_artifact"]["sha256"] == "9" * 64
+    assert record["selected_artifact"]["source"] == "prior_valid_artifact"
 
 def test_feasibility_requires_measured_release_decoder_off_proof() -> None:
     proof = _proof()
@@ -284,3 +346,4 @@ def test_workflow_binds_feasibility_to_the_uploaded_artifact_identity() -> None:
     assert "steps.nw10_evidence_upload.outputs.artifact-digest" in workflow
     assert "--runtime-status $runtimeStatus" in workflow
     assert "--runtime-exit-code $runtimeExitCode" in workflow
+    assert "--prior-valid-ledger" in workflow
