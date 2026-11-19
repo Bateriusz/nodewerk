@@ -7,23 +7,23 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "50d0cc2fb2d2af0e292f1441606b4191363fba8cdd06a403fe5b29f38ce6957b"
+      "sha256": "12f86876d441822fca382d31b1890e0cbf20adf6c32a39312708c1ff0a42fae1"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "429c93aa9e41c331b1ed6fa53c0f4b74f01fa1ec7990f7ab78f2ece911b5f952"
+      "sha256": "8d9f710e5cd3a50247b32c82aba701e8d2efef494c7f1629a8a9ffa9ced95f3e"
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
-      "sha256": "d11ebc1185c2c976123f4337395da70ff1aee33501d9126d8aeaf1664bb7cec7"
+      "sha256": "a6617392de47895d2002c443556c2ad7b5107758f6fa7a9248a22b26be1e2cbf"
     },
     {
       "path": "benchmarks/nw10/intro-export-report.v1.json",
-      "sha256": "7d0bab50aeb8372c0a808203bd45378ca5876ed66a2d131030d22750c630e36d"
+      "sha256": "524e13abde14c48125f3ef9d364d5d4f86d0d3980909f8e769495800f511e5ee"
     },
     {
       "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
-      "sha256": "7b042e5cff9d7435c7848d1c72dd1d70444d2f151ce3474990536160ecbefc2b"
+      "sha256": "458dd57b28960f5b7597d27784b49b1ef21351dba91144228e3cbb7e64905efb"
     },
     {
       "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
@@ -31,7 +31,7 @@
     },
     {
       "path": "benchmarks/nw10/system-validation.v1.json",
-      "sha256": "eda2e4fe0be640816b638867b22bd83303dc2f1afc68f2bf3fa6cce057478776"
+      "sha256": "6b136a30403f62db2e161ef7a9873128dd28550c28d6e8eb2e4d86323b6e3728"
     },
     {
       "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
@@ -48,7 +48,7 @@
   "memory": "pending_unverified",
   "physical_evidence": "pending",
   "reference_capture": "pending_reference_capture",
-  "source_head_sha": "2f1a0103f84765b04cf17a2e0605f550dc7d18ff",
+  "source_head_sha": null,
   "startup": "pending_unverified",
   "superseded_physical_evidence": {
     "previous_source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",

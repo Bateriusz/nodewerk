@@ -73,11 +73,12 @@
   },
   "source": {
     "execution_kind": "none",
-    "implementation_head": "2f1a0103f84765b04cf17a2e0605f550dc7d18ff",
+    "implementation_head": null,
     "mode": "pending",
     "raw_capture_manifests_tracked": false,
     "tool": "tools/nw10/run-correctness-evidence.ps1"
   },
+  "source_head_sha": null,
   "status": "pending_unverified",
   "task": "NW-10",
   "version": 1

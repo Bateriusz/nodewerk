@@ -122,7 +122,7 @@
     "layout_id": "nwc.layout.soa.v1",
     "packaging_tool": {
       "identity": "tools/nw10_compact.py",
-      "version": "f6d18500a5b15239c8fb8c49fa71e13ceff654cf583dff94f726c876e0ea525e"
+      "version": "12903559ce0241846c38f73e76bcd8ddd6eaa1a05c86e91594707b469068ce42"
     },
     "selected_executable_bytes": 2090,
     "task": "NW-10",
@@ -145,7 +145,7 @@
       "relative": 0.0001
     },
     "numeric": {
-      "absolute": 1e-05,
+      "absolute": 0.00001,
       "mode": "absolute_or_relative",
       "relative": 0.0001
     }

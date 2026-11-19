@@ -18,7 +18,7 @@
     "user_profile_paths_included": false
   },
   "reason": "No single physical environment captured the exact current-head final artifact with clean-system startup and engine-committed memory. The previous record mixed clean-system and metric hosts, omitted the Windows build, and referenced a non-runnable 0xC0000005 artifact; those claims were withdrawn.",
-  "source_head_sha": "2f1a0103f84765b04cf17a2e0605f550dc7d18ff",
+  "source_head_sha": null,
   "startup": null,
   "status": "pending_unverified",
   "task": "NW-10",
