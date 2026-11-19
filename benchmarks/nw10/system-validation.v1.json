@@ -2,12 +2,12 @@
   "artifact_transfer": {
     "executable_identity_exact": false,
     "package_identity_exact": true,
-    "source_head_sha": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
+    "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
     "status": "verified_package_identity_executable_rebuilt",
     "verification_model": "same_release_package_with_current_head_pe_and_dependency_validation",
-    "workflow_artifact_digest": "sha256:ac35ac00ebea17183787dad4ede0956b92f93a32bbbcaf2a33acf1e6b9b0c7a2",
-    "workflow_artifact_id": 14536032623,
-    "workflow_run_id": 44535528801
+    "workflow_artifact_digest": "sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4",
+    "workflow_artifact_id": 14540370510,
+    "workflow_run_id": 44542203189
   },
   "clean_system": {
     "captured_at_utc": "2026-11-19T06:30:45.682639+00:00",
@@ -40,19 +40,55 @@
       "windows_build_status": "not_recorded_by_legacy_capture_tool"
     },
     "scenarios": [
-      {"expected_exit_code": 70, "observed_exit_code": 70, "scenario": "corrupt_payload", "status": "passed", "timed_out": false},
-      {"expected_exit_code": 0, "observed_exit_code": 0, "scenario": "deployed_startup", "status": "passed", "timed_out": false},
-      {"expected_exit_code": 23, "observed_exit_code": 23, "scenario": "missing_required_feature", "status": "passed", "timed_out": false},
-      {"expected_exit_code": 42, "observed_exit_code": 42, "scenario": "initialization_failure", "status": "passed", "timed_out": false},
-      {"expected_exit_code": 0, "observed_exit_code": 0, "scenario": "resize", "status": "passed", "timed_out": false},
-      {"expected_exit_code": 51, "observed_exit_code": 51, "scenario": "device_removal", "status": "passed", "timed_out": false}
+      {
+        "expected_exit_code": 70,
+        "observed_exit_code": 70,
+        "scenario": "corrupt_payload",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "scenario": "deployed_startup",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 23,
+        "observed_exit_code": 23,
+        "scenario": "missing_required_feature",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 42,
+        "observed_exit_code": 42,
+        "scenario": "initialization_failure",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "scenario": "resize",
+        "status": "passed",
+        "timed_out": false
+      },
+      {
+        "expected_exit_code": 51,
+        "observed_exit_code": 51,
+        "scenario": "device_removal",
+        "status": "passed",
+        "timed_out": false
+      }
     ],
     "source_result_bundle_sha256": "d7dabd5a093271fbdb6a213e58a379b9ca03b7206d19e38f1846762a7b64bc04",
     "status": "verified"
   },
   "current_artifact": {
     "executable_bytes": 237118,
-    "executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
     "manifest_sha256": "802a629c542e08b6b03854647ef5d13f1965bcc1cc436093f22193162117f36e",
     "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
   },
@@ -65,7 +101,7 @@
   },
   "final_artifact": {
     "executable_bytes": 237118,
-    "executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
     "manifest_sha256": "802a629c542e08b6b03854647ef5d13f1965bcc1cc436093f22193162117f36e",
     "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
   },
@@ -94,7 +130,10 @@
     "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
     "peak_engine_committed_gpu_bytes": 42926080,
     "post_initialization_allocation_violation": 0,
-    "resolution": {"height": 1080, "width": 1920},
+    "resolution": {
+      "height": 1080,
+      "width": 1920
+    },
     "status": "verified"
   },
   "privacy": {
@@ -105,8 +144,11 @@
   },
   "reuse_provenance": "benchmarks/nw10/reused-physical-evidence.v1.json",
   "startup": {
-    "cache_state": {"application_pipeline_cache_used": false, "kind": "warm"},
-    "ceiling_ms": 2000.0,
+    "cache_state": {
+      "application_pipeline_cache_used": false,
+      "kind": "warm"
+    },
+    "ceiling_ms": 2000,
     "cold_driver_cache_preparation": "A reboot or equivalent driver-cache reset is required for a cold run; this recorded measurement is the contract-permitted warm run.",
     "execution_kind": "physical",
     "hardware": {
