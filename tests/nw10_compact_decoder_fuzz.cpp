@@ -32,9 +32,17 @@ struct Failures {
 bool ReadFile(const char* path, Bytes* output) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) return false;
-    output->assign(std::istreambuf_iterator<char>(stream),
-                   std::istreambuf_iterator<char>());
-    return stream.good() || stream.eof();
+    output->clear();
+    char buffer[4096];
+    while (stream) {
+        stream.read(buffer, static_cast<std::streamsize>(sizeof(buffer)));
+        const std::streamsize count = stream.gcount();
+        for (std::streamsize index = 0; index < count; ++index) {
+            output->push_back(
+                static_cast<std::uint8_t>(buffer[index]));
+        }
+    }
+    return stream.eof();
 }
 
 void WriteU16(Bytes* out, std::uint16_t value) {
@@ -81,10 +89,10 @@ void AppendAosRecord(Bytes* table, std::uint8_t kind, std::uint32_t reference,
 
 Bytes StoredContainer(const Bytes& canonical, std::uint16_t layout,
                       bool forward_reference, bool short_reference,
-                      bool oversized_count) {
+                      bool use_reference) {
     Bytes table;
     Bytes raw;
-    const std::uint32_t count = oversized_count ? 2u : 3u;
+    const std::uint32_t count = 3u;
     if (layout == nw::package::kCompactLayoutSoa) {
         Bytes kinds(count, 0u);
         Bytes refs;
@@ -95,7 +103,7 @@ Bytes StoredContainer(const Bytes& canonical, std::uint16_t layout,
                 static_cast<std::size_t>(index) * canonical.size() / count;
             const std::size_t end =
                 static_cast<std::size_t>(index + 1u) * canonical.size() / count;
-            if (index == 1u) {
+            if (use_reference && index == 1u) {
                 kinds[index] = 1u;
                 WriteU32(&refs, forward_reference ? 2u : 0u);
                 WriteU32(&lengths, short_reference
@@ -121,7 +129,7 @@ Bytes StoredContainer(const Bytes& canonical, std::uint16_t layout,
                 static_cast<std::size_t>(index) * canonical.size() / count;
             const std::size_t end =
                 static_cast<std::size_t>(index + 1u) * canonical.size() / count;
-            if (index == 1u) {
+            if (use_reference && index == 1u) {
                 AppendAosRecord(&table, 1u, forward_reference ? 2u : 0u,
                                 short_reference
                                     ? static_cast<std::uint32_t>(end - start) - 1u
@@ -179,6 +187,15 @@ void ExpectFailure(Failures* failures, const Bytes& data, const char* label) {
 
 void RunMalformedSuite(Failures* failures, const Bytes& canonical) {
     const std::uint32_t flags = 1u | 2u;
+    const std::size_t chunk = canonical.size() / 3u;
+    Bytes chunk_a(canonical.begin(),
+                  canonical.begin() + static_cast<std::ptrdiff_t>(chunk));
+    Bytes chunk_b(canonical.end() - static_cast<std::ptrdiff_t>(chunk),
+                  canonical.end());
+    Bytes delta;
+    delta.insert(delta.end(), chunk_a.begin(), chunk_a.end());
+    delta.insert(delta.end(), chunk_a.begin(), chunk_a.end());
+    delta.insert(delta.end(), chunk_b.begin(), chunk_b.end());
     for (std::uint16_t layout :
          {nw::package::kCompactLayoutAos, nw::package::kCompactLayoutSoa}) {
         Bytes container = StoredContainer(canonical, layout, false, false, false);
@@ -194,6 +211,21 @@ void RunMalformedSuite(Failures* failures, const Bytes& canonical) {
             failures->Fail("valid stored container did not round-trip");
         }
 
+        Bytes delta_container =
+            StoredContainer(delta, layout, false, false, true);
+        Bytes delta_sha = Sha(delta);
+        Bytes delta_data = Header(
+            nw::package::kCompactCodecStored, layout, flags,
+            static_cast<std::uint32_t>(delta.size()),
+            static_cast<std::uint32_t>(delta_container.size()),
+            static_cast<std::uint32_t>(delta_container.size()), delta_sha);
+        Append(&delta_data, delta_container);
+        decoded.clear();
+        error.clear();
+        if (!Decode(delta_data, &decoded, &error) || !Same(decoded, delta)) {
+            failures->Fail("valid delta container did not round-trip");
+        }
+
         for (std::size_t offset = 0u; offset < valid.size(); offset += 7u) {
             Bytes truncated(valid.begin(),
                             valid.begin() + static_cast<std::ptrdiff_t>(offset));
@@ -207,44 +239,42 @@ void RunMalformedSuite(Failures* failures, const Bytes& canonical) {
         }
 
         Bytes bad = valid;
-        bad[0] = 'X';
+        bad[0] = static_cast<std::uint8_t>('X');
         ExpectFailure(failures, bad, "bad magic accepted");
         bad = valid;
-        bad[8] = 2u;
+        bad[8] = static_cast<std::uint8_t>(2u);
         ExpectFailure(failures, bad, "unsupported version accepted");
         bad = valid;
-        bad[10] = 63u;
+        bad[10] = static_cast<std::uint8_t>(63u);
         ExpectFailure(failures, bad, "unsupported header size accepted");
         bad = valid;
-        bad[12] = 99u;
+        bad[12] = static_cast<std::uint8_t>(99u);
         ExpectFailure(failures, bad, "unsupported codec accepted");
         bad = valid;
-        bad[14] = 99u;
+        bad[14] = static_cast<std::uint8_t>(99u);
         ExpectFailure(failures, bad, "unsupported layout accepted");
         bad = valid;
-        bad[16] = 0x80u;
+        bad[16] = static_cast<std::uint8_t>(0x80u);
         ExpectFailure(failures, bad, "unsupported flags accepted");
         bad = valid;
         bad[24] = static_cast<std::uint8_t>(bad[24] + 1u);
         ExpectFailure(failures, bad, "payload size mismatch accepted");
 
-        Bytes forward =
-            StoredContainer(canonical, layout, true, false, false);
+        Bytes forward = StoredContainer(delta, layout, true, false, true);
         Bytes forward_data = Header(
             nw::package::kCompactCodecStored, layout, flags,
-            static_cast<std::uint32_t>(canonical.size()),
+            static_cast<std::uint32_t>(delta.size()),
             static_cast<std::uint32_t>(forward.size()),
-            static_cast<std::uint32_t>(forward.size()), sha);
+            static_cast<std::uint32_t>(forward.size()), delta_sha);
         Append(&forward_data, forward);
         ExpectFailure(failures, forward_data, "forward reference accepted");
 
-        Bytes short_ref =
-            StoredContainer(canonical, layout, false, true, false);
+        Bytes short_ref = StoredContainer(delta, layout, false, true, true);
         Bytes short_data = Header(
             nw::package::kCompactCodecStored, layout, flags,
-            static_cast<std::uint32_t>(canonical.size()),
+            static_cast<std::uint32_t>(delta.size()),
             static_cast<std::uint32_t>(short_ref.size()),
-            static_cast<std::uint32_t>(short_ref.size()), sha);
+            static_cast<std::uint32_t>(short_ref.size()), delta_sha);
         Append(&short_data, short_ref);
         ExpectFailure(failures, short_data, "mismatched reference length accepted");
     }
@@ -254,7 +284,7 @@ void RunMalformedSuite(Failures* failures, const Bytes& canonical) {
     Bytes sha = Sha(canonical);
     Bytes data = Header(nw::package::kCompactCodecStored,
                         nw::package::kCompactLayoutAos, flags,
-                        static_cast<std::uint32_t>(canonical.size()),
+                        1024u,
                         static_cast<std::uint32_t>(oversized.size()),
                         static_cast<std::uint32_t>(oversized.size()), sha);
     Append(&data, oversized);
@@ -279,6 +309,8 @@ void RunMalformedSuite(Failures* failures, const Bytes& canonical) {
                              nw::package::kCompactLayoutAos, flags,
                              nw::package::kCompactMaxDecodedBytes,
                              8u, 8u, sha);
+    Bytes expansion_payload(8u, 0u);
+    Append(&expansion, expansion_payload);
     ExpectFailure(failures, expansion, "expansion limit accepted");
 }
 

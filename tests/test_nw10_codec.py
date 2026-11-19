@@ -302,3 +302,97 @@ def test_byte_ledger_is_complete_only_with_a_measured_decoder_cost() -> None:
     assert ledger["components"]["decoder_code_bytes"] == decoder
     assert ledger["components"]["compact_player_image_bytes"] == canonical_player + decoder
     assert "cabinet.dll" in {row["name"].lower() for row in ledger["dependencies"]}
+
+
+def _harness_container(
+    source: bytes,
+    layout: int,
+    *,
+    use_reference: bool = False,
+    forward: bool = False,
+    short: bool = False,
+) -> bytes:
+    """Mirror tests/nw10_compact_decoder_fuzz.cpp container construction."""
+    count = 3
+    table = bytearray()
+    raw = bytearray()
+    if layout == compact.LAYOUT_SOA:
+        kinds = bytearray(count)
+        refs: list[int] = []
+        lengths: list[int] = []
+        offsets: list[int] = []
+        for index in range(count):
+            start = index * len(source) // count
+            end = (index + 1) * len(source) // count
+            if use_reference and index == 1:
+                kinds[index] = compact.RECORD_REFERENCE
+                refs.append(2 if forward else 0)
+                lengths.append((end - start) - (1 if short else 0))
+                offsets.append(0)
+            else:
+                kinds[index] = compact.RECORD_RAW
+                refs.append(0)
+                lengths.append(end - start)
+                offsets.append(len(raw))
+                raw += source[start:end]
+        table += kinds
+        for values in (refs, lengths, offsets):
+            for value in values:
+                table += struct.pack("<I", value)
+    else:
+        for index in range(count):
+            start = index * len(source) // count
+            end = (index + 1) * len(source) // count
+            if use_reference and index == 1:
+                table += struct.pack(
+                    "<BBIII",
+                    compact.RECORD_REFERENCE,
+                    0,
+                    2 if forward else 0,
+                    (end - start) - (1 if short else 0),
+                    0,
+                )
+            else:
+                table += struct.pack(
+                    "<BBIII", compact.RECORD_RAW, 0, 0, end - start, len(raw)
+                )
+                raw += source[start:end]
+    return struct.pack("<I", count) + bytes(table) + bytes(raw)
+
+
+def test_cpp_fuzz_harness_container_construction_round_trips() -> None:
+    canonical = _package_bytes()
+    chunk = len(canonical) // 3
+    delta = canonical[:chunk] + canonical[:chunk] + canonical[-chunk:]
+    for layout in (compact.LAYOUT_AOS, compact.LAYOUT_SOA):
+        raw = _harness_container(canonical, layout)
+        assert compact.decode_compact(
+            _wrap_container(
+                raw,
+                decoded_size=len(canonical),
+                sha=hashlib.sha256(canonical).digest(),
+                layout=layout,
+            )
+        ) == canonical
+        delta_container = _harness_container(delta, layout, use_reference=True)
+        assert compact.decode_compact(
+            _wrap_container(
+                delta_container,
+                decoded_size=len(delta),
+                sha=hashlib.sha256(delta).digest(),
+                layout=layout,
+            )
+        ) == delta
+        for forward, short in ((True, False), (False, True)):
+            bad = _harness_container(
+                delta, layout, use_reference=True, forward=forward, short=short
+            )
+            with pytest.raises(compact.CompactCodecError):
+                compact.decode_compact(
+                    _wrap_container(
+                        bad,
+                        decoded_size=len(delta),
+                        sha=hashlib.sha256(delta).digest(),
+                        layout=layout,
+                    )
+                )
