@@ -342,6 +342,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build "$PWD/build/nw10-decoder-off" --target nw_procedural_image_player --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $canonicalTemplate = Join-Path $PWD "build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $canonicalTemplate -PathType Leaf)) {
+            throw "Decoder-off PE-ledger control template was not built: $canonicalTemplate"
+          }
 
           $oldLink = $env:_LINK_
           try {
