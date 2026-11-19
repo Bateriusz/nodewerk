@@ -51,6 +51,13 @@ def _capture_record(
             "release_manifest_reused": False,
             "packaging_mode": packaging_mode,
             "encoded_container_sha256": encoded_container_sha256,
+            "encoded_container_bytes": 512 if packaging_mode == "packed" else None,
+            "codec_id": (
+                "nwc.codec.mszip.v1" if packaging_mode == "packed" else None
+            ),
+            "layout_id": (
+                "nwc.layout.soa.v1" if packaging_mode == "packed" else None
+            ),
         },
         "hardware": {
             "adapter_description": adapter,
