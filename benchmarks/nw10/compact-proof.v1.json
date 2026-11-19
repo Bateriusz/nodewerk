@@ -1055,7 +1055,7 @@
       "width": 1920
     },
     "report_path": "benchmarks/nw10/intro-export-report.v1.json",
-    "report_sha256": "2b2c1163b4e78c48752082e011966228f1315ff6f97c3b42d040f5b917e2a308"
+    "report_sha256": "d997e9d55e76d44d78731d070216029b458c59baa8b6114779db6c87bdcb7ba4"
   },
   "minimum_measured_artifact": {
     "bytes": 2090,
@@ -1135,13 +1135,13 @@
     "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
     "tools/nw10_compact.py": "12903559ce0241846c38f73e76bcd8ddd6eaa1a05c86e91594707b469068ce42",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
-    "tools/nw10_evidence.py": "a5366fe90b6c7a1dc55e1e7a8eecd2c504920f5ea14030b4b04eb3ae8b2ca44a",
+    "tools/nw10_evidence.py": "42316e480eb60ded504b092c4e731937015e3c855bad938e897b7ace28a77135",
     "tools/nw10_intro.py": "fad0131cfc2729cdf4401455d9d2525b10951e739637426cabcbe4091ec83122",
-    "tools/nw10_proof.py": "891980b7aaec8092f3dc3881b6b46abd35c0987e511a8de943a222216902cb0f",
+    "tools/nw10_proof.py": "0286592098669dfb58065d2980a16cbe84de2e0ecc2ab29599d9a5aa7ca65fed",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:9db2e5d5db056d508bcd155528ee38a66454b597389c80104821f3f037696791",
+  "nw10_build_inputs_digest": "sha256:v1:73f9a66c90199eeebab7ee102aa36b3b906f7c8cfcc920330e6adbd2d3a7885f",
   "packaging_modes": [
     {
       "clean_system_checked": false,
@@ -1765,7 +1765,7 @@
       }
     },
     "report_path": "benchmarks/nw10/proof-export-report.v1.json",
-    "report_sha256": "fdc7b56e22f66cc48a05a85123a9774f4b0a7a9a5c4be231df06ac5d0ef09d08",
+    "report_sha256": "a0d393418b0f3782d402b23a77ac9268fb423510b1b13176e727a2cef4c4a90c",
     "reproducibility": {
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",
