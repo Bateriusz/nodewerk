@@ -92,6 +92,19 @@ def build_feasibility(
         raise ValueError("feasibility publication requires release-grade reports")
     if proof.get("release_grade") is not True or intro.get("release_grade") is not True:
         raise ValueError("feasibility publication requires release-grade reports")
+    if proof.get("measurement_kind") != "release_decoder_off":
+        raise ValueError(
+            "proof report is not a measured release decoder-OFF export"
+        )
+    current_digest = contract.build_inputs_digest(contract.compute_build_inputs())
+    if proof.get("nw10_build_inputs_digest") != current_digest:
+        raise ValueError(
+            "proof report build inputs do not match the checked-out implementation"
+        )
+    if intro.get("nw10_build_inputs_digest") != current_digest:
+        raise ValueError(
+            "intro report build inputs do not match the checked-out implementation"
+        )
     proof_artifact = _proof_artifact(proof)
     templates = proof.get("templates")
     if not isinstance(templates, Mapping) or templates.get(
@@ -220,7 +233,11 @@ def build_feasibility(
         "source": source,
         "measurements": {
             "proof_measured_bytes": proof_bytes,
-            "proof_measurement_status": "measured_decoder_off",
+            "proof_measurement_status": (
+                "measured_decoder_off"
+                if proof.get("measurement_kind") == "release_decoder_off"
+                else "unverified"
+            ),
             "canonical_proof_within_tier": proof_within,
             "proof_build_inputs_digest": proof.get("nw10_build_inputs_digest"),
             "minimum_measured_candidate_bytes": (

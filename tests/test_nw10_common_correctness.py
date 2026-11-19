@@ -12,6 +12,72 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw10_common_correctness as correctness  # noqa: E402
+import nw10_publish_evidence as publisher  # noqa: E402
+
+
+def _capture_record(
+    tier: str,
+    status: str,
+    *,
+    package_sha256: str = "same",
+    packaging_mode: str = "unpacked",
+    diagnostic_sha256: str | None = None,
+    encoded_container_sha256: str | None = None,
+) -> dict:
+    adapter = (
+        "NVIDIA GeForce RTX 4060 Ti"
+        if tier == "ada"
+        else "NVIDIA GeForce RTX 5070 Ti"
+    )
+    diagnostic_sha256 = diagnostic_sha256 or (
+        "d" * 64 if tier == "ada" else "e" * 64
+    )
+    return {
+        "format": correctness.FORMAT,
+        "version": 1,
+        "task": "NW-10",
+        "tier": tier,
+        "status": status,
+        "execution_kind": "physical",
+        "packaging_mode": packaging_mode,
+        "capture_protocol": "nw07-correctness-capture.v1",
+        "common_artifact": {"package_sha256": package_sha256},
+        "diagnostic_sibling": {
+            "executable_sha256": diagnostic_sha256,
+            "executable_bytes": 1024,
+            "manifest_sha256": "f" * 64,
+            "separate_from_final_executable": True,
+            "same_common_package": True,
+            "release_manifest_reused": False,
+            "packaging_mode": packaging_mode,
+            "encoded_container_sha256": encoded_container_sha256,
+        },
+        "hardware": {
+            "adapter_description": adapter,
+            "driver_version": "1.2.3",
+            "vendor_id": 4318,
+            "device_id": 1,
+            "classified_tier": tier,
+            "device_form_factor": "desktop",
+            "device_form_factor_source": "win32_system_enclosure_and_battery",
+        },
+        "captures": [
+            {
+                "tick": tick,
+                "file": f"tick_{tick}.rgba32f",
+                "bytes": 4,
+                "sha256": "ignored",
+            }
+            for tick in correctness.ALL_TICKS
+        ],
+        "loop_boundary": {"status": "captured_pending_numeric_validation"},
+        "runtime": {
+            "status": "passed",
+            "capture_exit_code": 0,
+            "frames_per_tick": 1,
+            "present_sync_interval": 0,
+        },
+    }
 
 
 def test_probe_requires_hardware_identity_and_uncapped_field() -> None:
@@ -84,27 +150,18 @@ def test_same_common_artifact_allows_diagnostic_manifest_and_executable_to_diffe
 
 
 def test_cross_hardware_comparison_requires_same_artifact(tmp_path: Path, monkeypatch) -> None:
-    ada = {
-        "tier": "ada",
-        "status": "captured_reference",
-        "common_artifact": {"package_sha256": "a"},
-        "hardware": {},
-        "captures": [],
-        "loop_boundary": {},
-    }
-    blackwell = {
-        "tier": "blackwell",
-        "status": "captured_candidate",
-        "common_artifact": {"package_sha256": "b"},
-        "hardware": {},
-        "captures": [],
-        "loop_boundary": {},
-    }
+    ada = _capture_record("ada", "captured_reference", package_sha256="a")
+    blackwell = _capture_record(
+        "blackwell", "captured_candidate", package_sha256="b"
+    )
     a = tmp_path / "ada.json"
     b = tmp_path / "blackwell.json"
     a.write_text(json.dumps(ada), encoding="utf-8")
     b.write_text(json.dumps(blackwell), encoding="utf-8")
     with pytest.raises(ValueError, match="same common artifact"):
+        monkeypatch.setattr(
+            correctness, "_verify_capture_manifest", lambda *_args: None
+        )
         correctness.compare(
             a,
             b,
@@ -199,39 +256,15 @@ def test_verify_capture_manifest_rejects_transferred_file_corruption(tmp_path: P
 def test_compare_recomputes_loop_boundaries_from_raw_captures(
     tmp_path: Path, monkeypatch
 ) -> None:
-    common = {"package_sha256": "same"}
-    def record(tier: str, status: str) -> dict:
-        return {
-            "tier": tier,
-            "status": status,
-            "common_artifact": common,
-            "hardware": {
-                "adapter_description": (
-                    "NVIDIA GeForce RTX 4060 Ti"
-                    if tier == "ada"
-                    else "NVIDIA GeForce RTX 5070 Ti"
-                ),
-                "classified_tier": tier,
-                "device_form_factor": "desktop",
-                "device_form_factor_source": "win32_system_enclosure_and_battery",
-            },
-            "captures": [
-                {
-                    "tick": tick,
-                    "file": f"tick_{tick}.rgba32f",
-                    "bytes": 4,
-                    "sha256": "ignored",
-                }
-                for tick in correctness.ALL_TICKS
-            ],
-            "loop_boundary": {"status": "captured_pending_numeric_validation"},
-        }
-
     ada_record = tmp_path / "ada.json"
     blackwell_record = tmp_path / "blackwell.json"
-    ada_record.write_text(json.dumps(record("ada", "captured_reference")), encoding="utf-8")
+    ada_record.write_text(
+        json.dumps(_capture_record("ada", "captured_reference")),
+        encoding="utf-8",
+    )
     blackwell_record.write_text(
-        json.dumps(record("blackwell", "captured_candidate")), encoding="utf-8"
+        json.dumps(_capture_record("blackwell", "captured_candidate")),
+        encoding="utf-8",
     )
     monkeypatch.setattr(correctness, "_verify_capture_manifest", lambda *_args: None)
     calls = []
@@ -250,7 +283,150 @@ def test_compare_recomputes_loop_boundaries_from_raw_captures(
     assert result["ada"]["loop_boundary"]["status"] == "passed"
     assert result["blackwell"]["loop_boundary"]["status"] == "passed"
     assert result["packed_unpacked_comparison"]["status"] == "pending_physical"
+    assert result["source"]["mode"] == "compare"
+    assert result["source"]["execution_kind"] == "physical_cross_hardware"
+    assert len(result["source"]["implementation_head"]) == 40
+    assert result["comparison"]["fixed_tick_status"] == "passed"
+    assert result["comparison"]["ada_loop_boundary_status"] == "passed"
+    assert result["comparison"]["blackwell_loop_boundary_status"] == "passed"
     assert (
         f"tick_{correctness.nw07_contract.LOOP_BOUNDARY_TICKS[1]}.rgba32f"
         in {name for pair in calls for name in pair}
     )
+
+
+def test_packed_comparison_requires_manifests_and_packed_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(correctness, "_verify_capture_manifest", lambda *_args: None)
+    monkeypatch.setattr(
+        correctness,
+        "_compare_rgba32f",
+        lambda *_args: {"maximum_error": 0.0, "maximum_relative_error": 0.0},
+    )
+    package = "a" * 64
+    ada = _capture_record("ada", "captured_reference", package_sha256=package)
+    blackwell = _capture_record(
+        "blackwell", "captured_candidate", package_sha256=package
+    )
+    ada_record = tmp_path / "ada.json"
+    blackwell_record = tmp_path / "blackwell.json"
+    ada_record.write_text(json.dumps(ada), encoding="utf-8")
+    blackwell_record.write_text(json.dumps(blackwell), encoding="utf-8")
+    packed_ada = _capture_record(
+        "ada",
+        "captured_reference",
+        package_sha256=package,
+        packaging_mode="packed",
+        diagnostic_sha256="1" * 64,
+        encoded_container_sha256="2" * 64,
+    )
+    packed_blackwell = _capture_record(
+        "blackwell",
+        "captured_candidate",
+        package_sha256=package,
+        packaging_mode="packed",
+        diagnostic_sha256="3" * 64,
+        encoded_container_sha256="4" * 64,
+    )
+    packed_ada_record = tmp_path / "packed-ada.json"
+    packed_blackwell_record = tmp_path / "packed-blackwell.json"
+    (tmp_path / "packed-ada").mkdir()
+    (tmp_path / "packed-blackwell").mkdir()
+    packed_ada_record.write_text(json.dumps(packed_ada), encoding="utf-8")
+    packed_blackwell_record.write_text(
+        json.dumps(packed_blackwell), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="requires both hardware capture"):
+        correctness.compare(
+            ada_record,
+            blackwell_record,
+            ada_capture_dir=tmp_path / "ada",
+            blackwell_capture_dir=tmp_path / "blackwell",
+            output=tmp_path / "out.json",
+            packed_ada_capture_dir=tmp_path / "packed-ada",
+        )
+
+    result = correctness.compare(
+        ada_record,
+        blackwell_record,
+        ada_capture_dir=tmp_path / "ada",
+        blackwell_capture_dir=tmp_path / "blackwell",
+        output=tmp_path / "out.json",
+        packed_ada_capture_dir=tmp_path / "packed-ada",
+        packed_blackwell_capture_dir=tmp_path / "packed-blackwell",
+        packed_ada_record=packed_ada_record,
+        packed_blackwell_record=packed_blackwell_record,
+        packed_package_sha256=package,
+        unpacked_package_sha256=package,
+    )
+    assert result["packed_unpacked_comparison"]["status"] == "verified"
+    assert (
+        result["packed_unpacked_comparison"][
+            "direct_separate_packed_gpu_capture_recorded"
+        ]
+        is True
+    )
+    assert result["packed_unpacked_comparison"]["runtime"]["ada"][
+        "packed_executable_sha256"
+    ] == "1" * 64
+
+    # The compare output must be directly consumable by the publisher; a
+    # separately hand-authored summary is not the documented path.
+    monkeypatch.setattr(publisher, "REPO_ROOT", tmp_path)
+    status_path = tmp_path / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "format": "nw10-evidence-status",
+                "version": 1,
+                "task": "NW-10",
+                "evidence_status": "pending_physical_windows_capture",
+                "contract_evidence": "verified_by_pytest",
+                "physical_evidence": "pending",
+                "reference_capture": "pending_reference_capture",
+                "ada_correctness": "pending_unverified",
+                "blackwell_correctness": "pending_unverified",
+                "clean_system": "pending_unverified",
+                "startup": "pending_unverified",
+                "memory": "pending_unverified",
+                "frame_time": "pending_unverified",
+                "files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    import argparse
+
+    published = publisher.publish_correctness(
+        argparse.Namespace(
+            comparison=str(tmp_path / "out.json"),
+            destination="benchmarks/nw10/common-artifact-correctness.v1.json",
+            status_file="benchmarks/nw10/evidence-status.v1.json",
+            implementation_head=result["source"]["implementation_head"],
+            forbid_token=[],
+        )
+    )
+    assert published["status"] == "verified"
+    assert published["packed_unpacked_comparison"]["status"] == "verified"
+
+    packed_blackwell["packaging_mode"] = "unpacked"
+    packed_blackwell_record.write_text(
+        json.dumps(packed_blackwell), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="not the declared packed artifact"):
+        correctness.compare(
+            ada_record,
+            blackwell_record,
+            ada_capture_dir=tmp_path / "ada",
+            blackwell_capture_dir=tmp_path / "blackwell",
+            output=tmp_path / "out2.json",
+            packed_ada_capture_dir=tmp_path / "packed-ada",
+            packed_blackwell_capture_dir=tmp_path / "packed-blackwell",
+            packed_ada_record=packed_ada_record,
+            packed_blackwell_record=packed_blackwell_record,
+            packed_package_sha256=package,
+            unpacked_package_sha256=package,
+        )

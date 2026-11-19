@@ -31,6 +31,7 @@ INVALIDATED_GRADIENT_SHA256 = (
 STARTUP_CEILING_MS = 2000.0
 MEMORY_CEILING_BYTES = 536_870_912
 EXPECTED_SCENARIO_EXIT_CODES = clean_system_contract.EXPECTED_SCENARIO_EXIT_CODES
+ARCHIVED_PHYSICAL_SOURCE_HEAD = "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee"
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -128,15 +129,65 @@ def _artifact_from_intro_report(report: Mapping[str, Any]) -> dict[str, Any]:
     if selected_mode == "compact":
         if not isinstance(compact, Mapping):
             raise ValueError("intro report selected a missing compact artifact")
+        if compact.get("selected_reason") != (
+            "explicit_compact_selection_after_validation"
+        ):
+            raise ValueError(
+                "intro report selected the compact executable without an "
+                "explicit post-validation selection reason"
+            )
         executable_sha256 = str(
             compact.get("selected_executable_sha256", "")
         ).lower()
         executable_bytes = int(compact.get("selected_executable_bytes", 0))
         selected_mode_value = "compact"
+        if executable_sha256 != str(
+            compact.get("executable_sha256", "")
+        ).lower():
+            raise ValueError(
+                "intro compact selection does not name the compact executable"
+            )
+        if executable_bytes != int(compact.get("executable_bytes", -1)):
+            raise ValueError(
+                "intro compact selection size does not match the compact executable"
+            )
+        if str(compact.get("decoded_package_sha256", "")).lower() != str(
+            artifact["package_sha256"]
+        ).lower():
+            raise ValueError(
+                "intro compact payload does not decode to the canonical package"
+            )
+        if compact.get("codec_id") not in {"nwc.codec.stored.v1", "nwc.codec.mszip.v1"}:
+            raise ValueError("intro compact selection uses an unsupported codec")
+        if compact.get("layout_id") not in {
+            "nwc.layout.canonical.v1",
+            "nwc.layout.aos.v1",
+            "nwc.layout.soa.v1",
+        }:
+            raise ValueError("intro compact selection uses an unsupported layout")
     else:
         executable_sha256 = str(artifact["executable_sha256"]).lower()
         executable_bytes = int(artifact["executable_bytes"])
         selected_mode_value = "canonical"
+        if isinstance(compact, Mapping):
+            if str(compact.get("selected_executable_sha256", "")).lower() != (
+                executable_sha256
+            ):
+                raise ValueError(
+                    "intro canonical selection does not name the canonical executable"
+                )
+            if int(compact.get("selected_executable_bytes", -1)) != executable_bytes:
+                raise ValueError(
+                    "intro canonical selection size does not match the canonical "
+                    "executable"
+                )
+            if compact.get("selected_reason") not in {
+                "runtime_validation_pending",
+                "compression_rejected_for_increasing_distribution",
+            }:
+                raise ValueError(
+                    "intro canonical selection has an unrecognized reason"
+                )
     result = {
         "executable_sha256": executable_sha256,
         "executable_bytes": executable_bytes,
@@ -439,6 +490,143 @@ def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
     return status
 
 
+def build_pending_correctness(
+    *, implementation_head: str | None = None
+) -> dict[str, Any]:
+    """Build the explicit non-certifying correctness state.
+
+    The physical record can only be replaced by ``publish_correctness`` after a
+    direct separate packed-GPU capture set exists on both representative
+    desktop tiers.  This pending record keeps the status machine honest and is
+    reproducible from a clean checkout.
+    """
+    head = implementation_head or _git_head()
+    if not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise ValueError("implementation head must be a 40-character hex SHA")
+    return {
+        "format": "nw10-common-artifact-correctness-summary",
+        "version": 1,
+        "task": "NW-10",
+        "status": "pending_unverified",
+        "capture_protocol": "nw07-correctness-capture.v1",
+        "common_artifact": {"package_sha256": None},
+        "ada": {
+            "hardware": {
+                "adapter_description": "unavailable",
+                "classified_tier": "ada",
+                "device_form_factor": "unknown",
+                "device_form_factor_source": "pending_physical_probe",
+                "driver_version": "unavailable",
+            },
+            "status": "pending_unverified",
+        },
+        "blackwell": {
+            "hardware": {
+                "adapter_description": "unavailable",
+                "classified_tier": "blackwell",
+                "device_form_factor": "unknown",
+                "device_form_factor_source": "pending_physical_probe",
+                "driver_version": "unavailable",
+            },
+            "status": "pending_unverified",
+        },
+        "comparison": {
+            "absolute_required": True,
+            "absolute_tolerance": 0.0001,
+            "ada_loop_boundary_status": "pending",
+            "blackwell_loop_boundary_status": "pending",
+            "fixed_tick_status": "pending",
+            "fixed_ticks": [0, 240000, 480000, 720000, 959999],
+            "loop_boundary_ticks": [0, 960000],
+            "relative_tolerance": 0.0001,
+            "worst_absolute_error": None,
+            "worst_relative_error": None,
+        },
+        "packed_unpacked_comparison": {
+            "direct_separate_packed_gpu_capture_recorded": False,
+            "packed_package_sha256": None,
+            "runtime": {
+                "ada": {"status": "pending_physical"},
+                "blackwell": {"status": "pending_physical"},
+            },
+            "status": "pending_physical",
+            "unpacked_package_sha256": None,
+            "worst_absolute_error": None,
+        },
+        "privacy": {
+            "local_paths_included": False,
+            "raw_capture_bytes_embedded": False,
+            "stdout_stderr_included": False,
+        },
+        "source": {
+            "execution_kind": "none",
+            "implementation_head": head,
+            "mode": "pending",
+            "raw_capture_manifests_tracked": False,
+            "tool": "tools/nw10/run-correctness-evidence.ps1",
+        },
+        "archived_physical_evidence": {
+            "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
+            "reason": (
+                "The prior cross-hardware captures were not a direct "
+                "packed/unpacked GPU comparison and were not captured at the "
+                "current source head."
+            ),
+            "source_head_sha": ARCHIVED_PHYSICAL_SOURCE_HEAD,
+            "status": "archived_not_current_head",
+        },
+    }
+
+
+def build_pending_system_validation(
+    *, implementation_head: str | None = None
+) -> dict[str, Any]:
+    """Build the explicit non-certifying system-validation state."""
+    head = implementation_head or _git_head()
+    if not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise ValueError("implementation head must be a 40-character hex SHA")
+    return {
+        "format": "nw10-system-validation",
+        "version": 1,
+        "task": "NW-10",
+        "status": "pending_unverified",
+        "source_head_sha": head,
+        "final_artifact": None,
+        "startup": None,
+        "memory": None,
+        "clean_system": None,
+        "windows_build": None,
+        "reason": (
+            "No single physical environment captured the exact current-head "
+            "final artifact with clean-system startup and engine-committed "
+            "memory. The previous record mixed clean-system and metric hosts, "
+            "omitted the Windows build, and referenced a non-runnable "
+            "0xC0000005 artifact; those claims were withdrawn."
+        ),
+        "archived_physical_evidence": {
+            "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
+            "status": "archived_not_current_head",
+            "source_head_sha": ARCHIVED_PHYSICAL_SOURCE_HEAD,
+            "current_executable_sha256": (
+                "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8"
+            ),
+            "measured_executable_sha256": (
+                "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e"
+            ),
+            "reason": (
+                "The historical system measurements are retained for "
+                "attribution but cannot certify the current checkout."
+            ),
+        },
+        "privacy": {
+            "local_paths_included": False,
+            "raw_result_bundle_tracked": False,
+            "raw_stdout_stderr_included": False,
+            "user_profile_paths_included": False,
+        },
+    }
+
+
 def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
     source = _load(Path(args.comparison))
     if source.get("format") != "nw10-common-artifact-correctness":
@@ -453,6 +641,16 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
     if source_meta.get("execution_kind") != "physical_cross_hardware":
         raise ValueError(
             "correctness comparison is not physical cross-hardware evidence"
+        )
+    if source_meta.get("tool") != "tools/nw10/run-correctness-evidence.ps1":
+        raise ValueError("correctness comparison came from an unrecognized tool")
+    source_head = str(source_meta.get("implementation_head", ""))
+    if not re.fullmatch(r"[0-9a-f]{40}", source_head):
+        raise ValueError("correctness comparison has no implementation head")
+    requested_head = args.implementation_head or _git_head()
+    if source_head != requested_head:
+        raise ValueError(
+            "correctness comparison was captured at a different implementation head"
         )
     privacy = source.get("privacy")
     if not isinstance(privacy, Mapping):
@@ -525,6 +723,17 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(
                 f"packed/unpacked {tier} runtime comparison did not pass"
             )
+        for key in (
+            "unpacked_executable_sha256",
+            "packed_executable_sha256",
+            "encoded_container_sha256",
+        ):
+            if not re.fullmatch(
+                r"[0-9a-f]{64}", str(entry.get(key, "")).lower()
+            ):
+                raise ValueError(
+                    f"packed/unpacked {tier} runtime is missing {key}"
+                )
     ada_loop = ada.get("loop_boundary")
     blackwell_loop = blackwell.get("loop_boundary")
     if not isinstance(ada_loop, Mapping) or not isinstance(blackwell_loop, Mapping):
@@ -598,8 +807,30 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
             ).lower(),
             "worst_absolute_error": float(packed_error),
             "runtime": {
-                "ada": {"status": "passed"},
-                "blackwell": {"status": "passed"},
+                "ada": {
+                    "status": "passed",
+                    "unpacked_executable_sha256": packed_runtime["ada"].get(
+                        "unpacked_executable_sha256"
+                    ),
+                    "packed_executable_sha256": packed_runtime["ada"].get(
+                        "packed_executable_sha256"
+                    ),
+                    "encoded_container_sha256": packed_runtime["ada"].get(
+                        "encoded_container_sha256"
+                    ),
+                },
+                "blackwell": {
+                    "status": "passed",
+                    "unpacked_executable_sha256": packed_runtime[
+                        "blackwell"
+                    ].get("unpacked_executable_sha256"),
+                    "packed_executable_sha256": packed_runtime["blackwell"].get(
+                        "packed_executable_sha256"
+                    ),
+                    "encoded_container_sha256": packed_runtime["blackwell"].get(
+                        "encoded_container_sha256"
+                    ),
+                },
             },
         },
         "privacy": {
@@ -824,12 +1055,32 @@ def main(argv: list[str] | None = None) -> int:
     system.add_argument("--status-file", default=STATUS_PATH.as_posix())
     system.add_argument("--forbid-token", action="append", default=[])
 
+    pending_correctness = sub.add_parser("pending-correctness")
+    pending_correctness.add_argument(
+        "--destination", default=CORRECTNESS_PATH.as_posix()
+    )
+    pending_correctness.add_argument("--implementation-head", default="")
+
+    pending_system = sub.add_parser("pending-system")
+    pending_system.add_argument("--destination", default=SYSTEM_PATH.as_posix())
+    pending_system.add_argument("--implementation-head", default="")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "correctness":
             public = publish_correctness(args)
-        else:
+        elif args.command == "system":
             public = publish_system(args)
+        elif args.command == "pending-correctness":
+            public = build_pending_correctness(
+                implementation_head=args.implementation_head or None
+            )
+            _write(REPO_ROOT / args.destination, public)
+        else:
+            public = build_pending_system_validation(
+                implementation_head=args.implementation_head or None
+            )
+            _write(REPO_ROOT / args.destination, public)
     except Exception as exc:
         print(
             json.dumps(

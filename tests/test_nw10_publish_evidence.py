@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw10_publish_evidence as publisher  # noqa: E402
+from schema_validator import validate_instance  # noqa: E402
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -132,8 +133,18 @@ def test_correctness_publisher_strips_raw_capture_material(
             "unpacked_package_sha256": "a" * 64,
             "worst_absolute_error": 0.0,
             "runtime": {
-                "ada": {"status": "passed"},
-                "blackwell": {"status": "passed"},
+                "ada": {
+                    "status": "passed",
+                    "unpacked_executable_sha256": "1" * 64,
+                    "packed_executable_sha256": "2" * 64,
+                    "encoded_container_sha256": "3" * 64,
+                },
+                "blackwell": {
+                    "status": "passed",
+                    "unpacked_executable_sha256": "4" * 64,
+                    "packed_executable_sha256": "5" * 64,
+                    "encoded_container_sha256": "6" * 64,
+                },
             },
         },
         "privacy": {
@@ -145,6 +156,7 @@ def test_correctness_publisher_strips_raw_capture_material(
             "mode": "compare",
             "execution_kind": "physical_cross_hardware",
             "tool": "tools/nw10/run-correctness-evidence.ps1",
+            "implementation_head": "1" * 40,
         },
     }
     comparison = tmp_path / "build" / "comparison.json"
@@ -229,6 +241,7 @@ def test_correctness_publisher_rejects_asserted_desktop_and_pending_packed(
             "mode": "compare",
             "execution_kind": "physical_cross_hardware",
             "tool": "tools/nw10/run-correctness-evidence.ps1",
+            "implementation_head": "1" * 40,
         },
     }
     comparison = tmp_path / "build" / "comparison.json"
@@ -277,15 +290,29 @@ def test_correctness_publisher_rejects_compositional_packed_parity(
             "unpacked_package_sha256": package,
             "worst_absolute_error": 0.0,
             "runtime": {
-                "ada": {"status": "passed"},
-                "blackwell": {"status": "passed"},
+                "ada": {
+                    "status": "passed",
+                    "unpacked_executable_sha256": "1" * 64,
+                    "packed_executable_sha256": "2" * 64,
+                    "encoded_container_sha256": "3" * 64,
+                },
+                "blackwell": {
+                    "status": "passed",
+                    "unpacked_executable_sha256": "4" * 64,
+                    "packed_executable_sha256": "5" * 64,
+                    "encoded_container_sha256": "6" * 64,
+                },
             },
         },
         "privacy": {
             "raw_capture_bytes_embedded": False,
             "local_paths_included": False,
         },
-        "source": {"execution_kind": "physical_cross_hardware"},
+        "source": {
+            "execution_kind": "physical_cross_hardware",
+            "tool": "tools/nw10/run-correctness-evidence.ps1",
+            "implementation_head": "1" * 40,
+        },
     }
     comparison = tmp_path / "build" / "comparison.json"
     status_path = tmp_path / "benchmarks" / "nw10" / "evidence-status.v1.json"
@@ -300,6 +327,164 @@ def test_correctness_publisher_rejects_compositional_packed_parity(
     )
     with pytest.raises(ValueError, match="direct separate packed GPU capture"):
         publisher.publish_correctness(args)
+
+
+def test_correctness_publisher_rejects_reused_inventory_form_factor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(publisher, "REPO_ROOT", tmp_path)
+    package = "a" * 64
+    source = {
+        "format": "nw10-common-artifact-correctness",
+        "status": "verified",
+        "capture_protocol": "nw07-correctness-capture.v1",
+        "common_artifact": {"package_sha256": package},
+        "ada": {
+            "hardware": {
+                "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+                "device_form_factor": "desktop",
+                "device_form_factor_source": "physical host inventory: MSI B550",
+                "classified_tier": "ada",
+            },
+            "loop_boundary": {"status": "passed"},
+        },
+        "blackwell": {
+            "hardware": {
+                "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+                "device_form_factor": "desktop",
+                "device_form_factor_source": "win32_system_enclosure_and_battery",
+                "classified_tier": "blackwell",
+            },
+            "loop_boundary": {"status": "passed"},
+        },
+        "comparison": {
+            "fixed_ticks": [0, 240000, 480000, 720000, 959999],
+            "per_tick": [
+                {"tick": tick, "status": "passed"}
+                for tick in (0, 240000, 480000, 720000, 959999)
+            ],
+            "worst_absolute_error": 0.0,
+            "worst_relative_error": 0.0,
+            "absolute_tolerance": 0.0001,
+            "relative_tolerance": 0.0001,
+            "absolute_required": True,
+        },
+        "packed_unpacked_comparison": {
+            "status": "verified",
+            "direct_separate_packed_gpu_capture_recorded": True,
+            "packed_package_sha256": package,
+            "unpacked_package_sha256": package,
+            "worst_absolute_error": 0.0,
+            "runtime": {
+                "ada": {
+                    "status": "passed",
+                    "unpacked_executable_sha256": "1" * 64,
+                    "packed_executable_sha256": "2" * 64,
+                    "encoded_container_sha256": "3" * 64,
+                },
+                "blackwell": {
+                    "status": "passed",
+                    "unpacked_executable_sha256": "4" * 64,
+                    "packed_executable_sha256": "5" * 64,
+                    "encoded_container_sha256": "6" * 64,
+                },
+            },
+        },
+        "privacy": {
+            "raw_capture_bytes_embedded": False,
+            "local_paths_included": False,
+        },
+        "source": {
+            "execution_kind": "physical_cross_hardware",
+            "tool": "tools/nw10/run-correctness-evidence.ps1",
+            "implementation_head": "1" * 40,
+        },
+    }
+    comparison = tmp_path / "build" / "comparison.json"
+    status_path = tmp_path / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    _write_json(comparison, source)
+    _write_json(status_path, _base_status())
+    args = argparse.Namespace(
+        comparison=str(comparison),
+        destination="benchmarks/nw10/common-artifact-correctness.v1.json",
+        status_file="benchmarks/nw10/evidence-status.v1.json",
+        implementation_head="1" * 40,
+        forbid_token=[],
+    )
+    with pytest.raises(ValueError, match="chassis probe"):
+        publisher.publish_correctness(args)
+
+
+def test_compact_selection_requires_explicit_post_validation_reason() -> None:
+    artifact = {
+        "executable_sha256": "a" * 64,
+        "executable_bytes": 100,
+        "package_sha256": "b" * 64,
+        "manifest_sha256": "c" * 64,
+    }
+    compact = {
+        "executable_sha256": "d" * 64,
+        "executable_bytes": 90,
+        "selected_mode": "compact",
+        "selected_reason": "runtime_validation_pending",
+        "selected_executable_sha256": "d" * 64,
+        "selected_executable_bytes": 90,
+        "decoded_package_sha256": "b" * 64,
+        "codec_id": "nwc.codec.mszip.v1",
+        "layout_id": "nwc.layout.soa.v1",
+    }
+    with pytest.raises(ValueError, match="post-validation"):
+        publisher._artifact_from_intro_report(
+            {
+                "release_grade": True,
+                "test_payload": False,
+                "canonical_artifact": artifact,
+                "compact_artifact": compact,
+            }
+        )
+    compact["selected_reason"] = "explicit_compact_selection_after_validation"
+    selected = publisher._artifact_from_intro_report(
+        {
+            "release_grade": True,
+            "test_payload": False,
+            "canonical_artifact": artifact,
+            "compact_artifact": compact,
+        }
+    )
+    assert selected["selected_mode"] == "compact"
+    assert selected["executable_sha256"] == "d" * 64
+
+
+def test_pending_physical_records_are_reproducible_and_fail_closed() -> None:
+    head = "1" * 40
+    correctness = publisher.build_pending_correctness(implementation_head=head)
+    system = publisher.build_pending_system_validation(implementation_head=head)
+    correctness_schema = json.loads(
+        (
+            REPO_ROOT / "schemas" / "nw10-common-artifact-correctness.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    system_schema = json.loads(
+        (REPO_ROOT / "schemas" / "nw10-system-validation.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    validate_instance(correctness, correctness_schema, correctness_schema)
+    validate_instance(system, system_schema, system_schema)
+    assert correctness["status"] == "pending_unverified"
+    assert (
+        correctness["packed_unpacked_comparison"][
+            "direct_separate_packed_gpu_capture_recorded"
+        ]
+        is False
+    )
+    assert correctness["common_artifact"]["package_sha256"] is None
+    assert system["status"] == "pending_unverified"
+    assert system["final_artifact"] is None
+    assert system["startup"] is None
+    assert system["memory"] is None
+    assert system["clean_system"] is None
+    assert system["windows_build"] is None
 
 
 def test_system_publisher_verifies_bundle_and_can_complete_state(

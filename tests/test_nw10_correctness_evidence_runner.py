@@ -24,6 +24,7 @@ def test_correctness_runner_reproduces_and_binds_common_artifact() -> None:
     assert "Get-NwExpectedArtifact" in text
     assert "--packed-ada-captures" in text
     assert "--packed-blackwell-captures" in text
+    assert '"--implementation-head", (& git rev-parse HEAD).Trim()' in text
     assert 'Assert-NwSameValue "artifact_key"' in text
     assert 'Assert-NwSameValue "package_sha256"' in text
     assert 'Assert-NwSameValue "manifest_sha256"' in text
@@ -56,7 +57,12 @@ def test_correctness_runner_can_create_transfer_bundle() -> None:
     assert "bundle-manifest.json" in text
     assert "Get-FileHash -Algorithm SHA256" in text
     assert "Compress-Archive" in text
-    assert "nw10-correctness-$Tier-bundle.zip" in text
+    assert 'nw10-correctness-$Tier$bundleSuffix-bundle.zip' in text
+    assert '[ValidateSet("unpacked", "packed")]' in text
+    assert '"--mode", $PackagingMode' in text
+    assert "-PackagingMode packed" in (
+        REPO_ROOT / ".github" / "workflows" / "nw10-compact.yml"
+    ).read_text(encoding="utf-8")
 
 
 def test_correctness_runner_compare_requires_both_hardware_sets() -> None:
@@ -143,6 +149,8 @@ def test_transferred_capture_requires_no_build_toolchain() -> None:
     assert "--capture-tick" in text
     assert "--frames 1" in text
     assert "get-filehash" in text
+    assert "packaging_mode" in text
+    assert "capture_exit_code = 0" in text
     assert "utf8encoding($false)" in text
     assert "measure-object -property bytes" not in text
     assert '$rawbytes += [int64]$row["bytes"]' in text

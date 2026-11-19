@@ -48,6 +48,12 @@ performance preservation is still **pending** and no faster substitute hardware
 is used to certify it. The decision is **continue**, not a universal
 feasibility or impossibility claim.
 
+`windows-pe-ledger.v1.json` keeps the prior valid `6c6fdb40` artifact and its
+complete measured ledger as the selected final distribution. The non-runnable
+`063bb45b` current-head attempt is retained in `current_attempt` with its
+`rejected_runtime_failure`/`0xC0000005` state; its ledger is not promoted to a
+current-head final ledger.
+
 ### Hosted Windows feasibility result
 
 The hosted Windows x64 experiment is treated as a measured feasibility run,
@@ -60,17 +66,20 @@ GPU requirement, both outcomes remain `pending_runtime_validation` rather than
 being mislabeled as compact-package failures. Dependency closure and the
 single-file/link-manifest checks still pass.
 
-The same run publishes a current PE ledger for the 237,118-byte restricted
-intro. It measures a **4,096-byte** compact-decoder template cost (3,584 bytes
-in `.text`, 512 bytes in `.rdata`) and the only added runtime import is
-`cabinet.dll`. The current evidence artifact is retained as GitHub Actions
+The same run measures a PE ledger for the 237,118-byte restricted intro, but
+that artifact exited `0xC0000005`. The ledger is archived as a superseded
+measurement and cannot be the selected final distribution. The retained prior
+valid ledger measures a **3,584-byte** compact-decoder template cost (3,072
+bytes in `.text`, 512 bytes in `.rdata`), and the only added runtime import is
+`cabinet.dll`. The historical evidence artifact is retained as GitHub Actions
 artifact `14540370510` with digest
 `sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4`.
 
 Physical correctness and system measurements are represented separately from
-this hosted feasibility result. Their reuse and current-head transfer bindings
-are recorded in `reused-physical-evidence.v1.json`; the exact performance
-reference capture remains pending.
+this hosted feasibility result. Their historical bindings are retained only as
+archived attribution in `reused-physical-evidence.v1.json`; they are not
+current-head certification. The exact performance reference capture remains
+pending.
 
 The Windows workflow constructs `build/nw10-windows-compact-feasibility.json`
 with `tools/nw10_feasibility.py` and schema-validates it in both outcomes: a
@@ -121,7 +130,8 @@ u8  decoded_sha256[32]
 Supported identifiers:
 
 - codec `nwc.codec.stored.v1`
-- codec `nwc.codec.mszip.v1` (Windows inbox MSZIP decompressor)
+- codec `nwc.codec.mszip.v1` (deterministic CK-framed DEFLATE encoder
+  `nwc.mszip.ck-zlib.v1`; Windows inbox Compression API decoder)
 - layout `nwc.layout.canonical.v1`
 - layout `nwc.layout.aos.v1`
 - layout `nwc.layout.soa.v1`
@@ -172,7 +182,10 @@ package:
   executable remains selected. Candidate-only lzma produced a smaller payload
   but is not selected because no measured player decoder/dependency path exists
   for it; introducing a new compressor library is outside NW-10's measured
-  options.
+  options. MSZIP encoding is the repository-owned deterministic CK-framed zlib
+  encoder on every host, so encoded payload hashes reproduce across the
+  contract and Windows release hosts. The Windows player's inbox decompressor
+  is exercised against those exact bytes by the decoder parity harness.
 
 ## Restricted intro
 
@@ -246,9 +259,10 @@ above 262,144 bytes fails the export instead of silently redefining the tier.
 
 No executable packer is used. In particular, Crinkler is not invoked and its
 x64 support is not assumed. The only compression mode considered for the
-artifact is the Windows inbox MSZIP decoder; candidate-only zlib/bzip2/lzma
-payloads remain measured but unselected because their decoder/dependency cost
-is not part of the verified closure.
+artifact is deterministic CK-framed MSZIP decoded by the Windows inbox
+Compression API; candidate-only zlib/bzip2/lzma payloads remain measured but
+unselected because their decoder/dependency cost is not part of the verified
+closure.
 
 ### Physical capture and clean-system checks
 
@@ -322,6 +336,15 @@ Packed/unpacked correctness requires a separately rendered packed capture set
 plus its capture manifests; compositional decoder parity alone is rejected:
 
 ```powershell
+# Capture the same common package through an independent unpacked diagnostic
+# sibling and a decoder-ON diagnostic sibling with the compact payload embedded.
+pwsh ./tools/nw10/run-correctness-evidence.ps1 -Tier ada -PackagingMode unpacked -Bundle
+pwsh ./tools/nw10/run-correctness-evidence.ps1 -Tier ada -PackagingMode packed -Bundle
+pwsh ./tools/nw10/run-correctness-evidence.ps1 -Tier blackwell -PackagingMode unpacked -Bundle
+pwsh ./tools/nw10/run-correctness-evidence.ps1 -Tier blackwell -PackagingMode packed -Bundle
+```
+
+```powershell
 pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare `
   -AdaRecord build/nw10-correctness-scripted/ada/capture.json `
   -AdaCaptures build/nw10-correctness-scripted/ada/captures `
@@ -335,6 +358,13 @@ pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare `
   -UnpackedPackageSha256 <decoded-package-sha256> `
   -Publish -Commit
 ```
+
+The transfer-bundle preparation path accepts the same `-PackagingMode`
+selection, so remote capture hosts need no compiler, CMake, DXC, Python, or
+repository checkout. Both modes record the exact diagnostic executable hash,
+encoded-container hash (packed mode), capture-manifest hashes, and runtime exit
+status. The compare command rejects mismatched packaging modes, hardware,
+manifests, or canonical package identities.
 
 The correctness publisher validates the cross-hardware comparison, removes raw
 capture material, audits user/profile paths and forbidden tokens, validates the
@@ -370,6 +400,14 @@ local paths, and the result ZIP itself are never tracked.
 Both publishers require a clean tracked tree (build outputs are allowed), the
 expected `agent/NW-10` branch, schema-valid output, `git diff --check`, and
 an allowlist of staged evidence paths. `-Push` always requires `-Commit`.
+
+When physical evidence is absent, the checked-in pending summaries are
+reproducible without inventing measurements:
+
+```bash
+python tools/nw10_publish_evidence.py pending-correctness
+python tools/nw10_publish_evidence.py pending-system
+```
 
 ## Byte-accounting policy
 

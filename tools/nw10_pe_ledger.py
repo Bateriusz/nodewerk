@@ -85,7 +85,15 @@ def build_report(
     linker_baseline_package: Path,
     final_manifest: Path,
     linker_baseline_manifest: Path,
+    runtime_status: str = "validated_runnable",
+    runtime_exit_code: int | None = 0,
 ) -> dict[str, Any]:
+    if runtime_status not in {
+        "validated_runnable",
+        "pending_runtime_validation",
+        "rejected_runtime_failure",
+    }:
+        raise ValueError(f"unsupported runtime status: {runtime_status}")
     final = pe_summary(final_executable)
     linker_baseline = pe_summary(linker_baseline_executable)
     decoder_on = pe_summary(decoder_on_template)
@@ -127,7 +135,23 @@ def build_report(
         "format": FORMAT,
         "version": VERSION,
         "task": "NW-10",
-        "status": "verified",
+        "status": (
+            "verified" if runtime_status == "validated_runnable" else "archived_superseded"
+        ),
+        "measurement_status": (
+            "measured_current_head"
+            if runtime_status == "validated_runnable"
+            else "archived_superseded"
+        ),
+        "archived_reason": (
+            None
+            if runtime_status == "validated_runnable"
+            else (
+                "The measured artifact did not pass the required Windows x64 "
+                "runtime validation; the PE measurement remains attributable "
+                "but cannot certify a runnable final distribution."
+            )
+        ),
         "source": {
             "measurement_tool": "tools/nw10_pe_ledger.py",
             "linker_control_method": (
@@ -146,6 +170,8 @@ def build_report(
             "manifest_sha256": sha256_file(final_manifest),
             "pe_image_file_bytes": final["pe_image_file_bytes"],
             "overlay_bytes": final["overlay_bytes"],
+            "runtime_status": runtime_status,
+            "runtime_exit_code": runtime_exit_code,
             "sections": [
                 {
                     "name": row["name"],
@@ -193,9 +219,12 @@ def build_report(
             "runtime_imports_added": added_imports,
         },
         "conclusion": {
-            "byte_ledger_complete": True,
+            "byte_ledger_complete": runtime_status == "validated_runnable",
             "linker_elimination_measured_on_exact_windows_artifact": True,
             "decoder_cost_measured_on_pinned_windows_template": True,
+            "current_head_artifact_validated": (
+                runtime_status == "validated_runnable"
+            ),
             "universal_64k_claim": False,
         },
         "privacy": {
@@ -216,6 +245,16 @@ def main() -> int:
     parser.add_argument("--linker-baseline-package", type=Path, required=True)
     parser.add_argument("--final-manifest", type=Path, required=True)
     parser.add_argument("--linker-baseline-manifest", type=Path, required=True)
+    parser.add_argument(
+        "--runtime-status",
+        choices=(
+            "validated_runnable",
+            "pending_runtime_validation",
+            "rejected_runtime_failure",
+        ),
+        default="validated_runnable",
+    )
+    parser.add_argument("--runtime-exit-code", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -228,6 +267,8 @@ def main() -> int:
         linker_baseline_package=args.linker_baseline_package,
         final_manifest=args.final_manifest,
         linker_baseline_manifest=args.linker_baseline_manifest,
+        runtime_status=args.runtime_status,
+        runtime_exit_code=args.runtime_exit_code,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

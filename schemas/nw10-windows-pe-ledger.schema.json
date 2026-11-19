@@ -40,6 +40,7 @@
         "manifest_sha256",
         "pe_image_file_bytes",
         "overlay_bytes",
+        "runtime_status",
         "sections"
       ],
       "properties": {
@@ -58,6 +59,19 @@
         "manifest_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "enum": [
+            "validated_runnable",
+            "pending_runtime_validation",
+            "rejected_runtime_failure"
+          ]
+        },
+        "runtime_exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       }
     },
@@ -124,7 +138,7 @@
       ],
       "properties": {
         "byte_ledger_complete": {
-          "const": true
+          "type": "boolean"
         },
         "linker_elimination_measured_on_exact_windows_artifact": {
           "const": true

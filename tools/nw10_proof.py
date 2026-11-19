@@ -361,6 +361,9 @@ def export_proof(
             "success": True,
             "release_grade": not contracts_only,
             "test_payload": bool(contracts_only),
+            "measurement_kind": (
+                "contract_only" if contracts_only else "release_decoder_off"
+            ),
             "canonical_graph": contract.CANONICAL_PROOF_GRAPH,
             "canonical_config": contract.CANONICAL_PROOF_CONFIG,
             "nw07_perf_contract": contract.PERF_CONTRACT_ID,
@@ -536,6 +539,11 @@ def main(argv: list[str] | None = None) -> int:
                 "success": False,
                 "release_grade": not args.contracts_only,
                 "test_payload": bool(args.contracts_only),
+                "measurement_kind": (
+                    "contract_only"
+                    if args.contracts_only
+                    else "release_decoder_off_size_blocked"
+                ),
                 "measurement_outcome": "size_target_not_met",
                 "measured_distribution_bytes": measured,
                 "blockers": [

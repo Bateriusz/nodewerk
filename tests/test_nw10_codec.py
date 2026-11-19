@@ -81,13 +81,51 @@ def test_mszip_handles_incompressible_and_multiblock_inputs() -> None:
     payload = bytes((index * 37 + 11) & 0xFF for index in range(100_000))
     encoded = compact.mszip_compress(payload)
     assert compact.mszip_compress(payload) == encoded
-    if sys.platform != "win32":
-        # The deterministic contract encoder uses CAB-style CK blocks; the
-        # Windows packaging path uses the inbox Compression API directly.
-        assert encoded[:2] == b"CK"
+    # Both the contract host and the Windows packaging host use the same
+    # repository-owned deterministic encoder; the Windows inbox API is only a
+    # decoder.
+    assert encoded[:2] == b"CK"
     assert compact.mszip_decompress(
         encoded, max_output_bytes=len(payload)
     ) == payload
+
+
+def test_mszip_encoding_identity_is_cross_platform_and_byte_stable() -> None:
+    payload = bytes((index * 37 + 11) & 0xFF for index in range(100_000))
+    encoded = compact.mszip_compress(payload)
+    assert hashlib.sha256(encoded).hexdigest() == (
+        "6306329d17df2af293189ecac16f1ad2a5611a5d751d9170970ea4a36cfdd07f"
+    )
+    identity = compact.mszip_encoding_identity()
+    assert identity["encoding_id"] == "nwc.mszip.ck-zlib.v1"
+    assert identity["cross_platform_byte_parity"] is True
+    assert identity["deterministic"] is True
+    # The declared encoder is the selected player-supported MSZIP codec and
+    # the portable reference decoder reconstructs the exact payload.
+    assert compact.contract.CODEC_MSZIP_ID == identity["codec_id"]
+    assert compact._zlib_mszip_decompress(
+        encoded, max_output_bytes=len(payload)
+    ) == payload
+
+
+def test_windows_mszip_packaging_fails_closed_when_inbox_decoder_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(compact.sys, "platform", "win32")
+    monkeypatch.setattr(
+        compact,
+        "_windows_mszip_decompress",
+        lambda *_args, **_kwargs: b"changed",
+    )
+    with pytest.raises(compact.CompactCodecError, match="changed the deterministic"):
+        compact.mszip_compress(b"payload")
+
+    def reject(*_args, **_kwargs):
+        raise compact.CompactCodecError("compact_codec_malformed", "rejected")
+
+    monkeypatch.setattr(compact, "_windows_mszip_decompress", reject)
+    with pytest.raises(compact.CompactCodecError, match="rejected the deterministic"):
+        compact.mszip_compress(b"payload")
 
 
 def _stored_container_with_table(

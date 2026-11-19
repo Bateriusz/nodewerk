@@ -88,8 +88,7 @@
       "properties": {
         "status": {
           "enum": [
-            "verified",
-            "verified_reused_split_hosts"
+            "verified"
           ]
         },
         "path": {

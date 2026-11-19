@@ -9,6 +9,8 @@ param(
     [switch]$PrepareTransferBundle,
     [ValidateSet("ada", "blackwell")]
     [string]$TargetTier,
+    [ValidateSet("unpacked", "packed")]
+    [string]$PackagingMode = "unpacked",
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
     [string]$ExpectedBranch = "agent/NW-10",
     [string]$ReferenceEvidence = "build/nw10-proof/report.json",
@@ -239,6 +241,7 @@ function New-NwBundle {
 
 try {
     Set-Location $repo
+    $bundleSuffix = if ($PackagingMode -eq "packed") { "-packed" } else { "" }
 
     if ($PrepareTransferBundle) {
         if ($PSBoundParameters.ContainsKey("Tier") -or $Compare) {
@@ -271,15 +274,16 @@ try {
         Write-Host "[NW10 CORRECTNESS] MSVC toolset=$($entered.VisualStudio.VcVarsVersion) SDK=$($entered.VisualStudio.WindowsSdkVersion)"
 
         $root = Resolve-NwRepoPath $WorkRoot
-        $transferRoot = Join-Path $root ("transfer-" + $TargetTier)
+        $transferRoot = Join-Path $root ("transfer-" + $TargetTier + $bundleSuffix)
         $commonTemplate = Join-Path $transferRoot "common-template"
         $commonArtifact = Join-Path $transferRoot "common"
         $commonReport = Join-Path $transferRoot "common-report.json"
-        $diagTemplate = Join-Path $transferRoot "diagnostic-template"
+        $diagTemplate = Join-Path $transferRoot ("diagnostic-template-" + $PackagingMode)
         $diagArtifact = Join-Path $transferRoot "diagnostic"
         $diagBuildRoot = Join-Path $transferRoot "diagnostic-build"
         $diagReport = Join-Path $transferRoot "diagnostic-report.json"
         $packageRoot = Join-Path $transferRoot "transfer-package"
+        $diagnosticCompactOption = if ($PackagingMode -eq "packed") { "ON" } else { "OFF" }
         Remove-Item $transferRoot -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force $packageRoot | Out-Null
 
@@ -331,7 +335,8 @@ try {
 
         Invoke-NwNative "cmake" @(
             "--preset", "nw07-diagnostics",
-            "-B", $diagTemplate
+            "-B", $diagTemplate,
+            "-DNW10_COMPACT_PACKAGE=$diagnosticCompactOption"
         ) "Transfer diagnostic template configure failed"
         Invoke-NwNative "cmake" @(
             "--build", $diagTemplate,
@@ -346,7 +351,8 @@ try {
             "--player-template", $diagTemplateExe,
             "--dxc", $dxc,
             "--build-root", $diagBuildRoot,
-            "--report", $diagReport
+            "--report", $diagReport,
+            "--mode", $PackagingMode
         ) "Diagnostic sibling export failed"
 
         $diag = Get-Content -Raw $diagReport | ConvertFrom-Json
@@ -392,6 +398,7 @@ try {
             version = 1
             task = "NW-10"
             target_tier = $TargetTier
+            packaging_mode = $PackagingMode
             capture_protocol = "nw07-correctness-capture.v1"
             common_artifact = [ordered]@{
                 artifact_key = [string]$diag.common_artifact.artifact_key
@@ -411,6 +418,8 @@ try {
                 same_common_package = $true
                 release_manifest_reused = $false
                 capture_controls_required = $true
+                encoded_container_sha256 = $diag.encoded_container_sha256
+                encoded_container_bytes = $diag.encoded_container_bytes
             }
             capture = [ordered]@{
                 fixed_ticks = @(0,240000,480000,720000,959999)
@@ -459,7 +468,7 @@ try {
             $utf8NoBom
         )
 
-        $zip = Join-Path $root ("nw10-correctness-transfer-" + $TargetTier + ".zip")
+        $zip = Join-Path $root ("nw10-correctness-transfer-" + $TargetTier + $bundleSuffix + ".zip")
         Remove-Item $zip -Force -ErrorAction SilentlyContinue
         Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zip -CompressionLevel Optimal
         Write-Host "[NW10 CORRECTNESS] TRANSFER_BUNDLE=$zip"
@@ -482,6 +491,25 @@ try {
                 throw "-Compare requires -$($pair[0])."
             }
         }
+        $packedValues = @(
+            $PackedAdaCaptures,
+            $PackedBlackwellCaptures,
+            $PackedAdaRecord,
+            $PackedBlackwellRecord,
+            $PackedPackageSha256,
+            $UnpackedPackageSha256
+        )
+        $packedProvided = @($packedValues | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_)
+        })
+        if ($packedProvided.Count -gt 0 -and $packedProvided.Count -ne $packedValues.Count) {
+            throw (
+                "Packed correctness comparison requires all of " +
+                "-PackedAdaCaptures, -PackedBlackwellCaptures, " +
+                "-PackedAdaRecord, -PackedBlackwellRecord, " +
+                "-PackedPackageSha256, and -UnpackedPackageSha256."
+            )
+        }
 
         $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
         if ($null -eq $pythonCommand) {
@@ -497,6 +525,7 @@ try {
             "--blackwell-record", (Resolve-NwRepoPath $BlackwellRecord),
             "--ada-captures", (Resolve-NwRepoPath $AdaCaptures),
             "--blackwell-captures", (Resolve-NwRepoPath $BlackwellCaptures),
+            "--implementation-head", (& git rev-parse HEAD).Trim(),
             "--output", $outputPath
         )
         if (-not [string]::IsNullOrWhiteSpace($PackedAdaCaptures)) {
@@ -672,16 +701,17 @@ try {
     Write-Host "[NW10 CORRECTNESS] MSVC toolset=$($entered.VisualStudio.VcVarsVersion) SDK=$($entered.VisualStudio.WindowsSdkVersion)"
 
     $root = Resolve-NwRepoPath $WorkRoot
-    $tierRoot = Join-Path $root $Tier
+    $tierRoot = Join-Path $root ($Tier + $bundleSuffix)
     $commonTemplate = Join-Path $tierRoot "common-template"
     $commonArtifact = Join-Path $tierRoot "common"
     $commonReport = Join-Path $tierRoot "common-report.json"
-    $diagTemplate = Join-Path $tierRoot "diagnostic-template"
+    $diagTemplate = Join-Path $tierRoot ("diagnostic-template-" + $PackagingMode)
     $diagArtifact = Join-Path $tierRoot "diagnostic"
     $diagBuildRoot = Join-Path $tierRoot "diagnostic-build"
     $diagReport = Join-Path $tierRoot "diagnostic-report.json"
     $captureDirectory = Join-Path $tierRoot "captures"
     $captureRecord = Join-Path $tierRoot "capture.json"
+    $diagnosticCompactOption = if ($PackagingMode -eq "packed") { "ON" } else { "OFF" }
 
     Remove-Item $tierRoot -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $tierRoot | Out-Null
@@ -727,7 +757,8 @@ try {
     Write-Host "[NW10 CORRECTNESS] building capture-enabled diagnostic sibling"
     Invoke-NwNative "cmake" @(
         "--preset", "nw07-diagnostics",
-        "-B", $diagTemplate
+        "-B", $diagTemplate,
+        "-DNW10_COMPACT_PACKAGE=$diagnosticCompactOption"
     ) "Diagnostic template configure failed"
     Invoke-NwNative "cmake" @(
         "--build", $diagTemplate,
@@ -743,7 +774,8 @@ try {
         "--player-template", $diagTemplateExe,
         "--dxc", $dxc,
         "--build-root", $diagBuildRoot,
-        "--report", $diagReport
+        "--report", $diagReport,
+        "--mode", $PackagingMode
     ) "Diagnostic sibling export failed"
 
     $diag = Get-Content -Raw $diagReport | ConvertFrom-Json
@@ -767,7 +799,8 @@ try {
         "--diagnostic-executable", $diagExe,
         "--capture-dir", $captureDirectory,
         "--tier", $Tier,
-        "--output", $captureRecord
+        "--output", $captureRecord,
+        "--mode", $PackagingMode
     ) "Physical correctness capture failed"
 
     $record = Get-Content -Raw $captureRecord | ConvertFrom-Json
@@ -794,6 +827,7 @@ try {
     $rawBytes = ($captureFiles | Measure-Object -Property Length -Sum).Sum
     Write-Host "[NW10 CORRECTNESS] STATUS=$($record.status)"
     Write-Host "[NW10 CORRECTNESS] TIER=$Tier"
+    Write-Host "[NW10 CORRECTNESS] PACKAGING_MODE=$PackagingMode"
     Write-Host "[NW10 CORRECTNESS] GPU=$($record.hardware.adapter_description)"
     Write-Host "[NW10 CORRECTNESS] DRIVER=$($record.hardware.driver_version)"
     Write-Host "[NW10 CORRECTNESS] CAPTURES=$($captureFiles.Count)"
@@ -804,7 +838,7 @@ try {
     Write-Host "[NW10 CORRECTNESS] CAPTURE_DIR=$captureDirectory"
 
     if ($Bundle) {
-        $bundlePath = Join-Path $root "nw10-correctness-$Tier-bundle.zip"
+        $bundlePath = Join-Path $root ("nw10-correctness-$Tier$bundleSuffix-bundle.zip")
         New-NwBundle -TierName $Tier -TierRoot $tierRoot -RecordPath $captureRecord -CaptureDirectory $captureDirectory -Destination $bundlePath
     } else {
         Write-Host "[NW10 CORRECTNESS] BUNDLE=NOT_REQUESTED"

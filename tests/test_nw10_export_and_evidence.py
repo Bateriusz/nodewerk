@@ -251,7 +251,11 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     assert evidence["decision"]["universal_64k_claim"] is False
     assert (
         evidence["codec_encoding_identity"]["cross_platform_byte_parity_claimed"]
-        is False
+        is True
+    )
+    assert (
+        evidence["codec_encoding_identity"]["encoding_id"]
+        == "nwc.mszip.ck-zlib.v1"
     )
     current_inputs = contract.compute_build_inputs()
     assert evidence["nw10_build_inputs"] == current_inputs
@@ -307,7 +311,8 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     assert reuse["physical_measurements"]["system"]["same_physical_host"] is False
     pe_ledger = json.loads(pe_ledger_path.read_text(encoding="utf-8"))
     assert pe_ledger["status"] == "archived_superseded"
-    assert pe_ledger["source"]["workflow_run_id"] == 44542203189
+    assert pe_ledger["source"]["workflow_run_id"] == 44469176377
+    assert pe_ledger["current_attempt"]["source"]["workflow_run_id"] == 44542203189
     assert pe_ledger["conclusion"]["byte_ledger_complete"] is True
 
     assert (
@@ -432,7 +437,21 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
     assert record["privacy"]["user_profile_paths_included"] is False
     assert system["status"] == "pending_unverified"
     assert pe["status"] == "archived_superseded"
-    assert pe["final_artifact"]["executable_sha256"] == record["canonical_fallback"]["sha256"]
+    assert pe["final_artifact"]["executable_sha256"] == (
+        record["prior_valid_artifact"]["executable_sha256"]
+    )
+    assert pe["final_artifact"]["runtime_status"] == "validated_runnable"
+    assert pe["current_attempt"]["measured_artifact"]["executable_sha256"] == (
+        record["canonical_fallback"]["sha256"]
+    )
+    assert pe["current_attempt"]["runtime"]["status"] == (
+        "rejected_runtime_failure"
+    )
+    assert pe["conclusion"]["current_head_artifact_validated"] is False
+    assert record["selected_artifact"]["sha256"] == (
+        record["prior_valid_artifact"]["executable_sha256"]
+    )
+    assert record["selected_artifact"]["runtime_status"] == "validated_runnable"
     text = json.dumps(record).casefold()
     for token in ("c:\\users\\", "/home/", "micha", "michal", "matyl"):
         assert token not in text
@@ -523,6 +542,170 @@ def test_verified_system_validation_cannot_omit_measurements(tmp_path: Path) -> 
         )
 
 
+def _verified_system_record() -> dict:
+    artifact = {
+        "executable_sha256": "1" * 64,
+        "executable_bytes": 240_702,
+        "package_sha256": "2" * 64,
+        "manifest_sha256": "3" * 64,
+        "selected_mode": "canonical",
+    }
+    scenarios = [
+        {
+            "scenario": name,
+            "expected_exit_code": code,
+            "observed_exit_code": code,
+            "status": "passed",
+            "timed_out": False,
+        }
+        for name, code in (
+            ("corrupt_payload", 70),
+            ("deployed_startup", 0),
+            ("missing_required_feature", 23),
+            ("initialization_failure", 42),
+            ("resize", 0),
+            ("device_removal", 51),
+        )
+    ]
+    hardware = {
+        "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+        "driver_version": "32.0.16.1088",
+    }
+    return {
+        "format": "nw10-system-validation",
+        "version": 1,
+        "task": "NW-10",
+        "status": "verified",
+        "source_head_sha": "4" * 40,
+        "final_artifact": artifact,
+        "windows_build": "10.0.26200",
+        "startup": {
+            "status": "verified",
+            "execution_kind": "physical",
+            "hardware": dict(hardware),
+            "cache_state": {"application_pipeline_cache_used": False},
+            "process_start_to_first_present_ms": 250.0,
+            "ceiling_ms": 2000.0,
+        },
+        "memory": {
+            "status": "verified",
+            "execution_kind": "physical",
+            "hardware": dict(hardware),
+            "package_sha256": artifact["package_sha256"],
+            "peak_engine_committed_gpu_bytes": 42_926_080,
+            "ceiling_bytes": 536_870_912,
+        },
+        "clean_system": {
+            "status": "verified",
+            "execution_kind": "physical",
+            "host": {
+                "windows_build": "10.0.26200",
+                "clean_environment": True,
+                "virtualization_probe": {"hypervisor_present": False},
+            },
+            "hardware": dict(hardware),
+            "deployment": {
+                "only_runtime_executable": True,
+                "sidecars": [],
+                "executable_sha256": artifact["executable_sha256"],
+                "executable_bytes": artifact["executable_bytes"],
+            },
+            "scenarios": scenarios,
+        },
+        "privacy": {
+            "local_paths_included": False,
+            "raw_stdout_stderr_included": False,
+            "user_profile_paths_included": False,
+            "raw_result_bundle_tracked": False,
+        },
+    }
+
+
+def test_verified_system_validation_binds_every_measurement(tmp_path: Path) -> None:
+    schema = REPO_ROOT / "schemas" / "nw10-system-validation.schema.json"
+    record = _verified_system_record()
+    path = tmp_path / "system.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    validate_file_against_schema(path, schema)
+
+    record["memory"]["package_sha256"] = "9" * 64
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="memory measurement is not bound"):
+        validate_file_against_schema(path, schema)
+
+    record = _verified_system_record()
+    record["startup"]["hardware"]["driver_version"] = "unavailable"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="driver does not match"):
+        validate_file_against_schema(path, schema)
+
+
+def test_verified_correctness_and_pe_ledger_cannot_claim_unmeasured_runtime(
+    tmp_path: Path,
+) -> None:
+    correctness = json.loads(
+        (
+            REPO_ROOT
+            / "benchmarks"
+            / "nw10"
+            / "common-artifact-correctness.v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    correctness["status"] = "verified"
+    correctness["ada"]["status"] = "verified"
+    correctness["blackwell"]["status"] = "verified"
+    correctness["ada"]["hardware"]["device_form_factor"] = "desktop"
+    correctness["blackwell"]["hardware"]["device_form_factor"] = "desktop"
+    correctness["ada"]["hardware"]["device_form_factor_source"] = (
+        "win32_system_enclosure_and_battery"
+    )
+    correctness["blackwell"]["hardware"]["device_form_factor_source"] = (
+        "win32_system_enclosure_and_battery"
+    )
+    correctness["common_artifact"]["package_sha256"] = "a" * 64
+    correctness["comparison"]["fixed_tick_status"] = "passed"
+    correctness["comparison"]["ada_loop_boundary_status"] = "passed"
+    correctness["comparison"]["blackwell_loop_boundary_status"] = "passed"
+    correctness["comparison"]["worst_absolute_error"] = 0.0
+    correctness["comparison"]["worst_relative_error"] = 0.0
+    correctness["packed_unpacked_comparison"] = {
+        "status": "verified",
+        "direct_separate_packed_gpu_capture_recorded": False,
+        "packed_package_sha256": "a" * 64,
+        "unpacked_package_sha256": "a" * 64,
+        "worst_absolute_error": 0.0,
+        "runtime": {
+            "ada": {"status": "passed"},
+            "blackwell": {"status": "passed"},
+        },
+    }
+    correctness["source"]["execution_kind"] = "physical_cross_hardware"
+    path = tmp_path / "correctness.json"
+    path.write_text(json.dumps(correctness), encoding="utf-8")
+    with pytest.raises(Exception, match="direct separate packed GPU capture"):
+        validate_file_against_schema(
+            path,
+            REPO_ROOT
+            / "schemas"
+            / "nw10-common-artifact-correctness.schema.json",
+        )
+
+    pe = json.loads(
+        (
+            REPO_ROOT / "benchmarks" / "nw10" / "windows-pe-ledger.v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    pe["status"] = "verified"
+    pe["final_artifact"]["runtime_status"] = "pending_runtime_validation"
+    pe["conclusion"]["byte_ledger_complete"] = True
+    path.write_text(json.dumps(pe), encoding="utf-8")
+    with pytest.raises(Exception, match="validated runnable"):
+        validate_file_against_schema(
+            path,
+            REPO_ROOT / "schemas" / "nw10-windows-pe-ledger.schema.json",
+        )
+
+
 def test_contract_evidence_regeneration_is_not_destructive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -588,3 +771,50 @@ def test_reused_physical_evidence_regeneration_does_not_promote_status(
     assert compact_record["correctness_coverage"]["desktop_ada_representative"]["status"] == "pending_unverified"
     assert intro_record["physical_measurements"] == "pending_physical_windows_capture"
     assert "reused_physical_evidence" not in intro_record
+
+
+def test_regeneration_withdraws_same_head_reuse_bridge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nw10_evidence
+
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    output = tmp_path / "evidence"
+    output.mkdir()
+    head = nw10_evidence._git_head()
+    status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
+        "source_head_sha": head,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "evidence_status": "performance_correctness_and_system_verified_packaging_pending",
+        "contract_evidence": "verified_by_pytest",
+        "physical_evidence": "performance_correctness_and_system_verified",
+        "reference_capture": "pending_reference_capture",
+        "ada_correctness": "verified",
+        "blackwell_correctness": "verified",
+        "clean_system": "verified",
+        "startup": "verified",
+        "memory": "verified",
+        "frame_time": "pending_unverified",
+        "reused_physical_evidence": "benchmarks/nw10/reused-physical-evidence.v1.json",
+        "correctness_evidence": {
+            "status": "verified",
+            "path": "benchmarks/nw10/missing-correctness.json",
+            "sha256": "0" * 64,
+        },
+        "files": [],
+    }
+    (output / "evidence-status.v1.json").write_text(
+        json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    nw10_evidence.build_evidence(output)
+    regenerated = json.loads(
+        (output / "evidence-status.v1.json").read_text(encoding="utf-8")
+    )
+    assert regenerated["evidence_status"] == "pending_physical_windows_capture"
+    assert regenerated["ada_correctness"] == "pending_unverified"
+    assert regenerated["clean_system"] == "pending_unverified"
+    assert "reused_physical_evidence" not in regenerated
+    assert regenerated["superseded_physical_evidence"]

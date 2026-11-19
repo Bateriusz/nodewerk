@@ -82,6 +82,8 @@ jobs:
               "evidence-status.v1.json",
               "proof-export-report.v1.json",
               "intro-export-report.v1.json",
+              "common-artifact-correctness.v1.json",
+              "system-validation.v1.json",
           )
           for name in names:
               first = Path("build/nw10-evidence-a") / name
@@ -261,6 +263,7 @@ jobs:
             $reportPath = Join-Path $artifactRoot "report.json"
             $introReport = Get-Content $reportPath -Raw | ConvertFrom-Json
             $introReport.compact_artifact.selected_mode = "compact"
+            $introReport.compact_artifact.selected_reason = "explicit_compact_selection_after_validation"
             $introReport.compact_artifact.selected_executable_bytes = [int64]$candidate.Length
             $introReport.compact_artifact.selected_executable_sha256 = (
               Get-FileHash -Algorithm SHA256 $candidate.FullName
@@ -303,6 +306,25 @@ jobs:
             }
           }
 
+          # Keep the intro report's declared selection identical to the
+          # executable copied into the final artifact slot.
+          $reportPath = Join-Path (Join-Path $PWD "build/nw10-intro") "report.json"
+          if (Test-Path $reportPath -PathType Leaf) {
+            $introReport = Get-Content $reportPath -Raw | ConvertFrom-Json
+            $introReport.compact_artifact.selected_executable_bytes = [int64]$selected.Length
+            $introReport.compact_artifact.selected_executable_sha256 = (
+              Get-FileHash -Algorithm SHA256 $selected.FullName
+            ).Hash.ToLowerInvariant()
+            if ($validatedMode -eq "compact") {
+              $introReport.compact_artifact.selected_mode = "compact"
+              $introReport.compact_artifact.selected_reason = "explicit_compact_selection_after_validation"
+            } else {
+              $introReport.compact_artifact.selected_mode = "canonical"
+              $introReport.compact_artifact.selected_reason = "runtime_validation_pending"
+            }
+            $introReport | ConvertTo-Json -Depth 24 | Set-Content -Encoding utf8 $reportPath
+          }
+
           if ($hostedRuntimeValidated) {
             $outcome.minimum_validated_runnable_bytes = [int64]$selected.Length
           } else {
@@ -328,6 +350,17 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $outcome = Get-Content "$PWD/build/nw10-windows-size-outcome.json" -Raw | ConvertFrom-Json
+          if ($outcome.compact_candidate_runtime_status -eq "validated_runnable" -or $outcome.canonical_fallback_exit_code -eq 0) {
+            $runtimeStatus = "validated_runnable"
+            $runtimeExitCode = 0
+          } elseif ($null -ne $outcome.canonical_fallback_exit_code) {
+            $runtimeStatus = "pending_runtime_validation"
+            $runtimeExitCode = [int]$outcome.canonical_fallback_exit_code
+          } else {
+            $runtimeStatus = "rejected_runtime_failure"
+            $runtimeExitCode = [int]$outcome.compact_candidate_exit_code
+          }
           $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
           $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
           $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
@@ -368,6 +401,8 @@ jobs:
             --linker-baseline-package "$PWD/build/nw10-intro-link-control/$stem.nwp" `
             --final-manifest "$PWD/build/nw10-intro/$stem.manifest.json" `
             --linker-baseline-manifest "$PWD/build/nw10-intro-link-control/$stem.manifest.json" `
+            --runtime-status $runtimeStatus `
+            --runtime-exit-code $runtimeExitCode `
             --output "$PWD/build/nw10-windows-pe-ledger.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/schema_validator.py `
@@ -401,8 +436,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $outcome = Get-Content "$PWD/build/nw10-windows-size-outcome.json" -Raw | ConvertFrom-Json
-          if ([string]$outcome.validated_mode -notin @("canonical_fallback", "canonical_fallback_pending_physical")) {
-            throw "Clean-system transfer requires the canonical fallback to be selected."
+          if ([string]$outcome.validated_mode -notin @("compact", "canonical_fallback", "canonical_fallback_pending_physical")) {
+            throw "Clean-system transfer requires a selected compact or canonical fallback executable."
           }
 
           $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
@@ -510,6 +545,40 @@ jobs:
         with:
           name: nw10-correctness-transfer-ada
           path: build/nw10-correctness-scripted/transfer-ada/transfer-package/**
+          if-no-files-found: error
+
+      - name: Package Blackwell packed correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -TargetTier blackwell `
+            -PackagingMode packed `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Blackwell packed correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-blackwell-packed
+          path: build/nw10-correctness-scripted/transfer-blackwell-packed/transfer-package/**
+          if-no-files-found: error
+
+      - name: Package Ada packed correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -TargetTier ada `
+            -PackagingMode packed `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Ada packed correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-ada-packed
+          path: build/nw10-correctness-scripted/transfer-ada-packed/transfer-package/**
           if-no-files-found: error
 
       - name: Upload Windows NW-10 evidence

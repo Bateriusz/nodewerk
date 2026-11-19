@@ -93,6 +93,7 @@ MAX_CONTAINER_BYTES = 64 * 1024 * 1024
 MAX_DECODED_BYTES = nwp.MAX_DECODED_BYTES
 MAX_EXPANSION_RATIO = 256
 MSZIP_BLOCK_BYTES = 32_768
+MSZIP_ENCODING_ID = "nwc.mszip.ck-zlib.v1"
 
 
 class CompactCodecError(ValueError):
@@ -355,17 +356,67 @@ def _windows_mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
 
 
 def mszip_compress(data: bytes, *, level: int = 9) -> bytes:
-    """Use the player's inbox MSZIP codec on Windows; deterministic zlib elsewhere."""
+    """Produce one deterministic MSZIP (CK-framed DEFLATE) byte stream.
+
+    The Windows release host and the GPU-less contract host must record the
+    same encoded payload identity.  The inbox Compression API on Windows is not
+    byte-stable across versions and is therefore used only as the shipped
+    *decoder*.  Encoding always uses the repository-owned deterministic CK
+    framing below.  The Windows decoder parity harness exercises the inbox
+    decompressor against these bytes so the selected encoding is demonstrated,
+    not assumed, to be supported by the player.
+    """
+    encoded = _zlib_mszip_compress(data, level=level)
     if sys.platform == "win32":
-        return _windows_mszip_compress(data)
-    return _zlib_mszip_compress(data, level=level)
+        # Fail closed at packaging time if the exact inbox decompressor used by
+        # the shipped player rejects the deterministic bytes.  This is a
+        # measured compatibility gate, not an assumption about API behaviour.
+        try:
+            decoded = _windows_mszip_decompress(
+                encoded, max_output_bytes=len(data)
+            )
+        except CompactCodecError as exc:
+            raise CompactCodecError(
+                "compact_codec_unavailable_or_malformed",
+                "Windows inbox MSZIP decoder rejected the deterministic encoder "
+                "bytes",
+            ) from exc
+        if decoded != data:
+            raise CompactCodecError(
+                "compact_codec_malformed",
+                "Windows inbox MSZIP decoder changed the deterministic payload",
+            )
+    return encoded
 
 
 def mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
-    """Decode with the same codec family used to produce the payload."""
+    """Decode deterministic MSZIP bytes.
+
+    On Windows prefer the exact inbox decompressor used by the shipped player;
+    fall back to the portable reference decoder only when the host API rejects
+    the bytes.  Both paths are bounded by ``max_output_bytes``.
+    """
     if sys.platform == "win32":
-        return _windows_mszip_decompress(data, max_output_bytes=max_output_bytes)
+        try:
+            return _windows_mszip_decompress(
+                data, max_output_bytes=max_output_bytes
+            )
+        except CompactCodecError:
+            pass
     return _zlib_mszip_decompress(data, max_output_bytes=max_output_bytes)
+
+
+def mszip_encoding_identity() -> dict[str, Any]:
+    """Return the declared encoder identity used in evidence records."""
+    return {
+        "encoding_id": MSZIP_ENCODING_ID,
+        "codec_id": contract.CODEC_MSZIP_ID,
+        "stored_format": "cab_mszip_ck_blocks_with_raw_deflate",
+        "encoder": "python-zlib-raw-deflate-level-9",
+        "decoder": "windows-inbox-compression-api-or-portable-reference",
+        "cross_platform_byte_parity": True,
+        "deterministic": True,
+    }
 
 
 def compress_payload(codec: int, payload: bytes) -> bytes:
@@ -893,6 +944,20 @@ def measure_candidate_compression(container: bytes) -> list[dict[str, Any]]:
             "payload_bytes": len(payload),
             "complete_container_bytes": HEADER_SIZE + len(payload),
             "player_supported": name in contract.PLAYER_SUPPORTED_CODEC_IDS,
+            "encoding_id": (
+                MSZIP_ENCODING_ID
+                if name == contract.CODEC_MSZIP_ID
+                else (
+                    "nwc.codec.stored.v1"
+                    if name == contract.CODEC_STORED_ID
+                    else f"{name}.v1"
+                )
+            ),
+            "deterministic": name in {
+                contract.CODEC_STORED_ID,
+                contract.CODEC_MSZIP_ID,
+                "candidate.zlib.raw",
+            },
         }
         for name, payload in options
     ]

@@ -26,6 +26,7 @@ import nw10_compact as compact  # noqa: E402
 import nw10_contract as contract  # noqa: E402
 import nw10_intro as intro  # noqa: E402
 import nw10_proof as proof  # noqa: E402
+import nw10_publish_evidence as publisher  # noqa: E402
 
 EVIDENCE_FORMAT = "nw10-compact-evidence"
 EVIDENCE_VERSION = 1
@@ -151,14 +152,18 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
             "physical_certification": "pending_physical_windows_capture",
             "reference_capture": "pending_reference_capture",
             "codec_encoding_identity": {
-                "contract_host": "zlib-raw-deflate-ck-framing",
-                "windows_release_host": "inbox-compression-api-mszip",
-                "cross_platform_byte_parity_claimed": False,
+                "encoding_id": compact.MSZIP_ENCODING_ID,
+                "contract_host": compact.MSZIP_ENCODING_ID,
+                "windows_release_host": compact.MSZIP_ENCODING_ID,
+                "encoder": "zlib-raw-deflate-level-9-ck-framing",
+                "decoder": "windows-inbox-compression-api-or-portable-reference",
+                "cross_platform_byte_parity_claimed": True,
                 "reason": (
-                    "The contract host uses deterministic zlib CK framing; the "
-                    "Windows release host uses the inbox Compression API paired "
-                    "with the shipped decoder. Byte identity across hosts is not "
-                    "assumed; each host records its own encoded payload hashes."
+                    "Both hosts use the repository-owned deterministic CK-framed "
+                    "DEFLATE encoder, so encoded payload hashes reproduce. The "
+                    "Windows player still decodes with the inbox Compression API; "
+                    "the Windows decoder parity test proves that API accepts the "
+                    "deterministic bytes."
                 ),
             },
             "correctness_coverage": {
@@ -351,6 +356,42 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
             )
             + "\n",
         )
+        # Keep the explicit non-certifying records reproducible.  Never
+        # overwrite a tracked verified physical record from contract-only
+        # regeneration.
+        previous_status: dict[str, Any] = {}
+        if status_path.is_file():
+            try:
+                previous_status = json.loads(
+                    status_path.read_text(encoding="utf-8")
+                )
+            except json.JSONDecodeError:
+                previous_status = {}
+        head = _git_head()
+        if (
+            previous_status.get("ada_correctness") != "verified"
+            and _record_status(
+                output / "common-artifact-correctness.v1.json"
+            )
+            != "verified"
+        ):
+            publisher._write(
+                output / "common-artifact-correctness.v1.json",
+                publisher.build_pending_correctness(
+                    implementation_head=head or None
+                ),
+            )
+        if (
+            previous_status.get("clean_system") != "verified"
+            and _record_status(output / "system-validation.v1.json")
+            != "verified"
+        ):
+            publisher._write(
+                output / "system-validation.v1.json",
+                publisher.build_pending_system_validation(
+                    implementation_head=head or None
+                ),
+            )
         status_files = [
             {
                 "path": "benchmarks/nw10/compact-proof.v1.json",
@@ -449,7 +490,14 @@ def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str
     existing = status_path if status_path.is_file() else None
     if existing is not None:
         previous = json.loads(existing.read_text(encoding="utf-8"))
-        if current_head and previous.get("source_head_sha") == current_head:
+        # Withdrawal history is attribution, not a physical claim.  Keep it
+        # even when the current state is pending so the executed failure and
+        # the reason its evidence cannot certify remain visible.
+        if isinstance(previous.get("superseded_physical_evidence"), dict):
+            status["superseded_physical_evidence"] = previous[
+                "superseded_physical_evidence"
+            ]
+        if _physical_evidence_is_current(previous, current_head):
             for field in _PHYSICAL_STATUS_FIELDS:
                 if field in previous:
                     status[field] = previous[field]
@@ -469,6 +517,48 @@ def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str
             }
     status["files"] = files
     return status
+
+
+def _physical_evidence_is_current(
+    previous: dict[str, Any], current_head: str
+) -> bool:
+    """Only preserve physical state that is bound and still materialised.
+
+    A source-head string by itself is not proof.  The record must also avoid
+    the withdrawn reuse bridge, and any referenced correctness/system summaries
+    must exist with the recorded canonical-text hash.  Otherwise regeneration
+    resets physical state to pending instead of laundering stale evidence.
+    """
+    if not current_head or previous.get("source_head_sha") != current_head:
+        return False
+    if previous.get("reused_physical_evidence"):
+        return False
+    for field in ("correctness_evidence", "system_validation"):
+        entry = previous.get(field)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            return False
+        relative = entry.get("path")
+        digest = entry.get("sha256")
+        if not isinstance(relative, str) or not isinstance(digest, str):
+            return False
+        candidate = REPO_ROOT / relative
+        if not candidate.is_file():
+            return False
+        if _sha256(candidate) != digest:
+            return False
+    return True
+
+
+def _record_status(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    return str(value.get("status", "")) if isinstance(value, dict) else ""
 
 
 def _git_head() -> str:

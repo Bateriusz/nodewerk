@@ -618,6 +618,9 @@ def export_intro(
             "success": True,
             "release_grade": not contracts_only,
             "test_payload": bool(contracts_only),
+            "measurement_kind": (
+                "contract_only" if contracts_only else "release_restricted_intro"
+            ),
             "profile": profile,
             "release_shader_binding": {
                 "specialization_id": intro_shader.specialization_id,

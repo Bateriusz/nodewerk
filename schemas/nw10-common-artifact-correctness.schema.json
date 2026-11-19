@@ -33,6 +33,10 @@
         "pending_unverified"
       ]
     },
+    "source_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
     "capture_protocol": {
       "const": "nw07-correctness-capture.v1"
     },
@@ -232,6 +236,7 @@
         "status": {
           "enum": [
             "verified",
+            "failed",
             "pending_physical"
           ]
         },

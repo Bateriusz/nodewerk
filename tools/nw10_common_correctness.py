@@ -34,9 +34,12 @@ import nw07_contract  # noqa: E402
 import nw07_evidence  # noqa: E402
 import nw07_export  # noqa: E402
 import nwp_package as nwp  # noqa: E402
+import nw10_compact as compact  # noqa: E402
+import nw10_contract as contract  # noqa: E402
 
 FORMAT = "nw10-common-artifact-correctness-capture"
 VERSION = 1
+PACKAGING_MODES = ("unpacked", "packed")
 ALL_TICKS = tuple(nw07_contract.REQUIRED_FIXED_TICKS) + (
     nw07_contract.LOOP_BOUNDARY_TICKS[1],
 )
@@ -130,11 +133,25 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _git_head() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    value = completed.stdout.strip()
+    return value if completed.returncode == 0 else ""
+
+
 def _identity(path: Path) -> dict[str, Any]:
     return nw07_export.inspect_artifact_directory(path)
 
 
-def _diagnostic_identity(path: Path) -> dict[str, Any]:
+def _diagnostic_identity(
+    path: Path, *, packaging_mode: str = "unpacked"
+) -> dict[str, Any]:
     """Inspect a dev diagnostic sibling without applying release-only rules.
 
     NW-07's inspect_artifact_directory intentionally expects the frozen release
@@ -144,6 +161,10 @@ def _diagnostic_identity(path: Path) -> dict[str, Any]:
     difference is expected and must not be mistaken for a common-package
     mismatch.
     """
+    if packaging_mode not in PACKAGING_MODES:
+        raise ValueError(
+            f"diagnostic packaging mode must be one of {PACKAGING_MODES}"
+        )
     stem = nw05_export._profile_file_stem(nw07_contract.PROFILE_ID)
     package_path = path / f"{stem}.nwp"
     manifest_path = path / f"{stem}.manifest.json"
@@ -168,11 +189,28 @@ def _diagnostic_identity(path: Path) -> dict[str, Any]:
     if package.capability.requirements_digest != nw07_contract.REQUIREMENTS_DIGEST:
         raise ValueError("diagnostic sibling changed the requirements digest")
 
-    embedded_package, embedded_manifest = nw05_export.extract_embedded_package(
+    embedded_payload, embedded_manifest = nw05_export.extract_embedded_package(
         executable_bytes
     )
-    if embedded_package != package_bytes:
-        raise ValueError("diagnostic executable does not embed the published package")
+    encoded_sha256: str | None = None
+    encoded_bytes: int | None = None
+    if packaging_mode == "unpacked":
+        if embedded_payload != package_bytes:
+            raise ValueError(
+                "diagnostic executable does not embed the published package"
+            )
+    else:
+        if not compact.is_compact_container(embedded_payload):
+            raise ValueError(
+                "packed diagnostic executable does not embed a compact container"
+            )
+        decoded = compact.decode_compact(embedded_payload)
+        if decoded != package_bytes:
+            raise ValueError(
+                "packed diagnostic executable does not decode to the common package"
+            )
+        encoded_sha256 = hashlib.sha256(embedded_payload).hexdigest()
+        encoded_bytes = len(embedded_payload)
     if embedded_manifest != manifest_bytes:
         raise ValueError(
             "diagnostic executable manifest binding does not match its published "
@@ -217,6 +255,9 @@ def _diagnostic_identity(path: Path) -> dict[str, Any]:
         "profile_id": package.capability.profile_id,
         "requirements_digest": package.capability.requirements_digest,
         "dependencies": actual_dependencies,
+        "packaging_mode": packaging_mode,
+        "encoded_container_sha256": encoded_sha256,
+        "encoded_container_bytes": encoded_bytes,
     }
 
 
@@ -243,7 +284,14 @@ def build_diagnostic(
     player_template: Path,
     dxc_executable: str,
     specialized_build_root: Path,
+    packaging_mode: str = "unpacked",
+    codec_id: str = "auto",
+    layout_id: str = "auto",
 ) -> dict[str, Any]:
+    if packaging_mode not in PACKAGING_MODES:
+        raise ValueError(
+            f"diagnostic packaging mode must be one of {PACKAGING_MODES}"
+        )
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"diagnostic output directory is not empty: {output}")
     expected = _identity(expected_package)
@@ -251,6 +299,18 @@ def build_diagnostic(
     pinned = nw07_export.verify_pinned_inputs(config)
     if pinned.get("matches_frozen_digest") is not True:
         raise ValueError("frozen NW-07 pinned build-input digest does not match")
+    template_configuration = nw05_export._template_build_configuration(
+        Path(player_template)
+    )
+    template_compact = str(
+        template_configuration.get("NW10_COMPACT_PACKAGE", "")
+    ).strip().upper() in {"ON", "1", "TRUE"}
+    required_compact = packaging_mode == "packed"
+    if template_compact is not required_compact:
+        raise ValueError(
+            "diagnostic packaging mode requires the template to be built with "
+            f"-DNW10_COMPACT_PACKAGE={'ON' if required_compact else 'OFF'}"
+        )
 
     settings = nw05_export.ExportSettings(
         byte_ceiling=64 * 1024 * 1024,
@@ -272,13 +332,64 @@ def build_diagnostic(
         dxc_executable=dxc_executable,
         optimization="O2",
     )
-    observed = _diagnostic_identity(output)
-    _require_same_common_artifact(expected, observed)
 
     stem = nw05_export._profile_file_stem(nw07_contract.PROFILE_ID)
+    package_path = output / f"{stem}.nwp"
+    manifest_path = output / f"{stem}.manifest.json"
     executable = output / f"{stem}.exe"
     if not executable.is_file():
         raise ValueError("diagnostic sibling executable was not emitted")
+
+    encoded: compact.CompactEncoding | None = None
+    if packaging_mode == "packed":
+        package_bytes = package_path.read_bytes()
+        manifest_bytes = manifest_path.read_bytes()
+        executable_bytes = executable.read_bytes()
+        embedded_package, embedded_manifest = nw05_export.extract_embedded_package(
+            executable_bytes
+        )
+        if embedded_package != package_bytes:
+            raise ValueError(
+                "packed diagnostic base executable does not embed the canonical package"
+            )
+        if embedded_manifest != manifest_bytes:
+            raise ValueError(
+                "packed diagnostic base executable manifest binding changed"
+            )
+        total = (
+            len(package_bytes)
+            + len(manifest_bytes)
+            + nw05_export.EMBED_FOOTER_SIZE
+        )
+        template_prefix = executable_bytes[: len(executable_bytes) - total]
+        resolved_layout = layout_id
+        if resolved_layout == "auto":
+            resolved_layout = compact.measure_layouts(package_bytes)["selected"]
+        resolved_codec = codec_id
+        if resolved_codec == "auto":
+            resolved_codec = compact.select_player_codec(
+                package_bytes,
+                layout_id=resolved_layout,
+                delta_references=True,
+            )["selected_codec_id"]
+        encoded = compact.encode_compact(
+            package_bytes,
+            codec_id=resolved_codec,
+            layout_id=resolved_layout,
+            delta_references=True,
+        )
+        rebuilt = nw05_export.embed_package(
+            template_prefix, encoded.bytes, manifest_bytes
+        )
+        if compact.decode_compact(
+            nw05_export.extract_embedded_package(rebuilt)[0]
+        ) != package_bytes:
+            raise ValueError("packed diagnostic sibling did not round-trip")
+        executable.write_bytes(rebuilt)
+        (output / f"{stem}.compact.nwc").write_bytes(encoded.bytes)
+
+    observed = _diagnostic_identity(output, packaging_mode=packaging_mode)
+    _require_same_common_artifact(expected, observed)
     if observed["executable_sha256"] == expected["executable_sha256"]:
         raise ValueError("diagnostic sibling unexpectedly equals final executable")
 
@@ -298,6 +409,11 @@ def build_diagnostic(
         "diagnostic_executable_bytes": observed["executable_bytes"],
         "diagnostic_manifest_sha256": observed["manifest_sha256"],
         "diagnostic_dependencies": observed["dependencies"],
+        "packaging_mode": packaging_mode,
+        "encoded_container_sha256": observed["encoded_container_sha256"],
+        "encoded_container_bytes": observed["encoded_container_bytes"],
+        "codec_id": encoded.codec_id if encoded is not None else None,
+        "layout_id": encoded.layout_id if encoded is not None else None,
         "capture_controls_required": True,
         "capture_protocol": nw07_contract.CORRECTNESS_CAPTURE_PROTOCOL,
     }
@@ -368,9 +484,14 @@ def capture(
     capture_dir: Path,
     tier: str,
     output: Path,
+    packaging_mode: str = "unpacked",
 ) -> dict[str, Any]:
+    if packaging_mode not in PACKAGING_MODES:
+        raise ValueError(
+            f"capture packaging mode must be one of {PACKAGING_MODES}"
+        )
     expected = _identity(expected_package)
-    observed = _diagnostic_identity(package)
+    observed = _diagnostic_identity(package, packaging_mode=packaging_mode)
     _require_same_common_artifact(expected, observed)
     if not diagnostic_executable.is_file():
         raise ValueError("diagnostic executable is unavailable")
@@ -462,6 +583,7 @@ def capture(
         "status": "captured_reference" if tier == "ada" else "captured_candidate",
         "tier": tier,
         "execution_kind": "physical",
+        "packaging_mode": packaging_mode,
         "capture_protocol": nw07_contract.CORRECTNESS_CAPTURE_PROTOCOL,
         "common_artifact": {
             "artifact_key": expected["artifact_key"],
@@ -479,6 +601,9 @@ def capture(
             "separate_from_final_executable": True,
             "same_common_package": True,
             "release_manifest_reused": False,
+            "packaging_mode": packaging_mode,
+            "encoded_container_sha256": observed["encoded_container_sha256"],
+            "encoded_container_bytes": observed["encoded_container_bytes"],
         },
         "hardware": {
             **hardware,
@@ -498,6 +623,12 @@ def capture(
             "absolute_tolerance": nw07_contract.IMAGE_ABSOLUTE_TOLERANCE,
             "relative_tolerance": nw07_contract.IMAGE_RELATIVE_TOLERANCE,
             "status": "passed",
+        },
+        "runtime": {
+            "status": "passed",
+            "capture_exit_code": 0,
+            "frames_per_tick": 1,
+            "present_sync_interval": hardware["present_sync_interval"],
         },
         "privacy": {
             "raw_capture_bytes_embedded": False,
@@ -548,6 +679,52 @@ def _verify_capture_manifest(
             raise ValueError(f"correctness raw capture SHA-256 mismatch for tick {tick}")
 
 
+def _verify_capture_record(
+    record: Mapping[str, Any],
+    *,
+    tier: str,
+    status: str,
+    packaging_mode: str,
+    capture_dir: Path,
+) -> None:
+    if record.get("format") != FORMAT:
+        raise ValueError(f"{tier} {packaging_mode} capture has an unexpected format")
+    if record.get("task") != "NW-10":
+        raise ValueError(f"{tier} {packaging_mode} capture is not NW-10 evidence")
+    if record.get("tier") != tier:
+        raise ValueError(f"{tier} {packaging_mode} capture changed its hardware tier")
+    if record.get("status") != status:
+        raise ValueError(f"{tier} {packaging_mode} capture has the wrong status")
+    if record.get("execution_kind") != "physical":
+        raise ValueError(f"{tier} {packaging_mode} capture is not physical")
+    if record.get("capture_protocol") != nw07_contract.CORRECTNESS_CAPTURE_PROTOCOL:
+        raise ValueError(f"{tier} {packaging_mode} capture changed the protocol")
+    if record.get("packaging_mode") != packaging_mode:
+        raise ValueError(
+            f"{tier} capture is not the declared {packaging_mode} artifact"
+        )
+    diagnostic = record.get("diagnostic_sibling")
+    if not isinstance(diagnostic, Mapping):
+        raise ValueError(f"{tier} {packaging_mode} diagnostic identity is missing")
+    if diagnostic.get("separate_from_final_executable") is not True:
+        raise ValueError(f"{tier} capture did not use a separate diagnostic sibling")
+    if diagnostic.get("same_common_package") is not True:
+        raise ValueError(f"{tier} capture diagnostic package identity is not bound")
+    if diagnostic.get("release_manifest_reused") is not False:
+        raise ValueError(f"{tier} capture reused the release manifest")
+    if str(diagnostic.get("executable_sha256", "")) == "":
+        raise ValueError(f"{tier} capture does not name its diagnostic executable")
+    if packaging_mode == "packed":
+        if not diagnostic.get("encoded_container_sha256"):
+            raise ValueError(f"{tier} packed capture does not name its encoded container")
+    runtime = record.get("runtime")
+    if not isinstance(runtime, Mapping) or runtime.get("status") != "passed":
+        raise ValueError(f"{tier} {packaging_mode} runtime capture did not pass")
+    if int(runtime.get("capture_exit_code", -1)) != 0:
+        raise ValueError(f"{tier} {packaging_mode} capture process did not exit zero")
+    _verify_capture_manifest(record, capture_dir)
+
+
 def compare(
     ada_record_path: Path,
     blackwell_record_path: Path,
@@ -561,15 +738,24 @@ def compare(
     packed_blackwell_record: Path | None = None,
     packed_package_sha256: str | None = None,
     unpacked_package_sha256: str | None = None,
+    implementation_head: str | None = None,
 ) -> dict[str, Any]:
     ada = json.loads(ada_record_path.read_text(encoding="utf-8"))
     blackwell = json.loads(blackwell_record_path.read_text(encoding="utf-8"))
-    if ada.get("tier") != "ada" or blackwell.get("tier") != "blackwell":
-        raise ValueError("comparison requires Ada reference and Blackwell candidate")
-    if ada.get("status") != "captured_reference":
-        raise ValueError("Ada correctness record is not a captured reference")
-    if blackwell.get("status") != "captured_candidate":
-        raise ValueError("Blackwell correctness record is not a captured candidate")
+    _verify_capture_record(
+        ada,
+        tier="ada",
+        status="captured_reference",
+        packaging_mode="unpacked",
+        capture_dir=ada_capture_dir,
+    )
+    _verify_capture_record(
+        blackwell,
+        tier="blackwell",
+        status="captured_candidate",
+        packaging_mode="unpacked",
+        capture_dir=blackwell_capture_dir,
+    )
     if ada.get("common_artifact") != blackwell.get("common_artifact"):
         raise ValueError("Ada and Blackwell captures do not name the same common artifact")
     for label, record, expected_tier in (
@@ -594,8 +780,14 @@ def compare(
             raise ValueError(
                 f"{label} correctness form factor was not measured"
             )
-    _verify_capture_manifest(ada, ada_capture_dir)
-    _verify_capture_manifest(blackwell, blackwell_capture_dir)
+        form_factor_source = str(
+            hardware.get("device_form_factor_source", "")
+        ).casefold()
+        if "reused" in form_factor_source or "inventory" in form_factor_source:
+            raise ValueError(
+                f"{label} correctness form factor came from inventory rather "
+                "than a chassis probe"
+            )
     ada_loop = _compare_rgba32f(
         ada_capture_dir / f"tick_{nw07_contract.LOOP_BOUNDARY_TICKS[0]}.rgba32f",
         ada_capture_dir / f"tick_{nw07_contract.LOOP_BOUNDARY_TICKS[1]}.rgba32f",
@@ -640,24 +832,107 @@ def compare(
         else "failed"
     )
     packed_block: dict[str, Any]
-    if packed_ada_capture_dir and packed_blackwell_capture_dir:
+    packed_inputs = (
+        packed_ada_capture_dir,
+        packed_blackwell_capture_dir,
+        packed_ada_record,
+        packed_blackwell_record,
+    )
+    if any(item is not None for item in packed_inputs):
+        if not all(item is not None for item in packed_inputs):
+            raise ValueError(
+                "packed correctness comparison requires both hardware capture "
+                "directories and both capture manifests"
+            )
         if packed_ada_record is None or packed_blackwell_record is None:
             raise ValueError(
                 "packed capture directories require their capture manifests"
             )
+        packed_records = {
+            "ada": json.loads(packed_ada_record.read_text(encoding="utf-8")),
+            "blackwell": json.loads(
+                packed_blackwell_record.read_text(encoding="utf-8")
+            ),
+        }
+        for label, record, capture_dir, expected_tier, expected_status in (
+            (
+                "ada",
+                packed_records["ada"],
+                packed_ada_capture_dir,
+                "ada",
+                "captured_reference",
+            ),
+            (
+                "blackwell",
+                packed_records["blackwell"],
+                packed_blackwell_capture_dir,
+                "blackwell",
+                "captured_candidate",
+            ),
+        ):
+            _verify_capture_record(
+                record,
+                tier=expected_tier,
+                status=expected_status,
+                packaging_mode="packed",
+                capture_dir=capture_dir,
+            )
+            if record.get("common_artifact") != ada.get("common_artifact"):
+                raise ValueError(
+                    f"packed {label} captures are not bound to the common artifact"
+                )
+            unpacked_hardware = (
+                ada if label == "ada" else blackwell
+            ).get("hardware", {})
+            unpacked_record = ada if label == "ada" else blackwell
+            packed_hardware = record.get("hardware", {})
+            for field in (
+                "adapter_description",
+                "driver_version",
+                "vendor_id",
+                "device_id",
+                "classified_tier",
+                "device_form_factor",
+            ):
+                if packed_hardware.get(field) != unpacked_hardware.get(field):
+                    raise ValueError(
+                        f"packed {label} capture hardware changed {field}"
+                    )
+            if (
+                str(
+                    packed_records[label]
+                    .get("diagnostic_sibling", {})
+                    .get("executable_sha256", "")
+                )
+                == str(
+                    unpacked_record.get("diagnostic_sibling", {}).get(
+                        "executable_sha256", ""
+                    )
+                )
+            ):
+                raise ValueError(
+                    f"packed {label} capture reused the unpacked executable"
+                )
         for label, record_path, capture_dir in (
             ("ada", packed_ada_record, packed_ada_capture_dir),
             ("blackwell", packed_blackwell_record, packed_blackwell_capture_dir),
         ):
-            packed_record = json.loads(record_path.read_text(encoding="utf-8"))
-            _verify_capture_manifest(packed_record, capture_dir)
-            if str(
-                packed_record.get("common_artifact", {}).get("package_sha256", "")
-            ).lower() != str(
-                ada["common_artifact"].get("package_sha256", "")
-            ).lower():
+            if not record_path.is_file():
+                raise ValueError(f"packed {label} capture manifest is missing")
+            if not capture_dir.is_dir():
+                raise ValueError(f"packed {label} capture directory is missing")
+        common_package_sha = str(
+            ada["common_artifact"].get("package_sha256", "")
+        ).lower()
+        for label in ("ada", "blackwell"):
+            packed_sha = str(
+                packed_records[label]
+                .get("diagnostic_sibling", {})
+                .get("encoded_container_sha256", "")
+            ).lower()
+            if not packed_sha:
                 raise ValueError(
-                    f"packed {label} captures are not bound to the common artifact"
+                    f"packed {label} capture does not name its encoded container"
                 )
         packed_worst = 0.0
         packed_runtime: dict[str, Any] = {}
@@ -676,13 +951,33 @@ def compare(
             packed_runtime[label] = {
                 "status": "passed" if passed else "failed",
                 "worst_absolute_error": tier_worst,
+                "runtime_status": "passed",
+                "unpacked_executable_sha256": (
+                    (ada if label == "ada" else blackwell)
+                    .get("diagnostic_sibling", {})
+                    .get("executable_sha256")
+                ),
+                "packed_executable_sha256": (
+                    packed_records[label]
+                    .get("diagnostic_sibling", {})
+                    .get("executable_sha256")
+                ),
+                "encoded_container_sha256": (
+                    packed_records[label]
+                    .get("diagnostic_sibling", {})
+                    .get("encoded_container_sha256")
+                ),
             }
             packed_worst = max(packed_worst, tier_worst)
         packed_ok = (
             all(item["status"] == "passed" for item in packed_runtime.values())
             and packed_package_sha256 is not None
             and packed_package_sha256 == unpacked_package_sha256
-            and packed_package_sha256 == ada["common_artifact"].get("package_sha256")
+            and packed_package_sha256 == common_package_sha
+            and all(
+                item.get("runtime_status") == "passed"
+                for item in packed_runtime.values()
+            )
         )
         packed_block = {
             "status": "verified" if packed_ok else "failed",
@@ -725,6 +1020,15 @@ def compare(
         },
         "comparison": {
             "per_tick": per_tick,
+            "fixed_ticks": list(nw07_contract.REQUIRED_FIXED_TICKS),
+            "fixed_tick_status": (
+                "passed"
+                if all(row["status"] == "passed" for row in per_tick)
+                else "failed"
+            ),
+            "loop_boundary_ticks": list(nw07_contract.LOOP_BOUNDARY_TICKS),
+            "ada_loop_boundary_status": ada_loop["status"],
+            "blackwell_loop_boundary_status": blackwell_loop["status"],
             "worst_absolute_error": worst_absolute,
             "worst_relative_error": worst_relative,
             "absolute_tolerance": nw07_contract.IMAGE_ABSOLUTE_TOLERANCE,
@@ -732,6 +1036,15 @@ def compare(
             "absolute_required": True,
         },
         "packed_unpacked_comparison": packed_block,
+        "source": {
+            "mode": "compare",
+            "execution_kind": "physical_cross_hardware",
+            "tool": "tools/nw10/run-correctness-evidence.ps1",
+            "implementation_head": (
+                implementation_head or _git_head() or "0" * 40
+            ),
+            "raw_capture_manifests_tracked": False,
+        },
         "privacy": {
             "raw_capture_bytes_embedded": False,
             "local_paths_included": False,
@@ -758,6 +1071,15 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--dxc", required=True)
     build.add_argument("--build-root", type=Path, required=True)
     build.add_argument("--report", type=Path, required=True)
+    build.add_argument(
+        "--mode", choices=PACKAGING_MODES, default="unpacked"
+    )
+    build.add_argument(
+        "--codec", default="auto", choices=("auto", *contract.PLAYER_SUPPORTED_CODEC_IDS)
+    )
+    build.add_argument(
+        "--layout", default="auto", choices=("auto", *contract.KNOWN_LAYOUT_IDS)
+    )
 
     cap = sub.add_parser("capture")
     cap.add_argument("--package", type=Path, required=True)
@@ -766,6 +1088,9 @@ def main(argv: list[str] | None = None) -> int:
     cap.add_argument("--capture-dir", type=Path, required=True)
     cap.add_argument("--tier", choices=("ada", "blackwell"), required=True)
     cap.add_argument("--output", type=Path, required=True)
+    cap.add_argument(
+        "--mode", choices=PACKAGING_MODES, default="unpacked"
+    )
 
     comp = sub.add_parser("compare")
     comp.add_argument("--ada-record", type=Path, required=True)
@@ -778,6 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
     comp.add_argument("--packed-blackwell-record", type=Path)
     comp.add_argument("--packed-package-sha256")
     comp.add_argument("--unpacked-package-sha256")
+    comp.add_argument("--implementation-head", default="")
     comp.add_argument("--output", type=Path, required=True)
 
     args = parser.parse_args(argv)
@@ -789,6 +1115,9 @@ def main(argv: list[str] | None = None) -> int:
                 player_template=args.player_template,
                 dxc_executable=args.dxc,
                 specialized_build_root=args.build_root,
+                packaging_mode=args.mode,
+                codec_id=args.codec,
+                layout_id=args.layout,
             )
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(
@@ -805,6 +1134,7 @@ def main(argv: list[str] | None = None) -> int:
                 capture_dir=args.capture_dir,
                 tier=args.tier,
                 output=args.output,
+                packaging_mode=args.mode,
             )
         else:
             summary = compare(
@@ -819,6 +1149,7 @@ def main(argv: list[str] | None = None) -> int:
                 packed_blackwell_record=args.packed_blackwell_record,
                 packed_package_sha256=args.packed_package_sha256,
                 unpacked_package_sha256=args.unpacked_package_sha256,
+                implementation_head=args.implementation_head or None,
             )
     except Exception as exc:
         print(

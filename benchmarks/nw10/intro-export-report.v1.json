@@ -364,7 +364,7 @@
       "layout_id": "nwc.layout.canonical.v1",
       "packaging_tool": {
         "identity": "tools/nw10_compact.py",
-        "version": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367"
+        "version": "f6d18500a5b15239c8fb8c49fa71e13ceff654cf583dff94f726c876e0ea525e"
       },
       "selected_executable_bytes": 4350,
       "task": "NW-10",
@@ -462,7 +462,7 @@
       "layout_id": "nwc.layout.soa.v1",
       "packaging_tool": {
         "identity": "tools/nw10_compact.py",
-        "version": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367"
+        "version": "f6d18500a5b15239c8fb8c49fa71e13ceff654cf583dff94f726c876e0ea525e"
       },
       "selected_executable_bytes": 2090,
       "task": "NW-10",
@@ -476,35 +476,46 @@
       "within_stretch": true
     }
   },
+  "measurement_kind": "contract_only",
   "measurements": {
     "compression_candidates": [
       {
         "codec": "nwc.codec.stored.v1",
         "complete_container_bytes": 4260,
+        "deterministic": true,
+        "encoding_id": "nwc.codec.stored.v1",
         "payload_bytes": 4196,
         "player_supported": true
       },
       {
         "codec": "candidate.zlib.raw",
         "complete_container_bytes": 1719,
+        "deterministic": true,
+        "encoding_id": "candidate.zlib.raw.v1",
         "payload_bytes": 1655,
         "player_supported": false
       },
       {
         "codec": "candidate.bzip2",
         "complete_container_bytes": 1898,
+        "deterministic": false,
+        "encoding_id": "candidate.bzip2.v1",
         "payload_bytes": 1834,
         "player_supported": false
       },
       {
         "codec": "candidate.lzma",
         "complete_container_bytes": 1684,
+        "deterministic": false,
+        "encoding_id": "candidate.lzma.v1",
         "payload_bytes": 1620,
         "player_supported": false
       },
       {
         "codec": "nwc.codec.mszip.v1",
         "complete_container_bytes": 1715,
+        "deterministic": true,
+        "encoding_id": "nwc.mszip.ck-zlib.v1",
         "payload_bytes": 1651,
         "player_supported": true
       }
@@ -813,15 +824,15 @@
     "tools/nw06_timeline.py": "c481aafaf948387dfc4eea36f712385d970d3dcc182e6f56c8b49d4b1217a81e",
     "tools/nw07_contract.py": "592cd0ca9be755dec18586c9b9b8e5ee140bee4fbd5c914815f02c17a549af21",
     "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
-    "tools/nw10_compact.py": "4f892530759476557cc305929e90aba233e061fa767db8a267b68338975af367",
+    "tools/nw10_compact.py": "f6d18500a5b15239c8fb8c49fa71e13ceff654cf583dff94f726c876e0ea525e",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
-    "tools/nw10_evidence.py": "711dd7ffdd4d12488b96ac7811f4fd90a62a00421359f908063b18c80e2f7fbb",
-    "tools/nw10_intro.py": "89c8804767f4c0b03a602a29abaa5129b45c1bcaff5b23ba7177bc8525b8291a",
-    "tools/nw10_proof.py": "6f071e4ae5e92c6d2202dd8937a39770b5c8792c8782aaf0af2378061f83f1d9",
+    "tools/nw10_evidence.py": "58a63371aebdb16e6956f167b04eb49ffd90cbd68db1d63fea984ed6fd14ca0c",
+    "tools/nw10_intro.py": "fad0131cfc2729cdf4401455d9d2525b10951e739637426cabcbe4091ec83122",
+    "tools/nw10_proof.py": "891980b7aaec8092f3dc3881b6b46abd35c0987e511a8de943a222216902cb0f",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:a60a3d0c1f50627467edcfec6208776134c98a29400b64a52739da8bfc60d0e2",
+  "nw10_build_inputs_digest": "sha256:v1:38f7a3d37b2bd85d4472a32a63a0acb38c4ac0979f7d0f9424b95aa3e91ea328",
   "performance_validation": {
     "contract_id": "nw07_perf_ref_v1",
     "protocol": "nw07-perf-run.v1",

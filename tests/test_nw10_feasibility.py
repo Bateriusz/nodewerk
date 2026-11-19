@@ -7,6 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw10_feasibility as feasibility  # noqa: E402
+import nw10_contract as contract  # noqa: E402
 from schema_validator import validate_instance  # noqa: E402
 import json  # noqa: E402
 
@@ -15,7 +16,10 @@ def _proof() -> dict:
     return {
         "release_grade": True,
         "test_payload": False,
-        "nw10_build_inputs_digest": "sha256:v1:" + "f" * 64,
+        "measurement_kind": "release_decoder_off",
+        "nw10_build_inputs_digest": contract.build_inputs_digest(
+            contract.compute_build_inputs()
+        ),
         "templates": {
             "canonical_decoder_off": True,
             "compact_decoder_on": True,
@@ -31,6 +35,10 @@ def _intro() -> dict:
     return {
         "release_grade": True,
         "test_payload": False,
+        "measurement_kind": "release_restricted_intro",
+        "nw10_build_inputs_digest": contract.build_inputs_digest(
+            contract.compute_build_inputs()
+        ),
         "canonical_artifact": {
             "executable_bytes": 240_000,
             "executable_sha256": "b" * 64,
@@ -199,3 +207,47 @@ def test_feasibility_rejects_canonical_proof_above_the_frozen_tier() -> None:
         assert "262,144" in str(exc)
     else:
         raise AssertionError("canonical proof above the tier was accepted")
+
+
+def test_feasibility_requires_measured_release_decoder_off_proof() -> None:
+    proof = _proof()
+    proof["measurement_kind"] = "contract_only"
+    try:
+        feasibility.build_feasibility(
+            outcome=_outcome(),
+            proof=proof,
+            intro=_intro(),
+            run_id=1,
+            head_sha="1" * 40,
+        )
+    except ValueError as exc:
+        assert "decoder-OFF" in str(exc)
+    else:
+        raise AssertionError("contract-only proof was accepted as feasibility evidence")
+
+    proof = _proof()
+    proof["nw10_build_inputs_digest"] = "sha256:v1:" + "0" * 64
+    try:
+        feasibility.build_feasibility(
+            outcome=_outcome(),
+            proof=proof,
+            intro=_intro(),
+            run_id=1,
+            head_sha="1" * 40,
+        )
+    except ValueError as exc:
+        assert "build inputs" in str(exc)
+    else:
+        raise AssertionError("stale proof build inputs were accepted")
+
+
+def test_workflow_binds_feasibility_to_the_uploaded_artifact_identity() -> None:
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "nw10-compact.yml"
+    ).read_text(encoding="utf-8")
+    assert "--artifact-id" in workflow
+    assert "--artifact-digest" in workflow
+    assert "steps.nw10_evidence_upload.outputs.artifact-id" in workflow
+    assert "steps.nw10_evidence_upload.outputs.artifact-digest" in workflow
+    assert "--runtime-status $runtimeStatus" in workflow
+    assert "--runtime-exit-code $runtimeExitCode" in workflow

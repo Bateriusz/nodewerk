@@ -1,5 +1,5 @@
 {
-  "archived_reason": "Superseded by the current checkout: the referenced measurements are from 4d216 and do not include a direct packed/unpacked GPU capture set or a single-host clean-system startup/memory run for the current artifact.",
+  "archived_reason": "Superseded by the current checkout: the referenced measurements are from 4d216, do not include a direct packed/unpacked GPU capture set, and do not provide a single-host clean-system startup/memory run for a runnable current-head artifact. No nested measurement below is certification.",
   "current_head_transfer": {
     "packed_unpacked_correctness": {
       "canonical_executable_sha256": "298c1868853e6d841e1c8da0e62c1cdef957cd72be391a1bc23fc6096156af86",
@@ -10,11 +10,11 @@
       "encoded_container_sha256": "3f2625ac9458c2630cefcd857af8ac92be48cc09f97420254113886f226eabee",
       "physical_runtime_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
       "physical_runtime_status": {
-        "ada": "passed",
-        "blackwell": "passed"
+        "ada": "historical_not_current_head",
+        "blackwell": "historical_not_current_head"
       },
-      "status": "verified_compositional",
-      "verification_model": "bit_exact_shipped_decoder_parity_plus_prior_physical_runtime",
+      "status": "archived_informational",
+      "verification_model": "compositional_decoder_parity_not_physical",
       "visual_error_bound": 0
     },
     "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
@@ -22,14 +22,14 @@
       "current_executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
       "current_manifest_sha256": "802a629c542e08b6b03854647ef5d13f1965bcc1cc436093f22193162117f36e",
       "current_package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
-      "current_pe_ledger_status": "verified",
+      "current_pe_ledger_status": "archived_superseded",
       "executable_identity_exact": false,
       "measured_executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
       "measured_package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
       "numeric_startup_memory_values_are_historical_measurements": true,
       "package_identity_exact": true,
-      "status": "package_identity_exact_executable_rebuilt",
-      "verification_model": "same_release_package_with_current_head_pe_and_dependency_validation"
+      "status": "archived_informational",
+      "verification_model": "historical_not_current_head"
     },
     "workflow_artifact": {
       "artifact_id": 14540370510,
@@ -43,7 +43,8 @@
     "The historical correctness procedure did not record a separate packed-GPU capture set; packed/unpacked correctness is therefore a compositional proof using the shipped decoder's bit-exact parity plus physical execution of the identical decoded package on Ada and Blackwell.",
     "Clean-system deployment was measured on RTX 5070 Ti while startup and memory metrics were measured on RTX 4060 Ti; the evidence records the split instead of representing it as one environment.",
     "The legacy NUC13 clean-system capture did not record the Windows build, so no Windows build is inferred for that host.",
-    "The exact nw07_perf_ref_v1 reference capture remains pending and is not certified by these reused measurements."
+    "The exact nw07_perf_ref_v1 reference capture remains pending and is not certified by these reused measurements.",
+    "Every nested status in this archived record is informational; none is a current-head physical certification."
   ],
   "physical_measurements": {
     "cross_hardware_correctness": {
@@ -68,6 +69,7 @@
         "result_bundle_name": "nw10-correctness-blackwell-bundle.zip"
       },
       "capture_protocol": "nw07-correctness-capture.v1",
+      "certification": "withdrawn_not_current_head",
       "common_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
       "fixed_ticks": [
         0,
@@ -80,7 +82,7 @@
         0,
         960000
       ],
-      "status": "verified",
+      "status": "archived_informational",
       "worst_absolute_error": 0,
       "worst_relative_error": 0
     },
@@ -89,6 +91,7 @@
         "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
         "adapter_generation": "blackwell",
         "captured_at_utc": "2026-11-19T06:30:45.682639+00:00",
+        "certification": "withdrawn_not_current_head",
         "development_dependencies_present_on_path": [],
         "device_id": 11269,
         "driver_version": "32.0.16.1088",
@@ -102,7 +105,7 @@
         "scenario_status": "all_six_frozen_scenarios_passed",
         "sidecars": [],
         "source_result_bundle_sha256": "d7dabd5a093271fbdb6a213e58a379b9ca03b7206d19e38f1846762a7b64bc04",
-        "status": "verified",
+        "status": "archived_informational",
         "vendor_id": 4318,
         "virtualization_based_security_status": 2,
         "virtualization_indicators": [],
@@ -138,7 +141,7 @@
           "width": 1920
         },
         "startup_ceiling_ms": 2000,
-        "status": "verified_measurements",
+        "status": "archived_informational",
         "windows_build": "10.0.26300"
       }
     }

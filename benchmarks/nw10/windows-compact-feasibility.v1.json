@@ -78,6 +78,14 @@
     "user_profile_paths_included": false,
     "whitelist_generated": true
   },
+  "selected_artifact": {
+    "bytes": 240702,
+    "ledger": "benchmarks/nw10/windows-pe-ledger.v1.json",
+    "reason": "The current-head compact candidate and canonical fallback could not be validated as runnable, so the last validated 6c6f fallback remains the selected runnable distribution and complete byte ledger.",
+    "runtime_status": "validated_runnable",
+    "sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "source": "prior_valid_artifact"
+  },
   "source": {
     "artifact_digest": "sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4",
     "artifact_id": 14540370510,

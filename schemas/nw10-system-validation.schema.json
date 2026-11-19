@@ -28,9 +28,12 @@
     "status": {
       "enum": [
         "verified",
-        "verified_reused_split_hosts",
         "pending_unverified"
       ]
+    },
+    "source_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
     },
     "reason": {
       "type": "string"

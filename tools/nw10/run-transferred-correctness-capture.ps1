@@ -47,6 +47,10 @@ $transfer = Get-Content -Raw (Join-Path $here "transfer.json") | ConvertFrom-Jso
 if ([string]$transfer.target_tier -ne $Tier) {
     throw "Bundle target tier '$($transfer.target_tier)' does not match requested '$Tier'"
 }
+$packagingMode = [string]$transfer.packaging_mode
+if ($packagingMode -notin @("unpacked", "packed")) {
+    throw "Transfer bundle has an unrecognized packaging mode '$packagingMode'"
+}
 $exe = Join-Path $here ([string]$transfer.diagnostic_sibling.file)
 $exeSha = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
 if ($exeSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLowerInvariant()) {
@@ -147,6 +151,7 @@ $record = [ordered]@{
     status = $status
     tier = $Tier
     execution_kind = "physical"
+    packaging_mode = $packagingMode
     capture_protocol = [string]$transfer.capture_protocol
     common_artifact = $transfer.common_artifact
     diagnostic_sibling = [ordered]@{
@@ -157,6 +162,9 @@ $record = [ordered]@{
         separate_from_final_executable = $true
         same_common_package = $true
         release_manifest_reused = $false
+        packaging_mode = $packagingMode
+        encoded_container_sha256 = $transfer.diagnostic_sibling.encoded_container_sha256
+        encoded_container_bytes = $transfer.diagnostic_sibling.encoded_container_bytes
     }
     hardware = [ordered]@{
         adapter_description = $adapter
@@ -177,6 +185,12 @@ $record = [ordered]@{
         status = "captured_pending_numeric_validation"
         absolute_tolerance = 0.0001
         relative_tolerance = 0.0001
+    }
+    runtime = [ordered]@{
+        status = "passed"
+        capture_exit_code = 0
+        frames_per_tick = 1
+        present_sync_interval = 0
     }
     privacy = [ordered]@{
         raw_capture_bytes_embedded = $false
