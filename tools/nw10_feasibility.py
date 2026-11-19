@@ -105,14 +105,20 @@ def build_feasibility(
     artifact_name: str = "nw10-windows-compact-evidence",
     artifact_id: int | None = None,
     artifact_digest: str = "",
+    prior_valid_ledger: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if proof.get("test_payload") is True or intro.get("test_payload") is True:
         raise ValueError("feasibility publication requires release-grade reports")
     if proof.get("release_grade") is not True or intro.get("release_grade") is not True:
         raise ValueError("feasibility publication requires release-grade reports")
-    if proof.get("measurement_kind") != "release_decoder_off":
+    proof_kind = str(proof.get("measurement_kind") or "")
+    if proof_kind not in {
+        "release_decoder_off",
+        "release_decoder_off_size_blocked",
+    }:
         raise ValueError(
-            "proof report is not a measured release decoder-OFF export"
+            "proof report is not a measured release decoder-OFF export or "
+            "decoder-OFF size-blocked measurement"
         )
     current_digest = contract.build_inputs_digest(contract.compute_build_inputs())
     if proof.get("nw10_build_inputs_digest") != current_digest:
@@ -123,7 +129,6 @@ def build_feasibility(
         raise ValueError(
             "intro report build inputs do not match the checked-out implementation"
         )
-    proof_artifact = _proof_artifact(proof)
     templates = proof.get("templates")
     if not isinstance(templates, Mapping) or templates.get(
         "canonical_decoder_off"
@@ -133,12 +138,23 @@ def build_feasibility(
         )
     canonical_intro, compact_intro = _intro_artifacts(intro)
 
-    proof_bytes = int(proof_artifact["executable_bytes"])
+    if proof_kind == "release_decoder_off":
+        proof_artifact = _proof_artifact(proof)
+        proof_bytes = int(proof_artifact["executable_bytes"])
+    else:
+        if proof.get("success") is not False:
+            raise ValueError("size-blocked proof report must record success=false")
+        if proof.get("measurement_outcome") != "size_target_not_met":
+            raise ValueError(
+                "size-blocked proof report does not identify the proof-tier blocker"
+            )
+        measured = proof.get("measured_distribution_bytes")
+        if measured is None or int(measured) <= contract.PROOF_TIER_BYTES:
+            raise ValueError(
+                "size-blocked proof report does not retain an above-tier measurement"
+            )
+        proof_bytes = int(measured)
     proof_within = proof_bytes <= contract.PROOF_TIER_BYTES
-    if not proof_within:
-        raise ValueError(
-            "canonical decoder-off proof exceeds the 262,144-byte proof tier"
-        )
 
     measured_candidate = outcome.get("minimum_measured_candidate_bytes")
     validated_bytes = outcome.get("minimum_validated_runnable_bytes")
@@ -172,7 +188,8 @@ def build_feasibility(
         candidate_sha = "0" * 64
     candidate_size = int(candidate_bytes) if candidate_bytes is not None else 1
     target_met = bool(
-        validated_bytes is not None
+        proof_within
+        and validated_bytes is not None
         and int(validated_bytes) <= contract.COMPACT_TARGET_BYTES
         and runtime_status == "validated_runnable"
     )
@@ -254,8 +271,8 @@ def build_feasibility(
             "proof_measured_bytes": proof_bytes,
             "proof_measurement_status": (
                 "measured_decoder_off"
-                if proof.get("measurement_kind") == "release_decoder_off"
-                else "unverified"
+                if proof_kind == "release_decoder_off"
+                else "measured_decoder_off_size_blocked"
             ),
             "canonical_proof_within_tier": proof_within,
             "proof_build_inputs_digest": proof.get("nw10_build_inputs_digest"),
@@ -307,6 +324,22 @@ def build_feasibility(
             "whitelist_generated": True,
         },
     }
+    blockers: list[dict[str, Any]] = []
+    if not proof_within:
+        blockers.append(
+            {
+                "id": "canonical_proof_tier",
+                "status": "measured_above_tier",
+                "exit_code": None,
+                "exit_code_hex": None,
+                "measured_bytes": proof_bytes,
+                "reason": (
+                    "The decoder-OFF canonical proof exceeds the frozen "
+                    "262,144-byte proof tier; the exact measured size is retained "
+                    "as a tested blocker and the decision remains continue."
+                ),
+            }
+        )
     if not target_met:
         if hosted_noncertifying:
             blocker_reason = (
@@ -324,13 +357,93 @@ def build_feasibility(
             blocker_status = (
                 "rejected" if runtime_status == "rejected_runtime_failure" else "pending"
             )
-        record["blocker"] = {
-            "id": "compact_candidate_runtime",
-            "status": blocker_status,
-            "exit_code": candidate_exit,
-            "exit_code_hex": _windows_exit_hex(candidate_exit),
-            "measured_bytes": candidate_size,
-            "reason": blocker_reason,
+        blockers.append(
+            {
+                "id": "compact_candidate_runtime",
+                "status": blocker_status,
+                "exit_code": candidate_exit,
+                "exit_code_hex": _windows_exit_hex(candidate_exit),
+                "measured_bytes": candidate_size,
+                "reason": blocker_reason,
+            }
+        )
+    if blockers:
+        record["blocker"] = blockers[0]
+        record["blockers"] = blockers
+
+    if prior_valid_ledger is not None:
+        prior_final = prior_valid_ledger.get("final_artifact")
+        prior_conclusion = prior_valid_ledger.get("conclusion")
+        if (
+            isinstance(prior_final, Mapping)
+            and isinstance(prior_conclusion, Mapping)
+            and prior_final.get("runtime_status") == "validated_runnable"
+            and prior_conclusion.get("byte_ledger_complete") is True
+        ):
+            prior_sha = str(prior_final.get("executable_sha256", "")).lower()
+            prior_bytes = int(prior_final.get("executable_bytes", 0))
+            if len(prior_sha) != 64 or prior_bytes <= 0:
+                raise ValueError("prior valid ledger has an invalid artifact identity")
+            prior_source = prior_valid_ledger.get("source")
+            prior_head = (
+                str(prior_source.get("head_sha"))
+                if isinstance(prior_source, Mapping)
+                and prior_source.get("head_sha")
+                else None
+            )
+            record["prior_valid_artifact"] = {
+                "executable_bytes": prior_bytes,
+                "executable_sha256": prior_sha,
+                "runtime_status": "validated_runnable",
+                "status": "archived_prior_valid_fallback",
+                "source_head_sha": prior_head,
+                "reason": (
+                    "The current measurement is not yet a validated runnable "
+                    "replacement, so the last complete runnable ledger remains "
+                    "available without being represented as current-head evidence."
+                ),
+            }
+            if not target_met and validated_bytes is None:
+                record["selected_artifact"] = {
+                    "bytes": prior_bytes,
+                    "sha256": prior_sha,
+                    "runtime_status": "validated_runnable",
+                    "source": "prior_valid_artifact",
+                    "ledger": "benchmarks/nw10/windows-pe-ledger.v1.json",
+                    "reason": (
+                        "No current artifact has completed runtime validation; "
+                        "select the last validated runnable distribution until "
+                        "new physical evidence is published."
+                    ),
+                }
+
+    if "selected_artifact" not in record:
+        if validated_bytes is not None and validated_mode == "compact":
+            selected_sha = candidate_sha
+            selected_bytes = int(validated_bytes)
+            selected_source = "compact_candidate"
+        elif validated_bytes is not None and validated_mode == "canonical_fallback":
+            selected_sha = str(canonical_intro["executable_sha256"]).lower()
+            selected_bytes = int(validated_bytes)
+            selected_source = "canonical_fallback"
+        else:
+            selected_sha = str(canonical_intro["executable_sha256"]).lower()
+            selected_bytes = int(canonical_intro["executable_bytes"])
+            selected_source = "pending_current_candidate"
+        record["selected_artifact"] = {
+            "bytes": selected_bytes,
+            "sha256": selected_sha,
+            "runtime_status": (
+                "validated_runnable"
+                if validated_bytes is not None
+                else "pending_runtime_validation"
+            ),
+            "source": selected_source,
+            "ledger": "build/nw10-windows-pe-ledger.json",
+            "reason": (
+                "Selection is derived from the current measured feasibility "
+                "outcome and is not promoted beyond its runtime validation state."
+            ),
         }
     return record
 
@@ -346,6 +459,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifact-name", default="nw10-windows-compact-evidence")
     parser.add_argument("--artifact-id", type=int)
     parser.add_argument("--artifact-digest", default="")
+    parser.add_argument("--prior-valid-ledger", type=Path)
     args = parser.parse_args(argv)
     if not (
         len(args.head_sha) == 40
@@ -353,6 +467,11 @@ def main(argv: list[str] | None = None) -> int:
     ):
         print("head SHA is not a 40-character lowercase hex digest", file=sys.stderr)
         return 1
+    prior_valid_ledger = (
+        _load(args.prior_valid_ledger)
+        if args.prior_valid_ledger is not None
+        else None
+    )
     record = build_feasibility(
         outcome=_load(args.outcome),
         proof=_load(args.proof_report),
@@ -362,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         artifact_name=args.artifact_name,
         artifact_id=args.artifact_id,
         artifact_digest=args.artifact_digest,
+        prior_valid_ledger=prior_valid_ledger,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
