@@ -240,25 +240,44 @@ def test_shipped_cpp_decoder_matches_python_encoder_and_fuzzes_cleanly(
     (tmp_path / "canonical.bin").write_bytes(canonical)
     (tmp_path / "stored.nwc").write_bytes(stored.bytes)
     (tmp_path / "mszip.nwc").write_bytes(mszip.bytes)
-    binary = tmp_path / "nw10_compact_decoder_fuzz"
-    completed = subprocess.run(
-        [
-            compiler,
-            "-std=c++20",
-            "-I",
-            str(REPO_ROOT / "src"),
-            "-I",
-            str(REPO_ROOT / "src" / "package"),
-            str(REPO_ROOT / "tests" / "nw10_compact_decoder_fuzz.cpp"),
-            str(REPO_ROOT / "src" / "package" / "nw_compact.cpp"),
-            str(REPO_ROOT / "src" / "package" / "nwp_format.cpp"),
-            "-o",
-            str(binary),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    binary = tmp_path / (
+        "nw10_compact_decoder_fuzz.exe"
+        if sys.platform == "win32"
+        else "nw10_compact_decoder_fuzz"
     )
+    command = [
+        compiler,
+        "-std=c++20",
+        "-I",
+        str(REPO_ROOT / "src"),
+        "-I",
+        str(REPO_ROOT / "src" / "package"),
+        str(REPO_ROOT / "tests" / "nw10_compact_decoder_fuzz.cpp"),
+        str(REPO_ROOT / "src" / "package" / "nw_compact.cpp"),
+        str(REPO_ROOT / "src" / "package" / "nwp_format.cpp"),
+        "-o",
+        str(binary),
+    ]
+    if sys.platform == "win32":
+        # MinGW ignores MSVC's #pragma comment(lib, "cabinet.lib"); the shipped
+        # decoder's Compression API calls still need the inbox import library.
+        command.append("-lcabinet")
+    commands = [command]
+    if sys.platform == "win32":
+        windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
+        commands.append(
+            command[:-1] + [str(windir / "System32" / "cabinet.dll")]
+        )
+    completed = None
+    for candidate in commands:
+        completed = subprocess.run(
+            candidate,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode == 0:
+            break
     assert completed.returncode == 0, completed.stderr
     decoded = subprocess.run(
         [
