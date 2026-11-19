@@ -60,7 +60,14 @@ jobs:
               [ref]$errors
             )
             if ($errors.Count -gt 0) {
-              Write-Error ("PowerShell parse failed for " + $path + ": " + (($errors | ForEach-Object { $_.Message }) -join "; "))
+              foreach ($parseError in $errors) {
+                Write-Error (
+                  "PowerShell parse failed for " + $path +
+                  " line " + $parseError.Extent.StartLineNumber +
+                  " col " + $parseError.Extent.StartColumnNumber +
+                  ": " + $parseError.Message
+                )
+              }
               $failed = $true
             }
           }
@@ -403,6 +410,38 @@ jobs:
         with:
           name: nw10-clean-system-transfer
           path: build/nw10-clean-system-transfer/**
+          if-no-files-found: error
+
+      - name: Package Blackwell correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -TargetTier blackwell `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Blackwell correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-blackwell
+          path: build/nw10-correctness-scripted/transfer-blackwell/transfer-package/**
+          if-no-files-found: error
+
+      - name: Package Ada correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -TargetTier ada `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Ada correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-ada
+          path: build/nw10-correctness-scripted/transfer-ada/transfer-package/**
           if-no-files-found: error
 
       - name: Upload Windows NW-10 evidence

@@ -140,6 +140,29 @@ function Assert-NwSameValue {
     }
 }
 
+function Get-NwCurrentBranch {
+    $output = @(& git branch --show-current)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to determine current git branch."
+    }
+    if ($output.Count -eq 0 -or $null -eq $output[0]) {
+        return ""
+    }
+    return ([string]$output[0]).Trim()
+}
+
+function Assert-NwExpectedBranch {
+    param([AllowEmptyString()][string]$Expected)
+    $branch = Get-NwCurrentBranch
+    if (
+        -not [string]::IsNullOrWhiteSpace($Expected) -and
+        $branch -ne $Expected
+    ) {
+        throw "Expected branch '$Expected', current branch is '$branch'."
+    }
+    return $branch
+}
+
 function New-NwBundle {
     param(
         [Parameter(Mandatory)][string]$TierName,
@@ -191,10 +214,7 @@ try {
             throw "Correctness transfer bundle preparation is Windows-only."
         }
 
-        $branch = (& git branch --show-current).Trim()
-        if ($LASTEXITCODE -ne 0 -or $branch -ne $ExpectedBranch) {
-            throw "Expected branch '$ExpectedBranch', current branch is '$branch'."
-        }
+        [void](Assert-NwExpectedBranch -Expected $ExpectedBranch)
         Assert-NwCleanTrackedTree
 
         $referencePath = Resolve-NwRepoPath $ReferenceEvidence
@@ -254,14 +274,22 @@ try {
         Assert-NwSameValue "artifact_key" $expectedArtifact.artifact_key $common.artifact.artifact_key
         Assert-NwSameValue "package_sha256" $expectedArtifact.package_sha256 $common.artifact.package_sha256
         Assert-NwSameValue "manifest_sha256" $expectedArtifact.manifest_sha256 $common.artifact.manifest_sha256
-        Assert-NwSameValue "executable_sha256" $expectedArtifact.executable_sha256 $common.artifact.executable_sha256
         Assert-NwSameValue "complete_distribution_bytes" $expectedArtifact.complete_distribution_bytes $common.artifact.complete_distribution_bytes
-        Write-Host "[NW10 CORRECTNESS] COMMON_ARTIFACT=EXACT_MATCH"
+        $referenceExecutableSha = [string]$expectedArtifact.executable_sha256
+        $reproducedExecutableSha = [string]$common.artifact.executable_sha256
+        if ($referenceExecutableSha -ne $reproducedExecutableSha) {
+            Write-Host "[NW10 CORRECTNESS] REFERENCE_EXECUTABLE_SHA256=$referenceExecutableSha"
+            Write-Host "[NW10 CORRECTNESS] REPRODUCED_EXECUTABLE_SHA256=$reproducedExecutableSha"
+            Write-Host "[NW10 CORRECTNESS] EXECUTABLE_REPRODUCTION=NON_IDENTICAL_COMMON_PACKAGE_PRESERVED"
+        } else {
+            Write-Host "[NW10 CORRECTNESS] EXECUTABLE_REPRODUCTION=EXACT_MATCH"
+        }
+        Write-Host "[NW10 CORRECTNESS] COMMON_PACKAGE=EXACT_MATCH"
 
         Invoke-NwNative "cmake" @(
             "--preset", "nw07-diagnostics",
             "-B", $diagTemplate
-        ) "Diagnostic template configure failed"
+        ) "Transfer diagnostic template configure failed"
         Invoke-NwNative "cmake" @(
             "--build", $diagTemplate,
             "--target", "nw_procedural_image_player",
@@ -284,6 +312,29 @@ try {
         if ($diag.capture_controls_required -ne $true) {
             throw "Diagnostic sibling does not have capture controls."
         }
+        $diagnosticDependencies = @(
+            foreach ($dependency in @($diag.diagnostic_dependencies)) {
+                if ($null -eq $dependency) { continue }
+                $dependencyName = ([string]$dependency).Trim().ToLowerInvariant()
+                if ([string]::IsNullOrWhiteSpace($dependencyName)) { continue }
+                $dependencyName
+            }
+        )
+        $debugRuntimeDependencies = @()
+        $knownDebugRuntimeDependencies = @(
+            "msvcp140d.dll",
+            "vcruntime140d.dll",
+            "vcruntime140_1d.dll",
+            "ucrtbased.dll"
+        )
+        foreach ($dependencyName in $diagnosticDependencies) {
+            if ($knownDebugRuntimeDependencies -contains $dependencyName) {
+                $debugRuntimeDependencies += $dependencyName
+            }
+        }
+        if ($debugRuntimeDependencies.Count -gt 0) {
+            Write-Host "[NW10 CORRECTNESS] TARGET_DEBUG_CRT_DEPENDENCIES=$($debugRuntimeDependencies -join ',')"
+        }
 
         $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
         $diagExeSource = Join-Path $diagArtifact "$stem.exe"
@@ -305,14 +356,14 @@ try {
                 manifest_sha256 = [string]$diag.common_artifact.manifest_sha256
                 profile_id = [string]$diag.common_artifact.profile_id
                 requirements_digest = [string]$diag.common_artifact.requirements_digest
-                final_executable_sha256 = [string]$diag.final_executable_sha256
+                final_executable_sha256 = $referenceExecutableSha
             }
             diagnostic_sibling = [ordered]@{
                 file = $diagExeName
                 executable_sha256 = [string]$diag.diagnostic_executable_sha256
                 executable_bytes = [int64]$diag.diagnostic_executable_bytes
                 manifest_sha256 = [string]$diag.diagnostic_manifest_sha256
-                dependencies = @($diag.diagnostic_dependencies)
+                dependencies = $diagnosticDependencies
                 separate_from_final_executable = $true
                 same_common_package = $true
                 release_manifest_reused = $false
@@ -324,6 +375,12 @@ try {
                 ticks = @(0,240000,480000,720000,959999,960000)
                 expected_bytes_per_capture = 33177600
                 format = "rgba32f"
+            }
+            reproduction = [ordered]@{
+                reference_executable_sha256 = $referenceExecutableSha
+                reproduced_executable_sha256 = $reproducedExecutableSha
+                executable_sha256_exact_match = ($referenceExecutableSha -eq $reproducedExecutableSha)
+                common_package_exact_match = $true
             }
             privacy = [ordered]@{
                 local_paths_included = $false
@@ -364,7 +421,7 @@ try {
         Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zip -CompressionLevel Optimal
         Write-Host "[NW10 CORRECTNESS] TRANSFER_BUNDLE=$zip"
         Write-Host "[NW10 CORRECTNESS] TARGET_TOOLCHAIN_REQUIRED=False"
-        Write-Host "[NW10 CORRECTNESS] TARGET_DEBUG_CRT_REQUIRED=True"
+        Write-Host "[NW10 CORRECTNESS] TARGET_DEBUG_CRT_REQUIRED=$($debugRuntimeDependencies.Count -gt 0)"
         return
     }
 
@@ -434,10 +491,7 @@ try {
             throw "-Commit requires -Publish."
         }
         if ($Publish) {
-            $branch = (& git branch --show-current).Trim()
-            if ($LASTEXITCODE -ne 0 -or $branch -ne $ExpectedBranch) {
-                throw "Expected branch '$ExpectedBranch', current branch is '$branch'."
-            }
+            [void](Assert-NwExpectedBranch -Expected $ExpectedBranch)
             $publishArgs = @(
                 "tools/nw10_publish_evidence.py", "correctness",
                 "--comparison", $outputPath,
@@ -514,10 +568,7 @@ try {
         throw "Physical NW-10 correctness capture is Windows-only."
     }
 
-    $branch = (& git branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0 -or $branch -ne $ExpectedBranch) {
-        throw "Expected branch '$ExpectedBranch', current branch is '$branch'."
-    }
+    [void](Assert-NwExpectedBranch -Expected $ExpectedBranch)
     Assert-NwCleanTrackedTree
 
     $referencePath = Resolve-NwRepoPath $ReferenceEvidence

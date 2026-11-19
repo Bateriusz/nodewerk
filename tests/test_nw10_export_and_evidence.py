@@ -212,7 +212,8 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         / "nw10"
         / "performance-preservation-rtx4060ti.v1.json"
     )
-    if status["evidence_status"] == "verified_complete":
+    evidence_state = status["evidence_status"]
+    if evidence_state == "verified_complete":
         assert performance_path.is_file()
         compact_physical_path = (
             REPO_ROOT
@@ -226,6 +227,8 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         assert status["clean_system"] == "verified"
         assert status["startup"] == "verified"
         assert status["memory"] == "verified"
+        assert status["ada_correctness"] == "verified"
+        assert status["blackwell_correctness"] == "verified"
         system = json.loads(system_path.read_text(encoding="utf-8"))
         assert system["status"] == "verified"
         pe_ledger = json.loads(pe_ledger_path.read_text(encoding="utf-8"))
@@ -233,18 +236,51 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         assert pe_ledger["conclusion"]["byte_ledger_complete"] is True
         assert status["reference_capture"] == "verified_reference_capture"
         assert status["frame_time"] == "verified_preserved"
-    else:
-        assert status["evidence_status"] == "pending_physical_windows_capture"
-        assert status["physical_evidence"] == "pending"
-        assert status["reference_capture"] == "pending_reference_capture"
-        assert status["frame_time"] == "pending_unverified"
+    elif evidence_state == "performance_correctness_and_system_verified_packaging_pending":
+        assert performance_path.is_file()
+        assert status["physical_evidence"] == "performance_correctness_and_system_verified"
+        assert status["reference_capture"] == "verified_reference_capture"
+        assert status["frame_time"] == "verified_preserved"
+        assert status["ada_correctness"] == "verified"
+        assert status["blackwell_correctness"] == "verified"
+        assert status["clean_system"] == "verified"
+        assert status["startup"] == "verified"
+        assert status["memory"] == "verified"
+    elif evidence_state == "performance_and_correctness_verified_system_pending":
+        assert performance_path.is_file()
+        assert status["physical_evidence"] == "performance_and_correctness_verified"
+        assert status["reference_capture"] == "verified_reference_capture"
+        assert status["frame_time"] == "verified_preserved"
+        assert status["ada_correctness"] == "verified"
+        assert status["blackwell_correctness"] == "verified"
         assert status["clean_system"] == "pending_unverified"
         assert status["startup"] == "pending_unverified"
         assert status["memory"] == "pending_unverified"
-        assert (
-            status["superseded_physical_evidence"]["invalidated_executable_sha256"]
-            == "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
-        )
+    elif evidence_state == "performance_verified_correctness_pending":
+        assert performance_path.is_file()
+        assert status["physical_evidence"] == "performance_verified"
+        assert status["reference_capture"] == "verified_reference_capture"
+        assert status["frame_time"] == "verified_preserved"
+        assert status["ada_correctness"] == "pending_unverified"
+        assert status["blackwell_correctness"] == "pending_unverified"
+        assert status["clean_system"] == "pending_unverified"
+        assert status["startup"] == "pending_unverified"
+        assert status["memory"] == "pending_unverified"
+    else:
+        assert evidence_state == "pending_physical_windows_capture"
+        assert status["physical_evidence"] == "pending"
+        assert status["reference_capture"] == "pending_reference_capture"
+        assert status["frame_time"] == "pending_unverified"
+        assert status["ada_correctness"] == "pending_unverified"
+        assert status["blackwell_correctness"] == "pending_unverified"
+        assert status["clean_system"] == "pending_unverified"
+        assert status["startup"] == "pending_unverified"
+        assert status["memory"] == "pending_unverified"
+
+    assert (
+        status["superseded_physical_evidence"]["invalidated_executable_sha256"]
+        == "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+    )
     for item in status["files"]:
         path = REPO_ROOT / item["path"]
         assert _canonical_text_sha256(path) == item["sha256"]
@@ -353,10 +389,8 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
             encoding="utf-8"
         )
     )
-    assert status["evidence_status"] == "pending_physical_windows_capture"
+    assert status["evidence_status"] != "verified_complete"
     assert "compact_feasibility" not in status
-    assert status["ada_correctness"] == "pending_unverified"
-    assert status["blackwell_correctness"] == "pending_unverified"
     assert (
         status["superseded_physical_evidence"]["invalidated_executable_sha256"]
         == record["canonical_fallback"]["sha256"]

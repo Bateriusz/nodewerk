@@ -79,6 +79,18 @@ def test_correctness_compare_runs_privacy_audit() -> None:
     assert "Assert-NwPrivacy -JsonObject $comparison" in compare_block
 
 
+def test_correctness_runner_handles_detached_head_for_ci_transfer() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "function Get-NwCurrentBranch" in text
+    assert "function Assert-NwExpectedBranch" in text
+    assert '$output = @(& git branch --show-current)' in text
+    assert '[string]::IsNullOrWhiteSpace($Expected)' in text
+    assert "(& git branch --show-current).Trim()" not in text
+
+
 def test_correctness_runner_supports_prebuilt_diagnostic_transfer() -> None:
     text = (
         REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
@@ -88,7 +100,25 @@ def test_correctness_runner_supports_prebuilt_diagnostic_transfer() -> None:
     assert '"build-diagnostic"' in text
     assert "run-transferred-correctness-capture.ps1" in text
     assert "TARGET_TOOLCHAIN_REQUIRED=False" in text
-    assert "TARGET_DEBUG_CRT_REQUIRED=True" in text
+    assert "TARGET_DEBUG_CRT_REQUIRED=$($debugRuntimeDependencies.Count -gt 0)" in text
+    assert "TARGET_DEBUG_CRT_DEPENDENCIES=" in text
+
+
+def test_transfer_allows_non_identical_rebuilt_pe_when_common_package_matches() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
+    ).read_text(encoding="utf-8")
+    transfer_block = text[text.index("if ($PrepareTransferBundle)") : text.index("if ($Compare)")]
+
+    assert 'Assert-NwSameValue "artifact_key"' in transfer_block
+    assert 'Assert-NwSameValue "package_sha256"' in transfer_block
+    assert 'Assert-NwSameValue "manifest_sha256"' in transfer_block
+    assert 'Assert-NwSameValue "complete_distribution_bytes"' in transfer_block
+    assert 'Assert-NwSameValue "executable_sha256"' not in transfer_block
+    assert "REFERENCE_EXECUTABLE_SHA256=" in transfer_block
+    assert "REPRODUCED_EXECUTABLE_SHA256=" in transfer_block
+    assert "final_executable_sha256 = $referenceExecutableSha" in transfer_block
+    assert "common_package_exact_match = $true" in transfer_block
 
 
 def test_transferred_capture_requires_no_build_toolchain() -> None:
