@@ -733,6 +733,8 @@ def test_verified_correctness_and_pe_ledger_cannot_claim_unmeasured_runtime(
     correctness["packed_unpacked_comparison"] = {
         "status": "verified",
         "direct_separate_packed_gpu_capture_recorded": False,
+        "codec_id": "nwc.codec.mszip.v1",
+        "layout_id": "nwc.layout.soa.v1",
         "packed_package_sha256": "a" * 64,
         "unpacked_package_sha256": "a" * 64,
         "worst_absolute_error": 0.0,
