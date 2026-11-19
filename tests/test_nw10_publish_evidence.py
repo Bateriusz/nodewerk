@@ -129,6 +129,8 @@ def test_correctness_publisher_strips_raw_capture_material(
         "packed_unpacked_comparison": {
             "status": "verified",
             "direct_separate_packed_gpu_capture_recorded": True,
+            "codec_id": "nwc.codec.mszip.v1",
+            "layout_id": "nwc.layout.soa.v1",
             "packed_package_sha256": "a" * 64,
             "unpacked_package_sha256": "a" * 64,
             "worst_absolute_error": 0.0,
@@ -138,12 +140,22 @@ def test_correctness_publisher_strips_raw_capture_material(
                     "unpacked_executable_sha256": "1" * 64,
                     "packed_executable_sha256": "2" * 64,
                     "encoded_container_sha256": "3" * 64,
+                    "codec_id": "nwc.codec.mszip.v1",
+                    "layout_id": "nwc.layout.soa.v1",
+                    "device_form_factor_source": "win32_system_enclosure_and_battery",
+                    "frames_per_tick": 1,
+                    "present_sync_interval": 0,
                 },
                 "blackwell": {
                     "status": "passed",
                     "unpacked_executable_sha256": "4" * 64,
                     "packed_executable_sha256": "5" * 64,
                     "encoded_container_sha256": "6" * 64,
+                    "codec_id": "nwc.codec.mszip.v1",
+                    "layout_id": "nwc.layout.soa.v1",
+                    "device_form_factor_source": "win32_system_enclosure_and_battery",
+                    "frames_per_tick": 1,
+                    "present_sync_interval": 0,
                 },
             },
         },
@@ -295,12 +307,22 @@ def test_correctness_publisher_rejects_compositional_packed_parity(
                     "unpacked_executable_sha256": "1" * 64,
                     "packed_executable_sha256": "2" * 64,
                     "encoded_container_sha256": "3" * 64,
+                    "codec_id": "nwc.codec.mszip.v1",
+                    "layout_id": "nwc.layout.soa.v1",
+                    "device_form_factor_source": "win32_system_enclosure_and_battery",
+                    "frames_per_tick": 1,
+                    "present_sync_interval": 0,
                 },
                 "blackwell": {
                     "status": "passed",
                     "unpacked_executable_sha256": "4" * 64,
                     "packed_executable_sha256": "5" * 64,
                     "encoded_container_sha256": "6" * 64,
+                    "codec_id": "nwc.codec.mszip.v1",
+                    "layout_id": "nwc.layout.soa.v1",
+                    "device_form_factor_source": "win32_system_enclosure_and_battery",
+                    "frames_per_tick": 1,
+                    "present_sync_interval": 0,
                 },
             },
         },
@@ -372,6 +394,8 @@ def test_correctness_publisher_rejects_reused_inventory_form_factor(
         "packed_unpacked_comparison": {
             "status": "verified",
             "direct_separate_packed_gpu_capture_recorded": True,
+            "codec_id": "nwc.codec.mszip.v1",
+            "layout_id": "nwc.layout.soa.v1",
             "packed_package_sha256": package,
             "unpacked_package_sha256": package,
             "worst_absolute_error": 0.0,
@@ -381,12 +405,22 @@ def test_correctness_publisher_rejects_reused_inventory_form_factor(
                     "unpacked_executable_sha256": "1" * 64,
                     "packed_executable_sha256": "2" * 64,
                     "encoded_container_sha256": "3" * 64,
+                    "codec_id": "nwc.codec.mszip.v1",
+                    "layout_id": "nwc.layout.soa.v1",
+                    "device_form_factor_source": "win32_system_enclosure_and_battery",
+                    "frames_per_tick": 1,
+                    "present_sync_interval": 0,
                 },
                 "blackwell": {
                     "status": "passed",
                     "unpacked_executable_sha256": "4" * 64,
                     "packed_executable_sha256": "5" * 64,
                     "encoded_container_sha256": "6" * 64,
+                    "codec_id": "nwc.codec.mszip.v1",
+                    "layout_id": "nwc.layout.soa.v1",
+                    "device_form_factor_source": "win32_system_enclosure_and_battery",
+                    "frames_per_tick": 1,
+                    "present_sync_interval": 0,
                 },
             },
         },
@@ -486,6 +520,12 @@ def test_pending_physical_records_are_reproducible_and_fail_closed() -> None:
     assert system["memory"] is None
     assert system["clean_system"] is None
     assert system["windows_build"] is None
+
+
+    with pytest.raises(ValueError, match="cannot bind an implementation head"):
+        publisher.build_pending_correctness(implementation_head="1" * 40)
+    with pytest.raises(ValueError, match="cannot bind an implementation head"):
+        publisher.build_pending_system_validation(implementation_head="1" * 40)
 
 
 def test_system_publisher_verifies_bundle_and_can_complete_state(
