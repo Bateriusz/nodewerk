@@ -525,49 +525,84 @@ def _physical_evidence_is_current(
     current_head: str,
     evidence_root: Path | None = None,
 ) -> bool:
-    """Preserve verified physical state only with a complete hash-bound chain.
+    """Preserve evidence only when the complete status machine is coherent.
 
-    A matching source-head string is necessary but never sufficient. Every
-    physical claim must have its corresponding published summary, that summary
-    must still exist with the recorded canonical-text hash, and the same hash
-    must also be present in status.files. This prevents a hand-edited status
-    JSON from laundering a verified state through contract regeneration.
+    File hashes bind the published summaries to the status ledger, while the
+    derived status fields must exactly match the verified component entries.
+    This rejects hand-edited partial states such as one verified correctness
+    tier, only one of startup/memory/clean-system, or verified_complete
+    without verified packaging ledgers.
     """
     if not current_head or previous.get("source_head_sha") != current_head:
         return False
     if previous.get("reused_physical_evidence"):
         return False
 
-    required: set[str] = set()
-    if (
-        previous.get("ada_correctness") == "verified"
-        or previous.get("blackwell_correctness") == "verified"
-    ):
-        required.add("correctness_evidence")
-    if any(
-        previous.get(field) == "verified"
-        for field in ("clean_system", "startup", "memory")
-    ):
-        required.add("system_validation")
-    if (
-        previous.get("reference_capture") == "verified_reference_capture"
-        or previous.get("frame_time") == "verified_preserved"
-    ):
-        required.add("performance_preservation")
-    compact = previous.get("compact_feasibility")
-    if isinstance(compact, dict) and compact.get("status") == "verified_windows_runtime":
-        required.add("compact_feasibility")
-    pe = previous.get("pe_ledger")
-    if isinstance(pe, dict) and pe.get("status") == "verified":
-        required.add("pe_ledger")
+    def entry_status(field: str, expected: str) -> bool:
+        entry = previous.get(field)
+        return isinstance(entry, dict) and entry.get("status") == expected
 
-    claims_physical = previous.get("physical_evidence") not in (None, "pending")
-    claims_complete = previous.get("evidence_status") not in (
-        None,
-        "pending_physical_windows_capture",
+    perf = entry_status("performance_preservation", "verified_preserved")
+    correctness = entry_status("correctness_evidence", "verified")
+    system = entry_status("system_validation", "verified")
+    compact = entry_status("compact_feasibility", "verified_windows_runtime")
+    pe = entry_status("pe_ledger", "verified")
+
+    expected_reference = (
+        "verified_reference_capture" if perf else "pending_reference_capture"
     )
-    if (claims_physical or claims_complete) and not required:
-        return False
+    expected_frame = "verified_preserved" if perf else "pending_unverified"
+    expected_correctness = "verified" if correctness else "pending_unverified"
+    expected_system = "verified" if system else "pending_unverified"
+
+    if perf and correctness and system:
+        expected_physical = "performance_correctness_and_system_verified"
+    elif perf and correctness:
+        expected_physical = "performance_and_correctness_verified"
+    elif perf:
+        expected_physical = "performance_verified"
+    else:
+        expected_physical = "pending"
+
+    if perf and correctness and system and compact and pe:
+        expected_evidence = "verified_complete"
+    elif perf and correctness and system:
+        expected_evidence = (
+            "performance_correctness_and_system_verified_packaging_pending"
+        )
+    elif perf and correctness:
+        expected_evidence = "performance_and_correctness_verified_system_pending"
+    elif perf:
+        expected_evidence = "performance_verified_correctness_pending"
+    else:
+        expected_evidence = "pending_physical_windows_capture"
+
+    expected_fields = {
+        "reference_capture": expected_reference,
+        "frame_time": expected_frame,
+        "ada_correctness": expected_correctness,
+        "blackwell_correctness": expected_correctness,
+        "clean_system": expected_system,
+        "startup": expected_system,
+        "memory": expected_system,
+        "physical_evidence": expected_physical,
+        "evidence_status": expected_evidence,
+    }
+    for field, expected in expected_fields.items():
+        if previous.get(field) != expected:
+            return False
+
+    required: set[str] = set()
+    if perf:
+        required.add("performance_preservation")
+    if correctness:
+        required.add("correctness_evidence")
+    if system:
+        required.add("system_validation")
+    if compact:
+        required.add("compact_feasibility")
+    if pe:
+        required.add("pe_ledger")
     if not required:
         return False
 
@@ -580,23 +615,28 @@ def _physical_evidence_is_current(
             return False
         relative = row.get("path")
         digest = row.get("sha256")
-        if isinstance(relative, str) and isinstance(digest, str):
-            file_hashes[relative.replace("\\", "/")] = digest.lower()
+        if not isinstance(relative, str) or not isinstance(digest, str):
+            return False
+        normalized = relative.replace("\\", "/")
+        digest = digest.lower()
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            return False
+        if normalized in file_hashes and file_hashes[normalized] != digest:
+            return False
+        file_hashes[normalized] = digest
 
     root = evidence_root or (REPO_ROOT / "benchmarks" / "nw10")
     for field in required:
         entry = previous.get(field)
-        if not isinstance(entry, dict) or entry.get("status") not in (
-            "verified",
-            "verified_preserved",
-            "verified_windows_runtime",
-        ):
-            return False
+        assert isinstance(entry, dict)
         relative = entry.get("path")
         digest = entry.get("sha256")
         if not isinstance(relative, str) or not isinstance(digest, str):
             return False
         relative = relative.replace("\\", "/")
+        digest = digest.lower()
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            return False
         if relative.startswith("benchmarks/nw10/"):
             candidate = root / Path(relative).name
         else:
@@ -604,7 +644,7 @@ def _physical_evidence_is_current(
         if not candidate.is_file():
             return False
         actual = _sha256(candidate)
-        if actual != digest.lower():
+        if actual != digest:
             return False
         if file_hashes.get(relative) != actual:
             return False
