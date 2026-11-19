@@ -496,6 +496,19 @@ def export_intro(
                 build_root_override=staging / "nw10-compact-build",
                 frozen_embedded_specialization=True,
             )
+            compact_dependencies = nw05_export._pe_runtime_dependencies(
+                compact_base_player
+            )
+            expected_compact_dependencies = sorted(
+                {*expected_dependencies, "cabinet"}
+            )
+            if compact_dependencies != expected_compact_dependencies:
+                raise IntroContractError(
+                    "NW-10 compact player changed dependency closure beyond "
+                    "cabinet.dll: "
+                    f"expected {expected_compact_dependencies}, "
+                    f"observed {compact_dependencies}"
+                )
             compact_template_executable = nw05_export.embed_package(
                 compact_base_player,
                 package_bytes,
