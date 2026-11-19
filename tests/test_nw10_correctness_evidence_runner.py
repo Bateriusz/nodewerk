@@ -57,6 +57,7 @@ def test_correctness_runner_can_create_transfer_bundle() -> None:
     assert "bundle-manifest.json" in text
     assert "Get-FileHash -Algorithm SHA256" in text
     assert "Compress-Archive" in text
+    assert "BUNDLE_ROOT=$bundleRoot" in text
     assert 'nw10-correctness-$Tier$bundleSuffix-bundle.zip' in text
     assert '[ValidateSet("unpacked", "packed")]' in text
     assert '"--mode", $PackagingMode' in text
@@ -169,3 +170,39 @@ def test_correctness_transfer_accepts_release_intro_without_status_field() -> No
     assert 'Get-NwOptionalProperty $Reference "canonical_artifact"' in expected_block
     assert "$Reference.status" not in expected_block
     assert "$Reference.canonical_artifact" not in expected_block
+
+
+def test_docs_point_packed_comparison_at_verifiable_bundle() -> None:
+    text = (
+        REPO_ROOT / "docs" / "nw10-compact-export.md"
+    ).read_text(encoding="utf-8")
+
+    for record in (
+        "-AdaRecord build/nw10-correctness-scripted/ada/bundle/capture.json",
+        "-AdaCaptures build/nw10-correctness-scripted/ada/bundle/captures",
+        "-BlackwellRecord "
+        "build/nw10-correctness-scripted/blackwell/bundle/capture.json",
+        "-BlackwellCaptures "
+        "build/nw10-correctness-scripted/blackwell/bundle/captures",
+    ):
+        assert record in text
+    assert (
+        "-PackedAdaRecord "
+        "build/nw10-correctness-scripted/ada-packed/bundle/capture.json"
+    ) in text
+    assert (
+        "-PackedAdaCaptures "
+        "build/nw10-correctness-scripted/ada-packed/bundle/captures"
+    ) in text
+    assert (
+        "-PackedBlackwellRecord "
+        "build/nw10-correctness-scripted/blackwell-packed/bundle/capture.json"
+    ) in text
+    assert (
+        "-PackedBlackwellCaptures "
+        "build/nw10-correctness-scripted/blackwell-packed/bundle/captures"
+    ) in text
+    assert "build/nw10-correctness-scripted/ada-packed/capture.json" not in text
+    assert "build/nw10-correctness-scripted/blackwell-packed/capture.json" not in text
+    assert "build/nw10-correctness-scripted/ada/capture.json" not in text
+    assert "build/nw10-correctness-scripted/blackwell/capture.json" not in text

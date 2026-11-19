@@ -406,6 +406,53 @@ def test_packed_result_bundle_manifest_binds_verification_file(
         )
 
 
+def test_direct_packed_capture_writes_comparable_result_bundle(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "bundle"
+    captures = root / "captures"
+    captures.mkdir(parents=True)
+    executable = root / "packed-diagnostic.exe"
+    executable.write_bytes(b"packed executable")
+    record = _capture_record(
+        "ada",
+        "captured_reference",
+        packaging_mode="packed",
+        diagnostic_sha256=correctness._sha256(executable),
+        encoded_container_sha256="2" * 64,
+    )
+    for capture in record["captures"]:
+        path = captures / capture["file"]
+        path.write_bytes(b"data")
+        capture["bytes"] = path.stat().st_size
+        capture["sha256"] = correctness._sha256(path)
+    record_path = root / "capture.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    correctness._write_result_bundle_manifest(
+        root,
+        tier="ada",
+        record_path=record_path,
+        capture_dir=captures,
+        verification_file="packed-diagnostic.exe",
+    )
+    correctness._verify_result_bundle_manifest(
+        record,
+        record_path=record_path,
+        capture_dir=captures,
+    )
+
+    manifest = json.loads(
+        (root / "bundle-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["format"] == "nw10-correctness-result-bundle"
+    assert {row["path"] for row in manifest["files"]} == {
+        "capture.json",
+        "packed-diagnostic.exe",
+        *{f"captures/{capture['file']}" for capture in record["captures"]},
+    }
+
+
 def test_packed_comparison_requires_manifests_and_packed_mode(
     tmp_path: Path, monkeypatch
 ) -> None:

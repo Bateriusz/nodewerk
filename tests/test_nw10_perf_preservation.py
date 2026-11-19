@@ -307,6 +307,8 @@ def test_preservation_schema_accepts_float_relative_alert_threshold() -> None:
 
 
 def test_publish_preserves_existing_compact_progress(tmp_path: Path) -> None:
+    import nw10_evidence
+
     bound, before, after, candidate = _fixture()
     public = preservation.validate_preservation(before, after, bound, candidate)
     source = tmp_path / "public.json"
@@ -315,6 +317,12 @@ def test_publish_preserves_existing_compact_progress(tmp_path: Path) -> None:
     destination = repo / "benchmarks" / "nw10" / "performance.json"
     status_path = repo / "benchmarks" / "nw10" / "evidence-status.v1.json"
     status_path.parent.mkdir(parents=True)
+    compact_relative = "benchmarks/nw10/windows-compact-feasibility.v1.json"
+    compact_path = repo / compact_relative
+    compact_path.write_text(
+        '{"status":"verified_windows_runtime"}\n', encoding="utf-8"
+    )
+    compact_sha = preservation._canonical_text_sha256(compact_path)
     status_path.write_text(
         json.dumps(
             {
@@ -332,7 +340,9 @@ def test_publish_preserves_existing_compact_progress(tmp_path: Path) -> None:
                 "memory": "pending_unverified",
                 "frame_time": "verified_preserved",
                 "compact_feasibility": {
-                    "status": "verified_windows_runtime"
+                    "status": "verified_windows_runtime",
+                    "path": compact_relative,
+                    "sha256": compact_sha,
                 },
                 "files": [],
             }
@@ -353,6 +363,20 @@ def test_publish_preserves_existing_compact_progress(tmp_path: Path) -> None:
     assert (
         status["evidence_status"]
         == "performance_and_compact_verified_correctness_pending"
+    )
+    compact_rows = [
+        row
+        for row in status["files"]
+        if row.get("path") == compact_relative
+    ]
+    assert compact_rows == [
+        {"path": compact_relative, "sha256": compact_sha}
+    ]
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, "a" * 40, status_path.parent
+        )
+        is True
     )
 
 

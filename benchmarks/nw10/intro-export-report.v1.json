@@ -826,13 +826,13 @@
     "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
     "tools/nw10_compact.py": "12903559ce0241846c38f73e76bcd8ddd6eaa1a05c86e91594707b469068ce42",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
-    "tools/nw10_evidence.py": "fc458fb031c5457c96e04d9ebea46996c123356018cfa4d3d9bbe697385c4418",
+    "tools/nw10_evidence.py": "311c45e74c7570379c29869279a102b1b3328afeb3e270a10d4ac4da1869222a",
     "tools/nw10_intro.py": "fad0131cfc2729cdf4401455d9d2525b10951e739637426cabcbe4091ec83122",
     "tools/nw10_proof.py": "0286592098669dfb58065d2980a16cbe84de2e0ecc2ab29599d9a5aa7ca65fed",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:15de191e1c1e2845b9afe507b8c8e68eebc00c36f6a6ee3a7ca42724906d39c4",
+  "nw10_build_inputs_digest": "sha256:v1:eb2616aa10a0c2c30a1da32efd8a482d4a447d15f5f6f8a6000736040b2fe9c1",
   "performance_validation": {
     "contract_id": "nw07_perf_ref_v1",
     "protocol": "nw07-perf-run.v1",

@@ -570,8 +570,14 @@ def _physical_evidence_is_current(
         expected_evidence = (
             "performance_correctness_and_system_verified_packaging_pending"
         )
+    elif perf and correctness and compact:
+        expected_evidence = (
+            "performance_compact_and_correctness_verified_system_pending"
+        )
     elif perf and correctness:
         expected_evidence = "performance_and_correctness_verified_system_pending"
+    elif perf and compact:
+        expected_evidence = "performance_and_compact_verified_correctness_pending"
     elif perf:
         expected_evidence = "performance_verified_correctness_pending"
     else:

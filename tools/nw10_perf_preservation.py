@@ -466,6 +466,53 @@ def _validate_public_for_publish(
             raise ValueError(f"{label} evidence contains a non-passing run")
 
 
+def _carry_compact_feasibility_file(
+    status: dict[str, Any], files: list[dict[str, Any]]
+) -> None:
+    """Keep a preserved compact-feasibility component in the status ledger.
+
+    Performance publication deliberately preserves an existing
+    ``compact_feasibility`` entry, but the evidence-status validator requires
+    every preserved component to have a matching ``files`` row.  Carry the
+    entry's path forward (refreshing its digest from the retained record when
+    it is available) so performance-only republication cannot invalidate a
+    verified compact result.
+    """
+    entry = status.get("compact_feasibility")
+    if not isinstance(entry, dict):
+        return
+    relative = entry.get("path")
+    digest = entry.get("sha256")
+    if not isinstance(relative, str) or not isinstance(digest, str):
+        return
+    normalized = relative.replace("\\", "/")
+    if not normalized.startswith("benchmarks/nw10/"):
+        return
+    if any(part in {"", ".", ".."} for part in normalized.split("/")):
+        return
+    digest = digest.lower()
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        return
+    candidate = REPO_ROOT / normalized
+    try:
+        if candidate.is_file():
+            digest = _canonical_text_sha256(candidate)
+            entry["sha256"] = digest
+    except OSError:
+        # A missing file is left to the evidence validator; do not fabricate
+        # a digest for a record that is not present in this checkout.
+        pass
+    files[:] = [
+        item
+        for item in files
+        if not (
+            isinstance(item, Mapping)
+            and str(item.get("path", "")).replace("\\", "/") == normalized
+        )
+    ]
+    files.append({"path": normalized, "sha256": digest})
+
+
 def publish_public_evidence(
     source: Path,
     destination: Path,
@@ -537,6 +584,7 @@ def publish_public_evidence(
             "sha256": _canonical_text_sha256(destination),
         }
     )
+    _carry_compact_feasibility_file(status, files)
     files.sort(key=lambda item: str(item.get("path", "")) if isinstance(item, Mapping) else "")
     status_path.write_text(
         json.dumps(status, indent=2, sort_keys=True) + "\n",

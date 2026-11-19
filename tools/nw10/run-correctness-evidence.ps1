@@ -245,6 +245,7 @@ function New-NwBundle {
 
     Remove-Item $Destination -Force -ErrorAction SilentlyContinue
     Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $Destination -CompressionLevel Optimal
+    Write-Host "[NW10 CORRECTNESS] BUNDLE_ROOT=$bundleRoot"
     Write-Host "[NW10 CORRECTNESS] BUNDLE=$Destination"
 }
 

@@ -1037,6 +1037,73 @@ def test_physical_status_preservation_requires_matching_file_hashes(
     )
 
 
+def test_physical_status_preservation_accepts_compact_only_progress(
+    tmp_path: Path,
+) -> None:
+    import nw10_evidence
+
+    evidence_root = tmp_path / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    performance_path = evidence_root / "performance-preservation.v1.json"
+    compact_path = evidence_root / "windows-compact-feasibility.v1.json"
+    performance_path.write_text('{"status":"verified_preserved"}\n', encoding="utf-8")
+    compact_path.write_text('{"status":"verified_windows_runtime"}\n', encoding="utf-8")
+    current_head = "2" * 40
+    performance_relative = (
+        "benchmarks/nw10/performance-preservation.v1.json"
+    )
+    compact_relative = "benchmarks/nw10/windows-compact-feasibility.v1.json"
+    status = {
+        "source_head_sha": current_head,
+        "evidence_status": (
+            "performance_and_compact_verified_correctness_pending"
+        ),
+        "physical_evidence": "performance_verified",
+        "reference_capture": "verified_reference_capture",
+        "frame_time": "verified_preserved",
+        "ada_correctness": "pending_unverified",
+        "blackwell_correctness": "pending_unverified",
+        "clean_system": "pending_unverified",
+        "startup": "pending_unverified",
+        "memory": "pending_unverified",
+        "performance_preservation": {
+            "status": "verified_preserved",
+            "path": performance_relative,
+            "sha256": nw10_evidence._sha256(performance_path),
+        },
+        "compact_feasibility": {
+            "status": "verified_windows_runtime",
+            "path": compact_relative,
+            "sha256": nw10_evidence._sha256(compact_path),
+        },
+        "files": [
+            {
+                "path": performance_relative,
+                "sha256": nw10_evidence._sha256(performance_path),
+            }
+        ],
+    }
+    # A verified compact component without its ledger row is not current.
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is False
+    )
+    status["files"].append(
+        {
+            "path": compact_relative,
+            "sha256": nw10_evidence._sha256(compact_path),
+        }
+    )
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is True
+    )
+
+
 def test_pe_ledger_artifact_binding_is_reproducible() -> None:
     report = {
         "format": "nw10-windows-pe-ledger",

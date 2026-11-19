@@ -329,10 +329,16 @@ pwsh ./tools/nw10/run-performance-evidence.ps1 -Commit
 
 After Ada and Blackwell correctness bundles have been captured, compare and
 publish them in one command. Raw RGBA32F captures and capture manifests are not
-tracked:
+tracked. The record and capture paths below name the `bundle` directory
+produced by `-Bundle`:
 
 ```powershell
-pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare -AdaRecord build/nw10-correctness-scripted/ada/capture.json -AdaCaptures build/nw10-correctness-scripted/ada/captures -BlackwellRecord build/nw10-correctness-scripted/blackwell/capture.json -BlackwellCaptures build/nw10-correctness-scripted/blackwell/captures -Publish -Commit
+pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare `
+  -AdaRecord build/nw10-correctness-scripted/ada/bundle/capture.json `
+  -AdaCaptures build/nw10-correctness-scripted/ada/bundle/captures `
+  -BlackwellRecord build/nw10-correctness-scripted/blackwell/bundle/capture.json `
+  -BlackwellCaptures build/nw10-correctness-scripted/blackwell/bundle/captures `
+  -Publish -Commit
 ```
 
 Packed/unpacked correctness requires a separately rendered packed capture set
@@ -347,16 +353,24 @@ pwsh ./tools/nw10/run-correctness-evidence.ps1 -Tier blackwell -PackagingMode un
 pwsh ./tools/nw10/run-correctness-evidence.ps1 -Tier blackwell -PackagingMode packed -Bundle
 ```
 
+`-Bundle` writes the verifiable result bundle to `<tier-directory>/bundle`
+(`capture.json`, `captures/`, `bundle-manifest.json`, and in packed mode the
+retained diagnostic verification executable). Use the bundle directory for the
+record and capture inputs. The packed comparison requires that manifest because
+the record directory must bind the captured images and the retained diagnostic
+executable. A direct `tools/nw10_common_correctness.py capture` invocation
+writes the same manifest next to its `capture.json`.
+
 ```powershell
 pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare `
-  -AdaRecord build/nw10-correctness-scripted/ada/capture.json `
-  -AdaCaptures build/nw10-correctness-scripted/ada/captures `
-  -BlackwellRecord build/nw10-correctness-scripted/blackwell/capture.json `
-  -BlackwellCaptures build/nw10-correctness-scripted/blackwell/captures `
-  -PackedAdaRecord build/nw10-correctness-scripted/ada-packed/capture.json `
-  -PackedAdaCaptures build/nw10-correctness-scripted/ada-packed/captures `
-  -PackedBlackwellRecord build/nw10-correctness-scripted/blackwell-packed/capture.json `
-  -PackedBlackwellCaptures build/nw10-correctness-scripted/blackwell-packed/captures `
+  -AdaRecord build/nw10-correctness-scripted/ada/bundle/capture.json `
+  -AdaCaptures build/nw10-correctness-scripted/ada/bundle/captures `
+  -BlackwellRecord build/nw10-correctness-scripted/blackwell/bundle/capture.json `
+  -BlackwellCaptures build/nw10-correctness-scripted/blackwell/bundle/captures `
+  -PackedAdaRecord build/nw10-correctness-scripted/ada-packed/bundle/capture.json `
+  -PackedAdaCaptures build/nw10-correctness-scripted/ada-packed/bundle/captures `
+  -PackedBlackwellRecord build/nw10-correctness-scripted/blackwell-packed/bundle/capture.json `
+  -PackedBlackwellCaptures build/nw10-correctness-scripted/blackwell-packed/bundle/captures `
   -PackedPackageSha256 <decoded-package-sha256> `
   -UnpackedPackageSha256 <decoded-package-sha256> `
   -Publish -Commit

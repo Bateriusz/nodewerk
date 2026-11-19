@@ -40,6 +40,29 @@ def _base_status() -> dict:
     }
 
 
+def test_refresh_status_tracks_compact_progress_before_system_validation() -> None:
+    status = _base_status()
+    status["performance_preservation"] = {"status": "verified_preserved"}
+    status["compact_feasibility"] = {"status": "verified_windows_runtime"}
+
+    refreshed = publisher._refresh_status(status)
+    assert (
+        refreshed["evidence_status"]
+        == "performance_and_compact_verified_correctness_pending"
+    )
+    assert refreshed["physical_evidence"] == "performance_verified"
+
+    status["correctness_evidence"] = {"status": "verified"}
+    refreshed = publisher._refresh_status(status)
+    assert (
+        refreshed["evidence_status"]
+        == "performance_compact_and_correctness_verified_system_pending"
+    )
+    assert refreshed["physical_evidence"] == (
+        "performance_and_correctness_verified"
+    )
+
+
 def test_artifact_publisher_rejects_invalidated_gradient() -> None:
     with pytest.raises(ValueError, match="invalidated gradient"):
         publisher._artifact_from_intro_report(

@@ -484,6 +484,50 @@ def _compare_rgba32f(left: Path, right: Path) -> dict[str, float]:
     }
 
 
+def _write_result_bundle_manifest(
+    root: Path,
+    *,
+    tier: str,
+    record_path: Path,
+    capture_dir: Path,
+    verification_file: str | None,
+) -> None:
+    """Bind a packed capture directory to a comparable result bundle.
+
+    The compare command requires the capture record, its raw captures, and the
+    retained packed diagnostic executable to be covered by a
+    ``bundle-manifest.json`` in the record directory.  Generate that manifest
+    as part of the direct capture path so callers do not have to remember a
+    separate bundling step.  ``New-NwBundle`` may still re-bundle the same
+    material for transfer.
+    """
+    files: dict[str, Path] = {record_path.name: record_path}
+    if verification_file:
+        files[verification_file] = root / verification_file
+    for path in sorted(capture_dir.glob("*")):
+        if path.is_file():
+            files[f"captures/{path.name}"] = path
+    manifest = {
+        "format": "nw10-correctness-result-bundle",
+        "version": 1,
+        "task": "NW-10",
+        "tier": tier,
+        "files": [
+            {
+                "path": relative,
+                "bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            }
+            for relative, path in sorted(files.items())
+        ],
+    }
+    (root / "bundle-manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 def capture(
     package: Path,
     *,
@@ -498,6 +542,17 @@ def capture(
         raise ValueError(
             f"capture packaging mode must be one of {PACKAGING_MODES}"
         )
+    if packaging_mode == "packed":
+        if output.name != "capture.json":
+            raise ValueError(
+                "packed correctness capture must be written as capture.json so "
+                "its result bundle manifest can be verified"
+            )
+        if capture_dir.resolve() != (output.parent / "captures").resolve():
+            raise ValueError(
+                "packed correctness capture directory must be the record "
+                "directory's captures subdirectory"
+            )
     expected = _identity(expected_package)
     observed = _diagnostic_identity(package, packaging_mode=packaging_mode)
     _require_same_common_artifact(expected, observed)
@@ -668,6 +723,19 @@ def capture(
         encoding="utf-8",
         newline="\n",
     )
+    if packaging_mode == "packed":
+        _write_result_bundle_manifest(
+            output.parent,
+            tier=tier,
+            record_path=output,
+            capture_dir=capture_dir,
+            verification_file=verification_file,
+        )
+        _verify_result_bundle_manifest(
+            record,
+            record_path=output,
+            capture_dir=capture_dir,
+        )
     return record
 
 

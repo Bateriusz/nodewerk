@@ -506,8 +506,16 @@ def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
         status["evidence_status"] = (
             "performance_correctness_and_system_verified_packaging_pending"
         )
+    elif perf and correctness and compact:
+        status["evidence_status"] = (
+            "performance_compact_and_correctness_verified_system_pending"
+        )
     elif perf and correctness:
         status["evidence_status"] = "performance_and_correctness_verified_system_pending"
+    elif perf and compact:
+        status["evidence_status"] = (
+            "performance_and_compact_verified_correctness_pending"
+        )
     elif perf:
         status["evidence_status"] = "performance_verified_correctness_pending"
     else:
