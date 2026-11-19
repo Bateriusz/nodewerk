@@ -750,12 +750,12 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(
                 f"packed/unpacked {tier} runtime changed codec/layout identity"
             )
-        source = str(entry.get("device_form_factor_source", ""))
+        form_factor_source = str(entry.get("device_form_factor_source", ""))
         if (
-            not source
-            or source in {"asserted", "pending_physical_probe", "unsupported_host"}
-            or "reused" in source.casefold()
-            or "inventory" in source.casefold()
+            not form_factor_source
+            or form_factor_source in {"asserted", "pending_physical_probe", "unsupported_host"}
+            or "reused" in form_factor_source.casefold()
+            or "inventory" in form_factor_source.casefold()
         ):
             raise ValueError(
                 f"packed/unpacked {tier} runtime lacks a measured chassis probe"
