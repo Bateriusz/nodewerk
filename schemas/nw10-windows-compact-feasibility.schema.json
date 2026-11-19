@@ -128,6 +128,7 @@
           "enum": [
             "compact",
             "canonical_fallback",
+            "canonical_fallback_pending_physical",
             "pending_runtime_validation",
             "none"
           ]
@@ -159,18 +160,31 @@
           ]
         },
         "exit_code": {
-          "type": "integer",
-          "minimum": 0
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "failure_classification": {
           "enum": [
             "none",
             "embedded_package_invalid",
+            "runtime_failure",
+            "non_certifying_hosted_failure",
             "runtime_validation_missing"
           ]
         },
         "counted_as_validated_runnable": {
           "type": "boolean"
+        },
+        "exit_code_hex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9A-F]{8}$"
         }
       }
     },
@@ -199,8 +213,12 @@
           ]
         },
         "exit_code": {
-          "type": "integer",
-          "minimum": 0
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "link_manifest_verified": {
           "type": "boolean"
@@ -225,6 +243,13 @@
               }
             }
           }
+        },
+        "exit_code_hex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9A-F]{8}$"
         }
       }
     },
@@ -238,7 +263,12 @@
           "type": "string"
         },
         "exit_code": {
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "measured_bytes": {
           "type": "integer",
@@ -246,6 +276,13 @@
         },
         "reason": {
           "type": "string"
+        },
+        "exit_code_hex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9A-F]{8}$"
         }
       }
     },
