@@ -22,6 +22,37 @@ import nw10_contract as contract  # noqa: E402
 from schema_validator import validate_file_against_schema  # noqa: E402
 
 FORMAT = "nw10-windows-compact-feasibility"
+WINDOWS_EXIT_MIN = -(2**31)
+WINDOWS_EXIT_MAX = 2**31 - 1
+
+
+def _windows_exit_code(value: Any, *, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    code = int(value)
+    if code < WINDOWS_EXIT_MIN or code > WINDOWS_EXIT_MAX:
+        raise ValueError(f"Windows process exit code is outside signed 32-bit range: {code}")
+    return code
+
+
+def _windows_exit_hex(code: int | None) -> str | None:
+    if code is None:
+        return None
+    return f"0x{code & 0xFFFFFFFF:08X}"
+
+
+def _canonical_dependencies(report: Mapping[str, Any]) -> list[str]:
+    ledgers = report.get("ledgers")
+    canonical = ledgers.get("canonical") if isinstance(ledgers, Mapping) else None
+    rows = canonical.get("dependencies") if isinstance(canonical, Mapping) else None
+    if not isinstance(rows, list):
+        return []
+    names = {
+        str(row.get("name", "")).strip().lower()
+        for row in rows
+        if isinstance(row, Mapping) and str(row.get("name", "")).strip()
+    }
+    return sorted(names)
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -77,7 +108,8 @@ def build_feasibility(
     runtime_status = str(
         outcome.get("compact_candidate_runtime_status") or "pending_runtime_validation"
     )
-    candidate_exit = outcome.get("compact_candidate_exit_code")
+    candidate_exit = _windows_exit_code(outcome.get("compact_candidate_exit_code"))
+    canonical_exit = _windows_exit_code(outcome.get("canonical_fallback_exit_code"))
     intro_candidate = outcome.get("intro_compact_candidate_bytes")
     proof_candidate = outcome.get("proof_compact_candidate_bytes")
     candidates = [
@@ -110,38 +142,51 @@ def build_feasibility(
     canonical_runtime = (
         "validated_runnable"
         if validated_bytes is not None
-        and validated_mode in {"canonical_fallback", "compact"}
+        and validated_mode == "canonical_fallback"
+        and canonical_exit == 0
         else "pending_runtime_validation"
     )
-
-    compact: dict[str, Any]
+    hosted_noncertifying = (
+        validated_mode == "canonical_fallback_pending_physical"
+        and canonical_exit not in (None, 0)
+    )
     if runtime_status == "validated_runnable":
-        compact = {
-            "bytes": int(validated_bytes),
-            "sha256": candidate_sha,
-            "runtime_status": "validated_runnable",
-            "exit_code": 0,
-            "failure_classification": "none",
-            "counted_as_validated_runnable": True,
-        }
+        failure_classification = "none"
+    elif hosted_noncertifying:
+        failure_classification = "non_certifying_hosted_failure"
+    elif runtime_status == "rejected_runtime_failure" and candidate_exit == 70:
+        failure_classification = "embedded_package_invalid"
     elif runtime_status == "rejected_runtime_failure":
-        compact = {
-            "bytes": candidate_size,
-            "sha256": candidate_sha,
-            "runtime_status": "rejected_runtime_failure",
-            "exit_code": int(candidate_exit or 1),
-            "failure_classification": "embedded_package_invalid",
-            "counted_as_validated_runnable": False,
-        }
+        failure_classification = "runtime_failure"
     else:
-        compact = {
-            "bytes": candidate_size,
-            "sha256": candidate_sha,
-            "runtime_status": "pending_runtime_validation",
-            "exit_code": 0,
-            "failure_classification": "runtime_validation_missing",
-            "counted_as_validated_runnable": False,
-        }
+        failure_classification = "runtime_validation_missing"
+
+    compact: dict[str, Any] = {
+        "bytes": (
+            int(validated_bytes)
+            if runtime_status == "validated_runnable" and validated_bytes is not None
+            else candidate_size
+        ),
+        "sha256": candidate_sha,
+        "runtime_status": (
+            runtime_status
+            if runtime_status
+            in {
+                "validated_runnable",
+                "rejected_runtime_failure",
+                "pending_runtime_validation",
+            }
+            else "pending_runtime_validation"
+        ),
+        "exit_code": (
+            0 if runtime_status == "validated_runnable" else candidate_exit
+        ),
+        "exit_code_hex": _windows_exit_hex(
+            0 if runtime_status == "validated_runnable" else candidate_exit
+        ),
+        "failure_classification": failure_classification,
+        "counted_as_validated_runnable": runtime_status == "validated_runnable",
+    }
 
     record: dict[str, Any] = {
         "format": FORMAT,
@@ -175,7 +220,13 @@ def build_feasibility(
             "validated_mode": (
                 validated_mode
                 if validated_mode
-                in {"compact", "canonical_fallback", "pending_runtime_validation", "none"}
+                in {
+                    "compact",
+                    "canonical_fallback",
+                    "canonical_fallback_pending_physical",
+                    "pending_runtime_validation",
+                    "none",
+                }
                 else "none"
             ),
         },
@@ -184,13 +235,14 @@ def build_feasibility(
             "bytes": int(canonical_intro["executable_bytes"]),
             "sha256": str(canonical_intro["executable_sha256"]).lower(),
             "runtime_status": canonical_runtime,
-            "exit_code": 0,
+            "exit_code": canonical_exit,
+            "exit_code_hex": _windows_exit_hex(canonical_exit),
             "link_manifest_verified": True,
             "present_sync_interval": 0,
             "dependency_closure": {
                 "closure_verified": True,
                 "sidecar_files": [],
-                "canonical_imports": ["cabinet.dll"],
+                "canonical_imports": _canonical_dependencies(intro),
             },
         },
         "acceptance_linkage": {
@@ -208,15 +260,29 @@ def build_feasibility(
         },
     }
     if not target_met:
-        record["blocker"] = {
-            "id": "compact_candidate_runtime",
-            "status": "rejected" if runtime_status == "rejected_runtime_failure" else "pending",
-            "exit_code": int(candidate_exit or 0),
-            "measured_bytes": candidate_size,
-            "reason": (
+        if hosted_noncertifying:
+            blocker_reason = (
+                "The hosted Windows runner could not certify either the compact "
+                "candidate or the canonical fallback; the compact result remains "
+                "pending physical runtime validation rather than being attributed "
+                "to compact packaging."
+            )
+            blocker_status = "pending_physical"
+        else:
+            blocker_reason = (
                 "The measured compact candidate did not produce a validated "
                 "at-most-65536-byte runnable artifact."
-            ),
+            )
+            blocker_status = (
+                "rejected" if runtime_status == "rejected_runtime_failure" else "pending"
+            )
+        record["blocker"] = {
+            "id": "compact_candidate_runtime",
+            "status": blocker_status,
+            "exit_code": candidate_exit,
+            "exit_code_hex": _windows_exit_hex(candidate_exit),
+            "measured_bytes": candidate_size,
+            "reason": blocker_reason,
         }
     return record
 
