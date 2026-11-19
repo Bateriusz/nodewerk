@@ -15,6 +15,7 @@ import nwp_package as nwp  # noqa: E402
 import nw10_compact as compact  # noqa: E402
 import nw10_contract as contract  # noqa: E402
 import nw10_proof as proof  # noqa: E402
+import nw10_pe_ledger as pe_ledger  # noqa: E402
 from schema_validator import validate_file_against_schema, validate_instance  # noqa: E402
 
 
@@ -604,6 +605,7 @@ def _verified_system_record() -> dict:
     hardware = {
         "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
         "driver_version": "32.0.16.1088",
+        "windows_build": "10.0.26200",
     }
     return {
         "format": "nw10-system-validation",
@@ -617,7 +619,10 @@ def _verified_system_record() -> dict:
             "status": "verified",
             "execution_kind": "physical",
             "hardware": dict(hardware),
-            "cache_state": {"application_pipeline_cache_used": False},
+            "cache_state": {
+                "kind": "warm",
+                "application_pipeline_cache_used": False,
+            },
             "process_start_to_first_present_ms": 250.0,
             "ceiling_ms": 2000.0,
         },
@@ -628,6 +633,7 @@ def _verified_system_record() -> dict:
             "package_sha256": artifact["package_sha256"],
             "peak_engine_committed_gpu_bytes": 42_926_080,
             "ceiling_bytes": 536_870_912,
+            "post_initialization_allocation_violation": 0,
         },
         "clean_system": {
             "status": "verified",
@@ -635,9 +641,16 @@ def _verified_system_record() -> dict:
             "host": {
                 "windows_build": "10.0.26200",
                 "clean_environment": True,
-                "virtualization_probe": {"hypervisor_present": False},
+                "virtualization_indicators": [],
+                "vm_markers": [],
+                "virtualization_probe": {
+                    "hypervisor_present": False,
+                    "vm_markers": [],
+                },
             },
             "hardware": dict(hardware),
+            "development_dependencies_present_on_path": [],
+            "environment_cache_variables": [],
             "deployment": {
                 "only_runtime_executable": True,
                 "sidecars": [],
@@ -699,6 +712,26 @@ def test_verified_system_validation_freezes_scenarios_and_dependencies(
     ]
     path.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(Exception, match="forbidden runtime dependencies"):
+        validate_file_against_schema(path, schema)
+
+    record = _verified_system_record()
+    record["memory"]["post_initialization_allocation_violation"] = 1
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="post-initialization allocation violation"):
+        validate_file_against_schema(path, schema)
+
+    record = _verified_system_record()
+    record["startup"]["hardware"]["windows_build"] = "10.0.99999"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="Windows build does not match"):
+        validate_file_against_schema(path, schema)
+
+    record = _verified_system_record()
+    record["clean_system"]["development_dependencies_present_on_path"] = [
+        "cmake.exe"
+    ]
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="development dependencies"):
         validate_file_against_schema(path, schema)
 
 
@@ -828,10 +861,15 @@ def test_physical_status_preservation_requires_matching_file_hashes(
     relative = "benchmarks/nw10/common-artifact-correctness.v1.json"
     status = {
         "source_head_sha": current_head,
-        "evidence_status": "correctness_verified_system_pending",
-        "physical_evidence": "correctness_verified",
+        "evidence_status": "pending_physical_windows_capture",
+        "physical_evidence": "pending",
+        "reference_capture": "pending_reference_capture",
+        "frame_time": "pending_unverified",
         "ada_correctness": "verified",
         "blackwell_correctness": "verified",
+        "clean_system": "pending_unverified",
+        "startup": "pending_unverified",
+        "memory": "pending_unverified",
         "correctness_evidence": {
             "status": "verified",
             "path": relative,
@@ -855,6 +893,46 @@ def test_physical_status_preservation_requires_matching_file_hashes(
         )
         is True
     )
+
+    status["blackwell_correctness"] = "pending_unverified"
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is False
+    )
+    status["blackwell_correctness"] = "verified"
+    status["evidence_status"] = "verified_complete"
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is False
+    )
+
+
+def test_pe_ledger_artifact_binding_is_reproducible() -> None:
+    report = {
+        "format": "nw10-windows-pe-ledger",
+        "version": 1,
+        "current_attempt": {
+            "source": {
+                "head_sha": "1" * 40,
+                "workflow_run_id": 123,
+            }
+        },
+    }
+    bound = pe_ledger.bind_artifact_source(
+        report,
+        artifact_name="nw10-windows-compact-evidence",
+        artifact_id=456,
+        artifact_digest="a" * 64,
+    )
+    source = bound["current_attempt"]["source"]
+    assert source["artifact_name"] == "nw10-windows-compact-evidence"
+    assert source["artifact_id"] == 456
+    assert source["artifact_digest"] == "sha256:" + "a" * 64
+    assert source["artifact_retained"] is True
 
 
 def test_reused_physical_evidence_regeneration_does_not_promote_status(
