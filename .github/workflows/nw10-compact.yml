@@ -601,6 +601,23 @@ jobs:
             build/nw10-intro-link-control-report.json
             ${{ runner.temp }}/nw10-bootstrap-provenance.json
 
+      - name: Bind PE ledger to the uploaded artifact identity
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/nw10_pe_ledger.py `
+            --bind-source-report "$PWD/build/nw10-windows-pe-ledger.json" `
+            --artifact-name "nw10-windows-compact-evidence" `
+            --artifact-id "${{ steps.nw10_evidence_upload.outputs.artifact-id }}" `
+            --artifact-digest "${{ steps.nw10_evidence_upload.outputs.artifact-digest }}" `
+            --output "$PWD/build/nw10-windows-pe-ledger-bound.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/schema_validator.py `
+            --document "$PWD/build/nw10-windows-pe-ledger-bound.json" `
+            --schema "$PWD/schemas/nw10-windows-pe-ledger.schema.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Bind feasibility record to the uploaded artifact identity
         if: success()
         shell: pwsh
@@ -628,5 +645,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nw10-windows-compact-feasibility-record
-          path: build/nw10-windows-compact-feasibility-bound.json
-          if-no-files-found: ignore
+          path: |
+            build/nw10-windows-compact-feasibility-bound.json
+            build/nw10-windows-pe-ledger-bound.json
+          if-no-files-found: error
