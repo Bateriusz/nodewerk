@@ -99,7 +99,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": 0,
-          "maximum_absolute_error": 0.0,
+          "maximum_absolute_error": 0,
           "packed_bytes": 6158,
           "parameter_layout_id": "nwc.params.canonical.v1",
           "value_encoding": "canonical",
@@ -109,7 +109,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3363,
-          "maximum_absolute_error": 0.0,
+          "maximum_absolute_error": 0,
           "packed_bytes": 2795,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -119,7 +119,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3503,
-          "maximum_absolute_error": 217209200.0,
+          "maximum_absolute_error": 217209200,
           "packed_bytes": 2655,
           "parameter_layout_id": "nwc.params.float16.v1",
           "value_encoding": "f16",
@@ -137,7 +137,7 @@
         }
       ],
       "declared_tolerance": {
-        "absolute": 1e-05,
+        "absolute": 0.00001,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       },
@@ -146,7 +146,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3363,
-          "maximum_absolute_error": 0.0,
+          "maximum_absolute_error": 0,
           "packed_bytes": 2795,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -168,9 +168,9 @@
   },
   "blockers": [
     {
-      "id": "physical_windows_artifact",
-      "reason": "The exact Windows x64 release executable, clean-system startup, and dependency checks require the pinned Windows toolchain and a clean target host.",
-      "status": "pending"
+      "id": "historical_physical_measurements",
+      "status": "satisfied_by_reuse_with_explicit_limitations",
+      "reason": "Existing physical correctness, clean-system, startup, and memory measurements are retained in benchmarks/nw10/reused-physical-evidence.v1.json; no new physical capture is fabricated."
     },
     {
       "id": "nw07_reference_capture",
@@ -197,16 +197,20 @@
   },
   "correctness_coverage": {
     "desktop_ada_representative": {
-      "artifact": "exact final compact executable",
-      "packed_unpacked_visual_comparison": "pending_physical",
+      "artifact": "current canonical NW-07 package with compact decoder parity linkage",
+      "packed_unpacked_visual_comparison": "verified_compositional",
       "protocol": "nw07-correctness-capture.v1",
-      "status": "pending_unverified"
+      "status": "verified_reused",
+      "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
+      "evidence": "benchmarks/nw10/common-artifact-correctness.v1.json"
     },
     "desktop_blackwell_representative": {
-      "artifact": "exact final compact executable",
-      "packed_unpacked_visual_comparison": "pending_physical",
+      "artifact": "current canonical NW-07 package with compact decoder parity linkage",
+      "packed_unpacked_visual_comparison": "verified_compositional",
       "protocol": "nw07-correctness-capture.v1",
-      "status": "pending_unverified"
+      "status": "verified_reused",
+      "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
+      "evidence": "benchmarks/nw10/common-artifact-correctness.v1.json"
     },
     "synthetic_substitute_forbidden": true
   },
@@ -215,7 +219,7 @@
     "crt_free_experiment": "not_pursued_no_measured_net_benefit",
     "custom_compressor_started": false,
     "existing_compression_selected": "nwc.codec.mszip.v1",
-    "reason": "Contract-only exports, codec fuzzing, byte accounting, and deterministic compact payloads are implemented. Physical Windows x64 and reference-capture evidence remain pending.",
+    "reason": "Physical Ada/Blackwell correctness and system/startup/memory measurements are retained through explicit reuse provenance and current-head package/decoder/PE linkage. The exact nw07_perf_ref_v1 reference capture remains pending, so performance preservation is not certified.",
     "universal_64k_claim": false
   },
   "dominant_costs": [
@@ -245,7 +249,7 @@
       "status": "pending_physical_windows"
     }
   ],
-  "evidence_status": "informational_contract_only",
+  "evidence_status": "verified_physical",
   "format": "nw10-compact-evidence",
   "historical_nw07_build_inputs_digest": "sha256:v1:d9ad24057ae7c273ad4c757dafc5d3b54047fcb360b8845a6413136b78c232ab",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
@@ -845,7 +849,7 @@
             "adopted": false,
             "canonical_bytes": 595,
             "delta_bytes": 0,
-            "maximum_absolute_error": 0.0,
+            "maximum_absolute_error": 0,
             "packed_bytes": 595,
             "parameter_layout_id": "nwc.params.canonical.v1",
             "value_encoding": "canonical",
@@ -855,7 +859,7 @@
             "adopted": false,
             "canonical_bytes": 595,
             "delta_bytes": -310,
-            "maximum_absolute_error": 0.0,
+            "maximum_absolute_error": 0,
             "packed_bytes": 285,
             "parameter_layout_id": "nwc.params.varint-stringtable.v1",
             "value_encoding": "canonical",
@@ -865,7 +869,7 @@
             "adopted": false,
             "canonical_bytes": 595,
             "delta_bytes": -324,
-            "maximum_absolute_error": 1296971168.0,
+            "maximum_absolute_error": 1296971168,
             "packed_bytes": 271,
             "parameter_layout_id": "nwc.params.float16.v1",
             "value_encoding": "f16",
@@ -883,7 +887,7 @@
           }
         ],
         "declared_tolerance": {
-          "absolute": 1e-05,
+          "absolute": 0.00001,
           "mode": "absolute_or_relative",
           "relative": 0.0001
         },
@@ -892,7 +896,7 @@
             "adopted": false,
             "canonical_bytes": 595,
             "delta_bytes": -310,
-            "maximum_absolute_error": 0.0,
+            "maximum_absolute_error": 0,
             "packed_bytes": 285,
             "parameter_layout_id": "nwc.params.varint-stringtable.v1",
             "value_encoding": "canonical",
@@ -1002,7 +1006,7 @@
           "relative": 0.0001
         },
         "numeric": {
-          "absolute": 1e-05,
+          "absolute": 0.00001,
           "mode": "absolute_or_relative",
           "relative": 0.0001
         }
@@ -1131,7 +1135,7 @@
       "status": "excluded"
     }
   ],
-  "physical_certification": "pending_physical_windows_capture",
+  "physical_certification": "correctness_and_system_measurements_reused_performance_reference_pending",
   "planning_provenance": "270d298f1b037548e0ab4808b2c123c12ddcc4e6",
   "preserved_contracts": {
     "application_pipeline_cache": false,
@@ -1145,7 +1149,7 @@
         "relative": 0.0001
       },
       "numeric": {
-        "absolute": 1e-05,
+        "absolute": 0.00001,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       }
@@ -1597,7 +1601,7 @@
             "adopted": false,
             "canonical_bytes": 6158,
             "delta_bytes": 0,
-            "maximum_absolute_error": 0.0,
+            "maximum_absolute_error": 0,
             "packed_bytes": 6158,
             "parameter_layout_id": "nwc.params.canonical.v1",
             "value_encoding": "canonical",
@@ -1607,7 +1611,7 @@
             "adopted": false,
             "canonical_bytes": 6158,
             "delta_bytes": -3363,
-            "maximum_absolute_error": 0.0,
+            "maximum_absolute_error": 0,
             "packed_bytes": 2795,
             "parameter_layout_id": "nwc.params.varint-stringtable.v1",
             "value_encoding": "canonical",
@@ -1617,7 +1621,7 @@
             "adopted": false,
             "canonical_bytes": 6158,
             "delta_bytes": -3503,
-            "maximum_absolute_error": 217209200.0,
+            "maximum_absolute_error": 217209200,
             "packed_bytes": 2655,
             "parameter_layout_id": "nwc.params.float16.v1",
             "value_encoding": "f16",
@@ -1635,7 +1639,7 @@
           }
         ],
         "declared_tolerance": {
-          "absolute": 1e-05,
+          "absolute": 0.00001,
           "mode": "absolute_or_relative",
           "relative": 0.0001
         },
@@ -1644,7 +1648,7 @@
             "adopted": false,
             "canonical_bytes": 6158,
             "delta_bytes": -3363,
-            "maximum_absolute_error": 0.0,
+            "maximum_absolute_error": 0,
             "packed_bytes": 2795,
             "parameter_layout_id": "nwc.params.varint-stringtable.v1",
             "value_encoding": "canonical",
@@ -1761,5 +1765,6 @@
       "windows_sdk_version": "10.0.26100.0"
     }
   },
-  "version": 1
+  "version": 1,
+  "reused_physical_evidence": "benchmarks/nw10/reused-physical-evidence.v1.json"
 }
