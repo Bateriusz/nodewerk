@@ -23,6 +23,7 @@
     "status": {
       "enum": [
         "verified",
+        "verified_reused_split_hosts",
         "pending_unverified"
       ]
     },
@@ -81,6 +82,36 @@
           "const": false
         }
       }
+    },
+    "measured_artifact": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "current_artifact": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "artifact_transfer": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "environment_consistency": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "reuse_provenance": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   }
 }
