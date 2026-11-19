@@ -262,6 +262,7 @@
           "enum": [
             "compact",
             "canonical_fallback",
+            "canonical_fallback_pending_physical",
             "pending_runtime_validation",
             "none"
           ]
