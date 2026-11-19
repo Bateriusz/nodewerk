@@ -815,12 +815,12 @@
     "tools/nw10_compact.py": "f5dc6329b0a840dbe6b6f37fa8b257989897c9964d7ed5c51b8f7d73ef37e711",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
     "tools/nw10_evidence.py": "3406a751c16eb70cfe6f22e7039b4e2bbb3ece17954ee44c507e746c15550dfe",
-    "tools/nw10_intro.py": "8f823433521a6d33c1dff632038be54327495a58a5d7ba2c3fc58aa790ba2857",
-    "tools/nw10_proof.py": "7b94a0bccd3a6a1a7e1359c69a88819c05d1a31526fe1f95ec3ce8ef6632823b",
+    "tools/nw10_intro.py": "b11505fa64b39e5fd37f6a3e98b4c34cf2ca020ea85c0d001795f663a4c0a6b8",
+    "tools/nw10_proof.py": "6f071e4ae5e92c6d2202dd8937a39770b5c8792c8782aaf0af2378061f83f1d9",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:77753d3b31146671a0e011d612c1278df7f3811b329ff84a543f038b0720ae86",
+  "nw10_build_inputs_digest": "sha256:v1:8174ae87553bf59fa38f5a35a485d9be2fe298435eccf3514251039f7ca449f5",
   "performance_validation": {
     "contract_id": "nw07_perf_ref_v1",
     "protocol": "nw07-perf-run.v1",
