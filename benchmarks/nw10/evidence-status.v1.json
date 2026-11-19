@@ -1,17 +1,17 @@
 {
-  "ada_correctness": "pending_unverified",
-  "blackwell_correctness": "pending_unverified",
-  "clean_system": "pending_unverified",
+  "ada_correctness": "verified",
+  "blackwell_correctness": "verified",
+  "clean_system": "verified",
   "contract_evidence": "verified_by_pytest",
-  "evidence_status": "pending_physical_windows_capture",
+  "evidence_status": "correctness_and_system_reused_performance_pending",
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "04f35843ed1d27fa8a1799438d94ec9681f203aebadaf9c3ed58cb3530d7c362"
+      "sha256": "7100b224622a43a292c2f4eca0586466776dd50ccaa01fc3ca790fde75ee6ccf"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "b2ce06292d756b479205ea623b7ae74ed7a1d9310798e871c52487a35fb691d7"
+      "sha256": "ffec3e5af9764a304c7532d22b664c3c1310e4d141171447682cec2a222fc049"
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
@@ -23,36 +23,76 @@
     },
     {
       "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
-      "sha256": "6a4c78f675868463b018112b3edb3948733e7cc986d2fe3830d2a636a48a063e"
+      "sha256": "fea662e676900cc9b89a993c80f1b2ee33243a531d6a08f021c66c85ad3b01cc"
     },
     {
       "path": "benchmarks/nw10/system-validation.v1.json",
-      "sha256": "6b7dc2fd952a0e69afa638fcf7898811085c3e36a0e7396e1f98e6c5a27ea64b"
+      "sha256": "7df9555a7365b0c7802ca525368545126d895423abe459d9826c3d40a8886cf3"
     },
     {
       "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-      "sha256": "0bc341d3873ec522b3c161a508f9c998e4f3d188374688203e6ea958918adf81"
+      "sha256": "250e63e00488f7537c21fa0f4199780fcc25c080a24e931e43979b9f31208cf4"
     },
     {
       "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
-      "sha256": "822e8b3301737ff5a0558ba857eb24978b96b24d818a0e182a556bf42512cdce"
+      "sha256": "c60aaf2d75df6048601b00a665c84c82be3b794686088d2f24d96a8a021aff97"
+    },
+    {
+      "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
+      "sha256": "67dd40a55c89d8e528ed9d9be3709427988c388ab6bd9753508de744d9ea2566"
     }
   ],
   "format": "nw10-evidence-status",
   "frame_time": "pending_unverified",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
-  "memory": "pending_unverified",
-  "physical_evidence": "pending",
+  "memory": "verified",
+  "physical_evidence": "correctness_and_system_reused",
   "reference_capture": "pending_reference_capture",
-  "startup": "pending_unverified",
+  "startup": "verified",
   "superseded_physical_evidence": {
-    "reason": "The tracked reference binding had been changed from device_id 10245 to 10243 without a fresh exact-board capture, the packed/unpacked correctness comparison was still pending, and the system summary mixed two different GPUs. Those claims were withdrawn; certification remains pending until the exact nw07_perf_ref_v1 capture and bindings exist.",
+    "reason": "The earlier performance-preservation claim based on an incorrect nw07_perf_ref_v1 device binding remains withdrawn. Correctness and system measurements are retained separately through the explicit reused-physical-evidence record, while the exact performance reference capture remains pending.",
     "withdrawn_files": [
-      "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json",
-      "benchmarks/nw10/common-artifact-correctness.v1.json#verified",
-      "benchmarks/nw10/system-validation.v1.json#verified"
+      "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json"
     ]
   },
   "task": "NW-10",
-  "version": 1
+  "version": 1,
+  "correctness_evidence": {
+    "status": "verified",
+    "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
+    "sha256": "fea662e676900cc9b89a993c80f1b2ee33243a531d6a08f021c66c85ad3b01cc",
+    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
+    "worst_absolute_error": 0,
+    "worst_relative_error": 0
+  },
+  "system_validation": {
+    "status": "verified_reused_split_hosts",
+    "path": "benchmarks/nw10/system-validation.v1.json",
+    "sha256": "7df9555a7365b0c7802ca525368545126d895423abe459d9826c3d40a8886cf3",
+    "final_executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
+  },
+  "compact_feasibility": {
+    "status": "pending_runtime_validation",
+    "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
+    "sha256": "250e63e00488f7537c21fa0f4199780fcc25c080a24e931e43979b9f31208cf4",
+    "source_run_id": 44535528801,
+    "target_met": false,
+    "minimum_measured_candidate_bytes": 228181,
+    "minimum_validated_runnable_bytes": null,
+    "validated_mode": "canonical_fallback_pending_physical"
+  },
+  "pe_ledger": {
+    "status": "verified",
+    "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
+    "sha256": "c60aaf2d75df6048601b00a665c84c82be3b794686088d2f24d96a8a021aff97",
+    "final_executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "linker_elimination_bytes_saved": 723456,
+    "compact_decoder_template_bytes_added": 4096
+  },
+  "reused_physical_evidence": {
+    "status": "verified_reuse_with_explicit_limitations",
+    "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
+    "sha256": "67dd40a55c89d8e528ed9d9be3709427988c388ab6bd9753508de744d9ea2566"
+  }
 }
