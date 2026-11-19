@@ -78,7 +78,6 @@
     "raw_capture_manifests_tracked": false,
     "tool": "tools/nw10/run-correctness-evidence.ps1"
   },
-  "source_head_sha": null,
   "status": "pending_unverified",
   "task": "NW-10",
   "version": 1

@@ -624,7 +624,7 @@
           "adopted": false,
           "canonical_bytes": 595,
           "delta_bytes": 0,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 595,
           "parameter_layout_id": "nwc.params.canonical.v1",
           "value_encoding": "canonical",
@@ -634,7 +634,7 @@
           "adopted": false,
           "canonical_bytes": 595,
           "delta_bytes": -310,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 285,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -644,7 +644,7 @@
           "adopted": false,
           "canonical_bytes": 595,
           "delta_bytes": -324,
-          "maximum_absolute_error": 1296971168,
+          "maximum_absolute_error": 1296971168.0,
           "packed_bytes": 271,
           "parameter_layout_id": "nwc.params.float16.v1",
           "value_encoding": "f16",
@@ -662,7 +662,7 @@
         }
       ],
       "declared_tolerance": {
-        "absolute": 0.00001,
+        "absolute": 1e-05,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       },
@@ -671,7 +671,7 @@
           "adopted": false,
           "canonical_bytes": 595,
           "delta_bytes": -310,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 285,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -880,7 +880,7 @@
         "relative": 0.0001
       },
       "numeric": {
-        "absolute": 0.00001,
+        "absolute": 1e-05,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       }
@@ -910,7 +910,7 @@
     "verified_in_package": true
   },
   "startup_validation": {
-    "ceiling_ms": 2000,
+    "ceiling_ms": 2000.0,
     "protocol": "nw07-startup.v1",
     "status": "pending_physical_windows_capture"
   },
@@ -935,7 +935,7 @@
         "relative": 0.0001
       },
       "numeric": {
-        "absolute": 0.00001,
+        "absolute": 1e-05,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       }

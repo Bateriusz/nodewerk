@@ -456,7 +456,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": 0,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 6158,
           "parameter_layout_id": "nwc.params.canonical.v1",
           "value_encoding": "canonical",
@@ -466,7 +466,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3363,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 2795,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -476,7 +476,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3503,
-          "maximum_absolute_error": 217209200,
+          "maximum_absolute_error": 217209200.0,
           "packed_bytes": 2655,
           "parameter_layout_id": "nwc.params.float16.v1",
           "value_encoding": "f16",
@@ -494,7 +494,7 @@
         }
       ],
       "declared_tolerance": {
-        "absolute": 0.00001,
+        "absolute": 1e-05,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       },
@@ -503,7 +503,7 @@
           "adopted": false,
           "canonical_bytes": 6158,
           "delta_bytes": -3363,
-          "maximum_absolute_error": 0,
+          "maximum_absolute_error": 0.0,
           "packed_bytes": 2795,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
           "value_encoding": "canonical",
@@ -688,7 +688,7 @@
         "relative": 0.0001
       },
       "numeric": {
-        "absolute": 0.00001,
+        "absolute": 1e-05,
         "mode": "absolute_or_relative",
         "relative": 0.0001
       }
@@ -1060,7 +1060,7 @@
     "version": 1
   },
   "startup": {
-    "ceiling_ms": 2000,
+    "ceiling_ms": 2000.0,
     "protocol": "nw07-startup.v1",
     "status": "pending_physical_windows_capture"
   },

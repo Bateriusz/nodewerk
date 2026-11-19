@@ -7,23 +7,23 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "12f86876d441822fca382d31b1890e0cbf20adf6c32a39312708c1ff0a42fae1"
+      "sha256": "6529f5a38eb49d202648a7e937d605f0cf17b38a986aea22c3c057af3b23bac6"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "8d9f710e5cd3a50247b32c82aba701e8d2efef494c7f1629a8a9ffa9ced95f3e"
+      "sha256": "cf6b460ccaa2283a2d293fdf8d11462e83a2a684b83f710f3b218fd1b731c351"
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
-      "sha256": "a6617392de47895d2002c443556c2ad7b5107758f6fa7a9248a22b26be1e2cbf"
+      "sha256": "fdc7b56e22f66cc48a05a85123a9774f4b0a7a9a5c4be231df06ac5d0ef09d08"
     },
     {
       "path": "benchmarks/nw10/intro-export-report.v1.json",
-      "sha256": "524e13abde14c48125f3ef9d364d5d4f86d0d3980909f8e769495800f511e5ee"
+      "sha256": "2b2c1163b4e78c48752082e011966228f1315ff6f97c3b42d040f5b917e2a308"
     },
     {
       "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
-      "sha256": "458dd57b28960f5b7597d27784b49b1ef21351dba91144228e3cbb7e64905efb"
+      "sha256": "ee56d4e49c504f02444727b4bf9897993faf81ca51c3240066fe3524fce4073e"
     },
     {
       "path": "benchmarks/nw10/reused-physical-evidence.v1.json",

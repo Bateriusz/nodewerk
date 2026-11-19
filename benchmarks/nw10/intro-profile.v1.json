@@ -145,7 +145,7 @@
       "relative": 0.0001
     },
     "numeric": {
-      "absolute": 0.00001,
+      "absolute": 1e-05,
       "mode": "absolute_or_relative",
       "relative": 0.0001
     }
