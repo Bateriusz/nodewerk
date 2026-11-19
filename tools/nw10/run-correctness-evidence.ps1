@@ -215,6 +215,15 @@ function New-NwBundle {
     New-Item -ItemType Directory -Force $bundleRoot | Out-Null
     Copy-Item $RecordPath (Join-Path $bundleRoot "capture.json") -Force
     Copy-Item $CaptureDirectory (Join-Path $bundleRoot "captures") -Recurse -Force
+    $record = Get-Content -Raw $RecordPath | ConvertFrom-Json
+    $verificationFile = Get-NwOptionalProperty $record.diagnostic_sibling "verification_file"
+    if (-not [string]::IsNullOrWhiteSpace([string]$verificationFile)) {
+        $source = Join-Path (Split-Path -Parent $RecordPath) ([string]$verificationFile)
+        if (-not (Test-Path $source -PathType Leaf)) {
+            throw "Packed diagnostic verification file is missing: $source"
+        }
+        Copy-Item $source (Join-Path $bundleRoot ([string]$verificationFile)) -Force
+    }
 
     $manifestRows = @()
     foreach ($file in Get-ChildItem $bundleRoot -File -Recurse | Sort-Object FullName) {
