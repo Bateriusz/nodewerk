@@ -127,6 +127,43 @@ def test_ledgers_attribute_every_required_component_and_preserve_tiers(
     assert ledger["components"]["compact_player_image_bytes"] is not None
 
 
+def test_byte_ledger_normalizes_cabinet_dependency_aliases() -> None:
+    encoding = compact.CompactEncoding(
+        bytes=b"x",
+        codec_id=contract.CODEC_MSZIP_ID,
+        layout_id=contract.LAYOUT_AOS_ID,
+        decoded_size=1,
+        payload_size=1,
+        container_size=1,
+        record_count=1,
+        reference_count=0,
+        decoded_sha256="0" * 64,
+    )
+    ledger = compact.build_byte_ledger(
+        artifact_kind="restricted_intro",
+        canonical_executable_bytes=200,
+        canonical_package_bytes=1,
+        manifest_bytes=1,
+        compact=encoding,
+        compact_executable_bytes=180,
+        decoder_code_bytes=1,
+        shader_bytes=0,
+        dependencies=[
+            {
+                "name": "cabinet",
+                "kind": "windows_inbox",
+                "distributed_bytes": 0,
+            }
+        ],
+        evidence_status="test",
+    )
+    normalized = [
+        item["name"].lower().removesuffix(".dll")
+        for item in ledger["dependencies"]
+    ]
+    assert normalized.count("cabinet") == 1
+
+
 def test_measurement_record_includes_every_required_alternative(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
