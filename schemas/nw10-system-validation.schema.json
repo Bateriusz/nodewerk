@@ -8,6 +8,11 @@
     "version",
     "task",
     "status",
+    "final_artifact",
+    "startup",
+    "memory",
+    "clean_system",
+    "windows_build",
     "privacy"
   ],
   "properties": {

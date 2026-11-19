@@ -1,4 +1,5 @@
 {
+  "archived_reason": "The measured 063b artifact exited 0xC0000005 at runtime and is not a validated runnable distribution. The PE measurements remain attributable but cannot certify a current-head runnable artifact or serve as the final-system ledger.",
   "compact_decoder": {
     "decoder_off_template_bytes": 506880,
     "decoder_on_template_bytes": 510976,
@@ -122,6 +123,14 @@
     "security_mitigations_preserved": true,
     "status": "verified"
   },
+  "measurement_status": "archived_superseded",
+  "prior_valid_artifact": {
+    "executable_bytes": 240702,
+    "executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "ledger_status": "archived_prior_valid_fallback",
+    "reason": "The measured 063b artifact failed runtime; this entry preserves the prior valid fallback identity without claiming a current-head PE remeasurement.",
+    "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee"
+  },
   "privacy": {
     "local_paths_included": false,
     "pdb_paths_included": false,
@@ -138,7 +147,7 @@
     "measurement_tool": "tools/nw10_pe_ledger.py",
     "workflow_run_id": 44542203189
   },
-  "status": "verified",
+  "status": "archived_superseded",
   "task": "NW-10",
   "version": 1
 }

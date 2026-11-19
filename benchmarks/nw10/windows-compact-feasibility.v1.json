@@ -6,6 +6,7 @@
     "tested_alternatives_source": "benchmarks/nw10/compact-proof.v1.json#alternatives",
     "true_64k_artifact_delivered": false
   },
+  "archived_reason": "The 4d216 run could not run either the compact candidate or the canonical fallback (0xC0000005) and is not at the current source head. It remains an attributed measured blocker, not validated current-head evidence.",
   "blocker": {
     "exit_code": -1073741819,
     "exit_code_hex": "0xC0000005",
@@ -51,8 +52,10 @@
     "runtime_status": "pending_runtime_validation",
     "sha256": "7d6ce07ba27ac73797d04c9f8e4ea5783c02ca35cbf365697fe693e898b9cd5c"
   },
+  "current_implementation_measurement": false,
   "format": "nw10-windows-compact-feasibility",
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+  "measurement_status": "archived_superseded",
   "measurements": {
     "canonical_proof_within_tier": true,
     "minimum_measured_candidate_bytes": 228181,
@@ -60,6 +63,14 @@
     "proof_measured_bytes": 260294,
     "proof_measurement_status": "measured_decoder_off",
     "validated_mode": "canonical_fallback_pending_physical"
+  },
+  "prior_valid_artifact": {
+    "executable_bytes": 240702,
+    "executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "reason": "The current-head export produced a non-runnable 063b artifact; the prior valid 6c6f fallback remains the attributable last-known-runnable distribution.",
+    "runtime_status": "validated_runnable",
+    "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+    "status": "archived_prior_valid_fallback"
   },
   "privacy": {
     "raw_stdout_stderr_included": false,

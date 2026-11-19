@@ -554,6 +554,78 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     f"is larger than verified alternative {smaller_ids} ({min_total} B total)"
                 )
 
+    elif schema_name == "nw10-system-validation.schema.json":
+        status = instance.get("status")
+        if status in {"verified", "verified_reused_split_hosts"}:
+            for field in ("final_artifact", "startup", "memory", "clean_system"):
+                if not isinstance(instance.get(field), dict):
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified NW-10 system validation requires "
+                        f"a measured {field} object"
+                    )
+            windows_build = instance.get("windows_build")
+            if not isinstance(windows_build, str) or not windows_build.strip():
+                raise SchemaValidationError(
+                    f"{doc_path}: verified NW-10 system validation requires a "
+                    "measured windows_build"
+                )
+            final_artifact = instance["final_artifact"]
+            for key in (
+                "executable_sha256",
+                "executable_bytes",
+                "package_sha256",
+                "manifest_sha256",
+            ):
+                if final_artifact.get(key) in (None, ""):
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified NW-10 final_artifact is missing {key}"
+                    )
+            clean = instance["clean_system"]
+            host = clean.get("host")
+            deployment = clean.get("deployment")
+            if not isinstance(host, dict) or not isinstance(deployment, dict):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system requires host and deployment"
+                )
+            if not isinstance(host.get("windows_build"), str) or not host[
+                "windows_build"
+            ].strip():
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system host requires windows_build"
+                )
+            if not isinstance(host.get("virtualization_probe"), dict):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system host requires a "
+                    "virtualization_probe"
+                )
+            if deployment.get("executable_sha256") != final_artifact.get(
+                "executable_sha256"
+            ):
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system deployment is not bound to the "
+                    "final artifact"
+                )
+            clean_hardware = clean.get("hardware", {})
+            for field in ("startup", "memory"):
+                measurement = instance[field]
+                if measurement.get("status") != "verified":
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified NW-10 system validation requires "
+                        f"{field}.status=verified"
+                    )
+                if measurement.get("execution_kind") != "physical":
+                    raise SchemaValidationError(
+                        f"{doc_path}: {field} is not a physical measurement"
+                    )
+                hardware = measurement.get("hardware", {})
+                if hardware.get("adapter_description") != clean_hardware.get(
+                    "adapter_description"
+                ):
+                    raise SchemaValidationError(
+                        f"{doc_path}: {field} hardware does not match the "
+                        "clean-system host"
+                    )
+
 
 ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
     ("benchmarks/capability-manifest.v1.json", "schemas/capability-manifest.schema.json"),

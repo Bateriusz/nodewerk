@@ -24,7 +24,10 @@
       "const": "NW-10"
     },
     "status": {
-      "const": "verified_reuse_with_explicit_limitations"
+      "enum": [
+        "verified_reuse_with_explicit_limitations",
+        "archived_informational"
+      ]
     },
     "physical_measurements": {
       "type": "object"

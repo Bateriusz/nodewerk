@@ -20,6 +20,8 @@ param(
     [string]$BlackwellCaptures = "",
     [string]$PackedAdaCaptures = "",
     [string]$PackedBlackwellCaptures = "",
+    [string]$PackedAdaRecord = "",
+    [string]$PackedBlackwellRecord = "",
     [string]$PackedPackageSha256 = "",
     [string]$UnpackedPackageSha256 = "",
     [string]$CompareOutput = "build/nw10-correctness-comparison.json",
@@ -505,6 +507,16 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($PackedBlackwellCaptures)) {
             $compareArguments += @(
                 "--packed-blackwell-captures", (Resolve-NwRepoPath $PackedBlackwellCaptures)
+            )
+        }
+        if (-not [string]::IsNullOrWhiteSpace($PackedAdaRecord)) {
+            $compareArguments += @(
+                "--packed-ada-record", (Resolve-NwRepoPath $PackedAdaRecord)
+            )
+        }
+        if (-not [string]::IsNullOrWhiteSpace($PackedBlackwellRecord)) {
+            $compareArguments += @(
+                "--packed-blackwell-record", (Resolve-NwRepoPath $PackedBlackwellRecord)
             )
         }
         if (-not [string]::IsNullOrWhiteSpace($PackedPackageSha256)) {

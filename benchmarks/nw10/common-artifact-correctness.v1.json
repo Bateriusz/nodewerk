@@ -1,34 +1,40 @@
 {
   "ada": {
     "hardware": {
-      "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+      "adapter_description": "unavailable",
       "classified_tier": "ada",
-      "device_form_factor": "desktop",
-      "device_form_factor_source": "reused physical host inventory: MSI B550-A PRO desktop",
-      "driver_version": "32.0.16.1088"
+      "device_form_factor": "unknown",
+      "device_form_factor_source": "pending_physical_probe",
+      "driver_version": "unavailable"
     },
-    "status": "verified"
+    "status": "pending_unverified"
+  },
+  "archived_physical_evidence": {
+    "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
+    "reason": "The prior cross-hardware captures were not a direct packed/unpacked GPU comparison and were not captured at the current source head.",
+    "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+    "status": "archived_not_current_head"
   },
   "blackwell": {
     "hardware": {
-      "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+      "adapter_description": "unavailable",
       "classified_tier": "blackwell",
-      "device_form_factor": "desktop",
-      "device_form_factor_source": "reused physical host inventory: ASUSTeK NUC13ANH-B mini PC",
-      "driver_version": "32.0.16.1088"
+      "device_form_factor": "unknown",
+      "device_form_factor_source": "pending_physical_probe",
+      "driver_version": "unavailable"
     },
-    "status": "verified"
+    "status": "pending_unverified"
   },
   "capture_protocol": "nw07-correctness-capture.v1",
   "common_artifact": {
-    "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1"
+    "package_sha256": null
   },
   "comparison": {
     "absolute_required": true,
     "absolute_tolerance": 0.0001,
-    "ada_loop_boundary_status": "passed",
-    "blackwell_loop_boundary_status": "passed",
-    "fixed_tick_status": "passed",
+    "ada_loop_boundary_status": "pending",
+    "blackwell_loop_boundary_status": "pending",
+    "fixed_tick_status": "pending",
     "fixed_ticks": [
       0,
       240000,
@@ -41,33 +47,24 @@
       960000
     ],
     "relative_tolerance": 0.0001,
-    "worst_absolute_error": 0,
-    "worst_relative_error": 0
+    "worst_absolute_error": null,
+    "worst_relative_error": null
   },
   "format": "nw10-common-artifact-correctness-summary",
   "packed_unpacked_comparison": {
-    "decoder_parity": {
-      "source": "tests/nw10_compact_decoder_fuzz.cpp + tests/test_nw10_codec.py",
-      "status": "passed",
-      "windows_ci_run_id": 44542203189
-    },
     "direct_separate_packed_gpu_capture_recorded": false,
-    "encoded_container_sha256": "3f2625ac9458c2630cefcd857af8ac92be48cc09f97420254113886f226eabee",
-    "packed_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
+    "packed_package_sha256": null,
     "runtime": {
       "ada": {
-        "evidence_model": "physical decoded-package capture plus bit-exact decoder parity",
-        "status": "passed"
+        "status": "pending_physical"
       },
       "blackwell": {
-        "evidence_model": "physical decoded-package capture plus bit-exact decoder parity",
-        "status": "passed"
+        "status": "pending_physical"
       }
     },
-    "status": "verified",
-    "unpacked_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
-    "verification_model": "bit_exact_shipped_decoder_parity_plus_prior_physical_runtime",
-    "worst_absolute_error": 0
+    "status": "pending_physical",
+    "unpacked_package_sha256": null,
+    "worst_absolute_error": null
   },
   "privacy": {
     "local_paths_included": false,
@@ -75,15 +72,13 @@
     "stdout_stderr_included": false
   },
   "source": {
-    "current_decoder_parity_head": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
-    "execution_kind": "physical_cross_hardware",
-    "implementation_head": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
-    "mode": "compare",
+    "execution_kind": "none",
+    "implementation_head": "58f24080d860a27a984382a546c9efcbb2a0642f",
+    "mode": "pending",
     "raw_capture_manifests_tracked": false,
-    "reuse_provenance": "benchmarks/nw10/reused-physical-evidence.v1.json",
     "tool": "tools/nw10/run-correctness-evidence.ps1"
   },
-  "status": "verified",
+  "status": "pending_unverified",
   "task": "NW-10",
   "version": 1
 }

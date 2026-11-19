@@ -225,7 +225,8 @@
       "required": [
         "status",
         "worst_absolute_error",
-        "runtime"
+        "runtime",
+        "direct_separate_packed_gpu_capture_recorded"
       ],
       "properties": {
         "status": {
@@ -291,6 +292,9 @@
               }
             }
           }
+        },
+        "direct_separate_packed_gpu_capture_recorded": {
+          "type": "boolean"
         }
       }
     },

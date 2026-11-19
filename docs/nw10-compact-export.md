@@ -36,25 +36,17 @@ Contract-only exports with structural DXIL payloads measure:
 
 These numbers validate the accounting, decoder, and deterministic export
 paths. They are **not** Windows release artifacts and are not physical 64 KiB
-proof. Existing physical Ada/Blackwell correctness, clean-system, startup, and
-engine-committed GPU-memory measurements are retained in
-`benchmarks/nw10/reused-physical-evidence.v1.json` rather than being discarded
-or re-captured. The exact `nw07_perf_ref_v1` reference capture and its bindings
-remain unavailable, so performance preservation is still **pending** and no
-faster substitute hardware is used to certify it. The decision is **continue**,
-not a universal feasibility or impossibility claim.
-
-The reuse record is intentionally explicit about two limitations. The historic
-correctness run did not record a second, separately rendered packed capture
-set; packed/unpacked correctness is therefore established compositionally:
-the shipped C++ decoder is parity/fuzz tested to reconstruct the exact
-canonical package bytes, and that exact decoded package was physically captured
-on representative desktop Ada and Blackwell with zero measured image error.
-Also, the clean-system run was performed on the RTX 5070 Ti NUC13 while the
-startup/memory metrics were measured on the RTX 4060 Ti desktop. Those hosts
-are recorded separately; the evidence does **not** pretend they were one
-environment. The legacy NUC13 capture did not record its Windows build, so no
-value is inferred for it.
+proof. Historical physical measurements are retained only as archived
+attribution in `benchmarks/nw10/reused-physical-evidence.v1.json`; they were
+captured at source head `4d216ddf` and cannot certify the current checkout.
+The historical correctness run did not record a separate packed GPU capture
+set, the clean-system run was on a different host from the startup/memory
+measurements, and the later `063bb45b` artifact exited with `0xC0000005`.
+All of those physical claims are therefore **pending**, not verified. The exact
+`nw07_perf_ref_v1` reference capture and its bindings remain unavailable, so
+performance preservation is still **pending** and no faster substitute hardware
+is used to certify it. The decision is **continue**, not a universal
+feasibility or impossibility claim.
 
 ### Hosted Windows feasibility result
 
@@ -324,6 +316,24 @@ tracked:
 
 ```powershell
 pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare -AdaRecord build/nw10-correctness-scripted/ada/capture.json -AdaCaptures build/nw10-correctness-scripted/ada/captures -BlackwellRecord build/nw10-correctness-scripted/blackwell/capture.json -BlackwellCaptures build/nw10-correctness-scripted/blackwell/captures -Publish -Commit
+```
+
+Packed/unpacked correctness requires a separately rendered packed capture set
+plus its capture manifests; compositional decoder parity alone is rejected:
+
+```powershell
+pwsh ./tools/nw10/run-correctness-evidence.ps1 -Compare `
+  -AdaRecord build/nw10-correctness-scripted/ada/capture.json `
+  -AdaCaptures build/nw10-correctness-scripted/ada/captures `
+  -BlackwellRecord build/nw10-correctness-scripted/blackwell/capture.json `
+  -BlackwellCaptures build/nw10-correctness-scripted/blackwell/captures `
+  -PackedAdaRecord build/nw10-packed/ada/capture.json `
+  -PackedAdaCaptures build/nw10-packed/ada/captures `
+  -PackedBlackwellRecord build/nw10-packed/blackwell/capture.json `
+  -PackedBlackwellCaptures build/nw10-packed/blackwell/captures `
+  -PackedPackageSha256 <decoded-package-sha256> `
+  -UnpackedPackageSha256 <decoded-package-sha256> `
+  -Publish -Commit
 ```
 
 The correctness publisher validates the cross-hardware comparison, removes raw

@@ -15,6 +15,11 @@ def _proof() -> dict:
     return {
         "release_grade": True,
         "test_payload": False,
+        "nw10_build_inputs_digest": "sha256:v1:" + "f" * 64,
+        "templates": {
+            "canonical_decoder_off": True,
+            "compact_decoder_on": True,
+        },
         "canonical_artifact": {
             "executable_bytes": 260_000,
             "executable_sha256": "a" * 64,

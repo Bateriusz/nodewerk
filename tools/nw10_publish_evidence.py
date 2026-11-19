@@ -326,6 +326,24 @@ def _clean_summary(
         "captured_at_utc": str(report.get("captured_at_utc", "")),
         "source_result_bundle_sha256": bundle_sha256,
         "host": {
+            "virtualization_probe": {
+                "manufacturer": probe.get("manufacturer"),
+                "model": probe.get("model"),
+                "product_vendor": probe.get("product_vendor"),
+                "product_name": probe.get("product_name"),
+                "bios_manufacturer": probe.get("bios_manufacturer"),
+                "bios_version": probe.get("bios_version"),
+                "baseboard_manufacturer": probe.get("baseboard_manufacturer"),
+                "baseboard_product": probe.get("baseboard_product"),
+                "hypervisor_present": probe.get("hypervisor_present"),
+                "virtualization_based_security_status": probe.get(
+                    "virtualization_based_security_status"
+                ),
+                "hypervisor_explained_by_vbs": probe.get(
+                    "hypervisor_explained_by_vbs"
+                ),
+                "vm_markers": markers,
+            },
             "manufacturer": probe.get("manufacturer"),
             "model": probe.get("model"),
             "product_vendor": probe.get("product_vendor"),
@@ -479,10 +497,20 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
         )
     if packed.get("status") != "verified":
         raise ValueError("packed/unpacked correctness comparison is not verified")
+    if packed.get("direct_separate_packed_gpu_capture_recorded") is not True:
+        raise ValueError(
+            "packed/unpacked correctness requires a direct separate packed "
+            "GPU capture set; compositional decoder parity is not physical proof"
+        )
     if str(packed.get("packed_package_sha256", "")).lower() != str(
         packed.get("unpacked_package_sha256", "")
     ).lower():
         raise ValueError("packed and unpacked packages are not the same artifact")
+    common_package_sha = str(common.get("package_sha256", "")).lower()
+    if str(packed.get("packed_package_sha256", "")).lower() != common_package_sha:
+        raise ValueError(
+            "packed/unpacked comparison is not bound to the common artifact"
+        )
     packed_error = packed.get("worst_absolute_error")
     if packed_error is None or float(packed_error) > 0.0001:
         raise ValueError(
@@ -514,9 +542,14 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(
                 f"{tier} correctness hardware was not measured as desktop"
             )
-        if hardware.get("device_form_factor_source") in (None, "", "asserted"):
+        form_factor_source = str(hardware.get("device_form_factor_source", ""))
+        if (
+            form_factor_source in ("", "asserted")
+            or "reused" in form_factor_source.casefold()
+            or "inventory" in form_factor_source.casefold()
+        ):
             raise ValueError(
-                f"{tier} correctness form factor was asserted rather than probed"
+                f"{tier} correctness form factor was not measured by a chassis probe"
             )
         result = {
             "adapter_description": hardware.get("adapter_description"),
@@ -532,6 +565,7 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "format": "nw10-common-artifact-correctness-summary",
         "version": 1,
         "task": "NW-10",
+        "source_head_sha": args.implementation_head or _git_head(),
         "status": "verified",
         "capture_protocol": source.get("capture_protocol"),
         "common_artifact": {
@@ -598,6 +632,7 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "worst_absolute_error": public["comparison"]["worst_absolute_error"],
         "worst_relative_error": public["comparison"]["worst_relative_error"],
     }
+    status["source_head_sha"] = public["source_head_sha"]
     _refresh_status(status)
     _assert_privacy(status, list(args.forbid_token or []))
     _write(status_path, status)
@@ -729,6 +764,7 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
         "version": 1,
         "task": "NW-10",
         "status": "verified",
+        "source_head_sha": _git_head(),
         "final_artifact": artifact,
         "windows_build": str(clean.get("host", {}).get("windows_build", "")),
         "environment": {
@@ -759,6 +795,7 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
         "final_executable_sha256": artifact["executable_sha256"],
         "package_sha256": artifact["package_sha256"],
     }
+    status["source_head_sha"] = public["source_head_sha"]
     _refresh_status(status)
     _assert_privacy(status, list(args.forbid_token or []))
     _write(status_path, status)

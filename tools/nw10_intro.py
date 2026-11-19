@@ -352,8 +352,11 @@ def export_intro(
     contracts_only: bool = False,
     codec_id: str = "auto",
     layout_id: str = "auto",
+    select_mode: str = "canonical",
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
+    if select_mode not in {"canonical", "compact"}:
+        raise IntroContractError("intro select mode must be canonical or compact")
     root = Path(repo_root or REPO_ROOT)
     profile = validate_intro_graph(root / contract.INTRO_GRAPH)
     document = nw03.load_graph(root / contract.INTRO_GRAPH)
@@ -581,14 +584,23 @@ def export_intro(
             ),
             evidence_status="informational_contract_only",
         )
-        # The selected runnable executable is the smaller complete
-        # distribution.  Compression that increases total distributed bytes is
-        # never presented as the artifact.
-        selected_executable = (
-            canonical_executable
-            if compact_ledger["compression_rejected_for_increasing_distribution"]
-            else compact_executable
-        )
+        # A compact candidate is not the shipped fallback until the Windows
+        # runtime validation step has accepted it.  The default selection is
+        # therefore the canonical executable; callers that have already
+        # validated the candidate may request compact selection explicitly.
+        compression_rejected = compact_ledger[
+            "compression_rejected_for_increasing_distribution"
+        ]
+        if select_mode == "compact" and not compression_rejected:
+            selected_executable = compact_executable
+            selected_reason = "explicit_compact_selection_after_validation"
+        else:
+            selected_executable = canonical_executable
+            selected_reason = (
+                "compression_rejected_for_increasing_distribution"
+                if compression_rejected
+                else "runtime_validation_pending"
+            )
         (compact_dir / f"{stem}.exe").write_bytes(selected_executable)
         selected_sha256 = hashlib.sha256(selected_executable).hexdigest()
         measurement = compact.comprehensive_measurement(package_bytes)
@@ -643,6 +655,7 @@ def export_intro(
                     if selected_executable == canonical_executable
                     else "compact"
                 ),
+                "selected_reason": selected_reason,
                 "encoded_package_bytes": len(encoded.bytes),
                 "encoded_package_sha256": hashlib.sha256(encoded.bytes).hexdigest(),
                 "codec_id": encoded.codec_id,
@@ -771,6 +784,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--layout", default="auto", choices=("auto", *contract.KNOWN_LAYOUT_IDS)
     )
+    parser.add_argument(
+        "--select-mode",
+        default="canonical",
+        choices=("canonical", "compact"),
+        help=(
+            "select the validated compact executable only after runtime "
+            "validation; the default canonical fallback is the safe export"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -789,6 +811,7 @@ def main(argv: list[str] | None = None) -> int:
             contracts_only=args.contracts_only,
             codec_id=args.codec,
             layout_id=args.layout,
+            select_mode=args.select_mode,
         )
     except Exception as exc:
         print(f"NW-10 intro export failed: {exc}", file=sys.stderr)

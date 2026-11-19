@@ -93,6 +93,13 @@ def build_feasibility(
     if proof.get("release_grade") is not True or intro.get("release_grade") is not True:
         raise ValueError("feasibility publication requires release-grade reports")
     proof_artifact = _proof_artifact(proof)
+    templates = proof.get("templates")
+    if not isinstance(templates, Mapping) or templates.get(
+        "canonical_decoder_off"
+    ) is not True:
+        raise ValueError(
+            "proof report does not prove a decoder-OFF canonical baseline"
+        )
     canonical_intro, compact_intro = _intro_artifacts(intro)
 
     proof_bytes = int(proof_artifact["executable_bytes"])
@@ -215,6 +222,7 @@ def build_feasibility(
             "proof_measured_bytes": proof_bytes,
             "proof_measurement_status": "measured_decoder_off",
             "canonical_proof_within_tier": proof_within,
+            "proof_build_inputs_digest": proof.get("nw10_build_inputs_digest"),
             "minimum_measured_candidate_bytes": (
                 int(measured_candidate) if measured_candidate is not None else None
             ),

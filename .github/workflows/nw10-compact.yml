@@ -184,7 +184,7 @@ jobs:
             $candidates += $proofBytes
             Write-Host ("NW-10 proof measured blocker bytes: " + $proofBytes)
           }
-          $introBytes = [int64]$intro.compact_artifact.selected_executable_bytes
+          $introBytes = [int64]$intro.compact_artifact.executable_bytes
           $canonicalIntroBytes = [int64]$intro.canonical_artifact.executable_bytes
           $candidates += $introBytes
           Write-Host ("NW-10 intro compact candidate bytes: " + $introBytes)
@@ -255,6 +255,17 @@ jobs:
             $outcome.compact_candidate_runtime_status = "validated_runnable"
             $outcome.compact_candidate_exit_code = 0
             $hostedRuntimeValidated = $true
+            $artifactRoot = Split-Path (Split-Path $candidate.FullName -Parent) -Parent
+            $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+            Copy-Item $candidate.FullName (Join-Path $artifactRoot "$stem.exe") -Force
+            $reportPath = Join-Path $artifactRoot "report.json"
+            $introReport = Get-Content $reportPath -Raw | ConvertFrom-Json
+            $introReport.compact_artifact.selected_mode = "compact"
+            $introReport.compact_artifact.selected_executable_bytes = [int64]$candidate.Length
+            $introReport.compact_artifact.selected_executable_sha256 = (
+              Get-FileHash -Algorithm SHA256 $candidate.FullName
+            ).Hash.ToLowerInvariant()
+            $introReport | ConvertTo-Json -Depth 24 | Set-Content -Encoding utf8 $reportPath
             Write-Host ("NW-10 compact candidate runtime validation: PASS (" + $candidate.Length + " bytes)")
           } else {
             $outcome.compact_candidate_runtime_status = "rejected_runtime_failure"
@@ -313,23 +324,6 @@ jobs:
           Write-Host "NW-10 Windows feasibility outcome:"
           Get-Content $outcomePath
 
-      - name: Publish schema-valid compact feasibility record
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          python tools/nw10_feasibility.py `
-            --outcome "$PWD/build/nw10-windows-size-outcome.json" `
-            --proof-report "$PWD/build/nw10-proof/report.json" `
-            --intro-report "$PWD/build/nw10-intro/report.json" `
-            --output "$PWD/build/nw10-windows-compact-feasibility.json" `
-            --run-id $env:GITHUB_RUN_ID `
-            --head-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
-            --artifact-name "nw10-windows-compact-evidence"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/schema_validator.py `
-            --document "$PWD/build/nw10-windows-compact-feasibility.json" `
-            --schema "$PWD/schemas/nw10-windows-compact-feasibility.schema.json"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Measure exact PE linker elimination and compact-decoder closure
         shell: pwsh
         run: |
@@ -519,6 +513,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Windows NW-10 evidence
+        id: nw10_evidence_upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -527,10 +522,38 @@ jobs:
             build/nw10-proof/**
             build/nw10-intro/**
             build/nw10-windows-size-outcome.json
-            build/nw10-windows-compact-feasibility.json
             build/nw10-dependency-closure.json
             build/nw10-dependency-check/**
             build/nw10-runtime/**
             build/nw10-windows-pe-ledger.json
             build/nw10-intro-link-control-report.json
             ${{ runner.temp }}/nw10-bootstrap-provenance.json
+
+      - name: Bind feasibility record to the uploaded artifact identity
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/nw10_feasibility.py `
+            --outcome "$PWD/build/nw10-windows-size-outcome.json" `
+            --proof-report "$PWD/build/nw10-proof/report.json" `
+            --intro-report "$PWD/build/nw10-intro/report.json" `
+            --output "$PWD/build/nw10-windows-compact-feasibility-bound.json" `
+            --run-id $env:GITHUB_RUN_ID `
+            --head-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
+            --artifact-name "nw10-windows-compact-evidence" `
+            --artifact-id "${{ steps.nw10_evidence_upload.outputs.artifact-id }}" `
+            --artifact-digest "${{ steps.nw10_evidence_upload.outputs.artifact-digest }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/schema_validator.py `
+            --document "$PWD/build/nw10-windows-compact-feasibility-bound.json" `
+            --schema "$PWD/schemas/nw10-windows-compact-feasibility.schema.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload artifact-bound feasibility record
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-windows-compact-feasibility-record
+          path: build/nw10-windows-compact-feasibility-bound.json
+          if-no-files-found: ignore

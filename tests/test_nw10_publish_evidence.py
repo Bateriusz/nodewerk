@@ -127,8 +127,9 @@ def test_correctness_publisher_strips_raw_capture_material(
         },
         "packed_unpacked_comparison": {
             "status": "verified",
-            "packed_package_sha256": "e" * 64,
-            "unpacked_package_sha256": "e" * 64,
+            "direct_separate_packed_gpu_capture_recorded": True,
+            "packed_package_sha256": "a" * 64,
+            "unpacked_package_sha256": "a" * 64,
             "worst_absolute_error": 0.0,
             "runtime": {
                 "ada": {"status": "passed"},
@@ -245,10 +246,67 @@ def test_correctness_publisher_rejects_asserted_desktop_and_pending_packed(
         publisher.publish_correctness(args)
 
 
+def test_correctness_publisher_rejects_compositional_packed_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(publisher, "REPO_ROOT", tmp_path)
+    package = "a" * 64
+    source = {
+        "format": "nw10-common-artifact-correctness",
+        "status": "verified",
+        "capture_protocol": "nw07-correctness-capture.v1",
+        "common_artifact": {"package_sha256": package},
+        "ada": {"loop_boundary": {"status": "passed"}},
+        "blackwell": {"loop_boundary": {"status": "passed"}},
+        "comparison": {
+            "fixed_ticks": [0, 240000, 480000, 720000, 959999],
+            "per_tick": [
+                {"tick": tick, "status": "passed"}
+                for tick in (0, 240000, 480000, 720000, 959999)
+            ],
+            "worst_absolute_error": 0.0,
+            "worst_relative_error": 0.0,
+            "absolute_tolerance": 0.0001,
+            "relative_tolerance": 0.0001,
+            "absolute_required": True,
+        },
+        "packed_unpacked_comparison": {
+            "status": "verified",
+            "direct_separate_packed_gpu_capture_recorded": False,
+            "packed_package_sha256": package,
+            "unpacked_package_sha256": package,
+            "worst_absolute_error": 0.0,
+            "runtime": {
+                "ada": {"status": "passed"},
+                "blackwell": {"status": "passed"},
+            },
+        },
+        "privacy": {
+            "raw_capture_bytes_embedded": False,
+            "local_paths_included": False,
+        },
+        "source": {"execution_kind": "physical_cross_hardware"},
+    }
+    comparison = tmp_path / "build" / "comparison.json"
+    status_path = tmp_path / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    _write_json(comparison, source)
+    _write_json(status_path, _base_status())
+    args = argparse.Namespace(
+        comparison=str(comparison),
+        destination="benchmarks/nw10/common-artifact-correctness.v1.json",
+        status_file="benchmarks/nw10/evidence-status.v1.json",
+        implementation_head="1" * 40,
+        forbid_token=[],
+    )
+    with pytest.raises(ValueError, match="direct separate packed GPU capture"):
+        publisher.publish_correctness(args)
+
+
 def test_system_publisher_verifies_bundle_and_can_complete_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(publisher, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(publisher, "_git_head", lambda: "1" * 40)
     artifact = {
         "executable_sha256": "1" * 64,
         "executable_bytes": 240702,

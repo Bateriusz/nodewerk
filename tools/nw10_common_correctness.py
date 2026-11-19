@@ -557,6 +557,8 @@ def compare(
     output: Path,
     packed_ada_capture_dir: Path | None = None,
     packed_blackwell_capture_dir: Path | None = None,
+    packed_ada_record: Path | None = None,
+    packed_blackwell_record: Path | None = None,
     packed_package_sha256: str | None = None,
     unpacked_package_sha256: str | None = None,
 ) -> dict[str, Any]:
@@ -639,6 +641,24 @@ def compare(
     )
     packed_block: dict[str, Any]
     if packed_ada_capture_dir and packed_blackwell_capture_dir:
+        if packed_ada_record is None or packed_blackwell_record is None:
+            raise ValueError(
+                "packed capture directories require their capture manifests"
+            )
+        for label, record_path, capture_dir in (
+            ("ada", packed_ada_record, packed_ada_capture_dir),
+            ("blackwell", packed_blackwell_record, packed_blackwell_capture_dir),
+        ):
+            packed_record = json.loads(record_path.read_text(encoding="utf-8"))
+            _verify_capture_manifest(packed_record, capture_dir)
+            if str(
+                packed_record.get("common_artifact", {}).get("package_sha256", "")
+            ).lower() != str(
+                ada["common_artifact"].get("package_sha256", "")
+            ).lower():
+                raise ValueError(
+                    f"packed {label} captures are not bound to the common artifact"
+                )
         packed_worst = 0.0
         packed_runtime: dict[str, Any] = {}
         for label, unpacked_dir, packed_dir in (
@@ -662,9 +682,11 @@ def compare(
             all(item["status"] == "passed" for item in packed_runtime.values())
             and packed_package_sha256 is not None
             and packed_package_sha256 == unpacked_package_sha256
+            and packed_package_sha256 == ada["common_artifact"].get("package_sha256")
         )
         packed_block = {
             "status": "verified" if packed_ok else "failed",
+            "direct_separate_packed_gpu_capture_recorded": True,
             "packed_package_sha256": packed_package_sha256,
             "unpacked_package_sha256": unpacked_package_sha256,
             "worst_absolute_error": packed_worst,
@@ -675,6 +697,7 @@ def compare(
     else:
         packed_block = {
             "status": "pending_physical",
+            "direct_separate_packed_gpu_capture_recorded": False,
             "packed_package_sha256": None,
             "unpacked_package_sha256": None,
             "worst_absolute_error": None,
@@ -751,6 +774,8 @@ def main(argv: list[str] | None = None) -> int:
     comp.add_argument("--blackwell-captures", type=Path, required=True)
     comp.add_argument("--packed-ada-captures", type=Path)
     comp.add_argument("--packed-blackwell-captures", type=Path)
+    comp.add_argument("--packed-ada-record", type=Path)
+    comp.add_argument("--packed-blackwell-record", type=Path)
     comp.add_argument("--packed-package-sha256")
     comp.add_argument("--unpacked-package-sha256")
     comp.add_argument("--output", type=Path, required=True)
@@ -790,6 +815,8 @@ def main(argv: list[str] | None = None) -> int:
                 output=args.output,
                 packed_ada_capture_dir=args.packed_ada_captures,
                 packed_blackwell_capture_dir=args.packed_blackwell_captures,
+                packed_ada_record=args.packed_ada_record,
+                packed_blackwell_record=args.packed_blackwell_record,
                 packed_package_sha256=args.packed_package_sha256,
                 unpacked_package_sha256=args.unpacked_package_sha256,
             )

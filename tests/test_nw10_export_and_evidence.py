@@ -238,13 +238,9 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         reuse_path, REPO_ROOT / "schemas" / "nw10-reused-physical-evidence.schema.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    assert evidence["evidence_status"] == "verified_physical"
-    assert evidence["physical_certification"] == (
-        "correctness_and_system_measurements_reused_performance_reference_pending"
-    )
-    assert evidence["reused_physical_evidence"] == (
-        "benchmarks/nw10/reused-physical-evidence.v1.json"
-    )
+    assert evidence["evidence_status"] == "informational_contract_only"
+    assert evidence["physical_certification"] == "pending_physical_windows_capture"
+    assert "reused_physical_evidence" not in evidence
     assert evidence["reference_capture"] == "pending_reference_capture"
     assert evidence["proof"]["reproducibility"]["matching"] is True
     assert evidence["tiers"]["compact_target_bytes"] == 65_536
@@ -253,6 +249,10 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     assert evidence["tiers"]["standard_bytes"] == 1_048_576
     assert evidence["decision"]["custom_compressor_started"] is False
     assert evidence["decision"]["universal_64k_claim"] is False
+    assert (
+        evidence["codec_encoding_identity"]["cross_platform_byte_parity_claimed"]
+        is False
+    )
     current_inputs = contract.compute_build_inputs()
     assert evidence["nw10_build_inputs"] == current_inputs
     assert evidence["nw10_build_inputs_digest"] == contract.build_inputs_digest(
@@ -270,18 +270,16 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     assert _canonical_text_sha256(intro_report_path) == evidence["intro"]["report_sha256"]
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["contract_evidence"] == "verified_by_pytest"
-    # Reuse the physical correctness and system measurements without reviving
-    # the invalid performance-reference claim. The exact nw07_perf_ref_v1
-    # capture/binding remains pending.
-    assert status["evidence_status"] == "correctness_and_system_reused_performance_pending"
-    assert status["physical_evidence"] == "correctness_and_system_reused"
+    assert len(status["source_head_sha"]) == 40
+    assert status["evidence_status"] == "pending_physical_windows_capture"
+    assert status["physical_evidence"] == "pending"
     assert status["reference_capture"] == "pending_reference_capture"
     assert status["frame_time"] == "pending_unverified"
-    assert status["ada_correctness"] == "verified"
-    assert status["blackwell_correctness"] == "verified"
-    assert status["clean_system"] == "verified"
-    assert status["startup"] == "verified"
-    assert status["memory"] == "verified"
+    assert status["ada_correctness"] == "pending_unverified"
+    assert status["blackwell_correctness"] == "pending_unverified"
+    assert status["clean_system"] == "pending_unverified"
+    assert status["startup"] == "pending_unverified"
+    assert status["memory"] == "pending_unverified"
     assert not (
         REPO_ROOT
         / "benchmarks"
@@ -289,32 +287,26 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         / "performance-preservation-rtx4060ti.v1.json"
     ).exists()
     correctness = json.loads(correctness_path.read_text(encoding="utf-8"))
-    assert correctness["status"] == "verified"
+    assert correctness["status"] == "pending_unverified"
     packed = correctness["packed_unpacked_comparison"]
-    assert packed["status"] == "verified"
+    assert packed["status"] == "pending_physical"
     assert packed["direct_separate_packed_gpu_capture_recorded"] is False
-    assert packed["decoder_parity"]["status"] == "passed"
-    assert packed["packed_package_sha256"] == packed["unpacked_package_sha256"]
-    assert packed["runtime"]["ada"]["status"] == "passed"
-    assert packed["runtime"]["blackwell"]["status"] == "passed"
+    assert packed["packed_package_sha256"] is None
+    assert packed["runtime"]["ada"]["status"] == "pending_physical"
+    assert packed["runtime"]["blackwell"]["status"] == "pending_physical"
     system = json.loads(system_path.read_text(encoding="utf-8"))
-    assert system["status"] == "verified_reused_split_hosts"
-    assert system["environment_consistency"]["same_physical_host"] is False
-    assert system["environment_consistency"]["single_host_clean_startup_memory_demonstrated"] is False
-    assert system["artifact_transfer"]["package_identity_exact"] is True
-    assert system["artifact_transfer"]["executable_identity_exact"] is False
-    assert system["startup"]["status"] == "verified"
-    assert system["memory"]["status"] == "verified"
-    assert system["clean_system"]["status"] == "verified"
+    assert system["status"] == "pending_unverified"
+    assert system["final_artifact"] is None
+    assert system["startup"] is None
+    assert system["memory"] is None
+    assert system["clean_system"] is None
     assert system["windows_build"] is None
     reuse = json.loads(reuse_path.read_text(encoding="utf-8"))
+    assert reuse["status"] == "archived_informational"
     assert reuse["current_head_transfer"]["packed_unpacked_correctness"]["direct_separate_packed_gpu_capture_recorded"] is False
     assert reuse["physical_measurements"]["system"]["same_physical_host"] is False
-    assert reuse["current_head_transfer"]["system_artifact_transfer"]["current_executable_sha256"] == system["current_artifact"]["executable_sha256"]
-    assert reuse["current_head_transfer"]["system_artifact_transfer"]["current_package_sha256"] == system["current_artifact"]["package_sha256"]
-    assert reuse["current_head_transfer"]["packed_unpacked_correctness"]["physical_runtime_package_sha256"] == correctness["common_artifact"]["package_sha256"]
     pe_ledger = json.loads(pe_ledger_path.read_text(encoding="utf-8"))
-    assert pe_ledger["status"] == "verified"
+    assert pe_ledger["status"] == "archived_superseded"
     assert pe_ledger["source"]["workflow_run_id"] == 44542203189
     assert pe_ledger["conclusion"]["byte_ledger_complete"] is True
 
@@ -416,6 +408,8 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
     assert record["target_met"] is False
     assert record["classification"] == "continue"
     assert record["universal_64k_claim"] is False
+    assert record["measurement_status"] == "archived_superseded"
+    assert record["current_implementation_measurement"] is False
     assert record["measurements"]["proof_measured_bytes"] == 260_294
     assert record["measurements"]["proof_measurement_status"] == "measured_decoder_off"
     assert record["measurements"]["canonical_proof_within_tier"] is True
@@ -436,8 +430,8 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
     assert record["privacy"]["raw_stdout_stderr_included"] is False
     assert record["privacy"]["runner_paths_included"] is False
     assert record["privacy"]["user_profile_paths_included"] is False
-    assert system["status"] == "verified_reused_split_hosts"
-    assert pe["status"] == "verified"
+    assert system["status"] == "pending_unverified"
+    assert pe["status"] == "archived_superseded"
     assert pe["final_artifact"]["executable_sha256"] == record["canonical_fallback"]["sha256"]
     text = json.dumps(record).casefold()
     for token in ("c:\\users\\", "/home/", "micha", "michal", "matyl"):
@@ -448,7 +442,7 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
             encoding="utf-8"
         )
     )
-    assert status["evidence_status"] == "correctness_and_system_reused_performance_pending"
+    assert status["evidence_status"] == "pending_physical_windows_capture"
     assert status["reference_capture"] == "pending_reference_capture"
 
 
@@ -502,6 +496,33 @@ def test_compact_feasibility_schema_supports_a_valid_success_branch() -> None:
     validate_instance(success, schema, schema)
 
 
+def test_verified_system_validation_cannot_omit_measurements(tmp_path: Path) -> None:
+    record = {
+        "format": "nw10-system-validation",
+        "version": 1,
+        "task": "NW-10",
+        "status": "verified",
+        "final_artifact": None,
+        "startup": None,
+        "memory": None,
+        "clean_system": None,
+        "windows_build": None,
+        "privacy": {
+            "local_paths_included": False,
+            "raw_stdout_stderr_included": False,
+            "user_profile_paths_included": False,
+            "raw_result_bundle_tracked": False,
+        },
+    }
+    path = tmp_path / "system.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(Exception, match="requires a measured final_artifact"):
+        validate_file_against_schema(
+            path,
+            REPO_ROOT / "schemas" / "nw10-system-validation.schema.json",
+        )
+
+
 def test_contract_evidence_regeneration_is_not_destructive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -514,6 +535,7 @@ def test_contract_evidence_regeneration_is_not_destructive(
         "format": "nw10-evidence-status",
         "version": 1,
         "task": "NW-10",
+        "source_head_sha": nw10_evidence._git_head(),
         "implementation_base": contract.IMPLEMENTATION_BASE,
         "evidence_status": "performance_correctness_and_system_verified_packaging_pending",
         "contract_evidence": "verified_by_pytest",
@@ -541,7 +563,7 @@ def test_contract_evidence_regeneration_is_not_destructive(
     assert regenerated["files"]
 
 
-def test_reused_physical_evidence_regeneration_preserves_summary_state(
+def test_reused_physical_evidence_regeneration_does_not_promote_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import shutil
@@ -562,8 +584,7 @@ def test_reused_physical_evidence_regeneration_preserves_summary_state(
     intro_record = json.loads(
         (output / "intro-profile.v1.json").read_text(encoding="utf-8")
     )
-    assert compact_record["evidence_status"] == "verified_physical"
-    assert compact_record["correctness_coverage"]["desktop_ada_representative"]["status"] == "verified_reused"
-    assert compact_record["correctness_coverage"]["desktop_blackwell_representative"]["packed_unpacked_visual_comparison"] == "verified_compositional"
-    assert intro_record["physical_measurements"] == "verified_reused_split_hosts"
-    assert intro_record["reused_physical_evidence"] == "benchmarks/nw10/reused-physical-evidence.v1.json"
+    assert compact_record["evidence_status"] == "informational_contract_only"
+    assert compact_record["correctness_coverage"]["desktop_ada_representative"]["status"] == "pending_unverified"
+    assert intro_record["physical_measurements"] == "pending_physical_windows_capture"
+    assert "reused_physical_evidence" not in intro_record
