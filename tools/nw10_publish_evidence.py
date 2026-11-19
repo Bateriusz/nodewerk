@@ -434,6 +434,31 @@ def _clean_summary(
     }
 
 
+def _upsert_status_file(
+    status: dict[str, Any], *, path: str, sha256: str
+) -> None:
+    normalized = path.replace("\\", "/")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise ValueError(f"status file hash is malformed for {normalized}")
+    rows = status.get("files")
+    if rows is None:
+        rows = []
+        status["files"] = rows
+    if not isinstance(rows, list):
+        raise ValueError("evidence status files ledger is not a list")
+    retained: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("evidence status files ledger row is invalid")
+        row_path = str(row.get("path", "")).replace("\\", "/")
+        if row_path == normalized:
+            continue
+        retained.append(dict(row))
+    retained.append({"path": normalized, "sha256": sha256})
+    retained.sort(key=lambda row: str(row.get("path", "")))
+    status["files"] = retained
+
+
 def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
     perf = (
         isinstance(status.get("performance_preservation"), Mapping)
@@ -912,14 +937,19 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
     _write(destination, public)
     status_path = REPO_ROOT / args.status_file
     status = _load(status_path)
+    correctness_sha = _text_sha256(destination)
+    correctness_path = args.destination.replace("\\", "/")
     status["correctness_evidence"] = {
         "status": "verified",
-        "path": args.destination.replace("\\", "/"),
-        "sha256": _text_sha256(destination),
+        "path": correctness_path,
+        "sha256": correctness_sha,
         "package_sha256": package_sha,
         "worst_absolute_error": public["comparison"]["worst_absolute_error"],
         "worst_relative_error": public["comparison"]["worst_relative_error"],
     }
+    _upsert_status_file(
+        status, path=correctness_path, sha256=correctness_sha
+    )
     status["source_head_sha"] = public["source_head_sha"]
     _refresh_status(status)
     _assert_privacy(status, list(args.forbid_token or []))
@@ -1076,13 +1106,16 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
     _write(destination, public)
     status_path = REPO_ROOT / args.status_file
     status = _load(status_path)
+    system_sha = _text_sha256(destination)
+    system_path = args.destination.replace("\\", "/")
     status["system_validation"] = {
         "status": "verified",
-        "path": args.destination.replace("\\", "/"),
-        "sha256": _text_sha256(destination),
+        "path": system_path,
+        "sha256": system_sha,
         "final_executable_sha256": artifact["executable_sha256"],
         "package_sha256": artifact["package_sha256"],
     }
+    _upsert_status_file(status, path=system_path, sha256=system_sha)
     status["source_head_sha"] = public["source_head_sha"]
     _refresh_status(status)
     _assert_privacy(status, list(args.forbid_token or []))
