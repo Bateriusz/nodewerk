@@ -716,11 +716,26 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
         "NVIDIA GeForce RTX 5070 Ti"
     )
     assert public["memory"]["peak_engine_committed_gpu_bytes"] == 42_926_080
+    assert public["startup"]["hardware"]["windows_build"] == "10.0.26200"
+    assert public["memory"]["hardware"]["windows_build"] == "10.0.26200"
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["evidence_status"] == "verified_complete"
     assert status["physical_evidence"] == (
         "performance_correctness_and_system_verified"
     )
+    system_path = tmp_path / "benchmarks" / "nw10" / "system-validation.v1.json"
+    system_sha = publisher._text_sha256(system_path)
+    system_rows = [
+        row
+        for row in status["files"]
+        if row.get("path") == "benchmarks/nw10/system-validation.v1.json"
+    ]
+    assert system_rows == [
+        {
+            "path": "benchmarks/nw10/system-validation.v1.json",
+            "sha256": system_sha,
+        }
+    ]
 
 
 def test_blackwell_transfer_bundle_is_runtime_only_and_published_by_ci() -> None:
