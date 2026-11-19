@@ -20,6 +20,7 @@ import json
 import math
 import os
 import platform
+import shutil
 import struct
 import subprocess
 import sys
@@ -582,6 +583,16 @@ def capture(
             "loop-boundary image does not satisfy frozen NW-07 image tolerance"
         )
 
+    verification_file: str | None = None
+    if packaging_mode == "packed":
+        output.parent.mkdir(parents=True, exist_ok=True)
+        verification_path = output.parent / "packed-diagnostic.exe"
+        if diagnostic_executable.resolve() != verification_path.resolve():
+            shutil.copy2(diagnostic_executable, verification_path)
+        if _sha256(verification_path) != observed["executable_sha256"]:
+            raise ValueError("retained packed diagnostic executable hash changed")
+        verification_file = verification_path.name
+
     record = {
         "format": FORMAT,
         "version": VERSION,
@@ -613,6 +624,7 @@ def capture(
             "encoded_container_bytes": observed["encoded_container_bytes"],
             "codec_id": observed["codec_id"],
             "layout_id": observed["layout_id"],
+            "verification_file": verification_file,
         },
         "hardware": {
             **hardware,
@@ -688,6 +700,45 @@ def _verify_capture_manifest(
             raise ValueError(f"correctness raw capture SHA-256 mismatch for tick {tick}")
 
 
+def _verify_packed_executable(
+    record: Mapping[str, Any], *, record_path: Path
+) -> None:
+    diagnostic = record.get("diagnostic_sibling")
+    common = record.get("common_artifact")
+    if not isinstance(diagnostic, Mapping) or not isinstance(common, Mapping):
+        raise ValueError("packed capture is missing artifact identity")
+    relative = diagnostic.get("verification_file")
+    if not isinstance(relative, str) or not relative:
+        raise ValueError("packed capture does not retain its diagnostic executable")
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or relative_path.name != relative:
+        raise ValueError("packed diagnostic verification file must be a local filename")
+    executable = record_path.parent / relative_path
+    if not executable.is_file():
+        raise ValueError("packed diagnostic verification executable is missing")
+    executable_bytes = executable.read_bytes()
+    executable_sha = hashlib.sha256(executable_bytes).hexdigest()
+    if executable_sha != str(diagnostic.get("executable_sha256", "")).lower():
+        raise ValueError("packed diagnostic executable SHA-256 mismatch")
+    payload, _manifest = nw05_export.extract_embedded_package(executable_bytes)
+    if not compact.is_compact_container(payload):
+        raise ValueError("packed diagnostic executable does not contain compact bytes")
+    encoded_sha = hashlib.sha256(payload).hexdigest()
+    if encoded_sha != str(diagnostic.get("encoded_container_sha256", "")).lower():
+        raise ValueError("packed encoded-container SHA-256 does not match executable")
+    if len(payload) != int(diagnostic.get("encoded_container_bytes", -1)):
+        raise ValueError("packed encoded-container size does not match executable")
+    header = compact.parse_header(payload)
+    if str(header.get("codec_id")) != str(diagnostic.get("codec_id")):
+        raise ValueError("packed codec identity does not match executable")
+    if str(header.get("layout_id")) != str(diagnostic.get("layout_id")):
+        raise ValueError("packed layout identity does not match executable")
+    decoded = compact.decode_compact(payload)
+    decoded_sha = hashlib.sha256(decoded).hexdigest()
+    if decoded_sha != str(common.get("package_sha256", "")).lower():
+        raise ValueError("packed executable does not decode to the common package")
+
+
 def _verify_capture_record(
     record: Mapping[str, Any],
     *,
@@ -695,6 +746,7 @@ def _verify_capture_record(
     status: str,
     packaging_mode: str,
     capture_dir: Path,
+    record_path: Path,
 ) -> None:
     if record.get("format") != FORMAT:
         raise ValueError(f"{tier} {packaging_mode} capture has an unexpected format")
@@ -730,6 +782,7 @@ def _verify_capture_record(
             raise ValueError(f"{tier} packed capture has no supported codec identity")
         if diagnostic.get("layout_id") not in contract.KNOWN_LAYOUT_IDS:
             raise ValueError(f"{tier} packed capture has no supported layout identity")
+        _verify_packed_executable(record, record_path=record_path)
     hardware = record.get("hardware")
     if not isinstance(hardware, Mapping):
         raise ValueError(f"{tier} {packaging_mode} hardware identity is missing")
@@ -780,6 +833,7 @@ def compare(
         status="captured_reference",
         packaging_mode="unpacked",
         capture_dir=ada_capture_dir,
+        record_path=ada_record_path,
     )
     _verify_capture_record(
         blackwell,
@@ -787,6 +841,7 @@ def compare(
         status="captured_candidate",
         packaging_mode="unpacked",
         capture_dir=blackwell_capture_dir,
+        record_path=blackwell_record_path,
     )
     if ada.get("common_artifact") != blackwell.get("common_artifact"):
         raise ValueError("Ada and Blackwell captures do not name the same common artifact")
@@ -908,6 +963,9 @@ def compare(
                 status=expected_status,
                 packaging_mode="packed",
                 capture_dir=capture_dir,
+                record_path=(
+                    packed_ada_record if label == "ada" else packed_blackwell_record
+                ),
             )
             if record.get("common_artifact") != ada.get("common_artifact"):
                 raise ValueError(
