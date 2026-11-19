@@ -36,7 +36,8 @@
         "performance_compact_and_correctness_verified_system_pending",
         "performance_and_correctness_verified_system_pending",
         "performance_correctness_and_system_verified_packaging_pending",
-        "verified_complete"
+        "verified_complete",
+        "correctness_and_system_reused_performance_pending"
       ]
     },
     "reference_capture": {
@@ -53,7 +54,8 @@
         "pending",
         "performance_verified",
         "performance_and_correctness_verified",
-        "performance_correctness_and_system_verified"
+        "performance_correctness_and_system_verified",
+        "correctness_and_system_reused"
       ]
     },
     "clean_system": {
@@ -85,7 +87,10 @@
       ],
       "properties": {
         "status": {
-          "const": "verified"
+          "enum": [
+            "verified",
+            "verified_reused_split_hosts"
+          ]
         },
         "path": {
           "const": "benchmarks/nw10/system-validation.v1.json"
@@ -260,6 +265,26 @@
             "pending_runtime_validation",
             "none"
           ]
+        }
+      }
+    },
+    "reused_physical_evidence": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified_reuse_with_explicit_limitations"
+        },
+        "path": {
+          "const": "benchmarks/nw10/reused-physical-evidence.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     }
