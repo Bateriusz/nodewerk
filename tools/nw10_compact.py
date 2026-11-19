@@ -93,7 +93,7 @@ MAX_CONTAINER_BYTES = 64 * 1024 * 1024
 MAX_DECODED_BYTES = nwp.MAX_DECODED_BYTES
 MAX_EXPANSION_RATIO = 256
 MSZIP_BLOCK_BYTES = 32_768
-MSZIP_ENCODING_ID = "nwc.mszip.ck-zlib.v1"
+MSZIP_ENCODING_ID = "nwc.codec.mszip.v1"
 
 
 class CompactCodecError(ValueError):
@@ -356,66 +356,39 @@ def _windows_mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
 
 
 def mszip_compress(data: bytes, *, level: int = 9) -> bytes:
-    """Produce one deterministic MSZIP (CK-framed DEFLATE) byte stream.
+    """Encode MSZIP with the implementation used by the target host.
 
-    The Windows release host and the GPU-less contract host must record the
-    same encoded payload identity.  The inbox Compression API on Windows is not
-    byte-stable across versions and is therefore used only as the shipped
-    *decoder*.  Encoding always uses the repository-owned deterministic CK
-    framing below.  The Windows decoder parity harness exercises the inbox
-    decompressor against these bytes so the selected encoding is demonstrated,
-    not assumed, to be supported by the player.
+    Windows release artifacts use the inbox Compression API because that is
+    the format consumed by the shipped cabinet.dll decoder. GPU-less contract
+    hosts use the portable CK-framed reference encoder only for contract
+    measurements. Encoded byte hashes are host-local; cross-host evidence is
+    linked by the decoded canonical package SHA-256.
     """
-    encoded = _zlib_mszip_compress(data, level=level)
     if sys.platform == "win32":
-        # Fail closed at packaging time if the exact inbox decompressor used by
-        # the shipped player rejects the deterministic bytes.  This is a
-        # measured compatibility gate, not an assumption about API behaviour.
-        try:
-            decoded = _windows_mszip_decompress(
-                encoded, max_output_bytes=len(data)
-            )
-        except CompactCodecError as exc:
-            raise CompactCodecError(
-                "compact_codec_unavailable_or_malformed",
-                "Windows inbox MSZIP decoder rejected the deterministic encoder "
-                "bytes",
-            ) from exc
-        if decoded != data:
-            raise CompactCodecError(
-                "compact_codec_malformed",
-                "Windows inbox MSZIP decoder changed the deterministic payload",
-            )
-    return encoded
+        return _windows_mszip_compress(data)
+    return _zlib_mszip_compress(data, level=level)
 
 
 def mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
-    """Decode deterministic MSZIP bytes.
-
-    On Windows prefer the exact inbox decompressor used by the shipped player;
-    fall back to the portable reference decoder only when the host API rejects
-    the bytes.  Both paths are bounded by ``max_output_bytes``.
-    """
+    """Decode with the same bounded implementation used by the current host."""
     if sys.platform == "win32":
-        try:
-            return _windows_mszip_decompress(
-                data, max_output_bytes=max_output_bytes
-            )
-        except CompactCodecError:
-            pass
+        return _windows_mszip_decompress(
+            data, max_output_bytes=max_output_bytes
+        )
     return _zlib_mszip_decompress(data, max_output_bytes=max_output_bytes)
 
 
 def mszip_encoding_identity() -> dict[str, Any]:
-    """Return the declared encoder identity used in evidence records."""
+    """Describe the codec without inventing cross-platform byte identity."""
     return {
         "encoding_id": MSZIP_ENCODING_ID,
         "codec_id": contract.CODEC_MSZIP_ID,
-        "stored_format": "cab_mszip_ck_blocks_with_raw_deflate",
-        "encoder": "python-zlib-raw-deflate-level-9",
-        "decoder": "windows-inbox-compression-api-or-portable-reference",
-        "cross_platform_byte_parity": True,
-        "deterministic": True,
+        "encoder_scope": "platform_specific",
+        "contract_host_encoder": "python-zlib-raw-deflate-level-9-ck-framing",
+        "windows_release_encoder": "windows-inbox-compression-api",
+        "cross_platform_byte_parity": False,
+        "decoded_package_sha256_invariant": True,
+        "encoded_payload_hash_scope": "host_specific",
     }
 
 

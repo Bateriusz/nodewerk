@@ -251,11 +251,11 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     assert evidence["decision"]["universal_64k_claim"] is False
     assert (
         evidence["codec_encoding_identity"]["cross_platform_byte_parity_claimed"]
-        is True
+        is False
     )
     assert (
         evidence["codec_encoding_identity"]["encoding_id"]
-        == "nwc.mszip.ck-zlib.v1"
+        == "nwc.codec.mszip.v1"
     )
     current_inputs = contract.compute_build_inputs()
     assert evidence["nw10_build_inputs"] == current_inputs
@@ -274,7 +274,7 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
     assert _canonical_text_sha256(intro_report_path) == evidence["intro"]["report_sha256"]
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["contract_evidence"] == "verified_by_pytest"
-    assert len(status["source_head_sha"]) == 40
+    assert status["source_head_sha"] is None
     assert status["evidence_status"] == "pending_physical_windows_capture"
     assert status["physical_evidence"] == "pending"
     assert status["reference_capture"] == "pending_reference_capture"

@@ -348,7 +348,10 @@
           "const": "tools/nw10/run-correctness-evidence.ps1"
         },
         "implementation_head": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^[0-9a-f]{40}$"
         },
         "raw_capture_manifests_tracked": {

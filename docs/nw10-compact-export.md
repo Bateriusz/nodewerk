@@ -130,8 +130,9 @@ u8  decoded_sha256[32]
 Supported identifiers:
 
 - codec `nwc.codec.stored.v1`
-- codec `nwc.codec.mszip.v1` (deterministic CK-framed DEFLATE encoder
-  `nwc.mszip.ck-zlib.v1`; Windows inbox Compression API decoder)
+- codec `nwc.codec.mszip.v1` (Windows release encoding uses the inbox
+  Compression API; GPU-less contract measurements use a portable CK-framed
+  reference encoder; decoded canonical package SHA-256 is the cross-host identity)
 - layout `nwc.layout.canonical.v1`
 - layout `nwc.layout.aos.v1`
 - layout `nwc.layout.soa.v1`
@@ -182,10 +183,11 @@ package:
   executable remains selected. Candidate-only lzma produced a smaller payload
   but is not selected because no measured player decoder/dependency path exists
   for it; introducing a new compressor library is outside NW-10's measured
-  options. MSZIP encoding is the repository-owned deterministic CK-framed zlib
-  encoder on every host, so encoded payload hashes reproduce across the
-  contract and Windows release hosts. The Windows player's inbox decompressor
-  is exercised against those exact bytes by the decoder parity harness.
+  options. MSZIP encoded bytes are intentionally host-specific: the Windows
+  release path uses the inbox Compression API, while GPU-less contract evidence
+  uses the portable CK-framed reference encoder. Encoded payload SHA-256 values
+  are therefore only local provenance. Cross-host identity is the SHA-256 of the
+  decoded canonical package, which both decoders must reconstruct exactly.
 
 ## Restricted intro
 
@@ -259,8 +261,9 @@ above 262,144 bytes fails the export instead of silently redefining the tier.
 
 No executable packer is used. In particular, Crinkler is not invoked and its
 x64 support is not assumed. The only compression mode considered for the
-artifact is deterministic CK-framed MSZIP decoded by the Windows inbox
-Compression API; candidate-only zlib/bzip2/lzma payloads remain measured but
+artifact is MSZIP. Windows release artifacts are encoded and decoded through
+the Windows inbox Compression API; GPU-less contract measurements use the
+portable reference codec and do not claim byte-identical encoded payloads; candidate-only zlib/bzip2/lzma payloads remain measured but
 unselected because their decoder/dependency cost is not part of the verified
 closure.
 

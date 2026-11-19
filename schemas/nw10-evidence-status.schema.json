@@ -287,6 +287,13 @@
           "pattern": "^[0-9a-f]{64}$"
         }
       }
+    },
+    "source_head_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
     }
   }
 }

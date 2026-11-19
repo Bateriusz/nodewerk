@@ -456,9 +456,8 @@ def test_compact_selection_requires_explicit_post_validation_reason() -> None:
 
 
 def test_pending_physical_records_are_reproducible_and_fail_closed() -> None:
-    head = "1" * 40
-    correctness = publisher.build_pending_correctness(implementation_head=head)
-    system = publisher.build_pending_system_validation(implementation_head=head)
+    correctness = publisher.build_pending_correctness()
+    system = publisher.build_pending_system_validation()
     correctness_schema = json.loads(
         (
             REPO_ROOT / "schemas" / "nw10-common-artifact-correctness.schema.json"
@@ -472,6 +471,8 @@ def test_pending_physical_records_are_reproducible_and_fail_closed() -> None:
     validate_instance(correctness, correctness_schema, correctness_schema)
     validate_instance(system, system_schema, system_schema)
     assert correctness["status"] == "pending_unverified"
+    assert correctness["source"]["implementation_head"] is None
+    assert system["source_head_sha"] is None
     assert (
         correctness["packed_unpacked_comparison"][
             "direct_separate_packed_gpu_capture_recorded"

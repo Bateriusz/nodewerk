@@ -153,17 +153,17 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
             "reference_capture": "pending_reference_capture",
             "codec_encoding_identity": {
                 "encoding_id": compact.MSZIP_ENCODING_ID,
-                "contract_host": compact.MSZIP_ENCODING_ID,
-                "windows_release_host": compact.MSZIP_ENCODING_ID,
-                "encoder": "zlib-raw-deflate-level-9-ck-framing",
-                "decoder": "windows-inbox-compression-api-or-portable-reference",
-                "cross_platform_byte_parity_claimed": True,
+                "contract_host_encoder": "python-zlib-raw-deflate-level-9-ck-framing",
+                "windows_release_encoder": "windows-inbox-compression-api",
+                "cross_platform_byte_parity_claimed": False,
+                "decoded_package_sha256_is_cross_host_invariant": True,
+                "encoded_payload_hash_scope": "host_specific",
                 "reason": (
-                    "Both hosts use the repository-owned deterministic CK-framed "
-                    "DEFLATE encoder, so encoded payload hashes reproduce. The "
-                    "Windows player still decodes with the inbox Compression API; "
-                    "the Windows decoder parity test proves that API accepts the "
-                    "deterministic bytes."
+                    "MSZIP encoded bytes are host-specific and are never used as "
+                    "a cross-host identity. Contract-only evidence records its "
+                    "local proxy bytes; Windows release evidence records the "
+                    "Windows encoder bytes. Cross-host linkage is only through "
+                    "the decoded canonical package SHA-256."
                 ),
             },
             "correctness_coverage": {
@@ -377,9 +377,7 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
         ):
             publisher._write(
                 output / "common-artifact-correctness.v1.json",
-                publisher.build_pending_correctness(
-                    implementation_head=head or None
-                ),
+                publisher.build_pending_correctness(),
             )
         if (
             previous_status.get("clean_system") != "verified"
@@ -388,9 +386,7 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
         ):
             publisher._write(
                 output / "system-validation.v1.json",
-                publisher.build_pending_system_validation(
-                    implementation_head=head or None
-                ),
+                publisher.build_pending_system_validation(),
             )
         status_files = [
             {
@@ -486,7 +482,7 @@ def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str
         "frame_time": "pending_unverified",
     }
     current_head = _git_head()
-    status["source_head_sha"] = current_head or ""
+    status["source_head_sha"] = None
     existing = status_path if status_path.is_file() else None
     if existing is not None:
         previous = json.loads(existing.read_text(encoding="utf-8"))

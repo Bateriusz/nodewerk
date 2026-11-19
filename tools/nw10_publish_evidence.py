@@ -500,8 +500,8 @@ def build_pending_correctness(
     desktop tiers.  This pending record keeps the status machine honest and is
     reproducible from a clean checkout.
     """
-    head = implementation_head or _git_head()
-    if not re.fullmatch(r"[0-9a-f]{40}", head):
+    head = implementation_head
+    if head is not None and not re.fullmatch(r"[0-9a-f]{40}", head):
         raise ValueError("implementation head must be a 40-character hex SHA")
     return {
         "format": "nw10-common-artifact-correctness-summary",
@@ -582,8 +582,8 @@ def build_pending_system_validation(
     *, implementation_head: str | None = None
 ) -> dict[str, Any]:
     """Build the explicit non-certifying system-validation state."""
-    head = implementation_head or _git_head()
-    if not re.fullmatch(r"[0-9a-f]{40}", head):
+    head = implementation_head
+    if head is not None and not re.fullmatch(r"[0-9a-f]{40}", head):
         raise ValueError("implementation head must be a 40-character hex SHA")
     return {
         "format": "nw10-system-validation",

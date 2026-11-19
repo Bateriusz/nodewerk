@@ -568,7 +568,20 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     f"{doc_path}: pending NW-10 system validation must not "
                     "infer a Windows build"
                 )
+            if instance.get("source_head_sha") is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending NW-10 system validation must not "
+                    "claim a current-head physical binding"
+                )
         elif status == "verified":
+            source_head = instance.get("source_head_sha")
+            if not isinstance(source_head, str) or re.fullmatch(
+                r"[0-9a-f]{40}", source_head
+            ) is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified NW-10 system validation requires "
+                    "a source-head binding"
+                )
             for field in ("final_artifact", "startup", "memory", "clean_system"):
                 if not isinstance(instance.get(field), dict):
                     raise SchemaValidationError(
@@ -747,6 +760,18 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 f"{doc_path}: correctness summary has no packed/unpacked comparison"
             )
         if status == "verified":
+            source = instance.get("source", {})
+            implementation_head = source.get("implementation_head")
+            if not isinstance(implementation_head, str) or re.fullmatch(
+                r"[0-9a-f]{40}", implementation_head
+            ) is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified correctness requires an implementation-head binding"
+                )
+            if instance.get("source_head_sha") != implementation_head:
+                raise SchemaValidationError(
+                    f"{doc_path}: correctness source-head bindings disagree"
+                )
             if instance.get("ada", {}).get("status") != "verified" or instance.get(
                 "blackwell", {}
             ).get("status") != "verified":
@@ -825,6 +850,14 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     f"{doc_path}: verified correctness is not physical evidence"
                 )
         elif status == "pending_unverified":
+            if instance.get("source", {}).get("implementation_head") is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending correctness must not claim a current-head physical binding"
+                )
+            if instance.get("source_head_sha") is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending correctness must not claim a source-head physical binding"
+                )
             if packed.get("direct_separate_packed_gpu_capture_recorded") is not False:
                 raise SchemaValidationError(
                     f"{doc_path}: pending correctness must not claim a packed capture"
