@@ -7,7 +7,7 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "0b4b57e98c0a1b3c87bb29ba9df377f6862a24d66f85d81c8490a98d9fe941ca"
+      "sha256": "782ed416b18dd22225af842171a60df87577183542ec7637efb809f4ba5b01ab"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
@@ -15,11 +15,11 @@
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
-      "sha256": "97d8760eea4846400dbd8ef3b5fa6c10334b98c2961834e83d4266555bd98f48"
+      "sha256": "4c4f78664043069e4224759251b5639b597adbbf6bced6ee0225ef88e1d9c16e"
     },
     {
       "path": "benchmarks/nw10/intro-export-report.v1.json",
-      "sha256": "ff1a8b393201fb388001d9e780d57efa6a91a3edb3f56bc74d45b72668439423"
+      "sha256": "2edaf488e1011658d17e87dc3ad1ca9837e72dc532f4d719fde1eb8dd0bdd9af"
     },
     {
       "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
