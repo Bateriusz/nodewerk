@@ -56,15 +56,26 @@ function Resolve-NwRepoPath([string]$Value) {
     return [System.IO.Path]::GetFullPath((Join-Path $repo $Value))
 }
 
+function Get-NwOptionalProperty($Object, [string]$Name) {
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
 function Get-NwExpectedArtifact($Reference) {
-    if ($Reference.status -eq "verified_preserved") {
+    $status = Get-NwOptionalProperty $Reference "status"
+    if ($status -eq "verified_preserved") {
         return $Reference.after.artifact
     }
-    if ($null -ne $Reference.canonical_artifact) {
-        if ($Reference.test_payload -eq $true -or $Reference.release_grade -ne $true) {
+
+    $artifact = Get-NwOptionalProperty $Reference "canonical_artifact"
+    if ($null -ne $artifact) {
+        $testPayload = Get-NwOptionalProperty $Reference "test_payload"
+        $releaseGrade = Get-NwOptionalProperty $Reference "release_grade"
+        if ($testPayload -eq $true -or $releaseGrade -ne $true) {
             throw "Artifact report must be release-grade and not a test payload."
         }
-        $artifact = $Reference.canonical_artifact
         return [pscustomobject]@{
             artifact_key = [string]$artifact.artifact_key
             package_sha256 = [string]$artifact.package_sha256
