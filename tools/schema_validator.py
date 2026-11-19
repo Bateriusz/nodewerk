@@ -654,6 +654,28 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 raise SchemaValidationError(
                     f"{doc_path}: clean_system host is not clean"
                 )
+            if clean.get("development_dependencies_present_on_path") != []:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system exposes development dependencies"
+                )
+            if clean.get("environment_cache_variables") != []:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system exposes cache environment variables"
+                )
+            probe = host.get("virtualization_probe", {})
+            if probe.get("hypervisor_present") is True and not probe.get(
+                "hypervisor_explained_by_vbs"
+            ):
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system host has an unexplained hypervisor"
+                )
+            virtualization_markers = list(host.get("virtualization_indicators") or [])
+            virtualization_markers.extend(host.get("vm_markers") or [])
+            virtualization_markers.extend(probe.get("vm_markers") or [])
+            if virtualization_markers:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system host exposes virtualization markers"
+                )
             if deployment.get("only_runtime_executable") is not True:
                 raise SchemaValidationError(
                     f"{doc_path}: clean_system deployment is not a single executable"
@@ -751,6 +773,11 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                         f"{doc_path}: {field} driver does not match the "
                         "clean-system host"
                     )
+                if hardware.get("windows_build") != windows_build:
+                    raise SchemaValidationError(
+                        f"{doc_path}: {field} Windows build does not match the "
+                        "clean-system host"
+                    )
             startup_ms = startup.get("process_start_to_first_present_ms")
             if not isinstance(startup_ms, (int, float)) or startup_ms < 0:
                 raise SchemaValidationError(
@@ -771,6 +798,10 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 raise SchemaValidationError(
                     f"{doc_path}: startup evidence used an application pipeline cache"
                 )
+            if cache_state.get("kind") not in {"cold_driver_cache", "warm"}:
+                raise SchemaValidationError(
+                    f"{doc_path}: startup cache kind is not a frozen supported value"
+                )
             peak_gpu = memory.get("peak_engine_committed_gpu_bytes")
             if not isinstance(peak_gpu, int) or peak_gpu < 0:
                 raise SchemaValidationError(
@@ -787,6 +818,10 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
             if memory.get("package_sha256") != final_artifact.get("package_sha256"):
                 raise SchemaValidationError(
                     f"{doc_path}: memory measurement is not bound to the final package"
+                )
+            if memory.get("post_initialization_allocation_violation") != 0:
+                raise SchemaValidationError(
+                    f"{doc_path}: memory post-initialization allocation violation is nonzero"
                 )
 
     elif schema_name == "nw10-common-artifact-correctness.schema.json":
