@@ -104,6 +104,39 @@ def test_feasibility_does_not_invent_unknown_artifact_identity() -> None:
     assert "artifact_digest" not in record["source"]
 
 
+def test_feasibility_normalizes_github_artifact_digest_output() -> None:
+    raw_digest = "3" * 64
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        artifact_id=2,
+        artifact_digest=raw_digest,
+    )
+    assert record["source"]["artifact_digest"] == "sha256:" + raw_digest
+    schema = _schema()
+    validate_instance(record, schema, schema)
+
+
+def test_feasibility_rejects_malformed_artifact_digest() -> None:
+    try:
+        feasibility.build_feasibility(
+            outcome=_outcome(),
+            proof=_proof(),
+            intro=_intro(),
+            run_id=1,
+            head_sha="1" * 40,
+            artifact_id=2,
+            artifact_digest="not-a-digest",
+        )
+    except ValueError as exc:
+        assert "SHA-256 digest" in str(exc)
+    else:
+        raise AssertionError("malformed artifact digest was accepted")
+
+
 def test_feasibility_failure_branch_keeps_canonical_fallback_and_continue() -> None:
     record = feasibility.build_feasibility(
         outcome=_outcome(
