@@ -15,7 +15,7 @@
   },
   "audio": false,
   "capture_protocol": "nw07-correctness-capture.v1",
-  "evidence_status": "informational_contract_only",
+  "evidence_status": "physical_measurements_reused",
   "external_assets": false,
   "features": [
     "sphere_sdf",
@@ -144,7 +144,7 @@
       "relative": 0.0001
     },
     "numeric": {
-      "absolute": 1e-05,
+      "absolute": 0.00001,
       "mode": "absolute_or_relative",
       "relative": 0.0001
     }
@@ -158,7 +158,7 @@
   ],
   "performance_contract": "nw07_perf_ref_v1",
   "performance_protocol": "nw07-perf-run.v1",
-  "physical_measurements": "pending_physical_windows_capture",
+  "physical_measurements": "verified_reused_split_hosts",
   "profile_id": "nw10.intro.sdf20.v1",
   "runtime_dxc": false,
   "shader": "shaders/nw10/nw10_sdf_intro_cs.hlsl",
@@ -166,5 +166,11 @@
   "task": "NW-10",
   "ticks_per_second": 48000,
   "version": 1,
-  "width": 1920
+  "width": 1920,
+  "reused_physical_evidence": "benchmarks/nw10/reused-physical-evidence.v1.json",
+  "current_head_artifact_transfer": {
+    "executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
+    "system_measurement_status": "verified_reused_split_hosts"
+  }
 }
