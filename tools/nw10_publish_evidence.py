@@ -500,9 +500,9 @@ def build_pending_correctness(
     desktop tiers.  This pending record keeps the status machine honest and is
     reproducible from a clean checkout.
     """
-    head = implementation_head
-    if head is not None and not re.fullmatch(r"[0-9a-f]{40}", head):
-        raise ValueError("implementation head must be a 40-character hex SHA")
+    if implementation_head not in (None, ""):
+        raise ValueError("pending correctness cannot bind an implementation head")
+    head = None
     return {
         "format": "nw10-common-artifact-correctness-summary",
         "version": 1,
@@ -544,6 +544,8 @@ def build_pending_correctness(
         },
         "packed_unpacked_comparison": {
             "direct_separate_packed_gpu_capture_recorded": False,
+            "codec_id": None,
+            "layout_id": None,
             "packed_package_sha256": None,
             "runtime": {
                 "ada": {"status": "pending_physical"},
@@ -582,9 +584,9 @@ def build_pending_system_validation(
     *, implementation_head: str | None = None
 ) -> dict[str, Any]:
     """Build the explicit non-certifying system-validation state."""
-    head = implementation_head
-    if head is not None and not re.fullmatch(r"[0-9a-f]{40}", head):
-        raise ValueError("implementation head must be a 40-character hex SHA")
+    if implementation_head not in (None, ""):
+        raise ValueError("pending system validation cannot bind an implementation head")
+    head = None
     return {
         "format": "nw10-system-validation",
         "version": 1,
@@ -709,6 +711,16 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "packed/unpacked comparison is not bound to the common artifact"
         )
+    codec_id = packed.get("codec_id")
+    layout_id = packed.get("layout_id")
+    if codec_id not in {"nwc.codec.stored.v1", "nwc.codec.mszip.v1"}:
+        raise ValueError("packed/unpacked comparison has no explicit supported codec identity")
+    if layout_id not in {
+        "nwc.layout.canonical.v1",
+        "nwc.layout.aos.v1",
+        "nwc.layout.soa.v1",
+    }:
+        raise ValueError("packed/unpacked comparison has no explicit supported layout identity")
     packed_error = packed.get("worst_absolute_error")
     if packed_error is None or float(packed_error) > 0.0001:
         raise ValueError(
@@ -734,6 +746,28 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
                 raise ValueError(
                     f"packed/unpacked {tier} runtime is missing {key}"
                 )
+        if entry.get("codec_id") != codec_id or entry.get("layout_id") != layout_id:
+            raise ValueError(
+                f"packed/unpacked {tier} runtime changed codec/layout identity"
+            )
+        source = str(entry.get("device_form_factor_source", ""))
+        if (
+            not source
+            or source in {"asserted", "pending_physical_probe", "unsupported_host"}
+            or "reused" in source.casefold()
+            or "inventory" in source.casefold()
+        ):
+            raise ValueError(
+                f"packed/unpacked {tier} runtime lacks a measured chassis probe"
+            )
+        if int(entry.get("frames_per_tick", -1)) != 1:
+            raise ValueError(
+                f"packed/unpacked {tier} runtime changed frames-per-tick"
+            )
+        if int(entry.get("present_sync_interval", -1)) != 0:
+            raise ValueError(
+                f"packed/unpacked {tier} runtime is not uncapped"
+            )
     ada_loop = ada.get("loop_boundary")
     blackwell_loop = blackwell.get("loop_boundary")
     if not isinstance(ada_loop, Mapping) or not isinstance(blackwell_loop, Mapping):
@@ -799,6 +833,9 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
         },
         "packed_unpacked_comparison": {
             "status": "verified",
+            "direct_separate_packed_gpu_capture_recorded": True,
+            "codec_id": codec_id,
+            "layout_id": layout_id,
             "packed_package_sha256": str(
                 packed.get("packed_package_sha256")
             ).lower(),
@@ -818,6 +855,15 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
                     "encoded_container_sha256": packed_runtime["ada"].get(
                         "encoded_container_sha256"
                     ),
+                    "codec_id": packed_runtime["ada"].get("codec_id"),
+                    "layout_id": packed_runtime["ada"].get("layout_id"),
+                    "device_form_factor_source": packed_runtime["ada"].get(
+                        "device_form_factor_source"
+                    ),
+                    "frames_per_tick": packed_runtime["ada"].get("frames_per_tick"),
+                    "present_sync_interval": packed_runtime["ada"].get(
+                        "present_sync_interval"
+                    ),
                 },
                 "blackwell": {
                     "status": "passed",
@@ -829,6 +875,17 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     "encoded_container_sha256": packed_runtime["blackwell"].get(
                         "encoded_container_sha256"
+                    ),
+                    "codec_id": packed_runtime["blackwell"].get("codec_id"),
+                    "layout_id": packed_runtime["blackwell"].get("layout_id"),
+                    "device_form_factor_source": packed_runtime["blackwell"].get(
+                        "device_form_factor_source"
+                    ),
+                    "frames_per_tick": packed_runtime["blackwell"].get(
+                        "frames_per_tick"
+                    ),
+                    "present_sync_interval": packed_runtime["blackwell"].get(
+                        "present_sync_interval"
                     ),
                 },
             },
@@ -1059,11 +1116,9 @@ def main(argv: list[str] | None = None) -> int:
     pending_correctness.add_argument(
         "--destination", default=CORRECTNESS_PATH.as_posix()
     )
-    pending_correctness.add_argument("--implementation-head", default="")
 
     pending_system = sub.add_parser("pending-system")
     pending_system.add_argument("--destination", default=SYSTEM_PATH.as_posix())
-    pending_system.add_argument("--implementation-head", default="")
 
     args = parser.parse_args(argv)
     try:
@@ -1072,14 +1127,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "system":
             public = publish_system(args)
         elif args.command == "pending-correctness":
-            public = build_pending_correctness(
-                implementation_head=args.implementation_head or None
-            )
+            public = build_pending_correctness()
             _write(REPO_ROOT / args.destination, public)
         else:
-            public = build_pending_system_validation(
-                implementation_head=args.implementation_head or None
-            )
+            public = build_pending_system_validation()
             _write(REPO_ROOT / args.destination, public)
     except Exception as exc:
         print(
@@ -1100,7 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
                 "status": public.get("status"),
                 "format": public.get("format"),
                 "destination": args.destination,
-                "status_file": args.status_file,
+                "status_file": getattr(args, "status_file", None),
             },
             indent=2,
             sort_keys=True,
