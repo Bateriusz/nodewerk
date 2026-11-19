@@ -169,7 +169,7 @@
   "width": 1920,
   "reused_physical_evidence": "benchmarks/nw10/reused-physical-evidence.v1.json",
   "current_head_artifact_transfer": {
-    "executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
     "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
     "system_measurement_status": "verified_reused_split_hosts"
   }
