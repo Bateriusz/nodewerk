@@ -29,18 +29,27 @@
     "ada_loop_boundary_status": "passed",
     "blackwell_loop_boundary_status": "passed",
     "fixed_tick_status": "passed",
-    "fixed_ticks": [0, 240000, 480000, 720000, 959999],
-    "loop_boundary_ticks": [0, 960000],
+    "fixed_ticks": [
+      0,
+      240000,
+      480000,
+      720000,
+      959999
+    ],
+    "loop_boundary_ticks": [
+      0,
+      960000
+    ],
     "relative_tolerance": 0.0001,
-    "worst_absolute_error": 0.0,
-    "worst_relative_error": 0.0
+    "worst_absolute_error": 0,
+    "worst_relative_error": 0
   },
   "format": "nw10-common-artifact-correctness-summary",
   "packed_unpacked_comparison": {
     "decoder_parity": {
       "source": "tests/nw10_compact_decoder_fuzz.cpp + tests/test_nw10_codec.py",
       "status": "passed",
-      "windows_ci_run_id": 44535528801
+      "windows_ci_run_id": 44542203189
     },
     "direct_separate_packed_gpu_capture_recorded": false,
     "encoded_container_sha256": "3f2625ac9458c2630cefcd857af8ac92be48cc09f97420254113886f226eabee",
@@ -58,7 +67,7 @@
     "status": "verified",
     "unpacked_package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
     "verification_model": "bit_exact_shipped_decoder_parity_plus_prior_physical_runtime",
-    "worst_absolute_error": 0.0
+    "worst_absolute_error": 0
   },
   "privacy": {
     "local_paths_included": false,
@@ -66,9 +75,9 @@
     "stdout_stderr_included": false
   },
   "source": {
-    "current_decoder_parity_head": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
+    "current_decoder_parity_head": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
     "execution_kind": "physical_cross_hardware",
-    "implementation_head": "d8ea821f1a562ee31ca1515d9cc3cb15423ad910",
+    "implementation_head": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
     "mode": "compare",
     "raw_capture_manifests_tracked": false,
     "reuse_provenance": "benchmarks/nw10/reused-physical-evidence.v1.json",
