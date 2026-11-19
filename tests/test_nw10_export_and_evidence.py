@@ -566,7 +566,10 @@ def test_verified_system_validation_cannot_omit_measurements(tmp_path: Path) -> 
     }
     path = tmp_path / "system.json"
     path.write_text(json.dumps(record), encoding="utf-8")
-    with pytest.raises(\n        Exception,\n        match=r"(requires a measured final_artifact|final_artifact: expected type)",\n    ):
+    with pytest.raises(
+        Exception,
+        match=r"(requires a measured final_artifact|final_artifact: expected type)",
+    ):
         validate_file_against_schema(
             path,
             REPO_ROOT / "schemas" / "nw10-system-validation.schema.json",
@@ -713,7 +716,10 @@ def test_verified_correctness_and_pe_ledger_cannot_claim_unmeasured_runtime(
     correctness["source"]["execution_kind"] = "physical_cross_hardware"
     path = tmp_path / "correctness.json"
     path.write_text(json.dumps(correctness), encoding="utf-8")
-    with pytest.raises(\n        Exception,\n        match=r"(direct separate packed GPU capture|direct_separate_packed_gpu_capture_recorded: expected const True)",\n    ):
+    with pytest.raises(
+        Exception,
+        match=r"(direct separate packed GPU capture|direct_separate_packed_gpu_capture_recorded: expected const True)",
+    ):
         validate_file_against_schema(
             path,
             REPO_ROOT
