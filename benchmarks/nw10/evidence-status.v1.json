@@ -11,7 +11,7 @@
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "ffec3e5af9764a304c7532d22b664c3c1310e4d141171447682cec2a222fc049"
+      "sha256": "398ed831a3de01a195311ce05e7d2f8500dd4ca1c5d93da21cf3b70acb13a099"
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
@@ -23,23 +23,23 @@
     },
     {
       "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
-      "sha256": "fea662e676900cc9b89a993c80f1b2ee33243a531d6a08f021c66c85ad3b01cc"
+      "sha256": "e5c3dc54c6086dccd7cf2af6efdb3b70e107fc459fd034abeafff80a99c3cc25"
     },
     {
       "path": "benchmarks/nw10/system-validation.v1.json",
-      "sha256": "7df9555a7365b0c7802ca525368545126d895423abe459d9826c3d40a8886cf3"
+      "sha256": "4cbd469b592b636c8136b8e6a072977d0ea4320c2eb01231013d0d899b97449b"
     },
     {
       "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-      "sha256": "250e63e00488f7537c21fa0f4199780fcc25c080a24e931e43979b9f31208cf4"
+      "sha256": "9eb869cb521ff6edb086285c98535b58fd3d064d54bc2c4648f448bf076e702b"
     },
     {
       "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
-      "sha256": "c60aaf2d75df6048601b00a665c84c82be3b794686088d2f24d96a8a021aff97"
+      "sha256": "fe4590394bb7dbadca237dd228bbfcbe12368c733193e36367547b103ff957a1"
     },
     {
       "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
-      "sha256": "67dd40a55c89d8e528ed9d9be3709427988c388ab6bd9753508de744d9ea2566"
+      "sha256": "d3e0dad901c678d872a14c0cfaedccc3dce08d2c8af570c0a78a8ca41fdfd4ee"
     }
   ],
   "format": "nw10-evidence-status",
@@ -60,7 +60,7 @@
   "correctness_evidence": {
     "status": "verified",
     "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
-    "sha256": "fea662e676900cc9b89a993c80f1b2ee33243a531d6a08f021c66c85ad3b01cc",
+    "sha256": "e5c3dc54c6086dccd7cf2af6efdb3b70e107fc459fd034abeafff80a99c3cc25",
     "package_sha256": "77e13cef76efad8faaac042975af0ffec74df11a3fbfd00b757f2f9fcc76ddf1",
     "worst_absolute_error": 0,
     "worst_relative_error": 0
@@ -68,15 +68,15 @@
   "system_validation": {
     "status": "verified_reused_split_hosts",
     "path": "benchmarks/nw10/system-validation.v1.json",
-    "sha256": "7df9555a7365b0c7802ca525368545126d895423abe459d9826c3d40a8886cf3",
-    "final_executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "sha256": "4cbd469b592b636c8136b8e6a072977d0ea4320c2eb01231013d0d899b97449b",
+    "final_executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
     "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8"
   },
   "compact_feasibility": {
     "status": "pending_runtime_validation",
     "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-    "sha256": "250e63e00488f7537c21fa0f4199780fcc25c080a24e931e43979b9f31208cf4",
-    "source_run_id": 44535528801,
+    "sha256": "9eb869cb521ff6edb086285c98535b58fd3d064d54bc2c4648f448bf076e702b",
+    "source_run_id": 44542203189,
     "target_met": false,
     "minimum_measured_candidate_bytes": 228181,
     "minimum_validated_runnable_bytes": null,
@@ -85,14 +85,14 @@
   "pe_ledger": {
     "status": "verified",
     "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
-    "sha256": "c60aaf2d75df6048601b00a665c84c82be3b794686088d2f24d96a8a021aff97",
-    "final_executable_sha256": "4ee01f9f7b31b351a5783f820744ed4d40ee8fcb03cd6ea9c79e52197df642e0",
+    "sha256": "fe4590394bb7dbadca237dd228bbfcbe12368c733193e36367547b103ff957a1",
+    "final_executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
     "linker_elimination_bytes_saved": 723456,
     "compact_decoder_template_bytes_added": 4096
   },
   "reused_physical_evidence": {
     "status": "verified_reuse_with_explicit_limitations",
     "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
-    "sha256": "67dd40a55c89d8e528ed9d9be3709427988c388ab6bd9753508de744d9ea2566"
+    "sha256": "d3e0dad901c678d872a14c0cfaedccc3dce08d2c8af570c0a78a8ca41fdfd4ee"
   }
 }
