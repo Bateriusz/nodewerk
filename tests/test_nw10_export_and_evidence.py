@@ -1166,6 +1166,53 @@ def test_physical_status_preservation_accepts_correctness_system_before_performa
     )
 
 
+def test_unknown_future_evidence_state_is_opaque_to_this_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nw10_evidence
+
+    evidence_root = tmp_path / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    status_path = evidence_root / "evidence-status.v1.json"
+    current_head = "a" * 40
+    status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
+        "source_head_sha": current_head,
+        "evidence_status": "future_more_advanced_state",
+        "contract_evidence": "verified_by_pytest",
+        "physical_evidence": "correctness_and_system_reused",
+        "reference_capture": "pending_reference_capture",
+        "ada_correctness": "verified",
+        "blackwell_correctness": "verified",
+        "clean_system": "verified",
+        "startup": "verified",
+        "memory": "verified",
+        "frame_time": "pending_unverified",
+        "files": [],
+    }
+    status_path.write_text(
+        json.dumps(status, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    original = status_path.read_bytes()
+    monkeypatch.setattr(nw10_evidence, "_git_head", lambda: current_head)
+
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is False
+    )
+    with pytest.raises(
+        ValueError,
+        match="refusing to regenerate NW-10 contract evidence",
+    ):
+        nw10_evidence._merge_status(status_path, files=[])
+    assert status_path.read_bytes() == original
+
+
 def test_pe_ledger_artifact_binding_is_reproducible() -> None:
     report = {
         "format": "nw10-windows-pe-ledger",

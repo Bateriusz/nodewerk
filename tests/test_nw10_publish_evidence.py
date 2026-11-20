@@ -83,21 +83,19 @@ def test_refresh_status_supports_correctness_and_system_before_performance() -> 
     assert refreshed["memory"] == "verified"
 
 
-def test_refresh_status_preserves_unknown_future_aggregate_state() -> None:
+def test_refresh_status_refuses_unknown_future_aggregate_state() -> None:
     status = _base_status()
     status["evidence_status"] = "future_more_advanced_state"
     status["correctness_evidence"] = {"status": "verified"}
     status["system_validation"] = {"status": "verified"}
 
-    refreshed = publisher._refresh_status(status)
-    # A state introduced by a later revision must not be downgraded to an
-    # older known combination.
-    assert refreshed["evidence_status"] == "future_more_advanced_state"
-    # Component-derived fields are still reduced from the actual records.
-    assert refreshed["physical_evidence"] == "correctness_and_system_reused"
-    assert refreshed["clean_system"] == "verified"
-    assert refreshed["startup"] == "verified"
-    assert refreshed["memory"] == "verified"
+    before = json.loads(json.dumps(status))
+    with pytest.raises(
+        publisher.UnsupportedEvidenceStatusError,
+        match="refusing to reinterpret or downgrade",
+    ):
+        publisher._refresh_status(status)
+    assert status == before
 
 
 def test_artifact_publisher_rejects_invalidated_gradient() -> None:

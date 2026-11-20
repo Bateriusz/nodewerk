@@ -569,11 +569,9 @@ def test_publish_carries_all_preserved_component_file_rows(
     )
 
 
-def test_publish_never_downgrades_unknown_later_evidence_state(
+def test_publish_refuses_unknown_later_state_without_mutating_outputs(
     tmp_path: Path,
 ) -> None:
-    import nw10_evidence
-
     bound, before, after, candidate = _fixture()
     public = preservation.validate_preservation(before, after, bound, candidate)
     source = tmp_path / "public.json"
@@ -582,25 +580,14 @@ def test_publish_never_downgrades_unknown_later_evidence_state(
     evidence_root = repo / "benchmarks" / "nw10"
     evidence_root.mkdir(parents=True)
     destination = evidence_root / "performance-preservation.v1.json"
+    destination.write_text('{"sentinel":"unchanged"}\n', encoding="utf-8")
     status_path = evidence_root / "evidence-status.v1.json"
 
-    entries = _component_entries(
-        evidence_root,
-        {
-            "correctness_evidence": (
-                "common-artifact-correctness.v1.json",
-                "verified",
-            ),
-            "system_validation": ("system-validation.v1.json", "verified"),
-        },
-    )
     status = {
         "format": "nw10-evidence-status",
         "version": 1,
         "task": "NW-10",
         "source_head_sha": "a" * 40,
-        # A future revision's aggregate state that this checkout cannot map
-        # back to a known component combination.
         "evidence_status": "future_more_advanced_state",
         "contract_evidence": "verified_by_pytest",
         "physical_evidence": "correctness_and_system_reused",
@@ -612,34 +599,30 @@ def test_publish_never_downgrades_unknown_later_evidence_state(
         "memory": "verified",
         "frame_time": "pending_unverified",
         "files": [],
-        **entries,
     }
-    status_path.write_text(json.dumps(status), encoding="utf-8")
+    status_path.write_text(
+        json.dumps(status, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    destination_before = destination.read_bytes()
+    status_before = status_path.read_bytes()
 
     old_root = preservation.REPO_ROOT
     preservation.REPO_ROOT = repo
     try:
-        published = preservation.publish_public_evidence(
-            source,
-            destination,
-            status_path,
-            implementation_head="a" * 40,
-        )
+        with pytest.raises(
+            preservation.evidence_publisher.UnsupportedEvidenceStatusError,
+            match="refusing to reinterpret or downgrade",
+        ):
+            preservation.publish_public_evidence(
+                source,
+                destination,
+                status_path,
+                implementation_head="a" * 40,
+            )
     finally:
         preservation.REPO_ROOT = old_root
 
-    assert published["evidence_status"] == "future_more_advanced_state"
-    # The performance publication still composes with the verified components
-    # instead of downgrading the aggregate state.
-    assert (
-        published["physical_evidence"]
-        == "performance_correctness_and_system_verified"
-    )
-    assert published["reference_capture"] == "verified_reference_capture"
-    assert published["frame_time"] == "verified_preserved"
-    assert (
-        nw10_evidence._physical_evidence_is_current(
-            published, "a" * 40, evidence_root
-        )
-        is True
-    )
+    assert destination.read_bytes() == destination_before
+    assert status_path.read_bytes() == status_before
+

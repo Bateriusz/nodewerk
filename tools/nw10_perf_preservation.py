@@ -550,6 +550,18 @@ def publish_public_evidence(
     public = _load_json(source)
     _validate_public_for_publish(public, forbid_tokens=list(forbid_tokens or []))
 
+    # Read and validate the aggregate status before mutating either tracked
+    # output.  A status produced by a newer revision is opaque to this
+    # checkout: fail closed and leave both files untouched rather than
+    # downgrading it or falsely certifying semantics we do not understand.
+    status = _load_json(status_path)
+    if status.get("format") != "nw10-evidence-status":
+        raise ValueError("NW-10 evidence-status file has an unexpected format")
+    evidence_publisher._require_known_evidence_status(status)
+    head = (implementation_head or _git_head()).strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40}", head) is None:
+        raise ValueError("implementation head must be a 40-character lowercase hex SHA")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
         json.dumps(public, indent=2, sort_keys=True) + "\n",
@@ -557,12 +569,6 @@ def publish_public_evidence(
         newline="\n",
     )
 
-    status = _load_json(status_path)
-    if status.get("format") != "nw10-evidence-status":
-        raise ValueError("NW-10 evidence-status file has an unexpected format")
-    head = (implementation_head or _git_head()).strip().lower()
-    if re.fullmatch(r"[0-9a-f]{40}", head) is None:
-        raise ValueError("implementation head must be a 40-character lowercase hex SHA")
     status["source_head_sha"] = head
     status["performance_preservation"] = {
         "status": "verified_preserved",

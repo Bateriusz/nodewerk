@@ -489,6 +489,14 @@ def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str
     existing = status_path if status_path.is_file() else None
     if existing is not None:
         previous = json.loads(existing.read_text(encoding="utf-8"))
+        try:
+            publisher._require_known_evidence_status(previous)
+        except publisher.UnsupportedEvidenceStatusError as exc:
+            raise ValueError(
+                "refusing to regenerate NW-10 contract evidence over an "
+                "unsupported aggregate evidence_status; use the revision "
+                "that introduced that status"
+            ) from exc
         # Withdrawal history is attribution, not a physical claim.  Keep it
         # even when the current state is pending so the executed failure and
         # the reason its evidence cannot certify remain visible.
@@ -536,6 +544,13 @@ def _physical_evidence_is_current(
     if not current_head or previous.get("source_head_sha") != current_head:
         return False
     if previous.get("reused_physical_evidence"):
+        return False
+    try:
+        publisher._require_known_evidence_status(previous)
+    except publisher.UnsupportedEvidenceStatusError:
+        # An older checkout cannot certify a newer aggregate state.  Callers
+        # that mutate tracked evidence must treat it as opaque and refuse the
+        # mutation rather than resetting it.
         return False
 
     def entry_status(field: str, expected: str) -> bool:
