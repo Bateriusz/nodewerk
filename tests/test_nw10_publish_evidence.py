@@ -63,6 +63,26 @@ def test_refresh_status_tracks_compact_progress_before_system_validation() -> No
     )
 
 
+def test_refresh_status_supports_correctness_and_system_before_performance() -> None:
+    status = _base_status()
+    status["correctness_evidence"] = {"status": "verified"}
+    status["system_validation"] = {"status": "verified"}
+
+    refreshed = publisher._refresh_status(status)
+    assert (
+        refreshed["evidence_status"]
+        == "correctness_and_system_reused_performance_pending"
+    )
+    assert refreshed["physical_evidence"] == "correctness_and_system_reused"
+    assert refreshed["reference_capture"] == "pending_reference_capture"
+    assert refreshed["frame_time"] == "pending_unverified"
+    assert refreshed["ada_correctness"] == "verified"
+    assert refreshed["blackwell_correctness"] == "verified"
+    assert refreshed["clean_system"] == "verified"
+    assert refreshed["startup"] == "verified"
+    assert refreshed["memory"] == "verified"
+
+
 def test_artifact_publisher_rejects_invalidated_gradient() -> None:
     with pytest.raises(ValueError, match="invalidated gradient"):
         publisher._artifact_from_intro_report(

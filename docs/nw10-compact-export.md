@@ -383,6 +383,14 @@ encoded-container hash (packed mode), capture-manifest hashes, and runtime exit
 status. The compare command rejects mismatched packaging modes, hardware,
 manifests, or canonical package identities.
 
+On a transfer target, `run-transferred-correctness-capture.ps1` uses its
+`OutputRoot` itself as the canonical result-bundle root: `capture.json`,
+`captures/`, `bundle-manifest.json`, and (for packed mode)
+`packed-diagnostic.exe` are siblings. There is no second
+`OutputRoot/bundle/capture.json`. The emitted `RESULT_RECORD` and
+`RESULT_MANIFEST` paths are therefore directly usable by the comparison
+verifier, and the ZIP contains that same single layout.
+
 The correctness publisher validates the cross-hardware comparison, removes raw
 capture material, audits user/profile paths and forbidden tokens, validates the
 published summary against

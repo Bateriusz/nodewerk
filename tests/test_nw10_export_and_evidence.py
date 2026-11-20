@@ -1104,6 +1104,68 @@ def test_physical_status_preservation_accepts_compact_only_progress(
     )
 
 
+def test_physical_status_preservation_accepts_correctness_system_before_performance(
+    tmp_path: Path,
+) -> None:
+    import nw10_evidence
+
+    evidence_root = tmp_path / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    current_head = "3" * 40
+    components = {}
+    rows = []
+    for field, name in (
+        ("correctness_evidence", "common-artifact-correctness.v1.json"),
+        ("system_validation", "system-validation.v1.json"),
+    ):
+        path = evidence_root / name
+        component_status = "verified"
+        path.write_text(
+            json.dumps({"status": component_status}) + "\n",
+            encoding="utf-8",
+        )
+        digest = nw10_evidence._sha256(path)
+        relative = f"benchmarks/nw10/{name}"
+        components[field] = {
+            "status": component_status,
+            "path": relative,
+            "sha256": digest,
+        }
+        rows.append({"path": relative, "sha256": digest})
+
+    status = {
+        "source_head_sha": current_head,
+        "evidence_status": "correctness_and_system_reused_performance_pending",
+        "physical_evidence": "correctness_and_system_reused",
+        "reference_capture": "pending_reference_capture",
+        "frame_time": "pending_unverified",
+        "ada_correctness": "verified",
+        "blackwell_correctness": "verified",
+        "clean_system": "verified",
+        "startup": "verified",
+        "memory": "verified",
+        "files": rows,
+        **components,
+    }
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is True
+    )
+
+    # The superseded explicit reuse bridge remains intentionally non-certifying.
+    status["reused_physical_evidence"] = {
+        "status": "verified_reuse_with_explicit_limitations"
+    }
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            status, current_head, evidence_root
+        )
+        is False
+    )
+
+
 def test_pe_ledger_artifact_binding_is_reproducible() -> None:
     report = {
         "format": "nw10-windows-pe-ledger",

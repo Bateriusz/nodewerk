@@ -495,6 +495,8 @@ def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
         status["physical_evidence"] = "performance_correctness_and_system_verified"
     elif perf and correctness:
         status["physical_evidence"] = "performance_and_correctness_verified"
+    elif correctness and system:
+        status["physical_evidence"] = "correctness_and_system_reused"
     elif perf:
         status["physical_evidence"] = "performance_verified"
     else:
@@ -518,6 +520,8 @@ def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
         )
     elif perf:
         status["evidence_status"] = "performance_verified_correctness_pending"
+    elif correctness and system:
+        status["evidence_status"] = "correctness_and_system_reused_performance_pending"
     else:
         status["evidence_status"] = "pending_physical_windows_capture"
     return status

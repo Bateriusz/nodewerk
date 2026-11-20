@@ -28,6 +28,7 @@ import nw07_capture  # noqa: E402
 import nw07_contract  # noqa: E402
 import nw07_evidence  # noqa: E402
 import nw10_contract  # noqa: E402
+import nw10_publish_evidence as evidence_publisher  # noqa: E402
 
 
 FORMAT = "nw10-performance-preservation"
@@ -538,28 +539,6 @@ def publish_public_evidence(
     if re.fullmatch(r"[0-9a-f]{40}", head) is None:
         raise ValueError("implementation head must be a 40-character lowercase hex SHA")
     status["source_head_sha"] = head
-    current_evidence_status = str(status.get("evidence_status", ""))
-    if current_evidence_status in {
-        "",
-        "pending_physical_windows_capture",
-        "performance_verified_correctness_pending",
-    }:
-        compact = status.get("compact_feasibility")
-        compact_verified = (
-            isinstance(compact, Mapping)
-            and compact.get("status") == "verified_windows_runtime"
-        )
-        status["evidence_status"] = (
-            "performance_and_compact_verified_correctness_pending"
-            if compact_verified
-            else "performance_verified_correctness_pending"
-        )
-    # A later evidence stage may have advanced the aggregate state beyond
-    # performance/compact. Re-running performance publication must never
-    # downgrade that progress.
-    status["physical_evidence"] = "performance_verified"
-    status["reference_capture"] = "verified_reference_capture"
-    status["frame_time"] = "verified_preserved"
     status["performance_preservation"] = {
         "status": "verified_preserved",
         "path": destination.relative_to(REPO_ROOT).as_posix(),
@@ -585,7 +564,16 @@ def publish_public_evidence(
         }
     )
     _carry_compact_feasibility_file(status, files)
-    files.sort(key=lambda item: str(item.get("path", "")) if isinstance(item, Mapping) else "")
+    files.sort(
+        key=lambda item: str(item.get("path", ""))
+        if isinstance(item, Mapping)
+        else ""
+    )
+    # Aggregate state is derived in one place for every publisher.  Existing
+    # verified correctness/system/packaging components are preserved from
+    # their component records instead of being downgraded by a performance
+    # republish.
+    evidence_publisher._refresh_status(status)
     status_path.write_text(
         json.dumps(status, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

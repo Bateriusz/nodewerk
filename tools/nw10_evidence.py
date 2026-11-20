@@ -548,51 +548,24 @@ def _physical_evidence_is_current(
     compact = entry_status("compact_feasibility", "verified_windows_runtime")
     pe = entry_status("pe_ledger", "verified")
 
-    expected_reference = (
-        "verified_reference_capture" if perf else "pending_reference_capture"
-    )
-    expected_frame = "verified_preserved" if perf else "pending_unverified"
-    expected_correctness = "verified" if correctness else "pending_unverified"
-    expected_system = "verified" if system else "pending_unverified"
-
-    if perf and correctness and system:
-        expected_physical = "performance_correctness_and_system_verified"
-    elif perf and correctness:
-        expected_physical = "performance_and_correctness_verified"
-    elif perf:
-        expected_physical = "performance_verified"
-    else:
-        expected_physical = "pending"
-
-    if perf and correctness and system and compact and pe:
-        expected_evidence = "verified_complete"
-    elif perf and correctness and system:
-        expected_evidence = (
-            "performance_correctness_and_system_verified_packaging_pending"
-        )
-    elif perf and correctness and compact:
-        expected_evidence = (
-            "performance_compact_and_correctness_verified_system_pending"
-        )
-    elif perf and correctness:
-        expected_evidence = "performance_and_correctness_verified_system_pending"
-    elif perf and compact:
-        expected_evidence = "performance_and_compact_verified_correctness_pending"
-    elif perf:
-        expected_evidence = "performance_verified_correctness_pending"
-    else:
-        expected_evidence = "pending_physical_windows_capture"
-
+    # Use the publisher's aggregate-state reducer as the single source of
+    # truth.  Validation compares the stored derived fields with a fresh
+    # reduction from the component records, including the schema-supported
+    # correctness+system/performance-pending state.
+    derived = publisher._refresh_status(dict(previous))
     expected_fields = {
-        "reference_capture": expected_reference,
-        "frame_time": expected_frame,
-        "ada_correctness": expected_correctness,
-        "blackwell_correctness": expected_correctness,
-        "clean_system": expected_system,
-        "startup": expected_system,
-        "memory": expected_system,
-        "physical_evidence": expected_physical,
-        "evidence_status": expected_evidence,
+        field: derived[field]
+        for field in (
+            "reference_capture",
+            "frame_time",
+            "ada_correctness",
+            "blackwell_correctness",
+            "clean_system",
+            "startup",
+            "memory",
+            "physical_evidence",
+            "evidence_status",
+        )
     }
     for field, expected in expected_fields.items():
         if previous.get(field) != expected:

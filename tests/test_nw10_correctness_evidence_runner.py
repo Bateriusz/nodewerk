@@ -157,6 +157,20 @@ def test_transferred_capture_requires_no_build_toolchain() -> None:
     assert '$rawbytes += [int64]$row["bytes"]' in text
 
 
+def test_transferred_capture_uses_single_canonical_result_root() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-transferred-correctness-capture.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert '$resultManifestPath = Join-Path $output "bundle-manifest.json"' in text
+    assert 'Get-RelativePath $output $file.FullName' in text
+    assert '$bundleRoot = Join-Path $output "bundle"' not in text
+    assert 'Copy-Item $recordPath (Join-Path $bundleRoot "capture.json")' not in text
+    assert 'RESULT_RECORD=$recordPath' in text
+    assert 'RESULT_MANIFEST=$resultManifestPath' in text
+    assert '$archivePaths = @($recordPath, $captures, $resultManifestPath)' in text
+
+
 def test_correctness_transfer_accepts_release_intro_without_status_field() -> None:
     text = (
         REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"

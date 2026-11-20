@@ -220,17 +220,14 @@ $recordPath = Join-Path $output "capture.json"
     $utf8NoBom
 )
 
-$bundleRoot = Join-Path $output "bundle"
-New-Item -ItemType Directory -Force $bundleRoot | Out-Null
-Copy-Item $recordPath (Join-Path $bundleRoot "capture.json") -Force
-Copy-Item $captures (Join-Path $bundleRoot "captures") -Recurse -Force
-if ($packagingMode -eq "packed") {
-    Copy-Item (Join-Path $output $verificationFile) (Join-Path $bundleRoot $verificationFile) -Force
-}
+# The output root itself is the canonical result-bundle root.  Do not create
+# a second capture.json under a nested bundle directory: callers can compare
+# $OutputRoot\capture.json directly, and the verifier will find its manifest
+# in the same directory.
 $fileRows = @()
-foreach ($file in Get-ChildItem $bundleRoot -File -Recurse | Sort-Object FullName) {
+foreach ($file in Get-ChildItem $output -File -Recurse | Sort-Object FullName) {
     $fileRows += [ordered]@{
-        path = Get-RelativePath $bundleRoot $file.FullName
+        path = Get-RelativePath $output $file.FullName
         bytes = [int64]$file.Length
         sha256 = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
     }
@@ -242,15 +239,20 @@ $resultManifest = [ordered]@{
     tier = $Tier
     files = $fileRows
 }
+$resultManifestPath = Join-Path $output "bundle-manifest.json"
 [System.IO.File]::WriteAllText(
-    (Join-Path $bundleRoot "bundle-manifest.json"),
+    $resultManifestPath,
     (($resultManifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
     $utf8NoBom
 )
 
 $zip = Join-Path $output ("nw10-correctness-" + $Tier + "-bundle.zip")
 Remove-Item $zip -Force -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $zip -CompressionLevel Optimal
+$archivePaths = @($recordPath, $captures, $resultManifestPath)
+if ($packagingMode -eq "packed") {
+    $archivePaths += (Join-Path $output $verificationFile)
+}
+Compress-Archive -Path $archivePaths -DestinationPath $zip -CompressionLevel Optimal
 
 $rawBytes = [int64]0
 foreach ($row in $rows) {
@@ -263,4 +265,6 @@ Write-Host "[NW10 TRANSFER] GPU=$adapter"
 Write-Host "[NW10 TRANSFER] DRIVER=$($values["NW05_DRIVER"])"
 Write-Host "[NW10 TRANSFER] CAPTURES=$($rows.Count)"
 Write-Host "[NW10 TRANSFER] RAW_BYTES=$rawBytes"
+Write-Host "[NW10 TRANSFER] RESULT_RECORD=$recordPath"
+Write-Host "[NW10 TRANSFER] RESULT_MANIFEST=$resultManifestPath"
 Write-Host "[NW10 TRANSFER] RESULT_BUNDLE=$zip"
