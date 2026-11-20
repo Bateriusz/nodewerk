@@ -467,19 +467,10 @@ def _validate_public_for_publish(
             raise ValueError(f"{label} evidence contains a non-passing run")
 
 
-def _carry_compact_feasibility_file(
-    status: dict[str, Any], files: list[dict[str, Any]]
+def _carry_component_file(
+    status: dict[str, Any], files: list[dict[str, Any]], field: str
 ) -> None:
-    """Keep a preserved compact-feasibility component in the status ledger.
-
-    Performance publication deliberately preserves an existing
-    ``compact_feasibility`` entry, but the evidence-status validator requires
-    every preserved component to have a matching ``files`` row.  Carry the
-    entry's path forward (refreshing its digest from the retained record when
-    it is available) so performance-only republication cannot invalidate a
-    verified compact result.
-    """
-    entry = status.get("compact_feasibility")
+    entry = status.get(field)
     if not isinstance(entry, dict):
         return
     relative = entry.get("path")
@@ -512,6 +503,40 @@ def _carry_compact_feasibility_file(
         )
     ]
     files.append({"path": normalized, "sha256": digest})
+
+
+_PRESERVED_COMPONENT_FIELDS = (
+    "performance_preservation",
+    "correctness_evidence",
+    "system_validation",
+    "compact_feasibility",
+    "pe_ledger",
+    "reused_physical_evidence",
+)
+
+
+def _carry_preserved_component_files(
+    status: dict[str, Any], files: list[dict[str, Any]]
+) -> None:
+    """Keep every preserved evidence component in the status file ledger.
+
+    Performance publication deliberately preserves existing correctness,
+    system-validation, packaging, and compact-feasibility entries, but the
+    evidence-status validator requires every preserved component to have a
+    matching ``files`` row.  Carry each entry's path forward (refreshing its
+    digest from the retained record when it is available) so a
+    performance-only republication cannot invalidate an already verified
+    later-stage result.
+    """
+    for field in _PRESERVED_COMPONENT_FIELDS:
+        _carry_component_file(status, files, field)
+
+
+def _carry_compact_feasibility_file(
+    status: dict[str, Any], files: list[dict[str, Any]]
+) -> None:
+    """Backward-compatible wrapper for the compact-only helper."""
+    _carry_component_file(status, files, "compact_feasibility")
 
 
 def publish_public_evidence(
@@ -563,7 +588,7 @@ def publish_public_evidence(
             "sha256": _canonical_text_sha256(destination),
         }
     )
-    _carry_compact_feasibility_file(status, files)
+    _carry_preserved_component_files(status, files)
     files.sort(
         key=lambda item: str(item.get("path", ""))
         if isinstance(item, Mapping)

@@ -459,6 +459,20 @@ def _upsert_status_file(
     status["files"] = retained
 
 
+_KNOWN_EVIDENCE_STATUSES = frozenset(
+    {
+        "pending_physical_windows_capture",
+        "performance_verified_correctness_pending",
+        "performance_and_compact_verified_correctness_pending",
+        "performance_compact_and_correctness_verified_system_pending",
+        "performance_and_correctness_verified_system_pending",
+        "performance_correctness_and_system_verified_packaging_pending",
+        "verified_complete",
+        "correctness_and_system_reused_performance_pending",
+    }
+)
+
+
 def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
     perf = (
         isinstance(status.get("performance_preservation"), Mapping)
@@ -502,6 +516,20 @@ def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
     else:
         status["physical_evidence"] = "pending"
 
+    previous_evidence_status = status.get("evidence_status")
+    if (
+        isinstance(previous_evidence_status, str)
+        and previous_evidence_status
+        and previous_evidence_status not in _KNOWN_EVIDENCE_STATUSES
+    ):
+        # Forward compatibility: an aggregate state introduced by a later
+        # revision is not understood here.  Recompute the component-derived
+        # fields, but never overwrite an unrecognised aggregate with an older
+        # known state.  Keeping the value also lets
+        # nw10_evidence._physical_evidence_is_current compare a freshly
+        # reduced status against it without treating the future state as
+        # stale.
+        return status
     if perf and correctness and system and compact and pe:
         status["evidence_status"] = "verified_complete"
     elif perf and correctness and system:

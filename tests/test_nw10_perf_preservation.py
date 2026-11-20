@@ -467,3 +467,179 @@ def test_publish_recomputes_advanced_state_from_component_records(tmp_path: Path
         )
         is True
     )
+
+
+def _component_entries(evidence_root: Path, specs: dict[str, tuple[str, str]]) -> dict:
+    entries = {}
+    for field, (name, component_status) in specs.items():
+        path = evidence_root / name
+        path.write_text(
+            json.dumps({"status": component_status}) + "\n",
+            encoding="utf-8",
+        )
+        entries[field] = {
+            "status": component_status,
+            "path": f"benchmarks/nw10/{name}",
+            "sha256": preservation._canonical_text_sha256(path),
+        }
+    return entries
+
+
+def test_publish_carries_all_preserved_component_file_rows(
+    tmp_path: Path,
+) -> None:
+    import nw10_evidence
+
+    bound, before, after, candidate = _fixture()
+    public = preservation.validate_preservation(before, after, bound, candidate)
+    source = tmp_path / "public.json"
+    source.write_text(json.dumps(public), encoding="utf-8")
+    repo = tmp_path / "repo"
+    evidence_root = repo / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    destination = evidence_root / "performance-preservation-rtx4060ti.v1.json"
+    status_path = evidence_root / "evidence-status.v1.json"
+
+    # Component records are already verified, but the status ledger has no
+    # matching file rows.  Performance-only republication must reconstruct all
+    # of them, not just the compact-feasibility row.
+    entries = _component_entries(
+        evidence_root,
+        {
+            "correctness_evidence": (
+                "common-artifact-correctness.v1.json",
+                "verified",
+            ),
+            "system_validation": ("system-validation.v1.json", "verified"),
+            "compact_feasibility": (
+                "windows-compact-feasibility.v1.json",
+                "verified_windows_runtime",
+            ),
+            "pe_ledger": ("windows-pe-ledger.v1.json", "verified"),
+        },
+    )
+    status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
+        "source_head_sha": "a" * 40,
+        "evidence_status": (
+            "performance_correctness_and_system_verified_packaging_pending"
+        ),
+        "contract_evidence": "verified_by_pytest",
+        "physical_evidence": "performance_correctness_and_system_verified",
+        "reference_capture": "verified_reference_capture",
+        "ada_correctness": "verified",
+        "blackwell_correctness": "verified",
+        "clean_system": "verified",
+        "startup": "verified",
+        "memory": "verified",
+        "frame_time": "verified_preserved",
+        "files": [],
+        **entries,
+    }
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+
+    old_root = preservation.REPO_ROOT
+    preservation.REPO_ROOT = repo
+    try:
+        published = preservation.publish_public_evidence(
+            source,
+            destination,
+            status_path,
+            implementation_head="a" * 40,
+        )
+    finally:
+        preservation.REPO_ROOT = old_root
+
+    ledger_paths = {row["path"] for row in published["files"]}
+    for field in (
+        "correctness_evidence",
+        "system_validation",
+        "compact_feasibility",
+        "pe_ledger",
+    ):
+        assert published[field]["path"] in ledger_paths
+    assert published["evidence_status"] == "verified_complete"
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            published, "a" * 40, evidence_root
+        )
+        is True
+    )
+
+
+def test_publish_never_downgrades_unknown_later_evidence_state(
+    tmp_path: Path,
+) -> None:
+    import nw10_evidence
+
+    bound, before, after, candidate = _fixture()
+    public = preservation.validate_preservation(before, after, bound, candidate)
+    source = tmp_path / "public.json"
+    source.write_text(json.dumps(public), encoding="utf-8")
+    repo = tmp_path / "repo"
+    evidence_root = repo / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    destination = evidence_root / "performance-preservation.v1.json"
+    status_path = evidence_root / "evidence-status.v1.json"
+
+    entries = _component_entries(
+        evidence_root,
+        {
+            "correctness_evidence": (
+                "common-artifact-correctness.v1.json",
+                "verified",
+            ),
+            "system_validation": ("system-validation.v1.json", "verified"),
+        },
+    )
+    status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
+        "source_head_sha": "a" * 40,
+        # A future revision's aggregate state that this checkout cannot map
+        # back to a known component combination.
+        "evidence_status": "future_more_advanced_state",
+        "contract_evidence": "verified_by_pytest",
+        "physical_evidence": "correctness_and_system_reused",
+        "reference_capture": "pending_reference_capture",
+        "ada_correctness": "verified",
+        "blackwell_correctness": "verified",
+        "clean_system": "verified",
+        "startup": "verified",
+        "memory": "verified",
+        "frame_time": "pending_unverified",
+        "files": [],
+        **entries,
+    }
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+
+    old_root = preservation.REPO_ROOT
+    preservation.REPO_ROOT = repo
+    try:
+        published = preservation.publish_public_evidence(
+            source,
+            destination,
+            status_path,
+            implementation_head="a" * 40,
+        )
+    finally:
+        preservation.REPO_ROOT = old_root
+
+    assert published["evidence_status"] == "future_more_advanced_state"
+    # The performance publication still composes with the verified components
+    # instead of downgrading the aggregate state.
+    assert (
+        published["physical_evidence"]
+        == "performance_correctness_and_system_verified"
+    )
+    assert published["reference_capture"] == "verified_reference_capture"
+    assert published["frame_time"] == "verified_preserved"
+    assert (
+        nw10_evidence._physical_evidence_is_current(
+            published, "a" * 40, evidence_root
+        )
+        is True
+    )
