@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-reused-physical-evidence.schema.json",
+  "title": "Nodewerk NW-10 reused physical evidence provenance",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "status",
+    "physical_measurements",
+    "current_head_transfer",
+    "limitations",
+    "privacy"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw10-reused-physical-evidence"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "status": {
+      "enum": [
+        "verified_reuse_with_explicit_limitations",
+        "archived_informational"
+      ]
+    },
+    "physical_measurements": {
+      "type": "object"
+    },
+    "current_head_transfer": {
+      "type": "object",
+      "required": [
+        "source_head_sha",
+        "workflow_run_id",
+        "workflow_artifact",
+        "packed_unpacked_correctness",
+        "system_artifact_transfer"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "local_paths_included",
+        "raw_capture_bytes_embedded",
+        "raw_stdout_stderr_included",
+        "user_profile_paths_included"
+      ],
+      "properties": {
+        "local_paths_included": {
+          "const": false
+        },
+        "raw_capture_bytes_embedded": {
+          "const": false
+        },
+        "raw_stdout_stderr_included": {
+          "const": false
+        },
+        "user_profile_paths_included": {
+          "const": false
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "ada_correctness": "pending_unverified",
+  "blackwell_correctness": "pending_unverified",
+  "clean_system": "pending_unverified",
+  "contract_evidence": "verified_by_pytest",
+  "evidence_status": "pending_physical_windows_capture",
+  "files": [
+    {
+      "path": "benchmarks/nw10/compact-proof.v1.json",
+      "sha256": "39fe2abfda5b471fd17228bfb4a0fb116c678d0a350060ce2dc19e3bd7e68378"
+    },
+    {
+      "path": "benchmarks/nw10/intro-profile.v1.json",
+      "sha256": "cf6b460ccaa2283a2d293fdf8d11462e83a2a684b83f710f3b218fd1b731c351"
+    },
+    {
+      "path": "benchmarks/nw10/proof-export-report.v1.json",
+      "sha256": "505bc5af8339dc99e847a2321114650fdbb9685a1f6046102d93b659ec4d246e"
+    },
+    {
+      "path": "benchmarks/nw10/intro-export-report.v1.json",
+      "sha256": "23166aea0e7ac0283ff957bd2590957b7c5d7b95cb45756cfb640c477bca833a"
+    },
+    {
+      "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
+      "sha256": "9852cb1e6428949aeccc4c2cd2437c96221676380282062aaef5e7b1fab03869"
+    },
+    {
+      "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
+      "sha256": "ebad05024683faa8ba59545e6adfe37ddd49d84af7f316dd00e5ba17fd7e7887"
+    },
+    {
+      "path": "benchmarks/nw10/system-validation.v1.json",
+      "sha256": "6b136a30403f62db2e161ef7a9873128dd28550c28d6e8eb2e4d86323b6e3728"
+    },
+    {
+      "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
+      "sha256": "166410619c7a5f86a80f6b1832c66daf5a5b8b4c2ed6a2f7c097ea343ac42460"
+    },
+    {
+      "path": "benchmarks/nw10/windows-pe-ledger.v1.json",
+      "sha256": "41cfaeb10323a8c969a3b5bcbf4ad24c302e40bd70712d7d73981d7989c14f1a"
+    }
+  ],
+  "format": "nw10-evidence-status",
+  "frame_time": "pending_unverified",
+  "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+  "memory": "pending_unverified",
+  "physical_evidence": "pending",
+  "reference_capture": "pending_reference_capture",
+  "source_head_sha": null,
+  "startup": "pending_unverified",
+  "superseded_physical_evidence": {
+    "previous_source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+    "reason": "The tracked physical evidence was captured at source head 4d216, was reviewed at 58f24, and could not support the current checkout. It also lacked a direct packed/unpacked GPU capture set, mixed clean-system and startup/memory hosts, and referenced a 0xC0000005 non-runnable artifact. Those claims were withdrawn; certification remains pending.",
+    "reviewed_source_head_sha": "58f24080d860a27a984382a546c9efcbb2a0642f",
+    "withdrawal_recorded_at_head_sha": "2f1a0103f84765b04cf17a2e0605f550dc7d18ff",
+    "withdrawn_files": [
+      "benchmarks/nw10/common-artifact-correctness.v1.json#verified",
+      "benchmarks/nw10/system-validation.v1.json#verified",
+      "benchmarks/nw10/windows-pe-ledger.v1.json#verified",
+      "benchmarks/nw10/windows-compact-feasibility.v1.json#verified_windows_runtime"
+    ]
+  },
+  "task": "NW-10",
+  "version": 1
+}

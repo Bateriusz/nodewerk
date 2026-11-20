@@ -26,6 +26,17 @@ option(NW06_COMPILE_ANALYTIC_LIGHTING_TWIST "Compile analytic lighting/twist pat
 option(NW06_COMPILE_ABSOLUTE_TICK_CAMERA "Compile absolute-tick camera path" ON)
 option(NW06_COMPILE_HALF_RESOLUTION_BLOOM "Compile half-resolution bloom path" ON)
 option(NW06_COMPILE_TONEMAP "Compile tonemap path" ON)
+option(NW10_COMPACT_PACKAGE
+    "Compile the opt-in NWC1 compact-package decoder into the player closure"
+    OFF)
+option(NW10_BUILD_DECODER_TESTS
+    "Build the shipped compact-decoder fuzz and parity harness"
+    OFF)
+
+set(NW_COMPACT_PACKAGE_SOURCES)
+if(NW10_COMPACT_PACKAGE)
+    list(APPEND NW_COMPACT_PACKAGE_SOURCES src/package/nw_compact.cpp)
+endif()
 
 if(WIN32)
 nw_add_offline_compute_shader(
@@ -87,6 +98,7 @@ else()
 endif()
 
 set(NW_PLAYER_BOOTSTRAP_SOURCES
+    ${NW_COMPACT_PACKAGE_SOURCES}
     src/player/diagnostics.cpp
     src/player/capability_check.cpp
     src/player/d3d12_bootstrap.cpp
@@ -136,6 +148,7 @@ if(NOT WIN32)
     )
 
     add_library(nw_package_format_frozen_host_compile OBJECT
+        src/package/nw_compact.cpp
         src/package/nwp_format.cpp
     )
     target_include_directories(nw_package_format_frozen_host_compile PRIVATE
@@ -154,6 +167,23 @@ if(NOT WIN32)
             nw_package_format_frozen_host_compile
     )
 endif()
+
+if(NW10_BUILD_DECODER_TESTS)
+    add_executable(nw10_compact_decoder_fuzz
+        tests/nw10_compact_decoder_fuzz.cpp
+        src/package/nw_compact.cpp
+        src/package/nwp_format.cpp
+    )
+    target_include_directories(nw10_compact_decoder_fuzz PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/package"
+    )
+    nw_apply_player_profile(nw10_compact_decoder_fuzz)
+    if(WIN32)
+        target_link_libraries(nw10_compact_decoder_fuzz PRIVATE cabinet)
+    endif()
+endif()
+
 target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -161,6 +191,9 @@ target_include_directories(nw_player_bootstrap PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
 )
 nw_apply_player_profile(nw_player_bootstrap)
+target_compile_definitions(nw_player_bootstrap PRIVATE
+    NW10_COMPACT_PACKAGE=$<BOOL:${NW10_COMPACT_PACKAGE}>
+)
 add_dependencies(nw_player_bootstrap nw_offline_shaders)
 add_dependencies(nw_player_bootstrap nw_offline_display_shader)
 
@@ -171,6 +204,9 @@ if(WIN32)
         user32
         kernel32
     )
+    if(NW10_COMPACT_PACKAGE)
+        target_link_libraries(nw_player_bootstrap PUBLIC cabinet)
+    endif()
 endif()
 
 add_executable(nw_empty_player
@@ -223,6 +259,7 @@ if(WIN32)
 endif()
 
 add_library(nw_package STATIC ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
+    ${NW_COMPACT_PACKAGE_SOURCES}
     src/package/nwp_format.cpp
 )
 target_include_directories(nw_package PUBLIC
@@ -235,6 +272,7 @@ target_compile_features(nw_package PUBLIC cxx_std_20)
 # flags as the bootstrap archive).  Authoring-side warning policy is disabled
 # for this archive only; NW-03's package implementation is not player code.
 add_library(nw_package_player STATIC
+    ${NW_COMPACT_PACKAGE_SOURCES}
     src/package/nwp_format.cpp
 )
 target_include_directories(nw_package_player PUBLIC
@@ -243,6 +281,9 @@ target_include_directories(nw_package_player PUBLIC
 )
 target_compile_features(nw_package_player PUBLIC cxx_std_20)
 nw_apply_player_profile(nw_package_player)
+target_compile_definitions(nw_package_player PRIVATE
+    NW10_COMPACT_PACKAGE=$<BOOL:${NW10_COMPACT_PACKAGE}>
+)
 if(NW05_FROZEN_EMBEDDED_SPECIALIZATION)
     target_compile_definitions(nw_package_player PRIVATE
         NW05_FROZEN_EMBEDDED_SPECIALIZATION=1
@@ -260,6 +301,7 @@ endif()
 # loads arbitrary presentation sizes, so it must keep the full decoder while
 # still linking the frozen player implementation.
 add_library(nw_package_player_diagnostic STATIC
+    ${NW_COMPACT_PACKAGE_SOURCES}
     src/package/nwp_format.cpp
 )
 target_include_directories(nw_package_player_diagnostic PUBLIC
@@ -268,6 +310,9 @@ target_include_directories(nw_package_player_diagnostic PUBLIC
 )
 target_compile_features(nw_package_player_diagnostic PUBLIC cxx_std_20)
 nw_apply_player_profile(nw_package_player_diagnostic)
+target_compile_definitions(nw_package_player_diagnostic PRIVATE
+    NW10_COMPACT_PACKAGE=$<BOOL:${NW10_COMPACT_PACKAGE}>
+)
 target_compile_definitions(nw_package_player_diagnostic PRIVATE
     NW05_FROZEN_EMBEDDED_SPECIALIZATION=0
 )
@@ -319,6 +364,7 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
     )
     nw_apply_player_profile(nw05_player_bootstrap)
     target_compile_definitions(nw05_player_bootstrap PRIVATE
+        NW10_COMPACT_PACKAGE=$<BOOL:${NW10_COMPACT_PACKAGE}>
         NW05_SPECIALIZED_VALIDATION=1
         NW05_FROZEN_EMBEDDED_SPECIALIZATION=$<BOOL:${NW05_FROZEN_EMBEDDED_SPECIALIZATION}>
         NW05_COMPILE_WAVE_OPS_QUERY=$<BOOL:${NW05_COMPILE_WAVE_OPS_QUERY}>
@@ -343,6 +389,9 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
             user32
             kernel32
         )
+        if(NW10_COMPACT_PACKAGE)
+            target_link_libraries(nw05_player_bootstrap PUBLIC cabinet)
+        endif()
     endif()
 
     # The frozen diagnostic fixture links the full external-package decoder.
@@ -362,6 +411,7 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
         )
         nw_apply_player_profile(nw05_player_bootstrap_diagnostic)
         target_compile_definitions(nw05_player_bootstrap_diagnostic PRIVATE
+            NW10_COMPACT_PACKAGE=$<BOOL:${NW10_COMPACT_PACKAGE}>
             NW09_FORCE_STATEFUL_PACKAGE_MODEL=1
             NW05_SPECIALIZED_VALIDATION=1
             NW05_FROZEN_EMBEDDED_SPECIALIZATION=1
@@ -387,6 +437,9 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
                 user32
                 kernel32
             )
+            if(NW10_COMPACT_PACKAGE)
+                target_link_libraries(nw05_player_bootstrap_diagnostic PUBLIC cabinet)
+            endif()
         endif()
     endif()
 endif()

@@ -1,0 +1,86 @@
+{
+  "ada": {
+    "hardware": {
+      "adapter_description": "unavailable",
+      "classified_tier": "ada",
+      "device_form_factor": "unknown",
+      "device_form_factor_source": "pending_physical_probe",
+      "driver_version": "unavailable"
+    },
+    "status": "pending_unverified"
+  },
+  "archived_physical_evidence": {
+    "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
+    "reason": "The prior cross-hardware captures were not a direct packed/unpacked GPU comparison and were not captured at the current source head.",
+    "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+    "status": "archived_not_current_head"
+  },
+  "blackwell": {
+    "hardware": {
+      "adapter_description": "unavailable",
+      "classified_tier": "blackwell",
+      "device_form_factor": "unknown",
+      "device_form_factor_source": "pending_physical_probe",
+      "driver_version": "unavailable"
+    },
+    "status": "pending_unverified"
+  },
+  "capture_protocol": "nw07-correctness-capture.v1",
+  "common_artifact": {
+    "package_sha256": null
+  },
+  "comparison": {
+    "absolute_required": true,
+    "absolute_tolerance": 0.0001,
+    "ada_loop_boundary_status": "pending",
+    "blackwell_loop_boundary_status": "pending",
+    "fixed_tick_status": "pending",
+    "fixed_ticks": [
+      0,
+      240000,
+      480000,
+      720000,
+      959999
+    ],
+    "loop_boundary_ticks": [
+      0,
+      960000
+    ],
+    "relative_tolerance": 0.0001,
+    "worst_absolute_error": null,
+    "worst_relative_error": null
+  },
+  "format": "nw10-common-artifact-correctness-summary",
+  "packed_unpacked_comparison": {
+    "codec_id": null,
+    "direct_separate_packed_gpu_capture_recorded": false,
+    "layout_id": null,
+    "packed_package_sha256": null,
+    "runtime": {
+      "ada": {
+        "status": "pending_physical"
+      },
+      "blackwell": {
+        "status": "pending_physical"
+      }
+    },
+    "status": "pending_physical",
+    "unpacked_package_sha256": null,
+    "worst_absolute_error": null
+  },
+  "privacy": {
+    "local_paths_included": false,
+    "raw_capture_bytes_embedded": false,
+    "stdout_stderr_included": false
+  },
+  "source": {
+    "execution_kind": "none",
+    "implementation_head": null,
+    "mode": "pending",
+    "raw_capture_manifests_tracked": false,
+    "tool": "tools/nw10/run-correctness-evidence.ps1"
+  },
+  "status": "pending_unverified",
+  "task": "NW-10",
+  "version": 1
+}

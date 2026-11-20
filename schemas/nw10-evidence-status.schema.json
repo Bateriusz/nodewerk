@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-evidence-status.schema.json",
+  "title": "Nodewerk NW-10 evidence status",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "evidence_status",
+    "contract_evidence",
+    "physical_evidence",
+    "reference_capture",
+    "ada_correctness",
+    "blackwell_correctness",
+    "clean_system",
+    "startup",
+    "memory",
+    "frame_time"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw10-evidence-status"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "evidence_status": {
+      "enum": [
+        "pending_physical_windows_capture",
+        "performance_verified_correctness_pending",
+        "performance_and_compact_verified_correctness_pending",
+        "performance_compact_and_correctness_verified_system_pending",
+        "performance_and_correctness_verified_system_pending",
+        "performance_correctness_and_system_verified_packaging_pending",
+        "verified_complete",
+        "correctness_and_system_reused_performance_pending"
+      ]
+    },
+    "reference_capture": {
+      "enum": [
+        "pending_reference_capture",
+        "verified_reference_capture"
+      ]
+    },
+    "contract_evidence": {
+      "type": "string"
+    },
+    "physical_evidence": {
+      "enum": [
+        "pending",
+        "performance_verified",
+        "performance_and_correctness_verified",
+        "performance_correctness_and_system_verified",
+        "correctness_and_system_reused"
+      ]
+    },
+    "clean_system": {
+      "enum": [
+        "pending_unverified",
+        "verified"
+      ]
+    },
+    "startup": {
+      "enum": [
+        "pending_unverified",
+        "verified"
+      ]
+    },
+    "memory": {
+      "enum": [
+        "pending_unverified",
+        "verified"
+      ]
+    },
+    "system_validation": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "final_executable_sha256",
+        "package_sha256"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified"
+          ]
+        },
+        "path": {
+          "const": "benchmarks/nw10/system-validation.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "final_executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "package_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "frame_time": {
+      "enum": [
+        "pending_unverified",
+        "verified_preserved"
+      ]
+    },
+    "performance_preservation": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "reference_binding_id"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified_preserved"
+        },
+        "path": {
+          "const": "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "reference_binding_id": {
+          "type": "string",
+          "pattern": "^nw07_perf_ref_v1@sha256:v1:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "pe_ledger": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "final_executable_sha256",
+        "linker_elimination_bytes_saved",
+        "compact_decoder_template_bytes_added"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified"
+        },
+        "path": {
+          "const": "benchmarks/nw10/windows-pe-ledger.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "final_executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "linker_elimination_bytes_saved": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compact_decoder_template_bytes_added": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "correctness_evidence": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "package_sha256",
+        "worst_absolute_error",
+        "worst_relative_error"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified"
+        },
+        "path": {
+          "const": "benchmarks/nw10/common-artifact-correctness.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "package_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "worst_absolute_error": {
+          "type": "number",
+          "minimum": 0
+        },
+        "worst_relative_error": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "compact_feasibility": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256",
+        "source_run_id",
+        "target_met",
+        "minimum_measured_candidate_bytes",
+        "minimum_validated_runnable_bytes",
+        "validated_mode"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified_windows_runtime",
+            "pending_runtime_validation",
+            "archived_only"
+          ]
+        },
+        "path": {
+          "const": "benchmarks/nw10/windows-compact-feasibility.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "target_met": {
+          "type": "boolean"
+        },
+        "minimum_measured_candidate_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "minimum_validated_runnable_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "validated_mode": {
+          "enum": [
+            "compact",
+            "canonical_fallback",
+            "canonical_fallback_pending_physical",
+            "pending_runtime_validation",
+            "none"
+          ]
+        }
+      }
+    },
+    "reused_physical_evidence": {
+      "type": "object",
+      "required": [
+        "status",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified_reuse_with_explicit_limitations"
+        },
+        "path": {
+          "const": "benchmarks/nw10/reused-physical-evidence.v1.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "source_head_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    }
+  }
+}

@@ -1,0 +1,706 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-common-artifact-correctness.schema.json",
+  "title": "Nodewerk NW-10 cross-hardware correctness summary",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "status",
+    "capture_protocol",
+    "common_artifact",
+    "ada",
+    "blackwell",
+    "comparison",
+    "packed_unpacked_comparison",
+    "privacy",
+    "source"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw10-common-artifact-correctness-summary"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "status": {
+      "enum": [
+        "verified",
+        "pending_unverified"
+      ]
+    },
+    "source_head_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "capture_protocol": {
+      "const": "nw07-correctness-capture.v1"
+    },
+    "common_artifact": {
+      "type": "object",
+      "required": [
+        "package_sha256"
+      ],
+      "properties": {
+        "package_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ada": {
+      "type": "object",
+      "required": [
+        "status",
+        "hardware"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "pending_unverified"
+          ]
+        },
+        "hardware": {
+          "type": "object",
+          "required": [
+            "adapter_description",
+            "classified_tier",
+            "device_form_factor",
+            "device_form_factor_source"
+          ],
+          "properties": {
+            "adapter_description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "classified_tier": {
+              "const": "ada"
+            },
+            "device_form_factor": {
+              "enum": [
+                "desktop",
+                "laptop",
+                "unknown"
+              ]
+            },
+            "device_form_factor_source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "driver_version": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "blackwell": {
+      "type": "object",
+      "required": [
+        "status",
+        "hardware"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "pending_unverified"
+          ]
+        },
+        "hardware": {
+          "type": "object",
+          "required": [
+            "adapter_description",
+            "classified_tier",
+            "device_form_factor",
+            "device_form_factor_source"
+          ],
+          "properties": {
+            "adapter_description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "classified_tier": {
+              "const": "blackwell"
+            },
+            "device_form_factor": {
+              "enum": [
+                "desktop",
+                "laptop",
+                "unknown"
+              ]
+            },
+            "device_form_factor_source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "driver_version": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "required": [
+        "fixed_ticks",
+        "fixed_tick_status",
+        "loop_boundary_ticks",
+        "ada_loop_boundary_status",
+        "blackwell_loop_boundary_status",
+        "worst_absolute_error",
+        "worst_relative_error",
+        "absolute_tolerance",
+        "relative_tolerance",
+        "absolute_required"
+      ],
+      "properties": {
+        "fixed_ticks": {
+          "type": "array",
+          "const": [
+            0,
+            240000,
+            480000,
+            720000,
+            959999
+          ]
+        },
+        "fixed_tick_status": {
+          "enum": [
+            "passed",
+            "pending"
+          ]
+        },
+        "loop_boundary_ticks": {
+          "type": "array",
+          "const": [
+            0,
+            960000
+          ]
+        },
+        "ada_loop_boundary_status": {
+          "enum": [
+            "passed",
+            "pending"
+          ]
+        },
+        "blackwell_loop_boundary_status": {
+          "enum": [
+            "passed",
+            "pending"
+          ]
+        },
+        "worst_absolute_error": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "worst_relative_error": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "absolute_tolerance": {
+          "const": 0.0001
+        },
+        "relative_tolerance": {
+          "const": 0.0001
+        },
+        "absolute_required": {
+          "const": true
+        }
+      }
+    },
+    "packed_unpacked_comparison": {
+      "type": "object",
+      "required": [
+        "status",
+        "worst_absolute_error",
+        "runtime",
+        "direct_separate_packed_gpu_capture_recorded"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "failed",
+            "pending_physical"
+          ]
+        },
+        "packed_package_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "unpacked_package_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "worst_absolute_error": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "runtime": {
+          "type": "object",
+          "required": [
+            "ada",
+            "blackwell"
+          ],
+          "properties": {
+            "ada": {
+              "type": "object",
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "passed",
+                    "pending_physical"
+                  ]
+                },
+                "unpacked_executable_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "packed_executable_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "encoded_container_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "codec_id": {
+                  "type": "string"
+                },
+                "layout_id": {
+                  "type": "string"
+                },
+                "device_form_factor_source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "frames_per_tick": {
+                  "type": "integer",
+                  "const": 1
+                },
+                "present_sync_interval": {
+                  "type": "integer",
+                  "const": 0
+                }
+              }
+            },
+            "blackwell": {
+              "type": "object",
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "passed",
+                    "pending_physical"
+                  ]
+                },
+                "unpacked_executable_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "packed_executable_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "encoded_container_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "codec_id": {
+                  "type": "string"
+                },
+                "layout_id": {
+                  "type": "string"
+                },
+                "device_form_factor_source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "frames_per_tick": {
+                  "type": "integer",
+                  "const": 1
+                },
+                "present_sync_interval": {
+                  "type": "integer",
+                  "const": 0
+                }
+              }
+            }
+          }
+        },
+        "direct_separate_packed_gpu_capture_recorded": {
+          "type": "boolean"
+        },
+        "codec_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "nwc.codec.stored.v1",
+            "nwc.codec.mszip.v1",
+            null
+          ]
+        },
+        "layout_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "nwc.layout.canonical.v1",
+            "nwc.layout.aos.v1",
+            "nwc.layout.soa.v1",
+            null
+          ]
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "raw_capture_bytes_embedded",
+        "local_paths_included",
+        "stdout_stderr_included"
+      ],
+      "properties": {
+        "raw_capture_bytes_embedded": {
+          "const": false
+        },
+        "local_paths_included": {
+          "const": false
+        },
+        "stdout_stderr_included": {
+          "const": false
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "mode",
+        "execution_kind",
+        "tool",
+        "implementation_head",
+        "raw_capture_manifests_tracked"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "compare",
+            "pending"
+          ]
+        },
+        "execution_kind": {
+          "enum": [
+            "physical_cross_hardware",
+            "none"
+          ]
+        },
+        "tool": {
+          "const": "tools/nw10/run-correctness-evidence.ps1"
+        },
+        "implementation_head": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "raw_capture_manifests_tracked": {
+          "const": false
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "status": {
+        "const": "verified"
+      }
+    },
+    "required": [
+      "status"
+    ]
+  },
+  "then": {
+    "properties": {
+      "source_head_sha": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "common_artifact": {
+        "properties": {
+          "package_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "ada": {
+        "properties": {
+          "status": {
+            "const": "verified"
+          }
+        }
+      },
+      "blackwell": {
+        "properties": {
+          "status": {
+            "const": "verified"
+          }
+        }
+      },
+      "comparison": {
+        "properties": {
+          "fixed_tick_status": {
+            "const": "passed"
+          },
+          "ada_loop_boundary_status": {
+            "const": "passed"
+          },
+          "blackwell_loop_boundary_status": {
+            "const": "passed"
+          },
+          "worst_absolute_error": {
+            "type": "number",
+            "minimum": 0
+          },
+          "worst_relative_error": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "packed_unpacked_comparison": {
+        "properties": {
+          "status": {
+            "const": "verified"
+          },
+          "direct_separate_packed_gpu_capture_recorded": {
+            "const": true
+          },
+          "packed_package_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "unpacked_package_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "worst_absolute_error": {
+            "type": "number",
+            "minimum": 0
+          },
+          "runtime": {
+            "properties": {
+              "ada": {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                },
+                "required": [
+                  "status",
+                  "unpacked_executable_sha256",
+                  "packed_executable_sha256",
+                  "encoded_container_sha256",
+                  "codec_id",
+                  "layout_id",
+                  "device_form_factor_source",
+                  "frames_per_tick",
+                  "present_sync_interval"
+                ]
+              },
+              "blackwell": {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                },
+                "required": [
+                  "status",
+                  "unpacked_executable_sha256",
+                  "packed_executable_sha256",
+                  "encoded_container_sha256",
+                  "codec_id",
+                  "layout_id",
+                  "device_form_factor_source",
+                  "frames_per_tick",
+                  "present_sync_interval"
+                ]
+              }
+            }
+          },
+          "codec_id": {
+            "enum": [
+              "nwc.codec.stored.v1",
+              "nwc.codec.mszip.v1"
+            ]
+          },
+          "layout_id": {
+            "enum": [
+              "nwc.layout.canonical.v1",
+              "nwc.layout.aos.v1",
+              "nwc.layout.soa.v1"
+            ]
+          }
+        },
+        "required": [
+          "codec_id",
+          "layout_id"
+        ]
+      },
+      "source": {
+        "properties": {
+          "mode": {
+            "const": "compare"
+          },
+          "execution_kind": {
+            "const": "physical_cross_hardware"
+          },
+          "implementation_head": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        }
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "source_head_sha": {
+        "type": "null"
+      },
+      "common_artifact": {
+        "properties": {
+          "package_sha256": {
+            "type": "null"
+          }
+        }
+      },
+      "ada": {
+        "properties": {
+          "status": {
+            "const": "pending_unverified"
+          }
+        }
+      },
+      "blackwell": {
+        "properties": {
+          "status": {
+            "const": "pending_unverified"
+          }
+        }
+      },
+      "comparison": {
+        "properties": {
+          "fixed_tick_status": {
+            "const": "pending"
+          },
+          "ada_loop_boundary_status": {
+            "const": "pending"
+          },
+          "blackwell_loop_boundary_status": {
+            "const": "pending"
+          },
+          "worst_absolute_error": {
+            "type": "null"
+          },
+          "worst_relative_error": {
+            "type": "null"
+          }
+        }
+      },
+      "packed_unpacked_comparison": {
+        "properties": {
+          "status": {
+            "const": "pending_physical"
+          },
+          "direct_separate_packed_gpu_capture_recorded": {
+            "const": false
+          },
+          "packed_package_sha256": {
+            "type": "null"
+          },
+          "unpacked_package_sha256": {
+            "type": "null"
+          },
+          "worst_absolute_error": {
+            "type": "null"
+          },
+          "runtime": {
+            "properties": {
+              "ada": {
+                "properties": {
+                  "status": {
+                    "const": "pending_physical"
+                  }
+                }
+              },
+              "blackwell": {
+                "properties": {
+                  "status": {
+                    "const": "pending_physical"
+                  }
+                }
+              }
+            }
+          },
+          "codec_id": {
+            "type": "null"
+          },
+          "layout_id": {
+            "type": "null"
+          }
+        }
+      },
+      "source": {
+        "properties": {
+          "mode": {
+            "const": "pending"
+          },
+          "execution_kind": {
+            "const": "none"
+          },
+          "implementation_head": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  }
+}

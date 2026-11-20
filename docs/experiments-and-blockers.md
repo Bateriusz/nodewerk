@@ -52,6 +52,17 @@ values.
 - **Failure Diagnostic (`NODEFAULTLIB_MISSING_CRT_AND_SECURITY_STUBS`):** Enabling `/NODEFAULTLIB /ENTRY:mainCRTStartup` alongside `/GS` and `/guard:cf` without supplying custom `mainCRTStartup`, `__security_cookie`, `__security_check_cookie`, `__guard_check_icall_fptr`, `_fltused`, and freestanding memory intrinsics fails at link time before producing a PE executable.
 - **Outcome:** `NW_ENABLE_CRT_ELIMINATION_EXPERIMENT` remains `OFF` by default; all six initialization and cleanup obligations are documented in [`src/player/crt_experiment_obligations.h`](../src/player/crt_experiment_obligations.h) and [`ADR-0004`](architecture/0004-dependency-closure-and-crt-experiment.md).
 
+## NW-10 Compact Container Experiments
+
+### MSZIP compact container
+- **Record:** [`benchmarks/experiments/nw10-compact-mszip.json`](../benchmarks/experiments/nw10-compact-mszip.json)
+- **Reproducible Command:** `NODEWERK_NW03_TEST_DIGEST=1 python tools/nw10_evidence.py --output-dir benchmarks/nw10`
+- **Outcome:** The existing Windows inbox MSZIP decompressor was selected for the contract-only compact payload. The canonical 17,626-byte package measured 4,093 bytes as an MSZIP container, while the complete structural-test executable measured 4,475 bytes instead of 18,008 bytes. The exact Windows x64 release artifact, decoder contribution, and clean-system verification remain pending.
+
+### Parameter packing alternatives
+- **Record:** [`benchmarks/experiments/nw10-parameter-packing-rejections.json`](../benchmarks/experiments/nw10-parameter-packing-rejections.json)
+- **Outcome:** Varint/string-table parameter packing was byte-positive with zero measured error but is not integrated without a matching player decoder. Float16 and signed Q16 packing were rejected because the measured maximum absolute error exceeded the frozen `1e-5` numeric tolerance.
+
 ## Inbox-Runtime Blocker Log
 
 - **Current Status:** No inbox-runtime blocker was observed in the verified RTX 4060 Ti capture or in the preserved RTX 5070 Ti run (unverified for the desktop tier because its host CPU was mobile). The recorded dispatches succeeded on inbox Windows 11 `d3d12.dll` with Feature Level `12_0` + Shader Model `6.0`, bounded descriptor tables, ordinary barriers, and one direct queue without Agility SDK redistribution. If a future capture fails, the exact `win_build`, `d3d12_dll` version, HRESULT, and failed feature must be recorded here before any profile or redistributable change.

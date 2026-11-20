@@ -29,6 +29,7 @@ graph semantics and `.nwgraph` schema.
 20. [NW-08A Presentation Geometry Correction and Windows Validation](nw08a-presentation-geometry-validation.md)
 21. [ADR-0008: NW-09 Explicit Temporal State Extension](architecture/0008-nw09-temporal-state.md)
 22. [NW-09 Explicit Temporal State (Particles and Feedback)](nw09-temporal-state.md)
+23. [NW-10 Compact Export, Restricted Intro & Measured 64 KiB Attempt](nw10-compact-export.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -60,4 +61,7 @@ graph semantics and `.nwgraph` schema.
 - NW-09 Checkpoint Schema: [`schemas/nw09-checkpoint.schema.json`](../schemas/nw09-checkpoint.schema.json)
 - NW-09 Export Report Schema: [`schemas/nw09-export-report.schema.json`](../schemas/nw09-export-report.schema.json)
 - NW-09 Cross-Device Temporal-State Evidence: [`benchmarks/nw09/hardware-evidence.json`](../benchmarks/nw09/hardware-evidence.json) (validated by [`schemas/nw09-hardware-evidence.schema.json`](../schemas/nw09-hardware-evidence.schema.json)); pending until identical stateful artifacts are captured on representative Ada/Blackwell hardware.
+- NW-10 Compact Evidence: [`benchmarks/nw10/compact-proof.v1.json`](../benchmarks/nw10/compact-proof.v1.json) (validated by [`schemas/nw10-compact-evidence.schema.json`](../schemas/nw10-compact-evidence.schema.json)); contract-only until the exact Windows x64 artifact and reference capture are available
+- NW-10 Restricted Intro Profile: [`benchmarks/nw10/intro-profile.v1.json`](../benchmarks/nw10/intro-profile.v1.json) (validated by [`schemas/nw10-intro-profile.schema.json`](../schemas/nw10-intro-profile.schema.json))
+- NW-10 Evidence Status: [`benchmarks/nw10/evidence-status.v1.json`](../benchmarks/nw10/evidence-status.v1.json) (validated by [`schemas/nw10-evidence-status.schema.json`](../schemas/nw10-evidence-status.schema.json))
 - Upstream Measured-Evidence Status: [`benchmarks/evidence-status.json`](../benchmarks/evidence-status.json) (complete for recorded Windows/RTX captures)

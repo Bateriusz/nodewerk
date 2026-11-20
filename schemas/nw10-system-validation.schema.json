@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-system-validation.schema.json",
+  "title": "Nodewerk NW-10 physical system validation",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "status",
+    "final_artifact",
+    "startup",
+    "memory",
+    "clean_system",
+    "windows_build",
+    "privacy"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw10-system-validation"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "status": {
+      "enum": [
+        "verified",
+        "pending_unverified"
+      ]
+    },
+    "source_head_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "final_artifact": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "startup": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "memory": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "clean_system": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "windows_build": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "local_paths_included",
+        "raw_stdout_stderr_included",
+        "user_profile_paths_included",
+        "raw_result_bundle_tracked"
+      ],
+      "properties": {
+        "local_paths_included": {
+          "const": false
+        },
+        "raw_stdout_stderr_included": {
+          "const": false
+        },
+        "user_profile_paths_included": {
+          "const": false
+        },
+        "raw_result_bundle_tracked": {
+          "const": false
+        }
+      }
+    },
+    "measured_artifact": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "current_artifact": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "artifact_transfer": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "environment_consistency": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "reuse_provenance": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "if": {
+    "properties": {
+      "status": {
+        "const": "verified"
+      }
+    },
+    "required": [
+      "status"
+    ]
+  },
+  "then": {
+    "properties": {
+      "source_head_sha": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "final_artifact": {
+        "type": "object"
+      },
+      "startup": {
+        "type": "object"
+      },
+      "memory": {
+        "type": "object"
+      },
+      "clean_system": {
+        "type": "object"
+      },
+      "windows_build": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "source_head_sha": {
+        "type": "null"
+      },
+      "final_artifact": {
+        "type": "null"
+      },
+      "startup": {
+        "type": "null"
+      },
+      "memory": {
+        "type": "null"
+      },
+      "clean_system": {
+        "type": "null"
+      },
+      "windows_build": {
+        "type": "null"
+      }
+    }
+  }
+}
