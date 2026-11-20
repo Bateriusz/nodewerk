@@ -488,6 +488,14 @@ def _require_known_evidence_status(status: Mapping[str, Any]) -> str:
     return value
 
 
+def _load_status_for_mutation(path: Path) -> dict[str, Any]:
+    status = _load(path)
+    if status.get("format") != "nw10-evidence-status":
+        raise ValueError("NW-10 evidence-status file has an unexpected format")
+    _require_known_evidence_status(status)
+    return status
+
+
 def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
     _require_known_evidence_status(status)
     perf = (
@@ -697,6 +705,8 @@ def build_pending_system_validation(
 
 
 def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
+    status_path = REPO_ROOT / args.status_file
+    status = _load_status_for_mutation(status_path)
     source = _load(Path(args.comparison))
     if source.get("format") != "nw10-common-artifact-correctness":
         raise ValueError("unexpected correctness comparison format")
@@ -977,8 +987,6 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
 
     destination = REPO_ROOT / args.destination
     _write(destination, public)
-    status_path = REPO_ROOT / args.status_file
-    status = _load(status_path)
     correctness_sha = _text_sha256(destination)
     correctness_path = args.destination.replace("\\", "/")
     status["correctness_evidence"] = {
@@ -1000,6 +1008,8 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def publish_system(args: argparse.Namespace) -> dict[str, Any]:
+    status_path = REPO_ROOT / args.status_file
+    status = _load_status_for_mutation(status_path)
     intro = _load(Path(args.intro_report))
     artifact = _artifact_from_intro_report(intro)
     clean_report, clean_bundle_sha, clean_files = _load_clean_bundle(
@@ -1148,8 +1158,6 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
 
     destination = REPO_ROOT / args.destination
     _write(destination, public)
-    status_path = REPO_ROOT / args.status_file
-    status = _load(status_path)
     system_sha = _text_sha256(destination)
     system_path = args.destination.replace("\\", "/")
     status["system_validation"] = {

@@ -139,6 +139,48 @@ def test_artifact_publisher_rejects_test_payload_and_non_release_intro() -> None
         )
 
 
+def test_mutating_publishers_refuse_unknown_status_before_other_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(publisher, "REPO_ROOT", tmp_path)
+    status_path = tmp_path / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    status = _base_status()
+    status["evidence_status"] = "future_more_advanced_state"
+    _write_json(status_path, status)
+    original = status_path.read_bytes()
+
+    correctness_args = argparse.Namespace(
+        comparison=str(tmp_path / "missing-comparison.json"),
+        destination="benchmarks/nw10/common-artifact-correctness.v1.json",
+        status_file="benchmarks/nw10/evidence-status.v1.json",
+        implementation_head="1" * 40,
+        forbid_token=[],
+    )
+    with pytest.raises(
+        publisher.UnsupportedEvidenceStatusError,
+        match="refusing to reinterpret or downgrade",
+    ):
+        publisher.publish_correctness(correctness_args)
+    assert not (tmp_path / correctness_args.destination).exists()
+    assert status_path.read_bytes() == original
+
+    system_args = argparse.Namespace(
+        intro_report=str(tmp_path / "missing-intro.json"),
+        clean_system_bundle=str(tmp_path / "missing-clean.zip"),
+        metrics=str(tmp_path / "missing-metrics.json"),
+        destination="benchmarks/nw10/system-validation.v1.json",
+        status_file="benchmarks/nw10/evidence-status.v1.json",
+        forbid_token=[],
+    )
+    with pytest.raises(
+        publisher.UnsupportedEvidenceStatusError,
+        match="refusing to reinterpret or downgrade",
+    ):
+        publisher.publish_system(system_args)
+    assert not (tmp_path / system_args.destination).exists()
+    assert status_path.read_bytes() == original
+
+
 def test_correctness_publisher_strips_raw_capture_material(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
