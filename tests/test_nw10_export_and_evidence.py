@@ -1213,6 +1213,67 @@ def test_unknown_future_evidence_state_is_opaque_to_this_revision(
     assert status_path.read_bytes() == original
 
 
+def test_build_evidence_refuses_unknown_future_state_before_any_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nw10_evidence
+
+    evidence_root = tmp_path / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    status_path = evidence_root / "evidence-status.v1.json"
+    status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
+        "source_head_sha": "a" * 40,
+        "evidence_status": "future_more_advanced_state",
+        "contract_evidence": "verified_by_pytest",
+        "physical_evidence": "correctness_and_system_reused",
+        "reference_capture": "pending_reference_capture",
+        "ada_correctness": "verified",
+        "blackwell_correctness": "verified",
+        "clean_system": "verified",
+        "startup": "verified",
+        "memory": "verified",
+        "frame_time": "pending_unverified",
+        "files": [],
+    }
+    status_path.write_text(
+        json.dumps(status, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    sentinel_paths = [
+        status_path,
+        evidence_root / "compact-proof.v1.json",
+        evidence_root / "intro-profile.v1.json",
+        evidence_root / "proof-export-report.v1.json",
+        evidence_root / "intro-export-report.v1.json",
+        evidence_root / "common-artifact-correctness.v1.json",
+        evidence_root / "system-validation.v1.json",
+    ]
+    for index, path in enumerate(sentinel_paths[1:], start=1):
+        path.write_bytes(f"sentinel-{index}\n".encode("utf-8"))
+    originals = {path: path.read_bytes() for path in sentinel_paths}
+
+    def unexpected_export(*args, **kwargs):
+        pytest.fail("contract report generation ran before unsupported-state preflight")
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("physical evidence publisher wrote before unsupported-state preflight")
+
+    monkeypatch.setattr(nw10_evidence.proof, "export_proof", unexpected_export)
+    monkeypatch.setattr(nw10_evidence.intro, "export_intro", unexpected_export)
+    monkeypatch.setattr(nw10_evidence.publisher, "_write", unexpected_write)
+
+    with pytest.raises(
+        ValueError,
+        match="refusing to regenerate NW-10 contract evidence",
+    ):
+        nw10_evidence.build_evidence(evidence_root)
+
+    assert {path: path.read_bytes() for path in sentinel_paths} == originals
+
+
 def test_pe_ledger_artifact_binding_is_reproducible() -> None:
     report = {
         "format": "nw10-windows-pe-ledger",
