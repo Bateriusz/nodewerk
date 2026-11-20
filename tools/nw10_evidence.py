@@ -64,6 +64,24 @@ def _write_text_lf(path: Path, text: str) -> None:
 def build_evidence(output_directory: Path | str) -> dict[str, Any]:
     output = Path(output_directory)
     output.mkdir(parents=True, exist_ok=True)
+    status_path = output / "evidence-status.v1.json"
+    previous_status: dict[str, Any] = {}
+    if status_path.is_file():
+        try:
+            previous_status = json.loads(
+                status_path.read_text(encoding="utf-8")
+            )
+        except json.JSONDecodeError:
+            previous_status = {}
+        else:
+            try:
+                publisher._require_known_evidence_status(previous_status)
+            except publisher.UnsupportedEvidenceStatusError as exc:
+                raise ValueError(
+                    "refusing to regenerate NW-10 contract evidence over an "
+                    "unsupported aggregate evidence_status; use the revision "
+                    "that introduced that status"
+                ) from exc
     os.environ.setdefault("NODEWERK_NW03_TEST_DIGEST", "1")
     with tempfile.TemporaryDirectory(prefix="nw10-evidence-") as temporary:
         root = Path(temporary)
@@ -332,7 +350,6 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
         }
         proof_path = output / "compact-proof.v1.json"
         intro_path = output / "intro-profile.v1.json"
-        status_path = output / "evidence-status.v1.json"
         _write_text_lf(
             proof_path,
             json.dumps(evidence, indent=2, sort_keys=True) + "\n",
@@ -359,14 +376,6 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
         # Keep the explicit non-certifying records reproducible.  Never
         # overwrite a tracked verified physical record from contract-only
         # regeneration.
-        previous_status: dict[str, Any] = {}
-        if status_path.is_file():
-            try:
-                previous_status = json.loads(
-                    status_path.read_text(encoding="utf-8")
-                )
-            except json.JSONDecodeError:
-                previous_status = {}
         head = _git_head()
         preserve_physical = _physical_evidence_is_current(
             previous_status, head, output
