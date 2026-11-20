@@ -966,6 +966,9 @@ def test_physical_status_preservation_requires_matching_file_hashes(
     current_head = "1" * 40
     relative = "benchmarks/nw10/common-artifact-correctness.v1.json"
     status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
         "source_head_sha": current_head,
         "evidence_status": "pending_physical_windows_capture",
         "physical_evidence": "pending",
@@ -1054,6 +1057,9 @@ def test_physical_status_preservation_accepts_compact_only_progress(
     )
     compact_relative = "benchmarks/nw10/windows-compact-feasibility.v1.json"
     status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
         "source_head_sha": current_head,
         "evidence_status": (
             "performance_and_compact_verified_correctness_pending"
@@ -1134,6 +1140,9 @@ def test_physical_status_preservation_accepts_correctness_system_before_performa
         rows.append({"path": relative, "sha256": digest})
 
     status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
         "source_head_sha": current_head,
         "evidence_status": "correctness_and_system_reused_performance_pending",
         "physical_evidence": "correctness_and_system_reused",
@@ -1269,6 +1278,105 @@ def test_build_evidence_refuses_unknown_future_state_before_any_mutation(
         ValueError,
         match="refusing to regenerate NW-10 contract evidence",
     ):
+        nw10_evidence.build_evidence(evidence_root)
+
+    assert {path: path.read_bytes() for path in sentinel_paths} == originals
+
+
+def test_build_evidence_refuses_malformed_status_before_any_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nw10_evidence
+
+    evidence_root = tmp_path / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    status_path = evidence_root / "evidence-status.v1.json"
+    status_path.write_bytes(b'{"format": "nw10-evidence-status", "version": 1')
+    sentinel_paths = [
+        status_path,
+        evidence_root / "compact-proof.v1.json",
+        evidence_root / "intro-profile.v1.json",
+        evidence_root / "proof-export-report.v1.json",
+        evidence_root / "intro-export-report.v1.json",
+        evidence_root / "common-artifact-correctness.v1.json",
+        evidence_root / "system-validation.v1.json",
+    ]
+    for index, path in enumerate(sentinel_paths[1:], start=1):
+        path.write_bytes(f"sentinel-{index}\n".encode("utf-8"))
+    originals = {path: path.read_bytes() for path in sentinel_paths}
+
+    def unexpected_export(*args, **kwargs):
+        pytest.fail("contract report generation ran before malformed-status preflight")
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("physical evidence publisher wrote before malformed-status preflight")
+
+    monkeypatch.setattr(nw10_evidence.proof, "export_proof", unexpected_export)
+    monkeypatch.setattr(nw10_evidence.intro, "export_intro", unexpected_export)
+    monkeypatch.setattr(nw10_evidence.publisher, "_write", unexpected_write)
+
+    with pytest.raises(ValueError, match="malformed"):
+        nw10_evidence.build_evidence(evidence_root)
+
+    assert {path: path.read_bytes() for path in sentinel_paths} == originals
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("format", "unrelated-summary", "unexpected format"),
+        ("version", 2, "unexpected version"),
+        ("task", "NW-09", "unexpected task"),
+    ],
+)
+def test_build_evidence_refuses_foreign_status_identity_before_any_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    import nw10_evidence
+
+    evidence_root = tmp_path / "benchmarks" / "nw10"
+    evidence_root.mkdir(parents=True)
+    status_path = evidence_root / "evidence-status.v1.json"
+    status = {
+        "format": "nw10-evidence-status",
+        "version": 1,
+        "task": "NW-10",
+        "evidence_status": "pending_physical_windows_capture",
+        "files": [],
+    }
+    status[field] = value
+    status_path.write_text(
+        json.dumps(status, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    sentinel_paths = [
+        status_path,
+        evidence_root / "compact-proof.v1.json",
+        evidence_root / "intro-profile.v1.json",
+        evidence_root / "proof-export-report.v1.json",
+        evidence_root / "intro-export-report.v1.json",
+        evidence_root / "common-artifact-correctness.v1.json",
+        evidence_root / "system-validation.v1.json",
+    ]
+    for index, path in enumerate(sentinel_paths[1:], start=1):
+        path.write_bytes(f"sentinel-{index}\n".encode("utf-8"))
+    originals = {path: path.read_bytes() for path in sentinel_paths}
+
+    def unexpected_export(*args, **kwargs):
+        pytest.fail("contract report generation ran before identity preflight")
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("physical evidence publisher wrote before identity preflight")
+
+    monkeypatch.setattr(nw10_evidence.proof, "export_proof", unexpected_export)
+    monkeypatch.setattr(nw10_evidence.intro, "export_intro", unexpected_export)
+    monkeypatch.setattr(nw10_evidence.publisher, "_write", unexpected_write)
+
+    with pytest.raises(ValueError, match=message):
         nw10_evidence.build_evidence(evidence_root)
 
     assert {path: path.read_bytes() for path in sentinel_paths} == originals

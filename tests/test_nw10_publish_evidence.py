@@ -98,6 +98,31 @@ def test_refresh_status_refuses_unknown_future_aggregate_state() -> None:
     assert status == before
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("format", "unrelated-summary", "unexpected format"),
+        ("version", 2, "unexpected version"),
+        ("task", "NW-09", "unexpected task"),
+    ],
+)
+def test_status_mutation_paths_require_nw10_identity(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    status = _base_status()
+    status[field] = value
+    status_path = tmp_path / "evidence-status.v1.json"
+    _write_json(status_path, status)
+
+    with pytest.raises(ValueError, match=message):
+        publisher._load_status_for_mutation(status_path)
+
+    before = json.loads(json.dumps(status))
+    with pytest.raises(ValueError, match=message):
+        publisher._refresh_status(status)
+    assert status == before
+
+
 def test_artifact_publisher_rejects_invalidated_gradient() -> None:
     with pytest.raises(ValueError, match="invalidated gradient"):
         publisher._artifact_from_intro_report(

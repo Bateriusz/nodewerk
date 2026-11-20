@@ -463,6 +463,11 @@ class UnsupportedEvidenceStatusError(ValueError):
     """Raised when this revision cannot safely interpret an aggregate status."""
 
 
+EVIDENCE_STATUS_FORMAT = "nw10-evidence-status"
+EVIDENCE_STATUS_VERSION = 1
+EVIDENCE_STATUS_TASK = "NW-10"
+
+
 _KNOWN_EVIDENCE_STATUSES = frozenset(
     {
         "pending_physical_windows_capture",
@@ -475,6 +480,25 @@ _KNOWN_EVIDENCE_STATUSES = frozenset(
         "correctness_and_system_reused_performance_pending",
     }
 )
+
+
+def _require_evidence_status_identity(status: Mapping[str, Any]) -> None:
+    """Reject unrelated JSON that merely happens to carry a known status.
+
+    Every path that reads or mutates tracked NW-10 status must first prove the
+    document is the NW-10 aggregate status machine.  Checking only
+    ``evidence_status`` would let a foreign object be partially merged into
+    tracked NW-10 evidence.
+    """
+    if not isinstance(status, Mapping):
+        raise ValueError("NW-10 evidence-status file is not a JSON object")
+    if status.get("format") != EVIDENCE_STATUS_FORMAT:
+        raise ValueError("NW-10 evidence-status file has an unexpected format")
+    version = status.get("version")
+    if isinstance(version, bool) or version != EVIDENCE_STATUS_VERSION:
+        raise ValueError("NW-10 evidence-status file has an unexpected version")
+    if status.get("task") != EVIDENCE_STATUS_TASK:
+        raise ValueError("NW-10 evidence-status file is for an unexpected task")
 
 
 def _require_known_evidence_status(status: Mapping[str, Any]) -> str:
@@ -490,13 +514,13 @@ def _require_known_evidence_status(status: Mapping[str, Any]) -> str:
 
 def _load_status_for_mutation(path: Path) -> dict[str, Any]:
     status = _load(path)
-    if status.get("format") != "nw10-evidence-status":
-        raise ValueError("NW-10 evidence-status file has an unexpected format")
+    _require_evidence_status_identity(status)
     _require_known_evidence_status(status)
     return status
 
 
 def _refresh_status(status: dict[str, Any]) -> dict[str, Any]:
+    _require_evidence_status_identity(status)
     _require_known_evidence_status(status)
     perf = (
         isinstance(status.get("performance_preservation"), Mapping)

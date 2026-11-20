@@ -61,27 +61,43 @@ def _write_text_lf(path: Path, text: str) -> None:
         stream.write(text)
 
 
+def _validate_previous_status(previous: dict[str, Any]) -> dict[str, Any]:
+    """Require the tracked file to be the NW-10 aggregate status machine."""
+    publisher._require_evidence_status_identity(previous)
+    try:
+        publisher._require_known_evidence_status(previous)
+    except publisher.UnsupportedEvidenceStatusError as exc:
+        raise ValueError(
+            "refusing to regenerate NW-10 contract evidence over an "
+            "unsupported aggregate evidence_status; use the revision "
+            "that introduced that status"
+        ) from exc
+    return previous
+
+
+def _load_existing_status(status_path: Path) -> dict[str, Any]:
+    """Preflight the existing status before any tracked output is mutated."""
+    if not status_path.is_file():
+        return {}
+    try:
+        previous = json.loads(status_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "refusing to regenerate NW-10 contract evidence over a malformed "
+            "evidence-status.v1.json"
+        ) from exc
+    if not isinstance(previous, dict):
+        raise ValueError("NW-10 evidence-status file is not a JSON object")
+    return _validate_previous_status(previous)
+
+
 def build_evidence(output_directory: Path | str) -> dict[str, Any]:
     output = Path(output_directory)
-    output.mkdir(parents=True, exist_ok=True)
     status_path = output / "evidence-status.v1.json"
-    previous_status: dict[str, Any] = {}
-    if status_path.is_file():
-        try:
-            previous_status = json.loads(
-                status_path.read_text(encoding="utf-8")
-            )
-        except json.JSONDecodeError:
-            previous_status = {}
-        else:
-            try:
-                publisher._require_known_evidence_status(previous_status)
-            except publisher.UnsupportedEvidenceStatusError as exc:
-                raise ValueError(
-                    "refusing to regenerate NW-10 contract evidence over an "
-                    "unsupported aggregate evidence_status; use the revision "
-                    "that introduced that status"
-                ) from exc
+    # Fail closed on malformed or foreign status documents *before* creating
+    # or rewriting any tracked evidence output.
+    previous_status = _load_existing_status(status_path)
+    output.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("NODEWERK_NW03_TEST_DIGEST", "1")
     with tempfile.TemporaryDirectory(prefix="nw10-evidence-") as temporary:
         root = Path(temporary)
@@ -440,6 +456,7 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                 _merge_status(
                     status_path,
                     files=status_files,
+                    previous=previous_status,
                 ),
                 indent=2,
                 sort_keys=True,
@@ -469,7 +486,12 @@ _PHYSICAL_STATUS_FIELDS = (
 )
 
 
-def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str, Any]:
+def _merge_status(
+    status_path: Path,
+    *,
+    files: list[dict[str, str]],
+    previous: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Regenerate contract evidence without silently deleting physical claims.
 
     The documented contract-evidence command is run routinely.  It must never
@@ -495,17 +517,14 @@ def _merge_status(status_path: Path, *, files: list[dict[str, str]]) -> dict[str
     }
     current_head = _git_head()
     status["source_head_sha"] = None
-    existing = status_path if status_path.is_file() else None
-    if existing is not None:
-        previous = json.loads(existing.read_text(encoding="utf-8"))
-        try:
-            publisher._require_known_evidence_status(previous)
-        except publisher.UnsupportedEvidenceStatusError as exc:
-            raise ValueError(
-                "refusing to regenerate NW-10 contract evidence over an "
-                "unsupported aggregate evidence_status; use the revision "
-                "that introduced that status"
-            ) from exc
+    if previous is None:
+        previous = _load_existing_status(status_path) or None
+    elif not previous:
+        previous = None
+    if previous is not None:
+        # Validate even when a caller supplied the parsed document so every
+        # mutation path applies the same format/version/task identity gate.
+        _validate_previous_status(previous)
         # Withdrawal history is attribution, not a physical claim.  Keep it
         # even when the current state is pending so the executed failure and
         # the reason its evidence cannot certify remain visible.
@@ -553,6 +572,12 @@ def _physical_evidence_is_current(
     if not current_head or previous.get("source_head_sha") != current_head:
         return False
     if previous.get("reused_physical_evidence"):
+        return False
+    try:
+        publisher._require_evidence_status_identity(previous)
+    except ValueError:
+        # A foreign document that merely happens to contain a known
+        # evidence_status string is not NW-10 status and cannot be current.
         return False
     try:
         publisher._require_known_evidence_status(previous)
