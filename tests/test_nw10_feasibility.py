@@ -222,18 +222,27 @@ def _system_validation() -> dict:
             "executable_sha256": "e" * 64,
             "executable_bytes": 65_000,
             "package_sha256": "c" * 64,
+            "manifest_sha256": "d" * 64,
         },
         "windows_build": windows_build,
         "clean_system": {
             "status": "verified",
+            "execution_kind": "physical",
             "deployment": {
                 "only_runtime_executable": True,
+                "sidecars": [],
+                "forbidden_runtime_dependencies": [],
                 "executable_sha256": "e" * 64,
                 "executable_bytes": 65_000,
             },
             "host": {
                 "clean_environment": True,
                 "windows_build": windows_build,
+                "virtualization_probe": {
+                    "hypervisor_present": False,
+                    "hypervisor_explained_by_vbs": False,
+                    "vm_markers": [],
+                },
             },
             "hardware": hardware,
             "development_dependencies_present_on_path": [],
@@ -242,12 +251,21 @@ def _system_validation() -> dict:
         },
         "startup": {
             "status": "verified",
+            "execution_kind": "physical",
             "process_start_to_first_present_ms": 100.0,
+            "ceiling_ms": 2_000.0,
+            "cache_state": {
+                "kind": "cold_driver_cache",
+                "application_pipeline_cache_used": False,
+            },
             "hardware": {**hardware, "windows_build": windows_build},
         },
         "memory": {
             "status": "verified",
+            "execution_kind": "physical",
             "peak_engine_committed_gpu_bytes": 1_000_000,
+            "ceiling_bytes": 536_870_912,
+            "package_sha256": "c" * 64,
             "post_initialization_allocation_violation": 0,
             "hardware": {**hardware, "windows_build": windows_build},
         },
@@ -261,6 +279,14 @@ def _system_validation() -> dict:
 
 
 def _performance() -> dict:
+    reference_environment = (
+        feasibility.nw10_perf_preservation._technical_reference(
+            _PERF_REFERENCE
+        )
+    )
+    binding_id = _perf_contract()["binding_id"]
+    binding_digest = _perf_contract()["binding_digest"]
+
     def capture(capture_id: str, executable_sha: str, bytes_: int) -> dict:
         return {
             "capture_id": capture_id,
@@ -275,6 +301,7 @@ def _performance() -> dict:
                 {
                     "run_index": index,
                     "status": "passed",
+                    "duration_seconds": 60,
                     "gpu_p99_ms": 10.0,
                     "gpu_sample_count": 100,
                     "cpu_p99_ms": 5.0,
@@ -291,12 +318,12 @@ def _performance() -> dict:
         "task": "NW-10",
         "performance_contract": "nw07_perf_ref_v1",
         "performance_protocol": "nw07-perf-run.v1",
-        "reference_binding_id": "nw07_perf_ref_v1@sha256:v1:" + "a" * 64,
-        "reference_binding_digest": "sha256:v1:" + "b" * 64,
+        "reference_binding_id": binding_id,
+        "reference_binding_digest": binding_digest,
         "status": "verified_preserved",
         "reasons": [],
         "matched_environment": True,
-        "reference_environment": {},
+        "reference_environment": reference_environment,
         "before": capture("before", "b" * 64, 65_001),
         "after": capture("after", "e" * 64, 65_000),
         "comparison": {
@@ -319,12 +346,95 @@ def _performance() -> dict:
     }
 
 
+_PERF_REFERENCE = {
+    "board": {
+        "model": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318,
+        "device_id": 10245,
+        "subsystem_vendor_id": 4318,
+        "subsystem_device_id": 10245,
+        "vram_mib": 8192,
+        "architecture": "Ada",
+    },
+    "host": {
+        "cpu_model": "AMD Ryzen 7 7800X3D",
+        "physical_cores": 8,
+        "logical_processors": 16,
+        "motherboard": "X670E",
+        "memory": "32 GiB DDR5",
+    },
+    "environment": {
+        "os": "Windows 11 x64",
+        "execution_kind": "physical",
+        "os_build": "10.0.22631",
+        "driver_version": "32.0.16.1088",
+        "wddm_driver_version": "3.1",
+        "windows_power_plan": "Ultimate Performance",
+        "nvidia_power_management_mode": "Prefer maximum performance",
+        "pcie_power_management": "off",
+        "gpu_clocks": "default",
+        "temperature_c": 25,
+    },
+    "toolchain": {
+        "toolchain_identity": "msvc-19.40.33821-lld",
+        "toolchain_manifest_sha256": "a" * 64,
+        "dxc_version": "1.8.2407",
+        "msvc_version": "19.40.33821",
+        "windows_sdk": "10.0.26100.0",
+    },
+    "quality": {
+        "profile_id": "nw07.quality.v1",
+        "resolution": {"width": 1920, "height": 1080},
+        "vsync": False,
+        "presentation_mode": "flip_discard",
+        "msaa_samples": 1,
+        "filtering": "linear",
+        "anisotropy": 1,
+        "texture_format": "r8g8b8a8_unorm",
+        "intermediate_format": "rgba32f",
+        "bloom_resolution_scale": 0.5,
+        "tonemap_operator": "aces",
+        "tone_exposure": 1.1,
+        "tone_gamma": 2.2,
+        "feature_level": "12_0",
+        "shader_model": "6_0",
+    },
+    "cache": {
+        "clean_start_application_pipeline_cache": False,
+        "accepted_states": ["cold_driver_cache", "warm"],
+        "cold_preparation": "Clear the driver shader cache or reboot the host",
+        "warm_preparation": "Pre-run the identical artifact once",
+    },
+    "artifact": {
+        "artifact_key": "sha256:v1:" + "a" * 64,
+        "package_sha256": "c" * 64,
+        "manifest_sha256": "d" * 64,
+        "executable_sha256": "b" * 64,
+        "complete_distribution_bytes": 65_001,
+    },
+}
+
+
+def _perf_contract() -> dict:
+    return {
+        "format": "nw07-performance-reference",
+        "version": 1,
+        "task": "NW-07",
+        "contract_id": "nw07_perf_ref_v1",
+        "contract_status": "frozen",
+        "binding_status": "bound",
+        "binding_id": "nw07_perf_ref_v1@sha256:v1:" + "a" * 64,
+        "binding_digest": "sha256:v1:" + "a" * 64,
+        "reference": _PERF_REFERENCE,
+    }
+
+
 def _correctness() -> dict:
-    def runtime(executable_sha: str) -> dict:
+    def runtime() -> dict:
         return {
             "status": "passed",
-            "unpacked_executable_sha256": "b" * 64,
-            "packed_executable_sha256": executable_sha,
+            "unpacked_executable_sha256": "9" * 64,
+            "packed_executable_sha256": "8" * 64,
             "encoded_container_sha256": "f" * 64,
             "codec_id": "nwc.codec.mszip.v1",
             "layout_id": "nwc.layout.soa.v1",
@@ -359,8 +469,8 @@ def _correctness() -> dict:
                 "driver_version": "32.0.16.1088",
             },
             "artifact": {
-                "unpacked_executable_sha256": "b" * 64,
-                "packed_executable_sha256": "e" * 64,
+                "unpacked_executable_sha256": "9" * 64,
+                "packed_executable_sha256": "8" * 64,
                 "encoded_container_sha256": "f" * 64,
             },
         },
@@ -374,8 +484,8 @@ def _correctness() -> dict:
                 "driver_version": "32.0.16.1088",
             },
             "artifact": {
-                "unpacked_executable_sha256": "b" * 64,
-                "packed_executable_sha256": "e" * 64,
+                "unpacked_executable_sha256": "9" * 64,
+                "packed_executable_sha256": "8" * 64,
                 "encoded_container_sha256": "f" * 64,
             },
         },
@@ -400,8 +510,8 @@ def _correctness() -> dict:
             "unpacked_package_sha256": "c" * 64,
             "worst_absolute_error": 0.0,
             "runtime": {
-                "ada": runtime("e" * 64),
-                "blackwell": runtime("e" * 64),
+                "ada": runtime(),
+                "blackwell": runtime(),
             },
         },
         "privacy": {
@@ -442,7 +552,12 @@ def _schema() -> dict:
     )
 
 
-def test_feasibility_success_branch_is_schema_valid() -> None:
+def test_feasibility_success_branch_is_schema_valid(monkeypatch) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
     record = feasibility.build_feasibility(
         outcome=_outcome(),
         proof=_proof(),
@@ -456,6 +571,7 @@ def test_feasibility_success_branch_is_schema_valid() -> None:
         system_validation=_system_validation(),
         performance=_performance(),
         correctness=_correctness(),
+        perf_contract=_perf_contract(),
     )
     schema = _schema()
     validate_instance(record, schema, schema)
@@ -488,7 +604,12 @@ def test_feasibility_byte_target_alone_cannot_certify_success() -> None:
     )
 
 
-def test_fabricated_or_anonymous_evidence_cannot_certify_success() -> None:
+def test_fabricated_or_anonymous_evidence_cannot_certify_success(monkeypatch) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
     system = _system_validation()
     system["clean_system"]["scenarios"] = [
         {"status": "passed", "timed_out": False} for _ in range(6)
@@ -514,6 +635,7 @@ def test_fabricated_or_anonymous_evidence_cannot_certify_success() -> None:
         system_validation=system,
         performance=performance,
         correctness=correctness,
+        perf_contract=_perf_contract(),
     )
     validate_instance(record, _schema(), _schema())
     assert record["target_met"] is False
@@ -524,7 +646,84 @@ def test_fabricated_or_anonymous_evidence_cannot_certify_success() -> None:
     assert "visual" in record["certification"]["failed_gates"]
 
 
-def test_validated_canonical_single_file_at_target_can_complete() -> None:
+def test_partial_system_record_cannot_certify_success(monkeypatch) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    system = _system_validation()
+    del system["final_artifact"]["manifest_sha256"]
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=system,
+        performance=_performance(),
+        correctness=_correctness(),
+        perf_contract=_perf_contract(),
+    )
+    validate_instance(record, _schema(), _schema())
+    assert record["target_met"] is False
+    assert record["certification"]["clean_system"]["status"] == "failed"
+    assert "manifest_sha256" in record["certification"]["clean_system"][
+        "schema_error"
+    ]
+
+
+def test_negative_performance_values_cannot_certify_success(monkeypatch) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    performance = _performance()
+    performance["after"]["runs"][0]["gpu_p99_ms"] = -1.0
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=performance,
+        correctness=_correctness(),
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"]["performance"]["status"] == "failed"
+
+    performance = _performance()
+    performance["after"]["worst_cpu_submit_p99_ms"] = -0.01
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=performance,
+        correctness=_correctness(),
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"]["performance"]["status"] == "failed"
+
+
+def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
     canonical_sha = "b" * 64
     intro = _intro()
     intro["canonical_artifact"]["executable_bytes"] = 65_000
@@ -573,6 +772,7 @@ def test_validated_canonical_single_file_at_target_can_complete() -> None:
         system_validation=system,
         performance=performance,
         correctness=correctness,
+        perf_contract=_perf_contract(),
     )
     validate_instance(record, _schema(), _schema())
     assert record["target_met"] is True

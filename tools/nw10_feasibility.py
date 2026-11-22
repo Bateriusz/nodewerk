@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -21,15 +22,19 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw10_contract as contract  # noqa: E402
 import nw07_clean_system as clean_system_contract  # noqa: E402
+import nw07_evidence  # noqa: E402
+import nw10_perf_preservation  # noqa: E402
 from schema_validator import (  # noqa: E402
     SchemaValidationError,
     validate_file_against_schema,
     validate_instance,
+    validate_semantic_invariants,
 )
 
 FORMAT = "nw10-windows-compact-feasibility"
 WINDOWS_EXIT_MIN = -(2**31)
 WINDOWS_EXIT_MAX = 2**31 - 1
+PERF_REFERENCE_PATH = REPO_ROOT / "benchmarks" / "nw07" / "perf-ref-v1.json"
 
 
 def _windows_exit_code(value: Any, *, default: int | None = None) -> int | None:
@@ -154,6 +159,19 @@ def _status(value: Any) -> str:
     return ""
 
 
+def _is_finite_nonnegative(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) >= 0.0
+    )
+
+
+def _is_strict_under(value: Any, limit: float) -> bool:
+    return _is_finite_nonnegative(value) and float(value) < limit
+
+
 def _verification(
     status: str, reason: str, **details: Any
 ) -> dict[str, Any]:
@@ -166,7 +184,9 @@ def _validate_evidence_schema(
     path = REPO_ROOT / "schemas" / schema_name
     try:
         schema = json.loads(path.read_text(encoding="utf-8"))
-        validate_instance(dict(value), schema, schema)
+        document = dict(value)
+        validate_instance(document, schema, schema)
+        validate_semantic_invariants(document, schema_name, path)
     except (OSError, ValueError, SchemaValidationError) as exc:
         return False, str(exc)
     return True, ""
@@ -184,6 +204,7 @@ def _certify_compact_candidate(
     system_validation: Mapping[str, Any] | None,
     performance: Mapping[str, Any] | None,
     correctness: Mapping[str, Any] | None,
+    perf_contract: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Verify every acceptance gate required to publish a 64 KiB success."""
     canonical_intro, compact_intro = _intro_artifacts(intro)
@@ -449,11 +470,15 @@ def _certify_compact_candidate(
         and system.get("status") == "verified"
         and str(system.get("source_head_sha", "")) == head_sha
         and clean.get("status") == "verified"
+        and clean.get("execution_kind") == "physical"
         and deployment.get("only_runtime_executable") is True
+        and deployment.get("sidecars") == []
+        and deployment.get("forbidden_runtime_dependencies") == []
         and str(deployment.get("executable_sha256", "")).lower()
         == validated_sha
         and int(deployment.get("executable_bytes", -1)) == validated_size
         and host.get("clean_environment") is True
+        and isinstance(host.get("virtualization_probe"), Mapping)
         and clean.get("development_dependencies_present_on_path") in ([], ())
         and clean.get("environment_cache_variables") in ([], ())
         and scenarios_ok
@@ -496,8 +521,15 @@ def _certify_compact_candidate(
     )
     startup_ok = (
         startup.get("status") == "verified"
+        and startup.get("execution_kind") == "physical"
         and startup_value is not None
         and 0.0 <= float(startup_value) <= contract.STARTUP_CEILING_MS
+        and startup.get("ceiling_ms") == contract.STARTUP_CEILING_MS
+        and isinstance(startup.get("cache_state"), Mapping)
+        and startup["cache_state"].get("application_pipeline_cache_used")
+        is False
+        and startup["cache_state"].get("kind")
+        in {"cold_driver_cache", "warm"}
         and str(startup_hardware.get("adapter_description", ""))
         == str(clean_hardware.get("adapter_description", ""))
         and str(startup_hardware.get("driver_version", ""))
@@ -531,8 +563,13 @@ def _certify_compact_candidate(
     )
     memory_ok = (
         memory.get("status") == "verified"
+        and memory.get("execution_kind") == "physical"
         and peak is not None
         and 0 <= int(peak) <= contract.PEAK_ENGINE_COMMITTED_GPU_BYTES
+        and memory.get("ceiling_bytes")
+        == contract.PEAK_ENGINE_COMMITTED_GPU_BYTES
+        and str(memory.get("package_sha256", "")).lower()
+        == canonical_package_sha
         and int(memory.get("post_initialization_allocation_violation", -1)) == 0
         and str(memory_hardware.get("adapter_description", ""))
         == str(clean_hardware.get("adapter_description", ""))
@@ -560,6 +597,44 @@ def _certify_compact_candidate(
 
     performance_ok = False
     performance_details: dict[str, Any] = {}
+    performance_reference_bound = False
+    expected_reference: dict[str, Any] = {}
+    expected_binding_id = ""
+    expected_binding_digest = ""
+    expected_reference_artifact: dict[str, Any] = {}
+    reference_validation: dict[str, Any] = {}
+    try:
+        reference_validation = nw07_evidence.validate_perf_contract(perf_contract)
+    except (KeyError, TypeError, ValueError) as exc:
+        reference_validation = {
+            "status": "invalid",
+            "reasons": [str(exc)],
+            "missing_bindings": ["reference_contract"],
+        }
+    performance_reference_bound = (
+        reference_validation.get("status") == "frozen"
+    )
+    if performance_reference_bound:
+        expected_reference = nw10_perf_preservation._technical_reference(
+            perf_contract.get("reference") or {}
+        )
+        expected_binding_id = str(perf_contract.get("binding_id") or "")
+        expected_binding_digest = str(
+            perf_contract.get("binding_digest") or ""
+        )
+        reference_artifact = (
+            (perf_contract.get("reference") or {}).get("artifact") or {}
+        )
+        expected_reference_artifact = {
+            key: reference_artifact.get(key)
+            for key in (
+                "artifact_key",
+                "package_sha256",
+                "manifest_sha256",
+                "executable_sha256",
+                "complete_distribution_bytes",
+            )
+        }
     if performance is not None:
         performance_schema_ok, performance_schema_error = (
             _validate_evidence_schema(
@@ -568,10 +643,78 @@ def _certify_compact_candidate(
         )
         after = performance.get("after")
         after = after if isinstance(after, Mapping) else {}
+        before = performance.get("before")
+        before = before if isinstance(before, Mapping) else {}
         runs = after.get("runs")
         runs = runs if isinstance(runs, list) else []
         artifact = after.get("artifact")
         artifact = artifact if isinstance(artifact, Mapping) else {}
+        before_artifact = before.get("artifact")
+        before_artifact = (
+            before_artifact if isinstance(before_artifact, Mapping) else {}
+        )
+        artifacts_ok = all(
+            re.fullmatch(r"[0-9a-f]{64}", str(entry.get(key, "")).lower())
+            is not None
+            and int(entry.get("complete_distribution_bytes", 0)) > 0
+            for entry in (before_artifact, artifact)
+            for key in ("package_sha256", "manifest_sha256", "executable_sha256")
+        )
+        artifacts_ok = (
+            artifacts_ok
+            and bool(str(before_artifact.get("artifact_key", "")).strip())
+            and bool(str(artifact.get("artifact_key", "")).strip())
+            and str(before_artifact.get("package_sha256", "")).lower()
+            == canonical_package_sha
+            and str(artifact.get("package_sha256", "")).lower()
+            == canonical_package_sha
+            and str(artifact.get("executable_sha256", "")).lower()
+            == validated_sha
+            and int(artifact.get("complete_distribution_bytes", -1))
+            == validated_size
+        )
+        def runs_valid(rows: Any) -> bool:
+            return (
+                isinstance(rows, list)
+                and len(rows) == contract.PERF_RUN_COUNT
+                and all(
+                    isinstance(run, Mapping)
+                    and run.get("status") == "passed"
+                    and run.get("duration_seconds")
+                    == contract.PERF_RUN_SECONDS
+                    and _is_strict_under(
+                        run.get("gpu_p99_ms"),
+                        contract.FRAME_TIME_THRESHOLD_MS,
+                    )
+                    and _is_strict_under(
+                        run.get("cpu_p99_ms"),
+                        contract.FRAME_TIME_THRESHOLD_MS,
+                    )
+                    and isinstance(run.get("gpu_sample_count"), int)
+                    and not isinstance(run.get("gpu_sample_count"), bool)
+                    and run["gpu_sample_count"] >= 1
+                    and isinstance(run.get("cpu_sample_count"), int)
+                    and not isinstance(run.get("cpu_sample_count"), bool)
+                    and run["cpu_sample_count"] >= 1
+                    for run in rows
+                )
+            )
+
+        runs_ok = runs_valid(runs)
+        before_runs_ok = runs_valid(before.get("runs"))
+        reference_environment_ok = (
+            performance_reference_bound
+            and performance.get("reference_environment") == expected_reference
+            and str(performance.get("reference_binding_id", ""))
+            == expected_binding_id
+            and str(performance.get("reference_binding_digest", ""))
+            == expected_binding_digest
+        )
+        before_matches_reference = (
+            performance_reference_bound
+            and before_artifact
+            == expected_reference_artifact
+        )
         performance_details = {
             "contract": performance.get("performance_contract"),
             "protocol": performance.get("performance_protocol"),
@@ -579,12 +722,30 @@ def _certify_compact_candidate(
             "reference_binding_digest": performance.get(
                 "reference_binding_digest"
             ),
+            "expected_reference_binding_id": expected_binding_id or None,
+            "reference_binding_status": reference_validation.get("status"),
+            "reference_missing_bindings": list(
+                reference_validation.get("missing_bindings") or []
+            ),
+            "reference_environment_matches": reference_environment_ok,
+            "before_matches_frozen_reference_artifact": (
+                before_matches_reference
+            ),
+            "expected_reference_artifact": expected_reference_artifact or None,
+            "before_executable_sha256": before_artifact.get(
+                "executable_sha256"
+            ),
+            "after_executable_sha256": artifact.get("executable_sha256"),
             "run_count": len(runs),
             "worst_gpu_p99_ms": after.get("worst_gpu_p99_ms"),
             "worst_cpu_submit_p99_ms": after.get("worst_cpu_submit_p99_ms"),
         }
         performance_ok = (
             performance_schema_ok
+            and performance_reference_bound
+            and reference_environment_ok
+            and before_matches_reference
+            and artifacts_ok
             and performance.get("status") == "verified_preserved"
             and performance.get("matched_environment") is True
             and performance.get("reasons") == []
@@ -592,27 +753,24 @@ def _certify_compact_candidate(
             == contract.PERF_CONTRACT_ID
             and performance.get("performance_protocol")
             == contract.PERF_PROTOCOL_ID
-            and len(runs) == contract.PERF_RUN_COUNT
-            and all(
-                isinstance(run, Mapping)
-                and run.get("status") == "passed"
-                and float(run.get("gpu_p99_ms", float("inf")))
-                < contract.FRAME_TIME_THRESHOLD_MS
-                and float(run.get("cpu_p99_ms", float("inf")))
-                < contract.FRAME_TIME_THRESHOLD_MS
-                for run in runs
+            and runs_ok
+            and before_runs_ok
+            and _is_strict_under(
+                before.get("worst_gpu_p99_ms"),
+                contract.FRAME_TIME_THRESHOLD_MS,
             )
-            and str(artifact.get("executable_sha256", "")).lower()
-            == validated_sha
-            and str(artifact.get("package_sha256", "")).lower()
-            == canonical_package_sha
-            and int(artifact.get("complete_distribution_bytes", -1))
-            == validated_size
-            and after.get("worst_gpu_p99_ms") is not None
-            and after.get("worst_cpu_submit_p99_ms") is not None
-            and float(after["worst_gpu_p99_ms"]) < contract.FRAME_TIME_THRESHOLD_MS
-            and float(after["worst_cpu_submit_p99_ms"])
-            < contract.FRAME_TIME_THRESHOLD_MS
+            and _is_strict_under(
+                before.get("worst_cpu_submit_p99_ms"),
+                contract.FRAME_TIME_THRESHOLD_MS,
+            )
+            and _is_strict_under(
+                after.get("worst_gpu_p99_ms"),
+                contract.FRAME_TIME_THRESHOLD_MS,
+            )
+            and _is_strict_under(
+                after.get("worst_cpu_submit_p99_ms"),
+                contract.FRAME_TIME_THRESHOLD_MS,
+            )
         )
     else:
         performance_schema_error = "not provided"
@@ -621,14 +779,19 @@ def _certify_compact_candidate(
         if performance_ok
         else (
             "failed"
-            if performance is not None
+            if performance_reference_bound
+            and performance is not None
             and performance.get("status") in {"verified_preserved", "failed"}
             else "pending"
         ),
         (
             "nw07_perf_ref_v1 matched performance gates are verified"
             if performance_ok
-            else "matched nw07_perf_ref_v1 performance preservation is pending"
+            else (
+                "matched nw07_perf_ref_v1 performance preservation is pending"
+                if not performance_reference_bound
+                else "performance record does not match the frozen reference"
+            )
         ),
         schema_error=performance_schema_error or None,
         **performance_details,
@@ -658,39 +821,65 @@ def _certify_compact_candidate(
         packed_runtime = (
             packed_runtime if isinstance(packed_runtime, Mapping) else {}
         )
+        def hash64(value: Any) -> bool:
+            return re.fullmatch(
+                r"[0-9a-f]{64}", str(value or "").lower()
+            ) is not None
+
+        tier_hash_bindings_ok = True
+        for tier in ("ada", "blackwell"):
+            runtime = packed_runtime.get(tier)
+            runtime = runtime if isinstance(runtime, Mapping) else {}
+            tier_record = correctness.get(tier)
+            tier_record = (
+                tier_record if isinstance(tier_record, Mapping) else {}
+            )
+            tier_artifact = tier_record.get("artifact")
+            tier_artifact = (
+                tier_artifact if isinstance(tier_artifact, Mapping) else {}
+            )
+            unpacked_sha = str(
+                runtime.get("unpacked_executable_sha256", "")
+            ).lower()
+            packed_sha = str(
+                runtime.get("packed_executable_sha256", "")
+            ).lower()
+            encoded_sha = str(
+                runtime.get("encoded_container_sha256", "")
+            ).lower()
+            tier_hash_bindings_ok = tier_hash_bindings_ok and (
+                runtime.get("status") == "passed"
+                and hash64(unpacked_sha)
+                and hash64(packed_sha)
+                and hash64(encoded_sha)
+                and unpacked_sha != packed_sha
+                and unpacked_sha != validated_sha
+                and packed_sha != validated_sha
+                and str(
+                    tier_artifact.get("unpacked_executable_sha256", "")
+                ).lower()
+                == unpacked_sha
+                and str(
+                    tier_artifact.get("packed_executable_sha256", "")
+                ).lower()
+                == packed_sha
+                and str(
+                    tier_artifact.get("encoded_container_sha256", "")
+                ).lower()
+                == encoded_sha
+                and int(runtime.get("frames_per_tick", -1)) == 1
+                and int(runtime.get("present_sync_interval", -1)) == 0
+            )
         packed_ok = (
             packed.get("status") == "verified"
-            and packed.get("worst_absolute_error") is not None
+            and _is_finite_nonnegative(packed.get("worst_absolute_error"))
             and float(packed["worst_absolute_error"])
             <= contract.IMAGE_ABSOLUTE_TOLERANCE
-            and all(
-                isinstance(packed_runtime.get(tier), Mapping)
-                and packed_runtime[tier].get("status") == "passed"
-                and len(
-                    str(
-                        packed_runtime[tier].get(
-                            "unpacked_executable_sha256", ""
-                        )
-                    )
-                )
-                == 64
-                and len(
-                    str(
-                        packed_runtime[tier].get(
-                            "packed_executable_sha256", ""
-                        )
-                    )
-                )
-                == 64
-                and packed_runtime[tier].get("unpacked_executable_sha256")
-                != packed_runtime[tier].get("packed_executable_sha256")
-                and int(packed_runtime[tier].get("frames_per_tick", -1)) == 1
-                and int(
-                    packed_runtime[tier].get("present_sync_interval", -1)
-                )
-                == 0
-                for tier in ("ada", "blackwell")
-            )
+            and str(packed.get("packed_package_sha256", "")).lower()
+            == canonical_package_sha
+            and str(packed.get("unpacked_package_sha256", "")).lower()
+            == canonical_package_sha
+            and tier_hash_bindings_ok
         )
         visual_ok = (
             correctness_schema_ok
@@ -704,6 +893,8 @@ def _certify_compact_candidate(
             == head_sha
             and str(correctness_common.get("package_sha256", "")).lower()
             == canonical_package_sha
+            and bool(str(correctness_common.get("artifact_key", "")).strip())
+            and hash64(correctness_common.get("manifest_sha256"))
             and str(
                 correctness_common.get("final_executable_sha256", "")
             ).lower()
@@ -713,10 +904,14 @@ def _certify_compact_candidate(
             and comparison.get("relative_tolerance")
             == contract.IMAGE_RELATIVE_TOLERANCE
             and comparison.get("absolute_required") is True
-            and comparison.get("worst_absolute_error") is not None
+            and _is_finite_nonnegative(
+                comparison.get("worst_absolute_error")
+            )
             and float(comparison["worst_absolute_error"])
             <= contract.IMAGE_ABSOLUTE_TOLERANCE
-            and comparison.get("worst_relative_error") is not None
+            and _is_finite_nonnegative(
+                comparison.get("worst_relative_error")
+            )
             and float(comparison["worst_relative_error"])
             <= contract.IMAGE_RELATIVE_TOLERANCE
             and packed_ok
@@ -728,6 +923,7 @@ def _certify_compact_candidate(
             ),
             "worst_absolute_error": comparison.get("worst_absolute_error"),
             "packed_worst_absolute_error": packed.get("worst_absolute_error"),
+            "tier_hash_bindings_verified": tier_hash_bindings_ok,
         }
     visual_verification = _verification(
         "verified"
@@ -802,9 +998,14 @@ def build_feasibility(
     system_validation: Mapping[str, Any] | None = None,
     performance: Mapping[str, Any] | None = None,
     correctness: Mapping[str, Any] | None = None,
+    perf_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if proof.get("test_payload") is True or intro.get("test_payload") is True:
         raise ValueError("feasibility publication requires release-grade reports")
+    if perf_contract is None:
+        perf_contract = json.loads(
+            PERF_REFERENCE_PATH.read_text(encoding="utf-8")
+        )
     if proof.get("release_grade") is not True or intro.get("release_grade") is not True:
         raise ValueError("feasibility publication requires release-grade reports")
     proof_kind = str(proof.get("measurement_kind") or "")
@@ -963,6 +1164,7 @@ def build_feasibility(
         system_validation=system_validation,
         performance=performance,
         correctness=correctness,
+        perf_contract=perf_contract,
     )
     target_met = bool(
         base_target_met

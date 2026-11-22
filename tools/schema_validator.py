@@ -68,6 +68,11 @@ def validate_instance(
         target = _resolve_ref(schema["$ref"], root_schema)
         validate_instance(instance, target, root_schema, path)
         return
+    if "allOf" in schema:
+        for index, subschema in enumerate(schema["allOf"]):
+            validate_instance(
+                instance, subschema, root_schema, f"{path}.allOf[{index}]"
+            )
     if "if" in schema:
         condition_matches = True
         try:

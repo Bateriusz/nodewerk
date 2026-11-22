@@ -17,7 +17,11 @@ import nw10_contract as contract  # noqa: E402
 import nw10_proof as proof  # noqa: E402
 import nw10_pe_ledger as pe_ledger  # noqa: E402
 import nw10_perf_preservation as perf_preservation  # noqa: E402
-from schema_validator import validate_file_against_schema, validate_instance  # noqa: E402
+from schema_validator import (  # noqa: E402
+    SchemaValidationError,
+    validate_file_against_schema,
+    validate_instance,
+)
 
 
 def _canonical_text_sha256(path: Path) -> str:
@@ -535,6 +539,10 @@ def test_compact_feasibility_schema_supports_a_valid_success_branch() -> None:
         "pending_gates": [],
     }
     validate_instance(success, schema, schema)
+    invalid = copy.deepcopy(success)
+    invalid["validated_artifact"]["payload_kind"] = None
+    with pytest.raises(SchemaValidationError):
+        validate_instance(invalid, schema, schema)
 
 
 def test_nw10_schemas_structurally_bind_verified_physical_evidence() -> None:

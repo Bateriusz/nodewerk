@@ -222,7 +222,47 @@
             null
           ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "compact"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload_kind": {
+                "const": "compact_container"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "canonical_fallback"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload_kind": {
+                "const": "canonical_package"
+              }
+            }
+          }
+        }
+      ]
     },
     "certification": {
       "type": "object",
