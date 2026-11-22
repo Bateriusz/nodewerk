@@ -168,7 +168,9 @@ def test_transferred_capture_uses_single_canonical_result_root() -> None:
     assert 'Copy-Item $recordPath (Join-Path $bundleRoot "capture.json")' not in text
     assert 'RESULT_RECORD=$recordPath' in text
     assert 'RESULT_MANIFEST=$resultManifestPath' in text
-    assert '$archivePaths = @($recordPath, $captures, $resultManifestPath)' in text
+    assert "$archivePaths = @(" in text
+    assert "$resultManifestPath," in text
+    assert "(Join-Path $output $verificationFile)" in text
 
 
 def test_correctness_transfer_accepts_release_intro_without_status_field() -> None:

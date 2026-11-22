@@ -33,7 +33,10 @@ MITIGATION_MASK = (
     | MITIGATION_FORCE_INTEGRITY
 )
 REQUIRED_MITIGATION_BITS = (
-    MITIGATION_HIGH_ENTROPY_VA | MITIGATION_DYNAMIC_BASE | MITIGATION_NX_COMPAT
+    MITIGATION_HIGH_ENTROPY_VA
+    | MITIGATION_DYNAMIC_BASE
+    | MITIGATION_NX_COMPAT
+    | MITIGATION_GUARD_CF
 )
 
 
@@ -373,6 +376,13 @@ def build_report(
             "linker-control build changed the embedded payload size; "
             "payload bytes would be misattributed to linker elimination"
         )
+    if final_embedded.get("payload_sha256") != baseline_embedded.get(
+        "payload_sha256"
+    ):
+        raise ValueError(
+            "linker-control build changed the embedded payload bytes; "
+            "the linker comparison is not an exact artifact match"
+        )
     canonical_package_identical = (
         final_embedded.get("decoded_package_sha256")
         == baseline_embedded.get("decoded_package_sha256")
@@ -402,15 +412,38 @@ def build_report(
     final_bits = int(final.get("dll_characteristics", 0)) & MITIGATION_MASK
     baseline_bits = int(linker_baseline.get("dll_characteristics", 0)) & MITIGATION_MASK
     decoder_on_bits = int(decoder_on.get("dll_characteristics", 0)) & MITIGATION_MASK
-    required_in_baseline = baseline_bits | (decoder_on_bits & REQUIRED_MITIGATION_BITS)
+    baseline_required_present = (
+        baseline_bits & REQUIRED_MITIGATION_BITS
+    ) == REQUIRED_MITIGATION_BITS
+    decoder_on_required_present = (
+        decoder_on_bits & REQUIRED_MITIGATION_BITS
+    ) == REQUIRED_MITIGATION_BITS
+    if not baseline_required_present or not decoder_on_required_present:
+        raise ValueError(
+            "linker control or decoder-on template does not contain the "
+            "required /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf "
+            "mitigation bits"
+        )
+    force_integrity_required = bool(
+        (baseline_bits | decoder_on_bits) & MITIGATION_FORCE_INTEGRITY
+    )
+    force_integrity_preserved = (
+        (final_bits & MITIGATION_FORCE_INTEGRITY)
+        == ((baseline_bits | decoder_on_bits) & MITIGATION_FORCE_INTEGRITY)
+    )
     security_mitigations_preserved = (
-        final_bits & required_in_baseline
-    ) == required_in_baseline
+        (final_bits & baseline_bits) == baseline_bits
+        and (final_bits & decoder_on_bits) == decoder_on_bits
+        and (final_bits & REQUIRED_MITIGATION_BITS)
+        == REQUIRED_MITIGATION_BITS
+        and force_integrity_preserved
+    )
     if not security_mitigations_preserved:
         raise ValueError(
-            "optimized executable removed security mitigation bits present in "
-            f"the linker control: final=0x{final_bits:04X} "
-            f"required=0x{required_in_baseline:04X}"
+            "optimized executable removed security mitigation bits: "
+            f"final=0x{final_bits:04X} control=0x{baseline_bits:04X} "
+            f"decoder_on=0x{decoder_on_bits:04X} "
+            f"required=0x{REQUIRED_MITIGATION_BITS:04X}"
         )
 
     ltgc_on = _build_tree_ltgc_evidence(decoder_on_template)
@@ -418,6 +451,11 @@ def build_report(
     ltgc_preserved = bool(
         ltgc_on.get("ltgc_preserved") and ltgc_off.get("ltgc_preserved")
     )
+    if not ltgc_preserved:
+        raise ValueError(
+            "LTCG/ThinLTO evidence is unavailable or disabled in the pinned "
+            "template build tree; linker elimination cannot be verified"
+        )
 
     linker_saved = int(linker_baseline["total_bytes"]) - int(final["total_bytes"])
     linker_pe_saved = int(linker_baseline["pe_image_file_bytes"]) - int(final["pe_image_file_bytes"])
@@ -505,11 +543,17 @@ def build_report(
                 "decoder_off_template": ltgc_off,
             },
             "security_mitigations_preserved": security_mitigations_preserved,
+            "force_integrity_required": force_integrity_required,
+            "force_integrity_preserved": force_integrity_preserved,
             "security_mitigation_bits": {
                 "final": f"0x{final_bits:04X}",
                 "linker_control": f"0x{baseline_bits:04X}",
                 "decoder_on_template": f"0x{decoder_on_bits:04X}",
-                "required": f"0x{required_in_baseline:04X}",
+                "required": f"0x{REQUIRED_MITIGATION_BITS:04X}",
+                "control_required_bits_present": baseline_required_present,
+                "decoder_on_required_bits_present": (
+                    decoder_on_required_present
+                ),
             },
             "compact_decoder_preserved": compact_payload_verified,
             "canonical_package_identical": canonical_package_identical,

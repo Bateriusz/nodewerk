@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -105,23 +106,84 @@ def _pe_ledger() -> dict:
         "format": "nw10-windows-pe-ledger",
         "version": 1,
         "task": "NW-10",
+        "status": "verified",
+        "source": {
+            "measurement_tool": "tools/nw10_pe_ledger.py",
+            "head_sha": "1" * 40,
+        },
         "final_artifact": {
             "executable_sha256": "e" * 64,
             "executable_bytes": 65_000,
             "package_sha256": "c" * 64,
+            "manifest_sha256": "d" * 64,
+            "pe_image_file_bytes": 64_000,
+            "overlay_bytes": 1_000,
+            "embedded_payload_kind": "compact_container",
+            "embedded_payload_bytes": 1_700,
+            "embedded_payload_sha256": "f" * 64,
+            "decoded_package_sha256": "c" * 64,
             "package_binding_verified": True,
             "manifest_binding_verified": True,
+            "dll_characteristics": "0x4060",
+            "security_mitigations": {"guard_cf": True},
+            "runtime_status": "validated_runnable",
+            "runtime_exit_code": 0,
+            "sections": [{"name": ".text", "raw_size_bytes": 63_000}],
         },
         "linker_elimination": {
+            "status": "verified",
+            "optimized_options": ["/OPT:REF"],
+            "control_options": ["/OPT:NOREF"],
             "security_mitigations_preserved": True,
+            "security_mitigation_bits": {
+                "final": "0x4060",
+                "linker_control": "0x4060",
+                "decoder_on_template": "0x4060",
+                "required": "0x4160",
+                "control_required_bits_present": True,
+                "decoder_on_required_bits_present": True,
+            },
             "canonical_package_identical": True,
             "compact_decoder_preserved": True,
+            "ltgc_preserved": True,
+            "ltgc_evidence": {
+                "decoder_on_template": {"status": "verified_build_tree_flags"},
+                "decoder_off_template": {"status": "verified_build_tree_flags"},
+            },
+            "embedded_payload_sha256_identical": True,
+            "final_payload_kind": "compact_container",
+            "control_payload_kind": "compact_container",
+            "control_executable_bytes": 70_000,
+            "control_pe_image_file_bytes": 69_000,
+            "complete_distribution_bytes_saved": 5_000,
+            "pe_image_bytes_saved": 5_000,
+            "section_bytes_saved": [{"section": ".text", "bytes_saved": 5_000}],
         },
         "compact_decoder": {
+            "status": "verified",
+            "decoder_on_template_bytes": 510_464,
+            "decoder_off_template_bytes": 506_880,
+            "template_bytes_added": 3_584,
+            "pe_image_bytes_added": 3_584,
+            "runtime_import_added": "cabinet.dll",
+            "runtime_imports_added": ["cabinet.dll"],
             "compact_payload_verified": True,
-            "template_bytes_added": 3_500,
+            "final_imports_cabinet": True,
+            "final_payload_kind": "compact_container",
+            "final_payload_sha256": "f" * 64,
+            "final_decoded_package_sha256": "c" * 64,
         },
-        "conclusion": {"byte_ledger_complete": True},
+        "conclusion": {
+            "byte_ledger_complete": True,
+            "linker_elimination_measured_on_exact_windows_artifact": True,
+            "decoder_cost_measured_on_pinned_windows_template": True,
+            "universal_64k_claim": False,
+        },
+        "privacy": {
+            "local_paths_included": False,
+            "raw_linker_map_included": False,
+            "pdb_paths_included": False,
+        },
     }
 
 
@@ -135,15 +197,33 @@ def _dependency_closure() -> dict:
 
 
 def _system_validation() -> dict:
+    hardware = {
+        "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+        "driver_version": "32.0.16.1088",
+    }
+    windows_build = "10.0.22631"
+    scenarios = [
+        {
+            "scenario": name,
+            "expected_exit_code": code,
+            "observed_exit_code": code,
+            "status": "passed",
+            "timed_out": False,
+        }
+        for name, code in feasibility.clean_system_contract.EXPECTED_SCENARIO_EXIT_CODES.items()
+    ]
     return {
         "format": "nw10-system-validation",
         "version": 1,
         "task": "NW-10",
         "status": "verified",
+        "source_head_sha": "1" * 40,
         "final_artifact": {
             "executable_sha256": "e" * 64,
+            "executable_bytes": 65_000,
             "package_sha256": "c" * 64,
         },
+        "windows_build": windows_build,
         "clean_system": {
             "status": "verified",
             "deployment": {
@@ -151,36 +231,190 @@ def _system_validation() -> dict:
                 "executable_sha256": "e" * 64,
                 "executable_bytes": 65_000,
             },
-            "host": {"clean_environment": True},
+            "host": {
+                "clean_environment": True,
+                "windows_build": windows_build,
+            },
+            "hardware": hardware,
             "development_dependencies_present_on_path": [],
             "environment_cache_variables": [],
-            "scenarios": [
-                {"status": "passed", "timed_out": False} for _ in range(6)
-            ],
+            "scenarios": scenarios,
         },
         "startup": {
             "status": "verified",
             "process_start_to_first_present_ms": 100.0,
+            "hardware": {**hardware, "windows_build": windows_build},
         },
         "memory": {
             "status": "verified",
             "peak_engine_committed_gpu_bytes": 1_000_000,
             "post_initialization_allocation_violation": 0,
+            "hardware": {**hardware, "windows_build": windows_build},
+        },
+        "privacy": {
+            "local_paths_included": False,
+            "raw_stdout_stderr_included": False,
+            "user_profile_paths_included": False,
+            "raw_result_bundle_tracked": False,
         },
     }
 
 
 def _performance() -> dict:
-    return {
-        "format": "nw10-performance-preservation",
-        "performance_contract": "nw07_perf_ref_v1",
-        "performance_protocol": "nw07-perf-run.v1",
-        "reference_binding_id": "binding-1",
-        "status": "verified_preserved",
-        "after": {
+    def capture(capture_id: str, executable_sha: str, bytes_: int) -> dict:
+        return {
+            "capture_id": capture_id,
+            "artifact": {
+                "artifact_key": "sha256:v1:" + "a" * 64,
+                "package_sha256": "c" * 64,
+                "manifest_sha256": "d" * 64,
+                "executable_sha256": executable_sha,
+                "complete_distribution_bytes": bytes_,
+            },
+            "runs": [
+                {
+                    "run_index": index,
+                    "status": "passed",
+                    "gpu_p99_ms": 10.0,
+                    "gpu_sample_count": 100,
+                    "cpu_p99_ms": 5.0,
+                    "cpu_sample_count": 100,
+                }
+                for index in range(1, 4)
+            ],
             "worst_gpu_p99_ms": 10.0,
             "worst_cpu_submit_p99_ms": 5.0,
-            "runs": [{"status": "passed"} for _ in range(3)],
+        }
+    return {
+        "format": "nw10-performance-preservation",
+        "version": 1,
+        "task": "NW-10",
+        "performance_contract": "nw07_perf_ref_v1",
+        "performance_protocol": "nw07-perf-run.v1",
+        "reference_binding_id": "nw07_perf_ref_v1@sha256:v1:" + "a" * 64,
+        "reference_binding_digest": "sha256:v1:" + "b" * 64,
+        "status": "verified_preserved",
+        "reasons": [],
+        "matched_environment": True,
+        "reference_environment": {},
+        "before": capture("before", "b" * 64, 65_001),
+        "after": capture("after", "e" * 64, 65_000),
+        "comparison": {
+            "same_canonical_package_sha256": True,
+            "gpu_worst_p99_delta_percent": 0.0,
+            "cpu_worst_p99_delta_percent": 0.0,
+            "relative_alert_threshold_percent": 10,
+            "relative_regression_alert": False,
+            "absolute_gate_operator": "<",
+            "absolute_gate_ms": 16.67,
+            "faster_substitute_used": False,
+        },
+        "privacy": {
+            "raw_samples_included": False,
+            "process_ids_included": False,
+            "stdout_stderr_included": False,
+            "local_paths_included": False,
+            "whitelist_generated": True,
+        },
+    }
+
+
+def _correctness() -> dict:
+    def runtime(executable_sha: str) -> dict:
+        return {
+            "status": "passed",
+            "unpacked_executable_sha256": "b" * 64,
+            "packed_executable_sha256": executable_sha,
+            "encoded_container_sha256": "f" * 64,
+            "codec_id": "nwc.codec.mszip.v1",
+            "layout_id": "nwc.layout.soa.v1",
+            "device_form_factor_source": "win32_system_enclosure_and_battery",
+            "frames_per_tick": 1,
+            "present_sync_interval": 0,
+        }
+
+    common = {
+        "artifact_key": "sha256:v1:" + "a" * 64,
+        "package_sha256": "c" * 64,
+        "manifest_sha256": "d" * 64,
+        "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+        "requirements_digest": "sha256:v1:" + "b" * 64,
+        "final_executable_sha256": "e" * 64,
+    }
+    return {
+        "format": "nw10-common-artifact-correctness-summary",
+        "version": 1,
+        "task": "NW-10",
+        "status": "verified",
+        "source_head_sha": "1" * 40,
+        "capture_protocol": "nw07-correctness-capture.v1",
+        "common_artifact": common,
+        "ada": {
+            "status": "verified",
+            "hardware": {
+                "adapter_description": "NVIDIA GeForce RTX 4060 Ti",
+                "classified_tier": "ada",
+                "device_form_factor": "desktop",
+                "device_form_factor_source": "win32_system_enclosure_and_battery",
+                "driver_version": "32.0.16.1088",
+            },
+            "artifact": {
+                "unpacked_executable_sha256": "b" * 64,
+                "packed_executable_sha256": "e" * 64,
+                "encoded_container_sha256": "f" * 64,
+            },
+        },
+        "blackwell": {
+            "status": "verified",
+            "hardware": {
+                "adapter_description": "NVIDIA GeForce RTX 5070 Ti",
+                "classified_tier": "blackwell",
+                "device_form_factor": "desktop",
+                "device_form_factor_source": "win32_system_enclosure_and_battery",
+                "driver_version": "32.0.16.1088",
+            },
+            "artifact": {
+                "unpacked_executable_sha256": "b" * 64,
+                "packed_executable_sha256": "e" * 64,
+                "encoded_container_sha256": "f" * 64,
+            },
+        },
+        "comparison": {
+            "fixed_ticks": [0, 240_000, 480_000, 720_000, 959_999],
+            "fixed_tick_status": "passed",
+            "loop_boundary_ticks": [0, 960_000],
+            "ada_loop_boundary_status": "passed",
+            "blackwell_loop_boundary_status": "passed",
+            "worst_absolute_error": 0.0,
+            "worst_relative_error": 0.0,
+            "absolute_tolerance": 0.0001,
+            "relative_tolerance": 0.0001,
+            "absolute_required": True,
+        },
+        "packed_unpacked_comparison": {
+            "status": "verified",
+            "direct_separate_packed_gpu_capture_recorded": True,
+            "codec_id": "nwc.codec.mszip.v1",
+            "layout_id": "nwc.layout.soa.v1",
+            "packed_package_sha256": "c" * 64,
+            "unpacked_package_sha256": "c" * 64,
+            "worst_absolute_error": 0.0,
+            "runtime": {
+                "ada": runtime("e" * 64),
+                "blackwell": runtime("e" * 64),
+            },
+        },
+        "privacy": {
+            "raw_capture_bytes_embedded": False,
+            "local_paths_included": False,
+            "stdout_stderr_included": False,
+        },
+        "source": {
+            "mode": "compare",
+            "execution_kind": "physical_cross_hardware",
+            "tool": "tools/nw10/run-correctness-evidence.ps1",
+            "implementation_head": "1" * 40,
+            "raw_capture_manifests_tracked": False,
         },
     }
 
@@ -221,6 +455,7 @@ def test_feasibility_success_branch_is_schema_valid() -> None:
         dependency_closure=_dependency_closure(),
         system_validation=_system_validation(),
         performance=_performance(),
+        correctness=_correctness(),
     )
     schema = _schema()
     validate_instance(record, schema, schema)
@@ -251,6 +486,100 @@ def test_feasibility_byte_target_alone_cannot_certify_success() -> None:
         blocker["id"] == "compact_certification_evidence"
         for blocker in record["blockers"]
     )
+
+
+def test_fabricated_or_anonymous_evidence_cannot_certify_success() -> None:
+    system = _system_validation()
+    system["clean_system"]["scenarios"] = [
+        {"status": "passed", "timed_out": False} for _ in range(6)
+    ]
+    performance = {
+        "status": "verified_preserved",
+        "reference_binding_id": "binding-1",
+        "after": {
+            "runs": [{"status": "passed"} for _ in range(3)],
+            "worst_gpu_p99_ms": 10.0,
+            "worst_cpu_submit_p99_ms": 5.0,
+        },
+    }
+    correctness = {"status": "verified"}
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+    )
+    validate_instance(record, _schema(), _schema())
+    assert record["target_met"] is False
+    assert record["classification"] == "continue"
+    assert record["certification"]["status"] == "failed"
+    assert "clean_system" in record["certification"]["failed_gates"]
+    assert "performance" in record["certification"]["failed_gates"]
+    assert "visual" in record["certification"]["failed_gates"]
+
+
+def test_validated_canonical_single_file_at_target_can_complete() -> None:
+    canonical_sha = "b" * 64
+    intro = _intro()
+    intro["canonical_artifact"]["executable_bytes"] = 65_000
+    intro["compact_artifact"]["selected_mode"] = "canonical"
+    intro["compact_artifact"]["selected_executable_bytes"] = 65_000
+    intro["compact_artifact"]["selected_executable_sha256"] = canonical_sha
+
+    pe = copy.deepcopy(_pe_ledger())
+    pe["final_artifact"]["executable_sha256"] = canonical_sha
+    pe["final_artifact"]["embedded_payload_kind"] = "canonical_package"
+    pe["linker_elimination"]["compact_decoder_preserved"] = False
+    pe["linker_elimination"]["final_payload_kind"] = "canonical_package"
+    pe["linker_elimination"]["control_payload_kind"] = "canonical_package"
+    pe["compact_decoder"]["compact_payload_verified"] = False
+    pe["compact_decoder"]["final_imports_cabinet"] = False
+    pe["compact_decoder"]["final_payload_kind"] = "canonical_package"
+
+    dependency = _dependency_closure()
+    dependency["binary_sha256"] = canonical_sha
+    dependency["canonical_imports"] = ["d3d12.dll", "kernel32.dll"]
+
+    system = copy.deepcopy(_system_validation())
+    system["final_artifact"]["executable_sha256"] = canonical_sha
+    system["clean_system"]["deployment"]["executable_sha256"] = canonical_sha
+
+    performance = copy.deepcopy(_performance())
+    performance["after"]["artifact"]["executable_sha256"] = canonical_sha
+
+    correctness = copy.deepcopy(_correctness())
+    correctness["common_artifact"]["final_executable_sha256"] = canonical_sha
+
+    record = feasibility.build_feasibility(
+        outcome=_outcome(
+            minimum_validated_runnable_bytes=65_000,
+            validated_mode="canonical_fallback",
+            compact_candidate_runtime_status="rejected_runtime_failure",
+            compact_candidate_exit_code=70,
+            canonical_fallback_exit_code=0,
+        ),
+        proof=_proof(),
+        intro=intro,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=dependency,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+    )
+    validate_instance(record, _schema(), _schema())
+    assert record["target_met"] is True
+    assert record["classification"] == "complete"
+    assert record["validated_artifact"]["mode"] == "canonical_fallback"
+    assert record["validated_artifact"]["bytes"] == 65_000
+    assert record["acceptance_linkage"]["true_64k_artifact_delivered"] is True
 
 
 def test_validated_compact_identity_is_not_taken_from_smaller_proof_candidate() -> None:
@@ -323,10 +652,14 @@ def test_feasibility_rejects_malformed_artifact_digest() -> None:
 
 
 def test_feasibility_failure_branch_keeps_canonical_fallback_and_continue() -> None:
+    intro = _intro()
+    intro["compact_artifact"]["selected_mode"] = "canonical"
+    intro["compact_artifact"]["selected_executable_bytes"] = 240_000
+    intro["compact_artifact"]["selected_executable_sha256"] = "b" * 64
     record = feasibility.build_feasibility(
         outcome=_outcome(
             minimum_measured_candidate_bytes=227_715,
-            minimum_validated_runnable_bytes=240_702,
+            minimum_validated_runnable_bytes=240_000,
             validated_mode="canonical_fallback",
             compact_candidate_runtime_status="rejected_runtime_failure",
             compact_candidate_exit_code=70,
@@ -334,7 +667,7 @@ def test_feasibility_failure_branch_keeps_canonical_fallback_and_continue() -> N
             proof_compact_candidate_bytes=227_715,
         ),
         proof=_proof(),
-        intro=_intro(),
+        intro=intro,
         run_id=1,
         head_sha="1" * 40,
         artifact_id=2,

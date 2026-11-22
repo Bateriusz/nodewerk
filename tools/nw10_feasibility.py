@@ -20,7 +20,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw10_contract as contract  # noqa: E402
-from schema_validator import validate_file_against_schema  # noqa: E402
+import nw07_clean_system as clean_system_contract  # noqa: E402
+from schema_validator import (  # noqa: E402
+    SchemaValidationError,
+    validate_file_against_schema,
+    validate_instance,
+)
 
 FORMAT = "nw10-windows-compact-feasibility"
 WINDOWS_EXIT_MIN = -(2**31)
@@ -155,35 +160,56 @@ def _verification(
     return {"status": status, "reason": reason, **details}
 
 
+def _validate_evidence_schema(
+    value: Mapping[str, Any], schema_name: str
+) -> tuple[bool, str]:
+    path = REPO_ROOT / "schemas" / schema_name
+    try:
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        validate_instance(dict(value), schema, schema)
+    except (OSError, ValueError, SchemaValidationError) as exc:
+        return False, str(exc)
+    return True, ""
+
+
 def _certify_compact_candidate(
     *,
     intro: Mapping[str, Any],
-    candidate_sha: str,
-    candidate_size: int,
+    validated_mode: str,
+    validated_sha: str,
+    validated_size: int,
+    head_sha: str,
     pe_ledger: Mapping[str, Any] | None,
     dependency_closure: Mapping[str, Any] | None,
     system_validation: Mapping[str, Any] | None,
     performance: Mapping[str, Any] | None,
+    correctness: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     """Verify every acceptance gate required to publish a 64 KiB success."""
     canonical_intro, compact_intro = _intro_artifacts(intro)
     ledgers = intro.get("ledgers")
     ledgers = ledgers if isinstance(ledgers, Mapping) else {}
+    canonical_ledger = ledgers.get("canonical")
+    canonical_ledger = (
+        canonical_ledger if isinstance(canonical_ledger, Mapping) else {}
+    )
     compact_ledger = ledgers.get("compact")
     compact_ledger = (
         compact_ledger if isinstance(compact_ledger, Mapping) else {}
     )
-    components = compact_ledger.get("components")
+    ledger = compact_ledger if validated_mode == "compact" else canonical_ledger
+    components = ledger.get("components")
     components = components if isinstance(components, Mapping) else {}
     canonical_package_sha = str(
         canonical_intro.get("package_sha256", "")
     ).lower()
+    canonical_package_bytes = canonical_intro.get("package_bytes")
     decoded_package_sha = str(
         compact_intro.get("decoded_package_sha256", "")
     ).lower()
     decoded_bytes_present = (
         compact_intro.get("decoded_package_bytes") is not None
-        and canonical_intro.get("package_bytes") is not None
+        and canonical_package_bytes is not None
     )
     decoded_match = (
         bool(decoded_package_sha)
@@ -191,7 +217,7 @@ def _certify_compact_candidate(
         and (
             not decoded_bytes_present
             or int(compact_intro.get("decoded_package_bytes", -1))
-            == int(canonical_intro.get("package_bytes", -2))
+            == int(canonical_package_bytes)
         )
     )
     decoded_identity = _verification(
@@ -203,21 +229,28 @@ def _certify_compact_candidate(
         ),
         canonical_package_sha256=canonical_package_sha or None,
         decoded_package_sha256=decoded_package_sha or None,
-        canonical_package_bytes=canonical_intro.get("package_bytes"),
+        canonical_package_bytes=canonical_package_bytes,
         decoded_package_bytes=compact_intro.get("decoded_package_bytes"),
+        validated_mode=validated_mode,
     )
 
     measured_decoder_bytes = components.get("decoder_code_bytes")
-    if measured_decoder_bytes is None and pe_ledger is not None:
+    if (
+        validated_mode == "compact"
+        and measured_decoder_bytes is None
+        and pe_ledger is not None
+    ):
         decoder = pe_ledger.get("compact_decoder")
         if isinstance(decoder, Mapping):
             measured_decoder_bytes = decoder.get("template_bytes_added")
-    unaccounted = list(compact_ledger.get("unaccounted_components") or [])
+    unaccounted = list(ledger.get("unaccounted_components") or [])
     only_decoder_pending = set(unaccounted) <= {"decoder_code_bytes"}
-    bytes_accounted = bool(compact_ledger.get("all_required_bytes_accounted")) or (
-        only_decoder_pending and measured_decoder_bytes is not None
+    bytes_accounted = bool(ledger.get("all_required_bytes_accounted")) or (
+        validated_mode == "compact"
+        and only_decoder_pending
+        and measured_decoder_bytes is not None
     )
-    required_auxiliary = compact_ledger.get("required_auxiliary_files")
+    required_auxiliary = ledger.get("required_auxiliary_files")
     no_required_sidecars = not required_auxiliary
     bytes_verification = _verification(
         "verified" if bytes_accounted and no_required_sidecars else "pending",
@@ -232,7 +265,7 @@ def _certify_compact_candidate(
         required_auxiliary_files=dict(required_auxiliary or {}),
     )
 
-    dependency_rows = compact_ledger.get("dependencies")
+    dependency_rows = ledger.get("dependencies")
     dependency_rows = (
         dependency_rows if isinstance(dependency_rows, list) else []
     )
@@ -246,14 +279,19 @@ def _certify_compact_candidate(
         reported_binary_sha = str(
             dependency_closure.get("binary_sha256", "")
         ).lower()
+        imported_dlls = {
+            str(item).lower().removesuffix(".dll")
+            for item in (dependency_closure.get("canonical_imports") or [])
+        }
         closure_verified = (
             dependency_closure.get("closure_verified") is True
-            and (
-                not reported_binary_sha
-                or reported_binary_sha == candidate_sha
-            )
+            and reported_binary_sha == validated_sha
             and not sidecars
-            and ("cabinet" in dependency_names or pe_ledger is not None)
+            and (
+                validated_mode != "compact"
+                or "cabinet" in imported_dlls
+                or "cabinet" in dependency_names
+            )
         )
         dependency_verification = _verification(
             "verified" if closure_verified else "failed",
@@ -265,9 +303,7 @@ def _certify_compact_candidate(
             sidecar_files=list(sidecars or []),
             imported_dlls=list(dependency_closure.get("canonical_imports") or []),
             binary_sha256=reported_binary_sha or None,
-            binary_binding=(
-                "verified" if reported_binary_sha else "not_provided"
-            ),
+            binary_binding="verified",
         )
     else:
         dependency_verification = _verification(
@@ -283,6 +319,9 @@ def _certify_compact_candidate(
             "pending", "no measured PE ledger was supplied"
         )
     else:
+        schema_ok, schema_error = _validate_evidence_schema(
+            pe_ledger, "nw10-windows-pe-ledger.schema.json"
+        )
         final = pe_ledger.get("final_artifact")
         final = final if isinstance(final, Mapping) else {}
         linker = pe_ledger.get("linker_elimination")
@@ -291,39 +330,79 @@ def _certify_compact_candidate(
         decoder = decoder if isinstance(decoder, Mapping) else {}
         conclusion = pe_ledger.get("conclusion")
         conclusion = conclusion if isinstance(conclusion, Mapping) else {}
+        mitigation_bits = linker.get("security_mitigation_bits")
+        mitigation_bits = (
+            mitigation_bits if isinstance(mitigation_bits, Mapping) else {}
+        )
+        expected_payload_kind = (
+            "compact_container"
+            if validated_mode == "compact"
+            else "canonical_package"
+        )
         pe_ok = (
-            pe_ledger.get("format") == "nw10-windows-pe-ledger"
-            and str(final.get("executable_sha256", "")).lower() == candidate_sha
-            and int(final.get("executable_bytes", -1)) == candidate_size
+            schema_ok
+            and pe_ledger.get("format") == "nw10-windows-pe-ledger"
+            and pe_ledger.get("status") == "verified"
+            and str(
+                (pe_ledger.get("source") or {}).get("head_sha", "")
+            ).lower()
+            == head_sha
+            and str(final.get("executable_sha256", "")).lower()
+            == validated_sha
+            and int(final.get("executable_bytes", -1)) == validated_size
             and str(final.get("package_sha256", "")).lower()
             == canonical_package_sha
             and final.get("package_binding_verified") is True
             and final.get("manifest_binding_verified") is True
+            and final.get("runtime_status") == "validated_runnable"
+            and final.get("runtime_exit_code") == 0
+            and final.get("embedded_payload_kind") == expected_payload_kind
             and linker.get("security_mitigations_preserved") is True
+            and mitigation_bits.get("control_required_bits_present") is True
+            and mitigation_bits.get("decoder_on_required_bits_present") is True
             and linker.get("canonical_package_identical") is True
-            and linker.get("compact_decoder_preserved") is True
-            and decoder.get("compact_payload_verified") is True
+            and linker.get("embedded_payload_sha256_identical") is True
+            and linker.get("ltgc_preserved") is True
+            and (
+                (
+                    validated_mode == "compact"
+                    and linker.get("compact_decoder_preserved") is True
+                    and decoder.get("compact_payload_verified") is True
+                )
+                or (
+                    validated_mode == "canonical_fallback"
+                    and linker.get("compact_decoder_preserved") is False
+                    and decoder.get("compact_payload_verified") is False
+                )
+            )
             and conclusion.get("byte_ledger_complete") is True
         )
         pe_verification = _verification(
-            "verified" if pe_ok else "failed",
+            "verified"
+            if pe_ok
+            else (
+                "failed"
+                if pe_ledger.get("status") == "verified"
+                else "pending"
+            ),
             (
-                "PE ledger binds the candidate, package, mitigations, and compact decoder"
+                "PE ledger binds the validated artifact, package, mitigations, "
+                "LTGC, and payload mode"
                 if pe_ok
                 else "PE ledger does not bind every required candidate property"
             ),
+            schema_error=schema_error or None,
             executable_sha256=final.get("executable_sha256"),
             executable_bytes=final.get("executable_bytes"),
             security_mitigations_preserved=linker.get(
                 "security_mitigations_preserved"
             ),
+            ltgc_preserved=linker.get("ltgc_preserved"),
             compact_decoder_preserved=linker.get("compact_decoder_preserved"),
         )
 
     system = system_validation or {}
     clean = system.get("clean_system")
-    if not isinstance(clean, Mapping):
-        clean = intro.get("clean_system_validation")
     clean = clean if isinstance(clean, Mapping) else {}
     deployment = clean.get("deployment")
     deployment = deployment if isinstance(deployment, Mapping) else {}
@@ -331,60 +410,109 @@ def _certify_compact_candidate(
     host = host if isinstance(host, Mapping) else {}
     scenarios = clean.get("scenarios")
     scenarios = scenarios if isinstance(scenarios, list) else []
-    scenarios_ok = bool(scenarios) and all(
+    expected_scenarios = clean_system_contract.EXPECTED_SCENARIO_EXIT_CODES
+    scenario_names = {
+        str(row.get("scenario", ""))
+        for row in scenarios
+        if isinstance(row, Mapping)
+    }
+    scenarios_ok = scenario_names == set(expected_scenarios) and all(
         isinstance(row, Mapping)
         and row.get("status") == "passed"
         and row.get("timed_out") is False
+        and row.get("expected_exit_code")
+        == expected_scenarios[str(row.get("scenario", ""))]
+        and row.get("observed_exit_code")
+        == expected_scenarios[str(row.get("scenario", ""))]
         for row in scenarios
     )
     system_final = system.get("final_artifact")
     system_final = (
         system_final if isinstance(system_final, Mapping) else {}
     )
-    if not system_final:
-        system_final = {
-            "executable_sha256": compact_intro.get("selected_executable_sha256"),
-            "package_sha256": canonical_package_sha,
-        }
+    system_schema_ok, system_schema_error = (
+        _validate_evidence_schema(
+            system, "nw10-system-validation.schema.json"
+        )
+        if system
+        else (False, "not provided")
+    )
+    clean_hardware = clean.get("hardware")
+    clean_hardware = (
+        clean_hardware if isinstance(clean_hardware, Mapping) else {}
+    )
+    clean_windows_build = str(host.get("windows_build", ""))
+    privacy = system.get("privacy")
+    privacy = privacy if isinstance(privacy, Mapping) else {}
     clean_ok = (
-        system.get("status") == "verified"
+        system_schema_ok
+        and system.get("status") == "verified"
+        and str(system.get("source_head_sha", "")) == head_sha
         and clean.get("status") == "verified"
         and deployment.get("only_runtime_executable") is True
         and str(deployment.get("executable_sha256", "")).lower()
-        == candidate_sha
-        and int(deployment.get("executable_bytes", -1)) == candidate_size
+        == validated_sha
+        and int(deployment.get("executable_bytes", -1)) == validated_size
         and host.get("clean_environment") is True
         and clean.get("development_dependencies_present_on_path") in ([], ())
         and clean.get("environment_cache_variables") in ([], ())
         and scenarios_ok
         and str(system_final.get("executable_sha256", "")).lower()
-        == candidate_sha
+        == validated_sha
+        and int(system_final.get("executable_bytes", -1)) == validated_size
         and str(system_final.get("package_sha256", "")).lower()
         == canonical_package_sha
+        and bool(clean_windows_build)
+        and str(system.get("windows_build", "")) == clean_windows_build
+        and privacy.get("local_paths_included") is False
+        and privacy.get("raw_stdout_stderr_included") is False
+        and privacy.get("user_profile_paths_included") is False
+        and privacy.get("raw_result_bundle_tracked") is False
     )
     clean_verification = _verification(
-        "verified" if clean_ok else "pending",
+        "verified"
+        if clean_ok
+        else (
+            "failed"
+            if system.get("status") == "verified"
+            else "pending"
+        ),
         (
             "clean target deployment and frozen scenarios are verified"
             if clean_ok
             else "clean-system physical validation is unavailable or incomplete"
         ),
+        schema_error=system_schema_error or None,
         deployment_executable_sha256=deployment.get("executable_sha256"),
         scenario_count=len(scenarios),
     )
 
     startup = system.get("startup")
-    if not isinstance(startup, Mapping):
-        startup = intro.get("startup_validation")
     startup = startup if isinstance(startup, Mapping) else {}
     startup_value = startup.get("process_start_to_first_present_ms")
+    startup_hardware = startup.get("hardware")
+    startup_hardware = (
+        startup_hardware if isinstance(startup_hardware, Mapping) else {}
+    )
     startup_ok = (
         startup.get("status") == "verified"
         and startup_value is not None
         and 0.0 <= float(startup_value) <= contract.STARTUP_CEILING_MS
+        and str(startup_hardware.get("adapter_description", ""))
+        == str(clean_hardware.get("adapter_description", ""))
+        and str(startup_hardware.get("driver_version", ""))
+        == str(clean_hardware.get("driver_version", ""))
+        and str(startup_hardware.get("windows_build", ""))
+        == clean_windows_build
     )
     startup_verification = _verification(
-        "verified" if startup_ok else "pending",
+        "verified"
+        if startup_ok
+        else (
+            "failed"
+            if system.get("status") == "verified"
+            else "pending"
+        ),
         (
             "startup is verified below the frozen ceiling"
             if startup_ok
@@ -395,18 +523,32 @@ def _certify_compact_candidate(
     )
 
     memory = system.get("memory")
-    if not isinstance(memory, Mapping):
-        memory = intro.get("memory_validation")
     memory = memory if isinstance(memory, Mapping) else {}
     peak = memory.get("peak_engine_committed_gpu_bytes")
+    memory_hardware = memory.get("hardware")
+    memory_hardware = (
+        memory_hardware if isinstance(memory_hardware, Mapping) else {}
+    )
     memory_ok = (
         memory.get("status") == "verified"
         and peak is not None
         and 0 <= int(peak) <= contract.PEAK_ENGINE_COMMITTED_GPU_BYTES
         and int(memory.get("post_initialization_allocation_violation", -1)) == 0
+        and str(memory_hardware.get("adapter_description", ""))
+        == str(clean_hardware.get("adapter_description", ""))
+        and str(memory_hardware.get("driver_version", ""))
+        == str(clean_hardware.get("driver_version", ""))
+        and str(memory_hardware.get("windows_build", ""))
+        == clean_windows_build
     )
     memory_verification = _verification(
-        "verified" if memory_ok else "pending",
+        "verified"
+        if memory_ok
+        else (
+            "failed"
+            if system.get("status") == "verified"
+            else "pending"
+        ),
         (
             "engine-committed memory is verified below the frozen ceiling"
             if memory_ok
@@ -418,86 +560,191 @@ def _certify_compact_candidate(
 
     performance_ok = False
     performance_details: dict[str, Any] = {}
-    performance_source = performance
-    if not isinstance(performance_source, Mapping):
-        performance_source = intro.get("performance_validation")
-    if isinstance(performance_source, Mapping):
-        after = performance_source.get("after")
-        if not isinstance(after, Mapping):
-            after = performance_source
+    if performance is not None:
+        performance_schema_ok, performance_schema_error = (
+            _validate_evidence_schema(
+                performance, "nw10-performance-preservation.schema.json"
+            )
+        )
+        after = performance.get("after")
         after = after if isinstance(after, Mapping) else {}
         runs = after.get("runs")
         runs = runs if isinstance(runs, list) else []
+        artifact = after.get("artifact")
+        artifact = artifact if isinstance(artifact, Mapping) else {}
         performance_details = {
-            "contract": performance_source.get(
-                "performance_contract",
-                performance_source.get("contract_id"),
-            ),
-            "protocol": performance_source.get(
-                "performance_protocol",
-                performance_source.get("protocol"),
-            ),
-            "reference_binding_id": performance_source.get(
-                "reference_binding_id"
+            "contract": performance.get("performance_contract"),
+            "protocol": performance.get("performance_protocol"),
+            "reference_binding_id": performance.get("reference_binding_id"),
+            "reference_binding_digest": performance.get(
+                "reference_binding_digest"
             ),
             "run_count": len(runs),
             "worst_gpu_p99_ms": after.get("worst_gpu_p99_ms"),
             "worst_cpu_submit_p99_ms": after.get("worst_cpu_submit_p99_ms"),
         }
         performance_ok = (
-            performance_source.get("status")
-            in {"verified_preserved", "verified"}
-            and performance_source.get(
-                "performance_contract", performance_source.get("contract_id")
-            )
+            performance_schema_ok
+            and performance.get("status") == "verified_preserved"
+            and performance.get("matched_environment") is True
+            and performance.get("reasons") == []
+            and performance.get("performance_contract")
             == contract.PERF_CONTRACT_ID
-            and performance_source.get(
-                "performance_protocol", performance_source.get("protocol")
-            )
+            and performance.get("performance_protocol")
             == contract.PERF_PROTOCOL_ID
-            and performance_source.get("reference_binding_id")
             and len(runs) == contract.PERF_RUN_COUNT
             and all(
-                isinstance(run, Mapping) and run.get("status") == "passed"
+                isinstance(run, Mapping)
+                and run.get("status") == "passed"
+                and float(run.get("gpu_p99_ms", float("inf")))
+                < contract.FRAME_TIME_THRESHOLD_MS
+                and float(run.get("cpu_p99_ms", float("inf")))
+                < contract.FRAME_TIME_THRESHOLD_MS
                 for run in runs
             )
+            and str(artifact.get("executable_sha256", "")).lower()
+            == validated_sha
+            and str(artifact.get("package_sha256", "")).lower()
+            == canonical_package_sha
+            and int(artifact.get("complete_distribution_bytes", -1))
+            == validated_size
             and after.get("worst_gpu_p99_ms") is not None
             and after.get("worst_cpu_submit_p99_ms") is not None
             and float(after["worst_gpu_p99_ms"]) < contract.FRAME_TIME_THRESHOLD_MS
             and float(after["worst_cpu_submit_p99_ms"])
             < contract.FRAME_TIME_THRESHOLD_MS
         )
+    else:
+        performance_schema_error = "not provided"
     performance_verification = _verification(
-        "verified" if performance_ok else "pending",
+        "verified"
+        if performance_ok
+        else (
+            "failed"
+            if performance is not None
+            and performance.get("status") in {"verified_preserved", "failed"}
+            else "pending"
+        ),
         (
             "nw07_perf_ref_v1 matched performance gates are verified"
             if performance_ok
             else "matched nw07_perf_ref_v1 performance preservation is pending"
         ),
+        schema_error=performance_schema_error or None,
         **performance_details,
     )
 
-    visual = intro.get("visual_validation")
-    visual = visual if isinstance(visual, Mapping) else {}
-    visual_status = _status(visual)
-    visual_ok = visual_status in {"verified", "passed"}
-    if visual_ok:
-        numeric = visual.get("numeric_absolute")
-        if numeric is not None and float(numeric) > contract.NUMERIC_ABSOLUTE_TOLERANCE:
-            visual_ok = False
-        image = visual.get("image_absolute")
-        if image is not None and float(image) > contract.IMAGE_ABSOLUTE_TOLERANCE:
-            visual_ok = False
+    correctness_schema_error = "not provided"
+    visual_ok = False
+    visual_details: dict[str, Any] = {}
+    if correctness is not None:
+        correctness_schema_ok, correctness_schema_error = (
+            _validate_evidence_schema(
+                correctness,
+                "nw10-common-artifact-correctness.schema.json",
+            )
+        )
+        correctness_common = correctness.get("common_artifact")
+        correctness_common = (
+            correctness_common
+            if isinstance(correctness_common, Mapping)
+            else {}
+        )
+        comparison = correctness.get("comparison")
+        comparison = comparison if isinstance(comparison, Mapping) else {}
+        packed = correctness.get("packed_unpacked_comparison")
+        packed = packed if isinstance(packed, Mapping) else {}
+        packed_runtime = packed.get("runtime")
+        packed_runtime = (
+            packed_runtime if isinstance(packed_runtime, Mapping) else {}
+        )
+        packed_ok = (
+            packed.get("status") == "verified"
+            and packed.get("worst_absolute_error") is not None
+            and float(packed["worst_absolute_error"])
+            <= contract.IMAGE_ABSOLUTE_TOLERANCE
+            and all(
+                isinstance(packed_runtime.get(tier), Mapping)
+                and packed_runtime[tier].get("status") == "passed"
+                and len(
+                    str(
+                        packed_runtime[tier].get(
+                            "unpacked_executable_sha256", ""
+                        )
+                    )
+                )
+                == 64
+                and len(
+                    str(
+                        packed_runtime[tier].get(
+                            "packed_executable_sha256", ""
+                        )
+                    )
+                )
+                == 64
+                and packed_runtime[tier].get("unpacked_executable_sha256")
+                != packed_runtime[tier].get("packed_executable_sha256")
+                and int(packed_runtime[tier].get("frames_per_tick", -1)) == 1
+                and int(
+                    packed_runtime[tier].get("present_sync_interval", -1)
+                )
+                == 0
+                for tier in ("ada", "blackwell")
+            )
+        )
+        visual_ok = (
+            correctness_schema_ok
+            and correctness.get("status") == "verified"
+            and str(correctness.get("source_head_sha", "")) == head_sha
+            and str(
+                (correctness.get("source") or {}).get(
+                    "implementation_head", ""
+                )
+            )
+            == head_sha
+            and str(correctness_common.get("package_sha256", "")).lower()
+            == canonical_package_sha
+            and str(
+                correctness_common.get("final_executable_sha256", "")
+            ).lower()
+            == validated_sha
+            and comparison.get("absolute_tolerance")
+            == contract.IMAGE_ABSOLUTE_TOLERANCE
+            and comparison.get("relative_tolerance")
+            == contract.IMAGE_RELATIVE_TOLERANCE
+            and comparison.get("absolute_required") is True
+            and comparison.get("worst_absolute_error") is not None
+            and float(comparison["worst_absolute_error"])
+            <= contract.IMAGE_ABSOLUTE_TOLERANCE
+            and comparison.get("worst_relative_error") is not None
+            and float(comparison["worst_relative_error"])
+            <= contract.IMAGE_RELATIVE_TOLERANCE
+            and packed_ok
+        )
+        visual_details = {
+            "correctness_head": correctness.get("source_head_sha"),
+            "final_executable_sha256": correctness_common.get(
+                "final_executable_sha256"
+            ),
+            "worst_absolute_error": comparison.get("worst_absolute_error"),
+            "packed_worst_absolute_error": packed.get("worst_absolute_error"),
+        }
     visual_verification = _verification(
-        "verified" if visual_ok else "pending",
+        "verified"
+        if visual_ok
+        else (
+            "failed"
+            if correctness is not None
+            and correctness.get("status") == "verified"
+            else "pending"
+        ),
         (
             "packed/unpacked visual validation is verified"
             if visual_ok
             else "packed/unpacked physical visual validation is pending"
         ),
-        source_validation_status=visual_status or None,
-        numeric_absolute=visual.get("numeric_absolute"),
-        image_absolute=visual.get("image_absolute"),
+        schema_error=correctness_schema_error or None,
+        **visual_details,
         tolerance=contract.image_tolerances(),
     )
 
@@ -554,6 +801,7 @@ def build_feasibility(
     dependency_closure: Mapping[str, Any] | None = None,
     system_validation: Mapping[str, Any] | None = None,
     performance: Mapping[str, Any] | None = None,
+    correctness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if proof.get("test_payload") is True or intro.get("test_payload") is True:
         raise ValueError("feasibility publication requires release-grade reports")
@@ -616,10 +864,18 @@ def build_feasibility(
     proof_candidate = outcome.get("proof_compact_candidate_bytes")
     candidate_size = int(compact_intro.get("executable_bytes", 0))
     candidate_sha = str(compact_intro.get("executable_sha256", "")).lower()
+    canonical_size = int(canonical_intro.get("executable_bytes", 0))
+    canonical_sha = str(
+        canonical_intro.get("executable_sha256", "")
+    ).lower()
     if candidate_size <= 0:
         raise ValueError("intro compact candidate has no positive executable size")
     if re.fullmatch(r"[0-9a-f]{64}", candidate_sha) is None:
         raise ValueError("intro compact candidate executable SHA-256 is malformed")
+    if canonical_size <= 0:
+        raise ValueError("intro canonical artifact has no positive executable size")
+    if re.fullmatch(r"[0-9a-f]{64}", canonical_sha) is None:
+        raise ValueError("intro canonical artifact SHA-256 is malformed")
     if runtime_status == "validated_runnable":
         if validated_mode != "compact" or validated_bytes is None:
             raise ValueError(
@@ -643,21 +899,70 @@ def build_feasibility(
             raise ValueError(
                 "selected intro compact SHA-256 does not match the validated candidate"
             )
+    if validated_mode == "canonical_fallback":
+        if validated_bytes is None or canonical_exit != 0:
+            raise ValueError(
+                "validated canonical fallback requires a zero exit code and bytes"
+            )
+        if int(validated_bytes) != canonical_size:
+            raise ValueError(
+                "validated canonical byte count does not match the intro artifact"
+            )
+        if compact_intro.get("selected_mode") != "canonical":
+            raise ValueError(
+                "validated canonical fallback is not selected in the intro report"
+            )
+        if (
+            int(compact_intro.get("selected_executable_bytes", -1))
+            != canonical_size
+        ):
+            raise ValueError(
+                "selected intro canonical byte count does not match the validated artifact"
+            )
+        if (
+            str(compact_intro.get("selected_executable_sha256", "")).lower()
+            != canonical_sha
+        ):
+            raise ValueError(
+                "selected intro canonical SHA-256 does not match the validated artifact"
+            )
+    if validated_mode == "compact":
+        validated_artifact_sha = candidate_sha
+        validated_artifact_size = candidate_size
+        validated_ready = (
+            runtime_status == "validated_runnable"
+            and candidate_exit == 0
+            and validated_bytes is not None
+            and int(validated_bytes) == candidate_size
+        )
+    elif validated_mode == "canonical_fallback":
+        validated_artifact_sha = canonical_sha
+        validated_artifact_size = canonical_size
+        validated_ready = (
+            canonical_exit == 0
+            and validated_bytes is not None
+            and int(validated_bytes) == canonical_size
+        )
+    else:
+        validated_artifact_sha = ""
+        validated_artifact_size = 0
+        validated_ready = False
     base_target_met = bool(
         proof_within
-        and validated_mode == "compact"
-        and validated_bytes is not None
-        and int(validated_bytes) <= contract.COMPACT_TARGET_BYTES
-        and runtime_status == "validated_runnable"
+        and validated_ready
+        and validated_artifact_size <= contract.COMPACT_TARGET_BYTES
     )
     certification = _certify_compact_candidate(
         intro=intro,
-        candidate_sha=candidate_sha,
-        candidate_size=candidate_size,
+        validated_mode=validated_mode,
+        validated_sha=validated_artifact_sha,
+        validated_size=validated_artifact_size,
+        head_sha=head_sha,
         pe_ledger=pe_ledger,
         dependency_closure=dependency_closure,
         system_validation=system_validation,
         performance=performance,
+        correctness=correctness,
     )
     target_met = bool(
         base_target_met
@@ -760,8 +1065,41 @@ def build_feasibility(
                 }
                 else "none"
             ),
+            "validated_artifact_bytes": (
+                validated_artifact_size if validated_artifact_sha else None
+            ),
+            "validated_artifact_sha256": (
+                validated_artifact_sha or None
+            ),
+            "validated_payload_kind": (
+                "compact_container"
+                if validated_mode == "compact"
+                else (
+                    "canonical_package"
+                    if validated_mode == "canonical_fallback"
+                    else None
+                )
+            ),
         },
         "compact_candidate": compact,
+        "validated_artifact": (
+            {
+                "bytes": validated_artifact_size,
+                "sha256": validated_artifact_sha,
+                "mode": validated_mode,
+                "payload_kind": (
+                    "compact_container"
+                    if validated_mode == "compact"
+                    else (
+                        "canonical_package"
+                        if validated_mode == "canonical_fallback"
+                        else None
+                    )
+                ),
+            }
+            if validated_artifact_sha
+            else None
+        ),
         "certification": certification,
         "canonical_fallback": {
             "bytes": int(canonical_intro["executable_bytes"]),
@@ -819,7 +1157,11 @@ def build_feasibility(
                     ),
                     "exit_code": None,
                     "exit_code_hex": None,
-                    "measured_bytes": candidate_size,
+                    "measured_bytes": (
+                        validated_artifact_size
+                        if validated_ready
+                        else candidate_size
+                    ),
                     "reason": (
                         "The candidate meets the byte target and reports a "
                         "validated runtime, but clean-target startup/memory/"
@@ -833,7 +1175,24 @@ def build_feasibility(
                     ),
                 }
             )
-        if hosted_noncertifying:
+        elif validated_ready and validated_artifact_size > contract.COMPACT_TARGET_BYTES:
+            blockers.append(
+                {
+                    "id": "validated_artifact_target",
+                    "status": "measured_above_target",
+                    "exit_code": 0,
+                    "exit_code_hex": _windows_exit_hex(0),
+                    "measured_bytes": validated_artifact_size,
+                    "reason": (
+                        "The validated "
+                        f"{validated_mode} single-file artifact is "
+                        f"{validated_artifact_size} bytes, above the 65,536-byte "
+                        "target; the exact measurement is retained and the "
+                        "decision remains continue."
+                    ),
+                }
+            )
+        elif hosted_noncertifying:
             blocker_reason = (
                 "The hosted Windows runner could not certify either the compact "
                 "candidate or the canonical fallback; the compact result remains "
@@ -841,6 +1200,16 @@ def build_feasibility(
                 "to compact packaging."
             )
             blocker_status = "pending_physical"
+            blockers.append(
+                {
+                    "id": "compact_candidate_runtime",
+                    "status": blocker_status,
+                    "exit_code": candidate_exit,
+                    "exit_code_hex": _windows_exit_hex(candidate_exit),
+                    "measured_bytes": candidate_size,
+                    "reason": blocker_reason,
+                }
+            )
         else:
             blocker_reason = (
                 "The measured compact candidate did not produce a validated "
@@ -849,16 +1218,16 @@ def build_feasibility(
             blocker_status = (
                 "rejected" if runtime_status == "rejected_runtime_failure" else "pending"
             )
-        blockers.append(
-            {
-                "id": "compact_candidate_runtime",
-                "status": blocker_status,
-                "exit_code": candidate_exit,
-                "exit_code_hex": _windows_exit_hex(candidate_exit),
-                "measured_bytes": candidate_size,
-                "reason": blocker_reason,
-            }
-        )
+            blockers.append(
+                {
+                    "id": "compact_candidate_runtime",
+                    "status": blocker_status,
+                    "exit_code": candidate_exit,
+                    "exit_code_hex": _windows_exit_hex(candidate_exit),
+                    "measured_bytes": candidate_size,
+                    "reason": blocker_reason,
+                }
+            )
     if blockers:
         record["blocker"] = blockers[0]
         record["blockers"] = blockers
@@ -947,6 +1316,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dependency-closure", type=Path)
     parser.add_argument("--system-validation", type=Path)
     parser.add_argument("--performance-preservation", type=Path)
+    parser.add_argument("--correctness", type=Path)
     args = parser.parse_args(argv)
     if not (
         len(args.head_sha) == 40
@@ -990,6 +1360,9 @@ def main(argv: list[str] | None = None) -> int:
             _load(args.performance_preservation)
             if args.performance_preservation is not None
             else None
+        ),
+        correctness=(
+            _load(args.correctness) if args.correctness is not None else None
         ),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

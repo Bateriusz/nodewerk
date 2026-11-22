@@ -124,7 +124,7 @@
     "layout_id": "nwc.layout.soa.v1",
     "packaging_tool": {
       "identity": "tools/nw10_compact.py",
-      "version": "5e5bada9ce5ff5907c35c81aba0ad88110a73176885a19e5dc54fb02e3f04a10"
+      "version": "115991d6d863ca41af5e7290a84b8001d8b91efbc7b451ed1730c4cb9d7b68f8"
     },
     "selected_executable_bytes": 2090,
     "task": "NW-10",
@@ -161,7 +161,7 @@
   ],
   "packaging_tool": {
     "identity": "tools/nw10_compact.py",
-    "version": "5e5bada9ce5ff5907c35c81aba0ad88110a73176885a19e5dc54fb02e3f04a10"
+    "version": "115991d6d863ca41af5e7290a84b8001d8b91efbc7b451ed1730c4cb9d7b68f8"
   },
   "parameter_quantization_tolerances": {
     "image_absolute": 0.0001,

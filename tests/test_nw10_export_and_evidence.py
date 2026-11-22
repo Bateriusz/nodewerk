@@ -514,6 +514,12 @@ def test_compact_feasibility_schema_supports_a_valid_success_branch() -> None:
     }
     success["acceptance_linkage"]["decision"] = "complete"
     success["acceptance_linkage"]["true_64k_artifact_delivered"] = True
+    success["validated_artifact"] = {
+        "bytes": 65_000,
+        "sha256": "a" * 64,
+        "mode": "compact",
+        "payload_kind": "compact_container",
+    }
     success["certification"] = {
         "status": "verified",
         "decoded_package_identity": {"status": "verified", "reason": "ok"},

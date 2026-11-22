@@ -1129,6 +1129,20 @@ def _structural_measurements(
 _FLOAT_PARAMETER_TYPES = {"float", "float2", "float3", "float4"}
 
 
+def _is_non_float_parameter(parameter: nwp.ParameterRecord) -> bool:
+    """Return True for parameters whose bytes are not IEEE float values.
+
+    The restricted intro emits ``nw05.material_recipe.seed`` as a float-typed
+    record that actually carries a uint32 seed bit pattern.  Quantizing those
+    bytes as f16/q16 is meaningless, so declared seed parameters are preserved
+    by identity just like explicitly uint-typed metadata.
+    """
+    if parameter.type == "uint":
+        return True
+    name = parameter.name.casefold()
+    return "seed" in name
+
+
 def _quantized_parameter_value(
     parameter: nwp.ParameterRecord, value_encoding: str
 ) -> tuple[bytes, float, int, int]:
@@ -1145,13 +1159,15 @@ def _quantized_parameter_value(
         # Canonical encoding preserves every component byte-for-byte.  Only
         # non-float components are counted in the corruption audit because
         # float components are quantized by the other encodings.
-        preserved = component_count if parameter.type == "uint" else 0
+        preserved = (
+            component_count if _is_non_float_parameter(parameter) else 0
+        )
         return value, 0.0, 0, max(preserved, 0)
     if component_count <= 0 or len(value) != component_count * 4:
         raise ValueError(
             "parameter payload is not aligned to the declared component count"
         )
-    if parameter.type == "uint":
+    if _is_non_float_parameter(parameter):
         return value, 0.0, 0, component_count
     if parameter.type not in _FLOAT_PARAMETER_TYPES:
         raise ValueError(
@@ -1210,6 +1226,7 @@ def _parameter_layout_size(
     quantized_components = 0
     preserved_non_float_components = 0
     non_float_components = 0
+    non_float_parameter_names: list[str] = []
     for parameter in parameters:
         packed += _varint(parameter.parameter_id - previous_id)
         previous_id = parameter.parameter_id
@@ -1223,8 +1240,9 @@ def _parameter_layout_size(
         maximum_error = max(maximum_error, parameter_error)
         quantized_components += quantized
         preserved_non_float_components += preserved
-        if parameter.type == "uint":
+        if _is_non_float_parameter(parameter):
             non_float_components += int(parameter.component_count)
+            non_float_parameter_names.append(parameter.name)
         packed += _varint(len(value)) + value
         packed += _varint(parameter.timeline_start_frame)
         packed += _varint(parameter.timeline_end_frame)
@@ -1258,6 +1276,7 @@ def _parameter_layout_size(
         "quantized_components": quantized_components,
         "preserved_non_float_components": preserved_non_float_components,
         "non_float_components": non_float_components,
+        "non_float_parameter_names": sorted(set(non_float_parameter_names)),
         "non_float_components_preserved": (
             preserved_non_float_components == non_float_components
         ),

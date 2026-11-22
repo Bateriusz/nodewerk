@@ -83,6 +83,10 @@ def test_pe_ledger_tool_emits_schema_valid_flattened_report(
     )
     for name in ("final.nwp", "baseline.nwp"):
         (tmp_path / name).write_bytes(b"fixture")
+    (tmp_path / "CMakeCache.txt").write_text("", encoding="utf-8")
+    (tmp_path / "build.ninja").write_text(
+        "FLAGS = /GL\nLINK_FLAGS = /LTCG\n", encoding="utf-8"
+    )
     (tmp_path / "final.json").write_text(
         json.dumps({"profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1"}),
         encoding="utf-8",

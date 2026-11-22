@@ -220,7 +220,7 @@ function New-NwBundle {
     if (-not [string]::IsNullOrWhiteSpace([string]$verificationFile)) {
         $source = Join-Path (Split-Path -Parent $RecordPath) ([string]$verificationFile)
         if (-not (Test-Path $source -PathType Leaf)) {
-            throw "Packed diagnostic verification file is missing: $source"
+            throw "Diagnostic verification file is missing: $source"
         }
         Copy-Item $source (Join-Path $bundleRoot ([string]$verificationFile)) -Force
     }

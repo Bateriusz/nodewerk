@@ -61,15 +61,12 @@ $output = [System.IO.Path]::GetFullPath((Join-Path $here $OutputRoot))
 $captures = Join-Path $output "captures"
 Remove-Item $output -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $captures | Out-Null
-$verificationFile = $null
-if ($packagingMode -eq "packed") {
-    $verificationFile = "packed-diagnostic.exe"
-    $verificationPath = Join-Path $output $verificationFile
-    Copy-Item $exe $verificationPath -Force
-    $verificationSha = (Get-FileHash -Algorithm SHA256 $verificationPath).Hash.ToLowerInvariant()
-    if ($verificationSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLowerInvariant()) {
-        throw "Retained packed diagnostic executable SHA-256 changed"
-    }
+$verificationFile = "$packagingMode-diagnostic.exe"
+$verificationPath = Join-Path $output $verificationFile
+Copy-Item $exe $verificationPath -Force
+$verificationSha = (Get-FileHash -Algorithm SHA256 $verificationPath).Hash.ToLowerInvariant()
+if ($verificationSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLowerInvariant()) {
+    throw "Retained $packagingMode diagnostic executable SHA-256 changed"
 }
 
 $probeOutput = @(& $exe --frames 1 2>&1)
@@ -248,10 +245,12 @@ $resultManifestPath = Join-Path $output "bundle-manifest.json"
 
 $zip = Join-Path $output ("nw10-correctness-" + $Tier + "-bundle.zip")
 Remove-Item $zip -Force -ErrorAction SilentlyContinue
-$archivePaths = @($recordPath, $captures, $resultManifestPath)
-if ($packagingMode -eq "packed") {
-    $archivePaths += (Join-Path $output $verificationFile)
-}
+$archivePaths = @(
+    $recordPath,
+    $captures,
+    $resultManifestPath,
+    (Join-Path $output $verificationFile)
+)
 Compress-Archive -Path $archivePaths -DestinationPath $zip -CompressionLevel Optimal
 
 $rawBytes = [int64]0

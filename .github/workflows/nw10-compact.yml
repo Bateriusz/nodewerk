@@ -656,7 +656,8 @@ jobs:
             --prior-valid-ledger "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json" `
             --pe-ledger "$PWD/build/nw10-windows-pe-ledger.json" `
             --dependency-closure "$PWD/build/nw10-dependency-closure.json" `
-            --system-validation "$PWD/benchmarks/nw10/system-validation.v1.json"
+            --system-validation "$PWD/benchmarks/nw10/system-validation.v1.json" `
+            --correctness "$PWD/benchmarks/nw10/common-artifact-correctness.v1.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/schema_validator.py `
             --document "$PWD/build/nw10-windows-compact-feasibility-bound.json" `

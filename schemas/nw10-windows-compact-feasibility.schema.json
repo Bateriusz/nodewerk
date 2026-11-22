@@ -189,6 +189,41 @@
         }
       }
     },
+    "validated_artifact": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "bytes",
+        "sha256",
+        "mode",
+        "payload_kind"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mode": {
+          "enum": [
+            "compact",
+            "canonical_fallback"
+          ]
+        },
+        "payload_kind": {
+          "enum": [
+            "compact_container",
+            "canonical_package",
+            null
+          ]
+        }
+      }
+    },
     "certification": {
       "type": "object",
       "required": [
@@ -519,9 +554,31 @@
       },
       "then": {
         "required": [
-          "certification"
+          "certification",
+          "validated_artifact"
         ],
         "properties": {
+          "validated_artifact": {
+            "type": "object",
+            "required": [
+              "bytes",
+              "sha256",
+              "mode",
+              "payload_kind"
+            ],
+            "properties": {
+              "bytes": {
+                "type": "integer",
+                "maximum": 65536
+              },
+              "mode": {
+                "enum": [
+                  "compact",
+                  "canonical_fallback"
+                ]
+              }
+            }
+          },
           "certification": {
             "required": [
               "status",

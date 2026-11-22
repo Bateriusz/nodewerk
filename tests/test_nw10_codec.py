@@ -160,6 +160,37 @@ def test_mszip_reference_decoder_rejects_malformed_truncated_corrupt_and_expansi
     assert caught.value.code == "compact_decode_limit"
 
 
+def test_parameter_packing_preserves_declared_seed_bits_by_identity() -> None:
+    parameters = [
+        nwp.ParameterRecord(
+            parameter_id=1,
+            name="nw05.material_recipe.seed",
+            type="float",
+            phase="initialization",
+            component_count=1,
+            value=struct.pack("<I", 0x4E9A9E6B),
+        ),
+        nwp.ParameterRecord(
+            parameter_id=2,
+            name="nw05.material_recipe.radius",
+            type="float",
+            phase="initialization",
+            component_count=1,
+            value=struct.pack("<f", 0.25),
+        ),
+    ]
+    f16 = compact._parameter_layout_size(parameters, value_encoding="f16")
+    assert "nw05.material_recipe.seed" in f16["non_float_parameter_names"]
+    assert f16["non_float_components_preserved"] is True
+    assert f16["maximum_absolute_error"] == 0.0
+
+    q16 = compact._parameter_layout_size(parameters, value_encoding="q16")
+    assert "nw05.material_recipe.seed" in q16["non_float_parameter_names"]
+    assert q16["non_float_components_preserved"] is True
+    assert q16["maximum_absolute_error"] < 1.0
+    assert q16["maximum_absolute_error"] > 0.0
+
+
 def _stored_container_with_table(
     records: list[tuple[int, int, int, int]], raw: bytes
 ) -> bytes:
