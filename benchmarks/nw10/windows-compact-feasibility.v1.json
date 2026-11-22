@@ -42,6 +42,57 @@
     "runtime_status": "pending_runtime_validation",
     "sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8"
   },
+  "certification": {
+    "all_required_bytes_accounted": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "clean_system": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "decoded_package_identity": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "dependency_closure": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "failed_gates": [],
+    "memory": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "pe_ledger_binding": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "pending_gates": [
+      "decoded_package_identity",
+      "all_required_bytes_accounted",
+      "dependency_closure",
+      "pe_ledger_binding",
+      "clean_system",
+      "startup",
+      "memory",
+      "performance",
+      "visual"
+    ],
+    "performance": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "startup": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "status": "pending",
+    "visual": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    }
+  },
   "classification": "continue",
   "compact_candidate": {
     "bytes": 228181,

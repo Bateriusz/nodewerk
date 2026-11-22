@@ -312,11 +312,39 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                 "layouts": proof_report["measurements"]["layouts"],
                 "shader_specialization": proof_report["measurements"]["shaders"],
                 "compression": proof_report["measurements"]["compression_candidates"],
+                "optimizations": proof_report["measurements"].get(
+                    "optimizations", {}
+                ),
+                "physical_evidence": proof_report["measurements"].get(
+                    "physical_evidence", {}
+                ),
                 "linker_elimination": {
                     "status": "pending_physical_pe",
                     "reason": (
                         "Exact release-PE section and symbol elimination bytes are "
                         "not substituted with source-level estimates."
+                    ),
+                    "measurements": compact.pending_optimization_measurements(
+                        reason=(
+                            "Exact release-PE section and symbol elimination "
+                            "bytes are measured by tools/nw10_pe_ledger.py on "
+                            "the Windows artifact; startup, memory, frame-time, "
+                            "and visual error remain pending physical capture."
+                        )
+                    ),
+                },
+                "crt_free_startup": {
+                    "status": "not_pursued",
+                    "reason": (
+                        "No measured complete-distribution benefit and no "
+                        "compiler-helper/initialization correctness proof; the "
+                        "supported startup path is retained."
+                    ),
+                    "measurements": compact.pending_optimization_measurements(
+                        reason=(
+                            "CRT-free startup remains an unproven experiment; "
+                            "no before/after physical measurement exists."
+                        )
                     ),
                 },
             },
@@ -379,6 +407,17 @@ def build_evidence(output_directory: Path | str) -> dict[str, Any]:
                     "task": contract.TASK,
                     "implementation_base": contract.IMPLEMENTATION_BASE,
                     **intro_report["profile"],
+                    "codec_id": intro_report["compact_artifact"]["codec_id"],
+                    "layout_id": intro_report["compact_artifact"]["layout_id"],
+                    "parameter_quantization_tolerances": {
+                        "numeric_absolute": contract.NUMERIC_ABSOLUTE_TOLERANCE,
+                        "numeric_relative": contract.NUMERIC_RELATIVE_TOLERANCE,
+                        "image_absolute": contract.IMAGE_ABSOLUTE_TOLERANCE,
+                        "image_relative": contract.IMAGE_RELATIVE_TOLERANCE,
+                    },
+                    "packaging_tool": intro_report["ledgers"]["compact"].get(
+                        "packaging_tool"
+                    ),
                     "artifact": intro_report["compact_artifact"],
                     "ledger": intro_report["ledgers"]["compact"],
                     "evidence_status": "informational_contract_only",

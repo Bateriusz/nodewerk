@@ -769,6 +769,20 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
     comparison = source.get("comparison")
     if not all(isinstance(item, Mapping) for item in (common, ada, blackwell, comparison)):
         raise ValueError("correctness comparison structure is incomplete")
+    common_final_executable_sha = common.get("final_executable_sha256")
+    if common_final_executable_sha is not None:
+        common_final_executable_sha = str(common_final_executable_sha).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", common_final_executable_sha):
+            raise ValueError(
+                "correctness comparison common executable hash is malformed"
+            )
+    common_manifest_sha = common.get("manifest_sha256")
+    if common_manifest_sha is not None:
+        common_manifest_sha = str(common_manifest_sha).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", common_manifest_sha):
+            raise ValueError(
+                "correctness comparison common manifest hash is malformed"
+            )
     fixed_ticks = [0, 240000, 480000, 720000, 959999]
     if comparison.get("fixed_ticks") not in (None, fixed_ticks):
         raise ValueError("correctness comparison changed the frozen fixed ticks")
@@ -869,6 +883,12 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(
                 f"packed/unpacked {tier} runtime is not uncapped"
             )
+        if str(entry.get("unpacked_executable_sha256", "")).lower() == str(
+            entry.get("packed_executable_sha256", "")
+        ).lower():
+            raise ValueError(
+                f"packed/unpacked {tier} reused the same diagnostic executable"
+            )
     ada_loop = ada.get("loop_boundary")
     blackwell_loop = blackwell.get("loop_boundary")
     if not isinstance(ada_loop, Mapping) or not isinstance(blackwell_loop, Mapping):
@@ -913,12 +933,42 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
         "status": "verified",
         "capture_protocol": source.get("capture_protocol"),
         "common_artifact": {
-            "package_sha256": str(common.get("package_sha256", "")).lower()
+            "artifact_key": common.get("artifact_key"),
+            "package_sha256": str(common.get("package_sha256", "")).lower(),
+            "manifest_sha256": common_manifest_sha,
+            "profile_id": common.get("profile_id"),
+            "requirements_digest": common.get("requirements_digest"),
+            "final_executable_sha256": common_final_executable_sha,
         },
-        "ada": {"status": "verified", "hardware": hardware_summary(ada, "ada")},
+        "ada": {
+            "status": "verified",
+            "hardware": hardware_summary(ada, "ada"),
+            "artifact": {
+                "unpacked_executable_sha256": packed_runtime["ada"].get(
+                    "unpacked_executable_sha256"
+                ),
+                "packed_executable_sha256": packed_runtime["ada"].get(
+                    "packed_executable_sha256"
+                ),
+                "encoded_container_sha256": packed_runtime["ada"].get(
+                    "encoded_container_sha256"
+                ),
+            },
+        },
         "blackwell": {
             "status": "verified",
             "hardware": hardware_summary(blackwell, "blackwell"),
+            "artifact": {
+                "unpacked_executable_sha256": packed_runtime["blackwell"].get(
+                    "unpacked_executable_sha256"
+                ),
+                "packed_executable_sha256": packed_runtime["blackwell"].get(
+                    "packed_executable_sha256"
+                ),
+                "encoded_container_sha256": packed_runtime["blackwell"].get(
+                    "encoded_container_sha256"
+                ),
+            },
         },
         "comparison": {
             "fixed_ticks": [int(row["tick"]) for row in per_tick],

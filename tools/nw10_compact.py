@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import bz2
 import hashlib
+import json
 import lzma
 import math
 import shutil
@@ -153,7 +154,12 @@ def _zlib_mszip_compress(data: bytes, *, level: int = 9) -> bytes:
 
 
 def _zlib_mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
-    """Bounded decoder for the deterministic MSZIP framing produced above."""
+    """Bounded decoder for the deterministic MSZIP framing produced above.
+
+    Each CK block is inflated with an explicit output cap of one byte above the
+    32 KiB block limit.  That means a crafted block cannot allocate an
+    unbounded buffer before the decoder checks the block-size invariant.
+    """
     output = bytearray()
     cursor = 0
     while cursor < len(data):
@@ -171,7 +177,9 @@ def _zlib_mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
             )
         decompressor = zlib.decompressobj(-15)
         try:
-            block = decompressor.decompress(data[cursor:])
+            block = decompressor.decompress(
+                data[cursor:], MSZIP_BLOCK_BYTES + 1
+            )
         except zlib.error as exc:
             raise CompactCodecError(
                 "compact_codec_malformed", f"MSZIP inflate failed: {exc}", offset=cursor
@@ -179,6 +187,19 @@ def _zlib_mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
         if len(block) > MSZIP_BLOCK_BYTES:
             raise CompactCodecError(
                 "compact_decode_limit", "MSZIP block expands beyond 32 KiB"
+            )
+        if not decompressor.eof:
+            if decompressor.unconsumed_tail:
+                # More than the permitted 32 KiB of output remained, but the
+                # capped inflate stopped at the exact cap.  Fail before
+                # retaining any more decoded bytes.
+                raise CompactCodecError(
+                    "compact_decode_limit",
+                    "MSZIP block expands beyond 32 KiB",
+                )
+            raise CompactCodecError(
+                "compact_codec_malformed", "MSZIP block is truncated",
+                offset=cursor,
             )
         if len(output) + len(block) > max_output_bytes:
             raise CompactCodecError(
@@ -192,11 +213,6 @@ def _zlib_mszip_decompress(data: bytes, *, max_output_bytes: int) -> bytes:
                 "compact_codec_malformed", "MSZIP decoder made no progress"
             )
         cursor += consumed
-        if not decompressor.eof:
-            raise CompactCodecError(
-                "compact_codec_malformed", "MSZIP block is truncated",
-                offset=cursor,
-            )
     return bytes(output)
 
 
@@ -892,12 +908,39 @@ def select_player_codec(
             )
         )
     selected = min(candidates, key=lambda item: (len(item.bytes), item.codec_id))
+    stored_bytes = len(candidates[0].bytes)
+    rows: list[dict[str, Any]] = []
+    for item in candidates:
+        row = item.to_dict()
+        row["selected"] = item is selected
+        row["rejection_reasons"] = (
+            []
+            if item is selected
+            else ["larger_complete_encoded_container"]
+        )
+        row["measurements"] = _structural_measurements(
+            before_bytes=stored_bytes,
+            after_bytes=len(item.bytes),
+            bytes_status="measured_complete_encoded_container_bytes",
+            numeric_error=0.0,
+            numeric_status="measured_lossless_container_round_trip",
+            lossless=True,
+        )
+        rows.append(row)
     return {
         "selected": selected.to_dict(),
         "selected_codec_id": selected.codec_id,
-        "candidates": [item.to_dict() for item in candidates],
+        "candidates": rows,
         "compression_increases_distribution": (
             len(selected.bytes) > len(canonical_package)
+        ),
+        "measurements": _structural_measurements(
+            before_bytes=stored_bytes,
+            after_bytes=len(selected.bytes),
+            bytes_status="measured_complete_encoded_container_bytes",
+            numeric_error=0.0,
+            numeric_status="measured_lossless_container_round_trip",
+            lossless=True,
         ),
     }
 
@@ -911,29 +954,62 @@ def measure_candidate_compression(container: bytes) -> list[dict[str, Any]]:
         ("candidate.lzma", lzma.compress(container, preset=9)),
         (contract.CODEC_MSZIP_ID, mszip_compress(container)),
     ]
-    return [
-        {
-            "codec": name,
-            "payload_bytes": len(payload),
-            "complete_container_bytes": HEADER_SIZE + len(payload),
-            "player_supported": name in contract.PLAYER_SUPPORTED_CODEC_IDS,
-            "encoding_id": (
-                MSZIP_ENCODING_ID
-                if name == contract.CODEC_MSZIP_ID
-                else (
-                    "nwc.codec.stored.v1"
-                    if name == contract.CODEC_STORED_ID
-                    else f"{name}.v1"
-                )
-            ),
-            "deterministic": name in {
-                contract.CODEC_STORED_ID,
-                contract.CODEC_MSZIP_ID,
-                "candidate.zlib.raw",
-            },
-        }
-        for name, payload in options
-    ]
+    stored_complete = HEADER_SIZE + len(container)
+    rows: list[dict[str, Any]] = []
+    for name, payload in options:
+        complete = HEADER_SIZE + len(payload)
+        player_supported = name in contract.PLAYER_SUPPORTED_CODEC_IDS
+        rejection_reasons: list[str] = []
+        if not player_supported:
+            rejection_reasons.append(
+                "no_measured_player_decoder_or_dependency_closure"
+            )
+        if complete > stored_complete:
+            rejection_reasons.append("increases_complete_distribution_bytes")
+        rows.append(
+            {
+                "codec": name,
+                "payload_bytes": len(payload),
+                "complete_container_bytes": complete,
+                "player_supported": player_supported,
+                "encoding_id": (
+                    MSZIP_ENCODING_ID
+                    if name == contract.CODEC_MSZIP_ID
+                    else (
+                        "nwc.codec.stored.v1"
+                        if name == contract.CODEC_STORED_ID
+                        else f"{name}.v1"
+                    )
+                ),
+                "deterministic": name in {
+                    contract.CODEC_STORED_ID,
+                    contract.CODEC_MSZIP_ID,
+                    "candidate.zlib.raw",
+                },
+                "decoder_dependency": (
+                    "cabinet.dll"
+                    if name == contract.CODEC_MSZIP_ID
+                    else None
+                ),
+                "rejection_reasons": rejection_reasons,
+                "measurements": _structural_measurements(
+                    before_bytes=stored_complete,
+                    after_bytes=complete,
+                    bytes_status="measured_complete_container_bytes",
+                    numeric_error=0.0,
+                    numeric_status="measured_lossless_container_round_trip",
+                    lossless=True,
+                ),
+            }
+        )
+    player_rows = [row for row in rows if row["player_supported"]]
+    selected = min(
+        player_rows,
+        key=lambda row: (row["complete_container_bytes"], row["codec"]),
+    )
+    for row in rows:
+        row["selected"] = row is selected
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +1029,156 @@ def _varint(value: int) -> bytes:
         else:
             output.append(byte)
             return bytes(output)
+
+
+def _pending_metric(reason: str) -> dict[str, Any]:
+    return {
+        "before": None,
+        "after": None,
+        "status": "pending_physical_windows_capture",
+        "reason": reason,
+    }
+
+
+def pending_optimization_measurements(
+    *,
+    reason: str = (
+        "Physical startup, memory, frame-time, and image-error measurements "
+        "require the exact Windows x64 artifact under the frozen "
+        "nw07_perf_ref_v1 protocol."
+    ),
+) -> dict[str, Any]:
+    """Explicit pending per-optimization measurements.
+
+    Every optimizations record carries the same before/after fields even when
+    only structural byte measurements are available.  Missing physical values
+    are marked pending rather than omitted.
+    """
+    return {
+        "distribution_bytes": _pending_metric(reason),
+        "startup_ms": _pending_metric(reason),
+        "memory_bytes": _pending_metric(reason),
+        "frame_time_ms": _pending_metric(reason),
+        "visual_error": {
+            "numeric_absolute": _pending_metric(reason),
+            "numeric_relative": _pending_metric(reason),
+            "image_absolute": _pending_metric(reason),
+            "image_relative": _pending_metric(reason),
+        },
+        "measurement_protocol": {
+            "performance_contract": contract.PERF_CONTRACT_ID,
+            "performance_protocol": contract.PERF_PROTOCOL_ID,
+            "reference_id": contract.PERF_CONTRACT_ID,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": None,
+            "matching_keys": None,
+            "artifact_sha256": None,
+            "provenance": None,
+            "result_status": "pending_physical_windows_capture",
+            "warmup_seconds": contract.WARMUP_SECONDS,
+            "runs": contract.PERF_RUN_COUNT,
+            "run_seconds": contract.PERF_RUN_SECONDS,
+            "fresh_process_per_run": True,
+            "application_pipeline_cache": False,
+        },
+    }
+
+
+def _structural_measurements(
+    *,
+    before_bytes: int | None,
+    after_bytes: int | None,
+    bytes_status: str,
+    numeric_error: float | None = None,
+    numeric_status: str = "pending_physical_windows_capture",
+    lossless: bool | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    base = pending_optimization_measurements(
+        reason=reason
+        or (
+            "Distribution bytes are measured structurally; startup, memory, "
+            "frame-time, and image error remain pending physical Windows "
+            "capture."
+        )
+    )
+    base["distribution_bytes"] = {
+        "before": before_bytes,
+        "after": after_bytes,
+        "status": bytes_status,
+    }
+    if numeric_error is not None:
+        base["visual_error"]["numeric_absolute"] = {
+            "before": 0.0,
+            "after": float(numeric_error),
+            "status": numeric_status,
+        }
+    if lossless is not None:
+        base["visual_error"]["numeric_relative"] = {
+            "before": 0.0,
+            "after": 0.0 if lossless else None,
+            "status": (
+                "measured_lossless_round_trip"
+                if lossless
+                else "pending_physical_windows_capture"
+            ),
+        }
+    return base
+
+
+_FLOAT_PARAMETER_TYPES = {"float", "float2", "float3", "float4"}
+
+
+def _quantized_parameter_value(
+    parameter: nwp.ParameterRecord, value_encoding: str
+) -> tuple[bytes, float, int, int]:
+    """Quantize only declared floating-point components.
+
+    Unsigned parameters (width, height, seeds, tick counters, ...) are not
+    IEEE floats.  Reinterpreting their bit patterns as float32 produces
+    meaningless errors, so non-float parameters are preserved byte-for-byte
+    and reported as preserved components.
+    """
+    value = parameter.value
+    component_count = int(parameter.component_count)
+    if value_encoding == "canonical":
+        # Canonical encoding preserves every component byte-for-byte.  Only
+        # non-float components are counted in the corruption audit because
+        # float components are quantized by the other encodings.
+        preserved = component_count if parameter.type == "uint" else 0
+        return value, 0.0, 0, max(preserved, 0)
+    if component_count <= 0 or len(value) != component_count * 4:
+        raise ValueError(
+            "parameter payload is not aligned to the declared component count"
+        )
+    if parameter.type == "uint":
+        return value, 0.0, 0, component_count
+    if parameter.type not in _FLOAT_PARAMETER_TYPES:
+        raise ValueError(
+            f"unsupported parameter type for quantized packing: {parameter.type}"
+        )
+    floats = struct.unpack("<" + "f" * component_count, value)
+    encoded = bytearray()
+    maximum_error = 0.0
+    for item in floats:
+        if value_encoding == "f16":
+            try:
+                packed_value = struct.pack("<e", item)
+            except OverflowError:
+                packed_value = struct.pack("<e", math.copysign(65504.0, item))
+            restored = struct.unpack("<e", packed_value)[0]
+            maximum_error = max(maximum_error, abs(restored - item))
+            encoded += packed_value
+        elif value_encoding == "q16":
+            # Signed normalized 16-bit fixed point in [-8, 8].
+            step = 16.0 / 65535.0
+            quantized = round(max(-8.0, min(8.0, item)) / step)
+            restored = quantized * step
+            maximum_error = max(maximum_error, abs(restored - item))
+            encoded += struct.pack("<h", int(max(-32767, min(32767, quantized))))
+        else:
+            raise ValueError(f"unsupported parameter value encoding: {value_encoding}")
+    return bytes(encoded), maximum_error, component_count, 0
 
 
 def _parameter_layout_size(
@@ -981,6 +1207,9 @@ def _parameter_layout_size(
             packed += _varint(len(encoded)) + encoded
     previous_id = 0
     maximum_error = 0.0
+    quantized_components = 0
+    preserved_non_float_components = 0
+    non_float_components = 0
     for parameter in parameters:
         packed += _varint(parameter.parameter_id - previous_id)
         previous_id = parameter.parameter_id
@@ -988,35 +1217,14 @@ def _parameter_layout_size(
         packed += _varint(type_index[parameter.type])
         packed += _varint(phase_index[parameter.phase])
         packed += _varint(parameter.component_count)
-        value = parameter.value
-        if value_encoding != "canonical":
-            if len(value) % 4 != 0:
-                raise ValueError("float parameter payload is not aligned to float32")
-            floats = struct.unpack("<" + "f" * (len(value) // 4), value)
-            encoded = bytearray()
-            for item in floats:
-                if value_encoding == "f16":
-                    try:
-                        packed_value = struct.pack("<e", item)
-                    except OverflowError:
-                        packed_value = struct.pack(
-                            "<e", math.copysign(65504.0, item)
-                        )
-                    restored = struct.unpack("<e", packed_value)[0]
-                    maximum_error = max(maximum_error, abs(restored - item))
-                    encoded += packed_value
-                elif value_encoding == "q16":
-                    # Signed normalized 16-bit fixed point in [-8, 8].
-                    step = 16.0 / 65535.0
-                    quantized = round(max(-8.0, min(8.0, item)) / step)
-                    restored = quantized * step
-                    maximum_error = max(maximum_error, abs(restored - item))
-                    encoded += struct.pack(
-                        "<h", int(max(-32767, min(32767, quantized)))
-                    )
-                else:
-                    encoded += struct.pack("<f", item)
-            value = bytes(encoded)
+        value, parameter_error, quantized, preserved = _quantized_parameter_value(
+            parameter, value_encoding
+        )
+        maximum_error = max(maximum_error, parameter_error)
+        quantized_components += quantized
+        preserved_non_float_components += preserved
+        if parameter.type == "uint":
+            non_float_components += int(parameter.component_count)
         packed += _varint(len(value)) + value
         packed += _varint(parameter.timeline_start_frame)
         packed += _varint(parameter.timeline_end_frame)
@@ -1047,6 +1255,12 @@ def _parameter_layout_size(
         "maximum_absolute_error": maximum_error,
         "within_numeric_tolerance": maximum_error <= contract.NUMERIC_ABSOLUTE_TOLERANCE,
         "value_encoding": value_encoding,
+        "quantized_components": quantized_components,
+        "preserved_non_float_components": preserved_non_float_components,
+        "non_float_components": non_float_components,
+        "non_float_components_preserved": (
+            preserved_non_float_components == non_float_components
+        ),
     }
 
 
@@ -1064,11 +1278,37 @@ def measure_parameter_packing(package: nwp.NwpPackage) -> dict[str, Any]:
         (contract.PARAM_LAYOUT_F16_ID, f16),
         (contract.PARAM_LAYOUT_Q16_ID, q16),
     ):
+        adopted = identifier == contract.PARAM_LAYOUT_CANONICAL_ID
+        rejection_reasons: list[str] = []
+        if not adopted and result["delta_bytes"] >= 0:
+            rejection_reasons.append("no_measured_byte_benefit")
+        if not result["within_numeric_tolerance"]:
+            rejection_reasons.append("numeric_tolerance_exceeded")
+        if not result["non_float_components_preserved"]:
+            rejection_reasons.append("non_float_parameter_corruption")
         alternatives.append(
             {
                 "parameter_layout_id": identifier,
                 **result,
-                "adopted": False,
+                "adopted": adopted,
+                "rejection_reasons": rejection_reasons,
+                "measurements": _structural_measurements(
+                    before_bytes=canonical["canonical_bytes"],
+                    after_bytes=result["packed_bytes"],
+                    bytes_status=(
+                        "measured_parameter_payload_bytes_not_integrated"
+                        if not adopted
+                        else "measured_parameter_payload_bytes_current"
+                    ),
+                    numeric_error=result["maximum_absolute_error"],
+                    numeric_status="measured_parameter_quantization_round_trip",
+                    lossless=result["maximum_absolute_error"] == 0.0,
+                    reason=(
+                        "Parameter payload bytes are measured structurally. "
+                        "Startup, memory, frame-time, and image error remain "
+                        "pending until a decoder adopts this layout."
+                    ),
+                ),
             }
         )
     # Only a packing mode with a measured byte benefit and tolerance compliance
@@ -1078,18 +1318,42 @@ def measure_parameter_packing(package: nwp.NwpPackage) -> dict[str, Any]:
     eligible = [
         item
         for item in alternatives
-        if item["delta_bytes"] < 0 and item["within_numeric_tolerance"]
+        if not item["adopted"]
+        and item["delta_bytes"] < 0
+        and item["within_numeric_tolerance"]
+        and item["non_float_components_preserved"]
     ]
     return {
         "alternatives": alternatives,
         "eligible": eligible,
         "selected": contract.PARAM_LAYOUT_CANONICAL_ID,
+        "selected_parameter_layout_id": contract.PARAM_LAYOUT_CANONICAL_ID,
         "adoption_status": (
             "eligible_but_not_integrated"
             if eligible
             else "no_eligible_layout"
         ),
         "declared_tolerance": contract.image_tolerances()["numeric"],
+        "quantization_tolerances": {
+            "numeric_absolute": contract.NUMERIC_ABSOLUTE_TOLERANCE,
+            "numeric_relative": contract.NUMERIC_RELATIVE_TOLERANCE,
+            "image_absolute": contract.IMAGE_ABSOLUTE_TOLERANCE,
+            "image_relative": contract.IMAGE_RELATIVE_TOLERANCE,
+        },
+        "non_float_parameters_preserved": all(
+            item["non_float_components_preserved"] for item in alternatives
+        ),
+        "measurements": _structural_measurements(
+            before_bytes=canonical["canonical_bytes"],
+            after_bytes=min(
+                item["packed_bytes"] for item in alternatives
+            ),
+            bytes_status="measured_parameter_payload_bytes_not_integrated",
+            reason=(
+                "Best measured parameter payload is structural only; the "
+                "complete distribution and physical metrics remain pending."
+            ),
+        ),
     }
 
 
@@ -1105,7 +1369,7 @@ def measure_delta_references(canonical_package: bytes) -> dict[str, Any]:
     aos_stored = HEADER_SIZE + 4 + len(stored) * RECORD_AOS_SIZE + stored_raw
     aos_delta = HEADER_SIZE + 4 + len(delta) * RECORD_AOS_SIZE + delta_raw
     soa_delta = HEADER_SIZE + 4 + len(delta) * RECORD_SOA_COLUMNS + delta_raw
-    return {
+    result = {
         "chunk_size": DEFAULT_CHUNK_SIZE,
         "raw_records": len(stored),
         "delta_records": len(delta),
@@ -1116,21 +1380,99 @@ def measure_delta_references(canonical_package: bytes) -> dict[str, Any]:
         "soa_with_references_bytes": soa_delta,
         "delta_complete_bytes_saved": aos_stored - aos_delta,
         "layout_advantage_soa_over_aos_bytes": aos_delta - soa_delta,
+        "adopted": True,
+        "adopted_reference_mode": "backward_delta_references",
+        "measurements": _structural_measurements(
+            before_bytes=aos_stored,
+            after_bytes=aos_delta,
+            bytes_status="measured_complete_container_bytes",
+            numeric_error=0.0,
+            numeric_status="measured_lossless_container_round_trip",
+            lossless=True,
+        ),
     }
+    return result
 
 
-def measure_layouts(canonical_package: bytes) -> dict[str, Any]:
+def measure_layouts(
+    canonical_package: bytes,
+    *,
+    codec_ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Measure AoS/SoA/canonical record layouts under every player codec.
+
+    The canonical evidence selects a layout and then encodes the container
+    with MSZIP.  Measuring layouts under stored bytes only would therefore
+    select on the wrong cost model, so both player-supported codecs are
+    measured and selection uses the complete encoded container.
+    """
+    codecs = tuple(codec_ids or contract.PLAYER_SUPPORTED_CODEC_IDS)
     results: list[dict[str, Any]] = []
-    for layout_id in (contract.LAYOUT_CANONICAL_ID, contract.LAYOUT_AOS_ID, contract.LAYOUT_SOA_ID):
-        encoded = encode_compact(
-            canonical_package,
-            codec_id=contract.CODEC_STORED_ID,
-            layout_id=layout_id,
-            delta_references=True,
+    for codec_id in codecs:
+        for layout_id in (
+            contract.LAYOUT_CANONICAL_ID,
+            contract.LAYOUT_AOS_ID,
+            contract.LAYOUT_SOA_ID,
+        ):
+            encoded = encode_compact(
+                canonical_package,
+                codec_id=codec_id,
+                layout_id=layout_id,
+                delta_references=True,
+            )
+            row = encoded.to_dict()
+            row["codec_id"] = codec_id
+            row["layout_id"] = layout_id
+            results.append(row)
+    baseline_by_codec = {
+        row["codec_id"]: row
+        for row in results
+        if row["layout_id"] == contract.LAYOUT_CANONICAL_ID
+    }
+    for row in results:
+        baseline = baseline_by_codec[row["codec_id"]]
+        row["measurements"] = _structural_measurements(
+            before_bytes=baseline["encoded_bytes"],
+            after_bytes=row["encoded_bytes"],
+            bytes_status="measured_encoded_payload_plus_container_header",
+            numeric_error=0.0,
+            numeric_status="measured_lossless_container_round_trip",
+            lossless=True,
         )
-        results.append(encoded.to_dict())
-    smallest = min(results, key=lambda item: (item["encoded_bytes"], item["layout_id"]))
-    return {"alternatives": results, "selected": smallest["layout_id"]}
+    selected_by_codec: dict[str, str] = {}
+    for codec_id in codecs:
+        rows = [row for row in results if row["codec_id"] == codec_id]
+        selected_by_codec[codec_id] = min(
+            rows, key=lambda item: (item["encoded_bytes"], item["layout_id"])
+        )["layout_id"]
+    smallest = min(
+        results,
+        key=lambda item: (
+            item["encoded_bytes"],
+            item["codec_id"],
+            item["layout_id"],
+        ),
+    )
+    return {
+        "alternatives": results,
+        "selected": smallest["layout_id"],
+        "selected_layout_id": smallest["layout_id"],
+        "selected_codec_id": smallest["codec_id"],
+        "selected_by_codec": selected_by_codec,
+        "measured_codec_ids": list(codecs),
+        "selection_basis": (
+            "minimum complete encoded container bytes across measured "
+            "player-supported codecs and layouts"
+        ),
+        "measurements": _structural_measurements(
+            before_bytes=baseline_by_codec[smallest["codec_id"]]["encoded_bytes"],
+            after_bytes=smallest["encoded_bytes"],
+            bytes_status="measured_encoded_payload_plus_container_header",
+            numeric_error=0.0,
+            numeric_status="measured_lossless_container_round_trip",
+            lossless=True,
+        ),
+    }
 
 
 def measure_shader_specialization(package: nwp.NwpPackage) -> dict[str, Any]:
@@ -1143,6 +1485,70 @@ def measure_shader_specialization(package: nwp.NwpPackage) -> dict[str, Any]:
     )
     root_blobs = [bytes(record.blob) for record in package.root_signatures]
     unique_roots: set[bytes] = set(root_blobs)
+    shader_bytes = sum(len(blob) for blob in blobs)
+    unique_shader_bytes = sum(len(blob) for blob in unique)
+    root_signature_bytes = sum(len(blob) for blob in root_blobs)
+    unique_root_signature_bytes = sum(len(blob) for blob in unique_roots)
+    alternatives = [
+        {
+            "id": "nw05_fused_offline_specializations",
+            "adopted": True,
+            "status": "measured_package_bytes",
+            "shader_count": len(blobs),
+            "unique_shader_blobs": len(unique),
+            "shader_bytes": shader_bytes,
+            "root_signature_bytes": root_signature_bytes,
+            "specialization_ids": sorted(
+                str(shader.entry_point) for shader in package.shaders
+            ),
+            "measurements": _structural_measurements(
+                before_bytes=shader_bytes + root_signature_bytes,
+                after_bytes=shader_bytes + root_signature_bytes,
+                bytes_status="measured_package_shader_and_root_signature_bytes",
+            ),
+        },
+        {
+            "id": "deduplicate_identical_shader_blobs",
+            "adopted": False,
+            "status": "measured_bytes_not_integrated",
+            "shader_count": len(blobs),
+            "unique_shader_blobs": len(unique),
+            "shader_bytes": unique_shader_bytes,
+            "root_signature_bytes": unique_root_signature_bytes,
+            "delta_bytes": (
+                unique_shader_bytes
+                + unique_root_signature_bytes
+                - shader_bytes
+                - root_signature_bytes
+            ),
+            "requires_package_shader_identity_change": True,
+            "rejection_reasons": [
+                "requires_package_shader_record_identity_rewrite"
+            ],
+            "measurements": _structural_measurements(
+                before_bytes=shader_bytes + root_signature_bytes,
+                after_bytes=unique_shader_bytes + unique_root_signature_bytes,
+                bytes_status="measured_package_shader_and_root_signature_bytes",
+            ),
+        },
+        {
+            "id": "unfused_generic_shaders",
+            "adopted": False,
+            "status": "not_measured_missing_unfused_fixture",
+            "shader_bytes": None,
+            "root_signature_bytes": None,
+            "rejection_reasons": [
+                "no_unfused_shader_fixture_from_the_pinned_offline_exporter"
+            ],
+            "measurements": pending_optimization_measurements(
+                reason=(
+                    "The pinned offline exporter emits fused SDF "
+                    "specializations only; no unfused shader fixture exists "
+                    "to measure this alternative."
+                )
+            ),
+        },
+    ]
     return {
         "shader_count": len(blobs),
         "unique_shader_blobs": len(unique),
@@ -1154,7 +1560,17 @@ def measure_shader_specialization(package: nwp.NwpPackage) -> dict[str, Any]:
         )
         - sum(len(blob) for blob in unique_roots),
         "fusion": "established NW-05 fusion decisions preserved; no unmeasured extra fusion applied",
+        "fusion_decisions_preserved_from": "NW-05 offline shader exporter",
+        "specialization_ids": sorted(
+            str(shader.entry_point) for shader in package.shaders
+        ),
+        "specialization_alternatives": alternatives,
         "requires_new_shader_semantics": False,
+        "measurements": _structural_measurements(
+            before_bytes=shader_bytes + root_signature_bytes,
+            after_bytes=shader_bytes + root_signature_bytes,
+            bytes_status="measured_package_shader_and_root_signature_bytes",
+        ),
     }
 
 
@@ -1469,6 +1885,19 @@ def artifact_ledger(
         layout_id=contract.LAYOUT_AOS_ID,
         delta_references=True,
     )
+    raw_dependencies = manifest.get("retained", {}).get("dependencies", [])
+    dependencies: list[dict[str, Any]] = []
+    for item in raw_dependencies:
+        if isinstance(item, Mapping):
+            dependencies.append(dict(item))
+        else:
+            dependencies.append(
+                {
+                    "name": str(item),
+                    "kind": "windows_inbox",
+                    "distributed_bytes": 0,
+                }
+            )
     return build_byte_ledger(
         artifact_kind="canonical_nw07_proof"
         if "nw07" in artifact_directory.__str__()
@@ -1480,7 +1909,7 @@ def artifact_ledger(
         decoder_code_bytes=decoder_code_bytes,
         shader_bytes=shader_bytes,
         auxiliary_files=auxiliary,
-        dependencies=list(manifest.get("retained", {}).get("dependencies", [])),
+        dependencies=dependencies,
         evidence_status=evidence_status,
     )
 
@@ -1506,24 +1935,38 @@ def comprehensive_measurement(
     decoder_code_bytes: int | None = None,
 ) -> dict[str, Any]:
     package = nwp.decode_package(package_bytes, allow_dev=False)
+    layout_selection = measure_layouts(package_bytes)
+    layout_id = str(layout_selection["selected_layout_id"])
+    layout = LAYOUT_IDS[layout_id]
     records, _references = _chunk_records(
         package_bytes, chunk_size=DEFAULT_CHUNK_SIZE, delta_references=True
     )
     container = (
         struct.pack("<I", len(records))
-        + _encode_table(records, LAYOUT_AOS)
+        + _encode_table(records, layout)
         + b"".join(
             record.data for record in records if record.kind == RECORD_RAW
         )
     )
     codec_selection = select_player_codec(
-        package_bytes, layout_id=contract.LAYOUT_AOS_ID, delta_references=True
+        package_bytes, layout_id=layout_id, delta_references=True
     )
+    parameter_packing = measure_parameter_packing(package)
+    delta_references = measure_delta_references(package_bytes)
+    shaders = measure_shader_specialization(package)
+    compression_candidates = measure_candidate_compression(container)
     return {
         "package": package_summary(package_bytes),
         "measurement_protocol": {
             "performance_contract": contract.PERF_CONTRACT_ID,
             "performance_protocol": contract.PERF_PROTOCOL_ID,
+            "reference_id": contract.PERF_CONTRACT_ID,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": None,
+            "matching_keys": None,
+            "artifact_sha256": None,
+            "provenance": None,
+            "result_status": "pending_physical_windows_capture",
             "warmup_seconds": contract.WARMUP_SECONDS,
             "runs": contract.PERF_RUN_COUNT,
             "run_seconds": contract.PERF_RUN_SECONDS,
@@ -1532,6 +1975,15 @@ def comprehensive_measurement(
             "status": "pending_physical_windows_capture",
         },
         "physical_evidence": {
+            "performance_contract": contract.PERF_CONTRACT_ID,
+            "performance_protocol": contract.PERF_PROTOCOL_ID,
+            "reference_id": contract.PERF_CONTRACT_ID,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": None,
+            "matching_keys": None,
+            "artifact_sha256": None,
+            "provenance": None,
+            "result_status": "pending_physical_windows_capture",
             "startup_ms": None,
             "startup_decode_memory_bytes": None,
             "peak_engine_committed_gpu_bytes": None,
@@ -1549,12 +2001,39 @@ def comprehensive_measurement(
                 "the frozen nw07_perf_ref_v1 capture environment."
             ),
         },
-        "parameter_packing": measure_parameter_packing(package),
-        "delta_references": measure_delta_references(package_bytes),
-        "layouts": measure_layouts(package_bytes),
-        "shaders": measure_shader_specialization(package),
-        "compression_candidates": measure_candidate_compression(container),
+        "parameter_packing": parameter_packing,
+        "delta_references": delta_references,
+        "layouts": layout_selection,
+        "shaders": shaders,
+        "compression_candidates": compression_candidates,
         "selected_codec": codec_selection,
+        "selected_layout_id": layout_id,
+        "selected_codec_id": codec_selection["selected_codec_id"],
+        "optimizations": {
+            "parameter_packing": parameter_packing["measurements"],
+            "delta_references": delta_references["measurements"],
+            "layouts": layout_selection["measurements"],
+            "shader_specialization_fusion": shaders["measurements"],
+            "compression": {
+                row["codec"]: row["measurements"]
+                for row in compression_candidates
+            },
+            "linker_elimination": pending_optimization_measurements(
+                reason=(
+                    "Exact release-PE section and symbol elimination bytes "
+                    "are measured by tools/nw10_pe_ledger.py on the Windows "
+                    "artifact; startup, memory, frame-time, and visual error "
+                    "remain pending physical capture."
+                )
+            ),
+            "crt_free_startup": pending_optimization_measurements(
+                reason=(
+                    "CRT-free startup was not pursued because no measured "
+                    "complete-distribution benefit exists and compiler-helper "
+                    "and initialization correctness are unproven."
+                )
+            ),
+        },
         "decoder_code_bytes": decoder_code_bytes,
         "decoder_code_status": (
             "host_proxy_measurement" if decoder_code_bytes is not None else "pending_physical_windows"

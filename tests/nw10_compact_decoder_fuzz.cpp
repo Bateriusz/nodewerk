@@ -338,6 +338,36 @@ void RunMutationFuzz(Failures* failures, const Bytes& canonical,
     }
 }
 
+void RunMszipCorruptionSuite(Failures* failures, const Bytes& valid) {
+    const std::size_t header = nw::package::kCompactHeaderSize;
+    if (valid.size() <= header + 2u) {
+        failures->Fail("MSZIP fixture is too small for corruption coverage");
+        return;
+    }
+
+    Bytes bad = valid;
+    bad[header] = static_cast<std::uint8_t>('X');
+    ExpectFailure(failures, bad, "MSZIP missing CK signature accepted");
+
+    bad = valid;
+    bad[header + 2u] ^= 0x5Au;
+    ExpectFailure(failures, bad, "corrupted MSZIP deflate stream accepted");
+
+    bad = valid;
+    bad[24] ^= 0x01u;
+    ExpectFailure(failures, bad, "MSZIP payload size mismatch accepted");
+
+    bad = valid;
+    bad[32] ^= 0xFFu;
+    ExpectFailure(failures, bad, "MSZIP checksum mismatch accepted");
+
+    for (std::size_t offset = header + 1u; offset < valid.size(); offset += 5u) {
+        Bytes truncated(valid.begin(),
+                        valid.begin() + static_cast<std::ptrdiff_t>(offset));
+        ExpectFailure(failures, truncated, "truncated MSZIP container accepted");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -368,6 +398,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "MSZIP decoder error: %s\n", error.c_str());
         failures.Fail("python MSZIP container did not decode identically");
     }
+    RunMszipCorruptionSuite(&failures, mszip);
+    RunMutationFuzz(&failures, canonical, mszip);
 #endif
     RunMalformedSuite(&failures, canonical);
     RunMutationFuzz(&failures, canonical, stored);

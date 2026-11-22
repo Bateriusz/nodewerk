@@ -189,6 +189,69 @@
         }
       }
     },
+    "certification": {
+      "type": "object",
+      "required": [
+        "status",
+        "decoded_package_identity",
+        "all_required_bytes_accounted",
+        "dependency_closure",
+        "pe_ledger_binding",
+        "clean_system",
+        "startup",
+        "memory",
+        "performance",
+        "visual"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "pending",
+            "failed"
+          ]
+        },
+        "decoded_package_identity": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "all_required_bytes_accounted": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "dependency_closure": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "pe_ledger_binding": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "clean_system": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "startup": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "memory": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "performance": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "visual": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "failed_gates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pending_gates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "canonical_fallback": {
       "type": "object",
       "required": [
@@ -419,5 +482,130 @@
         }
       }
     }
-  }
+  },
+  "$defs": {
+    "certificationGate": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "pending",
+            "failed"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "target_met": {
+            "const": true
+          }
+        },
+        "required": [
+          "target_met"
+        ]
+      },
+      "then": {
+        "required": [
+          "certification"
+        ],
+        "properties": {
+          "certification": {
+            "required": [
+              "status",
+              "decoded_package_identity",
+              "all_required_bytes_accounted",
+              "dependency_closure",
+              "pe_ledger_binding",
+              "clean_system",
+              "startup",
+              "memory",
+              "performance",
+              "visual"
+            ],
+            "properties": {
+              "status": {
+                "const": "verified"
+              },
+              "decoded_package_identity": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "all_required_bytes_accounted": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "dependency_closure": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "pe_ledger_binding": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "clean_system": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "startup": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "memory": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "performance": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "visual": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

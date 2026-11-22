@@ -7,6 +7,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,51 @@ def test_windows_mszip_dispatches_to_inbox_codec(monkeypatch: pytest.MonkeyPatch
     encoded = compact.mszip_compress(b"payload")
     assert encoded == b"native:payload"
     assert compact.mszip_decompress(encoded, max_output_bytes=7) == b"payload"
+
+
+def test_mszip_reference_decoder_rejects_malformed_truncated_corrupt_and_expansion() -> None:
+    if sys.platform == "win32":
+        pytest.skip("portable CK reference decoder is exercised on non-Windows hosts")
+    payload = bytes((index * 131 + 7) & 0xFF for index in range(70_000))
+    encoded = compact._zlib_mszip_compress(payload)
+    assert compact._zlib_mszip_decompress(
+        encoded, max_output_bytes=len(payload)
+    ) == payload
+
+    with pytest.raises(compact.CompactCodecError) as caught:
+        compact._zlib_mszip_decompress(
+            b"XX" + encoded[2:], max_output_bytes=len(payload)
+        )
+    assert caught.value.code == "compact_codec_malformed"
+
+    with pytest.raises(compact.CompactCodecError) as caught:
+        compact._zlib_mszip_decompress(
+            encoded[: len(encoded) // 2], max_output_bytes=len(payload)
+        )
+    assert caught.value.code in {
+        "compact_codec_malformed",
+        "compact_decode_limit",
+    }
+
+    corrupted = bytearray(encoded)
+    corrupted[3] ^= 0xFF
+    with pytest.raises(compact.CompactCodecError) as caught:
+        compact._zlib_mszip_decompress(
+            bytes(corrupted), max_output_bytes=len(payload)
+        )
+    assert caught.value.code == "compact_codec_malformed"
+
+    compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
+    bomb = (
+        b"CK"
+        + compressor.compress(b"\x00" * (compact.MSZIP_BLOCK_BYTES + 1))
+        + compressor.flush()
+    )
+    with pytest.raises(compact.CompactCodecError) as caught:
+        compact._zlib_mszip_decompress(
+            bomb, max_output_bytes=compact.MSZIP_BLOCK_BYTES + 1
+        )
+    assert caught.value.code == "compact_decode_limit"
 
 
 def _stored_container_with_table(

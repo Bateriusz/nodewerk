@@ -16,6 +16,7 @@
   },
   "audio": false,
   "capture_protocol": "nw07-correctness-capture.v1",
+  "codec_id": "nwc.codec.mszip.v1",
   "evidence_status": "informational_contract_only",
   "external_assets": false,
   "features": [
@@ -35,6 +36,7 @@
   "hardware_ray_tracing_required": false,
   "height": 1080,
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+  "layout_id": "nwc.layout.soa.v1",
   "ledger": {
     "all_required_bytes_accounted": false,
     "artifact_kind": "restricted_intro",
@@ -122,7 +124,7 @@
     "layout_id": "nwc.layout.soa.v1",
     "packaging_tool": {
       "identity": "tools/nw10_compact.py",
-      "version": "12903559ce0241846c38f73e76bcd8ddd6eaa1a05c86e91594707b469068ce42"
+      "version": "5e5bada9ce5ff5907c35c81aba0ad88110a73176885a19e5dc54fb02e3f04a10"
     },
     "selected_executable_bytes": 2090,
     "task": "NW-10",
@@ -157,6 +159,16 @@
     "nw.shader.expr",
     "nw.texture.procedural"
   ],
+  "packaging_tool": {
+    "identity": "tools/nw10_compact.py",
+    "version": "5e5bada9ce5ff5907c35c81aba0ad88110a73176885a19e5dc54fb02e3f04a10"
+  },
+  "parameter_quantization_tolerances": {
+    "image_absolute": 0.0001,
+    "image_relative": 0.0001,
+    "numeric_absolute": 1e-05,
+    "numeric_relative": 0.0001
+  },
   "performance_contract": "nw07_perf_ref_v1",
   "performance_protocol": "nw07-perf-run.v1",
   "physical_measurements": "pending_physical_windows_capture",

@@ -48,7 +48,9 @@ def _intro() -> dict:
             "executable_bytes": 240_000,
             "executable_sha256": "b" * 64,
             "package_sha256": "c" * 64,
+            "package_bytes": 4_000,
             "manifest_sha256": "d" * 64,
+            "manifest_bytes": 6_000,
         },
         "compact_artifact": {
             "executable_bytes": 65_000,
@@ -56,6 +58,129 @@ def _intro() -> dict:
             "selected_executable_bytes": 65_000,
             "selected_executable_sha256": "e" * 64,
             "selected_mode": "compact",
+            "decoded_package_sha256": "c" * 64,
+            "decoded_package_bytes": 4_000,
+            "encoded_package_bytes": 1_700,
+            "encoded_package_sha256": "f" * 64,
+            "codec_id": "nwc.codec.mszip.v1",
+            "layout_id": "nwc.layout.soa.v1",
+        },
+        "ledgers": {
+            "canonical": {
+                "all_required_bytes_accounted": True,
+                "dependencies": [
+                    {"name": "d3d12", "kind": "windows_inbox", "distributed_bytes": 0}
+                ],
+            },
+            "compact": {
+                "all_required_bytes_accounted": False,
+                "unaccounted_components": ["decoder_code_bytes"],
+                "components": {"decoder_code_bytes": None},
+                "required_auxiliary_files": {},
+                "dependencies": [
+                    {
+                        "name": "cabinet.dll",
+                        "kind": "windows_inbox",
+                        "distributed_bytes": 0,
+                    },
+                    {
+                        "name": "d3d12",
+                        "kind": "windows_inbox",
+                        "distributed_bytes": 0,
+                    },
+                ],
+                "complete_runnable_distribution_bytes": 65_000,
+            },
+        },
+        "visual_validation": {
+            "status": "verified",
+            "numeric_absolute": 0.0,
+            "image_absolute": 0.0,
+        },
+    }
+
+
+def _pe_ledger() -> dict:
+    return {
+        "format": "nw10-windows-pe-ledger",
+        "version": 1,
+        "task": "NW-10",
+        "final_artifact": {
+            "executable_sha256": "e" * 64,
+            "executable_bytes": 65_000,
+            "package_sha256": "c" * 64,
+            "package_binding_verified": True,
+            "manifest_binding_verified": True,
+        },
+        "linker_elimination": {
+            "security_mitigations_preserved": True,
+            "canonical_package_identical": True,
+            "compact_decoder_preserved": True,
+        },
+        "compact_decoder": {
+            "compact_payload_verified": True,
+            "template_bytes_added": 3_500,
+        },
+        "conclusion": {"byte_ledger_complete": True},
+    }
+
+
+def _dependency_closure() -> dict:
+    return {
+        "closure_verified": True,
+        "binary_sha256": "e" * 64,
+        "sidecar_files": [],
+        "canonical_imports": ["cabinet.dll", "d3d12.dll", "kernel32.dll"],
+    }
+
+
+def _system_validation() -> dict:
+    return {
+        "format": "nw10-system-validation",
+        "version": 1,
+        "task": "NW-10",
+        "status": "verified",
+        "final_artifact": {
+            "executable_sha256": "e" * 64,
+            "package_sha256": "c" * 64,
+        },
+        "clean_system": {
+            "status": "verified",
+            "deployment": {
+                "only_runtime_executable": True,
+                "executable_sha256": "e" * 64,
+                "executable_bytes": 65_000,
+            },
+            "host": {"clean_environment": True},
+            "development_dependencies_present_on_path": [],
+            "environment_cache_variables": [],
+            "scenarios": [
+                {"status": "passed", "timed_out": False} for _ in range(6)
+            ],
+        },
+        "startup": {
+            "status": "verified",
+            "process_start_to_first_present_ms": 100.0,
+        },
+        "memory": {
+            "status": "verified",
+            "peak_engine_committed_gpu_bytes": 1_000_000,
+            "post_initialization_allocation_violation": 0,
+        },
+    }
+
+
+def _performance() -> dict:
+    return {
+        "format": "nw10-performance-preservation",
+        "performance_contract": "nw07_perf_ref_v1",
+        "performance_protocol": "nw07-perf-run.v1",
+        "reference_binding_id": "binding-1",
+        "status": "verified_preserved",
+        "after": {
+            "worst_gpu_p99_ms": 10.0,
+            "worst_cpu_submit_p99_ms": 5.0,
+            "runs": [{"status": "passed"} for _ in range(3)],
         },
     }
 
@@ -92,6 +217,10 @@ def test_feasibility_success_branch_is_schema_valid() -> None:
         head_sha="1" * 40,
         artifact_id=2,
         artifact_digest="sha256:" + "3" * 64,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=_performance(),
     )
     schema = _schema()
     validate_instance(record, schema, schema)
@@ -99,6 +228,29 @@ def test_feasibility_success_branch_is_schema_valid() -> None:
     assert record["classification"] == "complete"
     assert record["compact_candidate"]["runtime_status"] == "validated_runnable"
     assert record["acceptance_linkage"]["true_64k_artifact_delivered"] is True
+    assert record["certification"]["status"] == "verified"
+
+
+def test_feasibility_byte_target_alone_cannot_certify_success() -> None:
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+    )
+    validate_instance(record, _schema(), _schema())
+    assert record["target_met"] is False
+    assert record["classification"] == "continue"
+    assert record["acceptance_linkage"]["true_64k_artifact_delivered"] is False
+    assert record["certification"]["status"] == "pending"
+    assert "clean_system" in record["certification"]["pending_gates"]
+    assert "dependency_closure" in record["certification"]["pending_gates"]
+    assert "pe_ledger_binding" in record["certification"]["pending_gates"]
+    assert any(
+        blocker["id"] == "compact_certification_evidence"
+        for blocker in record["blockers"]
+    )
 
 
 def test_validated_compact_identity_is_not_taken_from_smaller_proof_candidate() -> None:

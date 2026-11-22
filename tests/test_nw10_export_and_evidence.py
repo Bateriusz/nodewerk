@@ -514,6 +514,20 @@ def test_compact_feasibility_schema_supports_a_valid_success_branch() -> None:
     }
     success["acceptance_linkage"]["decision"] = "complete"
     success["acceptance_linkage"]["true_64k_artifact_delivered"] = True
+    success["certification"] = {
+        "status": "verified",
+        "decoded_package_identity": {"status": "verified", "reason": "ok"},
+        "all_required_bytes_accounted": {"status": "verified", "reason": "ok"},
+        "dependency_closure": {"status": "verified", "reason": "ok"},
+        "pe_ledger_binding": {"status": "verified", "reason": "ok"},
+        "clean_system": {"status": "verified", "reason": "ok"},
+        "startup": {"status": "verified", "reason": "ok"},
+        "memory": {"status": "verified", "reason": "ok"},
+        "performance": {"status": "verified", "reason": "ok"},
+        "visual": {"status": "verified", "reason": "ok"},
+        "failed_gates": [],
+        "pending_gates": [],
+    }
     validate_instance(success, schema, schema)
 
 

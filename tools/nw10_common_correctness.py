@@ -639,14 +639,15 @@ def capture(
         )
 
     verification_file: str | None = None
-    if packaging_mode == "packed":
-        output.parent.mkdir(parents=True, exist_ok=True)
-        verification_path = output.parent / "packed-diagnostic.exe"
-        if diagnostic_executable.resolve() != verification_path.resolve():
-            shutil.copy2(diagnostic_executable, verification_path)
-        if _sha256(verification_path) != observed["executable_sha256"]:
-            raise ValueError("retained packed diagnostic executable hash changed")
-        verification_file = verification_path.name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    verification_path = output.parent / f"{packaging_mode}-diagnostic.exe"
+    if diagnostic_executable.resolve() != verification_path.resolve():
+        shutil.copy2(diagnostic_executable, verification_path)
+    if _sha256(verification_path) != observed["executable_sha256"]:
+        raise ValueError(
+            f"retained {packaging_mode} diagnostic executable hash changed"
+        )
+    verification_file = verification_path.name
 
     record = {
         "format": FORMAT,
@@ -903,6 +904,48 @@ def _verify_packed_executable(
         raise ValueError("packed executable does not decode to the common package")
 
 
+def _verify_unpacked_executable(
+    record: Mapping[str, Any], *, record_path: Path
+) -> None:
+    """Reopen and hash the retained unpacked diagnostic executable.
+
+    The unpacked capture path must be bound to the actual bytes that produced
+    the compared images, not merely to a non-empty hash string.
+    """
+    diagnostic = record.get("diagnostic_sibling")
+    common = record.get("common_artifact")
+    if not isinstance(diagnostic, Mapping) or not isinstance(common, Mapping):
+        raise ValueError("unpacked capture is missing artifact identity")
+    relative = diagnostic.get("verification_file")
+    if not isinstance(relative, str) or not relative:
+        raise ValueError(
+            "unpacked capture does not retain its diagnostic executable"
+        )
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or relative_path.name != relative:
+        raise ValueError(
+            "unpacked diagnostic verification file must be a local filename"
+        )
+    executable = record_path.parent / relative_path
+    if not executable.is_file():
+        raise ValueError("unpacked diagnostic verification executable is missing")
+    executable_bytes = executable.read_bytes()
+    executable_sha = hashlib.sha256(executable_bytes).hexdigest()
+    if executable_sha != str(diagnostic.get("executable_sha256", "")).lower():
+        raise ValueError("unpacked diagnostic executable SHA-256 mismatch")
+    payload, _manifest = nw05_export.extract_embedded_package(executable_bytes)
+    if compact.is_compact_container(payload):
+        raise ValueError(
+            "unpacked diagnostic executable unexpectedly contains compact bytes"
+        )
+    if hashlib.sha256(payload).hexdigest() != str(
+        common.get("package_sha256", "")
+    ).lower():
+        raise ValueError(
+            "unpacked executable does not embed the common package"
+        )
+
+
 def _verify_capture_record(
     record: Mapping[str, Any],
     *,
@@ -952,6 +995,8 @@ def _verify_capture_record(
             capture_dir=capture_dir,
         )
         _verify_packed_executable(record, record_path=record_path)
+    else:
+        _verify_unpacked_executable(record, record_path=record_path)
     hardware = record.get("hardware")
     if not isinstance(hardware, Mapping):
         raise ValueError(f"{tier} {packaging_mode} hardware identity is missing")

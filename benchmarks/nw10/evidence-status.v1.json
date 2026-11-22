@@ -7,19 +7,19 @@
   "files": [
     {
       "path": "benchmarks/nw10/compact-proof.v1.json",
-      "sha256": "39fe2abfda5b471fd17228bfb4a0fb116c678d0a350060ce2dc19e3bd7e68378"
+      "sha256": "59f9e66e26ad9c90d8d3759f468c6c0f2553a1af60af0120b3b12ed1ba5bce32"
     },
     {
       "path": "benchmarks/nw10/intro-profile.v1.json",
-      "sha256": "cf6b460ccaa2283a2d293fdf8d11462e83a2a684b83f710f3b218fd1b731c351"
+      "sha256": "5a088da40ae743d89df905ac80874dd881af3b5fd1a22a29a181f8381558b9e2"
     },
     {
       "path": "benchmarks/nw10/proof-export-report.v1.json",
-      "sha256": "505bc5af8339dc99e847a2321114650fdbb9685a1f6046102d93b659ec4d246e"
+      "sha256": "e373e0f61e6f3e1e4d7dc511fbae27e85d595db41b2260b80304da2b2afdbe29"
     },
     {
       "path": "benchmarks/nw10/intro-export-report.v1.json",
-      "sha256": "23166aea0e7ac0283ff957bd2590957b7c5d7b95cb45756cfb640c477bca833a"
+      "sha256": "ae6ffe7c0ad10dc3b98dcac06ef5f6810856c40ccc69d85df3f1f7fdc881e9ca"
     },
     {
       "path": "benchmarks/nw10/common-artifact-correctness.v1.json",
@@ -35,7 +35,7 @@
     },
     {
       "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-      "sha256": "166410619c7a5f86a80f6b1832c66daf5a5b8b4c2ed6a2f7c097ea343ac42460"
+      "sha256": "af4964046d3c99ad7c26520c4a7441a46c993d9c552677e0dad1124dd9b9fd75"
     },
     {
       "path": "benchmarks/nw10/windows-pe-ledger.v1.json",

@@ -11,11 +11,136 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import dependency_check
+import nw05_export
+import nw10_compact as compact
 
 
 FORMAT = "nw10-windows-pe-ledger"
 VERSION = 1
 INVALIDATED_GRADIENT_SHA256 = "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+
+# IMAGE_DLLCHARACTERISTICS_* values that the release profile must retain.
+MITIGATION_HIGH_ENTROPY_VA = 0x0020
+MITIGATION_DYNAMIC_BASE = 0x0040
+MITIGATION_NX_COMPAT = 0x0100
+MITIGATION_GUARD_CF = 0x4000
+MITIGATION_FORCE_INTEGRITY = 0x0080
+MITIGATION_MASK = (
+    MITIGATION_HIGH_ENTROPY_VA
+    | MITIGATION_DYNAMIC_BASE
+    | MITIGATION_NX_COMPAT
+    | MITIGATION_GUARD_CF
+    | MITIGATION_FORCE_INTEGRITY
+)
+REQUIRED_MITIGATION_BITS = (
+    MITIGATION_HIGH_ENTROPY_VA | MITIGATION_DYNAMIC_BASE | MITIGATION_NX_COMPAT
+)
+
+
+def _mitigation_summary(bits: int) -> dict[str, Any]:
+    return {
+        "dll_characteristics": f"0x{bits & 0xFFFF:04X}",
+        "highentropyva": bool(bits & MITIGATION_HIGH_ENTROPY_VA),
+        "dynamicbase_aslr": bool(bits & MITIGATION_DYNAMIC_BASE),
+        "nx_compat_dep": bool(bits & MITIGATION_NX_COMPAT),
+        "guard_cf": bool(bits & MITIGATION_GUARD_CF),
+        "force_integrity": bool(bits & MITIGATION_FORCE_INTEGRITY),
+        "required_bits_present": (bits & REQUIRED_MITIGATION_BITS)
+        == REQUIRED_MITIGATION_BITS,
+    }
+
+
+def _embedded_payload_summary(raw: bytes) -> dict[str, Any]:
+    """Inspect the payload actually appended to the executable."""
+    try:
+        payload, embedded_manifest = nw05_export.extract_embedded_package(raw)
+    except Exception as exc:  # noqa: BLE001 - report malformed payloads as data
+        return {
+            "present": False,
+            "reason": str(exc),
+        }
+    payload_kind = (
+        "compact_container"
+        if compact.is_compact_container(payload)
+        else "canonical_package"
+    )
+    decoded = payload
+    decode_error = None
+    codec_id = None
+    layout_id = None
+    if payload_kind == "compact_container":
+        try:
+            header = compact.parse_header(payload)
+            codec_id = str(header["codec_id"])
+            layout_id = str(header["layout_id"])
+            decoded = compact.decode_compact(payload)
+        except Exception as exc:  # noqa: BLE001 - binder fails closed below
+            decoded = b""
+            decode_error = str(exc)
+    return {
+        "present": True,
+        "payload_kind": payload_kind,
+        "payload_bytes": len(payload),
+        "payload_sha256": hashlib.sha256(payload).hexdigest(),
+        "decoded_package_bytes": len(decoded) if decoded else 0,
+        "decoded_package_sha256": (
+            hashlib.sha256(decoded).hexdigest() if decoded else None
+        ),
+        "embedded_manifest_sha256": embedded_manifest.hex(),
+        "codec_id": codec_id,
+        "layout_id": layout_id,
+        "decode_error": decode_error,
+    }
+
+
+def _build_tree_ltgc_evidence(template: Path) -> dict[str, Any]:
+    """Inspect the template's Ninja build flags for whole-program optimization.
+
+    LTCG/ThinLTO is a link-time property, not a PE header bit.  It is therefore
+    verified from the same build tree that produced the measured template
+    instead of being hardcoded in the ledger.
+    """
+    try:
+        build_root = nw05_export._cmake_build_root_from_template(template)
+    except Exception as exc:  # noqa: BLE001 - unavailable evidence is reported
+        return {
+            "status": "unavailable",
+            "reason": f"template build tree is not inspectable: {exc}",
+            "has_gl": False,
+            "has_ltcg": False,
+            "has_lto": False,
+            "ltgc_preserved": False,
+        }
+    ninja = build_root / "build.ninja"
+    if not ninja.is_file():
+        return {
+            "status": "unavailable",
+            "reason": "template build tree has no build.ninja",
+            "has_gl": False,
+            "has_ltcg": False,
+            "has_lto": False,
+            "ltgc_preserved": False,
+        }
+    text = ninja.read_text(encoding="utf-8", errors="replace")
+    lowered = text.lower()
+    has_gl = bool(re.search(r"(?<![\w-])/gl(?![-:])", lowered))
+    has_ltcg = bool(re.search(r"/ltcg(?![-:])", lowered)) and (
+        "/ltcg:off" not in lowered and "/ltcg-" not in lowered
+    )
+    has_lto = bool(re.search(r"(?<![\w-])-flto(?:=thin)?(?![\w-])", lowered))
+    disabled = bool(
+        re.search(r"/gl-|/ltcg:off|/ltcg-|-fno-lto", lowered)
+    )
+    preserved = (has_gl and has_ltcg) or (has_lto and not disabled)
+    return {
+        "status": "verified_build_tree_flags",
+        "build_root": build_root.name,
+        "has_gl": has_gl,
+        "has_ltcg": has_ltcg,
+        "has_lto": has_lto,
+        "disabled": disabled,
+        "ltgc_preserved": bool(preserved and not disabled),
+    }
 
 
 def normalize_artifact_digest(value: str) -> str:
@@ -92,6 +217,11 @@ def pe_summary(path: Path) -> dict[str, Any]:
         "sections": sections,
         "imports": sorted(str(x).lower() for x in info.get("imports", [])),
         "delay_imports": sorted(str(x).lower() for x in info.get("delay_imports", [])),
+        "dll_characteristics": int(info.get("dll_characteristics", 0)),
+        "mitigations": _mitigation_summary(
+            int(info.get("dll_characteristics", 0))
+        ),
+        "embedded": _embedded_payload_summary(raw),
     }
 
 
@@ -185,8 +315,12 @@ def build_report(
             "final executable regressed to the invalidated gradient artifact: "
             f"{INVALIDATED_GRADIENT_SHA256}"
         )
-    if sha256_file(final_package) != sha256_file(linker_baseline_package):
+    final_package_sha = sha256_file(final_package)
+    baseline_package_sha = sha256_file(linker_baseline_package)
+    if final_package_sha != baseline_package_sha:
         raise ValueError("linker-control build changed the canonical package bytes")
+    final_manifest_sha = sha256_file(final_manifest)
+    baseline_manifest_sha = sha256_file(linker_baseline_manifest)
 
     final_manifest_data = json.loads(final_manifest.read_text(encoding="utf-8"))
     baseline_manifest_data = json.loads(linker_baseline_manifest.read_text(encoding="utf-8"))
@@ -194,6 +328,96 @@ def build_report(
     baseline_profile = str(baseline_manifest_data.get("profile_id") or baseline_manifest_data.get("target_profile") or "")
     if final_profile != baseline_profile:
         raise ValueError("linker-control build changed the manifest profile identity")
+
+    # Bind the sidecar package/manifest identities to the bytes actually
+    # appended to each executable.  A compact payload is decoded first so the
+    # sidecar canonical package identity is verified, never assumed.
+    final_embedded = final.get("embedded") or {}
+    baseline_embedded = linker_baseline.get("embedded") or {}
+    for label, summary, package_sha, manifest_sha in (
+        ("final", final_embedded, final_package_sha, final_manifest_sha),
+        (
+            "linker-control",
+            baseline_embedded,
+            baseline_package_sha,
+            baseline_manifest_sha,
+        ),
+    ):
+        if summary.get("present") is not True:
+            raise ValueError(
+                f"{label} executable has no inspectable embedded payload"
+            )
+        if summary.get("decode_error"):
+            raise ValueError(
+                f"{label} embedded payload failed decoding: "
+                f"{summary['decode_error']}"
+            )
+        if summary.get("decoded_package_sha256") != package_sha:
+            raise ValueError(
+                f"{label} embedded payload does not decode to its sidecar package"
+            )
+        if summary.get("embedded_manifest_sha256") != manifest_sha:
+            raise ValueError(
+                f"{label} embedded manifest binding does not match its sidecar"
+            )
+    if final_embedded.get("payload_kind") != baseline_embedded.get("payload_kind"):
+        raise ValueError(
+            "linker-control build embedded a different payload kind "
+            f"({baseline_embedded.get('payload_kind')!r}) than the final "
+            f"artifact ({final_embedded.get('payload_kind')!r})"
+        )
+    if final_embedded.get("payload_bytes") != baseline_embedded.get(
+        "payload_bytes"
+    ):
+        raise ValueError(
+            "linker-control build changed the embedded payload size; "
+            "payload bytes would be misattributed to linker elimination"
+        )
+    canonical_package_identical = (
+        final_embedded.get("decoded_package_sha256")
+        == baseline_embedded.get("decoded_package_sha256")
+        == final_package_sha
+    )
+    if not canonical_package_identical:
+        raise ValueError(
+            "linker-control and final executables do not carry the same "
+            "canonical package"
+        )
+    final_imports = {str(item).lower() for item in final.get("imports", [])}
+    final_has_cabinet = "cabinet.dll" in final_imports
+    compact_payload_verified = (
+        final_embedded.get("payload_kind") == "compact_container"
+        and final_embedded.get("decoded_package_sha256") == final_package_sha
+        and final_has_cabinet
+    )
+    if (
+        final_embedded.get("payload_kind") == "compact_container"
+        and not compact_payload_verified
+    ):
+        raise ValueError(
+            "final executable carries compact bytes without the verified "
+            "cabinet.dll decoder path"
+        )
+
+    final_bits = int(final.get("dll_characteristics", 0)) & MITIGATION_MASK
+    baseline_bits = int(linker_baseline.get("dll_characteristics", 0)) & MITIGATION_MASK
+    decoder_on_bits = int(decoder_on.get("dll_characteristics", 0)) & MITIGATION_MASK
+    required_in_baseline = baseline_bits | (decoder_on_bits & REQUIRED_MITIGATION_BITS)
+    security_mitigations_preserved = (
+        final_bits & required_in_baseline
+    ) == required_in_baseline
+    if not security_mitigations_preserved:
+        raise ValueError(
+            "optimized executable removed security mitigation bits present in "
+            f"the linker control: final=0x{final_bits:04X} "
+            f"required=0x{required_in_baseline:04X}"
+        )
+
+    ltgc_on = _build_tree_ltgc_evidence(decoder_on_template)
+    ltgc_off = _build_tree_ltgc_evidence(decoder_off_template)
+    ltgc_preserved = bool(
+        ltgc_on.get("ltgc_preserved") and ltgc_off.get("ltgc_preserved")
+    )
 
     linker_saved = int(linker_baseline["total_bytes"]) - int(final["total_bytes"])
     linker_pe_saved = int(linker_baseline["pe_image_file_bytes"]) - int(final["pe_image_file_bytes"])
@@ -247,10 +471,20 @@ def build_report(
         "final_artifact": {
             "executable_sha256": final["sha256"],
             "executable_bytes": final["total_bytes"],
-            "package_sha256": sha256_file(final_package),
-            "manifest_sha256": sha256_file(final_manifest),
+            "package_sha256": final_package_sha,
+            "manifest_sha256": final_manifest_sha,
             "pe_image_file_bytes": final["pe_image_file_bytes"],
             "overlay_bytes": final["overlay_bytes"],
+            "embedded_payload_kind": final_embedded.get("payload_kind"),
+            "embedded_payload_bytes": final_embedded.get("payload_bytes"),
+            "embedded_payload_sha256": final_embedded.get("payload_sha256"),
+            "decoded_package_sha256": final_embedded.get(
+                "decoded_package_sha256"
+            ),
+            "package_binding_verified": True,
+            "manifest_binding_verified": True,
+            "dll_characteristics": f"0x{final_bits:04X}",
+            "security_mitigations": final.get("mitigations"),
             "runtime_status": runtime_status,
             "runtime_exit_code": runtime_exit_code,
             "sections": [
@@ -265,10 +499,27 @@ def build_report(
             "status": "verified",
             "optimized_options": ["/OPT:REF", "/OPT:ICF=4"],
             "control_options": ["/OPT:NOREF", "/OPT:NOICF"],
-            "ltgc_preserved": True,
-            "security_mitigations_preserved": True,
-            "compact_decoder_preserved": True,
-            "canonical_package_identical": True,
+            "ltgc_preserved": ltgc_preserved,
+            "ltgc_evidence": {
+                "decoder_on_template": ltgc_on,
+                "decoder_off_template": ltgc_off,
+            },
+            "security_mitigations_preserved": security_mitigations_preserved,
+            "security_mitigation_bits": {
+                "final": f"0x{final_bits:04X}",
+                "linker_control": f"0x{baseline_bits:04X}",
+                "decoder_on_template": f"0x{decoder_on_bits:04X}",
+                "required": f"0x{required_in_baseline:04X}",
+            },
+            "compact_decoder_preserved": compact_payload_verified,
+            "canonical_package_identical": canonical_package_identical,
+            "final_payload_kind": final_embedded.get("payload_kind"),
+            "control_payload_kind": baseline_embedded.get("payload_kind"),
+            "embedded_payload_size_identical": True,
+            "embedded_payload_sha256_identical": (
+                final_embedded.get("payload_sha256")
+                == baseline_embedded.get("payload_sha256")
+            ),
             "control_executable_bytes": linker_baseline["total_bytes"],
             "control_pe_image_file_bytes": linker_baseline[
                 "pe_image_file_bytes"
@@ -298,6 +549,13 @@ def build_report(
             ],
             "runtime_import_added": "cabinet.dll",
             "runtime_imports_added": added_imports,
+            "compact_payload_verified": compact_payload_verified,
+            "final_imports_cabinet": final_has_cabinet,
+            "final_payload_kind": final_embedded.get("payload_kind"),
+            "final_payload_sha256": final_embedded.get("payload_sha256"),
+            "final_decoded_package_sha256": final_embedded.get(
+                "decoded_package_sha256"
+            ),
         },
         "conclusion": {
             "byte_ledger_complete": runtime_status == "validated_runnable",

@@ -364,7 +364,7 @@
       "layout_id": "nwc.layout.canonical.v1",
       "packaging_tool": {
         "identity": "tools/nw10_compact.py",
-        "version": "12903559ce0241846c38f73e76bcd8ddd6eaa1a05c86e91594707b469068ce42"
+        "version": "5e5bada9ce5ff5907c35c81aba0ad88110a73176885a19e5dc54fb02e3f04a10"
       },
       "selected_executable_bytes": 4350,
       "task": "NW-10",
@@ -462,7 +462,7 @@
       "layout_id": "nwc.layout.soa.v1",
       "packaging_tool": {
         "identity": "tools/nw10_compact.py",
-        "version": "12903559ce0241846c38f73e76bcd8ddd6eaa1a05c86e91594707b469068ce42"
+        "version": "5e5bada9ce5ff5907c35c81aba0ad88110a73176885a19e5dc54fb02e3f04a10"
       },
       "selected_executable_bytes": 2090,
       "task": "NW-10",
@@ -481,54 +481,467 @@
     "compression_candidates": [
       {
         "codec": "nwc.codec.stored.v1",
-        "complete_container_bytes": 4260,
+        "complete_container_bytes": 4244,
+        "decoder_dependency": null,
         "deterministic": true,
         "encoding_id": "nwc.codec.stored.v1",
-        "payload_bytes": 4196,
-        "player_supported": true
+        "measurements": {
+          "distribution_bytes": {
+            "after": 4244,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
+        "payload_bytes": 4180,
+        "player_supported": true,
+        "rejection_reasons": [],
+        "selected": false
       },
       {
         "codec": "candidate.zlib.raw",
-        "complete_container_bytes": 1719,
+        "complete_container_bytes": 1712,
+        "decoder_dependency": null,
         "deterministic": true,
         "encoding_id": "candidate.zlib.raw.v1",
-        "payload_bytes": 1655,
-        "player_supported": false
+        "measurements": {
+          "distribution_bytes": {
+            "after": 1712,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
+        "payload_bytes": 1648,
+        "player_supported": false,
+        "rejection_reasons": [
+          "no_measured_player_decoder_or_dependency_closure"
+        ],
+        "selected": false
       },
       {
         "codec": "candidate.bzip2",
-        "complete_container_bytes": 1898,
+        "complete_container_bytes": 1896,
+        "decoder_dependency": null,
         "deterministic": false,
         "encoding_id": "candidate.bzip2.v1",
-        "payload_bytes": 1834,
-        "player_supported": false
+        "measurements": {
+          "distribution_bytes": {
+            "after": 1896,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
+        "payload_bytes": 1832,
+        "player_supported": false,
+        "rejection_reasons": [
+          "no_measured_player_decoder_or_dependency_closure"
+        ],
+        "selected": false
       },
       {
         "codec": "candidate.lzma",
         "complete_container_bytes": 1684,
+        "decoder_dependency": null,
         "deterministic": false,
         "encoding_id": "candidate.lzma.v1",
+        "measurements": {
+          "distribution_bytes": {
+            "after": 1684,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
         "payload_bytes": 1620,
-        "player_supported": false
+        "player_supported": false,
+        "rejection_reasons": [
+          "no_measured_player_decoder_or_dependency_closure"
+        ],
+        "selected": false
       },
       {
         "codec": "nwc.codec.mszip.v1",
-        "complete_container_bytes": 1715,
+        "complete_container_bytes": 1708,
+        "decoder_dependency": "cabinet.dll",
         "deterministic": true,
         "encoding_id": "nwc.codec.mszip.v1",
-        "payload_bytes": 1651,
-        "player_supported": true
+        "measurements": {
+          "distribution_bytes": {
+            "after": 1708,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
+        "payload_bytes": 1644,
+        "player_supported": true,
+        "rejection_reasons": [],
+        "selected": true
       }
     ],
     "decoder_code_bytes": null,
     "decoder_code_status": "pending_physical_windows",
     "delta_references": {
+      "adopted": true,
+      "adopted_reference_mode": "backward_delta_references",
       "aos_with_references_bytes": 4260,
       "aos_without_references_bytes": 4260,
       "chunk_size": 256,
       "delta_complete_bytes_saved": 0,
       "delta_records": 16,
       "layout_advantage_soa_over_aos_bytes": 16,
+      "measurements": {
+        "distribution_bytes": {
+          "after": 4260,
+          "before": 4260,
+          "status": "measured_complete_container_bytes"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_container_round_trip"
+          },
+          "numeric_relative": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_round_trip"
+          }
+        }
+      },
       "raw_records": 16,
       "reference_records": 0,
       "referenced_bytes_saved": 0,
@@ -545,6 +958,71 @@
           "encoded_sha256": "9af25e6f526cae20566124e813f13f7c9e4dd5fbca69e14ed5c012464f1d2924",
           "format": "nwc.container.v1",
           "layout_id": "nwc.layout.canonical.v1",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 4260,
+              "before": 4260,
+              "status": "measured_encoded_payload_plus_container_header"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_container_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
           "payload_bytes": 4196,
           "record_count": 16,
           "reference_count": 0
@@ -558,6 +1036,71 @@
           "encoded_sha256": "d4af2c2a955c36a03d9d34579f5eda3d6539c1a136ae7e03a36fa962ed7d1526",
           "format": "nwc.container.v1",
           "layout_id": "nwc.layout.aos.v1",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 4260,
+              "before": 4260,
+              "status": "measured_encoded_payload_plus_container_header"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_container_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
           "payload_bytes": 4196,
           "record_count": 16,
           "reference_count": 0
@@ -571,22 +1114,1133 @@
           "encoded_sha256": "dd7faac4fef5442230b3d37689445f24ed41a166e8f8693028974a0ca167cb8a",
           "format": "nwc.container.v1",
           "layout_id": "nwc.layout.soa.v1",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 4244,
+              "before": 4260,
+              "status": "measured_encoded_payload_plus_container_header"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_container_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
           "payload_bytes": 4180,
+          "record_count": 16,
+          "reference_count": 0
+        },
+        {
+          "codec_id": "nwc.codec.mszip.v1",
+          "container_bytes": 4196,
+          "decoded_bytes": 3968,
+          "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+          "encoded_bytes": 1715,
+          "encoded_sha256": "1dd096dd936375d11de60faad2507e27a70865d175ca39dac5c0f13d1bf22464",
+          "format": "nwc.container.v1",
+          "layout_id": "nwc.layout.canonical.v1",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 1715,
+              "before": 1715,
+              "status": "measured_encoded_payload_plus_container_header"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_container_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
+          "payload_bytes": 1651,
+          "record_count": 16,
+          "reference_count": 0
+        },
+        {
+          "codec_id": "nwc.codec.mszip.v1",
+          "container_bytes": 4196,
+          "decoded_bytes": 3968,
+          "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+          "encoded_bytes": 1715,
+          "encoded_sha256": "a77ad9f30c26267ab618c207850b1ae450ceb3245e7587a277e7713d527e1f97",
+          "format": "nwc.container.v1",
+          "layout_id": "nwc.layout.aos.v1",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 1715,
+              "before": 1715,
+              "status": "measured_encoded_payload_plus_container_header"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_container_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
+          "payload_bytes": 1651,
+          "record_count": 16,
+          "reference_count": 0
+        },
+        {
+          "codec_id": "nwc.codec.mszip.v1",
+          "container_bytes": 4180,
+          "decoded_bytes": 3968,
+          "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+          "encoded_bytes": 1708,
+          "encoded_sha256": "30956531f935dea9d6ed20e71cb493937a1ddcf18f404430f733ee4fc31167b5",
+          "format": "nwc.container.v1",
+          "layout_id": "nwc.layout.soa.v1",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 1708,
+              "before": 1715,
+              "status": "measured_encoded_payload_plus_container_header"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_container_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
+          "payload_bytes": 1644,
           "record_count": 16,
           "reference_count": 0
         }
       ],
-      "selected": "nwc.layout.soa.v1"
+      "measured_codec_ids": [
+        "nwc.codec.stored.v1",
+        "nwc.codec.mszip.v1"
+      ],
+      "measurements": {
+        "distribution_bytes": {
+          "after": 1708,
+          "before": 1715,
+          "status": "measured_encoded_payload_plus_container_header"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_container_round_trip"
+          },
+          "numeric_relative": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_round_trip"
+          }
+        }
+      },
+      "selected": "nwc.layout.soa.v1",
+      "selected_by_codec": {
+        "nwc.codec.mszip.v1": "nwc.layout.soa.v1",
+        "nwc.codec.stored.v1": "nwc.layout.soa.v1"
+      },
+      "selected_codec_id": "nwc.codec.mszip.v1",
+      "selected_layout_id": "nwc.layout.soa.v1",
+      "selection_basis": "minimum complete encoded container bytes across measured player-supported codecs and layouts"
     },
     "measurement_protocol": {
       "application_pipeline_cache": false,
+      "artifact_sha256": null,
       "fresh_process_per_run": true,
+      "matching_keys": null,
       "performance_contract": "nw07_perf_ref_v1",
       "performance_protocol": "nw07-perf-run.v1",
+      "provenance": null,
+      "reference_capture": "pending_reference_capture",
+      "reference_host": null,
+      "reference_id": "nw07_perf_ref_v1",
+      "result_status": "pending_physical_windows_capture",
       "run_seconds": 60,
       "runs": 3,
       "status": "pending_physical_windows_capture",
       "warmup_seconds": 5
+    },
+    "optimizations": {
+      "compression": {
+        "candidate.bzip2": {
+          "distribution_bytes": {
+            "after": 1896,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
+        "candidate.lzma": {
+          "distribution_bytes": {
+            "after": 1684,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
+        "candidate.zlib.raw": {
+          "distribution_bytes": {
+            "after": 1712,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
+        "nwc.codec.mszip.v1": {
+          "distribution_bytes": {
+            "after": 1708,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        },
+        "nwc.codec.stored.v1": {
+          "distribution_bytes": {
+            "after": 4244,
+            "before": 4244,
+            "status": "measured_complete_container_bytes"
+          },
+          "frame_time_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "measurement_protocol": {
+            "application_pipeline_cache": false,
+            "artifact_sha256": null,
+            "fresh_process_per_run": true,
+            "matching_keys": null,
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "provenance": null,
+            "reference_capture": "pending_reference_capture",
+            "reference_host": null,
+            "reference_id": "nw07_perf_ref_v1",
+            "result_status": "pending_physical_windows_capture",
+            "run_seconds": 60,
+            "runs": 3,
+            "warmup_seconds": 5
+          },
+          "memory_bytes": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "startup_ms": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "visual_error": {
+            "image_absolute": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "image_relative": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "numeric_absolute": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_container_round_trip"
+            },
+            "numeric_relative": {
+              "after": 0.0,
+              "before": 0.0,
+              "status": "measured_lossless_round_trip"
+            }
+          }
+        }
+      },
+      "crt_free_startup": {
+        "distribution_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "CRT-free startup was not pursued because no measured complete-distribution benefit exists and compiler-helper and initialization correctness are unproven.",
+          "status": "pending_physical_windows_capture"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "CRT-free startup was not pursued because no measured complete-distribution benefit exists and compiler-helper and initialization correctness are unproven.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "CRT-free startup was not pursued because no measured complete-distribution benefit exists and compiler-helper and initialization correctness are unproven.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "CRT-free startup was not pursued because no measured complete-distribution benefit exists and compiler-helper and initialization correctness are unproven.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "CRT-free startup was not pursued because no measured complete-distribution benefit exists and compiler-helper and initialization correctness are unproven.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "CRT-free startup was not pursued because no measured complete-distribution benefit exists and compiler-helper and initialization correctness are unproven.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "CRT-free startup was not pursued because no measured complete-distribution benefit exists and compiler-helper and initialization correctness are unproven.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_relative": {
+            "after": null,
+            "before": null,
+            "reason": "CRT-free startup was not pursued because no measured complete-distribution benefit exists and compiler-helper and initialization correctness are unproven.",
+            "status": "pending_physical_windows_capture"
+          }
+        }
+      },
+      "delta_references": {
+        "distribution_bytes": {
+          "after": 4260,
+          "before": 4260,
+          "status": "measured_complete_container_bytes"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_container_round_trip"
+          },
+          "numeric_relative": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_round_trip"
+          }
+        }
+      },
+      "layouts": {
+        "distribution_bytes": {
+          "after": 1708,
+          "before": 1715,
+          "status": "measured_encoded_payload_plus_container_header"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_container_round_trip"
+          },
+          "numeric_relative": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_round_trip"
+          }
+        }
+      },
+      "linker_elimination": {
+        "distribution_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Exact release-PE section and symbol elimination bytes are measured by tools/nw10_pe_ledger.py on the Windows artifact; startup, memory, frame-time, and visual error remain pending physical capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Exact release-PE section and symbol elimination bytes are measured by tools/nw10_pe_ledger.py on the Windows artifact; startup, memory, frame-time, and visual error remain pending physical capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Exact release-PE section and symbol elimination bytes are measured by tools/nw10_pe_ledger.py on the Windows artifact; startup, memory, frame-time, and visual error remain pending physical capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Exact release-PE section and symbol elimination bytes are measured by tools/nw10_pe_ledger.py on the Windows artifact; startup, memory, frame-time, and visual error remain pending physical capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Exact release-PE section and symbol elimination bytes are measured by tools/nw10_pe_ledger.py on the Windows artifact; startup, memory, frame-time, and visual error remain pending physical capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Exact release-PE section and symbol elimination bytes are measured by tools/nw10_pe_ledger.py on the Windows artifact; startup, memory, frame-time, and visual error remain pending physical capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Exact release-PE section and symbol elimination bytes are measured by tools/nw10_pe_ledger.py on the Windows artifact; startup, memory, frame-time, and visual error remain pending physical capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Exact release-PE section and symbol elimination bytes are measured by tools/nw10_pe_ledger.py on the Windows artifact; startup, memory, frame-time, and visual error remain pending physical capture.",
+            "status": "pending_physical_windows_capture"
+          }
+        }
+      },
+      "parameter_packing": {
+        "distribution_bytes": {
+          "after": 277,
+          "before": 595,
+          "status": "measured_parameter_payload_bytes_not_integrated"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+            "status": "pending_physical_windows_capture"
+          }
+        }
+      },
+      "shader_specialization_fusion": {
+        "distribution_bytes": {
+          "after": 404,
+          "before": 404,
+          "status": "measured_package_shader_and_root_signature_bytes"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          }
+        }
+      }
     },
     "package": {
       "frame_instructions": [
@@ -621,12 +2275,82 @@
       "adoption_status": "eligible_but_not_integrated",
       "alternatives": [
         {
-          "adopted": false,
+          "adopted": true,
           "canonical_bytes": 595,
           "delta_bytes": 0,
           "maximum_absolute_error": 0.0,
+          "measurements": {
+            "distribution_bytes": {
+              "after": 595,
+              "before": 595,
+              "status": "measured_parameter_payload_bytes_current"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_parameter_quantization_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
+          "non_float_components": 3,
+          "non_float_components_preserved": true,
           "packed_bytes": 595,
           "parameter_layout_id": "nwc.params.canonical.v1",
+          "preserved_non_float_components": 3,
+          "quantized_components": 0,
+          "rejection_reasons": [],
           "value_encoding": "canonical",
           "within_numeric_tolerance": true
         },
@@ -635,28 +2359,242 @@
           "canonical_bytes": 595,
           "delta_bytes": -310,
           "maximum_absolute_error": 0.0,
+          "measurements": {
+            "distribution_bytes": {
+              "after": 285,
+              "before": 595,
+              "status": "measured_parameter_payload_bytes_not_integrated"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_parameter_quantization_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
+          "non_float_components": 3,
+          "non_float_components_preserved": true,
           "packed_bytes": 285,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
+          "preserved_non_float_components": 3,
+          "quantized_components": 0,
+          "rejection_reasons": [],
           "value_encoding": "canonical",
           "within_numeric_tolerance": true
         },
         {
           "adopted": false,
           "canonical_bytes": 595,
-          "delta_bytes": -324,
+          "delta_bytes": -318,
           "maximum_absolute_error": 1296971168.0,
-          "packed_bytes": 271,
+          "measurements": {
+            "distribution_bytes": {
+              "after": 277,
+              "before": 595,
+              "status": "measured_parameter_payload_bytes_not_integrated"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 1296971168.0,
+                "before": 0.0,
+                "status": "measured_parameter_quantization_round_trip"
+              },
+              "numeric_relative": {
+                "after": null,
+                "before": 0.0,
+                "status": "pending_physical_windows_capture"
+              }
+            }
+          },
+          "non_float_components": 3,
+          "non_float_components_preserved": true,
+          "packed_bytes": 277,
           "parameter_layout_id": "nwc.params.float16.v1",
+          "preserved_non_float_components": 3,
+          "quantized_components": 4,
+          "rejection_reasons": [
+            "numeric_tolerance_exceeded"
+          ],
           "value_encoding": "f16",
           "within_numeric_tolerance": false
         },
         {
           "adopted": false,
           "canonical_bytes": 595,
-          "delta_bytes": -324,
+          "delta_bytes": -318,
           "maximum_absolute_error": 1297036663.999878,
-          "packed_bytes": 271,
+          "measurements": {
+            "distribution_bytes": {
+              "after": 277,
+              "before": 595,
+              "status": "measured_parameter_payload_bytes_not_integrated"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 1297036663.999878,
+                "before": 0.0,
+                "status": "measured_parameter_quantization_round_trip"
+              },
+              "numeric_relative": {
+                "after": null,
+                "before": 0.0,
+                "status": "pending_physical_windows_capture"
+              }
+            }
+          },
+          "non_float_components": 3,
+          "non_float_components_preserved": true,
+          "packed_bytes": 277,
           "parameter_layout_id": "nwc.params.q16.v1",
+          "preserved_non_float_components": 3,
+          "quantized_components": 4,
+          "rejection_reasons": [
+            "numeric_tolerance_exceeded"
+          ],
           "value_encoding": "q16",
           "within_numeric_tolerance": false
         }
@@ -672,19 +2610,173 @@
           "canonical_bytes": 595,
           "delta_bytes": -310,
           "maximum_absolute_error": 0.0,
+          "measurements": {
+            "distribution_bytes": {
+              "after": 285,
+              "before": 595,
+              "status": "measured_parameter_payload_bytes_not_integrated"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Parameter payload bytes are measured structurally. Startup, memory, frame-time, and image error remain pending until a decoder adopts this layout.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_parameter_quantization_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
+          "non_float_components": 3,
+          "non_float_components_preserved": true,
           "packed_bytes": 285,
           "parameter_layout_id": "nwc.params.varint-stringtable.v1",
+          "preserved_non_float_components": 3,
+          "quantized_components": 0,
+          "rejection_reasons": [],
           "value_encoding": "canonical",
           "within_numeric_tolerance": true
         }
       ],
-      "selected": "nwc.params.canonical.v1"
+      "measurements": {
+        "distribution_bytes": {
+          "after": 277,
+          "before": 595,
+          "status": "measured_parameter_payload_bytes_not_integrated"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Best measured parameter payload is structural only; the complete distribution and physical metrics remain pending.",
+            "status": "pending_physical_windows_capture"
+          }
+        }
+      },
+      "non_float_parameters_preserved": true,
+      "quantization_tolerances": {
+        "image_absolute": 0.0001,
+        "image_relative": 0.0001,
+        "numeric_absolute": 1e-05,
+        "numeric_relative": 0.0001
+      },
+      "selected": "nwc.params.canonical.v1",
+      "selected_parameter_layout_id": "nwc.params.canonical.v1"
     },
     "physical_evidence": {
+      "artifact_sha256": null,
+      "matching_keys": null,
       "p99_cpu_submit_ms": null,
       "p99_gpu_frame_time_ms": null,
       "peak_engine_committed_gpu_bytes": null,
+      "performance_contract": "nw07_perf_ref_v1",
+      "performance_protocol": "nw07-perf-run.v1",
+      "provenance": null,
       "reason": "Physical measurements require the exact Windows x64 artifact and the frozen nw07_perf_ref_v1 capture environment.",
+      "reference_capture": "pending_reference_capture",
+      "reference_host": null,
+      "reference_id": "nw07_perf_ref_v1",
+      "result_status": "pending_physical_windows_capture",
       "startup_decode_memory_bytes": null,
       "startup_ms": null,
       "status": "pending_physical_windows_capture",
@@ -699,54 +2791,568 @@
       "candidates": [
         {
           "codec_id": "nwc.codec.stored.v1",
-          "container_bytes": 4196,
+          "container_bytes": 4180,
           "decoded_bytes": 3968,
           "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-          "encoded_bytes": 4260,
-          "encoded_sha256": "d4af2c2a955c36a03d9d34579f5eda3d6539c1a136ae7e03a36fa962ed7d1526",
+          "encoded_bytes": 4244,
+          "encoded_sha256": "dd7faac4fef5442230b3d37689445f24ed41a166e8f8693028974a0ca167cb8a",
           "format": "nwc.container.v1",
-          "layout_id": "nwc.layout.aos.v1",
-          "payload_bytes": 4196,
+          "layout_id": "nwc.layout.soa.v1",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 4244,
+              "before": 4244,
+              "status": "measured_complete_encoded_container_bytes"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_container_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
+          "payload_bytes": 4180,
           "record_count": 16,
-          "reference_count": 0
+          "reference_count": 0,
+          "rejection_reasons": [
+            "larger_complete_encoded_container"
+          ],
+          "selected": false
         },
         {
           "codec_id": "nwc.codec.mszip.v1",
-          "container_bytes": 4196,
+          "container_bytes": 4180,
           "decoded_bytes": 3968,
           "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-          "encoded_bytes": 1715,
-          "encoded_sha256": "a77ad9f30c26267ab618c207850b1ae450ceb3245e7587a277e7713d527e1f97",
+          "encoded_bytes": 1708,
+          "encoded_sha256": "30956531f935dea9d6ed20e71cb493937a1ddcf18f404430f733ee4fc31167b5",
           "format": "nwc.container.v1",
-          "layout_id": "nwc.layout.aos.v1",
-          "payload_bytes": 1651,
+          "layout_id": "nwc.layout.soa.v1",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 1708,
+              "before": 4244,
+              "status": "measured_complete_encoded_container_bytes"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_container_round_trip"
+              },
+              "numeric_relative": {
+                "after": 0.0,
+                "before": 0.0,
+                "status": "measured_lossless_round_trip"
+              }
+            }
+          },
+          "payload_bytes": 1644,
           "record_count": 16,
-          "reference_count": 0
+          "reference_count": 0,
+          "rejection_reasons": [],
+          "selected": true
         }
       ],
       "compression_increases_distribution": false,
+      "measurements": {
+        "distribution_bytes": {
+          "after": 1708,
+          "before": 4244,
+          "status": "measured_complete_encoded_container_bytes"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_container_round_trip"
+          },
+          "numeric_relative": {
+            "after": 0.0,
+            "before": 0.0,
+            "status": "measured_lossless_round_trip"
+          }
+        }
+      },
       "selected": {
         "codec_id": "nwc.codec.mszip.v1",
-        "container_bytes": 4196,
+        "container_bytes": 4180,
         "decoded_bytes": 3968,
         "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-        "encoded_bytes": 1715,
-        "encoded_sha256": "a77ad9f30c26267ab618c207850b1ae450ceb3245e7587a277e7713d527e1f97",
+        "encoded_bytes": 1708,
+        "encoded_sha256": "30956531f935dea9d6ed20e71cb493937a1ddcf18f404430f733ee4fc31167b5",
         "format": "nwc.container.v1",
-        "layout_id": "nwc.layout.aos.v1",
-        "payload_bytes": 1651,
+        "layout_id": "nwc.layout.soa.v1",
+        "payload_bytes": 1644,
         "record_count": 16,
         "reference_count": 0
       },
       "selected_codec_id": "nwc.codec.mszip.v1"
     },
+    "selected_codec_id": "nwc.codec.mszip.v1",
+    "selected_layout_id": "nwc.layout.soa.v1",
     "shaders": {
       "duplicate_root_signature_bytes": 0,
       "duplicate_shader_bytes": 0,
       "fusion": "established NW-05 fusion decisions preserved; no unmeasured extra fusion applied",
+      "fusion_decisions_preserved_from": "NW-05 offline shader exporter",
+      "measurements": {
+        "distribution_bytes": {
+          "after": 404,
+          "before": 404,
+          "status": "measured_package_shader_and_root_signature_bytes"
+        },
+        "frame_time_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "measurement_protocol": {
+          "application_pipeline_cache": false,
+          "artifact_sha256": null,
+          "fresh_process_per_run": true,
+          "matching_keys": null,
+          "performance_contract": "nw07_perf_ref_v1",
+          "performance_protocol": "nw07-perf-run.v1",
+          "provenance": null,
+          "reference_capture": "pending_reference_capture",
+          "reference_host": null,
+          "reference_id": "nw07_perf_ref_v1",
+          "result_status": "pending_physical_windows_capture",
+          "run_seconds": 60,
+          "runs": 3,
+          "warmup_seconds": 5
+        },
+        "memory_bytes": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "startup_ms": {
+          "after": null,
+          "before": null,
+          "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+          "status": "pending_physical_windows_capture"
+        },
+        "visual_error": {
+          "image_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "image_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_absolute": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          },
+          "numeric_relative": {
+            "after": null,
+            "before": null,
+            "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+            "status": "pending_physical_windows_capture"
+          }
+        }
+      },
       "requires_new_shader_semantics": false,
       "root_signature_count": 1,
       "shader_count": 1,
+      "specialization_alternatives": [
+        {
+          "adopted": true,
+          "id": "nw05_fused_offline_specializations",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 404,
+              "before": 404,
+              "status": "measured_package_shader_and_root_signature_bytes"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              }
+            }
+          },
+          "root_signature_bytes": 172,
+          "shader_bytes": 232,
+          "shader_count": 1,
+          "specialization_ids": [
+            "SDFIntroCS"
+          ],
+          "status": "measured_package_bytes",
+          "unique_shader_blobs": 1
+        },
+        {
+          "adopted": false,
+          "delta_bytes": 0,
+          "id": "deduplicate_identical_shader_blobs",
+          "measurements": {
+            "distribution_bytes": {
+              "after": 404,
+              "before": 404,
+              "status": "measured_package_shader_and_root_signature_bytes"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_relative": {
+                "after": null,
+                "before": null,
+                "reason": "Distribution bytes are measured structurally; startup, memory, frame-time, and image error remain pending physical Windows capture.",
+                "status": "pending_physical_windows_capture"
+              }
+            }
+          },
+          "rejection_reasons": [
+            "requires_package_shader_record_identity_rewrite"
+          ],
+          "requires_package_shader_identity_change": true,
+          "root_signature_bytes": 172,
+          "shader_bytes": 232,
+          "shader_count": 1,
+          "status": "measured_bytes_not_integrated",
+          "unique_shader_blobs": 1
+        },
+        {
+          "adopted": false,
+          "id": "unfused_generic_shaders",
+          "measurements": {
+            "distribution_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "The pinned offline exporter emits fused SDF specializations only; no unfused shader fixture exists to measure this alternative.",
+              "status": "pending_physical_windows_capture"
+            },
+            "frame_time_ms": {
+              "after": null,
+              "before": null,
+              "reason": "The pinned offline exporter emits fused SDF specializations only; no unfused shader fixture exists to measure this alternative.",
+              "status": "pending_physical_windows_capture"
+            },
+            "measurement_protocol": {
+              "application_pipeline_cache": false,
+              "artifact_sha256": null,
+              "fresh_process_per_run": true,
+              "matching_keys": null,
+              "performance_contract": "nw07_perf_ref_v1",
+              "performance_protocol": "nw07-perf-run.v1",
+              "provenance": null,
+              "reference_capture": "pending_reference_capture",
+              "reference_host": null,
+              "reference_id": "nw07_perf_ref_v1",
+              "result_status": "pending_physical_windows_capture",
+              "run_seconds": 60,
+              "runs": 3,
+              "warmup_seconds": 5
+            },
+            "memory_bytes": {
+              "after": null,
+              "before": null,
+              "reason": "The pinned offline exporter emits fused SDF specializations only; no unfused shader fixture exists to measure this alternative.",
+              "status": "pending_physical_windows_capture"
+            },
+            "startup_ms": {
+              "after": null,
+              "before": null,
+              "reason": "The pinned offline exporter emits fused SDF specializations only; no unfused shader fixture exists to measure this alternative.",
+              "status": "pending_physical_windows_capture"
+            },
+            "visual_error": {
+              "image_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "The pinned offline exporter emits fused SDF specializations only; no unfused shader fixture exists to measure this alternative.",
+                "status": "pending_physical_windows_capture"
+              },
+              "image_relative": {
+                "after": null,
+                "before": null,
+                "reason": "The pinned offline exporter emits fused SDF specializations only; no unfused shader fixture exists to measure this alternative.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_absolute": {
+                "after": null,
+                "before": null,
+                "reason": "The pinned offline exporter emits fused SDF specializations only; no unfused shader fixture exists to measure this alternative.",
+                "status": "pending_physical_windows_capture"
+              },
+              "numeric_relative": {
+                "after": null,
+                "before": null,
+                "reason": "The pinned offline exporter emits fused SDF specializations only; no unfused shader fixture exists to measure this alternative.",
+                "status": "pending_physical_windows_capture"
+              }
+            }
+          },
+          "rejection_reasons": [
+            "no_unfused_shader_fixture_from_the_pinned_offline_exporter"
+          ],
+          "root_signature_bytes": null,
+          "shader_bytes": null,
+          "status": "not_measured_missing_unfused_fixture"
+        }
+      ],
+      "specialization_ids": [
+        "SDFIntroCS"
+      ],
       "unique_root_signature_blobs": 1,
       "unique_shader_blobs": 1
     }
@@ -824,15 +3430,15 @@
     "tools/nw06_timeline.py": "c481aafaf948387dfc4eea36f712385d970d3dcc182e6f56c8b49d4b1217a81e",
     "tools/nw07_contract.py": "592cd0ca9be755dec18586c9b9b8e5ee140bee4fbd5c914815f02c17a549af21",
     "tools/nw07_export.py": "77005e31596bc8b3d4e2f45e23280539d5a51bc52cfb25f09743e70fcefe0828",
-    "tools/nw10_compact.py": "12903559ce0241846c38f73e76bcd8ddd6eaa1a05c86e91594707b469068ce42",
+    "tools/nw10_compact.py": "5e5bada9ce5ff5907c35c81aba0ad88110a73176885a19e5dc54fb02e3f04a10",
     "tools/nw10_contract.py": "d1f5c926a00d2d8b16f9b39caca2a94098e852822abcd2041b077ad5bcee650d",
-    "tools/nw10_evidence.py": "87adb9fc8cdfc9a64f55da47e89f9b1fc5297e70cbc4bd83dbd0460b4487865f",
+    "tools/nw10_evidence.py": "68d3727e632ce2f045ef7ea97e9d0420736fe6d432e8b1d3ab8bbbb8d4ef8bef",
     "tools/nw10_intro.py": "fad0131cfc2729cdf4401455d9d2525b10951e739637426cabcbe4091ec83122",
     "tools/nw10_proof.py": "0286592098669dfb58065d2980a16cbe84de2e0ecc2ab29599d9a5aa7ca65fed",
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:16d9cb92045b8c7af34c674fe3d26f0dbc72af203c8da9bc94718cf0117e1322",
+  "nw10_build_inputs_digest": "sha256:v1:b9b19d5ea628902dd82c3a4e6898b6ff7a1e27feecd7b7e5331c638ace189a41",
   "performance_validation": {
     "contract_id": "nw07_perf_ref_v1",
     "protocol": "nw07-perf-run.v1",

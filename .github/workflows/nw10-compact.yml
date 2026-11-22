@@ -98,7 +98,8 @@ jobs:
         with:
           name: nw10-contract-evidence
           path: |
-            build/nw10-evidence/**
+            build/nw10-evidence-a/**
+            build/nw10-evidence-b/**
             ${{ runner.temp }}/nw07-contracts.json
 
   windows-compact-export:
@@ -342,6 +343,16 @@ jobs:
           Copy-Item $selected.FullName $closureExe -Force
           python tools/dependency_check.py --binary $closureExe --deployment-root $closureRoot --profile compact_experiment --fixture nw10_validated > "$PWD/build/nw10-dependency-closure.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Bind the closure report to the exact selected executable bytes.
+          $closurePath = Join-Path $PWD "build/nw10-dependency-closure.json"
+          $closure = Get-Content $closurePath -Raw | ConvertFrom-Json
+          $closure | Add-Member -NotePropertyName binary_sha256 -NotePropertyValue (
+            (Get-FileHash -Algorithm SHA256 $closureExe).Hash.ToLowerInvariant()
+          ) -Force
+          $closure | Add-Member -NotePropertyName binary_bytes -NotePropertyValue (
+            [int64](Get-Item $closureExe).Length
+          ) -Force
+          $closure | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $closurePath
 
           Write-Host "NW-10 Windows feasibility outcome:"
           Get-Content $outcomePath
@@ -373,6 +384,14 @@ jobs:
           if (-not (Test-Path $canonicalTemplate -PathType Leaf)) {
             throw "Decoder-off PE-ledger control template was not built: $canonicalTemplate"
           }
+          # The link-control export must select the same embedded payload mode
+          # as the final artifact.  Otherwise the compact payload/decoder cost
+          # would be misattributed to linker elimination.
+          if ($outcome.compact_candidate_runtime_status -eq "validated_runnable") {
+            $selectMode = "compact"
+          } else {
+            $selectMode = "canonical"
+          }
 
           $oldLink = $env:_LINK_
           try {
@@ -382,7 +401,8 @@ jobs:
               --report "$PWD/build/nw10-intro-link-control-report.json" `
               --canonical-player-template $canonicalTemplate `
               --player-template $template `
-              --dxc $dxc
+              --dxc $dxc `
+              --select-mode $selectMode
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
             if ($null -eq $oldLink) {
@@ -633,7 +653,10 @@ jobs:
             --artifact-name "nw10-windows-compact-evidence" `
             --artifact-id "${{ steps.nw10_evidence_upload.outputs.artifact-id }}" `
             --artifact-digest "${{ steps.nw10_evidence_upload.outputs.artifact-digest }}" `
-            --prior-valid-ledger "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json"
+            --prior-valid-ledger "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json" `
+            --pe-ledger "$PWD/build/nw10-windows-pe-ledger.json" `
+            --dependency-closure "$PWD/build/nw10-dependency-closure.json" `
+            --system-validation "$PWD/benchmarks/nw10/system-validation.v1.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/schema_validator.py `
             --document "$PWD/build/nw10-windows-compact-feasibility-bound.json" `

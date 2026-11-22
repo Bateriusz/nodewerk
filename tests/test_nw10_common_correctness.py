@@ -13,6 +13,9 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw10_common_correctness as correctness  # noqa: E402
 import nw10_publish_evidence as publisher  # noqa: E402
+import nw04_fixture  # noqa: E402
+import nw05_export  # noqa: E402
+import nwp_package as nwp  # noqa: E402
 
 
 def _capture_record(
@@ -172,6 +175,11 @@ def test_cross_hardware_comparison_requires_same_artifact(tmp_path: Path, monkey
         monkeypatch.setattr(
             correctness, "_verify_capture_manifest", lambda *_args: None
         )
+        monkeypatch.setattr(
+            correctness,
+            "_verify_unpacked_executable",
+            lambda *_args, **_kwargs: None,
+        )
         correctness.compare(
             a,
             b,
@@ -277,6 +285,11 @@ def test_compare_recomputes_loop_boundaries_from_raw_captures(
         encoding="utf-8",
     )
     monkeypatch.setattr(correctness, "_verify_capture_manifest", lambda *_args: None)
+    monkeypatch.setattr(
+        correctness,
+        "_verify_unpacked_executable",
+        lambda *_args, **_kwargs: None,
+    )
     calls = []
     def fake_compare(left: Path, right: Path) -> dict[str, float]:
         calls.append((left.name, right.name))
@@ -345,6 +358,43 @@ def test_packed_executable_verification_recomputes_container_identity(
     record["diagnostic_sibling"]["encoded_container_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="encoded-container SHA-256"):
         correctness._verify_packed_executable(record, record_path=record_path)
+
+
+def test_unpacked_executable_is_reopened_hashed_and_bound(tmp_path: Path) -> None:
+    package = nwp.encode_package(
+        nwp.make_test_package(shader_blob=nw04_fixture.make_dxil_container())
+    )
+    executable = nw05_export.embed_package(
+        b"MZ" + b"\x00" * 128, package, b"\x00" * 32
+    )
+    package_sha = correctness.hashlib.sha256(package).hexdigest()
+    executable_sha = correctness.hashlib.sha256(executable).hexdigest()
+    record = _capture_record(
+        "ada",
+        "captured_reference",
+        package_sha256=package_sha,
+        packaging_mode="unpacked",
+        diagnostic_sha256=executable_sha,
+    )
+    record["diagnostic_sibling"]["verification_file"] = "unpacked-diagnostic.exe"
+    (tmp_path / "unpacked-diagnostic.exe").write_bytes(executable)
+    correctness._verify_unpacked_executable(
+        record, record_path=tmp_path / "capture.json"
+    )
+
+    tampered = bytearray(executable)
+    tampered[0] = ord("X")
+    (tmp_path / "unpacked-diagnostic.exe").write_bytes(bytes(tampered))
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        correctness._verify_unpacked_executable(
+            record, record_path=tmp_path / "capture.json"
+        )
+
+    record["diagnostic_sibling"]["verification_file"] = None
+    with pytest.raises(ValueError, match="does not retain"):
+        correctness._verify_unpacked_executable(
+            record, record_path=tmp_path / "capture.json"
+        )
 
 
 def test_packed_result_bundle_manifest_binds_verification_file(
@@ -459,6 +509,11 @@ def test_packed_comparison_requires_manifests_and_packed_mode(
     monkeypatch.setattr(correctness, "_verify_capture_manifest", lambda *_args: None)
     monkeypatch.setattr(
         correctness, "_verify_packed_executable", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        correctness,
+        "_verify_unpacked_executable",
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         correctness, "_verify_result_bundle_manifest", lambda *_args, **_kwargs: None
