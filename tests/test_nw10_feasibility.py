@@ -660,6 +660,10 @@ def test_feasibility_success_branch_is_schema_valid(monkeypatch) -> None:
     assert record["compact_candidate"]["runtime_status"] == "validated_runnable"
     assert record["acceptance_linkage"]["true_64k_artifact_delivered"] is True
     assert record["certification"]["status"] == "verified"
+    assert (
+        record["canonical_fallback"]["dependency_closure"]["closure_verified"]
+        is False
+    )
 
 
 def test_feasibility_byte_target_alone_cannot_certify_success() -> None:
@@ -1308,6 +1312,10 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     assert record["validated_artifact"]["mode"] == "canonical_fallback"
     assert record["validated_artifact"]["bytes"] == 65_000
     assert record["acceptance_linkage"]["true_64k_artifact_delivered"] is True
+    assert (
+        record["canonical_fallback"]["dependency_closure"]["closure_verified"]
+        is True
+    )
 
 
 def test_validated_compact_identity_is_not_taken_from_smaller_proof_candidate() -> None:
