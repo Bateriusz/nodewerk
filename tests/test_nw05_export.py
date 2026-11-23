@@ -115,6 +115,20 @@ def test_generated_player_uses_export_dimensions_and_reports_failures() -> None:
     assert source.count("player.Report(true)") >= 3
     assert "NW05_SPECIALIZED_IMPLEMENTATION_MISMATCH" in source
     assert "specialized_implementation_mask() != 0u" in source
+    capture_declarations = (
+        "#if NW07_CAPTURE_CONTROLS\n"
+        "    std::string capture_directory;\n"
+        "    std::vector<std::uint64_t> capture_ticks;\n"
+        "#endif\n"
+    )
+    assert capture_declarations in source
+    assert source.index(capture_declarations) < source.index(
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        "    bool emit_image_hash = false;\n"
+    )
+    assert source.count('"--capture-dir"') == 2
+    assert source.count('"--capture-tick"') == 2
+    assert source.count("capture_ticks.push_back") == 2
 
 
 def test_specialized_runtime_flags_follow_reachable_texture_implementation() -> None:
