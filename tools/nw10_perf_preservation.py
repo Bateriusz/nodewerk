@@ -21,8 +21,9 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "tools"))
+SOURCE_REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = SOURCE_REPO_ROOT
+sys.path.insert(0, str(SOURCE_REPO_ROOT / "tools"))
 
 import nw07_capture  # noqa: E402
 import nw07_contract  # noqa: E402
@@ -309,10 +310,10 @@ def validate_preservation(
         reasons.append("candidate report does not match current NW-10 build inputs")
     frozen = nw07_export.load_canonical_config()
     expected_graph = nw07_export.verify_canonical_graph(
-        frozen, repo_root=REPO_ROOT
+        frozen, repo_root=SOURCE_REPO_ROOT
     )
     pinned_inputs = nw07_export.verify_pinned_inputs(
-        frozen, repo_root=REPO_ROOT
+        frozen, repo_root=SOURCE_REPO_ROOT
     )
     graph = candidate_report.get("common_graph")
     graph = graph if isinstance(graph, Mapping) else {}
@@ -509,10 +510,10 @@ def _validate_public_for_publish(
         raise ValueError("public candidate does not match current NW-10 build inputs")
     frozen = nw07_export.load_canonical_config()
     expected_graph = nw07_export.verify_canonical_graph(
-        frozen, repo_root=REPO_ROOT
+        frozen, repo_root=SOURCE_REPO_ROOT
     )
     pinned_inputs = nw07_export.verify_pinned_inputs(
-        frozen, repo_root=REPO_ROOT
+        frozen, repo_root=SOURCE_REPO_ROOT
     )
     graph = candidate.get("common_graph")
     if (
