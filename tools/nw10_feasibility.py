@@ -327,14 +327,70 @@ def _certify_compact_candidate(
     )
     required_auxiliary = ledger.get("required_auxiliary_files")
     no_required_sidecars = not required_auxiliary
+    expected_ledger_codec = (
+        compact_codec_id
+        if validated_mode == "compact"
+        else contract.CODEC_STORED_ID
+    )
+    expected_ledger_layout = (
+        compact_layout_id
+        if validated_mode == "compact"
+        else contract.LAYOUT_CANONICAL_ID
+    )
+    expected_ledger_payload_bytes = (
+        compact_encoded_bytes
+        if validated_mode == "compact"
+        else canonical_package_bytes
+    )
+    ledger_identity_present = (
+        _is_positive_int(ledger.get("complete_runnable_distribution_bytes"))
+        and _is_positive_int(ledger.get("selected_executable_bytes"))
+        and _is_positive_int(components.get("canonical_package_bytes"))
+        and _is_positive_int(components.get("encoded_package_bytes"))
+        and bool(str(ledger.get("codec_id", "")))
+        and bool(str(ledger.get("layout_id", "")))
+    )
+    ledger_identity_ok = (
+        ledger_identity_present
+        and ledger.get("complete_runnable_distribution_bytes") == validated_size
+        and ledger.get("selected_executable_bytes") == validated_size
+        and components.get("canonical_package_bytes") == canonical_package_bytes
+        and components.get("encoded_package_bytes")
+        == expected_ledger_payload_bytes
+        and str(ledger.get("codec_id", "")) == expected_ledger_codec
+        and str(ledger.get("layout_id", "")) == expected_ledger_layout
+    )
+    bytes_ok = bytes_accounted and no_required_sidecars and ledger_identity_ok
+    bytes_status = (
+        "verified"
+        if bytes_ok
+        else (
+            "failed"
+            if ledger_identity_present and not ledger_identity_ok
+            else "pending"
+        )
+    )
     bytes_verification = _verification(
-        "verified" if bytes_accounted and no_required_sidecars else "pending",
+        bytes_status,
         (
-            "all complete-distribution bytes including decoder code are accounted"
-            if bytes_accounted and no_required_sidecars
-            else "complete-distribution byte accounting or sidecar closure is incomplete"
+            "all complete-distribution bytes and selected-artifact identities are accounted"
+            if bytes_ok
+            else (
+                "byte ledger describes a different selected artifact or payload"
+                if bytes_status == "failed"
+                else "complete-distribution byte accounting or identity binding is incomplete"
+            )
         ),
         all_required_bytes_accounted=bytes_accounted,
+        selected_artifact_identity_verified=ledger_identity_ok,
+        complete_runnable_distribution_bytes=ledger.get(
+            "complete_runnable_distribution_bytes"
+        ),
+        selected_executable_bytes=ledger.get("selected_executable_bytes"),
+        canonical_package_bytes=components.get("canonical_package_bytes"),
+        encoded_package_bytes=components.get("encoded_package_bytes"),
+        codec_id=ledger.get("codec_id"),
+        layout_id=ledger.get("layout_id"),
         decoder_code_bytes=measured_decoder_bytes,
         unaccounted_components=unaccounted,
         required_auxiliary_files=dict(required_auxiliary or {}),
