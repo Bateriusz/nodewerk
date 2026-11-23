@@ -667,6 +667,11 @@ jobs:
             --dependency-closure "$PWD/build/nw10-dependency-closure.json" `
             --system-validation "$PWD/benchmarks/nw10/system-validation.v1.json" `
             --correctness "$PWD/benchmarks/nw10/common-artifact-correctness.v1.json" `
+            --selected-executable "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.exe" `
+            --canonical-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.exe" `
+            --compact-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.compact.exe" `
+            --final-package "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.nwp" `
+            --final-manifest "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.manifest.json" `
             --correctness-ada-unpacked-executable "$PWD/build/nw10-correctness-scripted/transfer-ada/transfer-package/nw10-correctness-diagnostic.exe" `
             --correctness-ada-packed-executable "$PWD/build/nw10-correctness-scripted/transfer-ada-packed/transfer-package/nw10-correctness-diagnostic.exe" `
             --correctness-blackwell-unpacked-executable "$PWD/build/nw10-correctness-scripted/transfer-blackwell/transfer-package/nw10-correctness-diagnostic.exe" `
