@@ -1324,6 +1324,16 @@ def compare(
                     .get("diagnostic_sibling", {})
                     .get("encoded_container_bytes")
                 ),
+                "unpacked_manifest_sha256": (
+                    (ada if label == "ada" else blackwell)
+                    .get("diagnostic_sibling", {})
+                    .get("manifest_sha256")
+                ),
+                "packed_manifest_sha256": (
+                    packed_records[label]
+                    .get("diagnostic_sibling", {})
+                    .get("manifest_sha256")
+                ),
                 "codec_id": packed_codec_id,
                 "layout_id": packed_layout_id,
                 "device_form_factor_source": packed_records[label]
