@@ -1698,9 +1698,22 @@ def build_feasibility(
             "link_manifest_verified": True,
             "present_sync_interval": 0,
             "dependency_closure": {
-                "closure_verified": True,
-                "sidecar_files": [],
-                "canonical_imports": _canonical_dependencies(intro),
+                "closure_verified": (
+                    validated_mode == "canonical_fallback"
+                    and dependency_verification.get("status") == "verified"
+                ),
+                "sidecar_files": (
+                    list(dependency_closure.get("sidecar_files") or [])
+                    if validated_mode == "canonical_fallback"
+                    and dependency_closure is not None
+                    else []
+                ),
+                "canonical_imports": (
+                    list(dependency_closure.get("canonical_imports") or [])
+                    if validated_mode == "canonical_fallback"
+                    and dependency_closure is not None
+                    else _canonical_dependencies(intro)
+                ),
             },
         },
         "acceptance_linkage": {
