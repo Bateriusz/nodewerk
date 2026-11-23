@@ -181,6 +181,10 @@ def _is_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _evidence_bytes(value: Any) -> bytes:
     if isinstance(value, Mapping):
         value = value.get("executable", value.get("path"))
@@ -271,6 +275,10 @@ def _certify_compact_candidate(
     compact_components = (
         compact_components if isinstance(compact_components, Mapping) else {}
     )
+    canonical_components = canonical_ledger.get("components")
+    canonical_components = (
+        canonical_components if isinstance(canonical_components, Mapping) else {}
+    )
     compact_ledger_identity_applicable = True
     compact_dependencies = compact_ledger.get("dependencies")
     compact_dependencies = (
@@ -312,7 +320,7 @@ def _certify_compact_candidate(
             )
             or (
                 not compact_all_accounted
-                and "decoder_code_bytes" in compact_unaccounted
+                and set(compact_unaccounted) == {"decoder_code_bytes"}
                 and compact_decoder_bytes is None
             )
         )
@@ -359,8 +367,19 @@ def _certify_compact_candidate(
                 "embedded_footer_bytes",
             )
         )
+        and compact_components.get("embedded_manifest_binding_bytes") == 32
+        and compact_components.get("embedded_footer_bytes") == 92
+        and _is_nonnegative_int(
+            compact_components.get("shader_payload_bytes")
+        )
+        and (
+            not canonical_components
+            or compact_components.get("shader_payload_bytes")
+            == canonical_components.get("shader_payload_bytes")
+        )
         and not compact_ledger.get("required_auxiliary_files")
-        and "cabinet" in compact_dependency_names
+        and {"cabinet", "d3d12", "kernel32"}
+        <= compact_dependency_names
         and compact_decoder_accounting_ok
         and (
             validated_mode != "compact"
@@ -420,12 +439,21 @@ def _certify_compact_candidate(
         if isinstance(decoder, Mapping):
             measured_decoder_bytes = decoder.get("template_bytes_added")
     unaccounted = list(ledger.get("unaccounted_components") or [])
-    only_decoder_pending = set(unaccounted) <= {"decoder_code_bytes"}
-    bytes_accounted = bool(ledger.get("all_required_bytes_accounted")) or (
+    unaccounted_set = set(unaccounted)
+    all_required = ledger.get("all_required_bytes_accounted")
+    all_required_true = all_required is True and not unaccounted
+    ledger_accounting_consistent = all_required_true or (
         validated_mode == "compact"
-        and only_decoder_pending
+        and all_required is False
+        and unaccounted_set == {"decoder_code_bytes"}
+    )
+    decoder_pending_ok = (
+        validated_mode == "compact"
+        and all_required is False
+        and unaccounted_set == {"decoder_code_bytes"}
         and measured_decoder_bytes is not None
     )
+    bytes_accounted = all_required_true or decoder_pending_ok
     required_auxiliary = ledger.get("required_auxiliary_files")
     no_required_sidecars = not required_auxiliary
     expected_ledger_codec = (
@@ -443,11 +471,30 @@ def _certify_compact_candidate(
         if validated_mode == "compact"
         else canonical_package_bytes
     )
+    selected_component_total: int | None
+    try:
+        selected_component_total = sum(
+            int(components.get(key, -1))
+            for key in (
+                "player_image_bytes",
+                "encoded_package_bytes",
+                "embedded_manifest_binding_bytes",
+                "embedded_footer_bytes",
+            )
+        )
+    except (TypeError, ValueError):
+        selected_component_total = None
     ledger_identity_present = (
         _is_positive_int(ledger.get("complete_runnable_distribution_bytes"))
         and _is_positive_int(ledger.get("selected_executable_bytes"))
         and _is_positive_int(components.get("canonical_package_bytes"))
         and _is_positive_int(components.get("encoded_package_bytes"))
+        and _is_positive_int(components.get("player_image_bytes"))
+        and _is_positive_int(
+            components.get("embedded_manifest_binding_bytes")
+        )
+        and _is_positive_int(components.get("embedded_footer_bytes"))
+        and _is_positive_int(components.get("shader_payload_bytes"))
         and bool(str(ledger.get("codec_id", "")))
         and bool(str(ledger.get("layout_id", "")))
     )
@@ -455,11 +502,16 @@ def _certify_compact_candidate(
         ledger_identity_present
         and ledger.get("complete_runnable_distribution_bytes") == validated_size
         and ledger.get("selected_executable_bytes") == validated_size
+        and ledger.get("complete_runnable_distribution_bytes")
+        == selected_component_total
+        and components.get("embedded_manifest_binding_bytes") == 32
+        and components.get("embedded_footer_bytes") == 92
         and components.get("canonical_package_bytes") == canonical_package_bytes
         and components.get("encoded_package_bytes")
         == expected_ledger_payload_bytes
         and str(ledger.get("codec_id", "")) == expected_ledger_codec
         and str(ledger.get("layout_id", "")) == expected_ledger_layout
+        and ledger_accounting_consistent
     )
     bytes_ok = bytes_accounted and no_required_sidecars and ledger_identity_ok
     bytes_status = (

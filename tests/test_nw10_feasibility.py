@@ -130,6 +130,12 @@ def _intro() -> dict:
                 "components": {
                     "canonical_package_bytes": len(_PACKAGE_BYTES),
                     "encoded_package_bytes": len(_PACKAGE_BYTES),
+                    "player_image_bytes": (
+                        240_000 - len(_PACKAGE_BYTES) - 32 - 92
+                    ),
+                    "embedded_manifest_binding_bytes": 32,
+                    "embedded_footer_bytes": 92,
+                    "shader_payload_bytes": 232,
                 },
                 "required_auxiliary_files": {},
                 "dependencies": [
@@ -154,6 +160,7 @@ def _intro() -> dict:
                     ),
                     "embedded_manifest_binding_bytes": 32,
                     "embedded_footer_bytes": 92,
+                    "shader_payload_bytes": 232,
                 },
                 "required_auxiliary_files": {},
                 "dependencies": [
@@ -1390,6 +1397,9 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     intro["canonical_artifact"]["executable_bytes"] = 65_000
     intro["ledgers"]["canonical"]["complete_runnable_distribution_bytes"] = 65_000
     intro["ledgers"]["canonical"]["selected_executable_bytes"] = 65_000
+    intro["ledgers"]["canonical"]["components"]["player_image_bytes"] = (
+        65_000 - len(_PACKAGE_BYTES) - 32 - 92
+    )
     intro["compact_artifact"]["selected_mode"] = "canonical"
     intro["compact_artifact"]["selected_executable_bytes"] = 65_000
     intro["compact_artifact"]["selected_executable_sha256"] = canonical_sha
@@ -1497,6 +1507,68 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     assert missing["certification"]["visual"]["status"] == "failed"
     assert (
         missing["certification"]["visual"][
+            "compact_ledger_identity_verified"
+        ]
+        is False
+    )
+
+    incomplete_canonical = copy.deepcopy(intro)
+    del incomplete_canonical["ledgers"]["canonical"]["components"][
+        "player_image_bytes"
+    ]
+    incomplete = feasibility.build_feasibility(
+        outcome=outcome,
+        proof=_proof(),
+        intro=incomplete_canonical,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=dependency,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert incomplete["target_met"] is False
+    assert (
+        incomplete["certification"]["all_required_bytes_accounted"]["status"]
+        != "verified"
+    )
+
+    bad_compact = copy.deepcopy(intro)
+    bad_compact["ledgers"]["compact"]["dependencies"] = [
+        {
+            "name": "cabinet.dll",
+            "kind": "windows_inbox",
+            "distributed_bytes": 0,
+        }
+    ]
+    bad_compact["ledgers"]["compact"]["components"][
+        "embedded_manifest_binding_bytes"
+    ] = 31
+    bad_compact["ledgers"]["compact"]["unaccounted_components"] = [
+        "decoder_code_bytes",
+        "shader_payload_bytes",
+    ]
+    bad_compact_record = feasibility.build_feasibility(
+        outcome=outcome,
+        proof=_proof(),
+        intro=bad_compact,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=dependency,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert bad_compact_record["target_met"] is False
+    assert bad_compact_record["certification"]["visual"]["status"] == "failed"
+    assert (
+        bad_compact_record["certification"]["visual"][
             "compact_ledger_identity_verified"
         ]
         is False
