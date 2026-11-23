@@ -635,6 +635,35 @@ def test_feasibility_byte_target_alone_cannot_certify_success() -> None:
     )
 
 
+def test_missing_pe_ledger_leaves_dependent_gates_pending(monkeypatch) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=None,
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=_performance(),
+        correctness=_correctness(),
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"]["status"] == "pending"
+    assert record["certification"]["failed_gates"] == []
+    assert record["certification"]["clean_system"]["status"] == "verified"
+    assert record["certification"]["performance"]["status"] == "verified"
+    assert record["certification"]["visual"]["status"] == "verified"
+    assert record["certification"]["pe_ledger_binding"]["status"] == "pending"
+
+
 def test_fabricated_or_anonymous_evidence_cannot_certify_success(monkeypatch) -> None:
     monkeypatch.setattr(
         feasibility.nw07_evidence,
@@ -827,6 +856,63 @@ def test_fabricated_diagnostic_evidence_cannot_certify_success(monkeypatch) -> N
         record["certification"]["visual"][
             "retained_diagnostic_evidence_verified"
         ]
+        is False
+    )
+
+
+def test_codec_or_layout_identity_mismatch_cannot_certify_success(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    stored = compact.encode_compact(
+        _PACKAGE_BYTES,
+        codec_id=contract.CODEC_STORED_ID,
+        layout_id=contract.LAYOUT_SOA_ID,
+    )
+    stored_exe = nw05_export.embed_package(
+        b"MZ" + b"\x00" * 128, stored.bytes, _MANIFEST_DIGEST
+    )
+    stored_exe_sha = hashlib.sha256(stored_exe).hexdigest()
+    stored_encoded_sha = hashlib.sha256(stored.bytes).hexdigest()
+    correctness = copy.deepcopy(_correctness())
+    for tier in ("ada", "blackwell"):
+        correctness["packed_unpacked_comparison"]["runtime"][tier][
+            "packed_executable_sha256"
+        ] = stored_exe_sha
+        correctness["packed_unpacked_comparison"]["runtime"][tier][
+            "encoded_container_sha256"
+        ] = stored_encoded_sha
+        correctness[tier]["artifact"][
+            "packed_executable_sha256"
+        ] = stored_exe_sha
+        correctness[tier]["artifact"][
+            "encoded_container_sha256"
+        ] = stored_encoded_sha
+    evidence = _correctness_evidence()
+    evidence["ada"]["packed"] = stored_exe
+    evidence["blackwell"]["packed"] = stored_exe
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=_performance(),
+        correctness=correctness,
+        correctness_evidence=evidence,
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"]["visual"]["status"] == "failed"
+    assert (
+        record["certification"]["visual"]["codec_layout_identity_verified"]
         is False
     )
 
