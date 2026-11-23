@@ -854,6 +854,8 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
             "unpacked_executable_sha256",
             "packed_executable_sha256",
             "encoded_container_sha256",
+            "unpacked_manifest_sha256",
+            "packed_manifest_sha256",
         ):
             if not re.fullmatch(
                 r"[0-9a-f]{64}", str(entry.get(key, "")).lower()
@@ -861,6 +863,15 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
                 raise ValueError(
                     f"packed/unpacked {tier} runtime is missing {key}"
                 )
+        encoded_bytes = entry.get("encoded_container_bytes")
+        if (
+            not isinstance(encoded_bytes, int)
+            or isinstance(encoded_bytes, bool)
+            or encoded_bytes <= 0
+        ):
+            raise ValueError(
+                f"packed/unpacked {tier} runtime has no encoded container size"
+            )
         if entry.get("codec_id") != codec_id or entry.get("layout_id") != layout_id:
             raise ValueError(
                 f"packed/unpacked {tier} runtime changed codec/layout identity"
@@ -953,6 +964,15 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
                 "encoded_container_sha256": packed_runtime["ada"].get(
                     "encoded_container_sha256"
                 ),
+                "encoded_container_bytes": packed_runtime["ada"].get(
+                    "encoded_container_bytes"
+                ),
+                "unpacked_manifest_sha256": packed_runtime["ada"].get(
+                    "unpacked_manifest_sha256"
+                ),
+                "packed_manifest_sha256": packed_runtime["ada"].get(
+                    "packed_manifest_sha256"
+                ),
             },
         },
         "blackwell": {
@@ -967,6 +987,15 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "encoded_container_sha256": packed_runtime["blackwell"].get(
                     "encoded_container_sha256"
+                ),
+                "encoded_container_bytes": packed_runtime["blackwell"].get(
+                    "encoded_container_bytes"
+                ),
+                "unpacked_manifest_sha256": packed_runtime["blackwell"].get(
+                    "unpacked_manifest_sha256"
+                ),
+                "packed_manifest_sha256": packed_runtime["blackwell"].get(
+                    "packed_manifest_sha256"
                 ),
             },
         },
@@ -1006,6 +1035,15 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
                     "encoded_container_sha256": packed_runtime["ada"].get(
                         "encoded_container_sha256"
                     ),
+                    "encoded_container_bytes": packed_runtime["ada"].get(
+                        "encoded_container_bytes"
+                    ),
+                    "unpacked_manifest_sha256": packed_runtime["ada"].get(
+                        "unpacked_manifest_sha256"
+                    ),
+                    "packed_manifest_sha256": packed_runtime["ada"].get(
+                        "packed_manifest_sha256"
+                    ),
                     "codec_id": packed_runtime["ada"].get("codec_id"),
                     "layout_id": packed_runtime["ada"].get("layout_id"),
                     "device_form_factor_source": packed_runtime["ada"].get(
@@ -1026,6 +1064,15 @@ def publish_correctness(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     "encoded_container_sha256": packed_runtime["blackwell"].get(
                         "encoded_container_sha256"
+                    ),
+                    "encoded_container_bytes": packed_runtime["blackwell"].get(
+                        "encoded_container_bytes"
+                    ),
+                    "unpacked_manifest_sha256": packed_runtime["blackwell"].get(
+                        "unpacked_manifest_sha256"
+                    ),
+                    "packed_manifest_sha256": packed_runtime["blackwell"].get(
+                        "packed_manifest_sha256"
                     ),
                     "codec_id": packed_runtime["blackwell"].get("codec_id"),
                     "layout_id": packed_runtime["blackwell"].get("layout_id"),
