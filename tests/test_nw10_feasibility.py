@@ -99,6 +99,15 @@ def _intro() -> dict:
         "ledgers": {
             "canonical": {
                 "all_required_bytes_accounted": True,
+                "complete_runnable_distribution_bytes": 240_000,
+                "selected_executable_bytes": 240_000,
+                "codec_id": contract.CODEC_STORED_ID,
+                "layout_id": contract.LAYOUT_CANONICAL_ID,
+                "components": {
+                    "canonical_package_bytes": len(_PACKAGE_BYTES),
+                    "encoded_package_bytes": len(_PACKAGE_BYTES),
+                },
+                "required_auxiliary_files": {},
                 "dependencies": [
                     {"name": "d3d12", "kind": "windows_inbox", "distributed_bytes": 0}
                 ],
@@ -108,8 +117,11 @@ def _intro() -> dict:
                 "unaccounted_components": ["decoder_code_bytes"],
                 "codec_id": contract.CODEC_MSZIP_ID,
                 "layout_id": contract.LAYOUT_SOA_ID,
+                "complete_runnable_distribution_bytes": 65_000,
+                "selected_executable_bytes": 65_000,
                 "components": {
                     "decoder_code_bytes": None,
+                    "canonical_package_bytes": len(_PACKAGE_BYTES),
                     "encoded_package_bytes": len(_COMPACT_CONTAINER.bytes),
                 },
                 "required_auxiliary_files": {},
@@ -671,6 +683,45 @@ def test_missing_pe_ledger_leaves_dependent_gates_pending(monkeypatch) -> None:
     assert record["certification"]["pe_ledger_binding"]["status"] == "pending"
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("selected_executable_bytes", 64_999),
+        ("complete_runnable_distribution_bytes", 64_999),
+        ("codec_id", contract.CODEC_STORED_ID),
+        ("layout_id", contract.LAYOUT_CANONICAL_ID),
+    ],
+)
+def test_byte_ledger_identity_mismatch_cannot_certify_success(
+    monkeypatch, field, value
+) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    intro = copy.deepcopy(_intro())
+    intro["ledgers"]["compact"][field] = value
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=intro,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=_performance(),
+        correctness=_correctness(),
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    gate = record["certification"]["all_required_bytes_accounted"]
+    assert gate["status"] == "failed"
+    assert gate["selected_artifact_identity_verified"] is False
+
+
 def test_fabricated_or_anonymous_evidence_cannot_certify_success(monkeypatch) -> None:
     monkeypatch.setattr(
         feasibility.nw07_evidence,
@@ -1147,6 +1198,8 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     canonical_sha = "b" * 64
     intro = _intro()
     intro["canonical_artifact"]["executable_bytes"] = 65_000
+    intro["ledgers"]["canonical"]["complete_runnable_distribution_bytes"] = 65_000
+    intro["ledgers"]["canonical"]["selected_executable_bytes"] = 65_000
     intro["compact_artifact"]["selected_mode"] = "canonical"
     intro["compact_artifact"]["selected_executable_bytes"] = 65_000
     intro["compact_artifact"]["selected_executable_sha256"] = canonical_sha
