@@ -877,6 +877,20 @@ def test_performance_publisher_binds_status_to_implementation_head(
     source.parent.mkdir(parents=True)
     status_path.parent.mkdir(parents=True)
     runs = [{"status": "passed"} for _ in range(3)]
+    frozen = perf_preservation.nw07_export.load_canonical_config()
+    graph = perf_preservation.nw07_export.verify_canonical_graph(
+        frozen, repo_root=perf_preservation.SOURCE_REPO_ROOT
+    )
+    pinned = perf_preservation.nw07_export.verify_pinned_inputs(
+        frozen, repo_root=perf_preservation.SOURCE_REPO_ROOT
+    )
+    after_artifact = {
+        "artifact_key": "sha256:v1:" + "1" * 64,
+        "package_sha256": "2" * 64,
+        "manifest_sha256": "3" * 64,
+        "executable_sha256": "4" * 64,
+        "complete_distribution_bytes": 65_000,
+    }
     public = {
         "format": perf_preservation.FORMAT,
         "version": perf_preservation.VERSION,
@@ -887,12 +901,52 @@ def test_performance_publisher_binds_status_to_implementation_head(
         "status": "verified_preserved",
         "reasons": [],
         "matched_environment": True,
+        "candidate": {
+            "comparison_role": "after_common_artifact",
+            "performance_contract": contract.PERF_CONTRACT_ID,
+            "performance_protocol": contract.PERF_PROTOCOL_ID,
+            "profile_id": perf_preservation.nw07_contract.PROFILE_ID,
+            "requirements_digest": perf_preservation.nw07_contract.REQUIREMENTS_DIGEST,
+            "common_graph": {
+                "path": str(frozen["graph"]),
+                "sha256": graph["graph_sha256"],
+                "ir_sha256": graph["ir_sha256"],
+            },
+            "build_inputs": {
+                "nw07_frozen_digest": pinned["frozen_digest"],
+                "observed_digest": pinned["digest"],
+                "matches_frozen_digest": pinned["matches_frozen_digest"],
+                "nw10_digest": contract.build_inputs_digest(
+                    contract.compute_build_inputs()
+                ),
+            },
+            "artifact": after_artifact,
+            "dependency_closure": {
+                "imports": ["d3d12", "kernel32"],
+                "matches_manifest": True,
+            },
+            "runtime_probe": {
+                "status": "passed",
+                "exit_code": 0,
+                "uncapped_present_verified": True,
+            },
+            "release_grade": True,
+            "test_payload": False,
+        },
         "before": {
+            "artifact": {
+                "artifact_key": "sha256:v1:" + "5" * 64,
+                "package_sha256": "2" * 64,
+                "manifest_sha256": "6" * 64,
+                "executable_sha256": "7" * 64,
+                "complete_distribution_bytes": 65_100,
+            },
             "worst_gpu_p99_ms": 1.0,
             "worst_cpu_submit_p99_ms": 1.0,
             "runs": runs,
         },
         "after": {
+            "artifact": after_artifact,
             "worst_gpu_p99_ms": 1.1,
             "worst_cpu_submit_p99_ms": 1.1,
             "runs": runs,
