@@ -1981,6 +1981,7 @@ def build_feasibility(
     correctness: Mapping[str, Any] | None = None,
     correctness_evidence: Mapping[str, Any] | None = None,
     perf_contract: Mapping[str, Any] | None = None,
+    artifact_paths: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if proof.get("test_payload") is True or intro.get("test_payload") is True:
         raise ValueError("feasibility publication requires release-grade reports")
@@ -2048,11 +2049,18 @@ def build_feasibility(
     canonical_exit = _windows_exit_code(outcome.get("canonical_fallback_exit_code"))
     intro_candidate = outcome.get("intro_compact_candidate_bytes")
     proof_candidate = outcome.get("proof_compact_candidate_bytes")
-    candidate_size = int(compact_intro.get("executable_bytes", 0))
-    candidate_sha = str(compact_intro.get("executable_sha256", "")).lower()
-    canonical_size = int(canonical_intro.get("executable_bytes", 0))
+    trusted_artifacts = _verify_artifact_closure(
+        artifact_paths=artifact_paths,
+        validated_mode=validated_mode,
+        declared_intro=intro,
+    )
+    candidate_size = int(trusted_artifacts["compact_executable_bytes"])
+    candidate_sha = str(
+        trusted_artifacts["compact_executable_sha256"]
+    ).lower()
+    canonical_size = int(trusted_artifacts["canonical_executable_bytes"])
     canonical_sha = str(
-        canonical_intro.get("executable_sha256", "")
+        trusted_artifacts["canonical_executable_sha256"]
     ).lower()
     if candidate_size <= 0:
         raise ValueError("intro compact candidate has no positive executable size")
@@ -2161,6 +2169,7 @@ def build_feasibility(
         correctness=correctness,
         correctness_evidence=correctness_evidence,
         perf_contract=perf_contract,
+        trusted_artifacts=trusted_artifacts,
     )
     target_met = bool(
         base_target_met
