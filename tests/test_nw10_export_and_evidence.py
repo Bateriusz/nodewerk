@@ -30,6 +30,29 @@ def _canonical_text_sha256(path: Path) -> str:
     ).hexdigest()
 
 
+def test_feasibility_workflow_binds_retained_correctness_executables() -> None:
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "nw10-compact.yml"
+    ).read_text(encoding="utf-8")
+    expected = {
+        "--correctness-ada-unpacked-executable":
+            "build/nw10-correctness-scripted/transfer-ada/transfer-package/"
+            "nw10-correctness-diagnostic.exe",
+        "--correctness-ada-packed-executable":
+            "build/nw10-correctness-scripted/transfer-ada-packed/transfer-package/"
+            "nw10-correctness-diagnostic.exe",
+        "--correctness-blackwell-unpacked-executable":
+            "build/nw10-correctness-scripted/transfer-blackwell/transfer-package/"
+            "nw10-correctness-diagnostic.exe",
+        "--correctness-blackwell-packed-executable":
+            "build/nw10-correctness-scripted/transfer-blackwell-packed/"
+            "transfer-package/nw10-correctness-diagnostic.exe",
+    }
+    for flag, path in expected.items():
+        assert flag in workflow
+        assert path in workflow
+
+
 def test_proof_export_uses_the_canonical_nw07_graph_and_export_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
