@@ -713,6 +713,7 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
             "virtualization_indicators": [],
             "hypervisor_explained_by_vbs": False,
             "virtualization_probe": {
+                "available": True,
                 "manufacturer": "ASUSTeK COMPUTER INC.",
                 "model": "NUC13ANH-B",
                 "product_vendor": "ASUSTeK COMPUTER INC.",
@@ -886,6 +887,18 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
     with pytest.raises(ValueError, match="non-finite"):
         publisher.publish_system(args)
 
+    metrics_record["measurements"]["process_start_to_first_present_ms"] = 250.0
+    for optional_key, optional_value in (
+        ("lower_bound_ms", "NaN"),
+        ("process_creation_window_ms", "Infinity"),
+    ):
+        metrics_record["measurements"].pop("lower_bound_ms", None)
+        metrics_record["measurements"].pop("process_creation_window_ms", None)
+        metrics_record["measurements"][optional_key] = optional_value
+        _write_json(metrics, metrics_record)
+        with pytest.raises(ValueError, match="optional startup measurement"):
+            publisher.publish_system(args)
+
 
 def test_blackwell_transfer_bundle_is_runtime_only_and_published_by_ci() -> None:
     wrapper = (
@@ -929,6 +942,7 @@ def test_clean_summary_rejects_vm_markers_and_redefined_exit_codes() -> None:
             "virtualization_indicators": ["virtual machine"],
             "hypervisor_explained_by_vbs": True,
             "virtualization_probe": {
+                "available": True,
                 "manufacturer": "Microsoft Corporation",
                 "model": "Virtual Machine",
                 "hypervisor_present": True,
@@ -1030,6 +1044,7 @@ def test_clean_summary_rejects_vm_identity_even_when_marker_lists_are_cleared() 
             "virtualization_indicators": [],
             "hypervisor_explained_by_vbs": True,
             "virtualization_probe": {
+                "available": True,
                 "manufacturer": "Microsoft Corporation",
                 "model": "Virtual Machine",
                 "product_vendor": "Microsoft Corporation",
@@ -1087,3 +1102,38 @@ def test_clean_summary_rejects_vm_identity_even_when_marker_lists_are_cleared() 
         runtime_hardware={},
     )
     assert summary["host"]["windows_build"] == "10.0.26200"
+
+    physical_probe = dict(report["host"]["virtualization_probe"])
+    report["host"]["virtualization_probe"] = {}
+    with pytest.raises(ValueError, match="physical host probe"):
+        publisher._clean_summary(
+            report, bundle_sha256="a" * 64, artifact=artifact, runtime_hardware={}
+        )
+
+    report["host"]["virtualization_probe"] = dict(physical_probe)
+    report["host"]["virtualization_probe"]["available"] = False
+    with pytest.raises(ValueError, match="physical host probe"):
+        publisher._clean_summary(
+            report, bundle_sha256="a" * 64, artifact=artifact, runtime_hardware={}
+        )
+
+    report["host"]["virtualization_probe"] = dict(physical_probe)
+    report["host"]["virtualization_probe"]["hypervisor_present"] = None
+    with pytest.raises(ValueError, match="physical host probe"):
+        publisher._clean_summary(
+            report, bundle_sha256="a" * 64, artifact=artifact, runtime_hardware={}
+        )
+
+    report["host"]["virtualization_probe"] = dict(physical_probe)
+    report["host"]["virtualization_probe"]["product_name"] = "System Product Name"
+    with pytest.raises(ValueError, match="generic product"):
+        publisher._clean_summary(
+            report, bundle_sha256="a" * 64, artifact=artifact, runtime_hardware={}
+        )
+
+def test_transferred_clean_system_does_not_delete_output_root() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-transferred-clean-system.ps1"
+    ).read_text(encoding="utf-8")
+    assert "Remove-Item $output -Recurse" not in text
+    assert "$ownedOutputPaths" in text

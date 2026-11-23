@@ -354,52 +354,6 @@ def _clean_summary(
     probe = host.get("virtualization_probe")
     if not isinstance(probe, Mapping):
         raise ValueError("clean-system virtualization probe is absent")
-    independent_identity = " ".join(
-        str(probe.get(field, "") or "")
-        for field in (
-            "manufacturer",
-            "model",
-            "product_vendor",
-            "product_name",
-            "bios_manufacturer",
-            "bios_version",
-            "baseboard_manufacturer",
-            "baseboard_product",
-        )
-    ).lower()
-    independent_markers = [
-        marker
-        for marker in (
-            "virtual machine",
-            "vmware",
-            "virtualbox",
-            "kvm",
-            "qemu",
-            "xen",
-            "parallels",
-            "bochs",
-            "openstack",
-            "hyper-v",
-            "innotek",
-            "bhyve",
-            "cloud hypervisor",
-            "amazon ec2",
-            "google compute engine",
-            "digitalocean",
-        )
-        if marker in independent_identity
-    ]
-    identity_complete = all(
-        bool(str(probe.get(field, "") or "").strip())
-        for field in (
-            "manufacturer",
-            "model",
-            "product_vendor",
-            "product_name",
-            "bios_manufacturer",
-            "baseboard_manufacturer",
-        )
-    )
     markers = list(host.get("vm_markers") or [])
     markers.extend(host.get("virtualization_indicators") or [])
     markers.extend(probe.get("vm_markers") or [])
@@ -408,20 +362,29 @@ def _clean_summary(
             "clean-system host exposes virtualization markers: "
             + ", ".join(sorted({str(item) for item in markers}))
         )
-    if independent_markers:
+    evaluation = clean_system_contract.evaluate_physical_virtualization_probe(
+        probe
+    )
+    if evaluation["virtualization_indicators"]:
         raise ValueError(
             "clean-system physical identity exposes VM markers: "
-            + ", ".join(sorted(set(independent_markers)))
+            + ", ".join(evaluation["virtualization_indicators"])
         )
-    hypervisor_present = probe.get("hypervisor_present")
-    explained_vbs = (
-        hypervisor_present is True
-        and probe.get("virtualization_based_security_status") == 2
-        and identity_complete
-        and host.get("hypervisor_explained_by_vbs") is True
-    )
-    if hypervisor_present is True and not explained_vbs:
-        raise ValueError("clean-system host has an unexplained active hypervisor")
+    if evaluation["generic_identity"] is True:
+        raise ValueError(
+            "clean-system physical identity is a generic product placeholder"
+        )
+    if evaluation["valid"] is not True:
+        raise ValueError(
+            "clean-system physical host probe is incomplete or untrusted: "
+            + "; ".join(evaluation["reasons"])
+        )
+    if host.get("hypervisor_explained_by_vbs") is not bool(
+        evaluation["hypervisor_explained_by_vbs"]
+    ):
+        raise ValueError(
+            "clean-system VBS classification disagrees with the raw probe"
+        )
     hardware = dict(runtime_hardware)
     if not hardware:
         artifact_record = report.get("artifact")
@@ -1289,7 +1252,16 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
     }
     for key in ("lower_bound_ms", "process_creation_window_ms"):
         if measurements.get(key) is not None:
-            startup[key] = float(measurements[key])
+            optional_startup = float(measurements[key])
+            if (
+                not math.isfinite(optional_startup)
+                or optional_startup < 0
+                or optional_startup > STARTUP_CEILING_MS
+            ):
+                raise ValueError(
+                    f"optional startup measurement {key} is non-finite or out of range"
+                )
+            startup[key] = optional_startup
 
     memory = {
         "status": "verified",

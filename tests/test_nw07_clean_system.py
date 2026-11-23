@@ -530,3 +530,110 @@ def test_compact_delivery_payload_is_decoded_before_nwp_fixture_use() -> None:
     raw, raw_encoding = clean_system._decode_embedded_package(canonical)
     assert raw_encoding == "canonical"
     assert raw == canonical
+
+def test_physical_probe_evaluation_is_shared_and_fail_closed() -> None:
+    physical = {
+        "available": True,
+        "manufacturer": "ASUSTeK COMPUTER INC.",
+        "model": "NUC13ANH-B",
+        "product_vendor": "ASUSTeK COMPUTER INC.",
+        "product_name": "NUC13ANH-B",
+        "bios_manufacturer": "American Megatrends Inc.",
+        "bios_version": "NUC13ANBi.0058",
+        "baseboard_manufacturer": "ASUSTeK COMPUTER INC.",
+        "baseboard_product": "NUC13ANH-B",
+        "hypervisor_present": False,
+        "virtualization_based_security_status": 0,
+    }
+    assert clean_system.evaluate_physical_virtualization_probe(physical)["valid"] is True
+
+    unavailable = dict(physical)
+    unavailable["available"] = False
+    assert clean_system.evaluate_physical_virtualization_probe(unavailable)["valid"] is False
+
+    unmeasured = dict(physical)
+    unmeasured["hypervisor_present"] = None
+    assert clean_system.evaluate_physical_virtualization_probe(unmeasured)["valid"] is False
+
+    generic = dict(physical)
+    generic["product_name"] = "System Product Name"
+    assert clean_system.evaluate_physical_virtualization_probe(generic)["valid"] is False
+    assert clean_system.evaluate_physical_virtualization_probe(generic)["generic_identity"] is True
+
+
+def test_selected_artifact_identity_recomputes_size_tiers_and_pe_imports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "selected.exe"
+    executable.write_bytes(b"MZ" + b"x" * 748)
+    monkeypatch.setattr(
+        clean_system.export.nw05_export,
+        "_pe_runtime_dependencies",
+        lambda raw: ["cabinet", "d3d12", "kernel32"],
+    )
+    monkeypatch.setattr(
+        clean_system.contract, "COMPLETE_DISTRIBUTION_CEILING_BYTES", 1000
+    )
+    monkeypatch.setattr(
+        clean_system.contract, "STRETCH_DISTRIBUTION_CEILING_BYTES", 500
+    )
+    canonical = {
+        "size_accounting": {
+            "within_ceiling": False,
+            "within_stretch": True,
+            "auxiliary_evidence_bytes": 123,
+        },
+        "dependency_closure": {
+            "dependencies": ["d3d12", "kernel32"],
+            "forbidden": [],
+            "authoring_infrastructure_excluded": ["nodewerk-studio"],
+            "gpu_name_predicates": [],
+        },
+    }
+    selected = clean_system._selected_artifact_identity(
+        canonical,
+        executable=executable,
+        embedded_payload=b"p" * 100,
+        embedded_package=b"nwp" * 50,
+        embedded_manifest=b"m" * 32,
+        delivery_encoding="compact",
+    )
+    assert selected["executable_bytes"] == 750
+    assert selected["size_accounting"]["within_ceiling"] is True
+    assert selected["size_accounting"]["within_stretch"] is False
+    assert selected["dependency_closure"]["dependencies"] == [
+        "cabinet",
+        "d3d12",
+        "kernel32",
+    ]
+    assert selected["canonical_manifest_dependency_closure"]["dependencies"] == [
+        "d3d12",
+        "kernel32",
+    ]
+
+
+def test_integrity_failure_is_failed_not_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        clean_system,
+        "run_clean_system",
+        lambda **kwargs: (_ for _ in ()).throw(
+            clean_system.CleanSystemVerificationError("decoded package mismatch")
+        ),
+    )
+    output = tmp_path / "report.json"
+    code = clean_system.main(
+        [
+            "--fixture", str(tmp_path / "fixture.exe"),
+            "--package", str(tmp_path / "package"),
+            "--deployment", str(tmp_path / "deployment"),
+            "--execution-kind", "physical",
+            "--output", str(output),
+        ]
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert code == 1
+    assert report["verification_status"] == "failed"
+    assert "decoded package mismatch" in report["reason"]
