@@ -98,6 +98,7 @@ def _intro() -> dict:
         "nw10_build_inputs_digest": contract.build_inputs_digest(
             contract.compute_build_inputs()
         ),
+        "measurements": {"package": {"shader_bytes": 232}},
         "canonical_artifact": {
             "artifact_key": "sha256:v1:" + "a" * 64,
             "executable_bytes": 240_000,
@@ -1572,6 +1573,98 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
             "compact_ledger_identity_verified"
         ]
         is False
+    )
+
+    fabricated_shader = copy.deepcopy(intro)
+    for ledger_name in ("canonical", "compact"):
+        fabricated_shader["ledgers"][ledger_name]["components"][
+            "shader_payload_bytes"
+        ] = 1
+    fabricated_shader_record = feasibility.build_feasibility(
+        outcome=outcome,
+        proof=_proof(),
+        intro=fabricated_shader,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=dependency,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert fabricated_shader_record["target_met"] is False
+    assert (
+        fabricated_shader_record["certification"][
+            "all_required_bytes_accounted"
+        ]["status"]
+        == "failed"
+    )
+    assert (
+        fabricated_shader_record["certification"]["visual"]["status"]
+        == "failed"
+    )
+
+    bad_selected_dependencies = copy.deepcopy(intro)
+    bad_selected_dependencies["ledgers"]["canonical"]["dependencies"].append(
+        {
+            "name": "forbidden.dll",
+            "kind": "windows_inbox",
+            "distributed_bytes": 0,
+        }
+    )
+    bad_selected_dependencies["ledgers"]["canonical"]["dependencies"][0][
+        "distributed_bytes"
+    ] = 1
+    bad_selected_record = feasibility.build_feasibility(
+        outcome=outcome,
+        proof=_proof(),
+        intro=bad_selected_dependencies,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=dependency,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert bad_selected_record["target_met"] is False
+    assert (
+        bad_selected_record["certification"]["all_required_bytes_accounted"][
+            "status"
+        ]
+        == "failed"
+    )
+
+    bad_compact_dependencies = copy.deepcopy(intro)
+    bad_compact_dependencies["ledgers"]["compact"]["dependencies"].append(
+        {
+            "name": "forbidden.dll",
+            "kind": "windows_inbox",
+            "distributed_bytes": 0,
+        }
+    )
+    bad_compact_dependency_record = feasibility.build_feasibility(
+        outcome=outcome,
+        proof=_proof(),
+        intro=bad_compact_dependencies,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=dependency,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert bad_compact_dependency_record["target_met"] is False
+    assert (
+        bad_compact_dependency_record["certification"]["visual"]["status"]
+        == "failed"
     )
 
 

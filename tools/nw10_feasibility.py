@@ -181,10 +181,6 @@ def _is_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _is_nonnegative_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
-
-
 def _evidence_bytes(value: Any) -> bytes:
     if isinstance(value, Mapping):
         value = value.get("executable", value.get("path"))
@@ -205,6 +201,24 @@ def _manifest_sha(value: Any, *keys: str) -> str:
     if re.fullmatch(r"[0-9a-f]{64}", text) is None:
         return ""
     return text
+
+
+def _normalized_dependency_names(rows: Any) -> set[str] | None:
+    if not isinstance(rows, list) or not rows:
+        return None
+    names: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            return None
+        if row.get("kind") != "windows_inbox":
+            return None
+        if row.get("distributed_bytes") != 0:
+            return None
+        name = str(row.get("name", "")).lower().removesuffix(".dll")
+        if not name:
+            return None
+        names.add(name)
+    return names
 
 
 def _verification(
@@ -279,16 +293,45 @@ def _certify_compact_candidate(
     canonical_components = (
         canonical_components if isinstance(canonical_components, Mapping) else {}
     )
-    compact_ledger_identity_applicable = True
-    compact_dependencies = compact_ledger.get("dependencies")
-    compact_dependencies = (
-        compact_dependencies if isinstance(compact_dependencies, list) else []
+    intro_measurements = intro.get("measurements")
+    intro_measurements = (
+        intro_measurements if isinstance(intro_measurements, Mapping) else {}
     )
-    compact_dependency_names = {
-        str(item.get("name", "")).lower().removesuffix(".dll")
-        for item in compact_dependencies
-        if isinstance(item, Mapping)
-    }
+    intro_package_measurements = intro_measurements.get("package")
+    intro_package_measurements = (
+        intro_package_measurements
+        if isinstance(intro_package_measurements, Mapping)
+        else {}
+    )
+    measured_shader_bytes = intro_package_measurements.get("shader_bytes")
+    measured_shader_bytes_ok = _is_positive_int(measured_shader_bytes)
+    dependency_closure_available = isinstance(dependency_closure, Mapping)
+    expected_selected_dependencies: set[str] | None = None
+    expected_compact_dependencies: set[str] | None = None
+    if dependency_closure_available:
+        imported = {
+            str(item).lower().removesuffix(".dll")
+            for item in (dependency_closure.get("canonical_imports") or [])
+            if str(item).strip()
+        }
+        expected_selected_dependencies = imported
+        expected_compact_dependencies = imported | {"cabinet"}
+    compact_dependency_rows_present = bool(
+        isinstance(compact_ledger.get("dependencies"), list)
+        and compact_ledger.get("dependencies")
+    )
+    compact_dependency_names = _normalized_dependency_names(
+        compact_ledger.get("dependencies")
+    )
+    compact_dependencies_ok = (
+        compact_dependency_names is not None
+        and "cabinet" in compact_dependency_names
+        and (
+            expected_compact_dependencies is None
+            or compact_dependency_names == expected_compact_dependencies
+        )
+    )
+    compact_ledger_identity_applicable = True
     compact_compression_rejected = compact_ledger.get(
         "compression_rejected_for_increasing_distribution"
     )
@@ -369,17 +412,19 @@ def _certify_compact_candidate(
         )
         and compact_components.get("embedded_manifest_binding_bytes") == 32
         and compact_components.get("embedded_footer_bytes") == 92
-        and _is_nonnegative_int(
-            compact_components.get("shader_payload_bytes")
-        )
+        and measured_shader_bytes_ok
+        and compact_components.get("shader_payload_bytes")
+        == measured_shader_bytes
+        and compact_components.get("shader_payload_bytes")
+        <= compact_components.get("player_image_bytes")
         and (
             not canonical_components
             or compact_components.get("shader_payload_bytes")
             == canonical_components.get("shader_payload_bytes")
         )
         and not compact_ledger.get("required_auxiliary_files")
-        and {"cabinet", "d3d12", "kernel32"}
-        <= compact_dependency_names
+        and compact_dependency_rows_present
+        and compact_dependencies_ok
         and compact_decoder_accounting_ok
         and (
             validated_mode != "compact"
@@ -456,6 +501,20 @@ def _certify_compact_candidate(
     bytes_accounted = all_required_true or decoder_pending_ok
     required_auxiliary = ledger.get("required_auxiliary_files")
     no_required_sidecars = not required_auxiliary
+    selected_dependency_rows_present = bool(
+        isinstance(ledger.get("dependencies"), list)
+        and ledger.get("dependencies")
+    )
+    selected_dependency_names = _normalized_dependency_names(
+        ledger.get("dependencies")
+    )
+    selected_dependencies_ok = (
+        selected_dependency_names is not None
+        and (
+            expected_selected_dependencies is None
+            or selected_dependency_names == expected_selected_dependencies
+        )
+    )
     expected_ledger_codec = (
         compact_codec_id
         if validated_mode == "compact"
@@ -495,6 +554,8 @@ def _certify_compact_candidate(
         )
         and _is_positive_int(components.get("embedded_footer_bytes"))
         and _is_positive_int(components.get("shader_payload_bytes"))
+        and measured_shader_bytes_ok
+        and selected_dependency_rows_present
         and bool(str(ledger.get("codec_id", "")))
         and bool(str(ledger.get("layout_id", "")))
     )
@@ -506,11 +567,15 @@ def _certify_compact_candidate(
         == selected_component_total
         and components.get("embedded_manifest_binding_bytes") == 32
         and components.get("embedded_footer_bytes") == 92
+        and components.get("shader_payload_bytes") == measured_shader_bytes
+        and components.get("shader_payload_bytes")
+        <= components.get("player_image_bytes")
         and components.get("canonical_package_bytes") == canonical_package_bytes
         and components.get("encoded_package_bytes")
         == expected_ledger_payload_bytes
         and str(ledger.get("codec_id", "")) == expected_ledger_codec
         and str(ledger.get("layout_id", "")) == expected_ledger_layout
+        and selected_dependencies_ok
         and ledger_accounting_consistent
     )
     bytes_ok = bytes_accounted and no_required_sidecars and ledger_identity_ok
