@@ -23,6 +23,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw10_contract as contract  # noqa: E402
 import nw07_clean_system as clean_system_contract  # noqa: E402
+import nw07_contract as common_contract  # noqa: E402
 import nw07_evidence  # noqa: E402
 import nw05_export  # noqa: E402
 import nw10_compact as compact  # noqa: E402
@@ -256,6 +257,9 @@ def _certify_compact_candidate(
     ).lower()
     canonical_package_bytes = canonical_intro.get("package_bytes")
     canonical_manifest_sha = _manifest_sha(canonical_intro, "manifest_sha256")
+    canonical_artifact_key = str(
+        canonical_intro.get("artifact_key", "")
+    ).strip()
     compact_encoded_sha = str(
         compact_intro.get("encoded_package_sha256", "")
     ).lower()
@@ -815,7 +819,8 @@ def _certify_compact_candidate(
         artifacts_ok = (
             artifacts_ok
             and bool(str(before_artifact.get("artifact_key", "")).strip())
-            and bool(str(artifact.get("artifact_key", "")).strip())
+            and bool(canonical_artifact_key)
+            and str(artifact.get("artifact_key", "")) == canonical_artifact_key
             and str(before_artifact.get("package_sha256", "")).lower()
             == canonical_package_sha
             and str(artifact.get("package_sha256", "")).lower()
@@ -1250,7 +1255,13 @@ def _certify_compact_candidate(
             == head_sha
             and str(correctness_common.get("package_sha256", "")).lower()
             == canonical_package_sha
-            and bool(str(correctness_common.get("artifact_key", "")).strip())
+            and bool(canonical_artifact_key)
+            and str(correctness_common.get("artifact_key", ""))
+            == canonical_artifact_key
+            and str(correctness_common.get("profile_id", ""))
+            == common_contract.PROFILE_ID
+            and str(correctness_common.get("requirements_digest", ""))
+            == common_contract.REQUIREMENTS_DIGEST
             and bool(canonical_manifest_sha)
             and _manifest_sha(
                 correctness, "common_artifact", "manifest_sha256"
