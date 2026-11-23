@@ -126,6 +126,8 @@ def test_windows_bootstrap_cache_is_digest_verified_and_vs_install_is_minimal():
     assert "Get-MissingVisualStudioComponents" in bootstrap
     assert '-version "[17.0,18.0)"' in bootstrap
     assert "-latest -products * -requires" not in bootstrap
+    sources = json.loads((ROOT / "tools" / "nw01" / "toolchain-sources.json").read_text(encoding="utf-8"))
+    assert "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" in sources["visual_studio"]["components"]
     assert "--includeRecommended" not in bootstrap
     assert "Test-ExistingVisualStudio" in bootstrap
 
