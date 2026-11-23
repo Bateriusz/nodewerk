@@ -15,6 +15,7 @@
     "reasons",
     "matched_environment",
     "reference_environment",
+    "candidate",
     "before",
     "after",
     "comparison",
@@ -125,6 +126,165 @@
         },
         "whitelist_generated": {
           "const": true
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "comparison_role",
+        "performance_contract",
+        "performance_protocol",
+        "profile_id",
+        "requirements_digest",
+        "common_graph",
+        "build_inputs",
+        "artifact",
+        "dependency_closure",
+        "runtime_probe",
+        "release_grade",
+        "test_payload"
+      ],
+      "properties": {
+        "comparison_role": {
+          "const": "after_common_artifact"
+        },
+        "performance_contract": {
+          "const": "nw07_perf_ref_v1"
+        },
+        "performance_protocol": {
+          "const": "nw07-perf-run.v1"
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirements_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "common_graph": {
+          "type": "object",
+          "required": [
+            "path",
+            "sha256",
+            "ir_sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "ir_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "build_inputs": {
+          "type": "object",
+          "required": [
+            "nw07_frozen_digest",
+            "observed_digest",
+            "matches_frozen_digest",
+            "nw10_digest"
+          ],
+          "properties": {
+            "nw07_frozen_digest": {
+              "type": "string",
+              "minLength": 1
+            },
+            "observed_digest": {
+              "type": "string",
+              "minLength": 1
+            },
+            "matches_frozen_digest": {
+              "const": true
+            },
+            "nw10_digest": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "artifact": {
+          "type": "object",
+          "required": [
+            "artifact_key",
+            "package_sha256",
+            "manifest_sha256",
+            "executable_sha256",
+            "complete_distribution_bytes"
+          ],
+          "properties": {
+            "artifact_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "package_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "manifest_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "executable_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "complete_distribution_bytes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "dependency_closure": {
+          "type": "object",
+          "required": [
+            "imports",
+            "matches_manifest"
+          ],
+          "properties": {
+            "imports": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "matches_manifest": {
+              "const": true
+            }
+          }
+        },
+        "runtime_probe": {
+          "type": "object",
+          "required": [
+            "status",
+            "exit_code",
+            "uncapped_present_verified"
+          ],
+          "properties": {
+            "status": {
+              "const": "passed"
+            },
+            "exit_code": {
+              "const": 0
+            },
+            "uncapped_present_verified": {
+              "const": true
+            }
+          }
+        },
+        "release_grade": {
+          "const": true
+        },
+        "test_payload": {
+          "const": false
         }
       }
     }
