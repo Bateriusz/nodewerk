@@ -1,0 +1,276 @@
+{
+  "archived_reason": "The 063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8 current-head restricted-intro export exited 0xC0000005 and cannot be the selected final distribution. The prior valid 6c6fdb40 fallback remains the selected runnable artifact and complete byte ledger; the failed 063bb45b measurement is retained below as attributed superseded evidence.",
+  "compact_decoder": {
+    "decoder_off_template_bytes": 506880,
+    "decoder_on_template_bytes": 510464,
+    "pe_image_bytes_added": 3584,
+    "runtime_import_added": "cabinet.dll",
+    "section_bytes_added": [
+      {
+        "bytes_added": 3072,
+        "section": ".text"
+      },
+      {
+        "bytes_added": 512,
+        "section": ".rdata"
+      }
+    ],
+    "status": "verified",
+    "template_bytes_added": 3584
+  },
+  "conclusion": {
+    "byte_ledger_complete": true,
+    "current_head_artifact_validated": false,
+    "decoder_cost_measured_on_pinned_windows_template": true,
+    "linker_elimination_measured_on_exact_windows_artifact": true,
+    "selected_artifact_retained_from": "a745648fec808500a481a1ccd4befb70b0e71de9",
+    "universal_64k_claim": false
+  },
+  "current_attempt": {
+    "archived_reason": "The measured 063b artifact exited 0xC0000005 at runtime and is not a validated runnable distribution. The PE measurements remain attributable but cannot certify a current-head runnable artifact or serve as the final-system ledger.",
+    "compact_decoder": {
+      "decoder_off_template_bytes": 506880,
+      "decoder_on_template_bytes": 510976,
+      "pe_image_bytes_added": 4096,
+      "runtime_import_added": "cabinet.dll",
+      "runtime_imports_added": [
+        "cabinet.dll"
+      ],
+      "section_bytes_added": [
+        {
+          "bytes_added": 0,
+          "section": ".data"
+        },
+        {
+          "bytes_added": 0,
+          "section": ".pdata"
+        },
+        {
+          "bytes_added": 512,
+          "section": ".rdata"
+        },
+        {
+          "bytes_added": 0,
+          "section": ".reloc"
+        },
+        {
+          "bytes_added": 0,
+          "section": ".rsrc"
+        },
+        {
+          "bytes_added": 3584,
+          "section": ".text"
+        }
+      ],
+      "status": "measured_superseded",
+      "template_bytes_added": 4096
+    },
+    "linker_elimination": {
+      "canonical_package_identical": true,
+      "compact_decoder_preserved": true,
+      "complete_distribution_bytes_saved": 723456,
+      "control_executable_bytes": 960574,
+      "control_options": [
+        "/OPT:NOREF",
+        "/OPT:NOICF"
+      ],
+      "control_pe_image_file_bytes": 928768,
+      "ltgc_preserved": true,
+      "optimized_options": [
+        "/OPT:REF",
+        "/OPT:ICF=4"
+      ],
+      "pe_image_bytes_saved": 723456,
+      "section_bytes_saved": [
+        {
+          "bytes_saved": 4096,
+          "section": ".data"
+        },
+        {
+          "bytes_saved": 32256,
+          "section": ".pdata"
+        },
+        {
+          "bytes_saved": 93696,
+          "section": ".rdata"
+        },
+        {
+          "bytes_saved": 1024,
+          "section": ".reloc"
+        },
+        {
+          "bytes_saved": 0,
+          "section": ".rsrc"
+        },
+        {
+          "bytes_saved": 592384,
+          "section": ".text"
+        }
+      ],
+      "security_mitigations_preserved": true,
+      "status": "measured_superseded"
+    },
+    "measured_artifact": {
+      "executable_bytes": 237118,
+      "executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
+      "manifest_sha256": "802a629c542e08b6b03854647ef5d13f1965bcc1cc436093f22193162117f36e",
+      "overlay_bytes": 31806,
+      "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
+      "pe_image_file_bytes": 205312,
+      "runtime_exit_code": -1073741819,
+      "runtime_status": "rejected_runtime_failure",
+      "sections": [
+        {
+          "name": ".text",
+          "raw_size_bytes": 167936
+        },
+        {
+          "name": ".rdata",
+          "raw_size_bytes": 27648
+        },
+        {
+          "name": ".data",
+          "raw_size_bytes": 1024
+        },
+        {
+          "name": ".pdata",
+          "raw_size_bytes": 6144
+        },
+        {
+          "name": ".rsrc",
+          "raw_size_bytes": 512
+        },
+        {
+          "name": ".reloc",
+          "raw_size_bytes": 1024
+        }
+      ]
+    },
+    "prior_valid_artifact": {
+      "executable_bytes": 240702,
+      "executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+      "ledger_status": "archived_prior_valid_fallback",
+      "reason": "The measured 063b artifact failed runtime; this entry preserves the prior valid fallback identity without claiming a current-head PE remeasurement.",
+      "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee"
+    },
+    "runtime": {
+      "counted_as_validated_runnable": false,
+      "exit_code": -1073741819,
+      "exit_code_hex": "0xC0000005",
+      "reason": "Both the compact candidate and canonical fallback exited with an access violation on the hosted Windows runner. The artifact is not runnable and its PE ledger cannot be selected as final.",
+      "status": "rejected_runtime_failure"
+    },
+    "source": {
+      "artifact_digest": "sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4",
+      "artifact_id": 14540370510,
+      "artifact_name": "nw10-windows-compact-evidence",
+      "artifact_retained": true,
+      "decoder_control_method": "otherwise identical release template with NW10_COMPACT_PACKAGE=OFF",
+      "head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+      "linker_control_method": "MSVC _LINK_ appended /OPT:NOREF /OPT:NOICF to the otherwise identical release link",
+      "measurement_tool": "tools/nw10_pe_ledger.py",
+      "workflow_run_id": 44542203189
+    }
+  },
+  "final_artifact": {
+    "executable_bytes": 240702,
+    "executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "manifest_sha256": "7e86671adc0073194d369ac92c0c745f71705a0bd0e599d007a5e379b423f0d1",
+    "overlay_bytes": 31806,
+    "package_sha256": "c843a0843f4e2db75ddeb18f67e0ea7dceb06c7d1e05188bb39c4a9607fef8f8",
+    "pe_image_file_bytes": 208896,
+    "runtime_exit_code": 0,
+    "runtime_status": "validated_runnable",
+    "sections": [
+      {
+        "name": ".text",
+        "raw_size_bytes": 171008
+      },
+      {
+        "name": ".rdata",
+        "raw_size_bytes": 28160
+      },
+      {
+        "name": ".data",
+        "raw_size_bytes": 1024
+      },
+      {
+        "name": ".pdata",
+        "raw_size_bytes": 6144
+      },
+      {
+        "name": ".rsrc",
+        "raw_size_bytes": 512
+      },
+      {
+        "name": ".reloc",
+        "raw_size_bytes": 1024
+      }
+    ]
+  },
+  "format": "nw10-windows-pe-ledger",
+  "linker_elimination": {
+    "canonical_package_identical": true,
+    "compact_decoder_preserved": true,
+    "complete_distribution_bytes_saved": 726528,
+    "control_executable_bytes": 967230,
+    "control_options": [
+      "/OPT:NOREF",
+      "/OPT:NOICF"
+    ],
+    "control_pe_image_file_bytes": 935424,
+    "ltgc_preserved": true,
+    "optimized_options": [
+      "/OPT:REF",
+      "/OPT:ICF=4"
+    ],
+    "pe_image_bytes_saved": 726528,
+    "section_bytes_saved": [
+      {
+        "bytes_saved": 594432,
+        "section": ".text"
+      },
+      {
+        "bytes_saved": 94208,
+        "section": ".rdata"
+      },
+      {
+        "bytes_saved": 4096,
+        "section": ".data"
+      },
+      {
+        "bytes_saved": 32768,
+        "section": ".pdata"
+      },
+      {
+        "bytes_saved": 0,
+        "section": ".rsrc"
+      },
+      {
+        "bytes_saved": 1024,
+        "section": ".reloc"
+      }
+    ],
+    "security_mitigations_preserved": true,
+    "status": "verified"
+  },
+  "measurement_status": "archived_superseded",
+  "privacy": {
+    "local_paths_included": false,
+    "pdb_paths_included": false,
+    "raw_linker_map_included": false
+  },
+  "source": {
+    "artifact_retained": false,
+    "decoder_control_method": "otherwise identical release template with NW10_COMPACT_PACKAGE=OFF",
+    "head_sha": "bc8556be5788f3017ce32b6921b38fbfac455716",
+    "linker_control_method": "MSVC _LINK_ appended /OPT:NOREF /OPT:NOICF to the otherwise identical release link",
+    "measurement_tool": "tools/nw10_pe_ledger.py",
+    "retained_from_commit": "a745648fec808500a481a1ccd4befb70b0e71de9",
+    "toolchain": "pinned NW-01 Windows MSVC/SDK environment",
+    "workflow_run_id": 44469176377
+  },
+  "status": "archived_superseded",
+  "task": "NW-10",
+  "version": 1
+}

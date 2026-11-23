@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-intro-profile.schema.json",
+  "title": "Nodewerk NW-10 restricted intro profile",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "profile_id",
+    "loop_ticks",
+    "loop_seconds",
+    "width",
+    "height",
+    "operators",
+    "features",
+    "audio",
+    "mesh_pipeline",
+    "hardware_ray_tracing_required",
+    "runtime_dxc",
+    "fixed_tick_replay"
+  ],
+  "properties": {
+    "format": { "const": "nw10-intro-profile" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-10" },
+    "profile_id": { "const": "nw10.intro.sdf20.v1" },
+    "loop_ticks": { "const": 960000 },
+    "loop_seconds": { "const": 20 },
+    "width": { "const": 1920 },
+    "height": { "const": 1080 },
+    "operators": {
+      "type": "array",
+      "const": [
+        "nw.render.fullscreen",
+        "nw.render.present",
+        "nw.residency.upload_texture",
+        "nw.shader.expr",
+        "nw.texture.procedural"
+      ]
+    },
+    "features": {
+      "type": "array",
+      "contains": { "const": "sphere_sdf" }
+    },
+    "audio": { "const": false },
+    "mesh_pipeline": { "const": false },
+    "hardware_ray_tracing_required": { "const": false },
+    "runtime_dxc": { "const": false },
+    "external_assets": { "const": false },
+    "fixed_tick_replay": { "const": true }
+  }
+}

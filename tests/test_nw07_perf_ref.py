@@ -163,6 +163,21 @@ def test_bound_contract_is_frozen() -> None:
     assert result["reasons"] == []
 
 
+def test_pending_reference_keeps_the_originally_frozen_identity() -> None:
+    record = _contract()
+    board = record["reference"]["board"]
+    assert record["binding_status"] == "pending_reference_capture"
+    assert board["binding_status"] == "pending_reference_capture"
+    assert board["vendor_id"] == 0x10DE
+    assert board["device_id"] == 0x2805
+    assert contract.REFERENCE_BOARD_DEVICE_ID == 0x2805
+    # A different PCI identity is a new reference and cannot silently replace
+    # the frozen pending contract without a fresh exact-board capture.
+    changed = _contract()
+    changed["reference"]["board"]["device_id"] = 0x2803
+    assert evidence.validate_perf_contract(changed)["status"] == "invalid"
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -181,6 +196,8 @@ def test_bound_contract_is_frozen() -> None:
         lambda c: c["reference"]["quality"]["resolution"].__setitem__("width", 1280),
         lambda c: c["matching_rules"].__setitem__("reject_other_ada_devices", False),
         lambda c: c["reference"]["board"].__setitem__("model", "NVIDIA GeForce RTX 4070"),
+        lambda c: c["reference"]["board"].__setitem__("vendor_id", 0x1234),
+        lambda c: c["reference"]["board"].__setitem__("device_id", 0x2803),
     ),
 )
 def test_contract_cannot_be_weakened(mutation) -> None:
@@ -478,3 +495,19 @@ def test_unverified_label_cannot_hide_over_threshold_raw_samples() -> None:
         capture, _bound(), artifact_identity=_identity()
     )
     assert result["status"] == "failed"
+
+
+def test_console_summary_omits_raw_samples() -> None:
+    import nw07_capture as capture_module
+
+    capture = _capture()
+    capture["validation"] = evidence.validate_perf_capture(
+        capture, _bound(), artifact_identity=_identity()
+    )
+    summary = capture_module._console_summary(capture)
+    assert summary["status"] is None or summary["status"] == capture.get("status")
+    assert summary["validation_status"] == "verified"
+    assert len(summary["runs"]) == 3
+    assert summary["runs"][0]["gpu_p99_ms"] == 10.0004
+    assert summary["runs"][0]["cpu_p99_ms"] == 6.0004
+    assert "samples" not in json.dumps(summary)

@@ -27,6 +27,7 @@ import dependency_check  # noqa: E402
 import nw07_contract as contract  # noqa: E402
 import nw07_export as export  # noqa: E402
 import nwp_package as nwp  # noqa: E402
+import nw10_compact as compact  # noqa: E402
 
 REPORT_FORMAT = "nw07-clean-system-report"
 REPORT_VERSION = 1
@@ -63,6 +64,10 @@ _DEVELOPMENT_DEPENDENCY_PROBES = (
 )
 
 
+class CleanSystemVerificationError(RuntimeError):
+    """Artifact bytes were available but failed clean-system integrity checks."""
+
+
 def _windows_build() -> str:
     version = platform.version()
     parts = [part for part in version.replace("-", ".").split(".") if part.isdigit()]
@@ -79,6 +84,7 @@ def _windows_virtualization_probe() -> dict[str, Any]:
             "manufacturer": "",
             "model": "",
             "hypervisor_present": None,
+            "virtualization_based_security_status": None,
             "error": "not_windows",
         }
     command = [
@@ -88,8 +94,19 @@ def _windows_virtualization_probe() -> dict[str, Any]:
         "-Command",
         (
             "$c=Get-CimInstance Win32_ComputerSystem;"
+            "$p=$null;try{$p=Get-CimInstance Win32_ComputerSystemProduct -ErrorAction Stop}catch{};"
+            "$b=$null;try{$b=Get-CimInstance Win32_BIOS -ErrorAction Stop}catch{};"
+            "$m=$null;try{$m=Get-CimInstance Win32_BaseBoard -ErrorAction Stop}catch{};"
+            "$vbs=$null;"
+            "try{$d=Get-CimInstance -Namespace root\\Microsoft\\Windows\\DeviceGuard "
+            "-ClassName Win32_DeviceGuard -ErrorAction Stop;"
+            "$vbs=$d.VirtualizationBasedSecurityStatus}catch{};"
             "[pscustomobject]@{Manufacturer=$c.Manufacturer;Model=$c.Model;"
-            "HypervisorPresent=$c.HypervisorPresent}|ConvertTo-Json -Compress"
+            "ProductVendor=$p.Vendor;ProductName=$p.Name;"
+            "BiosManufacturer=$b.Manufacturer;BiosVersion=$b.SMBIOSBIOSVersion;"
+            "BaseBoardManufacturer=$m.Manufacturer;BaseBoardProduct=$m.Product;"
+            "HypervisorPresent=$c.HypervisorPresent;"
+            "VirtualizationBasedSecurityStatus=$vbs}|ConvertTo-Json -Compress"
         ),
     ]
     try:
@@ -102,6 +119,7 @@ def _windows_virtualization_probe() -> dict[str, Any]:
             "manufacturer": "",
             "model": "",
             "hypervisor_present": None,
+            "virtualization_based_security_status": None,
             "error": str(exc),
         }
     if completed.returncode != 0:
@@ -110,6 +128,7 @@ def _windows_virtualization_probe() -> dict[str, Any]:
             "manufacturer": "",
             "model": "",
             "hypervisor_present": None,
+            "virtualization_based_security_status": None,
             "error": completed.stderr.strip() or completed.stdout.strip(),
         }
     try:
@@ -120,14 +139,156 @@ def _windows_virtualization_probe() -> dict[str, Any]:
             "manufacturer": "",
             "model": "",
             "hypervisor_present": None,
+            "virtualization_based_security_status": None,
             "error": str(exc),
         }
+    raw_vbs_status = value.get("VirtualizationBasedSecurityStatus")
+    try:
+        vbs_status = int(raw_vbs_status) if raw_vbs_status is not None else None
+    except (TypeError, ValueError):
+        vbs_status = None
+    raw_hypervisor_present = value.get("HypervisorPresent")
+    hypervisor_present = (
+        raw_hypervisor_present
+        if isinstance(raw_hypervisor_present, bool)
+        else None
+    )
     return {
         "available": True,
-        "manufacturer": str(value.get("Manufacturer", "")),
-        "model": str(value.get("Model", "")),
-        "hypervisor_present": bool(value.get("HypervisorPresent", False)),
+        "manufacturer": str(value.get("Manufacturer") or ""),
+        "model": str(value.get("Model") or ""),
+        "product_vendor": str(value.get("ProductVendor", "") or ""),
+        "product_name": str(value.get("ProductName", "") or ""),
+        "bios_manufacturer": str(value.get("BiosManufacturer", "") or ""),
+        "bios_version": str(value.get("BiosVersion", "") or ""),
+        "baseboard_manufacturer": str(
+            value.get("BaseBoardManufacturer", "") or ""
+        ),
+        "baseboard_product": str(value.get("BaseBoardProduct", "") or ""),
+        "hypervisor_present": hypervisor_present,
+        "virtualization_based_security_status": vbs_status,
         "error": "",
+    }
+
+
+def evaluate_physical_virtualization_probe(
+    probe: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Evaluate one Windows physical-host probe with a single fail-closed policy."""
+    if not isinstance(probe, Mapping):
+        return {
+            "valid": False,
+            "available": False,
+            "hypervisor_measured": False,
+            "virtualization_indicators": [],
+            "generic_identity": False,
+            "identity_complete": False,
+            "hypervisor_explained_by_vbs": False,
+            "reasons": ["virtualization probe is absent"],
+        }
+    identity_fields = (
+        "manufacturer",
+        "model",
+        "product_vendor",
+        "product_name",
+        "bios_manufacturer",
+        "bios_version",
+        "baseboard_manufacturer",
+        "baseboard_product",
+    )
+    identity_text = " ".join(
+        str(probe.get(field, "") or "") for field in identity_fields
+    ).lower()
+    vm_markers = (
+        "virtual machine",
+        "vmware",
+        "virtualbox",
+        "kvm",
+        "qemu",
+        "xen",
+        "parallels",
+        "bochs",
+        "openstack",
+        "hyper-v",
+        "innotek",
+        "bhyve",
+        "cloud hypervisor",
+        "amazon ec2",
+        "google compute engine",
+        "digitalocean",
+    )
+    indicators = sorted(marker for marker in vm_markers if marker in identity_text)
+    physical_identity_fields = (
+        probe.get("manufacturer"),
+        probe.get("model"),
+        probe.get("product_vendor"),
+        probe.get("product_name"),
+        probe.get("bios_manufacturer"),
+        probe.get("baseboard_manufacturer"),
+    )
+    identity_complete = all(
+        bool(str(value or "").strip()) for value in physical_identity_fields
+    )
+    generic_product_markers = (
+        "to be filled by o.e.m.",
+        "system product name",
+        "default string",
+        "not specified",
+        "not available",
+        "oem",
+    )
+    product_text = " ".join(
+        str(probe.get(field, "") or "")
+        for field in ("product_name", "baseboard_product", "bios_version")
+    ).lower()
+    generic_identity = any(
+        marker == product_text.strip() or marker in product_text
+        for marker in generic_product_markers
+    )
+    hypervisor_present = probe.get("hypervisor_present")
+    hypervisor_measured = isinstance(hypervisor_present, bool)
+    vbs_status = probe.get("virtualization_based_security_status")
+    explained_vbs = (
+        hypervisor_present is True
+        and vbs_status == 2
+        and not indicators
+        and identity_complete
+        and not generic_identity
+    )
+    available = probe.get("available") is True
+    valid = (
+        available
+        and hypervisor_measured
+        and bool(str(probe.get("manufacturer") or "").strip())
+        and bool(str(probe.get("model") or "").strip())
+        and not indicators
+        and not generic_identity
+        and (hypervisor_present is False or explained_vbs)
+    )
+    reasons: list[str] = []
+    if not available:
+        reasons.append("virtualization probe is unavailable")
+    if not hypervisor_measured:
+        reasons.append("hypervisor status was not measured")
+    if not str(probe.get("manufacturer") or "").strip() or not str(
+        probe.get("model") or ""
+    ).strip():
+        reasons.append("manufacturer/model identity is incomplete")
+    if indicators:
+        reasons.append("VM markers: " + ", ".join(indicators))
+    if generic_identity:
+        reasons.append("generic physical product identity")
+    if hypervisor_present is True and not explained_vbs:
+        reasons.append("active hypervisor is not independently explained by VBS")
+    return {
+        "valid": valid,
+        "available": available,
+        "hypervisor_measured": hypervisor_measured,
+        "virtualization_indicators": indicators,
+        "generic_identity": generic_identity,
+        "identity_complete": identity_complete,
+        "hypervisor_explained_by_vbs": explained_vbs,
+        "reasons": reasons,
     }
 
 
@@ -157,34 +318,16 @@ def clean_host_provenance(
         tail = os_build.rsplit(".", 1)[-1]
         build_number = int(tail) if tail.isdigit() else 0
     virtualization = _windows_virtualization_probe()
-    identity_text = " ".join(
-        (
-            str(virtualization.get("manufacturer", "")),
-            str(virtualization.get("model", "")),
-        )
-    ).lower()
-    vm_markers = (
-        "virtual machine",
-        "vmware",
-        "virtualbox",
-        "kvm",
-        "qemu",
-        "xen",
-        "parallels",
-        "bochs",
-        "openstack",
-    )
-    virtualization_indicators = sorted(
-        marker for marker in vm_markers if marker in identity_text
+    probe_evaluation = evaluate_physical_virtualization_probe(virtualization)
+    virtualization_indicators = list(
+        probe_evaluation["virtualization_indicators"]
     )
     kind_valid = execution_kind in {"physical", "documented_gpu_passthrough"}
+    hypervisor_explained_by_vbs = bool(
+        probe_evaluation["hypervisor_explained_by_vbs"]
+    )
     physical_evidence = (
-        execution_kind == "physical"
-        and virtualization.get("available") is True
-        and virtualization.get("hypervisor_present") is False
-        and bool(virtualization.get("manufacturer"))
-        and bool(virtualization.get("model"))
-        and not virtualization_indicators
+        execution_kind == "physical" and probe_evaluation["valid"] is True
     )
     passthrough_evidence = (
         execution_kind == "documented_gpu_passthrough"
@@ -213,6 +356,8 @@ def clean_host_provenance(
         "environment_cache_variables": cache_variables,
         "virtualization_probe": virtualization,
         "virtualization_indicators": virtualization_indicators,
+        "vm_markers": virtualization_indicators,
+        "hypervisor_explained_by_vbs": hypervisor_explained_by_vbs,
         "physical_host_evidence": physical_evidence,
         "clean_environment": clean_environment,
         "application_pipeline_cache_present": bool(cache_variables),
@@ -334,6 +479,139 @@ def _write_corrupt_embedded_copy(executable: Path, destination: Path) -> None:
     destination.write_bytes(bytes(data))
 
 
+def _decode_embedded_package(payload: bytes) -> tuple[bytes, str]:
+    """Return canonical NWP bytes for canonical or NW-10 compact delivery."""
+    if compact.is_compact_container(payload):
+        return compact.decode_compact(payload), "compact"
+    return payload, "canonical"
+
+
+def _selected_artifact_identity(
+    canonical_identity: Mapping[str, Any],
+    *,
+    executable: Path,
+    embedded_payload: bytes,
+    embedded_package: bytes,
+    embedded_manifest: bytes,
+    delivery_encoding: str,
+) -> dict[str, Any]:
+    raw = executable.read_bytes()
+    executable_bytes = len(raw)
+    player_image_bytes = (
+        executable_bytes
+        - len(embedded_payload)
+        - len(embedded_manifest)
+        - export.nw05_export.EMBED_FOOTER_SIZE
+    )
+    if player_image_bytes < 0:
+        raise CleanSystemVerificationError(
+            "deployed executable is smaller than its embedded payload"
+        )
+    dependencies = export.nw05_export._pe_runtime_dependencies(raw)
+    forbidden = sorted(
+        name
+        for name in dependencies
+        if any(token in name for token in export.FORBIDDEN_RUNTIME_DEPENDENCIES)
+    )
+    canonical_dependency = dict(
+        canonical_identity.get("dependency_closure") or {}
+    )
+    identity = dict(canonical_identity)
+    identity.update(
+        {
+            "executable_sha256": export.sha256_file(executable),
+            "executable_bytes": executable_bytes,
+            "embedded_package_bytes": len(embedded_payload),
+            "embedded_manifest_bytes": len(embedded_manifest),
+            "canonical_package_bytes": len(embedded_package),
+            "player_image_bytes": player_image_bytes,
+            "delivery_encoding": delivery_encoding,
+            "canonical_manifest_dependency_closure": canonical_dependency,
+            "dependency_closure": {
+                "dependencies": dependencies,
+                "forbidden": forbidden,
+                "runtime_dxc_dependency": any(
+                    name in {"dxcompiler", "d3dcompiler_47", "dxil"}
+                    for name in dependencies
+                ),
+                "runtime_slang_dependency": any(
+                    "slang" in name for name in dependencies
+                ),
+                "authoring_infrastructure_excluded": list(
+                    canonical_dependency.get("authoring_infrastructure_excluded") or []
+                ),
+                "gpu_name_predicates": list(
+                    canonical_dependency.get("gpu_name_predicates") or []
+                ),
+                "source": "selected-pe-imports",
+            },
+        }
+    )
+    accounting = dict(identity.get("size_accounting") or {})
+    accounting.update(
+        {
+            "complete_distribution_bytes": executable_bytes,
+            "required_non_system_bytes": executable_bytes,
+            "player_image_bytes": player_image_bytes,
+            "embedded_package_bytes": len(embedded_payload),
+            "embedded_manifest_bytes": len(embedded_manifest),
+            "embedded_footer_bytes": export.nw05_export.EMBED_FOOTER_SIZE,
+            "system_dependency_bytes": 0,
+            "all_required_bytes_accounted": (
+                player_image_bytes
+                + len(embedded_payload)
+                + len(embedded_manifest)
+                + export.nw05_export.EMBED_FOOTER_SIZE
+                == executable_bytes
+            ),
+            "ceiling": contract.COMPLETE_DISTRIBUTION_CEILING_BYTES,
+            "within_ceiling": (
+                executable_bytes <= contract.COMPLETE_DISTRIBUTION_CEILING_BYTES
+            ),
+            "stretch_ceiling": contract.STRETCH_DISTRIBUTION_CEILING_BYTES,
+            "within_stretch": (
+                executable_bytes <= contract.STRETCH_DISTRIBUTION_CEILING_BYTES
+            ),
+            "stretch_mandatory_gate": False,
+        }
+    )
+    identity["size_accounting"] = accounting
+    return identity
+
+
+def _clean_system_verification_status(
+    *,
+    identity: Mapping[str, Any],
+    host: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+    rows: list[Mapping[str, Any]],
+) -> str:
+    """Classify collected evidence without allowing dependency violations to pass."""
+    scenario_failed = any(row.get("status") == "failed" for row in rows)
+    scenario_missing = any(row.get("status") == "not_executed" for row in rows)
+    host_failed = (
+        host.get("platform") != "Windows"
+        or host.get("x64") is not True
+        or host.get("windows_11_or_newer") is not True
+    )
+    dependency_closure = identity.get("dependency_closure")
+    forbidden = (
+        dependency_closure.get("forbidden")
+        if isinstance(dependency_closure, Mapping)
+        else None
+    )
+    if (
+        scenario_failed
+        or host_failed
+        or bool(forbidden)
+        or deployment.get("only_runtime_executable") is not True
+    ):
+        return "failed"
+    if scenario_missing or host.get("clean_environment") is not True:
+        return "pending_unverified"
+    return "verified"
+
+
 def run_clean_system(
     *,
     fixture: Path,
@@ -355,17 +633,55 @@ def run_clean_system(
         raise ValueError(
             "the failure-injection fixture must be separate from the final release executable"
         )
-    identity = export.inspect_artifact_directory(package_directory)
+    # The package directory carries the canonical NWP + manifest + canonical
+    # product EXE, while deployment carries the exact selected EXE. Verify the
+    # canonical sibling first, then re-attribute size/import identity to the
+    # executable that is actually deployed.
     host = clean_host_provenance(
         execution_kind=execution_kind,
         passthrough_documentation=passthrough_documentation,
     )
-    embedded_package, _ = export.nw05_export.extract_embedded_package(
-        executable.read_bytes()
+    # Missing canonical sidecars mean there is nothing to compare yet. Keep
+    # that case as unavailable/pending. Once all canonical files exist, any
+    # decode/hash/binding disagreement below is a proven verification failure.
+    published_package, published_manifest, _ = export._artifact_paths(
+        package_directory
     )
-    inspection = nwp.inspect_package_bytes(embedded_package, allow_dev=False)
-    if not inspection.valid:
-        raise ValueError("embedded package is invalid")
+    try:
+        canonical_identity = dict(
+            export.inspect_artifact_directory(package_directory)
+        )
+        embedded_payload, embedded_manifest = (
+            export.nw05_export.extract_embedded_package(executable.read_bytes())
+        )
+        embedded_package, delivery_encoding = _decode_embedded_package(
+            embedded_payload
+        )
+        if embedded_package != published_package.read_bytes():
+            raise CleanSystemVerificationError(
+                "deployed executable does not decode to the published canonical package"
+            )
+        if embedded_manifest.hex() != export.sha256_file(published_manifest):
+            raise CleanSystemVerificationError(
+                "deployed executable manifest binding does not match the published manifest"
+            )
+        inspection = nwp.inspect_package_bytes(embedded_package, allow_dev=False)
+        if not inspection.valid:
+            raise CleanSystemVerificationError("embedded package is invalid")
+        identity = _selected_artifact_identity(
+            canonical_identity,
+            executable=executable,
+            embedded_payload=embedded_payload,
+            embedded_package=embedded_package,
+            embedded_manifest=embedded_manifest,
+            delivery_encoding=delivery_encoding,
+        )
+    except CleanSystemVerificationError:
+        raise
+    except (ValueError, export.Nw07ExportError, export.nw05_export.ExportError) as exc:
+        raise CleanSystemVerificationError(
+            f"artifact integrity verification failed: {exc}"
+        ) from exc
     deployment = deployment_report(
         executable, deployment_directory, exclude_paths=(output,)
     )
@@ -525,12 +841,11 @@ def run_clean_system(
             EXPECTED_SCENARIO_EXIT_CODES["device_removal"],
         )
     )
-    scenario_failed = any(row["status"] == "failed" for row in rows)
-    scenario_missing = any(row["status"] == "not_executed" for row in rows)
-    host_failed = (
-        host.get("platform") != "Windows"
-        or host.get("x64") is not True
-        or host.get("windows_11_or_newer") is not True
+    verification_status = _clean_system_verification_status(
+        identity=identity,
+        host=host,
+        deployment=deployment,
+        rows=rows,
     )
     report = {
         "format": REPORT_FORMAT,
@@ -544,15 +859,7 @@ def run_clean_system(
         "host": host,
         "deployment": deployment,
         "scenarios": rows,
-        "verification_status": (
-            "failed"
-            if scenario_failed
-            or host_failed
-            or not deployment["only_runtime_executable"]
-            else "pending_unverified"
-            if scenario_missing or host.get("clean_environment") is not True
-            else "verified"
-        ),
+        "verification_status": verification_status,
         "policy": (
             "An executed scenario failure remains failed. Missing execution stays "
             "pending. Deployment must contain only the self-contained release "
@@ -583,6 +890,16 @@ def pending_report(reason: str) -> dict[str, Any]:
             "final NW-07 artifact. Missing execution never becomes passing evidence."
         ),
     }
+
+
+def failed_report(reason: str) -> dict[str, Any]:
+    report = pending_report(reason)
+    report["verification_status"] = "failed"
+    report["policy"] = (
+        "Artifact bytes were available and failed integrity verification. "
+        "A proven mismatch is an executed verification failure, never pending."
+    )
+    return report
 
 
 def validate_report(
@@ -618,26 +935,42 @@ def validate_report(
         if execution_kind == "physical":
             probe = host.get("virtualization_probe")
             indicators = host.get("virtualization_indicators")
-            if not isinstance(probe, Mapping) or probe.get("available") is not True:
-                host_pending = True
-                reasons.append("physical clean-system host identity was not probed")
-            elif not probe.get("manufacturer") or not probe.get("model"):
-                host_pending = True
-                reasons.append("physical clean-system host manufacturer/model is missing")
-            hypervisor = probe.get("hypervisor_present")
-            if hypervisor is True:
+            evaluation = evaluate_physical_virtualization_probe(
+                probe if isinstance(probe, Mapping) else None
+            )
+            if not evaluation["valid"]:
+                reasons.extend(evaluation["reasons"])
+                if (
+                    evaluation["virtualization_indicators"]
+                    or evaluation["generic_identity"]
+                    or (
+                        isinstance(probe, Mapping)
+                        and probe.get("hypervisor_present") is True
+                        and not evaluation["hypervisor_explained_by_vbs"]
+                    )
+                ):
+                    host_failed = True
+                else:
+                    host_pending = True
+            declared_vbs = host.get("hypervisor_explained_by_vbs")
+            expected_vbs = bool(evaluation["hypervisor_explained_by_vbs"])
+            if (
+                (declared_vbs is not None and declared_vbs is not expected_vbs)
+                or (
+                    isinstance(probe, Mapping)
+                    and probe.get("hypervisor_present") is True
+                    and declared_vbs is not True
+                )
+            ):
                 host_failed = True
                 reasons.append(
-                    "physical clean-system claim reports a hypervisor-present host"
-                )
-            elif hypervisor is not False:
-                host_pending = True
-                reasons.append(
-                    "physical clean-system host hypervisor status was not probed"
+                    "physical clean-system VBS classification disagrees with the raw probe"
                 )
             if not isinstance(indicators, list):
                 host_pending = True
-                reasons.append("physical clean-system virtualization indicators are missing")
+                reasons.append(
+                    "physical clean-system virtualization indicators are missing"
+                )
             elif indicators:
                 host_failed = True
                 reasons.append(
@@ -850,6 +1183,13 @@ def main(argv: list[str] | None = None) -> int:
             execution_kind=args.execution_kind,
             passthrough_documentation=args.passthrough_documentation,
         )
+    except CleanSystemVerificationError as exc:
+        report = failed_report(f"clean-system artifact verification failed: {exc}")
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return 1
     except (OSError, ValueError, export.Nw07ExportError) as exc:
         report = pending_report(
             f"clean-system prerequisites are unavailable: {exc}"

@@ -858,6 +858,7 @@ def export_production(
     adapter_identity: str = "unavailable-native-adapter",
     specialized_build_root: Path | str | None = None,
     validate_schema: bool = True,
+    allow_complete_distribution_over_proof_tier: bool = False,
 ) -> dict[str, Any]:
     root = Path(repo_root or REPO_ROOT)
     record = (
@@ -986,7 +987,7 @@ def export_production(
         pe_closure = {"imports": names, "matches_manifest": True}
 
     size = identity["size_accounting"]
-    if not size["within_ceiling"]:
+    if not size["within_ceiling"] and not allow_complete_distribution_over_proof_tier:
         raise Nw07ExportError(
             "complete distribution exceeds the 262,144-byte ceiling",
             details={"complete_distribution_bytes": size["complete_distribution_bytes"]},

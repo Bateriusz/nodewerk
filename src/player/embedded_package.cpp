@@ -1,5 +1,8 @@
 #include "embedded_package.h"
 
+#if NW10_COMPACT_PACKAGE
+#include "package/nw_compact.h"
+#endif
 #include "package/nwp_format.h"
 
 #include <array>
@@ -145,8 +148,27 @@ bool ParseEmbeddedPackage(const std::uint8_t* executable,
                        footer + 60u)) {
         return false;
     }
-    package->bytes = package_bytes;
-    package->size = static_cast<std::size_t>(package_size);
+    bool expanded_compact = false;
+#if NW10_COMPACT_PACKAGE
+    if (package::IsCompactPackage(package_bytes,
+                                  static_cast<std::size_t>(package_size))) {
+        std::string compact_error;
+        if (!package::DecodeCompactPackage(
+                package_bytes, static_cast<std::size_t>(package_size),
+                &package->expanded, &compact_error,
+                package::kMaxDecodedBytes)) {
+            *package = EmbeddedPackage{};
+            return false;
+        }
+        package->bytes = package->expanded.data();
+        package->size = package->expanded.size();
+        expanded_compact = true;
+    }
+#endif
+    if (!expanded_compact) {
+        package->bytes = package_bytes;
+        package->size = static_cast<std::size_t>(package_size);
+    }
     package->manifest = manifest_bytes;
     package->manifest_size = static_cast<std::size_t>(manifest_size);
     package->valid = true;
@@ -167,12 +189,18 @@ bool LoadEmbeddedPackage(EmbeddedPackage* package) {
         return false;
     }
     const std::uint8_t* base = package->image.data();
-    const std::size_t package_offset =
-        static_cast<std::size_t>(parsed.bytes - base);
     const std::size_t manifest_offset =
         static_cast<std::size_t>(parsed.manifest - base);
-    package->bytes = base + package_offset;
-    package->size = parsed.size;
+    package->expanded = std::move(parsed.expanded);
+    if (!package->expanded.empty()) {
+        package->bytes = package->expanded.data();
+        package->size = package->expanded.size();
+    } else {
+        const std::size_t package_offset =
+            static_cast<std::size_t>(parsed.bytes - base);
+        package->bytes = base + package_offset;
+        package->size = parsed.size;
+    }
     package->manifest = base + manifest_offset;
     package->manifest_size = parsed.manifest_size;
     package->valid = true;

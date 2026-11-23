@@ -58,7 +58,7 @@
     "d3d12core_classification_unknown": false,
     "inbox_d3d12core_observed": true,
     "observed_loaded_modules": [
-      "C:/Users/Michal/Desktop/nw01-clean-system-03a6a4e6e809-20261109-125927/deploy/nw_clear_present_fixture.exe",
+      "C:/Users/REDACTED/Desktop/nw01-clean-system-03a6a4e6e809-20261109-125927/deploy/nw_clear_present_fixture.exe",
       "C:/WINDOWS/SYSTEM32/ntdll.dll",
       "C:/WINDOWS/System32/KERNEL32.DLL",
       "C:/WINDOWS/System32/KERNELBASE.dll",
@@ -124,7 +124,7 @@
       "C:/WINDOWS/SYSTEM32/dcomp.dll",
       "C:/WINDOWS/SYSTEM32/Microsoft.Internal.WarpPal.dll",
       "C:/WINDOWS/SYSTEM32/dwmapi.dll",
-      "C:/Users/Michal/Desktop/nw01-clean-system-03a6a4e6e809-20261109-125927/deploy/nw_compute_shader_fixture.exe"
+      "C:/Users/REDACTED/Desktop/nw01-clean-system-03a6a4e6e809-20261109-125927/deploy/nw_compute_shader_fixture.exe"
     ],
     "expected_output_sha256": "b112cee7d52c16a00041e01b8a3c37ddc51fef1be5e9c37b3f06e2b5e6e4b1bd",
     "observed_output_sha256": "b112cee7d52c16a00041e01b8a3c37ddc51fef1be5e9c37b3f06e2b5e6e4b1bd",
@@ -174,7 +174,7 @@
       "d3d12_validation_errors": [],
       "d3d12_validation_messages": [],
       "observed_loaded_modules": [
-        "C:/Users/Michal/Desktop/nw01-clean-system-03a6a4e6e809-20261109-125927/deploy/nw_clear_present_fixture.exe",
+        "C:/Users/REDACTED/Desktop/nw01-clean-system-03a6a4e6e809-20261109-125927/deploy/nw_clear_present_fixture.exe",
         "C:/WINDOWS/SYSTEM32/ntdll.dll",
         "C:/WINDOWS/System32/KERNEL32.DLL",
         "C:/WINDOWS/System32/KERNELBASE.dll",
@@ -281,7 +281,7 @@
       "d3d12_validation_errors": [],
       "d3d12_validation_messages": [],
       "observed_loaded_modules": [
-        "C:/Users/Michal/Desktop/nw01-clean-system-03a6a4e6e809-20261109-125927/deploy/nw_compute_shader_fixture.exe",
+        "C:/Users/REDACTED/Desktop/nw01-clean-system-03a6a4e6e809-20261109-125927/deploy/nw_compute_shader_fixture.exe",
         "C:/WINDOWS/SYSTEM32/ntdll.dll",
         "C:/WINDOWS/System32/KERNEL32.DLL",
         "C:/WINDOWS/System32/KERNELBASE.dll",

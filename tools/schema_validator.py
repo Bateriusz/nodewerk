@@ -68,6 +68,20 @@ def validate_instance(
         target = _resolve_ref(schema["$ref"], root_schema)
         validate_instance(instance, target, root_schema, path)
         return
+    if "allOf" in schema:
+        for index, subschema in enumerate(schema["allOf"]):
+            validate_instance(
+                instance, subschema, root_schema, f"{path}.allOf[{index}]"
+            )
+    if "if" in schema:
+        condition_matches = True
+        try:
+            validate_instance(instance, schema["if"], root_schema, path)
+        except SchemaValidationError:
+            condition_matches = False
+        branch = schema.get("then") if condition_matches else schema.get("else")
+        if isinstance(branch, dict):
+            validate_instance(instance, branch, root_schema, path)
 
     if "type" in schema:
         expected = schema["type"]
@@ -552,6 +566,405 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 raise SchemaValidationError(
                     f"{doc_path}: selected_toolchain '{selected_id}' ({totals.get(selected_id)} B total) "
                     f"is larger than verified alternative {smaller_ids} ({min_total} B total)"
+                )
+
+    elif schema_name == "nw10-system-validation.schema.json":
+        status = instance.get("status")
+        if status == "pending_unverified":
+            for field in ("final_artifact", "startup", "memory", "clean_system"):
+                if instance.get(field) is not None:
+                    raise SchemaValidationError(
+                        f"{doc_path}: pending NW-10 system validation must not "
+                        f"carry a {field} object"
+                    )
+            if instance.get("windows_build") is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending NW-10 system validation must not "
+                    "infer a Windows build"
+                )
+            if instance.get("source_head_sha") is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending NW-10 system validation must not "
+                    "claim a current-head physical binding"
+                )
+        elif status == "verified":
+            source_head = instance.get("source_head_sha")
+            if not isinstance(source_head, str) or re.fullmatch(
+                r"[0-9a-f]{40}", source_head
+            ) is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified NW-10 system validation requires "
+                    "a source-head binding"
+                )
+            for field in ("final_artifact", "startup", "memory", "clean_system"):
+                if not isinstance(instance.get(field), dict):
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified NW-10 system validation requires "
+                        f"a measured {field} object"
+                    )
+            windows_build = instance.get("windows_build")
+            if not isinstance(windows_build, str) or not windows_build.strip():
+                raise SchemaValidationError(
+                    f"{doc_path}: verified NW-10 system validation requires a "
+                    "measured windows_build"
+                )
+            final_artifact = instance["final_artifact"]
+            for key in (
+                "executable_sha256",
+                "executable_bytes",
+                "package_sha256",
+                "manifest_sha256",
+            ):
+                if final_artifact.get(key) in (None, ""):
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified NW-10 final_artifact is missing {key}"
+                    )
+            if int(final_artifact.get("executable_bytes", 0)) <= 0:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified NW-10 final_artifact has no executable bytes"
+                )
+            clean = instance["clean_system"]
+            host = clean.get("host")
+            deployment = clean.get("deployment")
+            if not isinstance(host, dict) or not isinstance(deployment, dict):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system requires host and deployment"
+                )
+            if clean.get("status") != "verified":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified NW-10 system validation requires "
+                    "clean_system.status=verified"
+                )
+            if clean.get("execution_kind") != "physical":
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system evidence is not physical"
+                )
+            if not isinstance(host.get("windows_build"), str) or not host[
+                "windows_build"
+            ].strip():
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system host requires windows_build"
+                )
+            if host.get("windows_build") != windows_build:
+                raise SchemaValidationError(
+                    f"{doc_path}: system windows_build does not match the "
+                    "clean-system host"
+                )
+            if not isinstance(host.get("virtualization_probe"), dict):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system host requires a "
+                    "virtualization_probe"
+                )
+            if str(host.get("architecture", "")).lower() not in {
+                "amd64",
+                "x86_64",
+            }:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system host is not a "
+                    "measured x64 target"
+                )
+            if host.get("clean_environment") is not True:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system host is not clean"
+                )
+            if clean.get("development_dependencies_present_on_path") != []:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system exposes development dependencies"
+                )
+            if clean.get("environment_cache_variables") != []:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system exposes cache environment variables"
+                )
+            probe = host.get("virtualization_probe", {})
+            if probe.get("hypervisor_present") is True and not probe.get(
+                "hypervisor_explained_by_vbs"
+            ):
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system host has an unexplained hypervisor"
+                )
+            virtualization_markers = list(host.get("virtualization_indicators") or [])
+            virtualization_markers.extend(host.get("vm_markers") or [])
+            virtualization_markers.extend(probe.get("vm_markers") or [])
+            if virtualization_markers:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system host exposes virtualization markers"
+                )
+            if deployment.get("only_runtime_executable") is not True:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system deployment is not a single executable"
+                )
+            if deployment.get("sidecars") != []:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system deployment must contain no sidecars"
+                )
+            if deployment.get("forbidden_runtime_dependencies") != []:
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system deployment contains forbidden runtime dependencies"
+                )
+            if deployment.get("executable_sha256") != final_artifact.get(
+                "executable_sha256"
+            ):
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system deployment is not bound to the "
+                    "final artifact"
+                )
+            if int(deployment.get("executable_bytes", -1)) != int(
+                final_artifact.get("executable_bytes", -2)
+            ):
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system deployment size is not bound to the "
+                    "final artifact"
+                )
+            scenarios = clean.get("scenarios")
+            frozen_scenarios = {
+                "corrupt_payload": 70,
+                "deployed_startup": 0,
+                "missing_required_feature": 23,
+                "initialization_failure": 42,
+                "resize": 0,
+                "device_removal": 51,
+            }
+            if not isinstance(scenarios, list) or len(scenarios) != len(frozen_scenarios):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system requires the frozen six "
+                    "scenarios"
+                )
+            observed_names: set[str] = set()
+            for row in scenarios:
+                if not isinstance(row, dict):
+                    raise SchemaValidationError(
+                        f"{doc_path}: clean_system scenario row is invalid"
+                    )
+                name = row.get("scenario")
+                if name not in frozen_scenarios or name in observed_names:
+                    raise SchemaValidationError(
+                        f"{doc_path}: clean_system scenario set changed"
+                    )
+                observed_names.add(str(name))
+                expected_code = frozen_scenarios[str(name)]
+                if row.get("expected_exit_code") != expected_code:
+                    raise SchemaValidationError(
+                        f"{doc_path}: clean_system scenario expected exit code changed"
+                    )
+                if row.get("observed_exit_code") != expected_code:
+                    raise SchemaValidationError(
+                        f"{doc_path}: clean_system scenario observed exit code changed"
+                    )
+                if row.get("status") != "passed" or row.get("timed_out") is not False:
+                    raise SchemaValidationError(
+                        f"{doc_path}: clean_system scenario did not pass"
+                    )
+            if observed_names != set(frozen_scenarios):
+                raise SchemaValidationError(
+                    f"{doc_path}: clean_system scenario set is incomplete"
+                )
+            clean_hardware = clean.get("hardware", {})
+            startup = instance["startup"]
+            memory = instance["memory"]
+            for field, measurement in (("startup", startup), ("memory", memory)):
+                if measurement.get("status") != "verified":
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified NW-10 system validation requires "
+                        f"{field}.status=verified"
+                    )
+                if measurement.get("execution_kind") != "physical":
+                    raise SchemaValidationError(
+                        f"{doc_path}: {field} is not a physical measurement"
+                    )
+                hardware = measurement.get("hardware", {})
+                if hardware.get("adapter_description") != clean_hardware.get(
+                    "adapter_description"
+                ):
+                    raise SchemaValidationError(
+                        f"{doc_path}: {field} hardware does not match the "
+                        "clean-system host"
+                    )
+                if hardware.get("driver_version") != clean_hardware.get(
+                    "driver_version"
+                ):
+                    raise SchemaValidationError(
+                        f"{doc_path}: {field} driver does not match the "
+                        "clean-system host"
+                    )
+                if hardware.get("windows_build") != windows_build:
+                    raise SchemaValidationError(
+                        f"{doc_path}: {field} Windows build does not match the "
+                        "clean-system host"
+                    )
+            startup_ms = startup.get("process_start_to_first_present_ms")
+            if not isinstance(startup_ms, (int, float)) or startup_ms < 0:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified startup measurement is missing"
+                )
+            if float(startup_ms) > 2_000.0:
+                raise SchemaValidationError(
+                    f"{doc_path}: startup measurement exceeds the 2,000 ms ceiling"
+                )
+            if startup.get("ceiling_ms") != 2_000.0:
+                raise SchemaValidationError(
+                    f"{doc_path}: startup ceiling was changed"
+                )
+            cache_state = startup.get("cache_state")
+            if not isinstance(cache_state, dict) or cache_state.get(
+                "application_pipeline_cache_used"
+            ) is not False:
+                raise SchemaValidationError(
+                    f"{doc_path}: startup evidence used an application pipeline cache"
+                )
+            if cache_state.get("kind") not in {"cold_driver_cache", "warm"}:
+                raise SchemaValidationError(
+                    f"{doc_path}: startup cache kind is not a frozen supported value"
+                )
+            peak_gpu = memory.get("peak_engine_committed_gpu_bytes")
+            if not isinstance(peak_gpu, int) or peak_gpu < 0:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified memory measurement is missing"
+                )
+            if peak_gpu > 536_870_912:
+                raise SchemaValidationError(
+                    f"{doc_path}: memory measurement exceeds the frozen ceiling"
+                )
+            if memory.get("ceiling_bytes") != 536_870_912:
+                raise SchemaValidationError(
+                    f"{doc_path}: memory ceiling was changed"
+                )
+            if memory.get("package_sha256") != final_artifact.get("package_sha256"):
+                raise SchemaValidationError(
+                    f"{doc_path}: memory measurement is not bound to the final package"
+                )
+            if memory.get("post_initialization_allocation_violation") != 0:
+                raise SchemaValidationError(
+                    f"{doc_path}: memory post-initialization allocation violation is nonzero"
+                )
+
+    elif schema_name == "nw10-common-artifact-correctness.schema.json":
+        status = instance.get("status")
+        packed = instance.get("packed_unpacked_comparison")
+        if not isinstance(packed, dict):
+            raise SchemaValidationError(
+                f"{doc_path}: correctness summary has no packed/unpacked comparison"
+            )
+        if status == "verified":
+            source = instance.get("source", {})
+            implementation_head = source.get("implementation_head")
+            if not isinstance(implementation_head, str) or re.fullmatch(
+                r"[0-9a-f]{40}", implementation_head
+            ) is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified correctness requires an implementation-head binding"
+                )
+            if instance.get("source_head_sha") != implementation_head:
+                raise SchemaValidationError(
+                    f"{doc_path}: correctness source-head bindings disagree"
+                )
+            if instance.get("ada", {}).get("status") != "verified" or instance.get(
+                "blackwell", {}
+            ).get("status") != "verified":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified correctness requires both desktop tiers"
+                )
+            for tier in ("ada", "blackwell"):
+                hardware = instance.get(tier, {}).get("hardware", {})
+                if hardware.get("device_form_factor") != "desktop":
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified {tier} correctness requires a "
+                        "measured desktop"
+                    )
+                if str(hardware.get("device_form_factor_source", "")) in (
+                    "",
+                    "asserted",
+                    "pending_physical_probe",
+                ):
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified {tier} correctness form factor is "
+                        "not measured"
+                    )
+            comparison = instance.get("comparison", {})
+            if comparison.get("fixed_tick_status") != "passed":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified correctness requires passed fixed ticks"
+                )
+            if comparison.get("ada_loop_boundary_status") != "passed" or comparison.get(
+                "blackwell_loop_boundary_status"
+            ) != "passed":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified correctness loop-boundary check failed"
+                )
+            for key in ("worst_absolute_error", "worst_relative_error"):
+                value = comparison.get(key)
+                if value is None or float(value) > 0.0001:
+                    raise SchemaValidationError(
+                        f"{doc_path}: verified correctness {key} exceeds tolerance"
+                    )
+            if packed.get("status") != "verified":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified correctness requires packed/unpacked "
+                    "verification"
+                )
+            if packed.get("direct_separate_packed_gpu_capture_recorded") is not True:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified correctness requires a direct separate "
+                    "packed GPU capture set"
+                )
+            if packed.get("packed_package_sha256") != instance.get(
+                "common_artifact", {}
+            ).get("package_sha256"):
+                raise SchemaValidationError(
+                    f"{doc_path}: packed capture is not bound to the common artifact"
+                )
+            if packed.get("unpacked_package_sha256") != packed.get(
+                "packed_package_sha256"
+            ):
+                raise SchemaValidationError(
+                    f"{doc_path}: packed and unpacked captures use different packages"
+                )
+            packed_error = packed.get("worst_absolute_error")
+            if packed_error is None or float(packed_error) > 0.0001:
+                raise SchemaValidationError(
+                    f"{doc_path}: packed/unpacked visual error exceeds tolerance"
+                )
+            for tier in ("ada", "blackwell"):
+                runtime = packed.get("runtime", {}).get(tier, {})
+                if runtime.get("status") != "passed":
+                    raise SchemaValidationError(
+                        f"{doc_path}: packed/unpacked {tier} runtime did not pass"
+                    )
+            source = instance.get("source", {})
+            if source.get("execution_kind") != "physical_cross_hardware":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified correctness is not physical evidence"
+                )
+        elif status == "pending_unverified":
+            if instance.get("source", {}).get("implementation_head") is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending correctness must not claim a current-head physical binding"
+                )
+            if instance.get("source_head_sha") is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending correctness must not claim a source-head physical binding"
+                )
+            if packed.get("direct_separate_packed_gpu_capture_recorded") is not False:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending correctness must not claim a packed capture"
+                )
+            if packed.get("status") != "pending_physical":
+                raise SchemaValidationError(
+                    f"{doc_path}: pending correctness must keep packed comparison pending"
+                )
+
+    elif schema_name == "nw10-windows-pe-ledger.schema.json":
+        status = instance.get("status")
+        final_artifact = instance.get("final_artifact", {})
+        conclusion = instance.get("conclusion", {})
+        if status == "verified":
+            if final_artifact.get("runtime_status") != "validated_runnable":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified PE ledger requires a validated runnable "
+                    "final artifact"
+                )
+            if conclusion.get("byte_ledger_complete") is not True:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified PE ledger requires complete accounting"
                 )
 
 

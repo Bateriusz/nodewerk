@@ -392,7 +392,7 @@ def test_passthrough_clean_host_requires_documentation(
     assert host["clean_environment"] is False
 
 
-def test_physical_clean_host_rejects_hypervisor_without_vm_markers(
+def test_physical_clean_host_rejects_vbs_hypervisor_without_independent_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
@@ -406,6 +406,104 @@ def test_physical_clean_host_rejects_hypervisor_without_vm_markers(
             "manufacturer": "Contoso",
             "model": "Workstation 9000",
             "hypervisor_present": True,
+            "virtualization_based_security_status": 2,
+            "error": "",
+        },
+    )
+    host = clean_system.clean_host_provenance({"PATH": ""}, execution_kind="physical")
+    assert host["physical_host_evidence"] is False
+    assert host["clean_environment"] is False
+    report = _report()
+    report["host"] = host
+    result = clean_system.validate_report(report)
+    assert result["status"] == "failed"
+    assert any("hypervisor" in reason for reason in result["reasons"])
+
+
+def test_physical_clean_host_accepts_vbs_only_with_complete_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(clean_system.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(clean_system.platform, "version", lambda: "10.0.26100")
+    monkeypatch.setattr(
+        clean_system,
+        "_windows_virtualization_probe",
+        lambda: {
+            "available": True,
+            "manufacturer": "ASUSTeK COMPUTER INC.",
+            "model": "NUC13ANH-B",
+            "product_vendor": "ASUSTeK COMPUTER INC.",
+            "product_name": "NUC13ANH-B",
+            "bios_manufacturer": "American Megatrends Inc.",
+            "bios_version": "NUC13ANBi.0058.2023.0613.1143",
+            "baseboard_manufacturer": "ASUSTeK COMPUTER INC.",
+            "baseboard_product": "NUC13ANH-B",
+            "hypervisor_present": True,
+            "virtualization_based_security_status": 2,
+            "error": "",
+        },
+    )
+    host = clean_system.clean_host_provenance({"PATH": ""}, execution_kind="physical")
+    assert host["physical_host_evidence"] is True
+    assert host["hypervisor_explained_by_vbs"] is True
+    assert host["clean_environment"] is True
+    report = _report()
+    report["host"] = host
+    result = clean_system.validate_report(report)
+    # _report intentionally has no bound deployment directory, so overall
+    # verification remains pending. The VBS host itself must not be rejected.
+    assert result["status"] == "pending_unverified"
+    assert not any("hypervisor" in reason for reason in result["reasons"])
+
+
+def test_physical_clean_host_rejects_vm_product_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(clean_system.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(clean_system.platform, "version", lambda: "10.0.26100")
+    monkeypatch.setattr(
+        clean_system,
+        "_windows_virtualization_probe",
+        lambda: {
+            "available": True,
+            "manufacturer": "Microsoft Corporation",
+            "model": "Virtual Machine",
+            "product_vendor": "Microsoft Corporation",
+            "product_name": "Virtual Machine",
+            "bios_manufacturer": "Microsoft Corporation",
+            "bios_version": "Hyper-V UEFI Release v4.1",
+            "baseboard_manufacturer": "Microsoft Corporation",
+            "baseboard_product": "Virtual Machine",
+            "hypervisor_present": True,
+            "virtualization_based_security_status": 2,
+            "error": "",
+        },
+    )
+    host = clean_system.clean_host_provenance({"PATH": ""}, execution_kind="physical")
+    assert host["physical_host_evidence"] is False
+    assert "virtual machine" in host["virtualization_indicators"]
+    report = _report()
+    report["host"] = host
+    assert clean_system.validate_report(report)["status"] == "failed"
+
+
+def test_physical_clean_host_rejects_unexplained_hypervisor_without_vm_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(clean_system.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(clean_system.platform, "version", lambda: "10.0.26100")
+    monkeypatch.setattr(
+        clean_system,
+        "_windows_virtualization_probe",
+        lambda: {
+            "available": True,
+            "manufacturer": "Contoso",
+            "model": "Workstation 9000",
+            "hypervisor_present": True,
+            "virtualization_based_security_status": 0,
             "error": "",
         },
     )
@@ -415,3 +513,232 @@ def test_physical_clean_host_rejects_hypervisor_without_vm_markers(
     report = _report()
     report["host"] = host
     assert clean_system.validate_report(report)["status"] == "failed"
+
+def test_compact_delivery_payload_is_decoded_before_nwp_fixture_use() -> None:
+    canonical = (b"canonical-nwp-payload-" * 64) + b"end"
+    codec_id = clean_system.compact.CODEC_NAMES[clean_system.compact.CODEC_STORED]
+    layout_id = clean_system.compact.LAYOUT_NAMES[clean_system.compact.LAYOUT_AOS]
+    encoded = clean_system.compact.encode_compact(
+        canonical,
+        codec_id=codec_id,
+        layout_id=layout_id,
+        delta_references=True,
+    )
+    decoded, delivery_encoding = clean_system._decode_embedded_package(encoded.bytes)
+    assert delivery_encoding == "compact"
+    assert decoded == canonical
+    raw, raw_encoding = clean_system._decode_embedded_package(canonical)
+    assert raw_encoding == "canonical"
+    assert raw == canonical
+
+def test_physical_probe_evaluation_is_shared_and_fail_closed() -> None:
+    physical = {
+        "available": True,
+        "manufacturer": "ASUSTeK COMPUTER INC.",
+        "model": "NUC13ANH-B",
+        "product_vendor": "ASUSTeK COMPUTER INC.",
+        "product_name": "NUC13ANH-B",
+        "bios_manufacturer": "American Megatrends Inc.",
+        "bios_version": "NUC13ANBi.0058",
+        "baseboard_manufacturer": "ASUSTeK COMPUTER INC.",
+        "baseboard_product": "NUC13ANH-B",
+        "hypervisor_present": False,
+        "virtualization_based_security_status": 0,
+    }
+    assert clean_system.evaluate_physical_virtualization_probe(physical)["valid"] is True
+
+    unavailable = dict(physical)
+    unavailable["available"] = False
+    assert clean_system.evaluate_physical_virtualization_probe(unavailable)["valid"] is False
+
+    unmeasured = dict(physical)
+    unmeasured["hypervisor_present"] = None
+    assert clean_system.evaluate_physical_virtualization_probe(unmeasured)["valid"] is False
+
+    generic = dict(physical)
+    generic["product_name"] = "System Product Name"
+    assert clean_system.evaluate_physical_virtualization_probe(generic)["valid"] is False
+    assert clean_system.evaluate_physical_virtualization_probe(generic)["generic_identity"] is True
+
+
+def test_selected_artifact_identity_recomputes_size_tiers_and_pe_imports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "selected.exe"
+    executable.write_bytes(b"MZ" + b"x" * 748)
+    monkeypatch.setattr(
+        clean_system.export.nw05_export,
+        "_pe_runtime_dependencies",
+        lambda raw: ["cabinet", "d3d12", "kernel32"],
+    )
+    monkeypatch.setattr(
+        clean_system.contract, "COMPLETE_DISTRIBUTION_CEILING_BYTES", 1000
+    )
+    monkeypatch.setattr(
+        clean_system.contract, "STRETCH_DISTRIBUTION_CEILING_BYTES", 500
+    )
+    canonical = {
+        "size_accounting": {
+            "within_ceiling": False,
+            "within_stretch": True,
+            "auxiliary_evidence_bytes": 123,
+        },
+        "dependency_closure": {
+            "dependencies": ["d3d12", "kernel32"],
+            "forbidden": [],
+            "authoring_infrastructure_excluded": ["nodewerk-studio"],
+            "gpu_name_predicates": [],
+        },
+    }
+    selected = clean_system._selected_artifact_identity(
+        canonical,
+        executable=executable,
+        embedded_payload=b"p" * 100,
+        embedded_package=b"nwp" * 50,
+        embedded_manifest=b"m" * 32,
+        delivery_encoding="compact",
+    )
+    assert selected["executable_bytes"] == 750
+    assert selected["size_accounting"]["within_ceiling"] is True
+    assert selected["size_accounting"]["within_stretch"] is False
+    assert selected["dependency_closure"]["dependencies"] == [
+        "cabinet",
+        "d3d12",
+        "kernel32",
+    ]
+    assert selected["canonical_manifest_dependency_closure"]["dependencies"] == [
+        "d3d12",
+        "kernel32",
+    ]
+
+
+def test_integrity_failure_is_failed_not_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        clean_system,
+        "run_clean_system",
+        lambda **kwargs: (_ for _ in ()).throw(
+            clean_system.CleanSystemVerificationError("decoded package mismatch")
+        ),
+    )
+    output = tmp_path / "report.json"
+    code = clean_system.main(
+        [
+            "--fixture", str(tmp_path / "fixture.exe"),
+            "--package", str(tmp_path / "package"),
+            "--deployment", str(tmp_path / "deployment"),
+            "--execution-kind", "physical",
+            "--output", str(output),
+        ]
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert code == 1
+    assert report["verification_status"] == "failed"
+    assert "decoded package mismatch" in report["reason"]
+
+def test_missing_canonical_sidecars_are_pending_not_integrity_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        clean_system,
+        "clean_host_provenance",
+        lambda **kwargs: {},
+    )
+    deployment = tmp_path / "deployment"
+    deployment.mkdir()
+    (deployment / "nw_common_release.exe").write_bytes(b"MZ")
+    fixture = tmp_path / "fixture.exe"
+    fixture.write_bytes(b"MZ-fixture")
+    package = tmp_path / "package"
+    package.mkdir()
+    output = tmp_path / "report.json"
+
+    code = clean_system.main(
+        [
+            "--fixture", str(fixture),
+            "--package", str(package),
+            "--deployment", str(deployment),
+            "--execution-kind", "physical",
+            "--output", str(output),
+        ]
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert code == 2
+    assert report["verification_status"] == "pending_unverified"
+    assert "prerequisites are unavailable" in report["reason"]
+    assert "NW-07 package is unavailable" in report["reason"]
+
+
+def test_collected_report_fails_when_selected_pe_has_forbidden_import() -> None:
+    identity = {"dependency_closure": {"forbidden": ["vcruntime140"]}}
+    host = {
+        "platform": "Windows",
+        "x64": True,
+        "windows_11_or_newer": True,
+        "clean_environment": True,
+    }
+    deployment = {"only_runtime_executable": True}
+    rows = [{"status": "passed"}]
+    assert (
+        clean_system._clean_system_verification_status(
+            identity=identity,
+            host=host,
+            deployment=deployment,
+            rows=rows,
+        )
+        == "failed"
+    )
+
+
+def test_validate_report_honors_shared_invalid_physical_probe_verdict() -> None:
+    report = _report()
+    report["host"]["virtualization_probe"] = {
+        "available": True,
+        "manufacturer": "",
+        "model": "",
+        "hypervisor_present": False,
+        "virtualization_based_security_status": 0,
+    }
+    # Retain stale positive booleans to ensure raw shared-probe verdict wins.
+    report["host"]["physical_host_evidence"] = True
+    report["host"]["clean_environment"] = True
+    result = clean_system.validate_report(report)
+    assert result["status"] == "pending_unverified"
+    assert any(
+        "manufacturer/model identity is incomplete" in reason
+        for reason in result["reasons"]
+    )
+
+
+def test_windows_virtualization_probe_normalizes_null_identity_to_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    payload = {
+        "Manufacturer": None,
+        "Model": None,
+        "ProductVendor": None,
+        "ProductName": None,
+        "BiosManufacturer": None,
+        "BiosVersion": None,
+        "BaseBoardManufacturer": None,
+        "BaseBoardProduct": None,
+        "HypervisorPresent": False,
+        "VirtualizationBasedSecurityStatus": 0,
+    }
+    monkeypatch.setattr(
+        clean_system.subprocess,
+        "run",
+        lambda *args, **kwargs: clean_system.subprocess.CompletedProcess(
+            args[0], 0, stdout=json.dumps(payload), stderr=""
+        ),
+    )
+    probe = clean_system._windows_virtualization_probe()
+    assert probe["manufacturer"] == ""
+    assert probe["model"] == ""
+    evaluation = clean_system.evaluate_physical_virtualization_probe(probe)
+    assert evaluation["valid"] is False
+    assert "manufacturer/model identity is incomplete" in evaluation["reasons"]

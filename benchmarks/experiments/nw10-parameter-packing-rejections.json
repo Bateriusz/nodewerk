@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "nw10-parameter-packing-rejections",
+  "category": "compact_profile",
+  "status": "rejected_preserved",
+  "verification_status": "unverified",
+  "substituted_silently": false,
+  "reproducible_command": "NODEWERK_NW03_TEST_DIGEST=1 python -m pytest -q tests/test_nw10_export_and_evidence.py",
+  "configuration": {
+    "toolchain_id": "structural-test-payload",
+    "profile_name": "nwc.params.q16+float16-measurement",
+    "compiler_flags": [],
+    "linker_flags": [],
+    "security_mitigations_retained": true
+  },
+  "initialization_and_cleanup_obligations": [
+    {
+      "obligation_id": "preserve_numeric_tolerance",
+      "phase": "runtime",
+      "description": "Float16 and signed Q16 parameter packing are retained only as measurements because their measured maximum absolute error exceeded the frozen 1e-5 numeric tolerance.",
+      "satisfied": true
+    }
+  ],
+  "measurements": {
+    "fixture_id": "nw07-production-contract-only",
+    "total_distributed_bytes": null,
+    "delta_vs_release_baseline_bytes": null,
+    "notes": "Contract-only measurement gave canonical parameter layout 595 bytes, varint/string-table 285 bytes with zero error, float16 271 bytes, and signed Q16 271 bytes. Float16/Q16 exceeded the frozen 1e-5 numeric tolerance and were rejected. The canonical layout remains selected; no tolerance was relaxed."
+  },
+  "diagnostics": {
+    "exit_code": null,
+    "error_code": "NUMERIC_TOLERANCE_EXCEEDED",
+    "summary": "Float16/Q16 packing reduced payload bytes but exceeded the frozen numeric absolute tolerance, so the alternatives were rejected.",
+    "preservation_statement": "Rejected alternatives remain in the NW-10 evidence record with measured error and byte deltas."
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "physical startup latency",
+      "reason": "The exact Windows target and clean-system capture are pending."
+    }
+  ]
+}

@@ -1348,6 +1348,7 @@ def _template_build_configuration(template_path: Path) -> dict[str, str]:
             "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
             "NW_USE_INBOX_UCRT",
             "NW07_CAPTURE_CONTROLS",
+            "NW10_COMPACT_PACKAGE",
         }:
             values[key] = value
     if values.get("NW_ENFORCE_PINNED_TOOLCHAIN", "").upper() != "ON":
@@ -1425,6 +1426,7 @@ def _build_specialized_player(
         "NW_ENABLE_CRT_ELIMINATION_EXPERIMENT",
         "NW_USE_INBOX_UCRT",
         "NW07_CAPTURE_CONTROLS",
+        "NW10_COMPACT_PACKAGE",
     ):
         if name in inherited:
             value = inherited[name]
@@ -2517,8 +2519,14 @@ def _compile_profile_package(
     cache_dir: str | None,
     allow_unpinned_dxc: bool,
     allow_test_payloads: bool,
+    generated_shaders_override: Sequence[nw03.GeneratedShader] | None = None,
 ) -> tuple[bytes, nwp.NwpPackage, dict[str, Any]]:
     if nw06_export.uses_nw06(optimized):
+        if generated_shaders_override is not None:
+            raise ExportError(
+                "explicit shader override is not supported by the NW-06 specialized path",
+                dependency_path=["specialized_shader", "nw06"],
+            )
         document = optimized.materialize_document(
             generation_modes=generation_modes,
             apply_accepted_fusions=False,
@@ -2587,8 +2595,12 @@ def _compile_profile_package(
         for connection in [node.inputs.get("shader")]
         if connection is not None
     }
-    generated_override = None
-    if has_composed_shader or texture_sample_roots:
+    generated_override = (
+        list(generated_shaders_override)
+        if generated_shaders_override is not None
+        else None
+    )
+    if generated_override is None and (has_composed_shader or texture_sample_roots):
         generated_override, diagnostics = nw03.lower_to_selective_hlsl(
             document,
             fused_roots={
@@ -2920,6 +2932,7 @@ def export_graph(
     | None = None,
     adapter_identity: str = "unavailable-native-adapter",
     prepare_staging: Callable[[Path], None] | None = None,
+    generated_shaders_override: Sequence[nw03.GeneratedShader] | None = None,
 ) -> ExportResult:
     """Export one artifact per capability profile with transactional publication."""
     settings = settings or ExportSettings()
@@ -2951,6 +2964,15 @@ def export_graph(
             dependency_path=["graph_profile", "requirements_digest"],
         )
     optional_profiles: list[str] = []
+    if generated_shaders_override is not None and (
+        settings.target_profile != nwp.COMMON_PROFILE_ID
+        or settings.optional_profiles
+        or settings.allow_optional_profiles
+    ):
+        raise ExportError(
+            "explicit shader override is restricted to a single common-profile export",
+            dependency_path=["specialized_shader", "capability_profile"],
+        )
     if settings.target_profile != nwp.COMMON_PROFILE_ID:
         canonical_profile_identity(settings.target_profile)
         optional_profiles.append(settings.target_profile)
@@ -3465,6 +3487,7 @@ def export_graph(
                     cache_dir=str(cache_dir) if cache_dir is not None else None,
                     allow_unpinned_dxc=allow_unpinned_dxc,
                     allow_test_payloads=allow_test_payloads,
+                    generated_shaders_override=generated_shaders_override,
                 )
             except nw03.CompilerError:
                 raise

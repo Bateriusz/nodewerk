@@ -1,0 +1,708 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw10-windows-compact-feasibility.schema.json",
+  "title": "Nodewerk NW-10 Windows compact feasibility evidence",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "target_bytes",
+    "target_met",
+    "classification",
+    "universal_64k_claim",
+    "source",
+    "measurements",
+    "privacy"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw10-windows-compact-feasibility"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-10"
+    },
+    "implementation_base": {
+      "const": "c7a73ce64a15973fc18b384543894e68ee2464e8"
+    },
+    "target_bytes": {
+      "const": 65536
+    },
+    "target_met": {
+      "type": "boolean"
+    },
+    "classification": {
+      "enum": [
+        "continue",
+        "complete"
+      ]
+    },
+    "universal_64k_claim": {
+      "const": false
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "kind",
+        "workflow"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "github_actions_windows_runtime",
+            "physical_windows_capture"
+          ]
+        },
+        "workflow": {
+          "const": "NW-10 Compact Export and Restricted Intro"
+        },
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "head_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "artifact_name": {
+          "type": "string"
+        },
+        "artifact_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifact_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "measurement_tool": {
+          "type": "string"
+        }
+      }
+    },
+    "measurements": {
+      "type": "object",
+      "required": [
+        "proof_measurement_status",
+        "minimum_measured_candidate_bytes",
+        "minimum_validated_runnable_bytes",
+        "validated_mode"
+      ],
+      "properties": {
+        "proof_measured_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "proof_measurement_status": {
+          "enum": [
+            "measured_decoder_off",
+            "pending_decoder_off",
+            "invalid_decoder_on_baseline",
+            "measured_decoder_off_size_blocked"
+          ]
+        },
+        "canonical_proof_within_tier": {
+          "type": "boolean"
+        },
+        "minimum_measured_candidate_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "minimum_validated_runnable_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "validated_mode": {
+          "enum": [
+            "compact",
+            "canonical_fallback",
+            "canonical_fallback_pending_physical",
+            "pending_runtime_validation",
+            "none"
+          ]
+        }
+      }
+    },
+    "compact_candidate": {
+      "type": "object",
+      "required": [
+        "bytes",
+        "sha256",
+        "runtime_status",
+        "counted_as_validated_runnable"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "enum": [
+            "validated_runnable",
+            "rejected_runtime_failure",
+            "pending_runtime_validation"
+          ]
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "failure_classification": {
+          "enum": [
+            "none",
+            "embedded_package_invalid",
+            "runtime_failure",
+            "non_certifying_hosted_failure",
+            "runtime_validation_missing"
+          ]
+        },
+        "counted_as_validated_runnable": {
+          "type": "boolean"
+        },
+        "exit_code_hex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9A-F]{8}$"
+        }
+      }
+    },
+    "validated_artifact": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "bytes",
+        "sha256",
+        "mode",
+        "payload_kind"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mode": {
+          "enum": [
+            "compact",
+            "canonical_fallback"
+          ]
+        },
+        "payload_kind": {
+          "enum": [
+            "compact_container",
+            "canonical_package",
+            null
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "compact"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload_kind": {
+                "const": "compact_container"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "canonical_fallback"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload_kind": {
+                "const": "canonical_package"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "certification": {
+      "type": "object",
+      "required": [
+        "status",
+        "decoded_package_identity",
+        "all_required_bytes_accounted",
+        "dependency_closure",
+        "pe_ledger_binding",
+        "clean_system",
+        "startup",
+        "memory",
+        "performance",
+        "visual"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "pending",
+            "failed"
+          ]
+        },
+        "decoded_package_identity": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "all_required_bytes_accounted": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "dependency_closure": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "pe_ledger_binding": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "clean_system": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "startup": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "memory": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "performance": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "visual": {
+          "$ref": "#/$defs/certificationGate"
+        },
+        "failed_gates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pending_gates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "canonical_fallback": {
+      "type": "object",
+      "required": [
+        "bytes",
+        "sha256",
+        "runtime_status",
+        "exit_code"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "enum": [
+            "validated_runnable",
+            "pending_runtime_validation",
+            "rejected_runtime_failure"
+          ]
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "link_manifest_verified": {
+          "type": "boolean"
+        },
+        "present_sync_interval": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dependency_closure": {
+          "type": "object",
+          "properties": {
+            "closure_verified": {
+              "type": "boolean"
+            },
+            "sidecar_files": {
+              "type": "array"
+            },
+            "canonical_imports": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "exit_code_hex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9A-F]{8}$"
+        }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "measured_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string"
+        },
+        "exit_code_hex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9A-F]{8}$"
+        }
+      }
+    },
+    "blockers": {
+      "type": "array"
+    },
+    "acceptance_linkage": {
+      "type": "object",
+      "required": [
+        "byte_ledger",
+        "dominant_costs_source",
+        "tested_alternatives_source",
+        "decision",
+        "true_64k_artifact_delivered"
+      ],
+      "properties": {
+        "byte_ledger": {
+          "const": "benchmarks/nw10/compact-proof.v1.json"
+        },
+        "dominant_costs_source": {
+          "type": "string"
+        },
+        "tested_alternatives_source": {
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "continue",
+            "complete"
+          ]
+        },
+        "true_64k_artifact_delivered": {
+          "type": "boolean"
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "raw_stdout_stderr_included",
+        "runner_paths_included",
+        "user_profile_paths_included",
+        "whitelist_generated"
+      ],
+      "properties": {
+        "raw_stdout_stderr_included": {
+          "const": false
+        },
+        "runner_paths_included": {
+          "const": false
+        },
+        "user_profile_paths_included": {
+          "const": false
+        },
+        "whitelist_generated": {
+          "const": true
+        }
+      }
+    },
+    "prior_valid_artifact": {
+      "type": "object",
+      "required": [
+        "executable_bytes",
+        "executable_sha256",
+        "runtime_status",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "executable_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "const": "validated_runnable"
+        },
+        "status": {
+          "const": "archived_prior_valid_fallback"
+        },
+        "source_head_sha": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "selected_artifact": {
+      "type": "object",
+      "required": [
+        "bytes",
+        "sha256",
+        "runtime_status",
+        "source",
+        "ledger",
+        "reason"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_status": {
+          "enum": [
+            "validated_runnable",
+            "pending_runtime_validation"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ledger": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "certificationGate": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "pending",
+            "failed"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "target_met": {
+            "const": true
+          }
+        },
+        "required": [
+          "target_met"
+        ]
+      },
+      "then": {
+        "required": [
+          "certification",
+          "validated_artifact"
+        ],
+        "properties": {
+          "validated_artifact": {
+            "type": "object",
+            "required": [
+              "bytes",
+              "sha256",
+              "mode",
+              "payload_kind"
+            ],
+            "properties": {
+              "bytes": {
+                "type": "integer",
+                "maximum": 65536
+              },
+              "mode": {
+                "enum": [
+                  "compact",
+                  "canonical_fallback"
+                ]
+              }
+            }
+          },
+          "certification": {
+            "required": [
+              "status",
+              "decoded_package_identity",
+              "all_required_bytes_accounted",
+              "dependency_closure",
+              "pe_ledger_binding",
+              "clean_system",
+              "startup",
+              "memory",
+              "performance",
+              "visual"
+            ],
+            "properties": {
+              "status": {
+                "const": "verified"
+              },
+              "decoded_package_identity": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "all_required_bytes_accounted": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "dependency_closure": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "pe_ledger_binding": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "clean_system": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "startup": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "memory": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "performance": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              },
+              "visual": {
+                "properties": {
+                  "status": {
+                    "const": "verified"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

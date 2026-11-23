@@ -45,6 +45,12 @@
       "role": "Inbox Windows 11 Universal C Runtime (OS system component since Windows 10/11)",
       "minimum_windows_build": "10.0.22631.4317",
       "counted_in_distributed_bytes": false
+    },
+    {
+      "dll_name": "cabinet.dll",
+      "role": "Inbox Windows Compression API used by the bounded NW-10 MSZIP compact-package decoder",
+      "minimum_windows_build": "10.0.22631.4317",
+      "counted_in_distributed_bytes": false
     }
   ],
   "installed_display_driver_allowlist": [
@@ -95,6 +101,7 @@
         "d3d12.dll",
         "dxgi.dll",
         "ucrtbase.dll",
+        "cabinet.dll",
         "ucrtbased.dll",
         "vcruntime140d.dll",
         "msvcp140d.dll",
@@ -120,7 +127,8 @@
         "gdi32.dll",
         "d3d12.dll",
         "dxgi.dll",
-        "ucrtbase.dll"
+        "ucrtbase.dll",
+        "cabinet.dll"
       ],
       "allowed_optional_dev_dlls": [],
       "allowed_sidecar_categories": [],
@@ -136,7 +144,8 @@
         "gdi32.dll",
         "d3d12.dll",
         "dxgi.dll",
-        "ucrtbase.dll"
+        "ucrtbase.dll",
+        "cabinet.dll"
       ],
       "allowed_optional_dev_dlls": [],
       "allowed_sidecar_categories": [],

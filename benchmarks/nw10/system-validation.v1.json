@@ -1,0 +1,27 @@
+{
+  "archived_physical_evidence": {
+    "current_executable_sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8",
+    "measured_executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "path": "benchmarks/nw10/reused-physical-evidence.v1.json",
+    "reason": "The historical system measurements are retained for attribution but cannot certify the current checkout.",
+    "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+    "status": "archived_not_current_head"
+  },
+  "clean_system": null,
+  "final_artifact": null,
+  "format": "nw10-system-validation",
+  "memory": null,
+  "privacy": {
+    "local_paths_included": false,
+    "raw_result_bundle_tracked": false,
+    "raw_stdout_stderr_included": false,
+    "user_profile_paths_included": false
+  },
+  "reason": "No single physical environment captured the exact current-head final artifact with clean-system startup and engine-committed memory. The previous record mixed clean-system and metric hosts, omitted the Windows build, and referenced a non-runnable 0xC0000005 artifact; those claims were withdrawn.",
+  "source_head_sha": null,
+  "startup": null,
+  "status": "pending_unverified",
+  "task": "NW-10",
+  "version": 1,
+  "windows_build": null
+}

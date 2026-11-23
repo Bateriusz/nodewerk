@@ -101,6 +101,22 @@ def _utc_seconds(value: Any) -> float | None:
     return parsed.timestamp()
 
 
+def _split_external_command(
+    command: str, *, windows: bool | None = None
+) -> list[str]:
+    """Split a configured external command without retaining Windows quotes."""
+    is_windows = os.name == "nt" if windows is None else windows
+    tokens = shlex.split(command, posix=not is_windows)
+    if is_windows:
+        tokens = [
+            token[1:-1]
+            if len(token) >= 2 and token[0] == token[-1] == '"'
+            else token
+            for token in tokens
+        ]
+    return tokens
+
+
 def _load_json(path: str | None) -> dict[str, Any]:
     if not path:
         return {}
@@ -1080,12 +1096,12 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             identity,
             failure="release executable does not match the published final artifact",
         )
-    collector = shlex.split(args.collector_command, posix=os.name != "nt")
+    collector = _split_external_command(args.collector_command)
     if not collector:
         return _failed_collection_capture(
             args, identity, failure="a measurement collector command is required"
         )
-    player_args = shlex.split(args.player_args, posix=os.name != "nt")
+    player_args = _split_external_command(args.player_args)
     samples_dir = Path(args.samples_dir)
     samples_dir.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {
@@ -1103,6 +1119,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         "collected_at_utc": _utc_now(),
     }
 
+    print("[NW07 PERF] presentation probe", flush=True)
     try:
         probe = subprocess.run(
             [str(executable), "--frames", "1"],
@@ -1141,6 +1158,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             args, identity, failure=record["failure"], collection=record
         )
 
+    print(f"[NW07 PERF] warm-up: {contract.WARMUP_SECONDS}s", flush=True)
     # One frozen five-second warm-up, ended before teardown so process
     # termination never extends the measured window.
     warmup_started = _utc_now()
@@ -1172,6 +1190,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         "stdout": warmup_stdout[-2000:],
         "stderr": warmup_stderr[-2000:],
     }
+    print("[NW07 PERF] warm-up complete", flush=True)
     if warmup_exited_early:
         record["failure"] = (
             "release executable exited before the five-second warm-up completed"
@@ -1185,6 +1204,11 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
 
     failure: str | None = None
     for index in range(1, contract.PERF_RUN_COUNT + 1):
+        print(
+            f"[NW07 PERF] run {index}/{contract.PERF_RUN_COUNT}: "
+            f"{contract.PERF_RUN_SECONDS}s",
+            flush=True,
+        )
         try:
             player = _start_player(executable, player_args)
         except OSError as exc:
@@ -1250,6 +1274,7 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
         collector_exit = (
             collector_completed.returncode if collector_completed is not None else None
         )
+        print(f"[NW07 PERF] run {index}/{contract.PERF_RUN_COUNT}: collector finished", flush=True)
         timing = {
             "warmup_started_utc": warmup_started,
             "warmup_ended_utc": warmup_ended,
@@ -1342,6 +1367,40 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
     capture = record_perf(namespace)
     capture["collection"] = record
     return capture
+
+def _console_summary(capture: Mapping[str, Any]) -> dict[str, Any]:
+    validation = capture.get("validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    runs = validation.get("runs")
+    compact_runs: list[dict[str, Any]] = []
+    if isinstance(runs, list):
+        for run in runs:
+            if not isinstance(run, Mapping):
+                continue
+            gpu = run.get("gpu_frame_time_ms")
+            cpu = run.get("cpu_submit_ms")
+            compact_runs.append(
+                {
+                    "run_index": run.get("run_index"),
+                    "status": run.get("status"),
+                    "gpu_p99_ms": (
+                        gpu.get("p99_ms") if isinstance(gpu, Mapping) else None
+                    ),
+                    "cpu_p99_ms": (
+                        cpu.get("p99_ms") if isinstance(cpu, Mapping) else None
+                    ),
+                    "sample_density_hz": run.get("sample_density_hz"),
+                }
+            )
+    return {
+        "format": "nw07-capture-summary",
+        "capture_id": capture.get("capture_id"),
+        "status": capture.get("status"),
+        "validation_status": validation.get("status"),
+        "reference_binding_id": capture.get("reference_binding_id"),
+        "runs": compact_runs,
+    }
+
 
 def _append_record(path: Path, capture: Mapping[str, Any]) -> dict[str, Any]:
     record = (
@@ -1582,7 +1641,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    print(json.dumps(capture, indent=2, sort_keys=True))
+    print(json.dumps(_console_summary(capture), indent=2, sort_keys=True))
     validation_status = str(
         (capture.get("validation") or {}).get("status", "")
     )

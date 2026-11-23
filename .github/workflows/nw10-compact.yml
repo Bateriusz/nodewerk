@@ -1,0 +1,712 @@
+name: NW-10 Compact Export and Restricted Intro
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: NW-10 codec, accounting, profile, and evidence contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Configure frozen host compile gate
+        run: >-
+          cmake -S . -B build/nw10-frozen-host -G Ninja
+          -DCMAKE_BUILD_TYPE=MinSizeRel
+          -DNW_BUILD_PROFILE=release
+          -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
+      - name: Compile compact decoder in the frozen host path
+        run: cmake --build build/nw10-frozen-host --target nw07_frozen_host_compile --parallel 2
+      - name: Regenerate deterministic contract evidence twice
+        env:
+          NODEWERK_NW03_TEST_DIGEST: "1"
+        run: |
+          python tools/nw10_evidence.py --output-dir build/nw10-evidence-a
+          python tools/nw10_evidence.py --output-dir build/nw10-evidence-b
+      - name: Upload regenerated contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-regenerated-contract-evidence
+          path: build/nw10-evidence-a/**
+      - name: Run NW-10 contract tests
+        run: python -m pytest -q tests/test_nw10_*.py
+      - name: Parse NW-10 evidence publisher PowerShell
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($path in @(
+            "tools/nw10/run-correctness-evidence.ps1",
+            "tools/nw10/publish-system-evidence.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                Write-Error (
+                  "PowerShell parse failed for " + $path +
+                  " line " + $parseError.Extent.StartLineNumber +
+                  " col " + $parseError.Extent.StartColumnNumber +
+                  ": " + $parseError.Message
+                )
+              }
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Verify deterministic contract evidence regeneration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          names = (
+              "compact-proof.v1.json",
+              "intro-profile.v1.json",
+              "evidence-status.v1.json",
+              "proof-export-report.v1.json",
+              "intro-export-report.v1.json",
+              "common-artifact-correctness.v1.json",
+              "system-validation.v1.json",
+          )
+          for name in names:
+              first = Path("build/nw10-evidence-a") / name
+              second = Path("build/nw10-evidence-b") / name
+              assert first.read_bytes() == second.read_bytes(), f"{name} regeneration is not deterministic"
+          print("NW-10 contract evidence regenerates byte-identically")
+          PY
+      - name: Run the existing NW-07 contract verification
+        run: python tools/verify_nw07.py --mode ContractsOnly --summary-json "$RUNNER_TEMP/nw07-contracts.json"
+      - name: Upload contract evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-contract-evidence
+          path: |
+            build/nw10-evidence-a/**
+            build/nw10-evidence-b/**
+            ${{ runner.temp }}/nw07-contracts.json
+
+  windows-compact-export:
+    name: Windows x64 compact export attempt
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Bootstrap exact NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh ./tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath "$env:RUNNER_TEMP\nw10-bootstrap-provenance.json"
+      - name: Export exact build environment
+        shell: pwsh
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+      - name: Configure release player template
+        run: >-
+          cmake --preset nw07-release
+          -DNW10_COMPACT_PACKAGE=ON
+          -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+      - name: Configure decoder-off canonical template
+        run: >-
+          cmake --preset nw07-release
+          -B "$PWD/build/nw07-release-decoder-off"
+          -DNW10_COMPACT_PACKAGE=OFF
+          -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+      - name: Build release player template and clean-system fixture
+        run: |
+          cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+          cmake --build --preset nw07-release --target nw_package_player_fixture --parallel 2
+          cmake --build "$PWD/build/nw07-release-decoder-off" --target nw_procedural_image_player --parallel 2
+      - name: Export canonical NW-07 proof and compact candidate
+        shell: pwsh
+        run: |
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          $canonicalTemplate = Join-Path $PWD "build/nw07-release-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template -PathType Leaf)) {
+            Write-Error "Release player template was not built: $template"
+            exit 1
+          }
+          if (-not (Test-Path $canonicalTemplate -PathType Leaf)) {
+            Write-Error "Decoder-off canonical player template was not built: $canonicalTemplate"
+            exit 1
+          }
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          python tools/nw10_proof.py `
+            --output "$PWD/build/nw10-proof" `
+            --report "$PWD/build/nw10-proof/report.json" `
+            --canonical-player-template $canonicalTemplate `
+            --player-template $template `
+            --dxc $dxc `
+            --reproducibility
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw10_intro.py `
+            --output "$PWD/build/nw10-intro" `
+            --report "$PWD/build/nw10-intro/report.json" `
+            --canonical-player-template $canonicalTemplate `
+            --player-template $template `
+            --dxc $dxc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Measure single-file sizes
+        shell: pwsh
+        run: |
+          $proof = Get-Content "$PWD/build/nw10-proof/report.json" | ConvertFrom-Json
+          $intro = Get-Content "$PWD/build/nw10-intro/report.json" | ConvertFrom-Json
+          $candidates = @()
+          if ($proof.success -eq $true) {
+            $proofBytes = [int64]$proof.compact_candidate.selected_executable_bytes
+            $canonicalProofBytes = [int64]$proof.canonical_artifact.executable_bytes
+            $candidates += $proofBytes
+            Write-Host ("NW-10 proof compact bytes: " + $proofBytes)
+            Write-Host ("NW-10 canonical decoder-off proof bytes: " + $canonicalProofBytes)
+            if ($canonicalProofBytes -gt 262144) {
+              throw "Canonical decoder-off NW-07 proof exceeds the 262,144-byte proof tier: $canonicalProofBytes"
+            }
+          } else {
+            $proofBytes = [int64]$proof.measured_distribution_bytes
+            $canonicalProofBytes = $null
+            $candidates += $proofBytes
+            Write-Host ("NW-10 proof measured blocker bytes: " + $proofBytes)
+          }
+          $introBytes = [int64]$intro.compact_artifact.executable_bytes
+          $canonicalIntroBytes = [int64]$intro.canonical_artifact.executable_bytes
+          $candidates += $introBytes
+          Write-Host ("NW-10 intro compact candidate bytes: " + $introBytes)
+          Write-Host ("NW-10 intro canonical bytes: " + $canonicalIntroBytes)
+          $minimum = ($candidates | Measure-Object -Minimum).Minimum
+          $outcome = [ordered]@{
+            target_bytes = 65536
+            minimum_measured_candidate_bytes = [int64]$minimum
+            target_met = ([int64]$minimum -le 65536)
+            classification = [string]$intro.decision.classification
+            proof_measured_bytes = $canonicalProofBytes
+            proof_compact_candidate_bytes = $proofBytes
+            proof_canonical_decoder_off_bytes = $canonicalProofBytes
+            intro_compact_candidate_bytes = $introBytes
+            intro_canonical_bytes = $canonicalIntroBytes
+            minimum_validated_runnable_bytes = $null
+            validated_executable_sha256 = $null
+            validated_mode = "pending_runtime_validation"
+            compact_candidate_runtime_status = "pending"
+            compact_candidate_exit_code = $null
+            canonical_fallback_exit_code = $null
+            blockers = @()
+            universal_64k_claim = $false
+          }
+          $outcome | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 "$PWD/build/nw10-windows-size-outcome.json"
+      - name: Diagnose SDF package through generic PackagePlayer fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $runtimeDir = Join-Path $PWD "build/nw10-runtime"
+          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+          $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+          $fixture = Join-Path $PWD "build/nw07-release/staging/package_player/nw_package_player_fixture.exe"
+          $package = Join-Path $PWD "build/nw10-intro/$stem.nwp"
+          if (-not (Test-Path $fixture -PathType Leaf)) { throw "PackagePlayer fixture missing: $fixture" }
+          if (-not (Test-Path $package -PathType Leaf)) { throw "SDF package missing: $package" }
+          $stdout = Join-Path $runtimeDir "sdf-generic-fixture.stdout.txt"
+          $stderr = Join-Path $runtimeDir "sdf-generic-fixture.stderr.txt"
+          $proc = Start-Process -FilePath $fixture -ArgumentList "--package",$package,"--frames","1","--tick-start","0","--tick-step","800","--width","1920","--height","1080","--emit-benchmark-metrics","--emit-image-hash" -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+          [ordered]@{
+            exit_code = [int]$proc.ExitCode
+            package_sha256 = (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
+            fixture_sha256 = (Get-FileHash -Algorithm SHA256 $fixture).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $runtimeDir "sdf-generic-fixture-result.json")
+          Write-Host "NW-10 generic PackagePlayer SDF diagnostic exit=$($proc.ExitCode)"
+          if (Test-Path $stdout) { Get-Content $stdout }
+          if (Test-Path $stderr) { Get-Content $stderr }
+      - name: Validate compact candidate, preserve canonical fallback, and check closure
+        shell: pwsh
+        run: |
+          $runtimeDir = Join-Path $PWD "build/nw10-runtime"
+          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+          $candidate = Get-ChildItem "$PWD/build/nw10-intro/compact/*.compact.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $canonical = Get-ChildItem "$PWD/build/nw10-intro/*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $candidate) { Write-Error "Restricted-intro compact candidate was not emitted"; exit 1 }
+          if ($null -eq $canonical) { Write-Error "Restricted-intro canonical fallback was not emitted"; exit 1 }
+
+          $candidateStdout = Join-Path $runtimeDir "compact-candidate.stdout.txt"
+          $candidateStderr = Join-Path $runtimeDir "compact-candidate.stderr.txt"
+          $candidateProcess = Start-Process -FilePath $candidate.FullName -ArgumentList "--frames","2" -RedirectStandardOutput $candidateStdout -RedirectStandardError $candidateStderr -PassThru -Wait
+
+          $outcomePath = Join-Path $PWD "build/nw10-windows-size-outcome.json"
+          $outcome = Get-Content $outcomePath -Raw | ConvertFrom-Json
+          $blockers = @()
+          $selected = $candidate
+          $validatedMode = "compact"
+          $hostedRuntimeValidated = $false
+          if ($candidateProcess.ExitCode -eq 0) {
+            $outcome.compact_candidate_runtime_status = "validated_runnable"
+            $outcome.compact_candidate_exit_code = 0
+            $hostedRuntimeValidated = $true
+            $compactRoot = Split-Path $candidate.FullName -Parent
+            $artifactRoot = Split-Path $compactRoot -Parent
+            $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+            # Root <stem>.exe remains the canonical product. The compact
+            # candidate is promoted into the selected compact/<stem>.exe slot.
+            Copy-Item $candidate.FullName (Join-Path $compactRoot "$stem.exe") -Force
+            $reportPath = Join-Path $artifactRoot "report.json"
+            $introReport = Get-Content $reportPath -Raw | ConvertFrom-Json
+            $introReport.compact_artifact.selected_mode = "compact"
+            $introReport.compact_artifact.selected_reason = "explicit_compact_selection_after_validation"
+            $introReport.compact_artifact.selected_executable_bytes = [int64]$candidate.Length
+            $introReport.compact_artifact.selected_executable_sha256 = (
+              Get-FileHash -Algorithm SHA256 $candidate.FullName
+            ).Hash.ToLowerInvariant()
+            $introReport | ConvertTo-Json -Depth 24 | Set-Content -Encoding utf8 $reportPath
+            Write-Host ("NW-10 compact candidate runtime validation: PASS (" + $candidate.Length + " bytes)")
+          } else {
+            $outcome.compact_candidate_runtime_status = "rejected_runtime_failure"
+            $outcome.compact_candidate_exit_code = [int]$candidateProcess.ExitCode
+            $blockers += [ordered]@{
+              id = "compact_candidate_runtime"
+              status = "rejected"
+              exit_code = [int]$candidateProcess.ExitCode
+              measured_bytes = [int64]$candidate.Length
+              reason = "The measured compact packaging candidate failed hosted Windows runtime validation; it is retained as a tested blocker and is not counted as a validated runnable artifact."
+            }
+            Write-Warning ("NW-10 compact candidate rejected with exit code " + $candidateProcess.ExitCode + "; probing canonical fallback on the hosted runner.")
+
+            $canonicalStdout = Join-Path $runtimeDir "canonical-fallback.stdout.txt"
+            $canonicalStderr = Join-Path $runtimeDir "canonical-fallback.stderr.txt"
+            $canonicalProcess = Start-Process -FilePath $canonical.FullName -ArgumentList "--frames","2" -RedirectStandardOutput $canonicalStdout -RedirectStandardError $canonicalStderr -PassThru -Wait
+            $selected = $canonical
+            if ($canonicalProcess.ExitCode -eq 0) {
+              $outcome.canonical_fallback_exit_code = 0
+              $hostedRuntimeValidated = $true
+              $validatedMode = "canonical_fallback"
+              Write-Host ("NW-10 canonical fallback hosted runtime validation: PASS (" + $canonical.Length + " bytes)")
+            } else {
+              $outcome.canonical_fallback_exit_code = [int]$canonicalProcess.ExitCode
+              # Keep the executed compact runtime failure. Physical certification
+              # eligibility is represented separately by validated_mode.
+              $validatedMode = "canonical_fallback_pending_physical"
+              $blockers += [ordered]@{
+                id = "hosted_canonical_runtime"
+                status = "non_certifying_hosted_failure"
+                exit_code = [int]$canonicalProcess.ExitCode
+                measured_bytes = [int64]$canonical.Length
+                reason = "The hosted Windows runner is non-certifying for the restricted SDF intro. Physical Ada/Blackwell runtime evidence is required before this executable can be counted as validated runnable."
+              }
+              Write-Warning ("NW-10 canonical fallback exited " + $canonicalProcess.ExitCode + " on the non-certifying hosted Windows runner; packaging it for physical GPU validation.")
+            }
+          }
+
+          # Keep the intro report's declared selection identical to the
+          # executable copied into the final artifact slot.
+          $reportPath = Join-Path (Join-Path $PWD "build/nw10-intro") "report.json"
+          if (Test-Path $reportPath -PathType Leaf) {
+            $introReport = Get-Content $reportPath -Raw | ConvertFrom-Json
+            $introReport.compact_artifact.selected_executable_bytes = [int64]$selected.Length
+            $introReport.compact_artifact.selected_executable_sha256 = (
+              Get-FileHash -Algorithm SHA256 $selected.FullName
+            ).Hash.ToLowerInvariant()
+            if ($validatedMode -eq "compact") {
+              $introReport.compact_artifact.selected_mode = "compact"
+              $introReport.compact_artifact.selected_reason = "explicit_compact_selection_after_validation"
+            } else {
+              $introReport.compact_artifact.selected_mode = "canonical"
+              $introReport.compact_artifact.selected_reason = "runtime_validation_pending"
+            }
+            $introReport | ConvertTo-Json -Depth 24 | Set-Content -Encoding utf8 $reportPath
+          }
+
+          if ($hostedRuntimeValidated) {
+            $outcome.minimum_validated_runnable_bytes = [int64]$selected.Length
+            $outcome.validated_executable_sha256 = (
+              Get-FileHash -Algorithm SHA256 $selected.FullName
+            ).Hash.ToLowerInvariant()
+          } else {
+            $outcome.minimum_validated_runnable_bytes = $null
+            $outcome.validated_executable_sha256 = $null
+          }
+          $outcome.validated_mode = $validatedMode
+          $outcome.blockers = $blockers
+          $outcome.classification = "continue"
+          $outcome | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $outcomePath
+
+          $closureRoot = Join-Path $PWD "build/nw10-dependency-check"
+          Remove-Item $closureRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $closureRoot | Out-Null
+          $closureExe = Join-Path $closureRoot "nw10_validated.exe"
+          Copy-Item $selected.FullName $closureExe -Force
+          python tools/dependency_check.py --binary $closureExe --deployment-root $closureRoot --profile compact_experiment --fixture nw10_validated > "$PWD/build/nw10-dependency-closure.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Bind the closure report to the exact selected executable bytes.
+          $closurePath = Join-Path $PWD "build/nw10-dependency-closure.json"
+          $closure = Get-Content $closurePath -Raw | ConvertFrom-Json
+          $closure | Add-Member -NotePropertyName binary_sha256 -NotePropertyValue (
+            (Get-FileHash -Algorithm SHA256 $closureExe).Hash.ToLowerInvariant()
+          ) -Force
+          $closure | Add-Member -NotePropertyName binary_bytes -NotePropertyValue (
+            [int64](Get-Item $closureExe).Length
+          ) -Force
+          $closure | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $closurePath
+
+          Write-Host "NW-10 Windows feasibility outcome:"
+          Get-Content $outcomePath
+
+      - name: Measure exact PE linker elimination and compact-decoder closure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $outcome = Get-Content "$PWD/build/nw10-windows-size-outcome.json" -Raw | ConvertFrom-Json
+          if ($outcome.compact_candidate_runtime_status -eq "validated_runnable" -or $outcome.canonical_fallback_exit_code -eq 0) {
+            $runtimeStatus = "validated_runnable"
+            $runtimeExitCode = 0
+          } elseif ($null -ne $outcome.canonical_fallback_exit_code) {
+            $runtimeStatus = "rejected_runtime_failure"
+            $runtimeExitCode = [int]$outcome.canonical_fallback_exit_code
+          } elseif ($null -ne $outcome.compact_candidate_exit_code) {
+            $runtimeStatus = "rejected_runtime_failure"
+            $runtimeExitCode = [int]$outcome.compact_candidate_exit_code
+          } else {
+            $runtimeStatus = "pending_runtime_validation"
+            $runtimeExitCode = $null
+          }
+          $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+
+          cmake --preset nw07-release -B "$PWD/build/nw10-decoder-off" -DNW10_COMPACT_PACKAGE=OFF -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build "$PWD/build/nw10-decoder-off" --target nw_procedural_image_player --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $canonicalTemplate = Join-Path $PWD "build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $canonicalTemplate -PathType Leaf)) {
+            throw "Decoder-off PE-ledger control template was not built: $canonicalTemplate"
+          }
+          # The link-control export must select the same embedded payload mode
+          # as the final artifact.  Otherwise the compact payload/decoder cost
+          # would be misattributed to linker elimination.
+          if ($outcome.compact_candidate_runtime_status -eq "validated_runnable") {
+            $selectMode = "compact"
+          } else {
+            $selectMode = "canonical"
+          }
+
+          $oldLink = $env:_LINK_
+          try {
+            $env:_LINK_ = "/OPT:NOREF /OPT:NOICF"
+            python tools/nw10_intro.py `
+              --output "$PWD/build/nw10-intro-link-control" `
+              --report "$PWD/build/nw10-intro-link-control-report.json" `
+              --canonical-player-template $canonicalTemplate `
+              --player-template $template `
+              --dxc $dxc `
+              --select-mode $selectMode
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            if ($null -eq $oldLink) {
+              Remove-Item Env:_LINK_ -ErrorAction SilentlyContinue
+            } else {
+              $env:_LINK_ = $oldLink
+            }
+          }
+
+          $ledgerArgs = @(
+            "tools/nw10_pe_ledger.py",
+            "--final-executable", "$PWD/build/nw10-intro/compact/$stem.exe",
+            "--linker-baseline-executable", "$PWD/build/nw10-intro-link-control/compact/$stem.exe",
+            "--decoder-on-template", $template,
+            "--decoder-off-template", "$PWD/build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe",
+            "--final-package", "$PWD/build/nw10-intro/$stem.nwp",
+            "--linker-baseline-package", "$PWD/build/nw10-intro-link-control/$stem.nwp",
+            "--final-manifest", "$PWD/build/nw10-intro/$stem.manifest.json",
+            "--linker-baseline-manifest", "$PWD/build/nw10-intro-link-control/$stem.manifest.json",
+            "--runtime-status", $runtimeStatus,
+            "--prior-valid-ledger", "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json",
+            "--source-head-sha", "${{ github.event.pull_request.head.sha || github.sha }}",
+            "--workflow-run-id", $env:GITHUB_RUN_ID,
+            "--output", "$PWD/build/nw10-windows-pe-ledger.json"
+          )
+          if ($null -ne $runtimeExitCode) {
+            $ledgerArgs += @("--runtime-exit-code", [string]$runtimeExitCode)
+          }
+          python @ledgerArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/schema_validator.py `
+            --document "$PWD/build/nw10-windows-pe-ledger.json" `
+            --schema "$PWD/schemas/nw10-windows-pe-ledger.schema.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content "$PWD/build/nw10-windows-pe-ledger.json"
+
+      - name: Fuzz and parity-test the shipped compact decoder
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake --preset nw07-release -B "$PWD/build/nw10-decoder-tests" `
+            -DNW10_BUILD_DECODER_TESTS=ON `
+            -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build "$PWD/build/nw10-decoder-tests" --target nw10_compact_decoder_fuzz --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw10_decoder_fixture.py --output "$PWD/build/nw10-decoder-tests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $fuzz = Get-ChildItem "$PWD/build/nw10-decoder-tests" -Filter nw10_compact_decoder_fuzz.exe -Recurse | Select-Object -First 1
+          if ($null -eq $fuzz) { throw "Compact decoder fuzz harness was not produced" }
+          & $fuzz.FullName `
+            "$PWD/build/nw10-decoder-tests/canonical.bin" `
+            "$PWD/build/nw10-decoder-tests/stored.nwc" `
+            "$PWD/build/nw10-decoder-tests/mszip.nwc"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package clean-system transfer bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $outcome = Get-Content "$PWD/build/nw10-windows-size-outcome.json" -Raw | ConvertFrom-Json
+          if ([string]$outcome.validated_mode -notin @("compact", "canonical_fallback", "canonical_fallback_pending_physical")) {
+            throw "Clean-system transfer requires a selected compact or canonical fallback executable."
+          }
+
+          $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+          $artifactRoot = Join-Path $PWD "build/nw10-intro"
+          $finalExe = Join-Path $artifactRoot "compact/$stem.exe"
+          $canonicalExe = Join-Path $artifactRoot "$stem.exe"
+          $package = Join-Path $artifactRoot "$stem.nwp"
+          $manifest = Join-Path $artifactRoot "$stem.manifest.json"
+          $fixture = Join-Path $PWD "build/nw07-release/staging/package_player/nw_package_player_fixture.exe"
+          foreach ($path in @($finalExe, $canonicalExe, $package, $manifest, $fixture)) {
+            if (-not (Test-Path $path -PathType Leaf)) {
+              throw "Clean-system transfer input is missing: $path"
+            }
+          }
+
+          $invalidatedGradientSha = "76c13bcc21da3a17b10b912f5e8ff4270f64749c74b347f174b519cbdd8c96bb"
+          $actualFinalSha = (Get-FileHash -Algorithm SHA256 $finalExe).Hash.ToLowerInvariant()
+          if ($actualFinalSha -eq $invalidatedGradientSha) {
+            throw "NW-10 final executable still matches the invalidated gradient artifact."
+          }
+
+          $transfer = Join-Path $PWD "build/nw10-clean-system-transfer"
+          Remove-Item $transfer -Recurse -Force -ErrorAction SilentlyContinue
+          $deployment = Join-Path $transfer "deployment"
+          $packageRoot = Join-Path $transfer "package"
+          $fixtureRoot = Join-Path $transfer "fixture"
+          $verifierRoot = Join-Path $transfer "verifier"
+          New-Item -ItemType Directory -Force $deployment,$packageRoot,$fixtureRoot,$verifierRoot | Out-Null
+
+          Copy-Item $finalExe (Join-Path $deployment "$stem.exe") -Force
+          # The verifier sibling remains canonical so nw07_export can validate
+          # the published NWP/manifest. nw07_clean_system separately decodes
+          # the exact deployed compact EXE and binds its identity to this NWP.
+          Copy-Item $canonicalExe (Join-Path $packageRoot "$stem.exe") -Force
+          Copy-Item $package (Join-Path $packageRoot "$stem.nwp") -Force
+          Copy-Item $manifest (Join-Path $packageRoot "$stem.manifest.json") -Force
+          Copy-Item $fixture (Join-Path $fixtureRoot "nw_package_player_fixture.exe") -Force
+          Copy-Item "$PWD/tools" (Join-Path $verifierRoot "tools") -Recurse -Force
+          Copy-Item "$PWD/benchmarks" (Join-Path $verifierRoot "benchmarks") -Recurse -Force
+          Copy-Item "$PWD/schemas" (Join-Path $verifierRoot "schemas") -Recurse -Force
+          Copy-Item "$PWD/fixtures" (Join-Path $verifierRoot "fixtures") -Recurse -Force
+          Copy-Item "$PWD/shaders" (Join-Path $verifierRoot "shaders") -Recurse -Force
+          Copy-Item "$PWD/tools/nw10/run-transferred-clean-system.ps1" (Join-Path $transfer "run-clean-system.ps1") -Force
+
+          $transferFull = [System.IO.Path]::GetFullPath($transfer).TrimEnd('\','/')
+          $fileRows = @()
+          foreach ($file in Get-ChildItem $transfer -File -Recurse | Sort-Object FullName) {
+            $fileFull = [System.IO.Path]::GetFullPath($file.FullName)
+            $relative = $fileFull.Substring($transferFull.Length).TrimStart('\','/').Replace('\','/')
+            $fileRows += [ordered]@{
+              path = $relative
+              bytes = [int64]$file.Length
+              sha256 = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            }
+          }
+          $bundle = [ordered]@{
+            format = "nw10-clean-system-transfer"
+            version = 1
+            task = "NW-10"
+            source_commit = "${{ github.event.pull_request.head.sha || github.sha }}"
+            final_executable_sha256 = $actualFinalSha
+            final_executable_bytes = [int64](Get-Item $finalExe).Length
+            package_sha256 = (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
+            files = $fileRows
+          }
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText(
+            (Join-Path $transfer "bundle-manifest.json"),
+            (($bundle | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
+            $utf8NoBom
+          )
+          Write-Host "[NW10 CLEAN] TRANSFER_READY=$transfer"
+          Write-Host "[NW10 CLEAN] FINAL_EXE_SHA256=$actualFinalSha"
+
+      - name: Upload NW-10 clean-system transfer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-clean-system-transfer
+          path: build/nw10-clean-system-transfer/**
+          if-no-files-found: error
+
+      - name: Package Blackwell correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
+            -TargetTier blackwell `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Blackwell correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-blackwell
+          path: build/nw10-correctness-scripted/transfer-blackwell/transfer-package/**
+          if-no-files-found: error
+
+      - name: Package Ada correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
+            -TargetTier ada `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Ada correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-ada
+          path: build/nw10-correctness-scripted/transfer-ada/transfer-package/**
+          if-no-files-found: error
+
+      - name: Package Blackwell packed correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
+            -TargetTier blackwell `
+            -PackagingMode packed `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Blackwell packed correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-blackwell-packed
+          path: build/nw10-correctness-scripted/transfer-blackwell-packed/transfer-package/**
+          if-no-files-found: error
+
+      - name: Package Ada packed correctness transfer bundle
+        shell: pwsh
+        run: |
+          ./tools/nw10/run-correctness-evidence.ps1 `
+            -PrepareTransferBundle `
+            -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
+            -TargetTier ada `
+            -PackagingMode packed `
+            -ExpectedBranch ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Ada packed correctness transfer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-correctness-transfer-ada-packed
+          path: build/nw10-correctness-scripted/transfer-ada-packed/transfer-package/**
+          if-no-files-found: error
+
+      - name: Upload Windows NW-10 evidence
+        id: nw10_evidence_upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-windows-compact-evidence
+          path: |
+            build/nw10-proof/**
+            build/nw10-intro/**
+            build/nw10-windows-size-outcome.json
+            build/nw10-dependency-closure.json
+            build/nw10-dependency-check/**
+            build/nw10-runtime/**
+            build/nw10-windows-pe-ledger.json
+            build/nw10-intro-link-control-report.json
+            ${{ runner.temp }}/nw10-bootstrap-provenance.json
+
+      - name: Bind PE ledger to the uploaded artifact identity
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/nw10_pe_ledger.py `
+            --bind-source-report "$PWD/build/nw10-windows-pe-ledger.json" `
+            --artifact-name "nw10-windows-compact-evidence" `
+            --artifact-id "${{ steps.nw10_evidence_upload.outputs.artifact-id }}" `
+            --artifact-digest "${{ steps.nw10_evidence_upload.outputs.artifact-digest }}" `
+            --output "$PWD/build/nw10-windows-pe-ledger-bound.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/schema_validator.py `
+            --document "$PWD/build/nw10-windows-pe-ledger-bound.json" `
+            --schema "$PWD/schemas/nw10-windows-pe-ledger.schema.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Bind feasibility record to the uploaded artifact identity
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Root <stem>.exe is the canonical product. Runtime validation
+          # promotes the compact candidate into the selected compact/<stem>.exe
+          # slot; compact/<stem>.compact.exe remains the measured candidate.
+          python tools/nw10_feasibility.py `
+            --outcome "$PWD/build/nw10-windows-size-outcome.json" `
+            --proof-report "$PWD/build/nw10-proof/report.json" `
+            --intro-report "$PWD/build/nw10-intro/report.json" `
+            --output "$PWD/build/nw10-windows-compact-feasibility-bound.json" `
+            --run-id $env:GITHUB_RUN_ID `
+            --head-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
+            --artifact-name "nw10-windows-compact-evidence" `
+            --artifact-id "${{ steps.nw10_evidence_upload.outputs.artifact-id }}" `
+            --artifact-digest "${{ steps.nw10_evidence_upload.outputs.artifact-digest }}" `
+            --prior-valid-ledger "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json" `
+            --pe-ledger "$PWD/build/nw10-windows-pe-ledger.json" `
+            --dependency-closure "$PWD/build/nw10-dependency-closure.json" `
+            --system-validation "$PWD/benchmarks/nw10/system-validation.v1.json" `
+            --correctness "$PWD/benchmarks/nw10/common-artifact-correctness.v1.json" `
+            --selected-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.exe" `
+            --canonical-executable "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.exe" `
+            --compact-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.compact.exe" `
+            --final-package "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.nwp" `
+            --final-manifest "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.manifest.json" `
+            --correctness-ada-unpacked-executable "$PWD/build/nw10-correctness-scripted/transfer-ada/transfer-package/nw10-correctness-diagnostic.exe" `
+            --correctness-ada-packed-executable "$PWD/build/nw10-correctness-scripted/transfer-ada-packed/transfer-package/nw10-correctness-diagnostic.exe" `
+            --correctness-blackwell-unpacked-executable "$PWD/build/nw10-correctness-scripted/transfer-blackwell/transfer-package/nw10-correctness-diagnostic.exe" `
+            --correctness-blackwell-packed-executable "$PWD/build/nw10-correctness-scripted/transfer-blackwell-packed/transfer-package/nw10-correctness-diagnostic.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/schema_validator.py `
+            --document "$PWD/build/nw10-windows-compact-feasibility-bound.json" `
+            --schema "$PWD/schemas/nw10-windows-compact-feasibility.schema.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload artifact-bound feasibility record
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw10-windows-compact-feasibility-record
+          path: |
+            build/nw10-windows-compact-feasibility-bound.json
+            build/nw10-windows-pe-ledger-bound.json
+          if-no-files-found: error

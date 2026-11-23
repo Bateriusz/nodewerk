@@ -75,7 +75,9 @@ DIAGNOSTIC_OVERHEAD_PROTOCOL = "nw07-diagnostic-overhead.v1"
 
 # Reference performance contract: the exact board name is recorded because
 # NW-07 intentionally keeps an explicitly justified absolute performance
-# reference.  It is never used as a compatibility predicate.
+# reference.  It is never used as a compatibility predicate.  The pending
+# nw07_perf_ref_v1 binding keeps the originally frozen PCI identity; changing
+# it requires a fresh exact-board capture and a new contract version.
 REFERENCE_BOARD_MODEL = "NVIDIA GeForce RTX 4060 Ti"
 REFERENCE_BOARD_VENDOR_ID = 0x10DE
 REFERENCE_BOARD_DEVICE_ID = 0x2805
@@ -142,6 +144,8 @@ PINNED_BUILD_INPUTS = (
     "shaders/nw06/nw06_tonemap_cs.hlsl",
     "src/package/nwp_format.cpp",
     "src/package/nwp_format.h",
+    "src/package/nw_compact.cpp",
+    "src/package/nw_compact.h",
     "src/platform/win32_window.cpp",
     "src/platform/win32_window.h",
     "src/player/capability_check.cpp",

@@ -1,0 +1,156 @@
+{
+  "acceptance_linkage": {
+    "byte_ledger": "benchmarks/nw10/compact-proof.v1.json",
+    "decision": "continue",
+    "dominant_costs_source": "benchmarks/nw10/compact-proof.v1.json#dominant_costs",
+    "tested_alternatives_source": "benchmarks/nw10/compact-proof.v1.json#alternatives",
+    "true_64k_artifact_delivered": false
+  },
+  "archived_reason": "The 4d216 run could not run either the compact candidate or the canonical fallback (0xC0000005) and is not at the current source head. It remains an attributed measured blocker, not validated current-head evidence.",
+  "blocker": {
+    "exit_code": -1073741819,
+    "exit_code_hex": "0xC0000005",
+    "id": "compact_candidate_runtime",
+    "measured_bytes": 228181,
+    "reason": "The hosted Windows runner recorded runtime failures for both the compact candidate and canonical fallback; those executed failures remain rejected runtime results. Qualifying physical certification remains pending before either current artifact can be counted as runnable.",
+    "status": "pending_physical"
+  },
+  "canonical_fallback": {
+    "bytes": 237118,
+    "dependency_closure": {
+      "canonical_imports": [
+        "api-ms-win-crt-convert-l1-1-0",
+        "api-ms-win-crt-heap-l1-1-0",
+        "api-ms-win-crt-locale-l1-1-0",
+        "api-ms-win-crt-math-l1-1-0",
+        "api-ms-win-crt-runtime-l1-1-0",
+        "api-ms-win-crt-stdio-l1-1-0",
+        "api-ms-win-crt-string-l1-1-0",
+        "d3d12",
+        "dxgi",
+        "gdi32",
+        "kernel32",
+        "user32"
+      ],
+      "closure_verified": true,
+      "sidecar_files": []
+    },
+    "exit_code": -1073741819,
+    "exit_code_hex": "0xC0000005",
+    "link_manifest_verified": true,
+    "present_sync_interval": 0,
+    "runtime_status": "rejected_runtime_failure",
+    "sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8"
+  },
+  "certification": {
+    "all_required_bytes_accounted": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "clean_system": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "decoded_package_identity": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "dependency_closure": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "failed_gates": [],
+    "memory": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "pe_ledger_binding": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "pending_gates": [
+      "decoded_package_identity",
+      "all_required_bytes_accounted",
+      "dependency_closure",
+      "pe_ledger_binding",
+      "clean_system",
+      "startup",
+      "memory",
+      "performance",
+      "visual"
+    ],
+    "performance": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "startup": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    },
+    "status": "pending",
+    "visual": {
+      "reason": "No qualifying physical reference capture exists for this archived attempt; the current candidate failed runtime validation and the selected artifact is the prior valid fallback.",
+      "status": "pending"
+    }
+  },
+  "classification": "continue",
+  "compact_candidate": {
+    "bytes": 228181,
+    "counted_as_validated_runnable": false,
+    "exit_code": -1073741819,
+    "exit_code_hex": "0xC0000005",
+    "failure_classification": "non_certifying_hosted_failure",
+    "runtime_status": "rejected_runtime_failure",
+    "sha256": "7d6ce07ba27ac73797d04c9f8e4ea5783c02ca35cbf365697fe693e898b9cd5c"
+  },
+  "current_implementation_measurement": false,
+  "format": "nw10-windows-compact-feasibility",
+  "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
+  "measurement_status": "archived_superseded",
+  "measurements": {
+    "canonical_proof_within_tier": true,
+    "minimum_measured_candidate_bytes": 228181,
+    "minimum_validated_runnable_bytes": null,
+    "proof_measured_bytes": 260294,
+    "proof_measurement_status": "measured_decoder_off",
+    "validated_mode": "canonical_fallback_pending_physical"
+  },
+  "prior_valid_artifact": {
+    "executable_bytes": 240702,
+    "executable_sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "reason": "The current-head export produced a non-runnable 063b artifact; the prior valid 6c6f fallback remains the attributable last-known-runnable distribution.",
+    "runtime_status": "validated_runnable",
+    "source_head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+    "status": "archived_prior_valid_fallback"
+  },
+  "privacy": {
+    "raw_stdout_stderr_included": false,
+    "runner_paths_included": false,
+    "user_profile_paths_included": false,
+    "whitelist_generated": true
+  },
+  "selected_artifact": {
+    "bytes": 240702,
+    "ledger": "benchmarks/nw10/windows-pe-ledger.v1.json",
+    "reason": "The current-head compact candidate and canonical fallback could not be validated as runnable, so the last validated 6c6f fallback remains the selected runnable distribution and complete byte ledger.",
+    "runtime_status": "validated_runnable",
+    "sha256": "6c6fdb40461bfecc02427efeccfcbeb00c2a8424217d893a15e5d2711a9b154e",
+    "source": "prior_valid_artifact"
+  },
+  "source": {
+    "artifact_digest": "sha256:7fb0807a098a4152eae8298fef5984e1410cc7ca14b910226680403d39c876f4",
+    "artifact_id": 14540370510,
+    "artifact_name": "nw10-windows-compact-evidence",
+    "artifact_retained": true,
+    "head_sha": "4d216ddf3cb4d5e0cecdc5bf0c49af3ff7d20eee",
+    "kind": "github_actions_windows_runtime",
+    "measurement_tool": "tools/nw10_feasibility.py",
+    "run_id": 44542203189,
+    "workflow": "NW-10 Compact Export and Restricted Intro"
+  },
+  "target_bytes": 65536,
+  "target_met": false,
+  "task": "NW-10",
+  "universal_64k_claim": false,
+  "version": 1
+}
