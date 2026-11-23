@@ -124,6 +124,8 @@ def test_windows_bootstrap_cache_is_digest_verified_and_vs_install_is_minimal():
     assert "CACHE_INVALID" in bootstrap
     assert "cached-pinned-artifact" in bootstrap
     assert "Get-MissingVisualStudioComponents" in bootstrap
+    assert '-version "[17.0,18.0)"' in bootstrap
+    assert "-latest -products * -requires" not in bootstrap
     assert "--includeRecommended" not in bootstrap
     assert "Test-ExistingVisualStudio" in bootstrap
 
