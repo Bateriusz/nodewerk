@@ -2987,11 +2987,11 @@
   "implementation_base": "c7a73ce64a15973fc18b384543894e68ee2464e8",
   "intro": {
     "canonical_artifact": {
-      "artifact_key": "sha256:v1:05a2188129a3b95206a54d4156905cfc8e1908c2d62f269151b9924180999ce0",
+      "artifact_key": "sha256:v1:a07c0ef90e5a996dca6241a3370f3498bdf77ea0ce067a1ef3021bf91fd45751",
       "executable_bytes": 4350,
-      "executable_sha256": "5bb9c1112b6316f8192d69e91507af206b6a8efa421a353508129824dee897b1",
+      "executable_sha256": "878c6318953333e62e57affaef1e0bc990992d43838df50a7e32bfdd85814728",
       "link_manifest": {
-        "artifact_identity": "sha256:v1:05a2188129a3b95206a54d4156905cfc8e1908c2d62f269151b9924180999ce0",
+        "artifact_identity": "sha256:v1:a07c0ef90e5a996dca6241a3370f3498bdf77ea0ce067a1ef3021bf91fd45751",
         "artifact_profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
         "artifact_requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
         "dependencies_source": "package-phase-requirements",
@@ -3081,7 +3081,7 @@
           "memory_budget_bytes": 536870912,
           "wave_ops": false
         },
-        "manifest_sha256": "sha256:v1:63a0af853cfffdeefb31e07f979b89b8b1a5a1a92617dd947663214a5e80962a",
+        "manifest_sha256": "sha256:v1:0c6d00ef85ba066044f4d25122e4f5547b04a26f255aa48f2d46aae33befc15d",
         "materialized_semantic_digest": "sha256:v1:9cbe19de4bb3c8863682d083ac690d5d081cd63887aa2cb4707a583c0d7ce21c",
         "optional_artifact": false,
         "optional_profile_id": "",
@@ -3196,7 +3196,7 @@
             "blob_sha256": "2285ae1f6263d6388c7ddbc79824610e41545028d498321f94e27f5bfb1595d4",
             "execution_order": 0,
             "execution_root": "image",
-            "hlsl_sha256": "da7dd456316936a40ac8a2309a9b0069c3c79ee5508903ac5261b70e439d87de",
+            "hlsl_sha256": "d848b1da26376226f03295263acb14bc8f59f762fc576c2c1ac545f725f7fdb9",
             "output_region": 0,
             "region_count": 1,
             "root_node_ids": [
@@ -3224,22 +3224,22 @@
         "version": 1
       },
       "manifest_bytes": 6256,
-      "manifest_sha256": "1048e0386441b949c3a14d420fe1328c7bfe61483ebf0b9bb650e1035b91f37b",
+      "manifest_sha256": "974d0434bfba119476ae4ad2e527cbebb800acfc51275da8bbc9250ba04c9db3",
       "package_bytes": 3968,
-      "package_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6"
+      "package_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c"
     },
     "compact_artifact": {
       "codec_id": "nwc.codec.mszip.v1",
       "decoded_package_bytes": 3968,
-      "decoded_package_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-      "encoded_package_bytes": 1708,
-      "encoded_package_sha256": "30956531f935dea9d6ed20e71cb493937a1ddcf18f404430f733ee4fc31167b5",
-      "executable_bytes": 2090,
-      "executable_sha256": "d77cb166e51ad9dab97440b18325f0896ffd762634935891efd46b8254ef6e51",
+      "decoded_package_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
+      "encoded_package_bytes": 1712,
+      "encoded_package_sha256": "63df6f22398eb1901b8ab5a1b0acc18138dae05789f4820c34770127451dc1e6",
+      "executable_bytes": 2094,
+      "executable_sha256": "b0b93a9855c8eca501902b17af7ea9f9b053ed2cb30260c33b399b18021c9a66",
       "layout_id": "nwc.layout.soa.v1",
       "reference_records": 0,
       "selected_executable_bytes": 4350,
-      "selected_executable_sha256": "5bb9c1112b6316f8192d69e91507af206b6a8efa421a353508129824dee897b1",
+      "selected_executable_sha256": "878c6318953333e62e57affaef1e0bc990992d43838df50a7e32bfdd85814728",
       "selected_mode": "canonical",
       "selected_reason": "runtime_validation_pending"
     },
@@ -3282,7 +3282,7 @@
           "compact_player_image_bytes": null,
           "decoder_code_bytes": null,
           "decoder_code_included_in_player_image": false,
-          "decoder_source_bytes": 13375,
+          "decoder_source_bytes": 13418,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
           "encoded_package_bytes": 3968,
@@ -3358,7 +3358,7 @@
           "stretch_bytes": 131072
         },
         "codec_id": "nwc.codec.mszip.v1",
-        "complete_runnable_distribution_bytes": 2090,
+        "complete_runnable_distribution_bytes": 2094,
         "components": {
           "auxiliary_file_bytes": 36922,
           "auxiliary_files": {
@@ -3374,10 +3374,10 @@
           "compact_player_image_bytes": 258,
           "decoder_code_bytes": null,
           "decoder_code_included_in_player_image": false,
-          "decoder_source_bytes": 13375,
+          "decoder_source_bytes": 13418,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
-          "encoded_package_bytes": 1708,
+          "encoded_package_bytes": 1712,
           "optional_auxiliary_files": {
             "link-manifest.json": 6256,
             "nw_common_d3d12_fl12_0_sm6_0_v1.aliases.json": 2350,
@@ -3425,7 +3425,7 @@
             "name": "user32"
           }
         ],
-        "distribution_delta_bytes": -2260,
+        "distribution_delta_bytes": -2256,
         "evidence_status": "informational_contract_only",
         "format": "nw10-byte-ledger",
         "layout_id": "nwc.layout.soa.v1",
@@ -3433,7 +3433,7 @@
           "identity": "tools/nw10_compact.py",
           "version": "115991d6d863ca41af5e7290a84b8001d8b91efbc7b451ed1730c4cb9d7b68f8"
         },
-        "selected_executable_bytes": 2090,
+        "selected_executable_bytes": 2094,
         "task": "NW-10",
         "unaccounted_components": [
           "decoder_code_bytes"
@@ -3525,13 +3525,13 @@
         },
         {
           "codec": "candidate.zlib.raw",
-          "complete_container_bytes": 1712,
+          "complete_container_bytes": 1716,
           "decoder_dependency": null,
           "deterministic": true,
           "encoding_id": "candidate.zlib.raw.v1",
           "measurements": {
             "distribution_bytes": {
-              "after": 1712,
+              "after": 1716,
               "before": 4244,
               "status": "measured_complete_container_bytes"
             },
@@ -3594,7 +3594,7 @@
               }
             }
           },
-          "payload_bytes": 1648,
+          "payload_bytes": 1652,
           "player_supported": false,
           "rejection_reasons": [
             "no_measured_player_decoder_or_dependency_closure"
@@ -3603,13 +3603,13 @@
         },
         {
           "codec": "candidate.bzip2",
-          "complete_container_bytes": 1896,
+          "complete_container_bytes": 1912,
           "decoder_dependency": null,
           "deterministic": false,
           "encoding_id": "candidate.bzip2.v1",
           "measurements": {
             "distribution_bytes": {
-              "after": 1896,
+              "after": 1912,
               "before": 4244,
               "status": "measured_complete_container_bytes"
             },
@@ -3672,7 +3672,7 @@
               }
             }
           },
-          "payload_bytes": 1832,
+          "payload_bytes": 1848,
           "player_supported": false,
           "rejection_reasons": [
             "no_measured_player_decoder_or_dependency_closure"
@@ -3759,13 +3759,13 @@
         },
         {
           "codec": "nwc.codec.mszip.v1",
-          "complete_container_bytes": 1708,
+          "complete_container_bytes": 1712,
           "decoder_dependency": "cabinet.dll",
           "deterministic": true,
           "encoding_id": "nwc.codec.mszip.v1",
           "measurements": {
             "distribution_bytes": {
-              "after": 1708,
+              "after": 1712,
               "before": 4244,
               "status": "measured_complete_container_bytes"
             },
@@ -3828,7 +3828,7 @@
               }
             }
           },
-          "payload_bytes": 1644,
+          "payload_bytes": 1648,
           "player_supported": true,
           "rejection_reasons": [],
           "selected": true
@@ -3921,9 +3921,9 @@
             "codec_id": "nwc.codec.stored.v1",
             "container_bytes": 4196,
             "decoded_bytes": 3968,
-            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
             "encoded_bytes": 4260,
-            "encoded_sha256": "9af25e6f526cae20566124e813f13f7c9e4dd5fbca69e14ed5c012464f1d2924",
+            "encoded_sha256": "ea46ca2bb5cdfa99afd59af4428d99f15438eca5905a3012ae795aed59c09734",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.canonical.v1",
             "measurements": {
@@ -3999,9 +3999,9 @@
             "codec_id": "nwc.codec.stored.v1",
             "container_bytes": 4196,
             "decoded_bytes": 3968,
-            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
             "encoded_bytes": 4260,
-            "encoded_sha256": "d4af2c2a955c36a03d9d34579f5eda3d6539c1a136ae7e03a36fa962ed7d1526",
+            "encoded_sha256": "55d4fc2e7ec16bb351502d807d26e465e06db703253aac230cdf162de8a9f5fd",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.aos.v1",
             "measurements": {
@@ -4077,9 +4077,9 @@
             "codec_id": "nwc.codec.stored.v1",
             "container_bytes": 4180,
             "decoded_bytes": 3968,
-            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
             "encoded_bytes": 4244,
-            "encoded_sha256": "dd7faac4fef5442230b3d37689445f24ed41a166e8f8693028974a0ca167cb8a",
+            "encoded_sha256": "66a49e7ff0889960e22f73872126101f4f1ca3bbdb7fcd9b99807b5e1db8f49c",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.soa.v1",
             "measurements": {
@@ -4155,15 +4155,15 @@
             "codec_id": "nwc.codec.mszip.v1",
             "container_bytes": 4196,
             "decoded_bytes": 3968,
-            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-            "encoded_bytes": 1715,
-            "encoded_sha256": "1dd096dd936375d11de60faad2507e27a70865d175ca39dac5c0f13d1bf22464",
+            "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
+            "encoded_bytes": 1717,
+            "encoded_sha256": "41fb97a02036391695d5986eec008339216ab2adf5055881979cd6dd0d27469d",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.canonical.v1",
             "measurements": {
               "distribution_bytes": {
-                "after": 1715,
-                "before": 1715,
+                "after": 1717,
+                "before": 1717,
                 "status": "measured_encoded_payload_plus_container_header"
               },
               "frame_time_ms": {
@@ -4225,7 +4225,7 @@
                 }
               }
             },
-            "payload_bytes": 1651,
+            "payload_bytes": 1653,
             "record_count": 16,
             "reference_count": 0
           },
@@ -4233,15 +4233,15 @@
             "codec_id": "nwc.codec.mszip.v1",
             "container_bytes": 4196,
             "decoded_bytes": 3968,
-            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-            "encoded_bytes": 1715,
-            "encoded_sha256": "a77ad9f30c26267ab618c207850b1ae450ceb3245e7587a277e7713d527e1f97",
+            "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
+            "encoded_bytes": 1717,
+            "encoded_sha256": "dbc05b30272c69f8b68c759a075ae38c5de983536a6fa6aecba43382468ac727",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.aos.v1",
             "measurements": {
               "distribution_bytes": {
-                "after": 1715,
-                "before": 1715,
+                "after": 1717,
+                "before": 1717,
                 "status": "measured_encoded_payload_plus_container_header"
               },
               "frame_time_ms": {
@@ -4303,7 +4303,7 @@
                 }
               }
             },
-            "payload_bytes": 1651,
+            "payload_bytes": 1653,
             "record_count": 16,
             "reference_count": 0
           },
@@ -4311,15 +4311,15 @@
             "codec_id": "nwc.codec.mszip.v1",
             "container_bytes": 4180,
             "decoded_bytes": 3968,
-            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-            "encoded_bytes": 1708,
-            "encoded_sha256": "30956531f935dea9d6ed20e71cb493937a1ddcf18f404430f733ee4fc31167b5",
+            "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
+            "encoded_bytes": 1712,
+            "encoded_sha256": "63df6f22398eb1901b8ab5a1b0acc18138dae05789f4820c34770127451dc1e6",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.soa.v1",
             "measurements": {
               "distribution_bytes": {
-                "after": 1708,
-                "before": 1715,
+                "after": 1712,
+                "before": 1717,
                 "status": "measured_encoded_payload_plus_container_header"
               },
               "frame_time_ms": {
@@ -4381,7 +4381,7 @@
                 }
               }
             },
-            "payload_bytes": 1644,
+            "payload_bytes": 1648,
             "record_count": 16,
             "reference_count": 0
           }
@@ -4392,8 +4392,8 @@
         ],
         "measurements": {
           "distribution_bytes": {
-            "after": 1708,
-            "before": 1715,
+            "after": 1712,
+            "before": 1717,
             "status": "measured_encoded_payload_plus_container_header"
           },
           "frame_time_ms": {
@@ -4485,7 +4485,7 @@
         "compression": {
           "candidate.bzip2": {
             "distribution_bytes": {
-              "after": 1896,
+              "after": 1912,
               "before": 4244,
               "status": "measured_complete_container_bytes"
             },
@@ -4615,7 +4615,7 @@
           },
           "candidate.zlib.raw": {
             "distribution_bytes": {
-              "after": 1712,
+              "after": 1716,
               "before": 4244,
               "status": "measured_complete_container_bytes"
             },
@@ -4680,7 +4680,7 @@
           },
           "nwc.codec.mszip.v1": {
             "distribution_bytes": {
-              "after": 1708,
+              "after": 1712,
               "before": 4244,
               "status": "measured_complete_container_bytes"
             },
@@ -4944,8 +4944,8 @@
         },
         "layouts": {
           "distribution_bytes": {
-            "after": 1708,
-            "before": 1715,
+            "after": 1712,
+            "before": 1717,
             "status": "measured_encoded_payload_plus_container_header"
           },
           "frame_time_ms": {
@@ -5232,7 +5232,7 @@
           "init.create_pipeline"
         ],
         "package_bytes": 3968,
-        "package_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+        "package_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
         "parameter_bytes": 28,
         "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
         "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
@@ -5875,9 +5875,9 @@
             "codec_id": "nwc.codec.stored.v1",
             "container_bytes": 4180,
             "decoded_bytes": 3968,
-            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
+            "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
             "encoded_bytes": 4244,
-            "encoded_sha256": "dd7faac4fef5442230b3d37689445f24ed41a166e8f8693028974a0ca167cb8a",
+            "encoded_sha256": "66a49e7ff0889960e22f73872126101f4f1ca3bbdb7fcd9b99807b5e1db8f49c",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.soa.v1",
             "measurements": {
@@ -5957,14 +5957,14 @@
             "codec_id": "nwc.codec.mszip.v1",
             "container_bytes": 4180,
             "decoded_bytes": 3968,
-            "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-            "encoded_bytes": 1708,
-            "encoded_sha256": "30956531f935dea9d6ed20e71cb493937a1ddcf18f404430f733ee4fc31167b5",
+            "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
+            "encoded_bytes": 1712,
+            "encoded_sha256": "63df6f22398eb1901b8ab5a1b0acc18138dae05789f4820c34770127451dc1e6",
             "format": "nwc.container.v1",
             "layout_id": "nwc.layout.soa.v1",
             "measurements": {
               "distribution_bytes": {
-                "after": 1708,
+                "after": 1712,
                 "before": 4244,
                 "status": "measured_complete_encoded_container_bytes"
               },
@@ -6027,7 +6027,7 @@
                 }
               }
             },
-            "payload_bytes": 1644,
+            "payload_bytes": 1648,
             "record_count": 16,
             "reference_count": 0,
             "rejection_reasons": [],
@@ -6037,7 +6037,7 @@
         "compression_increases_distribution": false,
         "measurements": {
           "distribution_bytes": {
-            "after": 1708,
+            "after": 1712,
             "before": 4244,
             "status": "measured_complete_encoded_container_bytes"
           },
@@ -6104,12 +6104,12 @@
           "codec_id": "nwc.codec.mszip.v1",
           "container_bytes": 4180,
           "decoded_bytes": 3968,
-          "decoded_sha256": "5392cdf0bd3bd089a9e7474c639d3deab1653cc27533b824ee3ebd6fe10733f6",
-          "encoded_bytes": 1708,
-          "encoded_sha256": "30956531f935dea9d6ed20e71cb493937a1ddcf18f404430f733ee4fc31167b5",
+          "decoded_sha256": "3e8fec574263da459ab2826defecb113949ed05c9a9bc80e51c7d9556c863f9c",
+          "encoded_bytes": 1712,
+          "encoded_sha256": "63df6f22398eb1901b8ab5a1b0acc18138dae05789f4820c34770127451dc1e6",
           "format": "nwc.container.v1",
           "layout_id": "nwc.layout.soa.v1",
-          "payload_bytes": 1644,
+          "payload_bytes": 1648,
           "record_count": 16,
           "reference_count": 0
         },
@@ -6487,17 +6487,17 @@
       "profile_id": "nw10.intro.sdf20.v1",
       "runtime_dxc": false,
       "shader": "shaders/nw10/nw10_sdf_intro_cs.hlsl",
-      "shader_sha256": "da7dd456316936a40ac8a2309a9b0069c3c79ee5508903ac5261b70e439d87de",
+      "shader_sha256": "d848b1da26376226f03295263acb14bc8f59f762fc576c2c1ac545f725f7fdb9",
       "ticks_per_second": 48000,
       "width": 1920
     },
     "report_path": "benchmarks/nw10/intro-export-report.v1.json",
-    "report_sha256": "b0661d03c552041ae39b9bc0181fff47fe80327396a74605d7a40475b18e3cd1"
+    "report_sha256": "e561e859296f9f64ee85418294b94f95cea6a173245511340f285d117fa661e6"
   },
   "minimum_measured_artifact": {
-    "bytes": 2090,
+    "bytes": 2094,
     "evidence_status": "informational_contract_only",
-    "intro_compact_bytes": 2090,
+    "intro_compact_bytes": 2094,
     "physical_result": null,
     "proof_compact_bytes": 4475
   },
@@ -6527,8 +6527,8 @@
     "shaders/nw06/nw06_scene_ps.hlsl": "f263d0dee0ff7ebc89beeeb604b3ae9f495ef50d3d503b92f3888395089d1e91",
     "shaders/nw06/nw06_scene_vs.hlsl": "f0d909b5a20817508f885d7f8754f628dd95dfa3b6898066bff9a5f7e8af4300",
     "shaders/nw06/nw06_tonemap_cs.hlsl": "bf0da426af7140076f5e20eba2e0fc7b717e4bef1068b987a1f2c1fdc9462429",
-    "shaders/nw10/nw10_sdf_intro_cs.hlsl": "da7dd456316936a40ac8a2309a9b0069c3c79ee5508903ac5261b70e439d87de",
-    "src/package/nw_compact.cpp": "bd1c3437d7246e8a21e09f64277fda7b05716b7fe19c844d1ffc60395c14ce69",
+    "shaders/nw10/nw10_sdf_intro_cs.hlsl": "d848b1da26376226f03295263acb14bc8f59f762fc576c2c1ac545f725f7fdb9",
+    "src/package/nw_compact.cpp": "412ed665eb370484e05c2a3d61bfe0c18c57012d9dbbc41009607a723eda2bda",
     "src/package/nw_compact.h": "9fca4faa57c6c22187864ca7c1bd2e4838fd0ac5e82100fdfd5dfbf9764a8b93",
     "src/package/nwp_format.cpp": "f1de9a1dde6c3a877eced60a8fa7e3192cf7ab1a8738d7d2ac62fdd9ce2286ed",
     "src/package/nwp_format.h": "95db908691ef077e5187a6d449c8be64d19d4b4a7b17ac678f41aecedd78314d",
@@ -6578,7 +6578,7 @@
     "tools/nwp_package.py": "406f824704ae69ee3251f89ac455f453b8d90e8ca3aa7490ee873784a013d9ce",
     "tools/offline_shader_pack.py": "7a0cdf460ad833d2892a14e38601a7b4f5076eae727c0b88c9e463d755546da0"
   },
-  "nw10_build_inputs_digest": "sha256:v1:fc61fb1b2afdbabb903f5cecbb94bd40dfe12af9b45486d7522d29f6af62d58a",
+  "nw10_build_inputs_digest": "sha256:v1:5ce357424165a88ad00988eb943486154fb2dac6ec3022a7143f9065fbc0ef00",
   "packaging_modes": [
     {
       "clean_system_checked": false,
@@ -6690,7 +6690,7 @@
           "compact_player_image_bytes": null,
           "decoder_code_bytes": null,
           "decoder_code_included_in_player_image": false,
-          "decoder_source_bytes": 13375,
+          "decoder_source_bytes": 13418,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
           "encoded_package_bytes": 17626,
@@ -6782,7 +6782,7 @@
           "compact_player_image_bytes": 258,
           "decoder_code_bytes": null,
           "decoder_code_included_in_player_image": false,
-          "decoder_source_bytes": 13375,
+          "decoder_source_bytes": 13418,
           "embedded_footer_bytes": 92,
           "embedded_manifest_binding_bytes": 32,
           "encoded_package_bytes": 4093,
@@ -9974,7 +9974,7 @@
       }
     },
     "report_path": "benchmarks/nw10/proof-export-report.v1.json",
-    "report_sha256": "a75ba460c7bd22d019d06ccd6499e1439769c7f556b17facd0cd1d1bf71bf553",
+    "report_sha256": "79319580a2d0b912a77b8ed8b02bd6cc051c9d8a5830b5d3c73615c54cd699f8",
     "reproducibility": {
       "fields": {
         "artifact_key": "sha256:v1:e636c51a1e65adbd07f0cba68195a85fc5df3d70ca3236e65b850b79fb1775ed",
