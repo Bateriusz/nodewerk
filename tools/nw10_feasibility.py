@@ -220,9 +220,10 @@ def _normalized_dependency_names(rows: Any) -> set[str] | None:
             return None
         if row.get("distributed_bytes") != 0:
             return None
-        name = str(row.get("name", "")).lower().removesuffix(".dll")
-        if not name:
+        raw_name = str(row.get("name", "")).lower()
+        if not raw_name:
             return None
+        name = dependency_check.canonical_inbox_dll(raw_name).removesuffix(".dll")
         names.add(name)
     return names
 
@@ -386,7 +387,7 @@ def _verify_artifact_closure(
     if not canonical_imports or not compact_imports or not selected_imports:
         raise ValueError("PE import extraction returned an empty dependency closure")
 
-    manifest_dependencies = _normalized_imports(
+    manifest_dependencies = _canonical_pe_imports(
         (manifest.get("retained") or {}).get("dependencies") or []
     )
     if manifest_dependencies != canonical_imports:
@@ -620,7 +621,7 @@ def _certify_compact_candidate(
     dependency_closure_available = isinstance(dependency_closure, Mapping)
     dependency_closure_valid = False
     if dependency_closure_available:
-        imported = _normalized_imports(
+        imported = _canonical_pe_imports(
             dependency_closure.get("canonical_imports")
         )
         sidecars = list(dependency_closure.get("sidecar_files") or [])
