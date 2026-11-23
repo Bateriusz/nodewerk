@@ -2,24 +2,62 @@
   "format": "nw10a-ci-baseline",
   "version": 1,
   "profiling_source": {
-    "pull_request": 35,
-    "head_sha": "c7ef42d9c1ad34e4d7bd5247ac29a507bcd18926",
-    "started_at_utc": "2026-11-23T13:05:31Z"
-  },
-  "before": {
-    "critical_path_seconds": 1093,
-    "runner_minutes_approx": 68.2,
-    "workflows": {
-      "nw01_seconds": 1093,
-      "nw08_seconds": 776,
-      "nw10_seconds": 689,
-      "nw08a_seconds": 493,
-      "nw07_seconds": 387
+    "historical_pr35": {
+      "pull_request": 35,
+      "head_sha": "c7ef42d9c1ad34e4d7bd5247ac29a507bcd18926",
+      "started_at_utc": "2026-11-23T13:05:31Z",
+      "critical_path_seconds": 1093,
+      "runner_minutes_approx": 68.2
+    },
+    "fresh_main": {
+      "head_sha": "0cd2952757f2b3fb04ebff4792d63fe26a18477a",
+      "started_at_utc": "2026-11-23T22:13:13Z",
+      "note": "Fresh push-to-main baseline captured immediately after NW-10 merge; queue time excluded from job durations derived from job log timestamps.",
+      "workflow_runs": {
+        "nw01": {
+          "run_id": 45277542451,
+          "critical_job_id": 138053125836,
+          "critical_job_seconds": 1003.129
+        },
+        "nw07": {
+          "run_id": 45277542464,
+          "critical_job_id": 138053126166,
+          "critical_job_seconds": 446.446
+        },
+        "nw08": {
+          "run_id": 45277542478,
+          "critical_job_id": 138053125343,
+          "critical_job_seconds": 662.649
+        },
+        "nw08a": {
+          "run_id": 45277542362,
+          "critical_job_id": 138053125114,
+          "critical_job_seconds": 598.059
+        },
+        "nw10": {
+          "run_id": 45277542535,
+          "critical_job_id": 138053125222,
+          "critical_job_seconds": 746.775
+        }
+      },
+      "critical_path_seconds": 1003.129,
+      "non_skipped_runner_seconds": 4055.614,
+      "non_skipped_runner_minutes": 67.594,
+      "key_step_seconds": {
+        "nw01_windows_bootstrap": 347.251,
+        "nw01_windows_full_pytest": 263.283,
+        "nw01_windows_run_build_checks": 142.763,
+        "nw10_windows_bootstrap": 314.766,
+        "nw10_correctness_transfer_blackwell_unpacked": 31.013,
+        "nw10_correctness_transfer_ada_unpacked": 30.313,
+        "nw10_correctness_transfer_blackwell_packed": 32.231,
+        "nw10_correctness_transfer_ada_packed": 32.242
+      }
     }
   },
   "after": {
     "status": "pending_representative_runs",
-    "note": "Populate with measured NW-10-only cold/warm and full-regression runs; queue time excluded."
+    "note": "Cross-cutting/full-regression timing will be measured on the NW-10A PR. NW-10-only cold/warm acceptance requires representative NW-10-only revisions after this routing exists; no synthetic timing is claimed."
   },
   "targets": {
     "nw10_only_cold_seconds_max": 720,

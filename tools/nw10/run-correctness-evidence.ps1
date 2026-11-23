@@ -349,7 +349,9 @@ try {
 
             Remove-Item -LiteralPath $transferRoot -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
-            Copy-Item -LiteralPath (Join-Path $reuseRoot "*") -Destination $packageRoot -Recurse -Force
+            foreach ($sourceFile in Get-ChildItem -LiteralPath $reuseRoot -File) {
+                Copy-Item -LiteralPath $sourceFile.FullName -Destination $packageRoot -Force
+            }
 
             $targetTransferPath = Join-Path $packageRoot "transfer.json"
             $targetManifestPath = Join-Path $packageRoot "bundle-manifest.json"
