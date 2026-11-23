@@ -25,6 +25,7 @@ import nw10_contract as contract  # noqa: E402
 import nw07_clean_system as clean_system_contract  # noqa: E402
 import nw07_contract as common_contract  # noqa: E402
 import nw07_evidence  # noqa: E402
+import nw07_export  # noqa: E402
 import nw05_export  # noqa: E402
 import nw10_compact as compact  # noqa: E402
 import nw10_perf_preservation  # noqa: E402
@@ -809,6 +810,37 @@ def _certify_compact_candidate(
         before_artifact = (
             before_artifact if isinstance(before_artifact, Mapping) else {}
         )
+        candidate = performance.get("candidate")
+        candidate = candidate if isinstance(candidate, Mapping) else {}
+        candidate_artifact = candidate.get("artifact")
+        candidate_artifact = (
+            candidate_artifact
+            if isinstance(candidate_artifact, Mapping)
+            else {}
+        )
+        candidate_graph = candidate.get("common_graph")
+        candidate_graph = (
+            candidate_graph if isinstance(candidate_graph, Mapping) else {}
+        )
+        candidate_build_inputs = candidate.get("build_inputs")
+        candidate_build_inputs = (
+            candidate_build_inputs
+            if isinstance(candidate_build_inputs, Mapping)
+            else {}
+        )
+        candidate_dependency = candidate.get("dependency_closure")
+        candidate_dependency = (
+            candidate_dependency
+            if isinstance(candidate_dependency, Mapping)
+            else {}
+        )
+        candidate_runtime = candidate.get("runtime_probe")
+        candidate_runtime = (
+            candidate_runtime
+            if isinstance(candidate_runtime, Mapping)
+            else {}
+        )
+
         artifacts_ok = all(
             re.fullmatch(r"[0-9a-f]{64}", str(entry.get(key, "")).lower())
             is not None
@@ -819,22 +851,54 @@ def _certify_compact_candidate(
         artifacts_ok = (
             artifacts_ok
             and bool(str(before_artifact.get("artifact_key", "")).strip())
-            and bool(canonical_artifact_key)
-            and str(artifact.get("artifact_key", "")) == canonical_artifact_key
+            and bool(str(artifact.get("artifact_key", "")).strip())
             and str(before_artifact.get("package_sha256", "")).lower()
-            == canonical_package_sha
-            and str(artifact.get("package_sha256", "")).lower()
-            == canonical_package_sha
-            and bool(canonical_manifest_sha)
-            and _manifest_sha(
-                performance, "after", "artifact", "manifest_sha256"
-            )
-            == canonical_manifest_sha
-            and str(artifact.get("executable_sha256", "")).lower()
-            == validated_sha
-            and int(artifact.get("complete_distribution_bytes", -1))
-            == validated_size
+            == str(artifact.get("package_sha256", "")).lower()
+            and candidate_artifact == artifact
         )
+
+        candidate_provenance_ok = False
+        candidate_provenance_error = ""
+        try:
+            frozen_nw07 = nw07_export.load_canonical_config()
+            expected_graph = nw07_export.verify_canonical_graph(
+                frozen_nw07, repo_root=REPO_ROOT
+            )
+            pinned_inputs = nw07_export.verify_pinned_inputs(
+                frozen_nw07, repo_root=REPO_ROOT
+            )
+            candidate_provenance_ok = (
+                candidate.get("comparison_role") == "after_common_artifact"
+                and candidate.get("performance_contract")
+                == contract.PERF_CONTRACT_ID
+                and candidate.get("performance_protocol")
+                == contract.PERF_PROTOCOL_ID
+                and candidate.get("profile_id") == common_contract.PROFILE_ID
+                and candidate.get("requirements_digest")
+                == common_contract.REQUIREMENTS_DIGEST
+                and candidate.get("release_grade") is True
+                and candidate.get("test_payload") is False
+                and candidate_graph.get("path") == str(frozen_nw07["graph"])
+                and candidate_graph.get("sha256")
+                == expected_graph["graph_sha256"]
+                and candidate_graph.get("ir_sha256")
+                == expected_graph["ir_sha256"]
+                and candidate_build_inputs.get("nw07_frozen_digest")
+                == pinned_inputs["frozen_digest"]
+                and candidate_build_inputs.get("observed_digest")
+                == pinned_inputs["digest"]
+                and candidate_build_inputs.get("matches_frozen_digest") is True
+                and candidate_build_inputs.get("nw10_digest")
+                == contract.build_inputs_digest(contract.compute_build_inputs())
+                and candidate_dependency.get("matches_manifest") is True
+                and isinstance(candidate_dependency.get("imports"), list)
+                and candidate_runtime.get("status") == "passed"
+                and candidate_runtime.get("exit_code") == 0
+                and candidate_runtime.get("uncapped_present_verified") is True
+            )
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            candidate_provenance_error = str(exc)
+
         def runs_valid(rows: Any) -> bool:
             return (
                 isinstance(rows, list)
@@ -874,8 +938,14 @@ def _certify_compact_candidate(
         )
         before_matches_reference = (
             performance_reference_bound
-            and before_artifact
-            == expected_reference_artifact
+            and before_artifact == expected_reference_artifact
+        )
+        comparison = performance.get("comparison")
+        comparison = comparison if isinstance(comparison, Mapping) else {}
+        package_identity_preserved = (
+            comparison.get("same_canonical_package_sha256") is True
+            and str(before_artifact.get("package_sha256", "")).lower()
+            == str(artifact.get("package_sha256", "")).lower()
         )
         performance_details = {
             "contract": performance.get("performance_contract"),
@@ -893,6 +963,10 @@ def _certify_compact_candidate(
             "before_matches_frozen_reference_artifact": (
                 before_matches_reference
             ),
+            "candidate_provenance_verified": candidate_provenance_ok,
+            "candidate_provenance_error": candidate_provenance_error or None,
+            "candidate_artifact_matches_after": candidate_artifact == artifact,
+            "same_canonical_package_sha256": package_identity_preserved,
             "expected_reference_artifact": expected_reference_artifact or None,
             "before_executable_sha256": before_artifact.get(
                 "executable_sha256"
@@ -908,6 +982,8 @@ def _certify_compact_candidate(
             and reference_environment_ok
             and before_matches_reference
             and artifacts_ok
+            and candidate_provenance_ok
+            and package_identity_preserved
             and performance.get("status") == "verified_preserved"
             and performance.get("matched_environment") is True
             and performance.get("reasons") == []
@@ -915,6 +991,7 @@ def _certify_compact_candidate(
             == contract.PERF_CONTRACT_ID
             and performance.get("performance_protocol")
             == contract.PERF_PROTOCOL_ID
+            and comparison.get("faster_substitute_used") is False
             and runs_ok
             and before_runs_ok
             and _is_strict_under(
