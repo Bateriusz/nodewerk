@@ -735,3 +735,24 @@ def test_preservation_revalidates_raw_runs_instead_of_cached_validation(
     result = preservation.validate_preservation(before, after, bound, candidate)
     assert result["status"] == "failed"
     assert result["reasons"]
+
+def test_revalidation_preserves_roots_for_file_backed_samples(
+    tmp_path: Path,
+) -> None:
+    bound, before, after, candidate_report = _fixture()
+    for label, capture in (("before", before), ("after", after)):
+        section = capture["runs"][0]["gpu_frame_time_ms"]
+        samples = section.pop("samples")
+        sample_path = tmp_path / f"{label}-gpu.json"
+        sample_path.write_text(json.dumps(samples), encoding="utf-8")
+        section["path"] = sample_path.name
+
+    result = preservation.validate_preservation(
+        before,
+        after,
+        bound,
+        candidate_report,
+        before_artifact_root=tmp_path,
+        after_artifact_root=tmp_path,
+    )
+    assert result["status"] == "verified_preserved"

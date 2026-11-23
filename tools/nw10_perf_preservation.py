@@ -216,6 +216,8 @@ def validate_preservation(
     candidate_report: Mapping[str, Any],
     *,
     forbid_tokens: list[str] | None = None,
+    before_artifact_root: Path | None = None,
+    after_artifact_root: Path | None = None,
 ) -> dict[str, Any]:
     reasons: list[str] = []
     contract_validation = nw07_evidence.validate_perf_contract(perf_contract)
@@ -235,12 +237,16 @@ def validate_preservation(
 
     # Cached validation is not authority: recompute from the retained raw runs.
     before_validation = nw07_evidence.validate_perf_capture(
-        before, perf_contract,
+        before,
+        perf_contract,
         artifact_identity=_validator_artifact_identity(reference_artifact),
+        artifact_root=before_artifact_root,
     )
     after_validation = nw07_evidence.validate_perf_capture(
-        after, perf_contract,
+        after,
+        perf_contract,
         artifact_identity=_validator_artifact_identity(candidate_artifact),
+        artifact_root=after_artifact_root,
     )
 
     if before_validation.get("status") != "verified":
@@ -793,6 +799,16 @@ def collect_after(args: argparse.Namespace) -> dict[str, Any]:
         perf_contract,
         candidate_report,
         forbid_tokens=list(args.forbid_token or []),
+        before_artifact_root=(
+            Path(args.before_artifact_root)
+            if args.before_artifact_root
+            else Path(args.before_evidence).resolve().parent
+        ),
+        after_artifact_root=(
+            Path(args.after_artifact_root)
+            if args.after_artifact_root
+            else Path(args.samples_dir).resolve()
+        ),
     )
     public_path = Path(args.public_evidence)
     public_path.parent.mkdir(parents=True, exist_ok=True)
@@ -813,6 +829,8 @@ def main(argv: list[str] | None = None) -> int:
     collect.add_argument("--reference", required=True)
     collect.add_argument("--before-evidence", required=True)
     collect.add_argument("--before-capture-id", required=True)
+    collect.add_argument("--before-artifact-root")
+    collect.add_argument("--after-artifact-root")
     collect.add_argument("--candidate-report", required=True)
     collect.add_argument("--samples-dir", required=True)
     collect.add_argument("--collector-command", required=True)
@@ -847,6 +865,8 @@ def main(argv: list[str] | None = None) -> int:
     compare.add_argument("--before-capture-id", required=True)
     compare.add_argument("--after-evidence", required=True)
     compare.add_argument("--after-capture-id", required=True)
+    compare.add_argument("--before-artifact-root")
+    compare.add_argument("--after-artifact-root")
     compare.add_argument("--contract", required=True)
     compare.add_argument("--candidate-report", required=True)
     compare.add_argument("--output", required=True)
@@ -891,6 +911,16 @@ def main(argv: list[str] | None = None) -> int:
                 _load_json(Path(args.contract)),
                 _load_json(Path(args.candidate_report)),
                 forbid_tokens=list(args.forbid_token or []),
+                before_artifact_root=(
+                    Path(args.before_artifact_root)
+                    if args.before_artifact_root
+                    else Path(args.before_evidence).resolve().parent
+                ),
+                after_artifact_root=(
+                    Path(args.after_artifact_root)
+                    if args.after_artifact_root
+                    else Path(args.after_evidence).resolve().parent
+                ),
             )
             output = Path(args.output)
             output.parent.mkdir(parents=True, exist_ok=True)

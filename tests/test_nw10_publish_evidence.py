@@ -880,6 +880,12 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
         }
     ]
 
+    metrics_record = json.loads(metrics.read_text(encoding="utf-8"))
+    metrics_record["measurements"]["process_start_to_first_present_ms"] = "NaN"
+    _write_json(metrics, metrics_record)
+    with pytest.raises(ValueError, match="non-finite"):
+        publisher.publish_system(args)
+
 
 def test_blackwell_transfer_bundle_is_runtime_only_and_published_by_ci() -> None:
     wrapper = (
@@ -900,6 +906,10 @@ def test_blackwell_transfer_bundle_is_runtime_only_and_published_by_ci() -> None
     assert "Package Blackwell correctness transfer bundle" in workflow
     assert "nw10-correctness-transfer-blackwell" in workflow
     assert "transfer-blackwell/transfer-package/**" in workflow
+    assert '$canonicalExe = Join-Path $artifactRoot "$stem.exe"' in workflow
+    assert 'Copy-Item $canonicalExe (Join-Path $packageRoot "$stem.exe") -Force' in workflow
+    assert '} elseif ($null -ne $outcome.canonical_fallback_exit_code) {' in workflow
+    assert '$runtimeStatus = "rejected_runtime_failure"' in workflow
 
 
 def test_clean_summary_rejects_vm_markers_and_redefined_exit_codes() -> None:
@@ -968,3 +978,93 @@ def test_clean_summary_rejects_vm_markers_and_redefined_exit_codes() -> None:
             artifact=artifact,
             runtime_hardware={"adapter_description": "NVIDIA GeForce RTX 5070 Ti"},
         )
+
+def test_clean_bundle_requires_authoritative_report_in_verified_manifest(
+    tmp_path: Path,
+) -> None:
+    report_bytes = b'{"verification_status":"verified"}\n'
+    manifest = {
+        "format": "nw10-clean-system-result-bundle",
+        "version": 1,
+        "task": "NW-10",
+        "files": [],
+    }
+    bundle = tmp_path / "clean.zip"
+    with zipfile.ZipFile(bundle, "w") as archive:
+        archive.writestr("clean-system-report.json", report_bytes)
+        archive.writestr("bundle-manifest.json", json.dumps(manifest))
+    with pytest.raises(ValueError, match="verified bundle manifest"):
+        publisher._load_clean_bundle(bundle)
+
+
+def test_clean_summary_rejects_vm_identity_even_when_marker_lists_are_cleared() -> None:
+    artifact = {"executable_sha256": "1" * 64, "executable_bytes": 100}
+    report = {
+        "verification_status": "verified",
+        "host": {
+            "execution_kind": "physical",
+            "clean_environment": True,
+            "architecture": "AMD64",
+            "os_build": "10.0.26200",
+            "development_dependencies_present_on_path": [],
+            "environment_cache_variables": [],
+            "virtualization_indicators": [],
+            "hypervisor_explained_by_vbs": True,
+            "virtualization_probe": {
+                "manufacturer": "Microsoft Corporation",
+                "model": "Virtual Machine",
+                "product_vendor": "Microsoft Corporation",
+                "product_name": "Virtual Machine",
+                "bios_manufacturer": "Microsoft Corporation",
+                "bios_version": "1.0",
+                "baseboard_manufacturer": "Microsoft Corporation",
+                "baseboard_product": "Virtual Machine",
+                "hypervisor_present": True,
+                "virtualization_based_security_status": 2,
+                "vm_markers": [],
+            },
+        },
+        "deployment": {
+            "only_runtime_executable": True,
+            "sidecars": [],
+            "executable_sha256": artifact["executable_sha256"],
+            "executable_bytes": artifact["executable_bytes"],
+        },
+        "scenarios": [
+            {
+                "scenario": name,
+                "expected_exit_code": code,
+                "observed_exit_code": code,
+                "status": "passed",
+                "timed_out": False,
+            }
+            for name, code in publisher.EXPECTED_SCENARIO_EXIT_CODES.items()
+        ],
+    }
+    with pytest.raises(ValueError, match="VM markers"):
+        publisher._clean_summary(
+            report,
+            bundle_sha256="a" * 64,
+            artifact=artifact,
+            runtime_hardware={},
+        )
+
+    report["host"]["virtualization_probe"].update(
+        {
+            "manufacturer": "ASUSTeK COMPUTER INC.",
+            "model": "NUC13ANH-B",
+            "product_vendor": "ASUSTeK COMPUTER INC.",
+            "product_name": "NUC13ANH-B",
+            "bios_manufacturer": "American Megatrends Inc.",
+            "bios_version": "NUC13ANBi.0058",
+            "baseboard_manufacturer": "ASUSTeK COMPUTER INC.",
+            "baseboard_product": "NUC13ANH-B",
+        }
+    )
+    summary = publisher._clean_summary(
+        report,
+        bundle_sha256="a" * 64,
+        artifact=artifact,
+        runtime_hardware={},
+    )
+    assert summary["host"]["windows_build"] == "10.0.26200"

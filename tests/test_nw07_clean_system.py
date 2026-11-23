@@ -513,3 +513,20 @@ def test_physical_clean_host_rejects_unexplained_hypervisor_without_vm_markers(
     report = _report()
     report["host"] = host
     assert clean_system.validate_report(report)["status"] == "failed"
+
+def test_compact_delivery_payload_is_decoded_before_nwp_fixture_use() -> None:
+    canonical = (b"canonical-nwp-payload-" * 64) + b"end"
+    codec_id = clean_system.compact.CODEC_NAMES[clean_system.compact.CODEC_STORED]
+    layout_id = clean_system.compact.LAYOUT_NAMES[clean_system.compact.LAYOUT_AOS]
+    encoded = clean_system.compact.encode_compact(
+        canonical,
+        codec_id=codec_id,
+        layout_id=layout_id,
+        delta_references=True,
+    )
+    decoded, delivery_encoding = clean_system._decode_embedded_package(encoded.bytes)
+    assert delivery_encoding == "compact"
+    assert decoded == canonical
+    raw, raw_encoding = clean_system._decode_embedded_package(canonical)
+    assert raw_encoding == "canonical"
+    assert raw == canonical

@@ -2355,3 +2355,17 @@ def test_workflow_does_not_downgrade_executed_runtime_failure_to_pending() -> No
         encoding="utf-8"
     )
     assert '$outcome.compact_candidate_runtime_status = "pending_runtime_validation"' not in workflow
+
+def test_validated_runnable_rejects_nonzero_observed_exit() -> None:
+    with pytest.raises(ValueError, match="observed zero exit code"):
+        feasibility.build_feasibility(
+            outcome=_outcome(
+                validated_mode="compact",
+                compact_candidate_runtime_status="validated_runnable",
+                compact_candidate_exit_code=70,
+            ),
+            proof=_proof(),
+            intro=_intro(),
+            run_id=1,
+            head_sha="1" * 40,
+        )

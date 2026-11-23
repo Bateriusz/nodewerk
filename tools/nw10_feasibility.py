@@ -2121,7 +2121,11 @@ def build_feasibility(
     )
     candidate_exit = _windows_exit_code(outcome.get("compact_candidate_exit_code"))
     canonical_exit = _windows_exit_code(outcome.get("canonical_fallback_exit_code"))
-    if candidate_exit not in (None, 0) and runtime_status != "validated_runnable":
+    if runtime_status == "validated_runnable" and candidate_exit != 0:
+        raise ValueError(
+            "validated compact runtime status requires an observed zero exit code"
+        )
+    if candidate_exit not in (None, 0):
         runtime_status = "rejected_runtime_failure"
     intro_candidate = outcome.get("intro_compact_candidate_bytes")
     proof_candidate = outcome.get("proof_compact_candidate_bytes")

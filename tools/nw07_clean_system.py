@@ -27,6 +27,7 @@ import dependency_check  # noqa: E402
 import nw07_contract as contract  # noqa: E402
 import nw07_export as export  # noqa: E402
 import nwp_package as nwp  # noqa: E402
+import nw10_compact as compact  # noqa: E402
 
 REPORT_FORMAT = "nw07-clean-system-report"
 REPORT_VERSION = 1
@@ -413,6 +414,13 @@ def _write_corrupt_embedded_copy(executable: Path, destination: Path) -> None:
     destination.write_bytes(bytes(data))
 
 
+def _decode_embedded_package(payload: bytes) -> tuple[bytes, str]:
+    """Return canonical NWP bytes for canonical or NW-10 compact delivery."""
+    if compact.is_compact_container(payload):
+        return compact.decode_compact(payload), "compact"
+    return payload, "canonical"
+
+
 def run_clean_system(
     *,
     fixture: Path,
@@ -434,17 +442,70 @@ def run_clean_system(
         raise ValueError(
             "the failure-injection fixture must be separate from the final release executable"
         )
-    identity = export.inspect_artifact_directory(package_directory)
+    # The package directory carries the canonical NWP + manifest + canonical
+    # product EXE, while deployment carries the exact selected EXE.  A compact
+    # selected EXE embeds NWC delivery bytes, so verify and decode those bytes
+    # back to the canonical NWP before using the established NW-07 verifier.
+    identity = dict(export.inspect_artifact_directory(package_directory))
     host = clean_host_provenance(
         execution_kind=execution_kind,
         passthrough_documentation=passthrough_documentation,
     )
-    embedded_package, _ = export.nw05_export.extract_embedded_package(
+    embedded_payload, embedded_manifest = export.nw05_export.extract_embedded_package(
         executable.read_bytes()
     )
+    embedded_package, delivery_encoding = _decode_embedded_package(embedded_payload)
+    published_package, published_manifest, _ = export._artifact_paths(package_directory)
+    if embedded_package != published_package.read_bytes():
+        raise ValueError(
+            "deployed executable does not decode to the published canonical package"
+        )
+    if embedded_manifest.hex() != export.sha256_file(published_manifest):
+        raise ValueError(
+            "deployed executable manifest binding does not match the published manifest"
+        )
     inspection = nwp.inspect_package_bytes(embedded_package, allow_dev=False)
     if not inspection.valid:
         raise ValueError("embedded package is invalid")
+
+    executable_bytes = executable.stat().st_size
+    player_image_bytes = (
+        executable_bytes
+        - len(embedded_payload)
+        - len(embedded_manifest)
+        - export.nw05_export.EMBED_FOOTER_SIZE
+    )
+    if player_image_bytes < 0:
+        raise ValueError("deployed executable is smaller than its embedded payload")
+    identity.update(
+        {
+            "executable_sha256": export.sha256_file(executable),
+            "executable_bytes": executable_bytes,
+            "embedded_package_bytes": len(embedded_payload),
+            "canonical_package_bytes": len(embedded_package),
+            "player_image_bytes": player_image_bytes,
+            "delivery_encoding": delivery_encoding,
+        }
+    )
+    accounting = dict(identity.get("size_accounting") or {})
+    accounting.update(
+        {
+            "complete_distribution_bytes": executable_bytes,
+            "required_non_system_bytes": executable_bytes,
+            "player_image_bytes": player_image_bytes,
+            "embedded_package_bytes": len(embedded_payload),
+            "embedded_manifest_bytes": len(embedded_manifest),
+            "embedded_footer_bytes": export.nw05_export.EMBED_FOOTER_SIZE,
+            "all_required_bytes_accounted": (
+                player_image_bytes
+                + len(embedded_payload)
+                + len(embedded_manifest)
+                + export.nw05_export.EMBED_FOOTER_SIZE
+                == executable_bytes
+            ),
+        }
+    )
+    identity["size_accounting"] = accounting
     deployment = deployment_report(
         executable, deployment_directory, exclude_paths=(output,)
     )

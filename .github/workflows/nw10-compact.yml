@@ -375,11 +375,14 @@ jobs:
             $runtimeStatus = "validated_runnable"
             $runtimeExitCode = 0
           } elseif ($null -ne $outcome.canonical_fallback_exit_code) {
-            $runtimeStatus = "pending_runtime_validation"
+            $runtimeStatus = "rejected_runtime_failure"
             $runtimeExitCode = [int]$outcome.canonical_fallback_exit_code
-          } else {
+          } elseif ($null -ne $outcome.compact_candidate_exit_code) {
             $runtimeStatus = "rejected_runtime_failure"
             $runtimeExitCode = [int]$outcome.compact_candidate_exit_code
+          } else {
+            $runtimeStatus = "pending_runtime_validation"
+            $runtimeExitCode = 0
           }
           $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
           $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
@@ -475,10 +478,11 @@ jobs:
           $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
           $artifactRoot = Join-Path $PWD "build/nw10-intro"
           $finalExe = Join-Path $artifactRoot "compact/$stem.exe"
+          $canonicalExe = Join-Path $artifactRoot "$stem.exe"
           $package = Join-Path $artifactRoot "$stem.nwp"
           $manifest = Join-Path $artifactRoot "$stem.manifest.json"
           $fixture = Join-Path $PWD "build/nw07-release/staging/package_player/nw_package_player_fixture.exe"
-          foreach ($path in @($finalExe, $package, $manifest, $fixture)) {
+          foreach ($path in @($finalExe, $canonicalExe, $package, $manifest, $fixture)) {
             if (-not (Test-Path $path -PathType Leaf)) {
               throw "Clean-system transfer input is missing: $path"
             }
@@ -499,7 +503,10 @@ jobs:
           New-Item -ItemType Directory -Force $deployment,$packageRoot,$fixtureRoot,$verifierRoot | Out-Null
 
           Copy-Item $finalExe (Join-Path $deployment "$stem.exe") -Force
-          Copy-Item $finalExe (Join-Path $packageRoot "$stem.exe") -Force
+          # The verifier sibling remains canonical so nw07_export can validate
+          # the published NWP/manifest. nw07_clean_system separately decodes
+          # the exact deployed compact EXE and binds its identity to this NWP.
+          Copy-Item $canonicalExe (Join-Path $packageRoot "$stem.exe") -Force
           Copy-Item $package (Join-Path $packageRoot "$stem.nwp") -Force
           Copy-Item $manifest (Join-Path $packageRoot "$stem.manifest.json") -Force
           Copy-Item $fixture (Join-Path $fixtureRoot "nw_package_player_fixture.exe") -Force

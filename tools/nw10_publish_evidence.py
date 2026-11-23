@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -238,8 +239,12 @@ def _load_clean_bundle(path: Path) -> tuple[dict[str, Any], str, dict[str, bytes
             retained[name] = data
         if "clean-system-report.json" not in names:
             raise ValueError("clean-system result bundle has no report")
+        if "clean-system-report.json" not in retained:
+            raise ValueError(
+                "clean-system report is not covered by the verified bundle manifest"
+            )
         report = json.loads(
-            archive.read("clean-system-report.json").decode("utf-8-sig")
+            retained["clean-system-report.json"].decode("utf-8-sig")
         )
     if not isinstance(report, dict):
         raise ValueError("clean-system report is not a JSON object")
@@ -298,10 +303,11 @@ def _clean_summary(
         raise ValueError("clean-system evidence is not physical")
     if str(host.get("architecture", "")).lower() not in {"amd64", "x86_64"}:
         raise ValueError("clean-system evidence host is not x64")
-    if not str(host.get("windows_build") or "").strip():
+    observed_windows_build = str(
+        host.get("windows_build") or host.get("os_build") or ""
+    ).strip()
+    if not observed_windows_build:
         raise ValueError("clean-system evidence host has no measured Windows build")
-    if str(host.get("os_build") or host.get("windows_build") or "").strip() == "":
-        raise ValueError("clean-system evidence host has no measured OS build")
     if host.get("clean_environment") is not True:
         raise ValueError("clean-system host is not clean")
     if host.get("development_dependencies_present_on_path") not in ([], tuple()):
@@ -348,11 +354,67 @@ def _clean_summary(
     probe = host.get("virtualization_probe")
     if not isinstance(probe, Mapping):
         raise ValueError("clean-system virtualization probe is absent")
-    if (
-        probe.get("hypervisor_present") is True
-        and host.get("hypervisor_explained_by_vbs") is not True
-    ):
+    independent_identity = " ".join(
+        str(probe.get(field, "") or "")
+        for field in (
+            "manufacturer",
+            "model",
+            "product_vendor",
+            "product_name",
+            "bios_manufacturer",
+            "bios_version",
+            "baseboard_manufacturer",
+            "baseboard_product",
+        )
+    ).lower()
+    independent_markers = [
+        marker
+        for marker in (
+            "virtual machine",
+            "vmware",
+            "virtualbox",
+            "kvm",
+            "qemu",
+            "xen",
+            "parallels",
+            "bochs",
+            "openstack",
+            "hyper-v",
+            "innotek",
+            "bhyve",
+            "cloud hypervisor",
+            "amazon ec2",
+            "google compute engine",
+            "digitalocean",
+        )
+        if marker in independent_identity
+    ]
+    identity_complete = all(
+        bool(str(probe.get(field, "") or "").strip())
+        for field in (
+            "manufacturer",
+            "model",
+            "product_vendor",
+            "product_name",
+            "bios_manufacturer",
+            "baseboard_manufacturer",
+        )
+    )
+    hypervisor_present = probe.get("hypervisor_present")
+    explained_vbs = (
+        hypervisor_present is True
+        and probe.get("virtualization_based_security_status") == 2
+        and not independent_markers
+        and identity_complete
+        and host.get("hypervisor_explained_by_vbs") is True
+    )
+    if hypervisor_present is True and not explained_vbs:
         raise ValueError("clean-system host has an unexplained active hypervisor")
+    if independent_markers:
+        raise ValueError(
+            "clean-system physical identity exposes VM markers: "
+            + ", ".join(sorted(set(independent_markers)))
+        )
     markers = list(host.get("vm_markers") or [])
     markers.extend(host.get("virtualization_indicators") or [])
     markers.extend(probe.get("vm_markers") or [])
@@ -401,7 +463,7 @@ def _clean_summary(
             "product_vendor": probe.get("product_vendor"),
             "product_name": probe.get("product_name"),
             "architecture": host.get("architecture"),
-            "windows_build": host.get("windows_build"),
+            "windows_build": observed_windows_build,
             "hypervisor_present": probe.get("hypervisor_present"),
             "virtualization_based_security_status": probe.get(
                 "virtualization_based_security_status"
@@ -1177,8 +1239,12 @@ def publish_system(args: argparse.Namespace) -> dict[str, Any]:
         )
     startup_ms = float(measurements.get("process_start_to_first_present_ms"))
     peak_gpu = int(measurements.get("peak_engine_committed_gpu_bytes"))
-    if startup_ms < 0 or startup_ms > STARTUP_CEILING_MS:
-        raise ValueError("startup measurement exceeds the NW-10 ceiling")
+    if (
+        not math.isfinite(startup_ms)
+        or startup_ms < 0
+        or startup_ms > STARTUP_CEILING_MS
+    ):
+        raise ValueError("startup measurement is non-finite or exceeds the NW-10 ceiling")
     if peak_gpu < 0 or peak_gpu > MEMORY_CEILING_BYTES:
         raise ValueError("GPU memory measurement exceeds the NW-10 ceiling")
     post_init = measurements.get("post_initialization_allocation_violation")
