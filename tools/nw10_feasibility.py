@@ -997,7 +997,7 @@ def _certify_compact_candidate(
             ) is not None
 
         tier_hash_bindings_ok = True
-        tier_hashes: dict[str, dict[str, str]] = {}
+        tier_hashes: dict[str, dict[str, Any]] = {}
         for tier in ("ada", "blackwell"):
             runtime = packed_runtime.get(tier)
             runtime = runtime if isinstance(runtime, Mapping) else {}
@@ -1018,16 +1018,29 @@ def _certify_compact_candidate(
             encoded_sha = str(
                 runtime.get("encoded_container_sha256", "")
             ).lower()
+            encoded_bytes = runtime.get("encoded_container_bytes")
+            unpacked_manifest_sha = str(
+                runtime.get("unpacked_manifest_sha256", "")
+            ).lower()
+            packed_manifest_sha = str(
+                runtime.get("packed_manifest_sha256", "")
+            ).lower()
             tier_hashes[tier] = {
                 "unpacked": unpacked_sha,
                 "packed": packed_sha,
                 "encoded": encoded_sha,
+                "encoded_bytes": encoded_bytes,
+                "unpacked_manifest": unpacked_manifest_sha,
+                "packed_manifest": packed_manifest_sha,
             }
             tier_hash_bindings_ok = tier_hash_bindings_ok and (
                 runtime.get("status") == "passed"
                 and hash64(unpacked_sha)
                 and hash64(packed_sha)
                 and hash64(encoded_sha)
+                and _is_positive_int(encoded_bytes)
+                and hash64(unpacked_manifest_sha)
+                and hash64(packed_manifest_sha)
                 and unpacked_sha != packed_sha
                 and unpacked_sha != validated_sha
                 and packed_sha != validated_sha
@@ -1043,6 +1056,16 @@ def _certify_compact_candidate(
                     tier_artifact.get("encoded_container_sha256", "")
                 ).lower()
                 == encoded_sha
+                and tier_artifact.get("encoded_container_bytes")
+                == encoded_bytes
+                and str(
+                    tier_artifact.get("unpacked_manifest_sha256", "")
+                ).lower()
+                == unpacked_manifest_sha
+                and str(
+                    tier_artifact.get("packed_manifest_sha256", "")
+                ).lower()
+                == packed_manifest_sha
                 and str(runtime.get("codec_id", "")) == declared_codec_id
                 and str(runtime.get("layout_id", "")) == declared_layout_id
                 and int(runtime.get("frames_per_tick", -1)) == 1
@@ -1050,7 +1073,14 @@ def _certify_compact_candidate(
             )
         cross_tier_hashes_ok = all(
             len({values[key] for values in tier_hashes.values()}) == 1
-            for key in ("unpacked", "packed", "encoded")
+            for key in (
+                "unpacked",
+                "packed",
+                "encoded",
+                "encoded_bytes",
+                "unpacked_manifest",
+                "packed_manifest",
+            )
         )
         tier_hash_bindings_ok = tier_hash_bindings_ok and cross_tier_hashes_ok
         evidence_entries = (
@@ -1089,9 +1119,13 @@ def _certify_compact_candidate(
                 embedded_manifest_sha = hashlib.sha256(
                     embedded_manifest
                 ).hexdigest()
+                expected_diagnostic_manifest_sha = hashes[
+                    f"{mode}_manifest"
+                ]
                 if (
-                    not canonical_manifest_sha
-                    or embedded_manifest_sha != canonical_manifest_sha
+                    not hash64(expected_diagnostic_manifest_sha)
+                    or embedded_manifest_sha
+                    != expected_diagnostic_manifest_sha
                 ):
                     retained_manifest_binding_ok = False
                     tier_evidence_ok = False
@@ -1127,7 +1161,10 @@ def _certify_compact_candidate(
                         continue
                     actual_encoded_shas.add(payload_sha)
                     actual_encoded_sizes.add(len(payload))
-                    if payload_sha != hashes["encoded"]:
+                    if (
+                        payload_sha != hashes["encoded"]
+                        or len(payload) != hashes["encoded_bytes"]
+                    ):
                         tier_evidence_ok = False
                         continue
                     try:
