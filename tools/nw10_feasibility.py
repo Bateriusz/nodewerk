@@ -568,6 +568,27 @@ def _certify_compact_candidate(
     compact_components = (
         compact_components if isinstance(compact_components, Mapping) else {}
     )
+    declared_intro_identity_ok = (
+        str(canonical_intro.get("package_sha256", "")).lower()
+        == canonical_package_sha
+        and canonical_intro.get("package_bytes") == canonical_package_bytes
+        and _manifest_sha(canonical_intro, "manifest_sha256")
+        == canonical_manifest_sha
+        and str(canonical_intro.get("executable_sha256", "")).lower()
+        == str(trusted_artifacts["canonical_executable_sha256"]).lower()
+        and canonical_intro.get("executable_bytes")
+        == trusted_artifacts["canonical_executable_bytes"]
+        and str(compact_intro.get("executable_sha256", "")).lower()
+        == str(trusted_artifacts["compact_executable_sha256"]).lower()
+        and compact_intro.get("executable_bytes")
+        == trusted_artifacts["compact_executable_bytes"]
+        and str(compact_intro.get("encoded_package_sha256", "")).lower()
+        == compact_encoded_sha
+        and compact_intro.get("encoded_package_bytes")
+        == compact_encoded_bytes
+        and str(compact_intro.get("codec_id", "")) == compact_codec_id
+        and str(compact_intro.get("layout_id", "")) == compact_layout_id
+    )
     canonical_components = canonical_ledger.get("components")
     canonical_components = (
         canonical_components if isinstance(canonical_components, Mapping) else {}
@@ -700,7 +721,8 @@ def _certify_compact_candidate(
     except (TypeError, ValueError):
         compact_component_total = None
     compact_ledger_identity_ok = (
-        bool(compact_ledger)
+        declared_intro_identity_ok
+        and bool(compact_ledger)
         and re.fullmatch(r"[0-9a-f]{64}", compact_encoded_sha) is not None
         and _is_positive_int(compact_encoded_bytes)
         and _is_positive_int(canonical_package_bytes)
@@ -885,7 +907,8 @@ def _certify_compact_candidate(
         and bool(str(ledger.get("layout_id", "")))
     )
     ledger_identity_ok = (
-        ledger_identity_present
+        declared_intro_identity_ok
+        and ledger_identity_present
         and intro_shader_measurement_ok
         and ledger.get("complete_runnable_distribution_bytes") == validated_size
         and ledger.get("selected_executable_bytes") == validated_size
