@@ -939,8 +939,15 @@ def validate_report(
                 reasons.append(
                     "physical clean-system host reports an unexplained active hypervisor"
                 )
-            if host.get("hypervisor_explained_by_vbs") is not bool(
-                evaluation["hypervisor_explained_by_vbs"]
+            declared_vbs = host.get("hypervisor_explained_by_vbs")
+            expected_vbs = bool(evaluation["hypervisor_explained_by_vbs"])
+            if (
+                (declared_vbs is not None and declared_vbs is not expected_vbs)
+                or (
+                    isinstance(probe, Mapping)
+                    and probe.get("hypervisor_present") is True
+                    and declared_vbs is not True
+                )
             ):
                 host_failed = True
                 reasons.append(

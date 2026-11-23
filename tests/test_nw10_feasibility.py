@@ -1011,11 +1011,11 @@ def test_workflow_feasibility_roles_match_runtime_product_promotion() -> None:
     assert canonical in workflow
     assert compact_candidate in workflow
     assert (
-        '--final-executable "$PWD/build/nw10-intro/compact/$stem.exe"'
+        '"--final-executable", "$PWD/build/nw10-intro/compact/$stem.exe"'
         in workflow
     )
     assert (
-        '--linker-baseline-executable "$PWD/build/nw10-intro-link-control/compact/$stem.exe"'
+        '"--linker-baseline-executable", "$PWD/build/nw10-intro-link-control/compact/$stem.exe"'
         in workflow
     )
     assert '$finalExe = Join-Path $artifactRoot "compact/$stem.exe"' in workflow
@@ -2343,8 +2343,10 @@ def test_workflow_binds_feasibility_to_the_uploaded_artifact_identity() -> None:
     assert "--artifact-digest" in workflow
     assert "steps.nw10_evidence_upload.outputs.artifact-id" in workflow
     assert "steps.nw10_evidence_upload.outputs.artifact-digest" in workflow
-    assert "--runtime-status $runtimeStatus" in workflow
-    assert "--runtime-exit-code $runtimeExitCode" in workflow
+    assert '"--runtime-status", $runtimeStatus' in workflow
+    assert '$runtimeExitCode = $null' in workflow
+    assert 'if ($null -ne $runtimeExitCode)' in workflow
+    assert '$ledgerArgs += @("--runtime-exit-code", [string]$runtimeExitCode)' in workflow
     assert "--prior-valid-ledger" in workflow
     assert "Bind PE ledger to the uploaded artifact identity" in workflow
     assert "--bind-source-report" in workflow
