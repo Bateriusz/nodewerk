@@ -1711,7 +1711,8 @@ def build_feasibility(
             "dependency_closure": {
                 "closure_verified": (
                     validated_mode == "canonical_fallback"
-                    and dependency_verification.get("status") == "verified"
+                    and certification["dependency_closure"].get("status")
+                    == "verified"
                 ),
                 "sidecar_files": (
                     list(dependency_closure.get("sidecar_files") or [])
