@@ -98,7 +98,21 @@ def test_portable_cache_key_binds_manifest_versions_and_digests():
     assert "windows-x64" in key
     assert toolchain["pinned_dependencies"]["cmake_version"] in key
     for name in ("cmake", "llvm", "dxc"):
-        assert sources[name]["sha256"][:16] in key
+        assert sources[name]["sha256"] in key
+
+
+def test_portable_cache_key_changes_when_source_identity_changes(tmp_path):
+    toolchain = ROOT / "benchmarks" / "toolchain-manifest.v1.json"
+    source = ROOT / "tools" / "nw01" / "toolchain-sources.json"
+    copied = tmp_path / "sources.json"
+    data = json.loads(source.read_text(encoding="utf-8"))
+    copied.write_text(json.dumps(data), encoding="utf-8")
+    first = portable_cache_key.build_key(toolchain, copied, "Windows", "X64")
+    data["cmake"]["sha256"] = "0" * 64
+    copied.write_text(json.dumps(data), encoding="utf-8")
+    second = portable_cache_key.build_key(toolchain, copied, "Windows", "X64")
+    assert first != second
+    assert "0" * 64 in second
 
 
 def test_windows_bootstrap_cache_is_digest_verified_and_vs_install_is_minimal():

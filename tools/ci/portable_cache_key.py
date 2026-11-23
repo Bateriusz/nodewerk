@@ -17,10 +17,10 @@ def build_key(toolchain_path: Path, sources_path: Path, runner_os: str, runner_a
     llvm = next(item for item in toolchain["evaluated_toolchains"] if item["toolchain_id"] == "clang-cl-lld")["compiler_version"]
     return "-".join([
         "nw01-portable-v1", runner_os.lower(), runner_arch.lower(),
-        f"tc-{sha(toolchain_path)[:16]}", f"src-{sha(sources_path)[:16]}",
-        f"cmake-{deps['cmake_version']}-{sources['cmake']['sha256'][:16]}",
-        f"llvm-{llvm}-{sources['llvm']['sha256'][:16]}",
-        f"dxc-{deps['dxc_version']}-{sources['dxc']['sha256'][:16]}",
+        f"tc-{sha(toolchain_path)}", f"src-{sha(sources_path)}",
+        f"cmake-{deps['cmake_version']}-{sources['cmake']['sha256']}",
+        f"llvm-{llvm}-{sources['llvm']['sha256']}",
+        f"dxc-{deps['dxc_version']}-{sources['dxc']['sha256']}",
     ])
 
 def main(argv=None) -> int:
