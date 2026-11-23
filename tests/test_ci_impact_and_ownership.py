@@ -36,6 +36,14 @@ def test_impact_routing(paths, expected, docs):
     assert result.docs_only is docs
 
 
+def test_dot_github_workflow_change_is_explicit_ci_infrastructure_not_unknown():
+    result = changed_scope.classify_paths([".github/workflows/nw10-compact.yml"], mapping())
+    assert set(result.scopes) == set(changed_scope.SCOPES)
+    assert result.full_regression is True
+    assert result.fail_safe is False
+    assert all(reason == "CI/routing infrastructure changed" for reason in result.reasons.values())
+
+
 def test_invalid_mapping_fails_safe(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text('{"version":999}', encoding="utf-8")

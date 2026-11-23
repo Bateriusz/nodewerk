@@ -54,15 +54,21 @@ def load_map(path: Path) -> dict:
             raise ImpactMapError(f"{key} must be a list")
     return data
 
+def normalize_path(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
 def matches(path: str, patterns: Iterable[str]) -> bool:
-    normalized = path.replace("\\", "/").lstrip("./")
+    normalized = normalize_path(path)
     return any(fnmatch.fnmatchcase(normalized, pattern) for pattern in patterns)
 
 def all_scopes(reason: str, changed: tuple[str, ...], *, fail_safe: bool = False, error: str | None = None) -> Classification:
     return Classification(changed, SCOPES, SCOPES, False, True, {scope: reason for scope in SCOPES}, fail_safe, error)
 
 def classify_paths(paths: Iterable[str], mapping: dict) -> Classification:
-    changed = tuple(sorted({str(path).replace("\\", "/").lstrip("./") for path in paths if str(path).strip()}))
+    changed = tuple(sorted({normalize_path(str(path)) for path in paths if str(path).strip()}))
     if not changed:
         return all_scopes("empty/unknown diff; conservative full regression", changed, fail_safe=True)
     if all(matches(path, mapping["docs_patterns"]) for path in changed):
