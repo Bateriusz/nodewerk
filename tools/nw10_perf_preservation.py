@@ -308,10 +308,26 @@ def validate_preservation(
     ):
         reasons.append("candidate report does not match current NW-10 build inputs")
     frozen = nw07_export.load_canonical_config()
+    expected_graph = nw07_export.verify_canonical_graph(
+        frozen, repo_root=REPO_ROOT
+    )
+    pinned_inputs = nw07_export.verify_pinned_inputs(
+        frozen, repo_root=REPO_ROOT
+    )
     graph = candidate_report.get("common_graph")
     graph = graph if isinstance(graph, Mapping) else {}
-    if graph.get("path") != str(frozen.get("graph")):
+    if (
+        graph.get("path") != str(frozen.get("graph"))
+        or graph.get("sha256") != expected_graph.get("graph_sha256")
+        or graph.get("ir_sha256") != expected_graph.get("ir_sha256")
+    ):
         reasons.append("candidate report changed the frozen NW-07 graph")
+    if (
+        build_inputs.get("nw07_frozen_digest")
+        != pinned_inputs.get("frozen_digest")
+        or build_inputs.get("observed_digest") != pinned_inputs.get("digest")
+    ):
+        reasons.append("candidate report build-input digests are not reproducible")
     dependency = candidate_report.get("dependency_closure")
     dependency = dependency if isinstance(dependency, Mapping) else {}
     if dependency.get("matches_manifest") is not True:
