@@ -20,6 +20,7 @@ import pytest  # noqa: E402
 _PACKAGE_BYTES = b"nw10-feasibility-package-fixture-" * 32
 _PACKAGE_SHA = hashlib.sha256(_PACKAGE_BYTES).hexdigest()
 _MANIFEST_DIGEST = b"\x11" * 32
+_MANIFEST_SHA = hashlib.sha256(_MANIFEST_DIGEST).hexdigest()
 _UNPACKED_EXE = nw05_export.embed_package(
     b"MZ" + b"\x00" * 128, _PACKAGE_BYTES, _MANIFEST_DIGEST
 )
@@ -79,7 +80,7 @@ def _intro() -> dict:
             "executable_sha256": "b" * 64,
             "package_sha256": _PACKAGE_SHA,
             "package_bytes": len(_PACKAGE_BYTES),
-            "manifest_sha256": "d" * 64,
+            "manifest_sha256": _MANIFEST_SHA,
             "manifest_bytes": 6_000,
         },
         "compact_artifact": {
@@ -105,7 +106,12 @@ def _intro() -> dict:
             "compact": {
                 "all_required_bytes_accounted": False,
                 "unaccounted_components": ["decoder_code_bytes"],
-                "components": {"decoder_code_bytes": None},
+                "codec_id": contract.CODEC_MSZIP_ID,
+                "layout_id": contract.LAYOUT_SOA_ID,
+                "components": {
+                    "decoder_code_bytes": None,
+                    "encoded_package_bytes": len(_COMPACT_CONTAINER.bytes),
+                },
                 "required_auxiliary_files": {},
                 "dependencies": [
                     {
@@ -144,7 +150,7 @@ def _pe_ledger() -> dict:
             "executable_sha256": "e" * 64,
             "executable_bytes": 65_000,
             "package_sha256": _PACKAGE_SHA,
-            "manifest_sha256": "d" * 64,
+            "manifest_sha256": _MANIFEST_SHA,
             "pe_image_file_bytes": 64_000,
             "overlay_bytes": 1_000,
             "embedded_payload_kind": "compact_container",
@@ -180,6 +186,7 @@ def _pe_ledger() -> dict:
                 "decoder_off_template": {"status": "verified_build_tree_flags"},
             },
             "embedded_payload_sha256_identical": True,
+            "embedded_payload_size_identical": True,
             "final_payload_kind": "compact_container",
             "control_payload_kind": "compact_container",
             "control_executable_bytes": 70_000,
@@ -251,7 +258,7 @@ def _system_validation() -> dict:
             "executable_sha256": "e" * 64,
             "executable_bytes": 65_000,
             "package_sha256": _PACKAGE_SHA,
-            "manifest_sha256": "d" * 64,
+            "manifest_sha256": _MANIFEST_SHA,
         },
         "windows_build": windows_build,
         "clean_system": {
@@ -323,7 +330,7 @@ def _performance() -> dict:
             "artifact": {
                 "artifact_key": "sha256:v1:" + "a" * 64,
                 "package_sha256": _PACKAGE_SHA,
-                "manifest_sha256": "d" * 64,
+                "manifest_sha256": _MANIFEST_SHA,
                 "executable_sha256": executable_sha,
                 "complete_distribution_bytes": bytes_,
             },
@@ -438,7 +445,7 @@ _PERF_REFERENCE = {
     "artifact": {
         "artifact_key": "sha256:v1:" + "a" * 64,
         "package_sha256": _PACKAGE_SHA,
-        "manifest_sha256": "d" * 64,
+        "manifest_sha256": _MANIFEST_SHA,
         "executable_sha256": "b" * 64,
         "complete_distribution_bytes": 65_001,
     },
@@ -476,7 +483,7 @@ def _correctness() -> dict:
     common = {
         "artifact_key": "sha256:v1:" + "a" * 64,
         "package_sha256": _PACKAGE_SHA,
-        "manifest_sha256": "d" * 64,
+        "manifest_sha256": _MANIFEST_SHA,
         "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
         "requirements_digest": "sha256:v1:" + "b" * 64,
         "final_executable_sha256": "e" * 64,
@@ -917,6 +924,177 @@ def test_codec_or_layout_identity_mismatch_cannot_certify_success(
     )
 
 
+def test_performance_manifest_binding_is_independent_of_correctness(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=None,
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=_performance(),
+        correctness=None,
+        correctness_evidence=None,
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"]["status"] == "pending"
+    assert record["certification"]["clean_system"]["status"] == "verified"
+    assert record["certification"]["performance"]["status"] == "verified"
+    assert record["certification"]["visual"]["status"] == "pending"
+
+
+def test_failed_performance_manifest_does_not_poison_other_verified_evidence(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    performance = copy.deepcopy(_performance())
+    performance["status"] = "failed"
+    performance["after"]["artifact"]["manifest_sha256"] = "9" * 64
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=performance,
+        correctness=_correctness(),
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"]["performance"]["status"] == "failed"
+    assert record["certification"]["clean_system"]["status"] == "verified"
+    assert record["certification"]["visual"]["status"] == "verified"
+
+
+@pytest.mark.parametrize(
+    ("mutator", "failed_gate"),
+    [
+        (
+            lambda intro, pe: intro["compact_artifact"].__setitem__(
+                "encoded_package_sha256", "9" * 64
+            ),
+            "visual",
+        ),
+        (
+            lambda intro, pe: intro["ledgers"]["compact"]["components"].__setitem__(
+                "encoded_package_bytes", len(_COMPACT_CONTAINER.bytes) + 1
+            ),
+            "visual",
+        ),
+        (
+            lambda intro, pe: pe["final_artifact"].__setitem__(
+                "embedded_payload_sha256", "9" * 64
+            ),
+            "pe_ledger_binding",
+        ),
+        (
+            lambda intro, pe: pe["final_artifact"].__setitem__(
+                "embedded_payload_bytes", len(_COMPACT_CONTAINER.bytes) + 1
+            ),
+            "pe_ledger_binding",
+        ),
+    ],
+)
+def test_encoded_payload_identity_is_cross_bound_across_all_evidence(
+    monkeypatch, mutator, failed_gate
+) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    intro = copy.deepcopy(_intro())
+    pe = copy.deepcopy(_pe_ledger())
+    mutator(intro, pe)
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=intro,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=_performance(),
+        correctness=_correctness(),
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"][failed_gate]["status"] == "failed"
+
+
+def test_retained_diagnostic_manifest_must_match_intro_manifest(monkeypatch) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    other_manifest = b"\x22" * 32
+    unpacked = nw05_export.embed_package(
+        b"MZ" + b"\x00" * 128, _PACKAGE_BYTES, other_manifest
+    )
+    packed = nw05_export.embed_package(
+        b"MZ" + b"\x00" * 128, _COMPACT_CONTAINER.bytes, other_manifest
+    )
+    unpacked_sha = hashlib.sha256(unpacked).hexdigest()
+    packed_sha = hashlib.sha256(packed).hexdigest()
+    correctness = copy.deepcopy(_correctness())
+    for tier in ("ada", "blackwell"):
+        correctness["packed_unpacked_comparison"]["runtime"][tier][
+            "unpacked_executable_sha256"
+        ] = unpacked_sha
+        correctness["packed_unpacked_comparison"]["runtime"][tier][
+            "packed_executable_sha256"
+        ] = packed_sha
+        correctness[tier]["artifact"][
+            "unpacked_executable_sha256"
+        ] = unpacked_sha
+        correctness[tier]["artifact"]["packed_executable_sha256"] = packed_sha
+    evidence = {
+        "ada": {"unpacked": unpacked, "packed": packed},
+        "blackwell": {"unpacked": unpacked, "packed": packed},
+    }
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=_performance(),
+        correctness=correctness,
+        correctness_evidence=evidence,
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"]["visual"]["status"] == "failed"
+    assert (
+        record["certification"]["visual"]["retained_manifest_binding_verified"]
+        is False
+    )
+
+
 def test_negative_performance_values_cannot_certify_success(monkeypatch) -> None:
     monkeypatch.setattr(
         feasibility.nw07_evidence,
@@ -976,12 +1154,17 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     pe = copy.deepcopy(_pe_ledger())
     pe["final_artifact"]["executable_sha256"] = canonical_sha
     pe["final_artifact"]["embedded_payload_kind"] = "canonical_package"
+    pe["final_artifact"]["embedded_payload_bytes"] = len(_PACKAGE_BYTES)
+    pe["final_artifact"]["embedded_payload_sha256"] = _PACKAGE_SHA
+    pe["final_artifact"]["decoded_package_sha256"] = _PACKAGE_SHA
     pe["linker_elimination"]["compact_decoder_preserved"] = False
     pe["linker_elimination"]["final_payload_kind"] = "canonical_package"
     pe["linker_elimination"]["control_payload_kind"] = "canonical_package"
     pe["compact_decoder"]["compact_payload_verified"] = False
     pe["compact_decoder"]["final_imports_cabinet"] = False
     pe["compact_decoder"]["final_payload_kind"] = "canonical_package"
+    pe["compact_decoder"]["final_payload_sha256"] = _PACKAGE_SHA
+    pe["compact_decoder"]["final_decoded_package_sha256"] = _PACKAGE_SHA
 
     dependency = _dependency_closure()
     dependency["binary_sha256"] = canonical_sha
