@@ -270,6 +270,12 @@ try {
         $referencePath = Resolve-NwRepoPath $ReferenceEvidence
         $reference = Get-Content -Raw $referencePath | ConvertFrom-Json
         $expectedArtifact = Get-NwExpectedArtifact $reference
+        $referenceFormat = [string](Get-NwOptionalProperty $reference "format")
+        $diagnosticSource = if ($referenceFormat -eq "nw10-intro-report") {
+            "nw10_intro"
+        } else {
+            "nw07"
+        }
 
         $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
         if ($null -eq $pythonCommand) {
@@ -297,43 +303,80 @@ try {
         Remove-Item $transferRoot -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force $packageRoot | Out-Null
 
-        Invoke-NwNative "cmake" @(
-            "--preset", "nw07-release",
-            "-B", $commonTemplate,
-            "-DNW10_COMPACT_PACKAGE=OFF",
-            "-DNW_ENFORCE_PINNED_TOOLCHAIN=ON"
-        ) "Common release template configure failed"
-        Invoke-NwNative "cmake" @(
-            "--build", $commonTemplate,
-            "--target", "nw_procedural_image_player",
-            "--parallel", "2"
-        ) "Common release template build failed"
         $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
-        $commonTemplateExe = Join-Path $commonTemplate "staging/procedural_image_player/nw_procedural_image_player.exe"
-        Invoke-NwNative $python @(
-            "tools/nw07_export.py",
-            "--output", $commonArtifact,
-            "--report", $commonReport,
-            "--player-template", $commonTemplateExe,
-            "--dxc", $dxc
-        ) "Canonical NW-07 common-artifact reproduction failed"
-
-        $commonReportRecord = Get-Content -Raw $commonReport | ConvertFrom-Json
-        $common = [pscustomobject]@{
-            artifact = [pscustomobject]@{
-                artifact_key = [string]$commonReportRecord.artifact.artifact_key
-                package_sha256 = [string]$commonReportRecord.artifact.package_sha256
-                manifest_sha256 = [string]$commonReportRecord.artifact.manifest_sha256
-                executable_sha256 = [string]$commonReportRecord.artifact.executable_sha256
-                complete_distribution_bytes = [int64]$commonReportRecord.distribution.complete_distribution_bytes
-            }
-        }
-        Assert-NwSameValue "artifact_key" $expectedArtifact.artifact_key $common.artifact.artifact_key
-        Assert-NwSameValue "package_sha256" $expectedArtifact.package_sha256 $common.artifact.package_sha256
-        Assert-NwSameValue "manifest_sha256" $expectedArtifact.manifest_sha256 $common.artifact.manifest_sha256
-        Assert-NwSameValue "complete_distribution_bytes" $expectedArtifact.complete_distribution_bytes $common.artifact.complete_distribution_bytes
         $referenceExecutableSha = [string]$expectedArtifact.executable_sha256
-        $reproducedExecutableSha = [string]$common.artifact.executable_sha256
+        if ($diagnosticSource -eq "nw10_intro") {
+            # The restricted intro already exists at this exact workflow head.
+            # Materialize its canonical release artifact rather than silently
+            # substituting the NW-07 production-loop package.
+            New-Item -ItemType Directory -Force $commonArtifact | Out-Null
+            $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+            $referenceRoot = Split-Path -Parent $referencePath
+            foreach ($name in @("$stem.nwp", "$stem.manifest.json")) {
+                $source = Join-Path $referenceRoot $name
+                if (-not (Test-Path $source -PathType Leaf)) {
+                    throw "Restricted-intro reference artifact is missing: $source"
+                }
+                Copy-Item $source (Join-Path $commonArtifact $name) -Force
+            }
+            $canonicalSource = $null
+            foreach ($candidate in @(
+                (Join-Path $referenceRoot "$stem.exe"),
+                (Join-Path $referenceRoot "compact/$stem.exe"),
+                (Join-Path $referenceRoot "compact/$stem.compact.exe")
+            )) {
+                if (-not (Test-Path $candidate -PathType Leaf)) { continue }
+                $candidateSha = (Get-FileHash -Algorithm SHA256 $candidate).Hash.ToLowerInvariant()
+                if ($candidateSha -eq $referenceExecutableSha) {
+                    $canonicalSource = $candidate
+                    break
+                }
+            }
+            if ($null -eq $canonicalSource) {
+                throw "The canonical restricted-intro executable named by the reference report was not retained."
+            }
+            Copy-Item $canonicalSource (Join-Path $commonArtifact "$stem.exe") -Force
+            $common = [pscustomobject]@{ artifact = $expectedArtifact }
+            $reproducedExecutableSha = (
+                Get-FileHash -Algorithm SHA256 (Join-Path $commonArtifact "$stem.exe")
+            ).Hash.ToLowerInvariant()
+        } else {
+            Invoke-NwNative "cmake" @(
+                "--preset", "nw07-release",
+                "-B", $commonTemplate,
+                "-DNW10_COMPACT_PACKAGE=OFF",
+                "-DNW_ENFORCE_PINNED_TOOLCHAIN=ON"
+            ) "Common release template configure failed"
+            Invoke-NwNative "cmake" @(
+                "--build", $commonTemplate,
+                "--target", "nw_procedural_image_player",
+                "--parallel", "2"
+            ) "Common release template build failed"
+            $commonTemplateExe = Join-Path $commonTemplate "staging/procedural_image_player/nw_procedural_image_player.exe"
+            Invoke-NwNative $python @(
+                "tools/nw07_export.py",
+                "--output", $commonArtifact,
+                "--report", $commonReport,
+                "--player-template", $commonTemplateExe,
+                "--dxc", $dxc
+            ) "Canonical NW-07 common-artifact reproduction failed"
+
+            $commonReportRecord = Get-Content -Raw $commonReport | ConvertFrom-Json
+            $common = [pscustomobject]@{
+                artifact = [pscustomobject]@{
+                    artifact_key = [string]$commonReportRecord.artifact.artifact_key
+                    package_sha256 = [string]$commonReportRecord.artifact.package_sha256
+                    manifest_sha256 = [string]$commonReportRecord.artifact.manifest_sha256
+                    executable_sha256 = [string]$commonReportRecord.artifact.executable_sha256
+                    complete_distribution_bytes = [int64]$commonReportRecord.distribution.complete_distribution_bytes
+                }
+            }
+            Assert-NwSameValue "artifact_key" $expectedArtifact.artifact_key $common.artifact.artifact_key
+            Assert-NwSameValue "package_sha256" $expectedArtifact.package_sha256 $common.artifact.package_sha256
+            Assert-NwSameValue "manifest_sha256" $expectedArtifact.manifest_sha256 $common.artifact.manifest_sha256
+            Assert-NwSameValue "complete_distribution_bytes" $expectedArtifact.complete_distribution_bytes $common.artifact.complete_distribution_bytes
+            $reproducedExecutableSha = [string]$common.artifact.executable_sha256
+        }
         if ($referenceExecutableSha -ne $reproducedExecutableSha) {
             Write-Host "[NW10 CORRECTNESS] REFERENCE_EXECUTABLE_SHA256=$referenceExecutableSha"
             Write-Host "[NW10 CORRECTNESS] REPRODUCED_EXECUTABLE_SHA256=$reproducedExecutableSha"
@@ -341,6 +384,7 @@ try {
         } else {
             Write-Host "[NW10 CORRECTNESS] EXECUTABLE_REPRODUCTION=EXACT_MATCH"
         }
+        Write-Host "[NW10 CORRECTNESS] DIAGNOSTIC_SOURCE=$diagnosticSource"
         Write-Host "[NW10 CORRECTNESS] COMMON_PACKAGE=EXACT_MATCH"
 
         Invoke-NwNative "cmake" @(
@@ -362,7 +406,8 @@ try {
             "--dxc", $dxc,
             "--build-root", $diagBuildRoot,
             "--report", $diagReport,
-            "--mode", $PackagingMode
+            "--mode", $PackagingMode,
+            "--source", $diagnosticSource
         ) "Diagnostic sibling export failed"
 
         $diag = Get-Content -Raw $diagReport | ConvertFrom-Json
