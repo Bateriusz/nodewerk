@@ -669,6 +669,7 @@ def _verified_system_record() -> dict:
             "execution_kind": "physical",
             "host": {
                 "windows_build": "10.0.26200",
+                "architecture": "AMD64",
                 "clean_environment": True,
                 "virtualization_indicators": [],
                 "vm_markers": [],

@@ -9,6 +9,7 @@ the true at-most-65536-byte success branches are representable.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -23,6 +24,8 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import nw10_contract as contract  # noqa: E402
 import nw07_clean_system as clean_system_contract  # noqa: E402
 import nw07_evidence  # noqa: E402
+import nw05_export  # noqa: E402
+import nw10_compact as compact  # noqa: E402
 import nw10_perf_preservation  # noqa: E402
 from schema_validator import (  # noqa: E402
     SchemaValidationError,
@@ -172,6 +175,16 @@ def _is_strict_under(value: Any, limit: float) -> bool:
     return _is_finite_nonnegative(value) and float(value) < limit
 
 
+def _evidence_bytes(value: Any) -> bytes:
+    if isinstance(value, Mapping):
+        value = value.get("executable", value.get("path"))
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, (str, Path)):
+        return Path(value).read_bytes()
+    raise ValueError("correctness diagnostic evidence is not bytes or a path")
+
+
 def _verification(
     status: str, reason: str, **details: Any
 ) -> dict[str, Any]:
@@ -204,6 +217,7 @@ def _certify_compact_candidate(
     system_validation: Mapping[str, Any] | None,
     performance: Mapping[str, Any] | None,
     correctness: Mapping[str, Any] | None,
+    correctness_evidence: Mapping[str, Any] | None,
     perf_contract: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Verify every acceptance gate required to publish a 64 KiB success."""
@@ -225,6 +239,15 @@ def _certify_compact_candidate(
         canonical_intro.get("package_sha256", "")
     ).lower()
     canonical_package_bytes = canonical_intro.get("package_bytes")
+    validated_manifest_sha = ""
+    if pe_ledger is not None:
+        pe_final = pe_ledger.get("final_artifact")
+        if isinstance(pe_final, Mapping):
+            candidate_manifest = str(
+                pe_final.get("manifest_sha256", "")
+            ).lower()
+            if re.fullmatch(r"[0-9a-f]{64}", candidate_manifest):
+                validated_manifest_sha = candidate_manifest
     decoded_package_sha = str(
         compact_intro.get("decoded_package_sha256", "")
     ).lower()
@@ -373,6 +396,9 @@ def _certify_compact_candidate(
             and int(final.get("executable_bytes", -1)) == validated_size
             and str(final.get("package_sha256", "")).lower()
             == canonical_package_sha
+            and str(final.get("manifest_sha256", "")).lower()
+            == validated_manifest_sha
+            and bool(validated_manifest_sha)
             and final.get("package_binding_verified") is True
             and final.get("manifest_binding_verified") is True
             and final.get("runtime_status") == "validated_runnable"
@@ -479,6 +505,8 @@ def _certify_compact_candidate(
         and int(deployment.get("executable_bytes", -1)) == validated_size
         and host.get("clean_environment") is True
         and isinstance(host.get("virtualization_probe"), Mapping)
+        and str(host.get("architecture", "")).lower()
+        in {"amd64", "x86_64"}
         and clean.get("development_dependencies_present_on_path") in ([], ())
         and clean.get("environment_cache_variables") in ([], ())
         and scenarios_ok
@@ -487,6 +515,9 @@ def _certify_compact_candidate(
         and int(system_final.get("executable_bytes", -1)) == validated_size
         and str(system_final.get("package_sha256", "")).lower()
         == canonical_package_sha
+        and str(system_final.get("manifest_sha256", "")).lower()
+        == validated_manifest_sha
+        and bool(validated_manifest_sha)
         and bool(clean_windows_build)
         and str(system.get("windows_build", "")) == clean_windows_build
         and privacy.get("local_paths_included") is False
@@ -668,6 +699,9 @@ def _certify_compact_candidate(
             == canonical_package_sha
             and str(artifact.get("package_sha256", "")).lower()
             == canonical_package_sha
+            and str(artifact.get("manifest_sha256", "")).lower()
+            == validated_manifest_sha
+            and bool(validated_manifest_sha)
             and str(artifact.get("executable_sha256", "")).lower()
             == validated_sha
             and int(artifact.get("complete_distribution_bytes", -1))
@@ -800,6 +834,8 @@ def _certify_compact_candidate(
     correctness_schema_error = "not provided"
     visual_ok = False
     visual_details: dict[str, Any] = {}
+    retained_evidence_present = False
+    tier_evidence_ok = False
     if correctness is not None:
         correctness_schema_ok, correctness_schema_error = (
             _validate_evidence_schema(
@@ -827,6 +863,7 @@ def _certify_compact_candidate(
             ) is not None
 
         tier_hash_bindings_ok = True
+        tier_hashes: dict[str, dict[str, str]] = {}
         for tier in ("ada", "blackwell"):
             runtime = packed_runtime.get(tier)
             runtime = runtime if isinstance(runtime, Mapping) else {}
@@ -847,6 +884,11 @@ def _certify_compact_candidate(
             encoded_sha = str(
                 runtime.get("encoded_container_sha256", "")
             ).lower()
+            tier_hashes[tier] = {
+                "unpacked": unpacked_sha,
+                "packed": packed_sha,
+                "encoded": encoded_sha,
+            }
             tier_hash_bindings_ok = tier_hash_bindings_ok and (
                 runtime.get("status") == "passed"
                 and hash64(unpacked_sha)
@@ -870,6 +912,69 @@ def _certify_compact_candidate(
                 and int(runtime.get("frames_per_tick", -1)) == 1
                 and int(runtime.get("present_sync_interval", -1)) == 0
             )
+        evidence_entries = (
+            correctness_evidence
+            if isinstance(correctness_evidence, Mapping)
+            else {}
+        )
+        retained_evidence_present = True
+        tier_evidence_ok = True
+        for tier, hashes in tier_hashes.items():
+            tier_entry = evidence_entries.get(tier)
+            tier_entry = (
+                tier_entry if isinstance(tier_entry, Mapping) else {}
+            )
+            for mode in ("unpacked", "packed"):
+                entry = tier_entry.get(mode)
+                if entry is None:
+                    retained_evidence_present = False
+                    tier_evidence_ok = False
+                    continue
+                try:
+                    data = _evidence_bytes(entry)
+                    payload, _embedded_manifest = (
+                        nw05_export.extract_embedded_package(data)
+                    )
+                except Exception:  # noqa: BLE001 - invalid evidence fails the gate
+                    tier_evidence_ok = False
+                    continue
+                if hashlib.sha256(data).hexdigest() != hashes[mode]:
+                    tier_evidence_ok = False
+                    continue
+                if mode == "unpacked":
+                    if compact.is_compact_container(payload):
+                        tier_evidence_ok = False
+                        continue
+                    if (
+                        hashlib.sha256(payload).hexdigest()
+                        != canonical_package_sha
+                    ):
+                        tier_evidence_ok = False
+                    if canonical_package_bytes is not None and len(
+                        payload
+                    ) != int(canonical_package_bytes):
+                        tier_evidence_ok = False
+                else:
+                    if not compact.is_compact_container(payload):
+                        tier_evidence_ok = False
+                        continue
+                    if hashlib.sha256(payload).hexdigest() != hashes["encoded"]:
+                        tier_evidence_ok = False
+                        continue
+                    try:
+                        decoded = compact.decode_compact(payload)
+                    except Exception:  # noqa: BLE001
+                        tier_evidence_ok = False
+                        continue
+                    if (
+                        hashlib.sha256(decoded).hexdigest()
+                        != canonical_package_sha
+                    ):
+                        tier_evidence_ok = False
+                    if canonical_package_bytes is not None and len(
+                        decoded
+                    ) != int(canonical_package_bytes):
+                        tier_evidence_ok = False
         packed_ok = (
             packed.get("status") == "verified"
             and _is_finite_nonnegative(packed.get("worst_absolute_error"))
@@ -880,6 +985,8 @@ def _certify_compact_candidate(
             and str(packed.get("unpacked_package_sha256", "")).lower()
             == canonical_package_sha
             and tier_hash_bindings_ok
+            and retained_evidence_present
+            and tier_evidence_ok
         )
         visual_ok = (
             correctness_schema_ok
@@ -894,7 +1001,9 @@ def _certify_compact_candidate(
             and str(correctness_common.get("package_sha256", "")).lower()
             == canonical_package_sha
             and bool(str(correctness_common.get("artifact_key", "")).strip())
-            and hash64(correctness_common.get("manifest_sha256"))
+            and str(correctness_common.get("manifest_sha256", "")).lower()
+            == validated_manifest_sha
+            and bool(validated_manifest_sha)
             and str(
                 correctness_common.get("final_executable_sha256", "")
             ).lower()
@@ -924,15 +1033,25 @@ def _certify_compact_candidate(
             "worst_absolute_error": comparison.get("worst_absolute_error"),
             "packed_worst_absolute_error": packed.get("worst_absolute_error"),
             "tier_hash_bindings_verified": tier_hash_bindings_ok,
+            "retained_diagnostic_evidence_present": (
+                retained_evidence_present
+            ),
+            "retained_diagnostic_evidence_verified": tier_evidence_ok,
         }
     visual_verification = _verification(
         "verified"
         if visual_ok
         else (
-            "failed"
+            "pending"
             if correctness is not None
             and correctness.get("status") == "verified"
-            else "pending"
+            and not retained_evidence_present
+            else (
+                "failed"
+                if correctness is not None
+                and correctness.get("status") == "verified"
+                else "pending"
+            )
         ),
         (
             "packed/unpacked visual validation is verified"
@@ -998,6 +1117,7 @@ def build_feasibility(
     system_validation: Mapping[str, Any] | None = None,
     performance: Mapping[str, Any] | None = None,
     correctness: Mapping[str, Any] | None = None,
+    correctness_evidence: Mapping[str, Any] | None = None,
     perf_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if proof.get("test_payload") is True or intro.get("test_payload") is True:
@@ -1164,6 +1284,7 @@ def build_feasibility(
         system_validation=system_validation,
         performance=performance,
         correctness=correctness,
+        correctness_evidence=correctness_evidence,
         perf_contract=perf_contract,
     )
     target_met = bool(
@@ -1519,6 +1640,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--system-validation", type=Path)
     parser.add_argument("--performance-preservation", type=Path)
     parser.add_argument("--correctness", type=Path)
+    parser.add_argument(
+        "--correctness-ada-unpacked-executable", type=Path
+    )
+    parser.add_argument("--correctness-ada-packed-executable", type=Path)
+    parser.add_argument(
+        "--correctness-blackwell-unpacked-executable", type=Path
+    )
+    parser.add_argument(
+        "--correctness-blackwell-packed-executable", type=Path
+    )
     args = parser.parse_args(argv)
     if not (
         len(args.head_sha) == 40
@@ -1536,6 +1667,23 @@ def main(argv: list[str] | None = None) -> int:
         if args.prior_valid_ledger is not None
         else None
     )
+    correctness_evidence: dict[str, dict[str, Path]] = {}
+    for tier, mode, value in (
+        ("ada", "unpacked", args.correctness_ada_unpacked_executable),
+        ("ada", "packed", args.correctness_ada_packed_executable),
+        (
+            "blackwell",
+            "unpacked",
+            args.correctness_blackwell_unpacked_executable,
+        ),
+        (
+            "blackwell",
+            "packed",
+            args.correctness_blackwell_packed_executable,
+        ),
+    ):
+        if value is not None:
+            correctness_evidence.setdefault(tier, {})[mode] = value
     record = build_feasibility(
         outcome=_load(args.outcome),
         proof=_load(args.proof_report),
@@ -1566,6 +1714,7 @@ def main(argv: list[str] | None = None) -> int:
         correctness=(
             _load(args.correctness) if args.correctness is not None else None
         ),
+        correctness_evidence=correctness_evidence or None,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

@@ -655,6 +655,14 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     f"{doc_path}: verified clean_system host requires a "
                     "virtualization_probe"
                 )
+            if str(host.get("architecture", "")).lower() not in {
+                "amd64",
+                "x86_64",
+            }:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified clean_system host is not a "
+                    "measured x64 target"
+                )
             if host.get("clean_environment") is not True:
                 raise SchemaValidationError(
                     f"{doc_path}: clean_system host is not clean"
