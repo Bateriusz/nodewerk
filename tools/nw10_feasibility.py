@@ -534,6 +534,7 @@ def _certify_compact_candidate(
     correctness: Mapping[str, Any] | None,
     correctness_evidence: Mapping[str, Any] | None,
     perf_contract: Mapping[str, Any],
+    trusted_artifacts: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Verify every acceptance gate required to publish a 64 KiB success."""
     canonical_intro, compact_intro = _intro_artifacts(intro)
@@ -550,20 +551,18 @@ def _certify_compact_candidate(
     ledger = compact_ledger if validated_mode == "compact" else canonical_ledger
     components = ledger.get("components")
     components = components if isinstance(components, Mapping) else {}
-    canonical_package_sha = str(
-        canonical_intro.get("package_sha256", "")
-    ).lower()
-    canonical_package_bytes = canonical_intro.get("package_bytes")
-    canonical_manifest_sha = _manifest_sha(canonical_intro, "manifest_sha256")
+    canonical_package_sha = str(trusted_artifacts["package_sha256"]).lower()
+    canonical_package_bytes = int(trusted_artifacts["package_bytes"])
+    canonical_manifest_sha = str(trusted_artifacts["manifest_sha256"]).lower()
     canonical_artifact_key = str(
         canonical_intro.get("artifact_key", "")
     ).strip()
     compact_encoded_sha = str(
-        compact_intro.get("encoded_package_sha256", "")
+        trusted_artifacts["compact_payload_sha256"]
     ).lower()
-    compact_encoded_bytes = compact_intro.get("encoded_package_bytes")
-    compact_codec_id = str(compact_intro.get("codec_id", ""))
-    compact_layout_id = str(compact_intro.get("layout_id", ""))
+    compact_encoded_bytes = int(trusted_artifacts["compact_payload_bytes"])
+    compact_codec_id = str(trusted_artifacts["compact_codec_id"])
+    compact_layout_id = str(trusted_artifacts["compact_layout_id"])
     compact_components = compact_ledger.get("components")
     compact_components = (
         compact_components if isinstance(compact_components, Mapping) else {}
@@ -572,92 +571,22 @@ def _certify_compact_candidate(
     canonical_components = (
         canonical_components if isinstance(canonical_components, Mapping) else {}
     )
-    intro_measurements = intro.get("measurements")
-    intro_measurements = (
-        intro_measurements if isinstance(intro_measurements, Mapping) else {}
+
+    # Shader/package identity and dependency expectations come from decoded
+    # artifact bytes and PE import inspection, not from report-to-report
+    # agreement.
+    measured_shader_bytes = int(trusted_artifacts["shader_bytes"])
+    intro_shader_measurement_present = True
+    intro_shader_measurement_ok = True
+    expected_selected_dependencies = set(
+        trusted_artifacts.get("selected_imports") or []
     )
-    intro_package_measurements = intro_measurements.get("package")
-    intro_package_measurements = (
-        intro_package_measurements
-        if isinstance(intro_package_measurements, Mapping)
-        else {}
-    )
-    link_manifest = canonical_intro.get("link_manifest")
-    link_manifest = (
-        link_manifest if isinstance(link_manifest, Mapping) else {}
-    )
-    link_shaders = link_manifest.get("shaders")
-    link_shaders = link_shaders if isinstance(link_shaders, list) else []
-    link_shader_blob_bytes: list[int] = []
-    link_shader_bytes_ok = bool(link_shaders)
-    for shader in link_shaders:
-        if not isinstance(shader, Mapping) or not _is_positive_int(
-            shader.get("blob_bytes")
-        ):
-            link_shader_bytes_ok = False
-            break
-        link_shader_blob_bytes.append(int(shader["blob_bytes"]))
-    link_shader_bytes = sum(link_shader_blob_bytes)
-    link_manifest_present = bool(link_manifest) and bool(link_shaders)
-    link_manifest_file_sha = hashlib.sha256(
-        json.dumps(link_manifest, indent=2, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    manifest_file_sha_ok = link_manifest_file_sha == canonical_manifest_sha
-    link_manifest_ok = (
-        link_manifest_present
-        and link_shader_bytes_ok
-        and _manifest_self_digest_ok(link_manifest)
-        and manifest_file_sha_ok
-    )
-    intro_package_measurement_present = all(
-        key in intro_package_measurements
-        for key in ("package_sha256", "package_bytes", "shader_bytes")
-    )
-    measured_shader_bytes = intro_package_measurements.get("shader_bytes")
-    intro_package_measurement_ok = (
-        intro_package_measurement_present
-        and str(
-            intro_package_measurements.get("package_sha256", "")
-        ).lower()
-        == canonical_package_sha
-        and intro_package_measurements.get("package_bytes")
-        == canonical_package_bytes
-    )
-    intro_shader_measurement_present = (
-        intro_package_measurement_present and link_manifest_present
-    )
-    intro_shader_measurement_ok = (
-        intro_package_measurement_ok
-        and link_manifest_ok
-        and _is_positive_int(measured_shader_bytes)
-        and int(measured_shader_bytes) == link_shader_bytes
+    expected_compact_dependencies = set(
+        trusted_artifacts.get("compact_imports") or []
     )
     dependency_closure_available = isinstance(dependency_closure, Mapping)
     dependency_closure_valid = False
-    expected_selected_dependencies: set[str] | None = None
-    expected_compact_dependencies: set[str] | None = None
     if dependency_closure_available:
-        inventory = _dependency_inventory()
-        closures = inventory.get("closures")
-        closures = closures if isinstance(closures, Mapping) else {}
-        profile = str(dependency_closure.get("profile", ""))
-        closure_spec = closures.get(profile)
-        closure_spec = (
-            closure_spec if isinstance(closure_spec, Mapping) else {}
-        )
-        allowed_imports = _normalized_imports(
-            closure_spec.get("allowed_import_dlls")
-        )
-        inbox_imports = _normalized_imports(
-            [
-                item.get("dll_name")
-                for item in inventory.get("inbox_windows_allowlist", [])
-                if isinstance(item, Mapping)
-            ]
-        )
-        forbidden_imports = _normalized_imports(
-            inventory.get("forbidden_release_imports")
-        )
         imported = _normalized_imports(
             dependency_closure.get("canonical_imports")
         )
@@ -666,18 +595,15 @@ def _certify_compact_candidate(
             dependency_closure.get("binary_sha256", "")
         ).lower()
         dependency_closure_valid = (
-            profile == "compact_experiment"
+            dependency_closure.get("profile") == "compact_experiment"
             and dependency_closure.get("closure_verified") is True
-            and bool(imported)
-            and imported <= allowed_imports
-            and imported <= inbox_imports
-            and not (imported & forbidden_imports)
+            and imported == expected_selected_dependencies
             and not sidecars
             and reported_binary_sha == validated_sha
+            and dependency_closure.get("binary_bytes") == validated_size
+            and trusted_artifacts.get("inventory_validated") is True
         )
-        if dependency_closure_valid:
-            expected_selected_dependencies = imported
-            expected_compact_dependencies = imported | {"cabinet"}
+
     compact_dependency_rows_present = bool(
         isinstance(compact_ledger.get("dependencies"), list)
         and compact_ledger.get("dependencies")
