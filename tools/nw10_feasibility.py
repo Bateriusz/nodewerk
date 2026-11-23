@@ -175,6 +175,10 @@ def _is_strict_under(value: Any, limit: float) -> bool:
     return _is_finite_nonnegative(value) and float(value) < limit
 
 
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 def _evidence_bytes(value: Any) -> bytes:
     if isinstance(value, Mapping):
         value = value.get("executable", value.get("path"))
@@ -251,32 +255,29 @@ def _certify_compact_candidate(
         canonical_intro.get("package_sha256", "")
     ).lower()
     canonical_package_bytes = canonical_intro.get("package_bytes")
+    canonical_manifest_sha = _manifest_sha(canonical_intro, "manifest_sha256")
+    compact_encoded_sha = str(
+        compact_intro.get("encoded_package_sha256", "")
+    ).lower()
+    compact_encoded_bytes = compact_intro.get("encoded_package_bytes")
+    compact_codec_id = str(compact_intro.get("codec_id", ""))
+    compact_layout_id = str(compact_intro.get("layout_id", ""))
+    compact_components = compact_ledger.get("components")
+    compact_components = (
+        compact_components if isinstance(compact_components, Mapping) else {}
+    )
+    compact_ledger_identity_ok = (
+        re.fullmatch(r"[0-9a-f]{64}", compact_encoded_sha) is not None
+        and _is_positive_int(compact_encoded_bytes)
+        and str(compact_ledger.get("codec_id", "")) == compact_codec_id
+        and str(compact_ledger.get("layout_id", "")) == compact_layout_id
+        and compact_components.get("encoded_package_bytes")
+        == compact_encoded_bytes
+    )
     pe_manifest_sha = (
         _manifest_sha(pe_ledger, "final_artifact", "manifest_sha256")
         if pe_ledger is not None
         else ""
-    )
-    manifest_candidates: list[str] = []
-    if pe_manifest_sha:
-        manifest_candidates.append(pe_manifest_sha)
-    else:
-        for candidate in (
-            _manifest_sha(
-                system_validation, "final_artifact", "manifest_sha256"
-            ),
-            _manifest_sha(
-                performance, "after", "artifact", "manifest_sha256"
-            ),
-            _manifest_sha(
-                correctness, "common_artifact", "manifest_sha256"
-            ),
-        ):
-            if candidate:
-                manifest_candidates.append(candidate)
-    unique_manifests = set(manifest_candidates)
-    manifest_anchor_conflict = len(unique_manifests) > 1
-    validated_manifest_sha = (
-        next(iter(unique_manifests)) if len(unique_manifests) == 1 else ""
     )
     decoded_package_sha = str(
         compact_intro.get("decoded_package_sha256", "")
@@ -413,6 +414,16 @@ def _certify_compact_candidate(
             if validated_mode == "compact"
             else "canonical_package"
         )
+        expected_payload_sha = (
+            compact_encoded_sha
+            if validated_mode == "compact"
+            else canonical_package_sha
+        )
+        expected_payload_bytes = (
+            compact_encoded_bytes
+            if validated_mode == "compact"
+            else canonical_package_bytes
+        )
         pe_ok = (
             schema_ok
             and pe_ledger.get("format") == "nw10-windows-pe-ledger"
@@ -426,11 +437,15 @@ def _certify_compact_candidate(
             and int(final.get("executable_bytes", -1)) == validated_size
             and str(final.get("package_sha256", "")).lower()
             == canonical_package_sha
-            and bool(pe_manifest_sha)
-            and str(final.get("manifest_sha256", "")).lower()
-            == pe_manifest_sha
+            and bool(canonical_manifest_sha)
+            and pe_manifest_sha == canonical_manifest_sha
             and final.get("package_binding_verified") is True
             and final.get("manifest_binding_verified") is True
+            and str(final.get("embedded_payload_sha256", "")).lower()
+            == expected_payload_sha
+            and final.get("embedded_payload_bytes") == expected_payload_bytes
+            and str(final.get("decoded_package_sha256", "")).lower()
+            == canonical_package_sha
             and final.get("runtime_status") == "validated_runnable"
             and final.get("runtime_exit_code") == 0
             and final.get("embedded_payload_kind") == expected_payload_kind
@@ -439,6 +454,9 @@ def _certify_compact_candidate(
             and mitigation_bits.get("decoder_on_required_bits_present") is True
             and linker.get("canonical_package_identical") is True
             and linker.get("embedded_payload_sha256_identical") is True
+            and linker.get("embedded_payload_size_identical") is True
+            and linker.get("final_payload_kind") == expected_payload_kind
+            and linker.get("control_payload_kind") == expected_payload_kind
             and linker.get("ltgc_preserved") is True
             and (
                 (
@@ -452,6 +470,11 @@ def _certify_compact_candidate(
                     and decoder.get("compact_payload_verified") is False
                 )
             )
+            and decoder.get("final_payload_kind") == expected_payload_kind
+            and str(decoder.get("final_payload_sha256", "")).lower()
+            == expected_payload_sha
+            and str(decoder.get("final_decoded_package_sha256", "")).lower()
+            == canonical_package_sha
             and conclusion.get("byte_ledger_complete") is True
         )
         pe_verification = _verification(
@@ -545,17 +568,11 @@ def _certify_compact_candidate(
         and int(system_final.get("executable_bytes", -1)) == validated_size
         and str(system_final.get("package_sha256", "")).lower()
         == canonical_package_sha
-        and not manifest_anchor_conflict
-        and bool(
-            _manifest_sha(
-                system_validation, "final_artifact", "manifest_sha256"
-            )
+        and bool(canonical_manifest_sha)
+        and _manifest_sha(
+            system_validation, "final_artifact", "manifest_sha256"
         )
-        and (
-            not validated_manifest_sha
-            or str(system_final.get("manifest_sha256", "")).lower()
-            == validated_manifest_sha
-        )
+        == canonical_manifest_sha
         and bool(clean_windows_build)
         and str(system.get("windows_build", "")) == clean_windows_build
         and privacy.get("local_paths_included") is False
@@ -589,7 +606,8 @@ def _certify_compact_candidate(
         startup_hardware if isinstance(startup_hardware, Mapping) else {}
     )
     startup_ok = (
-        startup.get("status") == "verified"
+        system_schema_ok
+        and startup.get("status") == "verified"
         and startup.get("execution_kind") == "physical"
         and startup_value is not None
         and 0.0 <= float(startup_value) <= contract.STARTUP_CEILING_MS
@@ -631,7 +649,8 @@ def _certify_compact_candidate(
         memory_hardware if isinstance(memory_hardware, Mapping) else {}
     )
     memory_ok = (
-        memory.get("status") == "verified"
+        system_schema_ok
+        and memory.get("status") == "verified"
         and memory.get("execution_kind") == "physical"
         and peak is not None
         and 0 <= int(peak) <= contract.PEAK_ENGINE_COMMITTED_GPU_BYTES
@@ -737,17 +756,11 @@ def _certify_compact_candidate(
             == canonical_package_sha
             and str(artifact.get("package_sha256", "")).lower()
             == canonical_package_sha
-            and not manifest_anchor_conflict
-            and bool(
-                _manifest_sha(
-                    correctness, "common_artifact", "manifest_sha256"
-                )
+            and bool(canonical_manifest_sha)
+            and _manifest_sha(
+                performance, "after", "artifact", "manifest_sha256"
             )
-            and (
-                not validated_manifest_sha
-                or str(artifact.get("manifest_sha256", "")).lower()
-                == validated_manifest_sha
-            )
+            == canonical_manifest_sha
             and str(artifact.get("executable_sha256", "")).lower()
             == validated_sha
             and int(artifact.get("complete_distribution_bytes", -1))
@@ -912,6 +925,7 @@ def _certify_compact_candidate(
             and declared_layout_id in contract.KNOWN_LAYOUT_IDS
             and intro_codec_id == declared_codec_id
             and intro_layout_id == declared_layout_id
+            and compact_ledger_identity_ok
         )
         def hash64(value: Any) -> bool:
             return re.fullmatch(
@@ -970,6 +984,11 @@ def _certify_compact_candidate(
                 and int(runtime.get("frames_per_tick", -1)) == 1
                 and int(runtime.get("present_sync_interval", -1)) == 0
             )
+        cross_tier_hashes_ok = all(
+            len({values[key] for values in tier_hashes.values()}) == 1
+            for key in ("unpacked", "packed", "encoded")
+        )
+        tier_hash_bindings_ok = tier_hash_bindings_ok and cross_tier_hashes_ok
         evidence_entries = (
             correctness_evidence
             if isinstance(correctness_evidence, Mapping)
@@ -978,6 +997,9 @@ def _certify_compact_candidate(
         retained_evidence_present = True
         tier_evidence_ok = True
         header_codec_layout_ok = True
+        actual_encoded_shas: set[str] = set()
+        actual_encoded_sizes: set[int] = set()
+        retained_manifest_binding_ok = True
         for tier, hashes in tier_hashes.items():
             tier_entry = evidence_entries.get(tier)
             tier_entry = (
@@ -991,7 +1013,7 @@ def _certify_compact_candidate(
                     continue
                 try:
                     data = _evidence_bytes(entry)
-                    payload, _embedded_manifest = (
+                    payload, embedded_manifest = (
                         nw05_export.extract_embedded_package(data)
                     )
                 except Exception:  # noqa: BLE001 - invalid evidence fails the gate
@@ -1000,14 +1022,22 @@ def _certify_compact_candidate(
                 if hashlib.sha256(data).hexdigest() != hashes[mode]:
                     tier_evidence_ok = False
                     continue
+                embedded_manifest_sha = hashlib.sha256(
+                    embedded_manifest
+                ).hexdigest()
+                if (
+                    not canonical_manifest_sha
+                    or embedded_manifest_sha != canonical_manifest_sha
+                ):
+                    retained_manifest_binding_ok = False
+                    tier_evidence_ok = False
+                    continue
+                payload_sha = hashlib.sha256(payload).hexdigest()
                 if mode == "unpacked":
                     if compact.is_compact_container(payload):
                         tier_evidence_ok = False
                         continue
-                    if (
-                        hashlib.sha256(payload).hexdigest()
-                        != canonical_package_sha
-                    ):
+                    if payload_sha != canonical_package_sha:
                         tier_evidence_ok = False
                     if canonical_package_bytes is not None and len(
                         payload
@@ -1031,7 +1061,9 @@ def _certify_compact_candidate(
                         header_codec_layout_ok = False
                         tier_evidence_ok = False
                         continue
-                    if hashlib.sha256(payload).hexdigest() != hashes["encoded"]:
+                    actual_encoded_shas.add(payload_sha)
+                    actual_encoded_sizes.add(len(payload))
+                    if payload_sha != hashes["encoded"]:
                         tier_evidence_ok = False
                         continue
                     try:
@@ -1048,7 +1080,49 @@ def _certify_compact_candidate(
                         decoded
                     ) != int(canonical_package_bytes):
                         tier_evidence_ok = False
-        codec_layout_ok = codec_layout_ok and header_codec_layout_ok
+        actual_encoded_sha = (
+            next(iter(actual_encoded_shas))
+            if len(actual_encoded_shas) == 1
+            else ""
+        )
+        actual_encoded_bytes = (
+            next(iter(actual_encoded_sizes))
+            if len(actual_encoded_sizes) == 1
+            else None
+        )
+        encoded_payload_identity_ok = (
+            retained_evidence_present
+            and len(actual_encoded_shas) == 1
+            and len(actual_encoded_sizes) == 1
+            and actual_encoded_sha == compact_encoded_sha
+            and actual_encoded_bytes == compact_encoded_bytes
+            and compact_ledger_identity_ok
+        )
+        pe_payload_identity_ok = True
+        if (
+            pe_ledger is not None
+            and pe_ledger.get("status") == "verified"
+            and validated_mode == "compact"
+        ):
+            pe_final = pe_ledger.get("final_artifact")
+            pe_final = pe_final if isinstance(pe_final, Mapping) else {}
+            pe_payload_identity_ok = (
+                str(pe_final.get("embedded_payload_sha256", "")).lower()
+                == actual_encoded_sha
+                and pe_final.get("embedded_payload_bytes")
+                == actual_encoded_bytes
+            )
+        tier_evidence_ok = (
+            tier_evidence_ok
+            and encoded_payload_identity_ok
+            and retained_manifest_binding_ok
+            and pe_payload_identity_ok
+        )
+        codec_layout_ok = (
+            codec_layout_ok
+            and header_codec_layout_ok
+            and encoded_payload_identity_ok
+        )
         packed_ok = (
             packed.get("status") == "verified"
             and _is_finite_nonnegative(packed.get("worst_absolute_error"))
@@ -1076,12 +1150,11 @@ def _certify_compact_candidate(
             and str(correctness_common.get("package_sha256", "")).lower()
             == canonical_package_sha
             and bool(str(correctness_common.get("artifact_key", "")).strip())
-            and not manifest_anchor_conflict
-            and (
-                not validated_manifest_sha
-                or str(correctness_common.get("manifest_sha256", "")).lower()
-                == validated_manifest_sha
+            and bool(canonical_manifest_sha)
+            and _manifest_sha(
+                correctness, "common_artifact", "manifest_sha256"
             )
+            == canonical_manifest_sha
             and str(
                 correctness_common.get("final_executable_sha256", "")
             ).lower()
@@ -1111,6 +1184,14 @@ def _certify_compact_candidate(
             "worst_absolute_error": comparison.get("worst_absolute_error"),
             "packed_worst_absolute_error": packed.get("worst_absolute_error"),
             "tier_hash_bindings_verified": tier_hash_bindings_ok,
+            "cross_tier_artifact_identity_verified": cross_tier_hashes_ok,
+            "actual_encoded_package_sha256": actual_encoded_sha or None,
+            "actual_encoded_package_bytes": actual_encoded_bytes,
+            "intro_encoded_package_sha256": compact_encoded_sha or None,
+            "intro_encoded_package_bytes": compact_encoded_bytes,
+            "compact_ledger_identity_verified": compact_ledger_identity_ok,
+            "pe_payload_identity_verified": pe_payload_identity_ok,
+            "retained_manifest_binding_verified": retained_manifest_binding_ok,
             "declared_codec_id": declared_codec_id or None,
             "declared_layout_id": declared_layout_id or None,
             "intro_codec_id": intro_codec_id or None,
