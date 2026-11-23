@@ -216,7 +216,12 @@ function Get-MissingVisualStudioComponents {
     }
     $missing = @()
     foreach ($component in $visualStudio.Components) {
-        $installation = @(& $vswhere -latest -products * -requires ([string]$component) -property installationPath 2>$null)
+        # The bootstrapper URL is explicitly VS 17.x. Do not let a component
+        # installed only in a newer side-by-side VS instance satisfy this probe:
+        # vcvars selection below intentionally searches VS 2022 ([17,18)) only.
+        # In particular, Windows11SDK may be present in the runner's VS 2026
+        # image while absent from the VS 2022 Build Tools instance we provision.
+        $installation = @(& $vswhere -version "[17.0,18.0)" -products * -requires ([string]$component) -property installationPath 2>$null)
         if ($LASTEXITCODE -ne 0 -or $installation.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string]$installation[0])) {
             $missing += [string]$component
         }
