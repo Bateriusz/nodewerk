@@ -2111,7 +2111,7 @@ def test_feasibility_failure_branch_keeps_canonical_fallback_and_continue() -> N
     assert record["canonical_fallback"]["exit_code"] == 0
 
 
-def test_hosted_access_violation_remains_pending_and_schema_valid() -> None:
+def test_hosted_access_violation_preserves_failures_and_pending_certification() -> None:
     access_violation = -1073741819
     intro = _intro()
     intro["ledgers"] = {
@@ -2127,7 +2127,7 @@ def test_hosted_access_violation_remains_pending_and_schema_valid() -> None:
             minimum_measured_candidate_bytes=228_181,
             minimum_validated_runnable_bytes=None,
             validated_mode="canonical_fallback_pending_physical",
-            compact_candidate_runtime_status="pending_runtime_validation",
+            compact_candidate_runtime_status="rejected_runtime_failure",
             compact_candidate_exit_code=access_violation,
             canonical_fallback_exit_code=access_violation,
             intro_compact_candidate_bytes=228_181,
@@ -2146,13 +2146,13 @@ def test_hosted_access_violation_remains_pending_and_schema_valid() -> None:
     assert record["measurements"]["validated_mode"] == (
         "canonical_fallback_pending_physical"
     )
-    assert record["compact_candidate"]["runtime_status"] == "pending_runtime_validation"
+    assert record["compact_candidate"]["runtime_status"] == "rejected_runtime_failure"
     assert record["compact_candidate"]["exit_code"] == access_violation
     assert record["compact_candidate"]["exit_code_hex"] == "0xC0000005"
     assert record["compact_candidate"]["failure_classification"] == (
         "non_certifying_hosted_failure"
     )
-    assert record["canonical_fallback"]["runtime_status"] == "pending_runtime_validation"
+    assert record["canonical_fallback"]["runtime_status"] == "rejected_runtime_failure"
     assert record["canonical_fallback"]["exit_code"] == access_violation
     assert record["canonical_fallback"]["exit_code_hex"] == "0xC0000005"
     assert record["canonical_fallback"]["dependency_closure"]["canonical_imports"] == [
@@ -2349,3 +2349,9 @@ def test_workflow_binds_feasibility_to_the_uploaded_artifact_identity() -> None:
     assert "Bind PE ledger to the uploaded artifact identity" in workflow
     assert "--bind-source-report" in workflow
     assert "nw10-windows-pe-ledger-bound.json" in workflow
+
+def test_workflow_does_not_downgrade_executed_runtime_failure_to_pending() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "nw10-compact.yml").read_text(
+        encoding="utf-8"
+    )
+    assert '$outcome.compact_candidate_runtime_status = "pending_runtime_validation"' not in workflow

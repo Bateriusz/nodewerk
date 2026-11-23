@@ -720,3 +720,18 @@ def test_publish_refuses_unknown_later_state_without_mutating_outputs(
     assert destination.read_bytes() == destination_before
     assert status_path.read_bytes() == status_before
 
+@pytest.mark.parametrize("capture_name", ["before", "after"])
+def test_preservation_revalidates_raw_runs_instead_of_cached_validation(
+    capture_name: str,
+) -> None:
+    bound, before, after, candidate = _fixture()
+    capture = before if capture_name == "before" else after
+    cached = copy.deepcopy(capture["validation"])
+    capture["runs"][0]["gpu_frame_time_ms"]["samples"] = [50.0] * 32
+    capture["runs"][0]["fresh_process"] = False
+    capture["runs"][0]["timing"]["fresh_process"] = False
+    capture["warmup"]["duration_seconds"] = 0
+    capture["validation"] = cached
+    result = preservation.validate_preservation(before, after, bound, candidate)
+    assert result["status"] == "failed"
+    assert result["reasons"]

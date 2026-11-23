@@ -35,7 +35,7 @@
     },
     {
       "path": "benchmarks/nw10/windows-compact-feasibility.v1.json",
-      "sha256": "af4964046d3c99ad7c26520c4a7441a46c993d9c552677e0dad1124dd9b9fd75"
+      "sha256": "fc4289743659312bc30681701e0274bc613f7e4d307fc70656851c5ae92bdeb0"
     },
     {
       "path": "benchmarks/nw10/windows-pe-ledger.v1.json",

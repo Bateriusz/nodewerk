@@ -2121,6 +2121,8 @@ def build_feasibility(
     )
     candidate_exit = _windows_exit_code(outcome.get("compact_candidate_exit_code"))
     canonical_exit = _windows_exit_code(outcome.get("canonical_fallback_exit_code"))
+    if candidate_exit not in (None, 0) and runtime_status != "validated_runnable":
+        runtime_status = "rejected_runtime_failure"
     intro_candidate = outcome.get("intro_compact_candidate_bytes")
     proof_candidate = outcome.get("proof_compact_candidate_bytes")
     trusted_artifacts = _verify_artifact_closure(
@@ -2250,16 +2252,20 @@ def build_feasibility(
         and certification.get("status") == "verified"
     )
     true_64k = target_met
+    hosted_noncertifying = (
+        validated_mode == "canonical_fallback_pending_physical"
+        and canonical_exit not in (None, 0)
+    )
     canonical_runtime = (
         "validated_runnable"
         if validated_bytes is not None
         and validated_mode == "canonical_fallback"
         and canonical_exit == 0
-        else "pending_runtime_validation"
-    )
-    hosted_noncertifying = (
-        validated_mode == "canonical_fallback_pending_physical"
-        and canonical_exit not in (None, 0)
+        else (
+            "rejected_runtime_failure"
+            if hosted_noncertifying
+            else "pending_runtime_validation"
+        )
     )
     if runtime_status == "validated_runnable":
         failure_classification = "none"

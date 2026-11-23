@@ -759,7 +759,7 @@ def validate_report(
                 and vbs_status == 2
                 and not independent_markers
                 and identity_complete
-                and probe.get("hypervisor_explained_by_vbs") is True
+                and host.get("hypervisor_explained_by_vbs") is True
             )
             if hypervisor is True and not explained_vbs:
                 host_failed = True

@@ -448,6 +448,9 @@ def test_physical_clean_host_accepts_vbs_only_with_complete_identity(
     assert host["physical_host_evidence"] is True
     assert host["hypervisor_explained_by_vbs"] is True
     assert host["clean_environment"] is True
+    report = _report()
+    report["host"] = host
+    assert clean_system.validate_report(report)["status"] == "verified"
 
 
 def test_physical_clean_host_rejects_vm_product_markers(

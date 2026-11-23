@@ -303,11 +303,13 @@ bool DecodeCompactPackage(const std::uint8_t* data, std::size_t size_bytes,
                 return false;
             }
             const std::size_t source_offset = record_offset[reference];
-            const auto begin = canonical->begin() +
-                               static_cast<std::ptrdiff_t>(source_offset);
-            const auto end = begin + static_cast<std::ptrdiff_t>(length);
-            canonical->insert(canonical->end(), begin, end);
-            record_offset[index] = canonical->size() - length;
+            const std::size_t destination_offset = canonical->size();
+            canonical->resize(destination_offset + length);
+            std::copy_n(
+                canonical->data() + source_offset,
+                static_cast<std::size_t>(length),
+                canonical->data() + destination_offset);
+            record_offset[index] = destination_offset;
             record_length[index] = length;
         } else {
             SetError(error, "compact_malformed");

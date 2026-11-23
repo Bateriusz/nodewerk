@@ -66,9 +66,7 @@ def _capture_from_record(record: Mapping[str, Any], capture_id: str) -> dict[str
     return copy.deepcopy(dict(matches[0]))
 
 
-def _run_summaries(capture: Mapping[str, Any]) -> list[dict[str, Any]]:
-    validation = capture.get("validation")
-    validation = validation if isinstance(validation, Mapping) else {}
+def _run_summaries(validation: Mapping[str, Any]) -> list[dict[str, Any]]:
     runs = validation.get("runs")
     if not isinstance(runs, list):
         return []
@@ -171,6 +169,20 @@ def _artifact_summary(capture: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validator_artifact_identity(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    """Translate a published artifact row to the frozen validator identity."""
+    executable_bytes = artifact.get("executable_bytes")
+    if executable_bytes is None:
+        executable_bytes = artifact.get("complete_distribution_bytes")
+    return {
+        "artifact_key": artifact.get("artifact_key"),
+        "package_sha256": artifact.get("package_sha256"),
+        "manifest_sha256": artifact.get("manifest_sha256"),
+        "executable_sha256": artifact.get("executable_sha256"),
+        "executable_bytes": executable_bytes,
+    }
+
+
 def _walk_strings(value: Any):
     if isinstance(value, str):
         yield value
@@ -212,12 +224,24 @@ def validate_preservation(
 
     binding_id = perf_contract.get("binding_id")
     binding_digest = perf_contract.get("binding_digest")
-    before_validation = before.get("validation")
-    after_validation = after.get("validation")
-    before_validation = (
-        before_validation if isinstance(before_validation, Mapping) else {}
+    expected_reference = perf_contract.get("reference")
+    if not isinstance(expected_reference, Mapping):
+        reasons.append("bound performance contract has no reference object")
+        expected_reference = {}
+    reference_artifact = expected_reference.get("artifact")
+    reference_artifact = reference_artifact if isinstance(reference_artifact, Mapping) else {}
+    candidate_artifact = candidate_report.get("artifact")
+    candidate_artifact = candidate_artifact if isinstance(candidate_artifact, Mapping) else {}
+
+    # Cached validation is not authority: recompute from the retained raw runs.
+    before_validation = nw07_evidence.validate_perf_capture(
+        before, perf_contract,
+        artifact_identity=_validator_artifact_identity(reference_artifact),
     )
-    after_validation = after_validation if isinstance(after_validation, Mapping) else {}
+    after_validation = nw07_evidence.validate_perf_capture(
+        after, perf_contract,
+        artifact_identity=_validator_artifact_identity(candidate_artifact),
+    )
 
     if before_validation.get("status") != "verified":
         reasons.append("before capture is not verified nw07_perf_ref_v1 evidence")
@@ -239,10 +263,6 @@ def validate_preservation(
         if capture.get("tools") != before.get("tools") and label == "after":
             reasons.append("before/after measurement tools do not match")
 
-    expected_reference = perf_contract.get("reference")
-    if not isinstance(expected_reference, Mapping):
-        reasons.append("bound performance contract has no reference object")
-        expected_reference = {}
     for label, capture in (("before", before), ("after", after)):
         reference = capture.get("reference")
         if reference != expected_reference:
@@ -267,8 +287,8 @@ def validate_preservation(
         )
     if after_validation.get("status") not in {"verified", "unverified"}:
         reasons.append("after capture did not complete frozen run validation")
-    after_runs = _run_summaries(after)
-    before_runs = _run_summaries(before)
+    after_runs = _run_summaries(after_validation)
+    before_runs = _run_summaries(before_validation)
     if len(before_runs) != nw07_contract.PERF_RUN_COUNT:
         reasons.append("before capture does not contain three validated runs")
     if len(after_runs) != nw07_contract.PERF_RUN_COUNT:
@@ -278,10 +298,6 @@ def validate_preservation(
     if any(run.get("status") != "passed" for run in before_runs):
         reasons.append("one or more before performance runs failed")
 
-    candidate_artifact = candidate_report.get("artifact")
-    candidate_artifact = (
-        candidate_artifact if isinstance(candidate_artifact, Mapping) else {}
-    )
     after_artifact = _artifact_summary(after)
     for key, value in candidate_artifact.items():
         if key in after_artifact and after_artifact.get(key) != value:

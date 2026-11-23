@@ -348,8 +348,9 @@ def _clean_summary(
     probe = host.get("virtualization_probe")
     if not isinstance(probe, Mapping):
         raise ValueError("clean-system virtualization probe is absent")
-    if probe.get("hypervisor_present") is True and not probe.get(
-        "hypervisor_explained_by_vbs"
+    if (
+        probe.get("hypervisor_present") is True
+        and host.get("hypervisor_explained_by_vbs") is not True
     ):
         raise ValueError("clean-system host has an unexplained active hypervisor")
     markers = list(host.get("vm_markers") or [])
@@ -390,7 +391,7 @@ def _clean_summary(
                 "virtualization_based_security_status": probe.get(
                     "virtualization_based_security_status"
                 ),
-                "hypervisor_explained_by_vbs": probe.get(
+                "hypervisor_explained_by_vbs": host.get(
                     "hypervisor_explained_by_vbs"
                 ),
                 "vm_markers": markers,
@@ -405,7 +406,7 @@ def _clean_summary(
             "virtualization_based_security_status": probe.get(
                 "virtualization_based_security_status"
             ),
-            "hypervisor_explained_by_vbs": probe.get(
+            "hypervisor_explained_by_vbs": host.get(
                 "hypervisor_explained_by_vbs"
             ),
             "virtualization_indicators": host.get("virtualization_indicators", []),

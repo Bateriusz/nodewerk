@@ -12,7 +12,7 @@
     "exit_code_hex": "0xC0000005",
     "id": "compact_candidate_runtime",
     "measured_bytes": 228181,
-    "reason": "The hosted Windows runner could not certify either the compact candidate or the canonical fallback; the compact result remains pending physical runtime validation rather than being attributed to compact packaging.",
+    "reason": "The hosted Windows runner recorded runtime failures for both the compact candidate and canonical fallback; those executed failures remain rejected runtime results. Qualifying physical certification remains pending before either current artifact can be counted as runnable.",
     "status": "pending_physical"
   },
   "canonical_fallback": {
@@ -39,7 +39,7 @@
     "exit_code_hex": "0xC0000005",
     "link_manifest_verified": true,
     "present_sync_interval": 0,
-    "runtime_status": "pending_runtime_validation",
+    "runtime_status": "rejected_runtime_failure",
     "sha256": "063bb45b72db60037e743e971157b0cbd8d3096c7ee69680fc34f70d705027c8"
   },
   "certification": {
@@ -100,7 +100,7 @@
     "exit_code": -1073741819,
     "exit_code_hex": "0xC0000005",
     "failure_classification": "non_certifying_hosted_failure",
-    "runtime_status": "pending_runtime_validation",
+    "runtime_status": "rejected_runtime_failure",
     "sha256": "7d6ce07ba27ac73797d04c9f8e4ea5783c02ca35cbf365697fe693e898b9cd5c"
   },
   "current_implementation_measurement": false,

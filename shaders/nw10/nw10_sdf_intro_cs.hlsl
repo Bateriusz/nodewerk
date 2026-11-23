@@ -53,7 +53,8 @@ float mapScene(float3 p)
     float sphere = sdSphere(sphere_point - float3(-1.15, 0.0, 0.0), 0.82);
 
     float3 torus_point = p;
-    torus_point.xz = rotate2(torus_point.xz, phase * 1.5);
+    // Integer cycles keep tick 0 and the frozen 20 s loop endpoint identical.
+    torus_point.xz = rotate2(torus_point.xz, phase * 2.0);
     torus_point.xy = rotate2(torus_point.xy, 0.35 * sin(phase));
     float torus = sdTorus(torus_point - float3(1.15, 0.0, 0.0), float2(0.62, 0.22));
 

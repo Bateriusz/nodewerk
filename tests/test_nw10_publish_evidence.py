@@ -711,6 +711,7 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
             "development_dependencies_present_on_path": [],
             "environment_cache_variables": [],
             "virtualization_indicators": [],
+            "hypervisor_explained_by_vbs": False,
             "virtualization_probe": {
                 "manufacturer": "ASUSTeK COMPUTER INC.",
                 "model": "NUC13ANH-B",
@@ -722,7 +723,6 @@ def test_system_publisher_verifies_bundle_and_can_complete_state(
                 "baseboard_product": "NUC13ANH-B",
                 "hypervisor_present": False,
                 "virtualization_based_security_status": 0,
-                "hypervisor_explained_by_vbs": False,
                 "vm_markers": [],
             },
         },
@@ -917,12 +917,12 @@ def test_clean_summary_rejects_vm_markers_and_redefined_exit_codes() -> None:
             "development_dependencies_present_on_path": [],
             "environment_cache_variables": [],
             "virtualization_indicators": ["virtual machine"],
+            "hypervisor_explained_by_vbs": True,
             "virtualization_probe": {
                 "manufacturer": "Microsoft Corporation",
                 "model": "Virtual Machine",
                 "hypervisor_present": True,
                 "virtualization_based_security_status": 2,
-                "hypervisor_explained_by_vbs": True,
                 "vm_markers": ["virtual machine"],
             },
         },
@@ -953,6 +953,13 @@ def test_clean_summary_rejects_vm_markers_and_redefined_exit_codes() -> None:
         )
     report["host"]["virtualization_indicators"] = []
     report["host"]["virtualization_probe"]["vm_markers"] = []
+    summary = publisher._clean_summary(
+        report,
+        bundle_sha256="a" * 64,
+        artifact=artifact,
+        runtime_hardware={"adapter_description": "NVIDIA GeForce RTX 5070 Ti"},
+    )
+    assert summary["host"]["hypervisor_explained_by_vbs"] is True
     report["scenarios"][0]["expected_exit_code"] = 0
     with pytest.raises(ValueError, match="frozen expected exit code"):
         publisher._clean_summary(

@@ -364,6 +364,9 @@ def test_shipped_cpp_decoder_matches_python_encoder_and_fuzzes_cleanly(
         "-o",
         str(binary),
     ]
+    if sys.platform != "win32":
+        # libstdc++ debug iterators catch accidental self-range vector inserts.
+        command.insert(2, "-D_GLIBCXX_DEBUG")
     if sys.platform == "win32":
         # MinGW ignores MSVC's #pragma comment(lib, "cabinet.lib"); the shipped
         # decoder's Compression API calls still need the inbox import library.

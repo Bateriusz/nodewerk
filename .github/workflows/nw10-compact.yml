@@ -298,7 +298,8 @@ jobs:
               Write-Host ("NW-10 canonical fallback hosted runtime validation: PASS (" + $canonical.Length + " bytes)")
             } else {
               $outcome.canonical_fallback_exit_code = [int]$canonicalProcess.ExitCode
-              $outcome.compact_candidate_runtime_status = "pending_runtime_validation"
+              # Keep the executed compact runtime failure. Physical certification
+              # eligibility is represented separately by validated_mode.
               $validatedMode = "canonical_fallback_pending_physical"
               $blockers += [ordered]@{
                 id = "hosted_canonical_runtime"

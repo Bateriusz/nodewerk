@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import struct
 import sys
 from pathlib import Path
@@ -649,3 +650,15 @@ def test_packed_comparison_requires_manifests_and_packed_mode(
             packed_package_sha256=package,
             unpacked_package_sha256=package,
         )
+
+def test_sdf_intro_torus_orbit_is_periodic_at_frozen_loop_boundary() -> None:
+    source = (REPO_ROOT / "shaders" / "nw10" / "nw10_sdf_intro_cs.hlsl").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(
+        r"torus_point\.xz\s*=\s*rotate2\(torus_point\.xz,\s*phase\s*\*\s*([0-9.]+)\s*\);",
+        source,
+    )
+    assert match is not None
+    cycles = float(match.group(1))
+    assert math.isclose(cycles, round(cycles), abs_tol=1e-12)
