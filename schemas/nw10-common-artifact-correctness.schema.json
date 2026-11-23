@@ -295,6 +295,18 @@
                   "type": "string",
                   "pattern": "^[0-9a-f]{64}$"
                 },
+                "encoded_container_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "unpacked_manifest_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "packed_manifest_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
                 "codec_id": {
                   "type": "string"
                 },
@@ -336,6 +348,18 @@
                   "pattern": "^[0-9a-f]{64}$"
                 },
                 "encoded_container_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "encoded_container_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "unpacked_manifest_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "packed_manifest_sha256": {
                   "type": "string",
                   "pattern": "^[0-9a-f]{64}$"
                 },
@@ -538,6 +562,9 @@
                   "unpacked_executable_sha256",
                   "packed_executable_sha256",
                   "encoded_container_sha256",
+                  "encoded_container_bytes",
+                  "unpacked_manifest_sha256",
+                  "packed_manifest_sha256",
                   "codec_id",
                   "layout_id",
                   "device_form_factor_source",
@@ -556,6 +583,9 @@
                   "unpacked_executable_sha256",
                   "packed_executable_sha256",
                   "encoded_container_sha256",
+                  "encoded_container_bytes",
+                  "unpacked_manifest_sha256",
+                  "packed_manifest_sha256",
                   "codec_id",
                   "layout_id",
                   "device_form_factor_source",
