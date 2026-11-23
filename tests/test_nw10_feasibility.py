@@ -109,7 +109,8 @@ def _intro() -> dict:
                 },
                 "required_auxiliary_files": {},
                 "dependencies": [
-                    {"name": "d3d12", "kind": "windows_inbox", "distributed_bytes": 0}
+                    {"name": "d3d12", "kind": "windows_inbox", "distributed_bytes": 0},
+                    {"name": "kernel32", "kind": "windows_inbox", "distributed_bytes": 0},
                 ],
             },
             "compact": {
@@ -133,6 +134,11 @@ def _intro() -> dict:
                     },
                     {
                         "name": "d3d12",
+                        "kind": "windows_inbox",
+                        "distributed_bytes": 0,
+                    },
+                    {
+                        "name": "kernel32",
                         "kind": "windows_inbox",
                         "distributed_bytes": 0,
                     },
@@ -237,8 +243,11 @@ def _pe_ledger() -> dict:
 
 def _dependency_closure() -> dict:
     return {
+        "fixture_id": "nw10_validated",
+        "profile": "compact_experiment",
         "closure_verified": True,
         "binary_sha256": "e" * 64,
+        "binary_bytes": 65_000,
         "sidecar_files": [],
         "canonical_imports": ["cabinet.dll", "d3d12.dll", "kernel32.dll"],
     }
@@ -763,6 +772,42 @@ def test_fabricated_or_anonymous_evidence_cannot_certify_success(monkeypatch) ->
     assert "clean_system" in record["certification"]["failed_gates"]
     assert "performance" in record["certification"]["failed_gates"]
     assert "visual" in record["certification"]["failed_gates"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("fixture_id", "other_fixture"),
+        ("profile", "release"),
+        ("binary_bytes", 64_999),
+    ],
+)
+def test_dependency_closure_provenance_mismatch_cannot_certify_success(
+    monkeypatch, field, value
+) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    closure = copy.deepcopy(_dependency_closure())
+    closure[field] = value
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=closure,
+        system_validation=_system_validation(),
+        performance=_performance(),
+        correctness=_correctness(),
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"]["dependency_closure"]["status"] == "failed"
 
 
 def test_partial_system_record_cannot_certify_success(monkeypatch) -> None:
