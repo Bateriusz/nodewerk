@@ -832,6 +832,127 @@ def _stub_artifact_backed_facts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(feasibility, "_verify_artifact_closure", fake_verify)
 
 
+def test_artifact_verifier_derives_ground_truth_from_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package_bytes = (REPO_ROOT / "fixtures" / "nw04" / "compute_display.nwp").read_bytes()
+    summary = compact.package_summary(package_bytes)
+    shader_bytes = int(summary["shader_bytes"])
+    manifest = {
+        "format": "nw05-player-link-manifest",
+        "profile_id": summary["profile_id"],
+        "requirements_digest": summary["requirements_digest"],
+        "manifest_sha256": "",
+        "shaders": [{"blob_bytes": shader_bytes, "specialization_id": "fixture"}],
+        "retained": {"dependencies": ["d3d12", "kernel32"]},
+    }
+    manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
+        nwp.canonical_json_bytes(
+            {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+        )
+    ).hexdigest()
+    manifest_bytes = (
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    binding = hashlib.sha256(manifest_bytes).digest()
+    canonical_exe = nw05_export.embed_package(
+        b"MZ" + b"\x00" * 4096, package_bytes, binding
+    )
+    encoded = compact.encode_compact(
+        package_bytes,
+        codec_id=contract.CODEC_MSZIP_ID,
+        layout_id=contract.LAYOUT_SOA_ID,
+    )
+    compact_exe = nw05_export.embed_package(
+        b"MZ" + b"\x01" * 6144, encoded.bytes, binding
+    )
+
+    paths = {
+        "selected_executable": tmp_path / "selected.exe",
+        "canonical_executable": tmp_path / "canonical.exe",
+        "compact_executable": tmp_path / "compact.exe",
+        "package": tmp_path / "artifact.nwp",
+        "manifest": tmp_path / "artifact.manifest.json",
+    }
+    paths["selected_executable"].write_bytes(compact_exe)
+    paths["canonical_executable"].write_bytes(canonical_exe)
+    paths["compact_executable"].write_bytes(compact_exe)
+    paths["package"].write_bytes(package_bytes)
+    paths["manifest"].write_bytes(manifest_bytes)
+
+    def pe_imports(executable: bytes) -> list[str]:
+        payload, _ = nw05_export.extract_embedded_package(executable)
+        if compact.is_compact_container(payload):
+            return ["cabinet", "d3d12", "kernel32"]
+        return ["d3d12", "kernel32"]
+
+    monkeypatch.setattr(nw05_export, "_pe_runtime_dependencies", pe_imports)
+    intro = _intro()
+    intro["measurements"]["package"] = {
+        "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
+        "package_bytes": len(package_bytes),
+        "shader_bytes": shader_bytes,
+    }
+    intro["canonical_artifact"].update(
+        {
+            "executable_bytes": len(canonical_exe),
+            "executable_sha256": hashlib.sha256(canonical_exe).hexdigest(),
+            "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
+            "package_bytes": len(package_bytes),
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "manifest_bytes": len(manifest_bytes),
+            "link_manifest": manifest,
+        }
+    )
+    intro["compact_artifact"].update(
+        {
+            "executable_bytes": len(compact_exe),
+            "executable_sha256": hashlib.sha256(compact_exe).hexdigest(),
+            "selected_executable_bytes": len(compact_exe),
+            "selected_executable_sha256": hashlib.sha256(compact_exe).hexdigest(),
+            "selected_mode": "compact",
+            "encoded_package_bytes": len(encoded.bytes),
+            "encoded_package_sha256": hashlib.sha256(encoded.bytes).hexdigest(),
+            "codec_id": encoded.codec_id,
+            "layout_id": encoded.layout_id,
+            "decoded_package_bytes": len(package_bytes),
+            "decoded_package_sha256": hashlib.sha256(package_bytes).hexdigest(),
+        }
+    )
+
+    facts = _REAL_VERIFY_ARTIFACT_CLOSURE(
+        artifact_paths=paths,
+        validated_mode="compact",
+        declared_intro=intro,
+    )
+    assert facts["shader_bytes"] == shader_bytes
+    assert facts["package_sha256"] == hashlib.sha256(package_bytes).hexdigest()
+    assert facts["compact_payload_sha256"] == hashlib.sha256(encoded.bytes).hexdigest()
+    assert facts["compact_imports"] == ["cabinet", "d3d12", "kernel32"]
+    assert facts["selected_executable_sha256"] == hashlib.sha256(compact_exe).hexdigest()
+
+    tampered = copy.deepcopy(intro)
+    tampered["measurements"]["package"]["shader_bytes"] = shader_bytes + 1
+    with pytest.raises(ValueError, match="package measurements"):
+        _REAL_VERIFY_ARTIFACT_CLOSURE(
+            artifact_paths=paths,
+            validated_mode="compact",
+            declared_intro=tampered,
+        )
+
+    monkeypatch.setattr(
+        nw05_export,
+        "_pe_runtime_dependencies",
+        lambda executable: ["d3d12", "kernel32", "dxcompiler"],
+    )
+    with pytest.raises(ValueError, match="forbidden|allowlist"):
+        _REAL_VERIFY_ARTIFACT_CLOSURE(
+            artifact_paths=paths,
+            validated_mode="compact",
+            declared_intro=intro,
+        )
+
+
 def test_feasibility_success_branch_is_schema_valid(monkeypatch) -> None:
     monkeypatch.setattr(
         feasibility.nw07_evidence,
