@@ -276,6 +276,22 @@ try {
         } else {
             "nw07"
         }
+        $finalExecutableSha = [string]$expectedArtifact.executable_sha256
+        $finalExecutableBytes = [int64]$expectedArtifact.complete_distribution_bytes
+        if ($referenceFormat -eq "nw10-intro-report") {
+            $selected = Get-NwOptionalProperty $reference "compact_artifact"
+            if ($null -ne $selected) {
+                $selectedSha = [string](Get-NwOptionalProperty $selected "selected_executable_sha256")
+                $selectedBytes = Get-NwOptionalProperty $selected "selected_executable_bytes"
+                if (
+                    -not [string]::IsNullOrWhiteSpace($selectedSha) -and
+                    $null -ne $selectedBytes
+                ) {
+                    $finalExecutableSha = $selectedSha.ToLowerInvariant()
+                    $finalExecutableBytes = [int64]$selectedBytes
+                }
+            }
+        }
 
         $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
         if ($null -eq $pythonCommand) {
@@ -461,7 +477,8 @@ try {
                 manifest_sha256 = [string]$diag.common_artifact.manifest_sha256
                 profile_id = [string]$diag.common_artifact.profile_id
                 requirements_digest = [string]$diag.common_artifact.requirements_digest
-                final_executable_sha256 = $referenceExecutableSha
+                final_executable_sha256 = $finalExecutableSha
+                final_executable_bytes = $finalExecutableBytes
             }
             diagnostic_sibling = [ordered]@{
                 file = $diagExeName
