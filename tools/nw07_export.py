@@ -77,10 +77,6 @@ class Nw07ExportError(RuntimeError):
         self.details = dict(details or {})
 
 
-class ArtifactUnavailableError(Nw07ExportError):
-    """A required published artifact file is missing."""
-
-
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -601,7 +597,7 @@ def _artifact_paths(
         ("executable", executable),
     ):
         if not path.is_file():
-            raise ArtifactUnavailableError(f"NW-07 {label} is unavailable: {path}")
+            raise Nw07ExportError(f"NW-07 {label} is unavailable: {path}")
     return package, manifest, executable
 
 

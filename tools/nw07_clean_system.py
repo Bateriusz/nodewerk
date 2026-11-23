@@ -579,6 +579,39 @@ def _selected_artifact_identity(
     return identity
 
 
+def _clean_system_verification_status(
+    *,
+    identity: Mapping[str, Any],
+    host: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+    rows: list[Mapping[str, Any]],
+) -> str:
+    """Classify collected evidence without allowing dependency violations to pass."""
+    scenario_failed = any(row.get("status") == "failed" for row in rows)
+    scenario_missing = any(row.get("status") == "not_executed" for row in rows)
+    host_failed = (
+        host.get("platform") != "Windows"
+        or host.get("x64") is not True
+        or host.get("windows_11_or_newer") is not True
+    )
+    dependency_closure = identity.get("dependency_closure")
+    forbidden = (
+        dependency_closure.get("forbidden")
+        if isinstance(dependency_closure, Mapping)
+        else None
+    )
+    if (
+        scenario_failed
+        or host_failed
+        or bool(forbidden)
+        or deployment.get("only_runtime_executable") is not True
+    ):
+        return "failed"
+    if scenario_missing or host.get("clean_environment") is not True:
+        return "pending_unverified"
+    return "verified"
+
+
 def run_clean_system(
     *,
     fixture: Path,
@@ -608,6 +641,12 @@ def run_clean_system(
         execution_kind=execution_kind,
         passthrough_documentation=passthrough_documentation,
     )
+    # Missing canonical sidecars mean there is nothing to compare yet. Keep
+    # that case as unavailable/pending. Once all canonical files exist, any
+    # decode/hash/binding disagreement below is a proven verification failure.
+    published_package, published_manifest, _ = export._artifact_paths(
+        package_directory
+    )
     try:
         canonical_identity = dict(
             export.inspect_artifact_directory(package_directory)
@@ -617,9 +656,6 @@ def run_clean_system(
         )
         embedded_package, delivery_encoding = _decode_embedded_package(
             embedded_payload
-        )
-        published_package, published_manifest, _ = export._artifact_paths(
-            package_directory
         )
         if embedded_package != published_package.read_bytes():
             raise CleanSystemVerificationError(
@@ -640,7 +676,7 @@ def run_clean_system(
             embedded_manifest=embedded_manifest,
             delivery_encoding=delivery_encoding,
         )
-    except (CleanSystemVerificationError, export.ArtifactUnavailableError):
+    except CleanSystemVerificationError:
         raise
     except (ValueError, export.Nw07ExportError, export.nw05_export.ExportError) as exc:
         raise CleanSystemVerificationError(
@@ -805,12 +841,11 @@ def run_clean_system(
             EXPECTED_SCENARIO_EXIT_CODES["device_removal"],
         )
     )
-    scenario_failed = any(row["status"] == "failed" for row in rows)
-    scenario_missing = any(row["status"] == "not_executed" for row in rows)
-    host_failed = (
-        host.get("platform") != "Windows"
-        or host.get("x64") is not True
-        or host.get("windows_11_or_newer") is not True
+    verification_status = _clean_system_verification_status(
+        identity=identity,
+        host=host,
+        deployment=deployment,
+        rows=rows,
     )
     report = {
         "format": REPORT_FORMAT,
@@ -824,16 +859,7 @@ def run_clean_system(
         "host": host,
         "deployment": deployment,
         "scenarios": rows,
-        "verification_status": (
-            "failed"
-            if scenario_failed
-            or host_failed
-            or identity["dependency_closure"]["forbidden"]
-            or not deployment["only_runtime_executable"]
-            else "pending_unverified"
-            if scenario_missing or host.get("clean_environment") is not True
-            else "verified"
-        ),
+        "verification_status": verification_status,
         "policy": (
             "An executed scenario failure remains failed. Missing execution stays "
             "pending. Deployment must contain only the self-contained release "

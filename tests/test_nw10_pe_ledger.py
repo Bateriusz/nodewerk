@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import hashlib
 import sys
@@ -236,3 +237,45 @@ def test_runtime_status_and_exit_code_contract_fails_closed() -> None:
             runtime_status="rejected_runtime_failure",
             runtime_exit_code=0,
         )
+
+def test_runtime_observation_defaults_are_pending_and_null() -> None:
+    signature = inspect.signature(ledger.build_report)
+    assert (
+        signature.parameters["runtime_status"].default
+        == "pending_runtime_validation"
+    )
+    assert signature.parameters["runtime_exit_code"].default is None
+
+
+def test_cli_omitted_runtime_observation_is_pending_and_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build_report(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "pending_runtime_validation",
+            "final_artifact": {"executable_bytes": 1},
+            "linker_elimination": {"complete_distribution_bytes_saved": 0},
+            "compact_decoder": {"template_bytes_added": 0},
+        }
+
+    monkeypatch.setattr(ledger, "build_report", fake_build_report)
+    output = tmp_path / "ledger.json"
+    argv = [
+        "nw10_pe_ledger.py",
+        "--final-executable", "final.exe",
+        "--linker-baseline-executable", "baseline.exe",
+        "--decoder-on-template", "decoder-on.exe",
+        "--decoder-off-template", "decoder-off.exe",
+        "--final-package", "final.nwp",
+        "--linker-baseline-package", "baseline.nwp",
+        "--final-manifest", "final.json",
+        "--linker-baseline-manifest", "baseline.json",
+        "--output", str(output),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert ledger.main() == 0
+    assert captured["runtime_status"] == "pending_runtime_validation"
+    assert captured["runtime_exit_code"] is None

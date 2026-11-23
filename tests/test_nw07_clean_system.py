@@ -637,3 +637,108 @@ def test_integrity_failure_is_failed_not_pending(
     assert code == 1
     assert report["verification_status"] == "failed"
     assert "decoded package mismatch" in report["reason"]
+
+def test_missing_canonical_sidecars_are_pending_not_integrity_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        clean_system,
+        "clean_host_provenance",
+        lambda **kwargs: {},
+    )
+    deployment = tmp_path / "deployment"
+    deployment.mkdir()
+    (deployment / "nw_common_release.exe").write_bytes(b"MZ")
+    fixture = tmp_path / "fixture.exe"
+    fixture.write_bytes(b"MZ-fixture")
+    package = tmp_path / "package"
+    package.mkdir()
+    output = tmp_path / "report.json"
+
+    code = clean_system.main(
+        [
+            "--fixture", str(fixture),
+            "--package", str(package),
+            "--deployment", str(deployment),
+            "--execution-kind", "physical",
+            "--output", str(output),
+        ]
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert code == 2
+    assert report["verification_status"] == "pending_unverified"
+    assert "prerequisites are unavailable" in report["reason"]
+    assert "NW-07 package is unavailable" in report["reason"]
+
+
+def test_collected_report_fails_when_selected_pe_has_forbidden_import() -> None:
+    identity = {"dependency_closure": {"forbidden": ["vcruntime140"]}}
+    host = {
+        "platform": "Windows",
+        "x64": True,
+        "windows_11_or_newer": True,
+        "clean_environment": True,
+    }
+    deployment = {"only_runtime_executable": True}
+    rows = [{"status": "passed"}]
+    assert (
+        clean_system._clean_system_verification_status(
+            identity=identity,
+            host=host,
+            deployment=deployment,
+            rows=rows,
+        )
+        == "failed"
+    )
+
+
+def test_validate_report_honors_shared_invalid_physical_probe_verdict() -> None:
+    report = _report()
+    report["host"]["virtualization_probe"] = {
+        "available": True,
+        "manufacturer": "",
+        "model": "",
+        "hypervisor_present": False,
+        "virtualization_based_security_status": 0,
+    }
+    # Retain stale positive booleans to ensure raw shared-probe verdict wins.
+    report["host"]["physical_host_evidence"] = True
+    report["host"]["clean_environment"] = True
+    result = clean_system.validate_report(report)
+    assert result["status"] == "pending_unverified"
+    assert any(
+        "manufacturer/model identity is incomplete" in reason
+        for reason in result["reasons"]
+    )
+
+
+def test_windows_virtualization_probe_normalizes_null_identity_to_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clean_system.platform, "system", lambda: "Windows")
+    payload = {
+        "Manufacturer": None,
+        "Model": None,
+        "ProductVendor": None,
+        "ProductName": None,
+        "BiosManufacturer": None,
+        "BiosVersion": None,
+        "BaseBoardManufacturer": None,
+        "BaseBoardProduct": None,
+        "HypervisorPresent": False,
+        "VirtualizationBasedSecurityStatus": 0,
+    }
+    monkeypatch.setattr(
+        clean_system.subprocess,
+        "run",
+        lambda *args, **kwargs: clean_system.subprocess.CompletedProcess(
+            args[0], 0, stdout=json.dumps(payload), stderr=""
+        ),
+    )
+    probe = clean_system._windows_virtualization_probe()
+    assert probe["manufacturer"] == ""
+    assert probe["model"] == ""
+    evaluation = clean_system.evaluate_physical_virtualization_probe(probe)
+    assert evaluation["valid"] is False
+    assert "manufacturer/model identity is incomplete" in evaluation["reasons"]

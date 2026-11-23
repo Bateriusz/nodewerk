@@ -249,3 +249,31 @@ def test_transferred_correctness_does_not_delete_output_root_or_manifest_unrelat
     assert "Refusing to reuse non-empty OutputRoot not owned by NW-10" in text
     assert "$ownedResultFiles" in text
     assert "Get-ChildItem $output -File -Recurse" not in text
+
+def test_transferred_runners_treat_operator_paths_literally() -> None:
+    commands = (
+        "Set-Location",
+        "Test-Path",
+        "Get-ChildItem",
+        "Get-Item",
+        "Get-Content",
+        "Get-FileHash",
+        "Remove-Item",
+        "Copy-Item",
+        "Compress-Archive",
+    )
+    for relative in (
+        "tools/nw10/run-transferred-clean-system.ps1",
+        "tools/nw10/run-transferred-correctness-capture.ps1",
+    ):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        for command in commands:
+            lines = [
+                line.strip()
+                for line in text.splitlines()
+                if command in line and not line.lstrip().startswith("#")
+            ]
+            assert lines, f"{relative} has no {command} coverage"
+            assert all("-LiteralPath" in line for line in lines), (
+                f"{relative} uses wildcard-aware {command}: {lines}"
+            )
