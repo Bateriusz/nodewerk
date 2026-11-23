@@ -71,9 +71,20 @@ if ($actualExeSha -ne $expectedExeSha) {
 }
 
 $output = [System.IO.Path]::GetFullPath((Join-Path $here $OutputRoot))
-New-Item -ItemType Directory -Force $output | Out-Null
-# OutputRoot may be an existing operator-owned directory. Never delete it.
-# Clean only paths this script owns from a prior invocation.
+$outputMarker = Join-Path $output ".nw10-clean-system-output.v1"
+if (Test-Path $output -PathType Container) {
+    $existing = @(Get-ChildItem $output -Force)
+    if ($existing.Count -gt 0 -and -not (Test-Path $outputMarker -PathType Leaf)) {
+        throw "Refusing to reuse non-empty OutputRoot not owned by NW-10: $output"
+    }
+} else {
+    New-Item -ItemType Directory -Force $output | Out-Null
+}
+if (-not (Test-Path $outputMarker -PathType Leaf)) {
+    [System.IO.File]::WriteAllText($outputMarker, "nw10-clean-system-output-v1")
+}
+# OutputRoot may be operator-selected. Never delete it; a non-empty directory
+# is reusable only after this runner has marked ownership.
 $ownedOutputPaths = @(
     (Join-Path $output "clean-system-report.json"),
     (Join-Path $output "clean-system-report-artifacts"),

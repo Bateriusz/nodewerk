@@ -58,7 +58,18 @@ if ($exeSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLower
 }
 
 $output = [System.IO.Path]::GetFullPath((Join-Path $here $OutputRoot))
-New-Item -ItemType Directory -Force $output | Out-Null
+$outputMarker = Join-Path $output ".nw10-correctness-output.v1"
+if (Test-Path $output -PathType Container) {
+    $existing = @(Get-ChildItem $output -Force)
+    if ($existing.Count -gt 0 -and -not (Test-Path $outputMarker -PathType Leaf)) {
+        throw "Refusing to reuse non-empty OutputRoot not owned by NW-10: $output"
+    }
+} else {
+    New-Item -ItemType Directory -Force $output | Out-Null
+}
+if (-not (Test-Path $outputMarker -PathType Leaf)) {
+    [System.IO.File]::WriteAllText($outputMarker, "nw10-correctness-output-v1")
+}
 $captures = Join-Path $output "captures"
 $verificationFile = "$packagingMode-diagnostic.exe"
 $verificationPath = Join-Path $output $verificationFile

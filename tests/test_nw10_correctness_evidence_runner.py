@@ -245,5 +245,7 @@ def test_transferred_correctness_does_not_delete_output_root_or_manifest_unrelat
     ).read_text(encoding="utf-8")
     assert "Remove-Item $output -Recurse" not in text
     assert "$ownedOutputPaths" in text
+    assert ".nw10-correctness-output.v1" in text
+    assert "Refusing to reuse non-empty OutputRoot not owned by NW-10" in text
     assert "$ownedResultFiles" in text
     assert "Get-ChildItem $output -File -Recurse" not in text

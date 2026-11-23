@@ -1137,3 +1137,5 @@ def test_transferred_clean_system_does_not_delete_output_root() -> None:
     ).read_text(encoding="utf-8")
     assert "Remove-Item $output -Recurse" not in text
     assert "$ownedOutputPaths" in text
+    assert ".nw10-clean-system-output.v1" in text
+    assert "Refusing to reuse non-empty OutputRoot not owned by NW-10" in text
