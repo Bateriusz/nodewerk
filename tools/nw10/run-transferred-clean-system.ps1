@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $here
+Set-Location -LiteralPath $here
 
 function Get-RelativePath([string]$Root, [string]$Path) {
     $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\','/')
@@ -22,23 +22,23 @@ function Get-RelativePath([string]$Root, [string]$Path) {
 }
 
 $bundleManifestPath = Join-Path $here "bundle-manifest.json"
-if (-not (Test-Path $bundleManifestPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $bundleManifestPath -PathType Leaf)) {
     throw "bundle-manifest.json is missing"
 }
-$bundleManifest = Get-Content -Raw $bundleManifestPath | ConvertFrom-Json
+$bundleManifest = Get-Content -Raw -LiteralPath $bundleManifestPath | ConvertFrom-Json
 if ([string]$bundleManifest.format -ne "nw10-clean-system-transfer" -or [int]$bundleManifest.version -ne 1) {
     throw "Unexpected clean-system transfer manifest"
 }
 foreach ($row in @($bundleManifest.files)) {
     $path = Join-Path $here ([string]$row.path)
-    if (-not (Test-Path $path -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Bundle file is missing: $($row.path)"
     }
-    $item = Get-Item $path
+    $item = Get-Item -LiteralPath $path
     if ([int64]$item.Length -ne [int64]$row.bytes) {
         throw "Bundle file size mismatch: $($row.path)"
     }
-    $sha = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
+    $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
     if ($sha -ne ([string]$row.sha256).ToLowerInvariant()) {
         throw "Bundle file SHA-256 mismatch: $($row.path)"
     }
@@ -57,30 +57,30 @@ $package = Join-Path $here "package"
 $fixture = Join-Path $here "fixture\nw_package_player_fixture.exe"
 $verifier = Join-Path $here "verifier\tools\nw07_clean_system.py"
 foreach ($required in @($deployment, $package, $fixture, $verifier)) {
-    if (-not (Test-Path $required)) { throw "Required bundle path is missing: $required" }
+    if (-not (Test-Path -LiteralPath $required)) { throw "Required bundle path is missing: $required" }
 }
 
-$deploymentFiles = @(Get-ChildItem $deployment -File)
+$deploymentFiles = @(Get-ChildItem -LiteralPath $deployment -File)
 if ($deploymentFiles.Count -ne 1 -or $deploymentFiles[0].Extension -ne ".exe") {
     throw "Deployment must contain exactly one executable and no sidecars."
 }
 $expectedExeSha = ([string]$bundleManifest.final_executable_sha256).ToLowerInvariant()
-$actualExeSha = (Get-FileHash -Algorithm SHA256 $deploymentFiles[0].FullName).Hash.ToLowerInvariant()
+$actualExeSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $deploymentFiles[0].FullName).Hash.ToLowerInvariant()
 if ($actualExeSha -ne $expectedExeSha) {
     throw "Final executable SHA-256 does not match transfer metadata."
 }
 
 $output = [System.IO.Path]::GetFullPath((Join-Path $here $OutputRoot))
 $outputMarker = Join-Path $output ".nw10-clean-system-output.v1"
-if (Test-Path $output -PathType Container) {
-    $existing = @(Get-ChildItem $output -Force)
-    if ($existing.Count -gt 0 -and -not (Test-Path $outputMarker -PathType Leaf)) {
+if (Test-Path -LiteralPath $output -PathType Container) {
+    $existing = @(Get-ChildItem -LiteralPath $output -Force)
+    if ($existing.Count -gt 0 -and -not (Test-Path -LiteralPath $outputMarker -PathType Leaf)) {
         throw "Refusing to reuse non-empty OutputRoot not owned by NW-10: $output"
     }
 } else {
-    New-Item -ItemType Directory -Force $output | Out-Null
+    [void][System.IO.Directory]::CreateDirectory($output)
 }
-if (-not (Test-Path $outputMarker -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $outputMarker -PathType Leaf)) {
     [System.IO.File]::WriteAllText($outputMarker, "nw10-clean-system-output-v1")
 }
 # OutputRoot may be operator-selected. Never delete it; a non-empty directory
@@ -92,16 +92,16 @@ $ownedOutputPaths = @(
     (Join-Path $output "nw10-clean-system-result.zip")
 )
 foreach ($ownedPath in $ownedOutputPaths) {
-    Remove-Item $ownedPath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ownedPath -Recurse -Force -ErrorAction SilentlyContinue
 }
 $report = Join-Path $output "clean-system-report.json"
 
 & $python.Source $verifier --fixture $fixture --package $package --deployment $deployment --execution-kind physical --output $report
 $code = $LASTEXITCODE
-if (-not (Test-Path $report -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $report -PathType Leaf)) {
     throw "Clean-system verifier did not produce a report (exit=$code)."
 }
-$data = Get-Content -Raw $report | ConvertFrom-Json
+$data = Get-Content -Raw -LiteralPath $report | ConvertFrom-Json
 if ($code -ne 0 -or [string]$data.verification_status -ne "verified") {
     Write-Host "[NW10 CLEAN] STATUS=$($data.verification_status)"
     Write-Host "[NW10 CLEAN] REPORT=$report"
@@ -109,18 +109,18 @@ if ($code -ne 0 -or [string]$data.verification_status -ne "verified") {
 }
 
 $resultRoot = Join-Path $output "bundle"
-New-Item -ItemType Directory -Force $resultRoot | Out-Null
-Copy-Item $report (Join-Path $resultRoot "clean-system-report.json") -Force
+[void][System.IO.Directory]::CreateDirectory($resultRoot)
+Copy-Item -LiteralPath $report -Destination (Join-Path $resultRoot "clean-system-report.json") -Force
 $artifactDir = Join-Path $output "clean-system-report-artifacts"
-if (Test-Path $artifactDir -PathType Container) {
-    Copy-Item $artifactDir (Join-Path $resultRoot "artifacts") -Recurse -Force
+if (Test-Path -LiteralPath $artifactDir -PathType Container) {
+    Copy-Item -LiteralPath $artifactDir -Destination (Join-Path $resultRoot "artifacts") -Recurse -Force
 }
 $fileRows = @()
-foreach ($file in Get-ChildItem $resultRoot -File -Recurse | Sort-Object FullName) {
+foreach ($file in Get-ChildItem -LiteralPath $resultRoot -File -Recurse | Sort-Object FullName) {
     $fileRows += [ordered]@{
         path = Get-RelativePath $resultRoot $file.FullName
         bytes = [int64]$file.Length
-        sha256 = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
     }
 }
 $resultManifest = [ordered]@{
@@ -138,8 +138,9 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $utf8NoBom
 )
 $zip = Join-Path $output "nw10-clean-system-result.zip"
-Remove-Item $zip -Force -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $resultRoot "*") -DestinationPath $zip -CompressionLevel Optimal
+Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+$archivePaths = @(Get-ChildItem -LiteralPath $resultRoot | ForEach-Object { $_.FullName })
+Compress-Archive -LiteralPath $archivePaths -DestinationPath $zip -CompressionLevel Optimal
 
 $hostInfo = $data.host.virtualization_probe
 Write-Host "[NW10 CLEAN] STATUS=verified"

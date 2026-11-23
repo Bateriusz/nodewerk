@@ -296,8 +296,8 @@ def build_report(
     linker_baseline_package: Path,
     final_manifest: Path,
     linker_baseline_manifest: Path,
-    runtime_status: str = "validated_runnable",
-    runtime_exit_code: int | None = 0,
+    runtime_status: str = "pending_runtime_validation",
+    runtime_exit_code: int | None = None,
     prior_valid_ledger: Mapping[str, Any] | None = None,
     source_head_sha: str | None = None,
     workflow_run_id: int | None = None,
@@ -724,7 +724,7 @@ def main() -> int:
             "pending_runtime_validation",
             "rejected_runtime_failure",
         ),
-        default="validated_runnable",
+        default="pending_runtime_validation",
     )
     parser.add_argument("--runtime-exit-code", type=int, default=None)
     parser.add_argument("--prior-valid-ledger", type=Path)

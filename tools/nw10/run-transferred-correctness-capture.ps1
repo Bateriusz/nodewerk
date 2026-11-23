@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $here
+Set-Location -LiteralPath $here
 
 function Get-RelativePath([string]$Root, [string]$Path) {
     $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\','/')
@@ -24,26 +24,26 @@ function Get-RelativePath([string]$Root, [string]$Path) {
 }
 
 $bundleManifestPath = Join-Path $here "bundle-manifest.json"
-if (-not (Test-Path $bundleManifestPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $bundleManifestPath -PathType Leaf)) {
     throw "bundle-manifest.json is missing"
 }
-$bundleManifest = Get-Content -Raw $bundleManifestPath | ConvertFrom-Json
+$bundleManifest = Get-Content -Raw -LiteralPath $bundleManifestPath | ConvertFrom-Json
 foreach ($row in @($bundleManifest.files)) {
     $path = Join-Path $here ([string]$row.path)
-    if (-not (Test-Path $path -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Bundle file is missing: $($row.path)"
     }
-    $item = Get-Item $path
+    $item = Get-Item -LiteralPath $path
     if ([int64]$item.Length -ne [int64]$row.bytes) {
         throw "Bundle file size mismatch: $($row.path)"
     }
-    $sha = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
+    $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
     if ($sha -ne ([string]$row.sha256).ToLowerInvariant()) {
         throw "Bundle file SHA-256 mismatch: $($row.path)"
     }
 }
 
-$transfer = Get-Content -Raw (Join-Path $here "transfer.json") | ConvertFrom-Json
+$transfer = Get-Content -Raw -LiteralPath (Join-Path $here "transfer.json") | ConvertFrom-Json
 if ([string]$transfer.target_tier -ne $Tier) {
     throw "Bundle target tier '$($transfer.target_tier)' does not match requested '$Tier'"
 }
@@ -52,22 +52,22 @@ if ($packagingMode -notin @("unpacked", "packed")) {
     throw "Transfer bundle has an unrecognized packaging mode '$packagingMode'"
 }
 $exe = Join-Path $here ([string]$transfer.diagnostic_sibling.file)
-$exeSha = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
+$exeSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant()
 if ($exeSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLowerInvariant()) {
     throw "Diagnostic executable SHA-256 does not match transfer metadata"
 }
 
 $output = [System.IO.Path]::GetFullPath((Join-Path $here $OutputRoot))
 $outputMarker = Join-Path $output ".nw10-correctness-output.v1"
-if (Test-Path $output -PathType Container) {
-    $existing = @(Get-ChildItem $output -Force)
-    if ($existing.Count -gt 0 -and -not (Test-Path $outputMarker -PathType Leaf)) {
+if (Test-Path -LiteralPath $output -PathType Container) {
+    $existing = @(Get-ChildItem -LiteralPath $output -Force)
+    if ($existing.Count -gt 0 -and -not (Test-Path -LiteralPath $outputMarker -PathType Leaf)) {
         throw "Refusing to reuse non-empty OutputRoot not owned by NW-10: $output"
     }
 } else {
-    New-Item -ItemType Directory -Force $output | Out-Null
+    [void][System.IO.Directory]::CreateDirectory($output)
 }
-if (-not (Test-Path $outputMarker -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $outputMarker -PathType Leaf)) {
     [System.IO.File]::WriteAllText($outputMarker, "nw10-correctness-output-v1")
 }
 $captures = Join-Path $output "captures"
@@ -83,11 +83,11 @@ $ownedOutputPaths = @(
     (Join-Path $output ("nw10-correctness-" + $Tier + "-bundle.zip"))
 )
 foreach ($ownedPath in $ownedOutputPaths) {
-    Remove-Item $ownedPath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ownedPath -Recurse -Force -ErrorAction SilentlyContinue
 }
-New-Item -ItemType Directory -Force $captures | Out-Null
-Copy-Item $exe $verificationPath -Force
-$verificationSha = (Get-FileHash -Algorithm SHA256 $verificationPath).Hash.ToLowerInvariant()
+[void][System.IO.Directory]::CreateDirectory($captures)
+Copy-Item -LiteralPath $exe -Destination $verificationPath -Force
+$verificationSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $verificationPath).Hash.ToLowerInvariant()
 if ($verificationSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLowerInvariant()) {
     throw "Retained $packagingMode diagnostic executable SHA-256 changed"
 }
@@ -157,10 +157,10 @@ $rows = @()
 foreach ($tick in @($transfer.capture.ticks)) {
     $name = "tick_$tick.rgba32f"
     $path = Join-Path $captures $name
-    if (-not (Test-Path $path -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Missing capture $name"
     }
-    $item = Get-Item $path
+    $item = Get-Item -LiteralPath $path
     if ([int64]$item.Length -ne [int64]$transfer.capture.expected_bytes_per_capture) {
         throw "Unexpected capture size for $name"
     }
@@ -168,7 +168,7 @@ foreach ($tick in @($transfer.capture.ticks)) {
         tick = [int64]$tick
         file = $name
         bytes = [int64]$item.Length
-        sha256 = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
     }
 }
 
@@ -246,13 +246,13 @@ $recordPath = Join-Path $output "capture.json"
 # in the same directory.
 $fileRows = @()
 $ownedResultFiles = @($recordPath, $verificationPath)
-$ownedResultFiles += @(Get-ChildItem $captures -File -Recurse)
-foreach ($filePath in $ownedResultFiles | Sort-Object FullName) {
-    $file = Get-Item $filePath
+$ownedResultFiles += @(Get-ChildItem -LiteralPath $captures -File -Recurse | ForEach-Object { $_.FullName })
+foreach ($filePath in $ownedResultFiles | Sort-Object) {
+    $file = Get-Item -LiteralPath $filePath
     $fileRows += [ordered]@{
         path = Get-RelativePath $output $file.FullName
         bytes = [int64]$file.Length
-        sha256 = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
     }
 }
 $resultManifest = [ordered]@{
@@ -270,14 +270,14 @@ $resultManifestPath = Join-Path $output "bundle-manifest.json"
 )
 
 $zip = Join-Path $output ("nw10-correctness-" + $Tier + "-bundle.zip")
-Remove-Item $zip -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 $archivePaths = @(
     $recordPath,
     $captures,
     $resultManifestPath,
     (Join-Path $output $verificationFile)
 )
-Compress-Archive -Path $archivePaths -DestinationPath $zip -CompressionLevel Optimal
+Compress-Archive -LiteralPath $archivePaths -DestinationPath $zip -CompressionLevel Optimal
 
 $rawBytes = [int64]0
 foreach ($row in $rows) {

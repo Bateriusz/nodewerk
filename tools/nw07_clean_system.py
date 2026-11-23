@@ -155,8 +155,8 @@ def _windows_virtualization_probe() -> dict[str, Any]:
     )
     return {
         "available": True,
-        "manufacturer": str(value.get("Manufacturer", "")),
-        "model": str(value.get("Model", "")),
+        "manufacturer": str(value.get("Manufacturer") or ""),
+        "model": str(value.get("Model") or ""),
         "product_vendor": str(value.get("ProductVendor", "") or ""),
         "product_name": str(value.get("ProductName", "") or ""),
         "bios_manufacturer": str(value.get("BiosManufacturer", "") or ""),
@@ -640,7 +640,7 @@ def run_clean_system(
             embedded_manifest=embedded_manifest,
             delivery_encoding=delivery_encoding,
         )
-    except CleanSystemVerificationError:
+    except (CleanSystemVerificationError, export.ArtifactUnavailableError):
         raise
     except (ValueError, export.Nw07ExportError, export.nw05_export.ExportError) as exc:
         raise CleanSystemVerificationError(
@@ -828,6 +828,7 @@ def run_clean_system(
             "failed"
             if scenario_failed
             or host_failed
+            or identity["dependency_closure"]["forbidden"]
             or not deployment["only_runtime_executable"]
             else "pending_unverified"
             if scenario_missing or host.get("clean_environment") is not True
@@ -911,34 +912,20 @@ def validate_report(
             evaluation = evaluate_physical_virtualization_probe(
                 probe if isinstance(probe, Mapping) else None
             )
-            if evaluation["available"] is not True:
-                host_pending = True
-                reasons.append("physical clean-system host identity was not probed")
-            if evaluation["hypervisor_measured"] is not True:
-                host_pending = True
-                reasons.append(
-                    "physical clean-system host hypervisor status was not probed"
-                )
-            if evaluation["virtualization_indicators"]:
-                host_failed = True
-                reasons.append(
-                    "physical clean-system host identity exposes VM markers: "
-                    + ", ".join(evaluation["virtualization_indicators"])
-                )
-            if evaluation["generic_identity"] is True:
-                host_failed = True
-                reasons.append(
-                    "physical clean-system host identity is a generic product placeholder"
-                )
-            if (
-                isinstance(probe, Mapping)
-                and probe.get("hypervisor_present") is True
-                and evaluation["hypervisor_explained_by_vbs"] is not True
-            ):
-                host_failed = True
-                reasons.append(
-                    "physical clean-system host reports an unexplained active hypervisor"
-                )
+            if not evaluation["valid"]:
+                reasons.extend(evaluation["reasons"])
+                if (
+                    evaluation["virtualization_indicators"]
+                    or evaluation["generic_identity"]
+                    or (
+                        isinstance(probe, Mapping)
+                        and probe.get("hypervisor_present") is True
+                        and not evaluation["hypervisor_explained_by_vbs"]
+                    )
+                ):
+                    host_failed = True
+                else:
+                    host_pending = True
             declared_vbs = host.get("hypervisor_explained_by_vbs")
             expected_vbs = bool(evaluation["hypervisor_explained_by_vbs"])
             if (

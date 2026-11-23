@@ -100,6 +100,8 @@ def test_pe_ledger_tool_emits_schema_valid_flattened_report(
         linker_baseline_package=tmp_path / "baseline.nwp",
         final_manifest=tmp_path / "final.json",
         linker_baseline_manifest=tmp_path / "final.json",
+        runtime_status="validated_runnable",
+        runtime_exit_code=0,
     )
     schema = json.loads(
         (REPO_ROOT / "schemas" / "nw10-windows-pe-ledger.schema.json").read_text(
