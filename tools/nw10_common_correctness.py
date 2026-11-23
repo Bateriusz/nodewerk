@@ -320,7 +320,11 @@ def build_diagnostic(
         generated_shaders_override = (
             nw10_intro._intro_generated_shader(document),
         )
-        frozen_embedded_specialization = True
+        # Correctness diagnostics are intentionally non-frozen siblings: the
+        # frozen restricted-intro executable omits diagnostic CLI plumbing,
+        # while this sibling must retain NW07 capture controls. Package,
+        # profile, requirements and artifact identity are verified separately.
+        frozen_embedded_specialization = False
     else:
         config = nw07_export.load_canonical_config()
         pinned = nw07_export.verify_pinned_inputs(config)
