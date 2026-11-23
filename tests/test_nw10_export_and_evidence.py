@@ -51,6 +51,12 @@ def test_feasibility_workflow_binds_retained_correctness_executables() -> None:
     for flag, path in expected.items():
         assert flag in workflow
         assert path in workflow
+    assert (
+        workflow.count(
+            '-ReferenceEvidence "$PWD/build/nw10-intro/report.json"'
+        )
+        == 4
+    )
 
 
 def test_proof_export_uses_the_canonical_nw07_graph_and_export_path(
