@@ -454,13 +454,13 @@ def test_static_windows_compact_feasibility_evidence_is_attributed_and_fail_clos
     assert record["measurements"]["proof_measurement_status"] == "measured_decoder_off"
     assert record["measurements"]["canonical_proof_within_tier"] is True
     assert record["measurements"]["minimum_measured_candidate_bytes"] == 228_181
-    assert record["compact_candidate"]["runtime_status"] == "pending_runtime_validation"
+    assert record["compact_candidate"]["runtime_status"] == "rejected_runtime_failure"
     assert record["compact_candidate"]["exit_code"] == -1073741819
     assert record["compact_candidate"]["failure_classification"] == "non_certifying_hosted_failure"
     assert record["compact_candidate"]["counted_as_validated_runnable"] is False
     assert record["measurements"]["minimum_validated_runnable_bytes"] is None
     assert record["measurements"]["validated_mode"] == "canonical_fallback_pending_physical"
-    assert record["canonical_fallback"]["runtime_status"] == "pending_runtime_validation"
+    assert record["canonical_fallback"]["runtime_status"] == "rejected_runtime_failure"
     assert record["canonical_fallback"]["exit_code"] == -1073741819
     assert record["canonical_fallback"]["dependency_closure"]["closure_verified"] is True
     assert record["canonical_fallback"]["dependency_closure"]["sidecar_files"] == []

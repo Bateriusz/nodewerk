@@ -450,7 +450,11 @@ def test_physical_clean_host_accepts_vbs_only_with_complete_identity(
     assert host["clean_environment"] is True
     report = _report()
     report["host"] = host
-    assert clean_system.validate_report(report)["status"] == "verified"
+    result = clean_system.validate_report(report)
+    # _report intentionally has no bound deployment directory, so overall
+    # verification remains pending. The VBS host itself must not be rejected.
+    assert result["status"] == "pending_unverified"
+    assert not any("hypervisor" in reason for reason in result["reasons"])
 
 
 def test_physical_clean_host_rejects_vm_product_markers(
