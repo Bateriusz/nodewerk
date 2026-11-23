@@ -18,9 +18,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci-impact:
+    name: CI impact routing
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.classify.outputs.core }}
+      nw01: ${{ steps.classify.outputs.nw01 }}
+      nw07: ${{ steps.classify.outputs.nw07 }}
+      nw08: ${{ steps.classify.outputs.nw08 }}
+      nw08a: ${{ steps.classify.outputs.nw08a }}
+      nw10: ${{ steps.classify.outputs.nw10 }}
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      full_regression: ${{ steps.classify.outputs.full_regression }}
+      fail_safe: ${{ steps.classify.outputs.fail_safe }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Classify changed scope
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python tools/ci/changed_scope.py
+          --event-name "${{ github.event_name }}"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
   per-change-checks:
+    needs: ci-impact
     name: Per-change CPU, compiler, reproducibility and size checks
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && needs.ci-impact.outputs.nw07 == 'true' && needs.ci-impact.outputs.nw07 == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +110,7 @@ jobs:
             ${{ runner.temp }}/nw07-build-checks.json
 
   windows-release-build:
+    needs: ci-impact
     name: Windows x64 release export and diagnostic sibling build
     if: github.event_name != 'schedule'
     runs-on: windows-latest
@@ -87,6 +121,26 @@ jobs:
           python-version: "3.12"
       - name: Install pytest
         run: python -m pip install pytest
+      - name: Compute pinned portable-tool cache key
+        id: nw01-portable-cache-key
+        shell: pwsh
+        run: >-
+          python tools/ci/portable_cache_key.py
+          --runner-os "${{ runner.os }}"
+          --runner-arch "${{ runner.arch }}"
+          --github-output "$env:GITHUB_OUTPUT"
+
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Bootstrap exact NW-01 Windows toolchain
         shell: pwsh
         run: >-

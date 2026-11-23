@@ -12,6 +12,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci-impact:
+    name: CI impact routing
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.classify.outputs.core }}
+      nw01: ${{ steps.classify.outputs.nw01 }}
+      nw07: ${{ steps.classify.outputs.nw07 }}
+      nw08: ${{ steps.classify.outputs.nw08 }}
+      nw08a: ${{ steps.classify.outputs.nw08a }}
+      nw10: ${{ steps.classify.outputs.nw10 }}
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      full_regression: ${{ steps.classify.outputs.full_regression }}
+      fail_safe: ${{ steps.classify.outputs.fail_safe }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Classify changed scope
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python tools/ci/changed_scope.py
+          --event-name "${{ github.event_name }}"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
   schema-and-contract-checks:
     name: Schema, Dependency Closure & Contract Tests
     runs-on: ubuntu-latest
@@ -52,6 +84,8 @@ jobs:
         run: python tools/verify_nw01.py --mode ContractsOnly
 
   windows-reproducibility-and-fixtures:
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw01 == 'true'
     name: Windows 11 x64 Build, Reproducibility & Concrete Check Gate
     runs-on: windows-latest
     steps:
@@ -81,6 +115,26 @@ jobs:
             exit 1
           }
 
+      - name: Compute pinned portable-tool cache key
+        id: nw01-portable-cache-key
+        shell: pwsh
+        run: >-
+          python tools/ci/portable_cache_key.py
+          --runner-os "${{ runner.os }}"
+          --runner-arch "${{ runner.arch }}"
+          --github-output "$env:GITHUB_OUTPUT"
+
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Bootstrap exact NW-01 Windows toolchain
         shell: pwsh
         run: >-
@@ -106,7 +160,13 @@ jobs:
       - name: Run NW-01 contract test suite on Windows
         env:
           NW09_REQUIRE_REAL_DXC: "1"
-        run: pytest -v
+        run: >-
+          python -m pytest -v
+          tests/test_nw01_windows_harness.py
+          tests/test_architecture_and_cmake_contracts.py
+          tests/test_dependency_closure_and_accounting.py
+          tests/test_offline_shader_and_compute_fixture.py
+          tests/test_schemas_and_manifests.py
 
       - name: Run NW-04 package-player contract checks on Windows
         run: python tools/verify_nw04.py --mode ContractsOnly --summary-json "$env:RUNNER_TEMP\nw04-contracts.json"
@@ -181,6 +241,8 @@ jobs:
           if-no-files-found: warn
 
   nw04-native-verification:
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw01 == 'true'
     name: NW-04 Native Player Lifecycle & D3D12 Validation (hosted WARP)
     runs-on: windows-latest
     steps:
@@ -195,6 +257,26 @@ jobs:
       - name: Install pytest
         run: python -m pip install pytest
 
+      - name: Compute pinned portable-tool cache key
+        id: nw01-portable-cache-key
+        shell: pwsh
+        run: >-
+          python tools/ci/portable_cache_key.py
+          --runner-os "${{ runner.os }}"
+          --runner-arch "${{ runner.arch }}"
+          --github-output "$env:GITHUB_OUTPUT"
+
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Bootstrap exact NW-01 Windows toolchain
         shell: pwsh
         run: >-
@@ -283,8 +365,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   windows-physical-evidence:
+    needs: ci-impact
     name: Physical Windows 11 x64 GPU Evidence & CleanSystem Package
-    if: vars.NW_PHYSICAL_RUNNER_LABEL != ''
+    if: vars.NW_PHYSICAL_RUNNER_LABEL != '' && needs.ci-impact.outputs.nw01 == 'true'
     runs-on: ${{ vars.NW_PHYSICAL_RUNNER_LABEL }}
     steps:
       - name: Checkout repository
