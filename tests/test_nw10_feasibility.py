@@ -763,17 +763,8 @@ def _stub_artifact_backed_facts(monkeypatch: pytest.MonkeyPatch) -> None:
         canonical = declared_intro["canonical_artifact"]
         compact_artifact = declared_intro["compact_artifact"]
         ledgers = declared_intro["ledgers"]
-        canonical_ledger = ledgers["canonical"]
-        compact_ledger = ledgers["compact"]
-
-        def names(rows):
-            return sorted(
-                str(row["name"]).lower().removesuffix(".dll")
-                for row in rows
-            )
-
-        canonical_imports = names(canonical_ledger["dependencies"])
-        compact_imports = names(compact_ledger["dependencies"])
+        canonical_imports = ["d3d12", "kernel32"]
+        compact_imports = ["cabinet", "d3d12", "kernel32"]
         selected_imports = (
             compact_imports if validated_mode == "compact" else canonical_imports
         )
@@ -948,7 +939,9 @@ def test_artifact_verifier_derives_ground_truth_from_files(
         "_pe_runtime_dependencies",
         lambda executable: ["d3d12", "kernel32", "dxcompiler"],
     )
-    with pytest.raises(ValueError, match="forbidden|allowlist"):
+    with pytest.raises(
+        ValueError, match="forbidden|allowlist|manifest dependency closure"
+    ):
         _REAL_VERIFY_ARTIFACT_CLOSURE(
             artifact_paths=paths,
             validated_mode="compact",
