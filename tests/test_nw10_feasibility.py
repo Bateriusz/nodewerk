@@ -684,6 +684,7 @@ def _outcome(**overrides) -> dict:
     value = {
         "minimum_measured_candidate_bytes": 65_000,
         "minimum_validated_runnable_bytes": 65_000,
+        "validated_executable_sha256": "e" * 64,
         "validated_mode": "compact",
         "compact_candidate_runtime_status": "validated_runnable",
         "compact_candidate_exit_code": 0,
@@ -1401,6 +1402,7 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     record = feasibility.build_feasibility(
         outcome=_outcome(
             minimum_validated_runnable_bytes=65_000,
+            validated_executable_sha256=canonical_sha,
             validated_mode="canonical_fallback",
             compact_candidate_runtime_status="rejected_runtime_failure",
             compact_candidate_exit_code=70,
@@ -1508,6 +1510,7 @@ def test_feasibility_failure_branch_keeps_canonical_fallback_and_continue() -> N
         outcome=_outcome(
             minimum_measured_candidate_bytes=227_715,
             minimum_validated_runnable_bytes=240_000,
+            validated_executable_sha256="b" * 64,
             validated_mode="canonical_fallback",
             compact_candidate_runtime_status="rejected_runtime_failure",
             compact_candidate_exit_code=70,
