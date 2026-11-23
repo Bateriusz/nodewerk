@@ -1528,6 +1528,9 @@ def build_feasibility(
 
     measured_candidate = outcome.get("minimum_measured_candidate_bytes")
     validated_bytes = outcome.get("minimum_validated_runnable_bytes")
+    outcome_validated_sha = str(
+        outcome.get("validated_executable_sha256") or ""
+    ).lower()
     validated_mode = str(outcome.get("validated_mode") or "none")
     runtime_status = str(
         outcome.get("compact_candidate_runtime_status") or "pending_runtime_validation"
@@ -1563,6 +1566,10 @@ def build_feasibility(
             raise ValueError(
                 "validated compact byte count does not match the intro candidate"
             )
+        if outcome_validated_sha != candidate_sha:
+            raise ValueError(
+                "validated compact executable SHA-256 does not match the intro candidate"
+            )
         if compact_intro.get("selected_mode") != "compact":
             raise ValueError("validated compact runtime is not selected in the intro report")
         if int(compact_intro.get("selected_executable_bytes", -1)) != candidate_size:
@@ -1581,6 +1588,10 @@ def build_feasibility(
         if int(validated_bytes) != canonical_size:
             raise ValueError(
                 "validated canonical byte count does not match the intro artifact"
+            )
+        if outcome_validated_sha != canonical_sha:
+            raise ValueError(
+                "validated canonical executable SHA-256 does not match the intro artifact"
             )
         if compact_intro.get("selected_mode") != "canonical":
             raise ValueError(
@@ -1608,6 +1619,7 @@ def build_feasibility(
             and candidate_exit == 0
             and validated_bytes is not None
             and int(validated_bytes) == candidate_size
+            and outcome_validated_sha == candidate_sha
         )
     elif validated_mode == "canonical_fallback":
         validated_artifact_sha = canonical_sha
@@ -1616,6 +1628,7 @@ def build_feasibility(
             canonical_exit == 0
             and validated_bytes is not None
             and int(validated_bytes) == canonical_size
+            and outcome_validated_sha == canonical_sha
         )
     else:
         validated_artifact_sha = ""
