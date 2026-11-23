@@ -130,7 +130,11 @@ def test_transfer_allows_non_identical_rebuilt_pe_when_common_package_matches() 
     assert 'Assert-NwSameValue "executable_sha256"' not in transfer_block
     assert "REFERENCE_EXECUTABLE_SHA256=" in transfer_block
     assert "REPRODUCED_EXECUTABLE_SHA256=" in transfer_block
-    assert "final_executable_sha256 = $referenceExecutableSha" in transfer_block
+    assert "final_executable_sha256 = $finalExecutableSha" in transfer_block
+    assert "final_executable_bytes = $finalExecutableBytes" in transfer_block
+    assert '$referenceFormat -eq "nw10-intro-report"' in transfer_block
+    assert '"nw10_intro"' in transfer_block
+    assert "selected_executable_sha256" in transfer_block
     assert "common_package_exact_match = $true" in transfer_block
 
 
