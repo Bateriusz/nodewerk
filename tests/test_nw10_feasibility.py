@@ -88,6 +88,7 @@ def _intro() -> dict:
             contract.compute_build_inputs()
         ),
         "canonical_artifact": {
+            "artifact_key": "sha256:v1:" + "a" * 64,
             "executable_bytes": 240_000,
             "executable_sha256": "b" * 64,
             "package_sha256": _PACKAGE_SHA,
@@ -521,7 +522,7 @@ def _correctness() -> dict:
         "package_sha256": _PACKAGE_SHA,
         "manifest_sha256": _MANIFEST_SHA,
         "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
-        "requirements_digest": "sha256:v1:" + "b" * 64,
+        "requirements_digest": feasibility.common_contract.REQUIREMENTS_DIGEST,
         "final_executable_sha256": "e" * 64,
     }
     return {
@@ -1072,6 +1073,47 @@ def test_performance_manifest_binding_is_independent_of_correctness(
     assert record["certification"]["clean_system"]["status"] == "verified"
     assert record["certification"]["performance"]["status"] == "verified"
     assert record["certification"]["visual"]["status"] == "pending"
+
+
+@pytest.mark.parametrize(
+    ("source", "field", "value", "gate"),
+    [
+        ("performance", "artifact_key", "sha256:v1:" + "9" * 64, "performance"),
+        ("correctness", "artifact_key", "sha256:v1:" + "9" * 64, "visual"),
+        ("correctness", "profile_id", "wrong.profile", "visual"),
+        ("correctness", "requirements_digest", "sha256:v1:" + "9" * 64, "visual"),
+    ],
+)
+def test_common_artifact_semantic_identity_mismatch_cannot_certify(
+    monkeypatch, source, field, value, gate
+) -> None:
+    monkeypatch.setattr(
+        feasibility.nw07_evidence,
+        "validate_perf_contract",
+        lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
+    )
+    performance = copy.deepcopy(_performance())
+    correctness = copy.deepcopy(_correctness())
+    if source == "performance":
+        performance["after"]["artifact"][field] = value
+    else:
+        correctness["common_artifact"][field] = value
+    record = feasibility.build_feasibility(
+        outcome=_outcome(),
+        proof=_proof(),
+        intro=_intro(),
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=_pe_ledger(),
+        dependency_closure=_dependency_closure(),
+        system_validation=_system_validation(),
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert record["target_met"] is False
+    assert record["certification"][gate]["status"] == "failed"
 
 
 def test_failed_performance_manifest_does_not_poison_other_verified_evidence(
