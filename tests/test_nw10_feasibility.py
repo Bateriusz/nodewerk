@@ -739,6 +739,23 @@ def test_feasibility_success_branch_is_schema_valid(monkeypatch) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "validated_sha",
+    ["9" * 64, "", "not-a-sha"],
+)
+def test_runtime_outcome_sha_must_match_selected_executable(
+    validated_sha: str,
+) -> None:
+    with pytest.raises(ValueError, match="executable SHA-256"):
+        feasibility.build_feasibility(
+            outcome=_outcome(validated_executable_sha256=validated_sha),
+            proof=_proof(),
+            intro=_intro(),
+            run_id=1,
+            head_sha="1" * 40,
+        )
+
+
 def test_feasibility_byte_target_alone_cannot_certify_success() -> None:
     record = feasibility.build_feasibility(
         outcome=_outcome(),
