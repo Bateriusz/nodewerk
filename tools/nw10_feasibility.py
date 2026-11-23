@@ -257,6 +257,249 @@ def _manifest_self_digest_ok(manifest: Mapping[str, Any]) -> bool:
     return declared == computed
 
 
+
+def _verify_artifact_closure(
+    *,
+    artifact_paths: Mapping[str, Any] | None,
+    validated_mode: str,
+    declared_intro: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Extract certification facts from artifact bytes, never from summary JSON.
+
+    The feasibility report is a consumer of these facts.  It is not allowed to
+    promote mutually-consistent report fields into ground truth.
+    """
+    if artifact_paths is None:
+        raise ValueError(
+            "artifact-backed feasibility verification requires canonical, compact, "
+            "selected, package, and manifest paths"
+        )
+    required = (
+        "selected_executable",
+        "canonical_executable",
+        "compact_executable",
+        "package",
+        "manifest",
+    )
+    paths: dict[str, Path] = {}
+    for key in required:
+        raw = artifact_paths.get(key)
+        if raw is None:
+            raise ValueError(f"artifact-backed feasibility verification is missing {key}")
+        path = Path(raw)
+        if not path.is_file():
+            raise ValueError(f"artifact-backed feasibility input is unavailable: {path}")
+        paths[key] = path
+
+    package_bytes = paths["package"].read_bytes()
+    package_summary = compact.package_summary(package_bytes)
+    package_sha = hashlib.sha256(package_bytes).hexdigest()
+    package_size = len(package_bytes)
+    if package_summary.get("package_sha256") != package_sha:
+        raise ValueError("package summary SHA-256 does not match the package bytes")
+    if package_summary.get("package_bytes") != package_size:
+        raise ValueError("package summary byte count does not match the package bytes")
+    if package_summary.get("profile_id") != common_contract.PROFILE_ID:
+        raise ValueError("restricted intro package changed the common profile")
+    if package_summary.get("requirements_digest") != common_contract.REQUIREMENTS_DIGEST:
+        raise ValueError("restricted intro package changed the requirements digest")
+    shader_bytes = package_summary.get("shader_bytes")
+    if not _is_positive_int(shader_bytes):
+        raise ValueError("restricted intro package has no measured shader payload")
+
+    manifest_bytes = paths["manifest"].read_bytes()
+    manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("restricted intro manifest is not valid UTF-8 JSON") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("restricted intro manifest is not a JSON object")
+    if not _manifest_self_digest_ok(manifest):
+        raise ValueError("restricted intro manifest self-digest is invalid")
+    manifest_shaders = manifest.get("shaders")
+    if not isinstance(manifest_shaders, list) or not manifest_shaders:
+        raise ValueError("restricted intro manifest has no shader byte ledger")
+    manifest_shader_bytes = 0
+    for row in manifest_shaders:
+        if not isinstance(row, Mapping) or not _is_positive_int(row.get("blob_bytes")):
+            raise ValueError("restricted intro manifest has invalid shader byte accounting")
+        manifest_shader_bytes += int(row["blob_bytes"])
+    if manifest_shader_bytes != int(shader_bytes):
+        raise ValueError(
+            "manifest shader byte ledger does not match shader bytes decoded from .nwp"
+        )
+
+    manifest_binding = hashlib.sha256(manifest_bytes).digest()
+    canonical_executable = paths["canonical_executable"].read_bytes()
+    canonical_payload, canonical_manifest_binding = nw05_export.extract_embedded_package(
+        canonical_executable
+    )
+    if canonical_payload != package_bytes:
+        raise ValueError("canonical executable does not embed the exact canonical package")
+    if canonical_manifest_binding != manifest_binding:
+        raise ValueError("canonical executable manifest binding does not match the manifest")
+
+    compact_executable = paths["compact_executable"].read_bytes()
+    compact_payload, compact_manifest_binding = nw05_export.extract_embedded_package(
+        compact_executable
+    )
+    if compact_manifest_binding != manifest_binding:
+        raise ValueError("compact executable manifest binding does not match the manifest")
+    if not compact.is_compact_container(compact_payload):
+        raise ValueError("compact candidate does not embed a compact container")
+    compact_header = compact.parse_header(compact_payload)
+    decoded_package = compact.decode_compact(compact_payload)
+    if decoded_package != package_bytes:
+        raise ValueError("compact candidate does not decode to the exact canonical package")
+
+    selected_executable = paths["selected_executable"].read_bytes()
+    expected_selected = (
+        compact_executable if validated_mode == "compact" else canonical_executable
+    )
+    if validated_mode in {"compact", "canonical_fallback"}:
+        if selected_executable != expected_selected:
+            raise ValueError(
+                "selected executable bytes do not match the validated packaging mode"
+            )
+
+    canonical_imports = _normalized_imports(
+        nw05_export._pe_runtime_dependencies(canonical_executable)
+    )
+    compact_imports = _normalized_imports(
+        nw05_export._pe_runtime_dependencies(compact_executable)
+    )
+    selected_imports = _normalized_imports(
+        nw05_export._pe_runtime_dependencies(selected_executable)
+    )
+    if not canonical_imports or not compact_imports or not selected_imports:
+        raise ValueError("PE import extraction returned an empty dependency closure")
+
+    manifest_dependencies = _normalized_imports(
+        (manifest.get("retained") or {}).get("dependencies") or []
+    )
+    if manifest_dependencies != canonical_imports:
+        raise ValueError(
+            "manifest dependency closure does not match canonical PE imports"
+        )
+    if compact_imports != canonical_imports | {"cabinet"}:
+        raise ValueError(
+            "compact PE imports differ from canonical imports by more than cabinet.dll"
+        )
+    expected_selected_imports = (
+        compact_imports if validated_mode == "compact" else canonical_imports
+    )
+    if validated_mode in {"compact", "canonical_fallback"} and (
+        selected_imports != expected_selected_imports
+    ):
+        raise ValueError("selected PE imports do not match the validated artifact")
+
+    inventory = _dependency_inventory()
+    closures = inventory.get("closures")
+    closures = closures if isinstance(closures, Mapping) else {}
+    compact_spec = closures.get("compact_experiment")
+    compact_spec = compact_spec if isinstance(compact_spec, Mapping) else {}
+    allowed_imports = _normalized_imports(compact_spec.get("allowed_import_dlls"))
+    inbox_imports = _normalized_imports(
+        [
+            item.get("dll_name")
+            for item in inventory.get("inbox_windows_allowlist", [])
+            if isinstance(item, Mapping)
+        ]
+    )
+    forbidden_imports = _normalized_imports(
+        inventory.get("forbidden_release_imports")
+    )
+    for label, imports in (
+        ("canonical", canonical_imports),
+        ("compact", compact_imports),
+        ("selected", selected_imports),
+    ):
+        if not imports <= allowed_imports or not imports <= inbox_imports:
+            raise ValueError(f"{label} PE imports escape the authoritative inbox allowlist")
+        if imports & forbidden_imports:
+            raise ValueError(f"{label} PE imports contain a forbidden release dependency")
+
+    canonical_size = len(canonical_executable)
+    compact_size = len(compact_executable)
+    compact_payload_sha = hashlib.sha256(compact_payload).hexdigest()
+    compact_payload_bytes = len(compact_payload)
+    footer_bytes = nw05_export.EMBED_FOOTER_SIZE
+    manifest_binding_bytes = len(manifest_binding)
+    canonical_player_image = (
+        canonical_size - package_size - manifest_binding_bytes - footer_bytes
+    )
+    compact_player_image = (
+        compact_size - compact_payload_bytes - manifest_binding_bytes - footer_bytes
+    )
+    if canonical_player_image <= 0 or compact_player_image <= 0:
+        raise ValueError("artifact closure has a non-positive player image component")
+
+    facts = {
+        "package_sha256": package_sha,
+        "package_bytes": package_size,
+        "shader_bytes": int(shader_bytes),
+        "profile_id": package_summary["profile_id"],
+        "requirements_digest": package_summary["requirements_digest"],
+        "manifest_sha256": manifest_sha,
+        "manifest_bytes": len(manifest_bytes),
+        "manifest": manifest,
+        "canonical_executable_sha256": hashlib.sha256(canonical_executable).hexdigest(),
+        "canonical_executable_bytes": canonical_size,
+        "canonical_player_image_bytes": canonical_player_image,
+        "canonical_imports": sorted(canonical_imports),
+        "compact_executable_sha256": hashlib.sha256(compact_executable).hexdigest(),
+        "compact_executable_bytes": compact_size,
+        "compact_player_image_bytes": compact_player_image,
+        "compact_payload_sha256": compact_payload_sha,
+        "compact_payload_bytes": compact_payload_bytes,
+        "compact_codec_id": str(compact_header.get("codec_id", "")),
+        "compact_layout_id": str(compact_header.get("layout_id", "")),
+        "compact_imports": sorted(compact_imports),
+        "selected_executable_sha256": hashlib.sha256(selected_executable).hexdigest(),
+        "selected_executable_bytes": len(selected_executable),
+        "selected_imports": sorted(selected_imports),
+        "manifest_binding_bytes": manifest_binding_bytes,
+        "embedded_footer_bytes": footer_bytes,
+        "inventory_validated": True,
+    }
+
+    canonical_intro, compact_intro = _intro_artifacts(declared_intro)
+    declared_checks = (
+        ("canonical package SHA", str(canonical_intro.get("package_sha256", "")).lower(), package_sha),
+        ("canonical package bytes", canonical_intro.get("package_bytes"), package_size),
+        ("canonical manifest SHA", _manifest_sha(canonical_intro, "manifest_sha256"), manifest_sha),
+        ("canonical executable SHA", str(canonical_intro.get("executable_sha256", "")).lower(), facts["canonical_executable_sha256"]),
+        ("canonical executable bytes", canonical_intro.get("executable_bytes"), canonical_size),
+        ("compact executable SHA", str(compact_intro.get("executable_sha256", "")).lower(), facts["compact_executable_sha256"]),
+        ("compact executable bytes", compact_intro.get("executable_bytes"), compact_size),
+        ("compact payload SHA", str(compact_intro.get("encoded_package_sha256", "")).lower(), compact_payload_sha),
+        ("compact payload bytes", compact_intro.get("encoded_package_bytes"), compact_payload_bytes),
+        ("compact codec", str(compact_intro.get("codec_id", "")), facts["compact_codec_id"]),
+        ("compact layout", str(compact_intro.get("layout_id", "")), facts["compact_layout_id"]),
+    )
+    for label, declared, actual in declared_checks:
+        if declared != actual:
+            raise ValueError(f"intro report {label} does not match artifact-backed facts")
+    if canonical_intro.get("link_manifest") != manifest:
+        raise ValueError("intro report link_manifest does not match the manifest file")
+    measurements = declared_intro.get("measurements")
+    measurements = measurements if isinstance(measurements, Mapping) else {}
+    package_measurement = measurements.get("package")
+    package_measurement = (
+        package_measurement if isinstance(package_measurement, Mapping) else {}
+    )
+    if (
+        str(package_measurement.get("package_sha256", "")).lower() != package_sha
+        or package_measurement.get("package_bytes") != package_size
+        or package_measurement.get("shader_bytes") != shader_bytes
+    ):
+        raise ValueError(
+            "intro package measurements do not match package bytes decoded from .nwp"
+        )
+    return facts
+
+
 def _verification(
     status: str, reason: str, **details: Any
 ) -> dict[str, Any]:
