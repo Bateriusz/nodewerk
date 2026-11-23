@@ -48,6 +48,17 @@ _UNPACKED_SHA = hashlib.sha256(_UNPACKED_EXE).hexdigest()
 _PACKED_SHA = hashlib.sha256(_PACKED_EXE).hexdigest()
 _ENCODED_SHA = hashlib.sha256(_COMPACT_CONTAINER.bytes).hexdigest()
 
+# Performance preservation is an independent NW-07 production track.  Keep
+# its package/artifact identities deliberately different from the restricted
+# NW-10 intro so tests catch any accidental cross-binding between the tracks.
+_PERF_PACKAGE_SHA = "4" * 64
+_PERF_BEFORE_MANIFEST_SHA = "5" * 64
+_PERF_AFTER_MANIFEST_SHA = "6" * 64
+_PERF_BEFORE_EXE_SHA = "7" * 64
+_PERF_AFTER_EXE_SHA = "8" * 64
+_PERF_BEFORE_ARTIFACT_KEY = "sha256:v1:" + "9" * 64
+_PERF_AFTER_ARTIFACT_KEY = "sha256:v1:" + "a" * 64
+
 
 def _correctness_evidence() -> dict:
     return {
@@ -358,13 +369,20 @@ def _performance() -> dict:
     binding_id = _perf_contract()["binding_id"]
     binding_digest = _perf_contract()["binding_digest"]
 
-    def capture(capture_id: str, executable_sha: str, bytes_: int) -> dict:
+    def capture(
+        capture_id: str,
+        *,
+        artifact_key: str,
+        manifest_sha: str,
+        executable_sha: str,
+        bytes_: int,
+    ) -> dict:
         return {
             "capture_id": capture_id,
             "artifact": {
-                "artifact_key": "sha256:v1:" + "a" * 64,
-                "package_sha256": _PACKAGE_SHA,
-                "manifest_sha256": _MANIFEST_SHA,
+                "artifact_key": artifact_key,
+                "package_sha256": _PERF_PACKAGE_SHA,
+                "manifest_sha256": manifest_sha,
                 "executable_sha256": executable_sha,
                 "complete_distribution_bytes": bytes_,
             },
@@ -383,6 +401,28 @@ def _performance() -> dict:
             "worst_gpu_p99_ms": 10.0,
             "worst_cpu_submit_p99_ms": 5.0,
         }
+
+    before = capture(
+        "before",
+        artifact_key=_PERF_BEFORE_ARTIFACT_KEY,
+        manifest_sha=_PERF_BEFORE_MANIFEST_SHA,
+        executable_sha=_PERF_BEFORE_EXE_SHA,
+        bytes_=65_001,
+    )
+    after = capture(
+        "after",
+        artifact_key=_PERF_AFTER_ARTIFACT_KEY,
+        manifest_sha=_PERF_AFTER_MANIFEST_SHA,
+        executable_sha=_PERF_AFTER_EXE_SHA,
+        bytes_=66_000,
+    )
+    frozen = feasibility.nw07_export.load_canonical_config()
+    graph = feasibility.nw07_export.verify_canonical_graph(
+        frozen, repo_root=REPO_ROOT
+    )
+    pinned = feasibility.nw07_export.verify_pinned_inputs(
+        frozen, repo_root=REPO_ROOT
+    )
     return {
         "format": "nw10-performance-preservation",
         "version": 1,
@@ -395,8 +435,40 @@ def _performance() -> dict:
         "reasons": [],
         "matched_environment": True,
         "reference_environment": reference_environment,
-        "before": capture("before", "b" * 64, 65_001),
-        "after": capture("after", "e" * 64, 65_000),
+        "candidate": {
+            "comparison_role": "after_common_artifact",
+            "performance_contract": "nw07_perf_ref_v1",
+            "performance_protocol": "nw07-perf-run.v1",
+            "profile_id": feasibility.common_contract.PROFILE_ID,
+            "requirements_digest": feasibility.common_contract.REQUIREMENTS_DIGEST,
+            "common_graph": {
+                "path": str(frozen["graph"]),
+                "sha256": graph["graph_sha256"],
+                "ir_sha256": graph["ir_sha256"],
+            },
+            "build_inputs": {
+                "nw07_frozen_digest": pinned["frozen_digest"],
+                "observed_digest": pinned["digest"],
+                "matches_frozen_digest": pinned["matches_frozen_digest"],
+                "nw10_digest": contract.build_inputs_digest(
+                    contract.compute_build_inputs()
+                ),
+            },
+            "artifact": copy.deepcopy(after["artifact"]),
+            "dependency_closure": {
+                "imports": ["d3d12", "kernel32"],
+                "matches_manifest": True,
+            },
+            "runtime_probe": {
+                "status": "passed",
+                "exit_code": 0,
+                "uncapped_present_verified": True,
+            },
+            "release_grade": True,
+            "test_payload": False,
+        },
+        "before": before,
+        "after": after,
         "comparison": {
             "same_canonical_package_sha256": True,
             "gpu_worst_p99_delta_percent": 0.0,
@@ -415,7 +487,6 @@ def _performance() -> dict:
             "whitelist_generated": True,
         },
     }
-
 
 _PERF_REFERENCE = {
     "board": {
@@ -477,10 +548,10 @@ _PERF_REFERENCE = {
         "warm_preparation": "Pre-run the identical artifact once",
     },
     "artifact": {
-        "artifact_key": "sha256:v1:" + "a" * 64,
-        "package_sha256": _PACKAGE_SHA,
-        "manifest_sha256": _MANIFEST_SHA,
-        "executable_sha256": "b" * 64,
+        "artifact_key": _PERF_BEFORE_ARTIFACT_KEY,
+        "package_sha256": _PERF_PACKAGE_SHA,
+        "manifest_sha256": _PERF_BEFORE_MANIFEST_SHA,
+        "executable_sha256": _PERF_BEFORE_EXE_SHA,
         "complete_distribution_bytes": 65_001,
     },
 }
@@ -1323,7 +1394,6 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     system["clean_system"]["deployment"]["executable_sha256"] = canonical_sha
 
     performance = copy.deepcopy(_performance())
-    performance["after"]["artifact"]["executable_sha256"] = canonical_sha
 
     correctness = copy.deepcopy(_correctness())
     correctness["common_artifact"]["final_executable_sha256"] = canonical_sha
