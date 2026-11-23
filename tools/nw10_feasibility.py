@@ -662,6 +662,16 @@ def _certify_compact_candidate(
     compact_selected_bytes = compact_ledger.get(
         "selected_executable_bytes"
     )
+    expected_compact_player_image = (
+        int(trusted_artifacts["canonical_player_image_bytes"])
+        if compact_compression_rejected is True
+        else int(trusted_artifacts["compact_player_image_bytes"])
+    )
+    expected_compact_complete_bytes = (
+        int(trusted_artifacts["canonical_executable_bytes"])
+        if compact_compression_rejected is True
+        else int(trusted_artifacts["compact_executable_bytes"])
+    )
     compact_component_total: int | None
     try:
         compact_component_total = sum(
@@ -687,7 +697,10 @@ def _certify_compact_candidate(
         and isinstance(compact_compression_rejected, bool)
         and compact_components.get("encoded_package_bytes")
         == expected_compact_encoded_bytes
+        and compact_components.get("player_image_bytes")
+        == expected_compact_player_image
         and compact_complete_bytes == compact_selected_bytes
+        and compact_complete_bytes == expected_compact_complete_bytes
         and compact_complete_bytes == compact_component_total
         and all(
             _is_positive_int(compact_components.get(key))
@@ -819,6 +832,13 @@ def _certify_compact_candidate(
         if validated_mode == "compact"
         else canonical_package_bytes
     )
+    expected_selected_player_image = int(
+        trusted_artifacts[
+            "compact_player_image_bytes"
+            if validated_mode == "compact"
+            else "canonical_player_image_bytes"
+        ]
+    )
     selected_component_total: int | None
     try:
         selected_component_total = sum(
@@ -855,8 +875,11 @@ def _certify_compact_candidate(
         and ledger.get("selected_executable_bytes") == validated_size
         and ledger.get("complete_runnable_distribution_bytes")
         == selected_component_total
-        and components.get("embedded_manifest_binding_bytes") == 32
-        and components.get("embedded_footer_bytes") == 92
+        and components.get("embedded_manifest_binding_bytes")
+        == trusted_artifacts.get("manifest_binding_bytes")
+        and components.get("embedded_footer_bytes")
+        == trusted_artifacts.get("embedded_footer_bytes")
+        and components.get("player_image_bytes") == expected_selected_player_image
         and components.get("shader_payload_bytes") == measured_shader_bytes
         and components.get("shader_payload_bytes")
         <= components.get("player_image_bytes")
