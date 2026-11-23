@@ -271,16 +271,108 @@ def _certify_compact_candidate(
     compact_components = (
         compact_components if isinstance(compact_components, Mapping) else {}
     )
-    compact_ledger_identity_applicable = validated_mode == "compact"
+    compact_ledger_identity_applicable = True
+    compact_dependencies = compact_ledger.get("dependencies")
+    compact_dependencies = (
+        compact_dependencies if isinstance(compact_dependencies, list) else []
+    )
+    compact_dependency_names = {
+        str(item.get("name", "")).lower().removesuffix(".dll")
+        for item in compact_dependencies
+        if isinstance(item, Mapping)
+    }
+    compact_compression_rejected = compact_ledger.get(
+        "compression_rejected_for_increasing_distribution"
+    )
+    if (
+        validated_mode == "canonical_fallback"
+        and compact_compression_rejected is True
+    ):
+        expected_compact_encoded_bytes = canonical_package_bytes
+        compact_encoded_payload_mode = (
+            "compression_rejected_canonical_package_bytes"
+        )
+    else:
+        expected_compact_encoded_bytes = compact_encoded_bytes
+        compact_encoded_payload_mode = "measured_compact_payload"
+    compact_all_accounted = compact_ledger.get(
+        "all_required_bytes_accounted"
+    )
+    compact_unaccounted = list(
+        compact_ledger.get("unaccounted_components") or []
+    )
+    compact_decoder_bytes = compact_components.get("decoder_code_bytes")
+    compact_decoder_accounting_ok = (
+        isinstance(compact_all_accounted, bool)
+        and (
+            (
+                compact_all_accounted
+                and not compact_unaccounted
+                and _is_positive_int(compact_decoder_bytes)
+            )
+            or (
+                not compact_all_accounted
+                and "decoder_code_bytes" in compact_unaccounted
+                and compact_decoder_bytes is None
+            )
+        )
+    )
+    compact_complete_bytes = compact_ledger.get(
+        "complete_runnable_distribution_bytes"
+    )
+    compact_selected_bytes = compact_ledger.get(
+        "selected_executable_bytes"
+    )
+    compact_component_total: int | None
+    try:
+        compact_component_total = sum(
+            int(compact_components.get(key, -1))
+            for key in (
+                "player_image_bytes",
+                "encoded_package_bytes",
+                "embedded_manifest_binding_bytes",
+                "embedded_footer_bytes",
+            )
+        )
+    except (TypeError, ValueError):
+        compact_component_total = None
     compact_ledger_identity_ok = (
-        not compact_ledger_identity_applicable
-        or (
-            re.fullmatch(r"[0-9a-f]{64}", compact_encoded_sha) is not None
-            and _is_positive_int(compact_encoded_bytes)
-            and str(compact_ledger.get("codec_id", "")) == compact_codec_id
-            and str(compact_ledger.get("layout_id", "")) == compact_layout_id
-            and compact_components.get("encoded_package_bytes")
-            == compact_encoded_bytes
+        bool(compact_ledger)
+        and re.fullmatch(r"[0-9a-f]{64}", compact_encoded_sha) is not None
+        and _is_positive_int(compact_encoded_bytes)
+        and _is_positive_int(canonical_package_bytes)
+        and compact_components.get("canonical_package_bytes")
+        == canonical_package_bytes
+        and str(compact_ledger.get("codec_id", "")) == compact_codec_id
+        and str(compact_ledger.get("layout_id", "")) == compact_layout_id
+        and isinstance(compact_compression_rejected, bool)
+        and compact_components.get("encoded_package_bytes")
+        == expected_compact_encoded_bytes
+        and compact_complete_bytes == compact_selected_bytes
+        and compact_complete_bytes == compact_component_total
+        and all(
+            _is_positive_int(compact_components.get(key))
+            for key in (
+                "player_image_bytes",
+                "encoded_package_bytes",
+                "embedded_manifest_binding_bytes",
+                "embedded_footer_bytes",
+            )
+        )
+        and not compact_ledger.get("required_auxiliary_files")
+        and "cabinet" in compact_dependency_names
+        and compact_decoder_accounting_ok
+        and (
+            validated_mode != "compact"
+            or (
+                compact_compression_rejected is False
+                and compact_complete_bytes == validated_size
+            )
+        )
+        and (
+            validated_mode != "canonical_fallback"
+            or compact_compression_rejected is not True
+            or compact_complete_bytes == validated_size
         )
     )
     pe_manifest_sha = (
@@ -1384,6 +1476,9 @@ def _certify_compact_candidate(
             "intro_encoded_package_bytes": compact_encoded_bytes,
             "compact_ledger_identity_applicable": (
                 compact_ledger_identity_applicable
+            ),
+            "compact_ledger_encoded_payload_mode": (
+                compact_encoded_payload_mode
             ),
             "compact_ledger_identity_verified": compact_ledger_identity_ok,
             "pe_payload_identity_verified": pe_payload_identity_ok,

@@ -144,10 +144,16 @@ def _intro() -> dict:
                 "layout_id": contract.LAYOUT_SOA_ID,
                 "complete_runnable_distribution_bytes": 65_000,
                 "selected_executable_bytes": 65_000,
+                "compression_rejected_for_increasing_distribution": False,
                 "components": {
                     "decoder_code_bytes": None,
                     "canonical_package_bytes": len(_PACKAGE_BYTES),
                     "encoded_package_bytes": len(_COMPACT_CONTAINER.bytes),
+                    "player_image_bytes": (
+                        65_000 - len(_COMPACT_CONTAINER.bytes) - 32 - 92
+                    ),
+                    "embedded_manifest_binding_bytes": 32,
+                    "embedded_footer_bytes": 92,
                 },
                 "required_auxiliary_files": {},
                 "dependencies": [
@@ -1393,6 +1399,9 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     intro["ledgers"]["compact"]["components"][
         "encoded_package_bytes"
     ] = len(_PACKAGE_BYTES)
+    intro["ledgers"]["compact"]["components"]["player_image_bytes"] = (
+        65_000 - len(_PACKAGE_BYTES) - 32 - 92
+    )
     intro["ledgers"]["compact"][
         "compression_rejected_for_increasing_distribution"
     ] = True
@@ -1425,15 +1434,16 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     correctness = copy.deepcopy(_correctness())
     correctness["common_artifact"]["final_executable_sha256"] = canonical_sha
 
+    outcome = _outcome(
+        minimum_validated_runnable_bytes=65_000,
+        validated_executable_sha256=canonical_sha,
+        validated_mode="canonical_fallback",
+        compact_candidate_runtime_status="rejected_runtime_failure",
+        compact_candidate_exit_code=70,
+        canonical_fallback_exit_code=0,
+    )
     record = feasibility.build_feasibility(
-        outcome=_outcome(
-            minimum_validated_runnable_bytes=65_000,
-            validated_executable_sha256=canonical_sha,
-            validated_mode="canonical_fallback",
-            compact_candidate_runtime_status="rejected_runtime_failure",
-            compact_candidate_exit_code=70,
-            canonical_fallback_exit_code=0,
-        ),
+        outcome=outcome,
         proof=_proof(),
         intro=intro,
         run_id=1,
@@ -1457,11 +1467,39 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
         record["certification"]["visual"][
             "compact_ledger_identity_applicable"
         ]
-        is False
+        is True
     )
+    assert record["certification"]["visual"][
+        "compact_ledger_encoded_payload_mode"
+    ] == "compression_rejected_canonical_package_bytes"
     assert (
         record["canonical_fallback"]["dependency_closure"]["closure_verified"]
         is True
+    )
+
+    missing_intro = copy.deepcopy(intro)
+    missing_intro["ledgers"].pop("compact", None)
+    missing = feasibility.build_feasibility(
+        outcome=outcome,
+        proof=_proof(),
+        intro=missing_intro,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=dependency,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert missing["target_met"] is False
+    assert missing["certification"]["visual"]["status"] == "failed"
+    assert (
+        missing["certification"]["visual"][
+            "compact_ledger_identity_verified"
+        ]
+        is False
     )
 
 
