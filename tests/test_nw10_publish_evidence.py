@@ -963,6 +963,25 @@ def test_clean_summary_rejects_vm_markers_and_redefined_exit_codes() -> None:
         )
     report["host"]["virtualization_indicators"] = []
     report["host"]["virtualization_probe"]["vm_markers"] = []
+    with pytest.raises(ValueError, match="VM markers"):
+        publisher._clean_summary(
+            report,
+            bundle_sha256="a" * 64,
+            artifact=artifact,
+            runtime_hardware={"adapter_description": "NVIDIA GeForce RTX 5070 Ti"},
+        )
+    report["host"]["virtualization_probe"].update(
+        {
+            "manufacturer": "ASUSTeK COMPUTER INC.",
+            "model": "NUC13ANH-B",
+            "product_vendor": "ASUSTeK COMPUTER INC.",
+            "product_name": "NUC13ANH-B",
+            "bios_manufacturer": "American Megatrends Inc.",
+            "bios_version": "NUC13ANBi.0058",
+            "baseboard_manufacturer": "ASUSTeK COMPUTER INC.",
+            "baseboard_product": "NUC13ANH-B",
+        }
+    )
     summary = publisher._clean_summary(
         report,
         bundle_sha256="a" * 64,

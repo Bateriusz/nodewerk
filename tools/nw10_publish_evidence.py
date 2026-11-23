@@ -400,21 +400,6 @@ def _clean_summary(
             "baseboard_manufacturer",
         )
     )
-    hypervisor_present = probe.get("hypervisor_present")
-    explained_vbs = (
-        hypervisor_present is True
-        and probe.get("virtualization_based_security_status") == 2
-        and not independent_markers
-        and identity_complete
-        and host.get("hypervisor_explained_by_vbs") is True
-    )
-    if hypervisor_present is True and not explained_vbs:
-        raise ValueError("clean-system host has an unexplained active hypervisor")
-    if independent_markers:
-        raise ValueError(
-            "clean-system physical identity exposes VM markers: "
-            + ", ".join(sorted(set(independent_markers)))
-        )
     markers = list(host.get("vm_markers") or [])
     markers.extend(host.get("virtualization_indicators") or [])
     markers.extend(probe.get("vm_markers") or [])
@@ -423,6 +408,20 @@ def _clean_summary(
             "clean-system host exposes virtualization markers: "
             + ", ".join(sorted({str(item) for item in markers}))
         )
+    if independent_markers:
+        raise ValueError(
+            "clean-system physical identity exposes VM markers: "
+            + ", ".join(sorted(set(independent_markers)))
+        )
+    hypervisor_present = probe.get("hypervisor_present")
+    explained_vbs = (
+        hypervisor_present is True
+        and probe.get("virtualization_based_security_status") == 2
+        and identity_complete
+        and host.get("hypervisor_explained_by_vbs") is True
+    )
+    if hypervisor_present is True and not explained_vbs:
+        raise ValueError("clean-system host has an unexplained active hypervisor")
     hardware = dict(runtime_hardware)
     if not hardware:
         artifact_record = report.get("artifact")
