@@ -204,6 +204,7 @@ jobs:
             intro_compact_candidate_bytes = $introBytes
             intro_canonical_bytes = $canonicalIntroBytes
             minimum_validated_runnable_bytes = $null
+            validated_executable_sha256 = $null
             validated_mode = "pending_runtime_validation"
             compact_candidate_runtime_status = "pending"
             compact_candidate_exit_code = $null
@@ -328,8 +329,12 @@ jobs:
 
           if ($hostedRuntimeValidated) {
             $outcome.minimum_validated_runnable_bytes = [int64]$selected.Length
+            $outcome.validated_executable_sha256 = (
+              Get-FileHash -Algorithm SHA256 $selected.FullName
+            ).Hash.ToLowerInvariant()
           } else {
             $outcome.minimum_validated_runnable_bytes = $null
+            $outcome.validated_executable_sha256 = $null
           }
           $outcome.validated_mode = $validatedMode
           $outcome.blockers = $blockers
