@@ -148,10 +148,32 @@ def _fixture() -> tuple[dict, dict, dict, dict]:
     bound = _bound(before_identity)
     before = _capture(bound, before_identity, "before", 10.0)
     after = _capture(bound, after_identity, "after", 10.5)
+    frozen = preservation.nw07_export.load_canonical_config()
+    graph = preservation.nw07_export.verify_canonical_graph(
+        frozen, repo_root=REPO_ROOT
+    )
+    pinned = preservation.nw07_export.verify_pinned_inputs(
+        frozen, repo_root=REPO_ROOT
+    )
     candidate = {
         "comparison_role": "after_common_artifact",
         "performance_contract": nw07_contract.PERF_CONTRACT_ID,
+        "performance_protocol": nw07_contract.PERF_RUN_PROTOCOL,
         "profile_id": nw07_contract.PROFILE_ID,
+        "requirements_digest": nw07_contract.REQUIREMENTS_DIGEST,
+        "common_graph": {
+            "path": str(frozen["graph"]),
+            "sha256": graph["graph_sha256"],
+            "ir_sha256": graph["ir_sha256"],
+        },
+        "build_inputs": {
+            "nw07_frozen_digest": pinned["frozen_digest"],
+            "observed_digest": pinned["digest"],
+            "matches_frozen_digest": pinned["matches_frozen_digest"],
+            "nw10_digest": preservation.nw10_contract.build_inputs_digest(
+                preservation.nw10_contract.compute_build_inputs()
+            ),
+        },
         "artifact": {
             "artifact_key": after_identity["artifact_key"],
             "package_sha256": after_identity["package_sha256"],
@@ -159,6 +181,17 @@ def _fixture() -> tuple[dict, dict, dict, dict]:
             "executable_sha256": after_identity["executable_sha256"],
             "complete_distribution_bytes": after_identity["executable_bytes"],
         },
+        "dependency_closure": {
+            "imports": ["d3d12", "kernel32"],
+            "matches_manifest": True,
+        },
+        "runtime_probe": {
+            "status": "passed",
+            "exit_code": 0,
+            "uncapped_present_verified": True,
+        },
+        "release_grade": True,
+        "test_payload": False,
     }
     return bound, before, after, candidate
 
@@ -177,6 +210,34 @@ def test_matched_after_artifact_preserves_frozen_performance_contract() -> None:
     assert result["comparison"]["faster_substitute_used"] is False
     assert result["privacy"]["raw_samples_included"] is False
     assert '"samples"' not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("comparison_role",), "wrong"),
+        (("performance_protocol",), "wrong"),
+        (("profile_id",), "wrong"),
+        (("requirements_digest",), "wrong"),
+        (("common_graph", "sha256"), "9" * 64),
+        (("build_inputs", "observed_digest"), "wrong"),
+        (("build_inputs", "matches_frozen_digest"), False),
+        (("dependency_closure", "matches_manifest"), False),
+        (("runtime_probe", "status"), "failed"),
+        (("release_grade",), False),
+        (("test_payload",), True),
+    ],
+)
+def test_candidate_provenance_mismatch_cannot_claim_preservation(
+    path, value
+) -> None:
+    bound, before, after, candidate = _fixture()
+    target = candidate
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    result = preservation.validate_preservation(before, after, bound, candidate)
+    assert result["status"] == "failed"
 
 
 def test_changed_common_package_cannot_claim_preservation() -> None:
