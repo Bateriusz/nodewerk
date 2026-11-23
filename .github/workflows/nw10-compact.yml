@@ -259,9 +259,12 @@ jobs:
             $outcome.compact_candidate_runtime_status = "validated_runnable"
             $outcome.compact_candidate_exit_code = 0
             $hostedRuntimeValidated = $true
-            $artifactRoot = Split-Path (Split-Path $candidate.FullName -Parent) -Parent
+            $compactRoot = Split-Path $candidate.FullName -Parent
+            $artifactRoot = Split-Path $compactRoot -Parent
             $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
-            Copy-Item $candidate.FullName (Join-Path $artifactRoot "$stem.exe") -Force
+            # Root <stem>.exe remains the canonical product. The compact
+            # candidate is promoted into the selected compact/<stem>.exe slot.
+            Copy-Item $candidate.FullName (Join-Path $compactRoot "$stem.exe") -Force
             $reportPath = Join-Path $artifactRoot "report.json"
             $introReport = Get-Content $reportPath -Raw | ConvertFrom-Json
             $introReport.compact_artifact.selected_mode = "compact"
@@ -418,8 +421,8 @@ jobs:
           }
 
           python tools/nw10_pe_ledger.py `
-            --final-executable "$PWD/build/nw10-intro/$stem.exe" `
-            --linker-baseline-executable "$PWD/build/nw10-intro-link-control/$stem.exe" `
+            --final-executable "$PWD/build/nw10-intro/compact/$stem.exe" `
+            --linker-baseline-executable "$PWD/build/nw10-intro-link-control/compact/$stem.exe" `
             --decoder-on-template "$template" `
             --decoder-off-template "$PWD/build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe" `
             --final-package "$PWD/build/nw10-intro/$stem.nwp" `
@@ -470,7 +473,7 @@ jobs:
 
           $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
           $artifactRoot = Join-Path $PWD "build/nw10-intro"
-          $finalExe = Join-Path $artifactRoot "$stem.exe"
+          $finalExe = Join-Path $artifactRoot "compact/$stem.exe"
           $package = Join-Path $artifactRoot "$stem.nwp"
           $manifest = Join-Path $artifactRoot "$stem.manifest.json"
           $fixture = Join-Path $PWD "build/nw07-release/staging/package_player/nw_package_player_fixture.exe"
@@ -652,6 +655,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          # Root <stem>.exe is the canonical product. Runtime validation
+          # promotes the compact candidate into the selected compact/<stem>.exe
+          # slot; compact/<stem>.compact.exe remains the measured candidate.
           python tools/nw10_feasibility.py `
             --outcome "$PWD/build/nw10-windows-size-outcome.json" `
             --proof-report "$PWD/build/nw10-proof/report.json" `
@@ -667,8 +673,8 @@ jobs:
             --dependency-closure "$PWD/build/nw10-dependency-closure.json" `
             --system-validation "$PWD/benchmarks/nw10/system-validation.v1.json" `
             --correctness "$PWD/benchmarks/nw10/common-artifact-correctness.v1.json" `
-            --selected-executable "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.exe" `
-            --canonical-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.exe" `
+            --selected-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.exe" `
+            --canonical-executable "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.exe" `
             --compact-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.compact.exe" `
             --final-package "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.nwp" `
             --final-manifest "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.manifest.json" `

@@ -860,12 +860,18 @@ def test_artifact_verifier_derives_ground_truth_from_files(
         b"MZ" + b"\x01" * 6144, encoded.bytes, binding
     )
 
+    stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
+    artifact_root = tmp_path / "nw10-intro"
+    compact_dir = artifact_root / "compact"
+    compact_dir.mkdir(parents=True)
     paths = {
-        "selected_executable": tmp_path / "selected.exe",
-        "canonical_executable": tmp_path / "canonical.exe",
-        "compact_executable": tmp_path / "compact.exe",
-        "package": tmp_path / "artifact.nwp",
-        "manifest": tmp_path / "artifact.manifest.json",
+        # Post-validation workflow layout: root <stem>.exe remains the
+        # canonical product; compact/<stem>.exe is the selected artifact.
+        "selected_executable": compact_dir / f"{stem}.exe",
+        "canonical_executable": artifact_root / f"{stem}.exe",
+        "compact_executable": compact_dir / f"{stem}.compact.exe",
+        "package": artifact_root / f"{stem}.nwp",
+        "manifest": artifact_root / f"{stem}.manifest.json",
     }
     paths["selected_executable"].write_bytes(compact_exe)
     paths["canonical_executable"].write_bytes(canonical_exe)
@@ -982,6 +988,38 @@ def test_feasibility_success_branch_is_schema_valid(monkeypatch) -> None:
         record["canonical_fallback"]["dependency_closure"]["closure_verified"]
         is False
     )
+
+
+def test_workflow_feasibility_roles_match_runtime_product_promotion() -> None:
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "nw10-compact.yml"
+    ).read_text(encoding="utf-8")
+    promotion = (
+        'Copy-Item $candidate.FullName (Join-Path $compactRoot "$stem.exe")'
+    )
+    selected = (
+        '--selected-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.exe"'
+    )
+    canonical = (
+        '--canonical-executable "$PWD/build/nw10-intro/nw_common_d3d12_fl12_0_sm6_0_v1.exe"'
+    )
+    compact_candidate = (
+        '--compact-executable "$PWD/build/nw10-intro/compact/nw_common_d3d12_fl12_0_sm6_0_v1.compact.exe"'
+    )
+    assert promotion in workflow
+    assert selected in workflow
+    assert canonical in workflow
+    assert compact_candidate in workflow
+    assert (
+        '--final-executable "$PWD/build/nw10-intro/compact/$stem.exe"'
+        in workflow
+    )
+    assert (
+        '--linker-baseline-executable "$PWD/build/nw10-intro-link-control/compact/$stem.exe"'
+        in workflow
+    )
+    assert '$finalExe = Join-Path $artifactRoot "compact/$stem.exe"' in workflow
+    assert workflow.index(promotion) < workflow.index(selected)
 
 
 @pytest.mark.parametrize(
