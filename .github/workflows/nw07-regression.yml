@@ -53,7 +53,7 @@ jobs:
   per-change-checks:
     needs: ci-impact
     name: Per-change CPU, compiler, reproducibility and size checks
-    if: github.event_name != 'schedule' && needs.ci-impact.outputs.nw07 == 'true' && needs.ci-impact.outputs.nw07 == 'true'
+    if: github.event_name != 'schedule' && needs.ci-impact.outputs.nw07 == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +112,7 @@ jobs:
   windows-release-build:
     needs: ci-impact
     name: Windows x64 release export and diagnostic sibling build
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && needs.ci-impact.outputs.nw07 == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

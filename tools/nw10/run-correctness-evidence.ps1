@@ -15,6 +15,7 @@ param(
     [string]$ExpectedBranch = "agent/NW-10",
     [string]$ReferenceEvidence = "build/nw10-proof/report.json",
     [string]$WorkRoot = "build/nw10-correctness-scripted",
+    [string]$ReusePreparedTransfer = "",
     [string[]]$ForbidToken = @(),
     [string]$AdaRecord = "",
     [string]$AdaCaptures = "",
@@ -291,6 +292,106 @@ try {
                     $finalExecutableBytes = [int64]$selectedBytes
                 }
             }
+        }
+
+        $root = Resolve-NwRepoPath $WorkRoot
+        $transferRoot = Join-Path $root ("transfer-" + $TargetTier + $bundleSuffix)
+        $packageRoot = Join-Path $transferRoot "transfer-package"
+
+        if (-not [string]::IsNullOrWhiteSpace($ReusePreparedTransfer)) {
+            $reuseRoot = Resolve-NwRepoPath $ReusePreparedTransfer
+            $reuseTransferPath = Join-Path $reuseRoot "transfer.json"
+            $reuseManifestPath = Join-Path $reuseRoot "bundle-manifest.json"
+            foreach ($required in @($reuseTransferPath, $reuseManifestPath)) {
+                if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+                    throw "Reusable prepared transfer is incomplete: $required"
+                }
+            }
+
+            $reuseTransfer = Get-Content -LiteralPath $reuseTransferPath -Raw | ConvertFrom-Json
+            $reuseManifest = Get-Content -LiteralPath $reuseManifestPath -Raw | ConvertFrom-Json
+            Assert-NwSameValue "reused transfer format" "nw10-correctness-diagnostic-transfer" ([string]$reuseTransfer.format)
+            Assert-NwSameValue "reused transfer packaging_mode" $PackagingMode ([string]$reuseTransfer.packaging_mode)
+            Assert-NwSameValue "reused transfer artifact_key" ([string]$expectedArtifact.artifact_key) ([string]$reuseTransfer.common_artifact.artifact_key)
+            Assert-NwSameValue "reused transfer package_sha256" ([string]$expectedArtifact.package_sha256) ([string]$reuseTransfer.common_artifact.package_sha256)
+            Assert-NwSameValue "reused transfer manifest_sha256" ([string]$expectedArtifact.manifest_sha256) ([string]$reuseTransfer.common_artifact.manifest_sha256)
+
+            if ([string]$reuseManifest.format -ne "nw10-correctness-diagnostic-input-bundle") {
+                throw "Reusable prepared transfer has unexpected bundle-manifest format."
+            }
+            Assert-NwSameValue "reused bundle packaging mode" $PackagingMode ([string]$reuseTransfer.packaging_mode)
+
+            foreach ($row in @($reuseManifest.files)) {
+                $relative = ([string]$row.path).Replace('\', '/')
+                if (
+                    [string]::IsNullOrWhiteSpace($relative) -or
+                    [System.IO.Path]::IsPathRooted($relative) -or
+                    $relative.Split('/') -contains '..'
+                ) {
+                    throw "Reusable prepared transfer contains an unsafe manifest path: $relative"
+                }
+                $sourceFile = Join-Path $reuseRoot $relative
+                if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) {
+                    throw "Reusable prepared transfer file is missing: $relative"
+                }
+                $observedSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceFile).Hash.ToLowerInvariant()
+                Assert-NwSameValue "reused transfer file hash $relative" ([string]$row.sha256).ToLowerInvariant() $observedSha
+                Assert-NwSameValue "reused transfer file size $relative" ([int64]$row.bytes) ([int64](Get-Item -LiteralPath $sourceFile).Length)
+            }
+
+            $diagRelative = [string]$reuseTransfer.diagnostic_sibling.file
+            $diagSource = Join-Path $reuseRoot $diagRelative
+            if (-not (Test-Path -LiteralPath $diagSource -PathType Leaf)) {
+                throw "Reusable diagnostic executable is missing: $diagRelative"
+            }
+            $diagSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $diagSource).Hash.ToLowerInvariant()
+            Assert-NwSameValue "reused diagnostic executable sha256" ([string]$reuseTransfer.diagnostic_sibling.executable_sha256).ToLowerInvariant() $diagSha
+
+            Remove-Item -LiteralPath $transferRoot -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
+            Copy-Item -LiteralPath (Join-Path $reuseRoot "*") -Destination $packageRoot -Recurse -Force
+
+            $targetTransferPath = Join-Path $packageRoot "transfer.json"
+            $targetManifestPath = Join-Path $packageRoot "bundle-manifest.json"
+            $targetTransfer = Get-Content -LiteralPath $targetTransferPath -Raw | ConvertFrom-Json
+            $targetTransfer.target_tier = $TargetTier
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText(
+                $targetTransferPath,
+                (($targetTransfer | ConvertTo-Json -Depth 12) + [Environment]::NewLine),
+                $utf8NoBom
+            )
+            Remove-Item -LiteralPath $targetManifestPath -Force
+
+            $fileRows = @()
+            foreach ($file in Get-ChildItem -LiteralPath $packageRoot -File | Sort-Object Name) {
+                $fileRows += [ordered]@{
+                    path = $file.Name
+                    bytes = [int64]$file.Length
+                    sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+                }
+            }
+            $targetManifest = [ordered]@{
+                format = "nw10-correctness-diagnostic-input-bundle"
+                version = 1
+                task = "NW-10"
+                target_tier = $TargetTier
+                files = $fileRows
+            }
+            [System.IO.File]::WriteAllText(
+                $targetManifestPath,
+                (($targetManifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
+                $utf8NoBom
+            )
+
+            $zip = Join-Path $root ("nw10-correctness-transfer-" + $TargetTier + $bundleSuffix + ".zip")
+            Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+            Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zip -CompressionLevel Optimal
+            Write-Host "[NW10 CORRECTNESS] REUSED_PREPARED_TRANSFER=$reuseRoot"
+            Write-Host "[NW10 CORRECTNESS] TRANSFER_BUNDLE=$zip"
+            Write-Host "[NW10 CORRECTNESS] TARGET_TOOLCHAIN_REQUIRED=False"
+            Write-Host "[NW10 CORRECTNESS] TARGET_DEBUG_CRT_REQUIRED=$(@($reuseTransfer.diagnostic_sibling.dependencies | Where-Object { $_ -match '(?i)(msvcp|vcruntime|ucrtbased).*d\.dll' }).Count -gt 0)"
+            return
         }
 
         $pythonCommand = Get-Command python -ErrorAction SilentlyContinue

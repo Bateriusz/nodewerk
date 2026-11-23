@@ -639,6 +639,7 @@ jobs:
             -PrepareTransferBundle `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier ada `
+            -ReusePreparedTransfer "$PWD/build/nw10-correctness-scripted/transfer-blackwell/transfer-package" `
             -ExpectedBranch ""
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -675,6 +676,7 @@ jobs:
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier ada `
             -PackagingMode packed `
+            -ReusePreparedTransfer "$PWD/build/nw10-correctness-scripted/transfer-blackwell-packed/transfer-package" `
             -ExpectedBranch ""
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
