@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import nw07_capture  # noqa: E402
 import nw07_contract  # noqa: E402
 import nw07_evidence  # noqa: E402
+import nw07_export  # noqa: E402
 import nw10_contract  # noqa: E402
 import nw10_publish_evidence as evidence_publisher  # noqa: E402
 
@@ -288,8 +289,41 @@ def validate_preservation(
         reasons.append("candidate report is not the NW-10 after common artifact")
     if candidate_report.get("performance_contract") != nw10_contract.PERF_CONTRACT_ID:
         reasons.append("candidate report changed the performance contract")
+    if candidate_report.get("performance_protocol") != nw10_contract.PERF_PROTOCOL_ID:
+        reasons.append("candidate report changed the performance protocol")
     if candidate_report.get("profile_id") != nw07_contract.PROFILE_ID:
         reasons.append("candidate report changed the common profile")
+    if candidate_report.get("requirements_digest") != nw07_contract.REQUIREMENTS_DIGEST:
+        reasons.append("candidate report changed the common requirements digest")
+    if candidate_report.get("release_grade") is not True:
+        reasons.append("candidate report is not release-grade")
+    if candidate_report.get("test_payload") is not False:
+        reasons.append("candidate report uses a test payload")
+    build_inputs = candidate_report.get("build_inputs")
+    build_inputs = build_inputs if isinstance(build_inputs, Mapping) else {}
+    if build_inputs.get("matches_frozen_digest") is not True:
+        reasons.append("candidate report does not match frozen NW-07 build inputs")
+    if build_inputs.get("nw10_digest") != nw10_contract.build_inputs_digest(
+        nw10_contract.compute_build_inputs()
+    ):
+        reasons.append("candidate report does not match current NW-10 build inputs")
+    frozen = nw07_export.load_canonical_config()
+    graph = candidate_report.get("common_graph")
+    graph = graph if isinstance(graph, Mapping) else {}
+    if graph.get("path") != str(frozen.get("graph")):
+        reasons.append("candidate report changed the frozen NW-07 graph")
+    dependency = candidate_report.get("dependency_closure")
+    dependency = dependency if isinstance(dependency, Mapping) else {}
+    if dependency.get("matches_manifest") is not True:
+        reasons.append("candidate dependency closure does not match its manifest")
+    runtime_probe = candidate_report.get("runtime_probe")
+    runtime_probe = runtime_probe if isinstance(runtime_probe, Mapping) else {}
+    if (
+        runtime_probe.get("status") != "passed"
+        or runtime_probe.get("exit_code") != 0
+        or runtime_probe.get("uncapped_present_verified") is not True
+    ):
+        reasons.append("candidate runtime/uncapped presentation probe did not pass")
     if before.get("package_sha256") != after.get("package_sha256"):
         reasons.append(
             "before/after canonical package hashes differ; common content is not matched"
@@ -340,6 +374,22 @@ def validate_preservation(
             for reason in reasons
         ),
         "reference_environment": _technical_reference(expected_reference),
+        "candidate": {
+            "comparison_role": candidate_report.get("comparison_role"),
+            "performance_contract": candidate_report.get("performance_contract"),
+            "performance_protocol": candidate_report.get("performance_protocol"),
+            "profile_id": candidate_report.get("profile_id"),
+            "requirements_digest": candidate_report.get("requirements_digest"),
+            "common_graph": copy.deepcopy(candidate_report.get("common_graph")),
+            "build_inputs": copy.deepcopy(candidate_report.get("build_inputs")),
+            "artifact": copy.deepcopy(candidate_artifact),
+            "dependency_closure": copy.deepcopy(
+                candidate_report.get("dependency_closure")
+            ),
+            "runtime_probe": copy.deepcopy(candidate_report.get("runtime_probe")),
+            "release_grade": candidate_report.get("release_grade"),
+            "test_payload": candidate_report.get("test_payload"),
+        },
         "before": {
             "capture_id": before.get("capture_id"),
             "artifact": _artifact_summary(before),
@@ -418,6 +468,40 @@ def _validate_public_for_publish(
         raise ValueError("verified public evidence still contains failure reasons")
     if public.get("matched_environment") is not True:
         raise ValueError("public evidence is not a matched before/after environment")
+
+    candidate = public.get("candidate")
+    if not isinstance(candidate, Mapping):
+        raise ValueError("public evidence has no candidate provenance")
+    if candidate.get("comparison_role") != "after_common_artifact":
+        raise ValueError("public candidate has the wrong comparison role")
+    if candidate.get("performance_contract") != nw10_contract.PERF_CONTRACT_ID:
+        raise ValueError("public candidate changed the performance contract")
+    if candidate.get("performance_protocol") != nw10_contract.PERF_PROTOCOL_ID:
+        raise ValueError("public candidate changed the performance protocol")
+    if candidate.get("profile_id") != nw07_contract.PROFILE_ID:
+        raise ValueError("public candidate changed the common profile")
+    if candidate.get("requirements_digest") != nw07_contract.REQUIREMENTS_DIGEST:
+        raise ValueError("public candidate changed the common requirements digest")
+    if candidate.get("release_grade") is not True or candidate.get("test_payload") is not False:
+        raise ValueError("public candidate is not release-grade")
+    build_inputs = candidate.get("build_inputs")
+    if not isinstance(build_inputs, Mapping) or build_inputs.get("matches_frozen_digest") is not True:
+        raise ValueError("public candidate does not match frozen NW-07 build inputs")
+    if build_inputs.get("nw10_digest") != nw10_contract.build_inputs_digest(
+        nw10_contract.compute_build_inputs()
+    ):
+        raise ValueError("public candidate does not match current NW-10 build inputs")
+    dependency = candidate.get("dependency_closure")
+    if not isinstance(dependency, Mapping) or dependency.get("matches_manifest") is not True:
+        raise ValueError("public candidate dependency closure is not verified")
+    runtime_probe = candidate.get("runtime_probe")
+    if (
+        not isinstance(runtime_probe, Mapping)
+        or runtime_probe.get("status") != "passed"
+        or runtime_probe.get("exit_code") != 0
+        or runtime_probe.get("uncapped_present_verified") is not True
+    ):
+        raise ValueError("public candidate runtime probe is not verified")
 
     comparison = public.get("comparison")
     if not isinstance(comparison, Mapping):
