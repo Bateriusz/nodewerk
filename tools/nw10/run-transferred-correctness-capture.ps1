@@ -58,11 +58,23 @@ if ($exeSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLower
 }
 
 $output = [System.IO.Path]::GetFullPath((Join-Path $here $OutputRoot))
+New-Item -ItemType Directory -Force $output | Out-Null
 $captures = Join-Path $output "captures"
-Remove-Item $output -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $captures | Out-Null
 $verificationFile = "$packagingMode-diagnostic.exe"
 $verificationPath = Join-Path $output $verificationFile
+# OutputRoot may contain unrelated operator files. Remove only result paths
+# owned by this script; never recursively delete OutputRoot itself.
+$ownedOutputPaths = @(
+    $captures,
+    $verificationPath,
+    (Join-Path $output "capture.json"),
+    (Join-Path $output "bundle-manifest.json"),
+    (Join-Path $output ("nw10-correctness-" + $Tier + "-bundle.zip"))
+)
+foreach ($ownedPath in $ownedOutputPaths) {
+    Remove-Item $ownedPath -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Force $captures | Out-Null
 Copy-Item $exe $verificationPath -Force
 $verificationSha = (Get-FileHash -Algorithm SHA256 $verificationPath).Hash.ToLowerInvariant()
 if ($verificationSha -ne ([string]$transfer.diagnostic_sibling.executable_sha256).ToLowerInvariant()) {
@@ -222,7 +234,10 @@ $recordPath = Join-Path $output "capture.json"
 # $OutputRoot\capture.json directly, and the verifier will find its manifest
 # in the same directory.
 $fileRows = @()
-foreach ($file in Get-ChildItem $output -File -Recurse | Sort-Object FullName) {
+$ownedResultFiles = @($recordPath, $verificationPath)
+$ownedResultFiles += @(Get-ChildItem $captures -File -Recurse)
+foreach ($filePath in $ownedResultFiles | Sort-Object FullName) {
+    $file = Get-Item $filePath
     $fileRows += [ordered]@{
         path = Get-RelativePath $output $file.FullName
         bytes = [int64]$file.Length

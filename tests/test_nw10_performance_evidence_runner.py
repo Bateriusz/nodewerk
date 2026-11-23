@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+
+import nw07_capture  # noqa: E402
 
 
 def test_performance_evidence_runner_is_fail_closed_and_explicit() -> None:
@@ -41,3 +45,21 @@ def test_performance_evidence_runner_only_stages_public_allowlist() -> None:
     assert "benchmarks/nw10/evidence-status.v1.json" in stage_block
     assert "benchmarks/nw10/performance-preservation-rtx4060ti.v1.json" in stage_block
     assert "build/" not in stage_block
+
+def test_performance_wrapper_forwards_baseline_root_and_selected_presentmon() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-performance-evidence.ps1"
+    ).read_text(encoding="utf-8")
+    assert "[string]$BeforeArtifactRoot" in text
+    assert '"--before-artifact-root"' in text
+    assert "$presentMonPath = Resolve-NwRepoPath $PresentMon" in text
+    assert "--presentmon build/tools/presentmon/PresentMon-2.6.0-x64.exe" not in text
+
+
+def test_windows_external_command_split_preserves_quoted_path_with_spaces() -> None:
+    command = (
+        'python tools/nw07_presentmon_collector.py --presentmon '
+        '"C:\\Program Files\\PresentMon\\PresentMon.exe"'
+    )
+    tokens = nw07_capture._split_external_command(command, windows=True)
+    assert tokens[-1] == "C:\\Program Files\\PresentMon\\PresentMon.exe"

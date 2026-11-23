@@ -71,8 +71,18 @@ if ($actualExeSha -ne $expectedExeSha) {
 }
 
 $output = [System.IO.Path]::GetFullPath((Join-Path $here $OutputRoot))
-Remove-Item $output -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $output | Out-Null
+# OutputRoot may be an existing operator-owned directory. Never delete it.
+# Clean only paths this script owns from a prior invocation.
+$ownedOutputPaths = @(
+    (Join-Path $output "clean-system-report.json"),
+    (Join-Path $output "clean-system-report-artifacts"),
+    (Join-Path $output "bundle"),
+    (Join-Path $output "nw10-clean-system-result.zip")
+)
+foreach ($ownedPath in $ownedOutputPaths) {
+    Remove-Item $ownedPath -Recurse -Force -ErrorAction SilentlyContinue
+}
 $report = Join-Path $output "clean-system-report.json"
 
 & $python.Source $verifier --fixture $fixture --package $package --deployment $deployment --execution-kind physical --output $report

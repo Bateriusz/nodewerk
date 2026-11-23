@@ -101,6 +101,22 @@ def _utc_seconds(value: Any) -> float | None:
     return parsed.timestamp()
 
 
+def _split_external_command(
+    command: str, *, windows: bool | None = None
+) -> list[str]:
+    """Split a configured external command without retaining Windows quotes."""
+    is_windows = os.name == "nt" if windows is None else windows
+    tokens = shlex.split(command, posix=not is_windows)
+    if is_windows:
+        tokens = [
+            token[1:-1]
+            if len(token) >= 2 and token[0] == token[-1] == '"'
+            else token
+            for token in tokens
+        ]
+    return tokens
+
+
 def _load_json(path: str | None) -> dict[str, Any]:
     if not path:
         return {}
@@ -1080,12 +1096,12 @@ def collect_perf(args: argparse.Namespace) -> dict[str, Any]:
             identity,
             failure="release executable does not match the published final artifact",
         )
-    collector = shlex.split(args.collector_command, posix=os.name != "nt")
+    collector = _split_external_command(args.collector_command)
     if not collector:
         return _failed_collection_capture(
             args, identity, failure="a measurement collector command is required"
         )
-    player_args = shlex.split(args.player_args, posix=os.name != "nt")
+    player_args = _split_external_command(args.player_args)
     samples_dir = Path(args.samples_dir)
     samples_dir.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {

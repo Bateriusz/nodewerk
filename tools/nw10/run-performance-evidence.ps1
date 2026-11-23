@@ -5,6 +5,7 @@ param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
     [string]$ExpectedBranch = "agent/NW-10",
     [string]$BeforeEvidence = "build/nw07-reference-perf-evidence.json",
+    [string]$BeforeArtifactRoot = "",
     [string]$BeforeCaptureId = "nw07-ref-4060ti-20261117",
     [string]$PerfContract = "build/nw07-perf-ref-bound.json",
     [string]$PerfReference = "build/nw07-reference-bound.json",
@@ -230,7 +231,8 @@ try {
     if (-not (Test-Path $candidateExe -PathType Leaf)) {
         throw "After candidate executable is missing: $candidateExe"
     }
-    $collectorCommand = "python tools/nw07_presentmon_collector.py --presentmon build/tools/presentmon/PresentMon-2.6.0-x64.exe"
+    $presentMonPath = Resolve-NwRepoPath $PresentMon
+    $collectorCommand = 'python tools/nw07_presentmon_collector.py --presentmon "' + $presentMonPath + '"'
     $collectArgs = @(
         "tools/nw10_perf_preservation.py", "collect-after",
         "--package", $candidateRoot,
@@ -248,6 +250,13 @@ try {
         "--raw-evidence", $rawEvidence,
         "--public-evidence", $publicLocal
     )
+    if (-not [string]::IsNullOrWhiteSpace($BeforeArtifactRoot)) {
+        $resolvedBeforeArtifactRoot = Resolve-NwRepoPath $BeforeArtifactRoot
+        if (-not (Test-Path $resolvedBeforeArtifactRoot -PathType Container)) {
+            throw "Before artifact root is missing: $BeforeArtifactRoot"
+        }
+        $collectArgs += @("--before-artifact-root", $resolvedBeforeArtifactRoot)
+    }
     foreach ($token in $privacyTokens) {
         $collectArgs += @("--forbid-token", $token)
     }
