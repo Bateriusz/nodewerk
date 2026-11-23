@@ -21,8 +21,18 @@ _PACKAGE_BYTES = b"nw10-feasibility-package-fixture-" * 32
 _PACKAGE_SHA = hashlib.sha256(_PACKAGE_BYTES).hexdigest()
 _MANIFEST_DIGEST = b"\x11" * 32
 _MANIFEST_SHA = hashlib.sha256(_MANIFEST_DIGEST).hexdigest()
+_UNPACKED_DIAGNOSTIC_MANIFEST = b"\x21" * 32
+_PACKED_DIAGNOSTIC_MANIFEST = b"\x22" * 32
+_UNPACKED_DIAGNOSTIC_MANIFEST_SHA = hashlib.sha256(
+    _UNPACKED_DIAGNOSTIC_MANIFEST
+).hexdigest()
+_PACKED_DIAGNOSTIC_MANIFEST_SHA = hashlib.sha256(
+    _PACKED_DIAGNOSTIC_MANIFEST
+).hexdigest()
 _UNPACKED_EXE = nw05_export.embed_package(
-    b"MZ" + b"\x00" * 128, _PACKAGE_BYTES, _MANIFEST_DIGEST
+    b"MZ" + b"\x00" * 128,
+    _PACKAGE_BYTES,
+    _UNPACKED_DIAGNOSTIC_MANIFEST,
 )
 _COMPACT_CONTAINER = compact.encode_compact(
     _PACKAGE_BYTES,
@@ -30,7 +40,9 @@ _COMPACT_CONTAINER = compact.encode_compact(
     layout_id=contract.LAYOUT_SOA_ID,
 )
 _PACKED_EXE = nw05_export.embed_package(
-    b"MZ" + b"\x00" * 128, _COMPACT_CONTAINER.bytes, _MANIFEST_DIGEST
+    b"MZ" + b"\x00" * 128,
+    _COMPACT_CONTAINER.bytes,
+    _PACKED_DIAGNOSTIC_MANIFEST,
 )
 _UNPACKED_SHA = hashlib.sha256(_UNPACKED_EXE).hexdigest()
 _PACKED_SHA = hashlib.sha256(_PACKED_EXE).hexdigest()
@@ -494,6 +506,9 @@ def _correctness() -> dict:
             "unpacked_executable_sha256": _UNPACKED_SHA,
             "packed_executable_sha256": _PACKED_SHA,
             "encoded_container_sha256": _ENCODED_SHA,
+            "encoded_container_bytes": len(_COMPACT_CONTAINER.bytes),
+            "unpacked_manifest_sha256": _UNPACKED_DIAGNOSTIC_MANIFEST_SHA,
+            "packed_manifest_sha256": _PACKED_DIAGNOSTIC_MANIFEST_SHA,
             "codec_id": "nwc.codec.mszip.v1",
             "layout_id": "nwc.layout.soa.v1",
             "device_form_factor_source": "win32_system_enclosure_and_battery",
@@ -530,6 +545,9 @@ def _correctness() -> dict:
                 "unpacked_executable_sha256": _UNPACKED_SHA,
                 "packed_executable_sha256": _PACKED_SHA,
                 "encoded_container_sha256": _ENCODED_SHA,
+                "encoded_container_bytes": len(_COMPACT_CONTAINER.bytes),
+                "unpacked_manifest_sha256": _UNPACKED_DIAGNOSTIC_MANIFEST_SHA,
+                "packed_manifest_sha256": _PACKED_DIAGNOSTIC_MANIFEST_SHA,
             },
         },
         "blackwell": {
@@ -545,6 +563,9 @@ def _correctness() -> dict:
                 "unpacked_executable_sha256": _UNPACKED_SHA,
                 "packed_executable_sha256": _PACKED_SHA,
                 "encoded_container_sha256": _ENCODED_SHA,
+                "encoded_container_bytes": len(_COMPACT_CONTAINER.bytes),
+                "unpacked_manifest_sha256": _UNPACKED_DIAGNOSTIC_MANIFEST_SHA,
+                "packed_manifest_sha256": _PACKED_DIAGNOSTIC_MANIFEST_SHA,
             },
         },
         "comparison": {
@@ -1138,37 +1159,20 @@ def test_encoded_payload_identity_is_cross_bound_across_all_evidence(
     assert record["certification"][failed_gate]["status"] == "failed"
 
 
-def test_retained_diagnostic_manifest_must_match_intro_manifest(monkeypatch) -> None:
+def test_retained_diagnostic_manifest_must_match_declared_identity(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         feasibility.nw07_evidence,
         "validate_perf_contract",
         lambda record: {"status": "frozen", "reasons": [], "missing_bindings": []},
     )
-    other_manifest = b"\x22" * 32
-    unpacked = nw05_export.embed_package(
-        b"MZ" + b"\x00" * 128, _PACKAGE_BYTES, other_manifest
-    )
-    packed = nw05_export.embed_package(
-        b"MZ" + b"\x00" * 128, _COMPACT_CONTAINER.bytes, other_manifest
-    )
-    unpacked_sha = hashlib.sha256(unpacked).hexdigest()
-    packed_sha = hashlib.sha256(packed).hexdigest()
     correctness = copy.deepcopy(_correctness())
     for tier in ("ada", "blackwell"):
         correctness["packed_unpacked_comparison"]["runtime"][tier][
-            "unpacked_executable_sha256"
-        ] = unpacked_sha
-        correctness["packed_unpacked_comparison"]["runtime"][tier][
-            "packed_executable_sha256"
-        ] = packed_sha
-        correctness[tier]["artifact"][
-            "unpacked_executable_sha256"
-        ] = unpacked_sha
-        correctness[tier]["artifact"]["packed_executable_sha256"] = packed_sha
-    evidence = {
-        "ada": {"unpacked": unpacked, "packed": packed},
-        "blackwell": {"unpacked": unpacked, "packed": packed},
-    }
+            "packed_manifest_sha256"
+        ] = "9" * 64
+        correctness[tier]["artifact"]["packed_manifest_sha256"] = "9" * 64
     record = feasibility.build_feasibility(
         outcome=_outcome(),
         proof=_proof(),
@@ -1180,7 +1184,7 @@ def test_retained_diagnostic_manifest_must_match_intro_manifest(monkeypatch) -> 
         system_validation=_system_validation(),
         performance=_performance(),
         correctness=correctness,
-        correctness_evidence=evidence,
+        correctness_evidence=_correctness_evidence(),
         perf_contract=_perf_contract(),
     )
     assert record["target_met"] is False
