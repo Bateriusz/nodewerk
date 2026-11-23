@@ -30,6 +30,7 @@ from typing import Any, Mapping
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
+import nw03_compiler as nw03  # noqa: E402
 import nw05_export  # noqa: E402
 import nw07_contract  # noqa: E402
 import nw07_evidence  # noqa: E402
@@ -37,10 +38,12 @@ import nw07_export  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 import nw10_compact as compact  # noqa: E402
 import nw10_contract as contract  # noqa: E402
+import nw10_intro  # noqa: E402
 
 FORMAT = "nw10-common-artifact-correctness-capture"
 VERSION = 1
 PACKAGING_MODES = ("unpacked", "packed")
+DIAGNOSTIC_SOURCES = ("nw07", "nw10_intro")
 ALL_TICKS = tuple(nw07_contract.REQUIRED_FIXED_TICKS) + (
     nw07_contract.LOOP_BOUNDARY_TICKS[1],
 )
@@ -295,18 +298,35 @@ def build_diagnostic(
     packaging_mode: str = "unpacked",
     codec_id: str = "auto",
     layout_id: str = "auto",
+    source_kind: str = "nw07",
 ) -> dict[str, Any]:
     if packaging_mode not in PACKAGING_MODES:
         raise ValueError(
             f"diagnostic packaging mode must be one of {PACKAGING_MODES}"
         )
+    if source_kind not in DIAGNOSTIC_SOURCES:
+        raise ValueError(
+            f"diagnostic source must be one of {DIAGNOSTIC_SOURCES}"
+        )
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"diagnostic output directory is not empty: {output}")
     expected = _identity(expected_package)
-    config = nw07_export.load_canonical_config()
-    pinned = nw07_export.verify_pinned_inputs(config)
-    if pinned.get("matches_frozen_digest") is not True:
-        raise ValueError("frozen NW-07 pinned build-input digest does not match")
+    generated_shaders_override = None
+    frozen_embedded_specialization = False
+    if source_kind == "nw10_intro":
+        graph_path = REPO_ROOT / contract.INTRO_GRAPH
+        nw10_intro.validate_intro_graph(graph_path)
+        document = nw03.load_graph(graph_path)
+        generated_shaders_override = (
+            nw10_intro._intro_generated_shader(document),
+        )
+        frozen_embedded_specialization = True
+    else:
+        config = nw07_export.load_canonical_config()
+        pinned = nw07_export.verify_pinned_inputs(config)
+        if pinned.get("matches_frozen_digest") is not True:
+            raise ValueError("frozen NW-07 pinned build-input digest does not match")
+        graph_path = REPO_ROOT / str(config["graph"])
     template_configuration = nw05_export._template_build_configuration(
         Path(player_template)
     )
@@ -329,16 +349,20 @@ def build_diagnostic(
         player_template=str(player_template),
         specialized_build_root=str(specialized_build_root),
         present_sync_interval=0,
-        frozen_embedded_specialization=False,
+        frozen_embedded_specialization=frozen_embedded_specialization,
         include_optional_artifacts=False,
         allow_optional_profiles=False,
     )
+    export_kwargs: dict[str, Any] = {}
+    if generated_shaders_override is not None:
+        export_kwargs["generated_shaders_override"] = generated_shaders_override
     nw05_export.export_graph(
-        REPO_ROOT / str(config["graph"]),
+        graph_path,
         output,
         settings=settings,
         dxc_executable=dxc_executable,
         optimization="O2",
+        **export_kwargs,
     )
 
     stem = nw05_export._profile_file_stem(nw07_contract.PROFILE_ID)
@@ -424,6 +448,7 @@ def build_diagnostic(
         "layout_id": encoded.layout_id if encoded is not None else None,
         "capture_controls_required": True,
         "capture_protocol": nw07_contract.CORRECTNESS_CAPTURE_PROTOCOL,
+        "source_kind": source_kind,
     }
 
 
@@ -1422,6 +1447,9 @@ def main(argv: list[str] | None = None) -> int:
         "--mode", choices=PACKAGING_MODES, default="unpacked"
     )
     build.add_argument(
+        "--source", choices=DIAGNOSTIC_SOURCES, default="nw07"
+    )
+    build.add_argument(
         "--codec", default="auto", choices=("auto", *contract.PLAYER_SUPPORTED_CODEC_IDS)
     )
     build.add_argument(
@@ -1465,6 +1493,7 @@ def main(argv: list[str] | None = None) -> int:
                 packaging_mode=args.mode,
                 codec_id=args.codec,
                 layout_id=args.layout,
+                source_kind=args.source,
             )
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(
