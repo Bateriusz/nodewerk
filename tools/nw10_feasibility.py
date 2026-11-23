@@ -416,12 +416,17 @@ def _certify_compact_candidate(
         }
         closure_verified = (
             dependency_closure.get("closure_verified") is True
+            and dependency_closure.get("fixture_id") == "nw10_validated"
+            and dependency_closure.get("profile") == "compact_experiment"
             and reported_binary_sha == validated_sha
+            and dependency_closure.get("binary_bytes") == validated_size
+            and isinstance(sidecars, list)
             and not sidecars
+            and bool(imported_dlls)
+            and imported_dlls <= dependency_names
             and (
                 validated_mode != "compact"
                 or "cabinet" in imported_dlls
-                or "cabinet" in dependency_names
             )
         )
         dependency_verification = _verification(
@@ -433,8 +438,11 @@ def _certify_compact_candidate(
             ),
             sidecar_files=list(sidecars or []),
             imported_dlls=list(dependency_closure.get("canonical_imports") or []),
+            fixture_id=dependency_closure.get("fixture_id"),
+            profile=dependency_closure.get("profile"),
             binary_sha256=reported_binary_sha or None,
-            binary_binding="verified",
+            binary_bytes=dependency_closure.get("binary_bytes"),
+            binary_binding="verified" if closure_verified else "failed",
         )
     else:
         dependency_verification = _verification(
