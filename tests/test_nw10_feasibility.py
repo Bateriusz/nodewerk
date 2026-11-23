@@ -799,6 +799,7 @@ def _stub_artifact_backed_facts(monkeypatch: pytest.MonkeyPatch) -> None:
             "manifest_sha256": _MANIFEST_SHA,
             "manifest_bytes": canonical.get("manifest_bytes", 6000),
             "manifest": copy.deepcopy(_LINK_MANIFEST),
+            "artifact_key": str(canonical.get("artifact_key", "")),
             "canonical_executable_sha256": str(canonical["executable_sha256"]),
             "canonical_executable_bytes": canonical_size,
             "canonical_player_image_bytes": (
@@ -843,6 +844,7 @@ def test_artifact_verifier_derives_ground_truth_from_files(
         "profile_id": summary["profile_id"],
         "requirements_digest": summary["requirements_digest"],
         "manifest_sha256": "",
+        "artifact_identity": "sha256:v1:" + "c" * 64,
         "shaders": [{"blob_bytes": shader_bytes, "specialization_id": "fixture"}],
         "retained": {"dependencies": ["d3d12", "kernel32"]},
     }
@@ -902,6 +904,7 @@ def test_artifact_verifier_derives_ground_truth_from_files(
             "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
             "manifest_bytes": len(manifest_bytes),
             "link_manifest": manifest,
+            "artifact_key": manifest["artifact_identity"],
         }
     )
     intro["compact_artifact"].update(
