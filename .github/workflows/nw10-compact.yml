@@ -382,7 +382,7 @@ jobs:
             $runtimeExitCode = [int]$outcome.compact_candidate_exit_code
           } else {
             $runtimeStatus = "pending_runtime_validation"
-            $runtimeExitCode = 0
+            $runtimeExitCode = $null
           }
           $stem = "nw_common_d3d12_fl12_0_sm6_0_v1"
           $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
@@ -424,21 +424,26 @@ jobs:
             }
           }
 
-          python tools/nw10_pe_ledger.py `
-            --final-executable "$PWD/build/nw10-intro/compact/$stem.exe" `
-            --linker-baseline-executable "$PWD/build/nw10-intro-link-control/compact/$stem.exe" `
-            --decoder-on-template "$template" `
-            --decoder-off-template "$PWD/build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe" `
-            --final-package "$PWD/build/nw10-intro/$stem.nwp" `
-            --linker-baseline-package "$PWD/build/nw10-intro-link-control/$stem.nwp" `
-            --final-manifest "$PWD/build/nw10-intro/$stem.manifest.json" `
-            --linker-baseline-manifest "$PWD/build/nw10-intro-link-control/$stem.manifest.json" `
-            --runtime-status $runtimeStatus `
-            --runtime-exit-code $runtimeExitCode `
-            --prior-valid-ledger "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json" `
-            --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
-            --workflow-run-id $env:GITHUB_RUN_ID `
-            --output "$PWD/build/nw10-windows-pe-ledger.json"
+          $ledgerArgs = @(
+            "tools/nw10_pe_ledger.py",
+            "--final-executable", "$PWD/build/nw10-intro/compact/$stem.exe",
+            "--linker-baseline-executable", "$PWD/build/nw10-intro-link-control/compact/$stem.exe",
+            "--decoder-on-template", $template,
+            "--decoder-off-template", "$PWD/build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe",
+            "--final-package", "$PWD/build/nw10-intro/$stem.nwp",
+            "--linker-baseline-package", "$PWD/build/nw10-intro-link-control/$stem.nwp",
+            "--final-manifest", "$PWD/build/nw10-intro/$stem.manifest.json",
+            "--linker-baseline-manifest", "$PWD/build/nw10-intro-link-control/$stem.manifest.json",
+            "--runtime-status", $runtimeStatus,
+            "--prior-valid-ledger", "$PWD/benchmarks/nw10/windows-pe-ledger.v1.json",
+            "--source-head-sha", "${{ github.event.pull_request.head.sha || github.sha }}",
+            "--workflow-run-id", $env:GITHUB_RUN_ID,
+            "--output", "$PWD/build/nw10-windows-pe-ledger.json"
+          )
+          if ($null -ne $runtimeExitCode) {
+            $ledgerArgs += @("--runtime-exit-code", [string]$runtimeExitCode)
+          }
+          python @ledgerArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/schema_validator.py `
             --document "$PWD/build/nw10-windows-pe-ledger.json" `

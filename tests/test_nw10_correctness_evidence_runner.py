@@ -238,3 +238,12 @@ def test_docs_point_packed_comparison_at_verifiable_bundle() -> None:
     assert "build/nw10-correctness-scripted/blackwell-packed/capture.json" not in text
     assert "build/nw10-correctness-scripted/ada/capture.json" not in text
     assert "build/nw10-correctness-scripted/blackwell/capture.json" not in text
+
+def test_transferred_correctness_does_not_delete_output_root_or_manifest_unrelated_files() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10" / "run-transferred-correctness-capture.ps1"
+    ).read_text(encoding="utf-8")
+    assert "Remove-Item $output -Recurse" not in text
+    assert "$ownedOutputPaths" in text
+    assert "$ownedResultFiles" in text
+    assert "Get-ChildItem $output -File -Recurse" not in text

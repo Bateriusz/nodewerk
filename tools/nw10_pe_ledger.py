@@ -308,6 +308,14 @@ def build_report(
         "rejected_runtime_failure",
     }:
         raise ValueError(f"unsupported runtime status: {runtime_status}")
+    if runtime_status == "validated_runnable" and runtime_exit_code != 0:
+        raise ValueError("validated runnable runtime status requires exit code zero")
+    if runtime_status == "pending_runtime_validation" and runtime_exit_code is not None:
+        raise ValueError("pending runtime status requires an unobserved/null exit code")
+    if runtime_status == "rejected_runtime_failure" and (
+        runtime_exit_code is None or runtime_exit_code == 0
+    ):
+        raise ValueError("rejected runtime failure requires an observed nonzero exit code")
     final = pe_summary(final_executable)
     linker_baseline = pe_summary(linker_baseline_executable)
     decoder_on = pe_summary(decoder_on_template)
@@ -718,7 +726,7 @@ def main() -> int:
         ),
         default="validated_runnable",
     )
-    parser.add_argument("--runtime-exit-code", type=int, default=0)
+    parser.add_argument("--runtime-exit-code", type=int, default=None)
     parser.add_argument("--prior-valid-ledger", type=Path)
     parser.add_argument("--source-head-sha")
     parser.add_argument("--workflow-run-id", type=int)

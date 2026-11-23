@@ -204,3 +204,33 @@ def test_removed_security_mitigation_fails_closed(tmp_path: Path, monkeypatch) -
             final_manifest=manifest,
             linker_baseline_manifest=manifest,
         )
+
+def test_runtime_status_and_exit_code_contract_fails_closed() -> None:
+    base = dict(
+        final_executable=Path("unused-final.exe"),
+        linker_baseline_executable=Path("unused-baseline.exe"),
+        decoder_on_template=Path("unused-on.exe"),
+        decoder_off_template=Path("unused-off.exe"),
+        final_package=Path("unused-final.nwp"),
+        linker_baseline_package=Path("unused-baseline.nwp"),
+        final_manifest=Path("unused-final.json"),
+        linker_baseline_manifest=Path("unused-baseline.json"),
+    )
+    with pytest.raises(ValueError, match="pending runtime status"):
+        ledger.build_report(
+            **base,
+            runtime_status="pending_runtime_validation",
+            runtime_exit_code=0,
+        )
+    with pytest.raises(ValueError, match="validated runnable"):
+        ledger.build_report(
+            **base,
+            runtime_status="validated_runnable",
+            runtime_exit_code=None,
+        )
+    with pytest.raises(ValueError, match="rejected runtime failure"):
+        ledger.build_report(
+            **base,
+            runtime_status="rejected_runtime_failure",
+            runtime_exit_code=0,
+        )
