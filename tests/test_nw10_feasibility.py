@@ -12,6 +12,7 @@ import nw10_feasibility as feasibility  # noqa: E402
 import nw10_contract as contract  # noqa: E402
 import nw05_export  # noqa: E402
 import nw10_compact as compact  # noqa: E402
+import nwp_package as nwp  # noqa: E402
 from schema_validator import validate_instance  # noqa: E402
 import json  # noqa: E402
 import pytest  # noqa: E402
@@ -20,7 +21,6 @@ import pytest  # noqa: E402
 _PACKAGE_BYTES = b"nw10-feasibility-package-fixture-" * 32
 _PACKAGE_SHA = hashlib.sha256(_PACKAGE_BYTES).hexdigest()
 _MANIFEST_DIGEST = b"\x11" * 32
-_MANIFEST_SHA = hashlib.sha256(_MANIFEST_DIGEST).hexdigest()
 _UNPACKED_DIAGNOSTIC_MANIFEST = b"\x21" * 32
 _PACKED_DIAGNOSTIC_MANIFEST = b"\x22" * 32
 _UNPACKED_DIAGNOSTIC_MANIFEST_SHA = hashlib.sha256(
@@ -47,6 +47,30 @@ _PACKED_EXE = nw05_export.embed_package(
 _UNPACKED_SHA = hashlib.sha256(_UNPACKED_EXE).hexdigest()
 _PACKED_SHA = hashlib.sha256(_PACKED_EXE).hexdigest()
 _ENCODED_SHA = hashlib.sha256(_COMPACT_CONTAINER.bytes).hexdigest()
+_LINK_MANIFEST = {
+    "format": "nw05-player-link-manifest",
+    "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+    "manifest_sha256": "",
+    "shaders": [
+        {
+            "blob_bytes": 232,
+            "specialization_id": "image",
+            "target": "cs_6_0",
+            "unfused": False,
+        }
+    ],
+    "retained": {
+        "dependencies": ["d3d12", "dxgi", "gdi32", "kernel32", "user32"]
+    },
+}
+_LINK_MANIFEST["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
+    nwp.canonical_json_bytes(
+        {key: value for key, value in _LINK_MANIFEST.items() if key != "manifest_sha256"}
+    )
+).hexdigest()
+_MANIFEST_SHA = hashlib.sha256(
+    json.dumps(_LINK_MANIFEST, indent=2, sort_keys=True).encode("utf-8")
+).hexdigest()
 
 # Performance preservation is an independent NW-07 production track.  Keep
 # its package/artifact identities deliberately different from the restricted
@@ -98,7 +122,13 @@ def _intro() -> dict:
         "nw10_build_inputs_digest": contract.build_inputs_digest(
             contract.compute_build_inputs()
         ),
-        "measurements": {"package": {"shader_bytes": 232}},
+        "measurements": {
+            "package": {
+                "package_sha256": _PACKAGE_SHA,
+                "package_bytes": len(_PACKAGE_BYTES),
+                "shader_bytes": 232,
+            }
+        },
         "canonical_artifact": {
             "artifact_key": "sha256:v1:" + "a" * 64,
             "executable_bytes": 240_000,
@@ -107,6 +137,7 @@ def _intro() -> dict:
             "package_bytes": len(_PACKAGE_BYTES),
             "manifest_sha256": _MANIFEST_SHA,
             "manifest_bytes": 6_000,
+            "link_manifest": copy.deepcopy(_LINK_MANIFEST),
         },
         "compact_artifact": {
             "executable_bytes": 65_000,
@@ -1606,6 +1637,38 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
         == "failed"
     )
 
+    fabricated_measurement = copy.deepcopy(intro)
+    fabricated_measurement["measurements"]["package"]["shader_bytes"] = 1
+    for ledger_name in ("canonical", "compact"):
+        fabricated_measurement["ledgers"][ledger_name]["components"][
+            "shader_payload_bytes"
+        ] = 1
+    fabricated_measurement_record = feasibility.build_feasibility(
+        outcome=outcome,
+        proof=_proof(),
+        intro=fabricated_measurement,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=dependency,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert fabricated_measurement_record["target_met"] is False
+    assert (
+        fabricated_measurement_record["certification"][
+            "all_required_bytes_accounted"
+        ]["status"]
+        == "failed"
+    )
+    assert (
+        fabricated_measurement_record["certification"]["visual"]["status"]
+        == "failed"
+    )
+
     bad_selected_dependencies = copy.deepcopy(intro)
     bad_selected_dependencies["ledgers"]["canonical"]["dependencies"].append(
         {
@@ -1664,6 +1727,47 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     assert bad_compact_dependency_record["target_met"] is False
     assert (
         bad_compact_dependency_record["certification"]["visual"]["status"]
+        == "failed"
+    )
+
+    forbidden_closure = copy.deepcopy(dependency)
+    forbidden_closure["canonical_imports"] = [
+        "d3d12.dll",
+        "kernel32.dll",
+        "dxcompiler.dll",
+    ]
+    forbidden_intro = copy.deepcopy(intro)
+    for ledger_name in ("canonical", "compact"):
+        forbidden_intro["ledgers"][ledger_name]["dependencies"].append(
+            {
+                "name": "dxcompiler.dll",
+                "kind": "windows_inbox",
+                "distributed_bytes": 0,
+            }
+        )
+    forbidden_record = feasibility.build_feasibility(
+        outcome=outcome,
+        proof=_proof(),
+        intro=forbidden_intro,
+        run_id=1,
+        head_sha="1" * 40,
+        pe_ledger=pe,
+        dependency_closure=forbidden_closure,
+        system_validation=system,
+        performance=performance,
+        correctness=correctness,
+        correctness_evidence=_correctness_evidence(),
+        perf_contract=_perf_contract(),
+    )
+    assert forbidden_record["target_met"] is False
+    assert (
+        forbidden_record["certification"]["dependency_closure"]["status"]
+        == "failed"
+    )
+    assert (
+        forbidden_record["certification"]["all_required_bytes_accounted"][
+            "status"
+        ]
         == "failed"
     )
 

@@ -9,6 +9,7 @@ the true at-most-65536-byte success branches are representable.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import math
@@ -29,6 +30,7 @@ import nw07_export  # noqa: E402
 import nw05_export  # noqa: E402
 import nw10_compact as compact  # noqa: E402
 import nw10_perf_preservation  # noqa: E402
+import nwp_package as nwp  # noqa: E402
 from schema_validator import (  # noqa: E402
     SchemaValidationError,
     validate_file_against_schema,
@@ -40,6 +42,9 @@ FORMAT = "nw10-windows-compact-feasibility"
 WINDOWS_EXIT_MIN = -(2**31)
 WINDOWS_EXIT_MAX = 2**31 - 1
 PERF_REFERENCE_PATH = REPO_ROOT / "benchmarks" / "nw07" / "perf-ref-v1.json"
+DEPENDENCY_INVENTORY_PATH = (
+    REPO_ROOT / "benchmarks" / "dependency-inventory.v1.json"
+)
 
 
 def _windows_exit_code(value: Any, *, default: int | None = None) -> int | None:
@@ -221,6 +226,37 @@ def _normalized_dependency_names(rows: Any) -> set[str] | None:
     return names
 
 
+@functools.lru_cache(maxsize=1)
+def _dependency_inventory() -> dict[str, Any]:
+    value = json.loads(
+        DEPENDENCY_INVENTORY_PATH.read_text(encoding="utf-8")
+    )
+    if not isinstance(value, dict):
+        raise ValueError("dependency inventory is not a JSON object")
+    return value
+
+
+def _normalized_imports(values: Any) -> set[str]:
+    return {
+        str(item).lower().removesuffix(".dll")
+        for item in (values or [])
+        if str(item).strip()
+    }
+
+
+def _manifest_self_digest_ok(manifest: Mapping[str, Any]) -> bool:
+    declared = str(manifest.get("manifest_sha256", ""))
+    if re.fullmatch(r"sha256:v1:[0-9a-f]{64}", declared) is None:
+        return False
+    without_digest = {
+        key: value for key, value in manifest.items() if key != "manifest_sha256"
+    }
+    computed = "sha256:v1:" + hashlib.sha256(
+        nwp.canonical_json_bytes(without_digest)
+    ).hexdigest()
+    return declared == computed
+
+
 def _verification(
     status: str, reason: str, **details: Any
 ) -> dict[str, Any]:
@@ -303,19 +339,102 @@ def _certify_compact_candidate(
         if isinstance(intro_package_measurements, Mapping)
         else {}
     )
+    link_manifest = canonical_intro.get("link_manifest")
+    link_manifest = (
+        link_manifest if isinstance(link_manifest, Mapping) else {}
+    )
+    link_shaders = link_manifest.get("shaders")
+    link_shaders = link_shaders if isinstance(link_shaders, list) else []
+    link_shader_blob_bytes: list[int] = []
+    link_shader_bytes_ok = bool(link_shaders)
+    for shader in link_shaders:
+        if not isinstance(shader, Mapping) or not _is_positive_int(
+            shader.get("blob_bytes")
+        ):
+            link_shader_bytes_ok = False
+            break
+        link_shader_blob_bytes.append(int(shader["blob_bytes"]))
+    link_shader_bytes = sum(link_shader_blob_bytes)
+    link_manifest_present = bool(link_manifest) and bool(link_shaders)
+    link_manifest_file_sha = hashlib.sha256(
+        json.dumps(link_manifest, indent=2, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    manifest_file_sha_ok = link_manifest_file_sha == canonical_manifest_sha
+    link_manifest_ok = (
+        link_manifest_present
+        and link_shader_bytes_ok
+        and _manifest_self_digest_ok(link_manifest)
+        and manifest_file_sha_ok
+    )
+    intro_package_measurement_present = all(
+        key in intro_package_measurements
+        for key in ("package_sha256", "package_bytes", "shader_bytes")
+    )
     measured_shader_bytes = intro_package_measurements.get("shader_bytes")
-    measured_shader_bytes_ok = _is_positive_int(measured_shader_bytes)
+    intro_package_measurement_ok = (
+        intro_package_measurement_present
+        and str(
+            intro_package_measurements.get("package_sha256", "")
+        ).lower()
+        == canonical_package_sha
+        and intro_package_measurements.get("package_bytes")
+        == canonical_package_bytes
+    )
+    intro_shader_measurement_present = (
+        intro_package_measurement_present and link_manifest_present
+    )
+    intro_shader_measurement_ok = (
+        intro_package_measurement_ok
+        and link_manifest_ok
+        and _is_positive_int(measured_shader_bytes)
+        and int(measured_shader_bytes) == link_shader_bytes
+    )
     dependency_closure_available = isinstance(dependency_closure, Mapping)
+    dependency_closure_valid = False
     expected_selected_dependencies: set[str] | None = None
     expected_compact_dependencies: set[str] | None = None
     if dependency_closure_available:
-        imported = {
-            str(item).lower().removesuffix(".dll")
-            for item in (dependency_closure.get("canonical_imports") or [])
-            if str(item).strip()
-        }
-        expected_selected_dependencies = imported
-        expected_compact_dependencies = imported | {"cabinet"}
+        inventory = _dependency_inventory()
+        closures = inventory.get("closures")
+        closures = closures if isinstance(closures, Mapping) else {}
+        profile = str(dependency_closure.get("profile", ""))
+        closure_spec = closures.get(profile)
+        closure_spec = (
+            closure_spec if isinstance(closure_spec, Mapping) else {}
+        )
+        allowed_imports = _normalized_imports(
+            closure_spec.get("allowed_import_dlls")
+        )
+        inbox_imports = _normalized_imports(
+            [
+                item.get("dll_name")
+                for item in inventory.get("inbox_windows_allowlist", [])
+                if isinstance(item, Mapping)
+            ]
+        )
+        forbidden_imports = _normalized_imports(
+            inventory.get("forbidden_release_imports")
+        )
+        imported = _normalized_imports(
+            dependency_closure.get("canonical_imports")
+        )
+        sidecars = list(dependency_closure.get("sidecar_files") or [])
+        reported_binary_sha = str(
+            dependency_closure.get("binary_sha256", "")
+        ).lower()
+        dependency_closure_valid = (
+            profile == "compact_experiment"
+            and dependency_closure.get("closure_verified") is True
+            and bool(imported)
+            and imported <= allowed_imports
+            and imported <= inbox_imports
+            and not (imported & forbidden_imports)
+            and not sidecars
+            and reported_binary_sha == validated_sha
+        )
+        if dependency_closure_valid:
+            expected_selected_dependencies = imported
+            expected_compact_dependencies = imported | {"cabinet"}
     compact_dependency_rows_present = bool(
         isinstance(compact_ledger.get("dependencies"), list)
         and compact_ledger.get("dependencies")
@@ -412,7 +531,7 @@ def _certify_compact_candidate(
         )
         and compact_components.get("embedded_manifest_binding_bytes") == 32
         and compact_components.get("embedded_footer_bytes") == 92
-        and measured_shader_bytes_ok
+        and intro_shader_measurement_ok
         and compact_components.get("shader_payload_bytes")
         == measured_shader_bytes
         and compact_components.get("shader_payload_bytes")
@@ -425,6 +544,7 @@ def _certify_compact_candidate(
         and not compact_ledger.get("required_auxiliary_files")
         and compact_dependency_rows_present
         and compact_dependencies_ok
+        and (not dependency_closure_available or dependency_closure_valid)
         and compact_decoder_accounting_ok
         and (
             validated_mode != "compact"
@@ -554,13 +674,14 @@ def _certify_compact_candidate(
         )
         and _is_positive_int(components.get("embedded_footer_bytes"))
         and _is_positive_int(components.get("shader_payload_bytes"))
-        and measured_shader_bytes_ok
+        and intro_shader_measurement_present
         and selected_dependency_rows_present
         and bool(str(ledger.get("codec_id", "")))
         and bool(str(ledger.get("layout_id", "")))
     )
     ledger_identity_ok = (
         ledger_identity_present
+        and intro_shader_measurement_ok
         and ledger.get("complete_runnable_distribution_bytes") == validated_size
         and ledger.get("selected_executable_bytes") == validated_size
         and ledger.get("complete_runnable_distribution_bytes")
@@ -576,6 +697,7 @@ def _certify_compact_candidate(
         and str(ledger.get("codec_id", "")) == expected_ledger_codec
         and str(ledger.get("layout_id", "")) == expected_ledger_layout
         and selected_dependencies_ok
+        and (not dependency_closure_available or dependency_closure_valid)
         and ledger_accounting_consistent
     )
     bytes_ok = bytes_accounted and no_required_sidecars and ledger_identity_ok
@@ -633,10 +755,8 @@ def _certify_compact_candidate(
             for item in (dependency_closure.get("canonical_imports") or [])
         }
         closure_verified = (
-            dependency_closure.get("closure_verified") is True
+            dependency_closure_valid
             and dependency_closure.get("fixture_id") == "nw10_validated"
-            and dependency_closure.get("profile") == "compact_experiment"
-            and reported_binary_sha == validated_sha
             and dependency_closure.get("binary_bytes") == validated_size
             and isinstance(sidecars, list)
             and not sidecars
@@ -661,6 +781,7 @@ def _certify_compact_candidate(
             binary_sha256=reported_binary_sha or None,
             binary_bytes=dependency_closure.get("binary_bytes"),
             binary_binding="verified" if closure_verified else "failed",
+            inventory_validated=dependency_closure_valid,
         )
     else:
         dependency_verification = _verification(
