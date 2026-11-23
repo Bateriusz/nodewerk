@@ -711,8 +711,10 @@ def _certify_compact_candidate(
                 "embedded_footer_bytes",
             )
         )
-        and compact_components.get("embedded_manifest_binding_bytes") == 32
-        and compact_components.get("embedded_footer_bytes") == 92
+        and compact_components.get("embedded_manifest_binding_bytes")
+        == trusted_artifacts.get("manifest_binding_bytes")
+        and compact_components.get("embedded_footer_bytes")
+        == trusted_artifacts.get("embedded_footer_bytes")
         and intro_shader_measurement_ok
         and compact_components.get("shader_payload_bytes")
         == measured_shader_bytes
@@ -2561,6 +2563,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--system-validation", type=Path)
     parser.add_argument("--performance-preservation", type=Path)
     parser.add_argument("--correctness", type=Path)
+    parser.add_argument("--selected-executable", type=Path, required=True)
+    parser.add_argument("--canonical-executable", type=Path, required=True)
+    parser.add_argument("--compact-executable", type=Path, required=True)
+    parser.add_argument("--final-package", type=Path, required=True)
+    parser.add_argument("--final-manifest", type=Path, required=True)
     parser.add_argument(
         "--correctness-ada-unpacked-executable", type=Path
     )
@@ -2636,6 +2643,13 @@ def main(argv: list[str] | None = None) -> int:
             _load(args.correctness) if args.correctness is not None else None
         ),
         correctness_evidence=correctness_evidence or None,
+        artifact_paths={
+            "selected_executable": args.selected_executable,
+            "canonical_executable": args.canonical_executable,
+            "compact_executable": args.compact_executable,
+            "package": args.final_package,
+            "manifest": args.final_manifest,
+        },
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
