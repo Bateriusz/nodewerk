@@ -1,0 +1,30 @@
+{
+  "format": "nw10a-ci-baseline",
+  "version": 1,
+  "profiling_source": {
+    "pull_request": 35,
+    "head_sha": "c7ef42d9c1ad34e4d7bd5247ac29a507bcd18926",
+    "started_at_utc": "2026-11-23T13:05:31Z"
+  },
+  "before": {
+    "critical_path_seconds": 1093,
+    "runner_minutes_approx": 68.2,
+    "workflows": {
+      "nw01_seconds": 1093,
+      "nw08_seconds": 776,
+      "nw10_seconds": 689,
+      "nw08a_seconds": 493,
+      "nw07_seconds": 387
+    }
+  },
+  "after": {
+    "status": "pending_representative_runs",
+    "note": "Populate with measured NW-10-only cold/warm and full-regression runs; queue time excluded."
+  },
+  "targets": {
+    "nw10_only_cold_seconds_max": 720,
+    "nw10_only_warm_seconds_max": 600,
+    "nw10_only_runner_minutes_max": 25,
+    "full_regression_critical_path_regression_percent_max": 10
+  }
+}

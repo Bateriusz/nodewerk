@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "description": "Every pytest namespace must be explicitly owned by the broad Ubuntu gate and a platform/subsystem gate.",
+  "families": [
+    {
+      "name": "general",
+      "patterns": [
+        "tests/test_architecture_and_cmake_contracts.py",
+        "tests/test_dependency_closure_and_accounting.py",
+        "tests/test_exit_codes_experiments_and_verify_runner.py",
+        "tests/test_offline_shader_and_compute_fixture.py",
+        "tests/test_schemas_and_manifests.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "ci.yml:windows-reproducibility-and-fixtures"
+    },
+    {
+      "name": "nw01",
+      "patterns": [
+        "tests/test_nw01_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "ci.yml:windows-reproducibility-and-fixtures"
+    },
+    {
+      "name": "nw02",
+      "patterns": [
+        "tests/test_nw02_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "ci.yml:schema-and-contract-checks"
+    },
+    {
+      "name": "nw03",
+      "patterns": [
+        "tests/test_nw03_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "ci.yml:schema-and-contract-checks"
+    },
+    {
+      "name": "nw04",
+      "patterns": [
+        "tests/test_nw04_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "ci.yml:nw04-native-verification"
+    },
+    {
+      "name": "nw05",
+      "patterns": [
+        "tests/test_nw05_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "ci.yml:windows-reproducibility-and-fixtures"
+    },
+    {
+      "name": "nw06",
+      "patterns": [
+        "tests/test_nw06_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw07-regression.yml:windows-release-build"
+    },
+    {
+      "name": "nw07",
+      "patterns": [
+        "tests/test_nw07_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw07-regression.yml"
+    },
+    {
+      "name": "nw08",
+      "patterns": [
+        "tests/test_nw08_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw08-studio.yml"
+    },
+    {
+      "name": "nw08a",
+      "patterns": [
+        "tests/test_nw08a_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw08a-presentation-geometry.yml"
+    },
+    {
+      "name": "nw09",
+      "patterns": [
+        "tests/test_nw09_*.py",
+        "tests/test_nw09a_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "ci.yml:windows-reproducibility-and-fixtures"
+    },
+    {
+      "name": "nw10",
+      "patterns": [
+        "tests/test_nw10_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw10-compact.yml"
+    }
+  ]
+}
