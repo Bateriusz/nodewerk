@@ -177,11 +177,11 @@
             },
             "sha256": {
               "type": "string",
-              "pattern": "^[0-9a-f]{64}$"
+              "pattern": "^(?:sha256:v1:)?[0-9a-f]{64}$"
             },
             "ir_sha256": {
               "type": "string",
-              "pattern": "^[0-9a-f]{64}$"
+              "pattern": "^(?:sha256:v1:)?[0-9a-f]{64}$"
             }
           }
         },
