@@ -31,6 +31,7 @@ import nw05_export  # noqa: E402
 import nw10_compact as compact  # noqa: E402
 import nw10_perf_preservation  # noqa: E402
 import nwp_package as nwp  # noqa: E402
+import dependency_check  # noqa: E402
 from schema_validator import (  # noqa: E402
     SchemaValidationError,
     validate_file_against_schema,
@@ -244,6 +245,16 @@ def _normalized_imports(values: Any) -> set[str]:
     }
 
 
+def _canonical_pe_imports(values: Any) -> set[str]:
+    """Normalize PE API-set aliases through the authoritative dependency policy."""
+    return {
+        dependency_check.canonical_inbox_dll(str(item).lower())
+        .removesuffix(".dll")
+        for item in (values or [])
+        if str(item).strip()
+    }
+
+
 def _manifest_self_digest_ok(manifest: Mapping[str, Any]) -> bool:
     declared = str(manifest.get("manifest_sha256", ""))
     if re.fullmatch(r"sha256:v1:[0-9a-f]{64}", declared) is None:
@@ -363,13 +374,13 @@ def _verify_artifact_closure(
                 "selected executable bytes do not match the validated packaging mode"
             )
 
-    canonical_imports = _normalized_imports(
+    canonical_imports = _canonical_pe_imports(
         nw05_export._pe_runtime_dependencies(canonical_executable)
     )
-    compact_imports = _normalized_imports(
+    compact_imports = _canonical_pe_imports(
         nw05_export._pe_runtime_dependencies(compact_executable)
     )
-    selected_imports = _normalized_imports(
+    selected_imports = _canonical_pe_imports(
         nw05_export._pe_runtime_dependencies(selected_executable)
     )
     if not canonical_imports or not compact_imports or not selected_imports:
