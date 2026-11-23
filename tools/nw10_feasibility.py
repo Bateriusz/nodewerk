@@ -271,13 +271,17 @@ def _certify_compact_candidate(
     compact_components = (
         compact_components if isinstance(compact_components, Mapping) else {}
     )
+    compact_ledger_identity_applicable = validated_mode == "compact"
     compact_ledger_identity_ok = (
-        re.fullmatch(r"[0-9a-f]{64}", compact_encoded_sha) is not None
-        and _is_positive_int(compact_encoded_bytes)
-        and str(compact_ledger.get("codec_id", "")) == compact_codec_id
-        and str(compact_ledger.get("layout_id", "")) == compact_layout_id
-        and compact_components.get("encoded_package_bytes")
-        == compact_encoded_bytes
+        not compact_ledger_identity_applicable
+        or (
+            re.fullmatch(r"[0-9a-f]{64}", compact_encoded_sha) is not None
+            and _is_positive_int(compact_encoded_bytes)
+            and str(compact_ledger.get("codec_id", "")) == compact_codec_id
+            and str(compact_ledger.get("layout_id", "")) == compact_layout_id
+            and compact_components.get("encoded_package_bytes")
+            == compact_encoded_bytes
+        )
     )
     pe_manifest_sha = (
         _manifest_sha(pe_ledger, "final_artifact", "manifest_sha256")
@@ -1378,6 +1382,9 @@ def _certify_compact_candidate(
             "actual_encoded_package_bytes": actual_encoded_bytes,
             "intro_encoded_package_sha256": compact_encoded_sha or None,
             "intro_encoded_package_bytes": compact_encoded_bytes,
+            "compact_ledger_identity_applicable": (
+                compact_ledger_identity_applicable
+            ),
             "compact_ledger_identity_verified": compact_ledger_identity_ok,
             "pe_payload_identity_verified": pe_payload_identity_ok,
             "retained_manifest_binding_verified": retained_manifest_binding_ok,

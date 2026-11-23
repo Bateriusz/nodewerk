@@ -1387,6 +1387,15 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     intro["compact_artifact"]["selected_mode"] = "canonical"
     intro["compact_artifact"]["selected_executable_bytes"] = 65_000
     intro["compact_artifact"]["selected_executable_sha256"] = canonical_sha
+    # A rejected compact distribution records the canonical package bytes in
+    # the selected compact ledger, while the measured compact payload remains
+    # in compact_artifact and must be compared separately.
+    intro["ledgers"]["compact"]["components"][
+        "encoded_package_bytes"
+    ] = len(_PACKAGE_BYTES)
+    intro["ledgers"]["compact"][
+        "compression_rejected_for_increasing_distribution"
+    ] = True
 
     pe = copy.deepcopy(_pe_ledger())
     pe["final_artifact"]["executable_sha256"] = canonical_sha
@@ -1443,6 +1452,13 @@ def test_validated_canonical_single_file_at_target_can_complete(monkeypatch) -> 
     assert record["validated_artifact"]["mode"] == "canonical_fallback"
     assert record["validated_artifact"]["bytes"] == 65_000
     assert record["acceptance_linkage"]["true_64k_artifact_delivered"] is True
+    assert record["certification"]["visual"]["status"] == "verified"
+    assert (
+        record["certification"]["visual"][
+            "compact_ledger_identity_applicable"
+        ]
+        is False
+    )
     assert (
         record["canonical_fallback"]["dependency_closure"]["closure_verified"]
         is True
