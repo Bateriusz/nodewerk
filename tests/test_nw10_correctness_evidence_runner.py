@@ -114,6 +114,18 @@ def test_correctness_runner_supports_prebuilt_diagnostic_transfer() -> None:
     assert "TARGET_DEBUG_CRT_DEPENDENCIES=" in text
 
 
+def test_intro_diagnostic_remains_non_frozen_for_capture_controls() -> None:
+    text = (
+        REPO_ROOT / "tools" / "nw10_common_correctness.py"
+    ).read_text(encoding="utf-8")
+    start = text.index('if source_kind == "nw10_intro":')
+    end = text.index("template_configuration =", start)
+    intro_block = text[start:end]
+
+    assert "frozen_embedded_specialization = False" in intro_block
+    assert "frozen_embedded_specialization = True" not in intro_block
+
+
 def test_transfer_allows_non_identical_rebuilt_pe_when_common_package_matches() -> None:
     text = (
         REPO_ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1"
