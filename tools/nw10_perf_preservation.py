@@ -507,6 +507,27 @@ def _validate_public_for_publish(
         nw10_contract.compute_build_inputs()
     ):
         raise ValueError("public candidate does not match current NW-10 build inputs")
+    frozen = nw07_export.load_canonical_config()
+    expected_graph = nw07_export.verify_canonical_graph(
+        frozen, repo_root=REPO_ROOT
+    )
+    pinned_inputs = nw07_export.verify_pinned_inputs(
+        frozen, repo_root=REPO_ROOT
+    )
+    graph = candidate.get("common_graph")
+    if (
+        not isinstance(graph, Mapping)
+        or graph.get("path") != str(frozen.get("graph"))
+        or graph.get("sha256") != expected_graph.get("graph_sha256")
+        or graph.get("ir_sha256") != expected_graph.get("ir_sha256")
+    ):
+        raise ValueError("public candidate changed the frozen NW-07 graph")
+    if (
+        build_inputs.get("nw07_frozen_digest")
+        != pinned_inputs.get("frozen_digest")
+        or build_inputs.get("observed_digest") != pinned_inputs.get("digest")
+    ):
+        raise ValueError("public candidate build-input digests are not reproducible")
     dependency = candidate.get("dependency_closure")
     if not isinstance(dependency, Mapping) or dependency.get("matches_manifest") is not True:
         raise ValueError("public candidate dependency closure is not verified")
@@ -518,6 +539,14 @@ def _validate_public_for_publish(
         or runtime_probe.get("uncapped_present_verified") is not True
     ):
         raise ValueError("public candidate runtime probe is not verified")
+    after = public.get("after")
+    after = after if isinstance(after, Mapping) else {}
+    after_artifact = after.get("artifact")
+    after_artifact = (
+        after_artifact if isinstance(after_artifact, Mapping) else {}
+    )
+    if candidate.get("artifact") != after_artifact:
+        raise ValueError("public candidate artifact does not match measured after artifact")
 
     comparison = public.get("comparison")
     if not isinstance(comparison, Mapping):
