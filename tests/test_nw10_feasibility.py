@@ -749,6 +749,89 @@ def _schema() -> dict:
     )
 
 
+_REAL_VERIFY_ARTIFACT_CLOSURE = feasibility._verify_artifact_closure
+
+
+@pytest.fixture(autouse=True)
+def _stub_artifact_backed_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit tests isolate feasibility policy from PE/package extraction.
+
+    Production build_feasibility has no untrusted fallback: without this test
+    double it requires artifact paths and reopens the actual files.
+    """
+    def fake_verify(*, artifact_paths, validated_mode, declared_intro):
+        canonical = declared_intro["canonical_artifact"]
+        compact_artifact = declared_intro["compact_artifact"]
+        ledgers = declared_intro["ledgers"]
+        canonical_ledger = ledgers["canonical"]
+        compact_ledger = ledgers["compact"]
+
+        def names(rows):
+            return sorted(
+                str(row["name"]).lower().removesuffix(".dll")
+                for row in rows
+            )
+
+        canonical_imports = names(canonical_ledger["dependencies"])
+        compact_imports = names(compact_ledger["dependencies"])
+        selected_imports = (
+            compact_imports if validated_mode == "compact" else canonical_imports
+        )
+        forbidden = feasibility._normalized_imports(
+            feasibility._dependency_inventory()["forbidden_release_imports"]
+        )
+        inventory_validated = not (
+            set(canonical_imports) & forbidden
+            or set(compact_imports) & forbidden
+            or set(selected_imports) & forbidden
+        )
+        shader_bytes = sum(
+            int(row["blob_bytes"]) for row in _LINK_MANIFEST["shaders"]
+        )
+        canonical_size = int(canonical["executable_bytes"])
+        compact_size = int(compact_artifact["executable_bytes"])
+        return {
+            "package_sha256": _PACKAGE_SHA,
+            "package_bytes": len(_PACKAGE_BYTES),
+            "shader_bytes": shader_bytes,
+            "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+            "requirements_digest": feasibility.common_contract.REQUIREMENTS_DIGEST,
+            "manifest_sha256": _MANIFEST_SHA,
+            "manifest_bytes": canonical.get("manifest_bytes", 6000),
+            "manifest": copy.deepcopy(_LINK_MANIFEST),
+            "canonical_executable_sha256": str(canonical["executable_sha256"]),
+            "canonical_executable_bytes": canonical_size,
+            "canonical_player_image_bytes": (
+                canonical_size - len(_PACKAGE_BYTES) - 32 - 92
+            ),
+            "canonical_imports": canonical_imports,
+            "compact_executable_sha256": str(compact_artifact["executable_sha256"]),
+            "compact_executable_bytes": compact_size,
+            "compact_player_image_bytes": (
+                compact_size - len(_COMPACT_CONTAINER.bytes) - 32 - 92
+            ),
+            "compact_payload_sha256": _ENCODED_SHA,
+            "compact_payload_bytes": len(_COMPACT_CONTAINER.bytes),
+            "compact_codec_id": contract.CODEC_MSZIP_ID,
+            "compact_layout_id": contract.LAYOUT_SOA_ID,
+            "compact_imports": compact_imports,
+            "selected_executable_sha256": (
+                str(compact_artifact["executable_sha256"])
+                if validated_mode == "compact"
+                else str(canonical["executable_sha256"])
+            ),
+            "selected_executable_bytes": (
+                compact_size if validated_mode == "compact" else canonical_size
+            ),
+            "selected_imports": selected_imports,
+            "manifest_binding_bytes": 32,
+            "embedded_footer_bytes": 92,
+            "inventory_validated": inventory_validated,
+        }
+
+    monkeypatch.setattr(feasibility, "_verify_artifact_closure", fake_verify)
+
+
 def test_feasibility_success_branch_is_schema_valid(monkeypatch) -> None:
     monkeypatch.setattr(
         feasibility.nw07_evidence,
