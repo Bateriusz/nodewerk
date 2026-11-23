@@ -657,7 +657,11 @@ jobs:
             --pe-ledger "$PWD/build/nw10-windows-pe-ledger.json" `
             --dependency-closure "$PWD/build/nw10-dependency-closure.json" `
             --system-validation "$PWD/benchmarks/nw10/system-validation.v1.json" `
-            --correctness "$PWD/benchmarks/nw10/common-artifact-correctness.v1.json"
+            --correctness "$PWD/benchmarks/nw10/common-artifact-correctness.v1.json" `
+            --correctness-ada-unpacked-executable "$PWD/build/nw10-correctness-scripted/transfer-ada/transfer-package/nw10-correctness-diagnostic.exe" `
+            --correctness-ada-packed-executable "$PWD/build/nw10-correctness-scripted/transfer-ada-packed/transfer-package/nw10-correctness-diagnostic.exe" `
+            --correctness-blackwell-unpacked-executable "$PWD/build/nw10-correctness-scripted/transfer-blackwell/transfer-package/nw10-correctness-diagnostic.exe" `
+            --correctness-blackwell-packed-executable "$PWD/build/nw10-correctness-scripted/transfer-blackwell-packed/transfer-package/nw10-correctness-diagnostic.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/schema_validator.py `
             --document "$PWD/build/nw10-windows-compact-feasibility-bound.json" `
