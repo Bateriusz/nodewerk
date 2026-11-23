@@ -355,6 +355,39 @@ def test_publish_rejects_private_path_and_promotes_only_performance_status(
         preservation.publish_public_evidence(source, destination, status_path)
 
 
+def test_publish_revalidates_candidate_provenance_after_serialization(
+    tmp_path: Path,
+) -> None:
+    bound, before, after, candidate = _fixture()
+    public = preservation.validate_preservation(before, after, bound, candidate)
+    source = tmp_path / "public.json"
+    destination = tmp_path / "repo" / "benchmarks" / "nw10" / "performance.json"
+    status_path = tmp_path / "repo" / "benchmarks" / "nw10" / "evidence-status.v1.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "format": "nw10-evidence-status",
+                "version": 1,
+                "task": "NW-10",
+                "evidence_status": "pending_physical_windows_capture",
+                "files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    tampered = copy.deepcopy(public)
+    tampered["candidate"]["artifact"]["executable_sha256"] = "9" * 64
+    source.write_text(json.dumps(tampered), encoding="utf-8")
+    old_root = preservation.REPO_ROOT
+    preservation.REPO_ROOT = tmp_path / "repo"
+    try:
+        with pytest.raises(ValueError, match="candidate artifact"):
+            preservation.publish_public_evidence(source, destination, status_path)
+    finally:
+        preservation.REPO_ROOT = old_root
+
+
 def test_preservation_schema_accepts_float_relative_alert_threshold() -> None:
     schema = json.loads(
         (REPO_ROOT / "schemas" / "nw10-performance-preservation.schema.json").read_text(
