@@ -444,6 +444,7 @@ def _verify_artifact_closure(
         "manifest_sha256": manifest_sha,
         "manifest_bytes": len(manifest_bytes),
         "manifest": manifest,
+        "artifact_key": str(manifest.get("artifact_identity", "")).strip(),
         "canonical_executable_sha256": hashlib.sha256(canonical_executable).hexdigest(),
         "canonical_executable_bytes": canonical_size,
         "canonical_player_image_bytes": canonical_player_image,
@@ -483,6 +484,8 @@ def _verify_artifact_closure(
             raise ValueError(f"intro report {label} does not match artifact-backed facts")
     if canonical_intro.get("link_manifest") != manifest:
         raise ValueError("intro report link_manifest does not match the manifest file")
+    if str(canonical_intro.get("artifact_key", "")).strip() != facts["artifact_key"]:
+        raise ValueError("intro report artifact_key does not match the manifest identity")
     measurements = declared_intro.get("measurements")
     measurements = measurements if isinstance(measurements, Mapping) else {}
     package_measurement = measurements.get("package")
@@ -554,9 +557,7 @@ def _certify_compact_candidate(
     canonical_package_sha = str(trusted_artifacts["package_sha256"]).lower()
     canonical_package_bytes = int(trusted_artifacts["package_bytes"])
     canonical_manifest_sha = str(trusted_artifacts["manifest_sha256"]).lower()
-    canonical_artifact_key = str(
-        canonical_intro.get("artifact_key", "")
-    ).strip()
+    canonical_artifact_key = str(trusted_artifacts.get("artifact_key", "")).strip()
     compact_encoded_sha = str(
         trusted_artifacts["compact_payload_sha256"]
     ).lower()
@@ -641,6 +642,18 @@ def _certify_compact_candidate(
         compact_ledger.get("unaccounted_components") or []
     )
     compact_decoder_bytes = compact_components.get("decoder_code_bytes")
+    pe_decoder_bytes = None
+    if pe_ledger is not None:
+        pe_decoder = pe_ledger.get("compact_decoder")
+        if isinstance(pe_decoder, Mapping):
+            candidate_decoder_bytes = pe_decoder.get("template_bytes_added")
+            if _is_positive_int(candidate_decoder_bytes):
+                pe_decoder_bytes = int(candidate_decoder_bytes)
+    compact_decoder_measurement_ok = (
+        pe_decoder_bytes is None
+        or compact_decoder_bytes is None
+        or compact_decoder_bytes == pe_decoder_bytes
+    )
     compact_decoder_accounting_ok = (
         isinstance(compact_all_accounted, bool)
         and (
@@ -655,6 +668,7 @@ def _certify_compact_candidate(
                 and compact_decoder_bytes is None
             )
         )
+        and compact_decoder_measurement_ok
     )
     compact_complete_bytes = compact_ledger.get(
         "complete_runnable_distribution_bytes"
