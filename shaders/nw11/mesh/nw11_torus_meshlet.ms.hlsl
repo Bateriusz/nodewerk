@@ -180,8 +180,7 @@ float SampleCameraCurve(uint tick, uint interpolation)
 [numthreads(NW_VERTS_PER_MESHLET, 1, 1)]
 [outputtopology("triangle")]
 void MeshMain(
-    uint group_thread_id : SV_GroupThreadID,
-    uint group_id : SV_GroupID,
+    uint group_thread_id : SV_GroupIndex,
     in payload NwMeshPayload payload,
     out vertices MSOutput vertices[NW_VERTS_PER_MESHLET],
     out indices uint3 triangles[NW_PRIMS_PER_MESHLET])

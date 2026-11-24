@@ -399,6 +399,15 @@ int RunSceneRenderer(const RendererOptions& options) {
 namespace nw11 {
 namespace {
 
+#if NW11_VARIANT_MESH
+// Each stream subobject starts at pointer alignment as required by D3D12.
+template <D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type, typename T>
+struct alignas(void*) PipelineSubobject {
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type = Type;
+    T value{};
+};
+#endif
+
 template <std::size_t N>
 D3D12_SHADER_BYTECODE Bytecode(const unsigned char (&data)[N]) {
     D3D12_SHADER_BYTECODE result{};
@@ -789,9 +798,18 @@ void SceneRenderer::CreatePipelines() {
     desc.pRootSignature = graphics_root_.Get();
     desc.BlendState.AlphaToCoverageEnable = FALSE;
     desc.BlendState.IndependentBlendEnable = FALSE;
-    desc.BlendState.RenderTarget[0].BlendEnable = FALSE;
-    desc.BlendState.RenderTarget[0].LogicOpEnable = FALSE;
-    desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    for (auto& target : desc.BlendState.RenderTarget) {
+        target.BlendEnable = FALSE;
+        target.LogicOpEnable = FALSE;
+        target.SrcBlend = D3D12_BLEND_ONE;
+        target.DestBlend = D3D12_BLEND_ZERO;
+        target.BlendOp = D3D12_BLEND_OP_ADD;
+        target.SrcBlendAlpha = D3D12_BLEND_ONE;
+        target.DestBlendAlpha = D3D12_BLEND_ZERO;
+        target.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        target.LogicOp = D3D12_LOGIC_OP_NOOP;
+        target.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
     desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     desc.RasterizerState.FrontCounterClockwise = FALSE;
@@ -807,6 +825,12 @@ void SceneRenderer::CreatePipelines() {
     desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     desc.DepthStencilState.StencilEnable = FALSE;
+    desc.DepthStencilState.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    desc.DepthStencilState.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+    desc.DepthStencilState.FrontFace = {
+        D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP,
+        D3D12_STENCIL_OP_KEEP, D3D12_COMPARISON_FUNC_ALWAYS};
+    desc.DepthStencilState.BackFace = desc.DepthStencilState.FrontFace;
     desc.SampleMask = UINT_MAX;
     desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     desc.NumRenderTargets = 1;
@@ -819,9 +843,42 @@ void SceneRenderer::CreatePipelines() {
 
     if (options_.variant == Variant::OptionalMesh) {
 #if NW11_VARIANT_MESH
-        desc.AS = Bytecode(kNw11TorusAsDxil);
-        desc.MS = Bytecode(kNw11TorusMsDxil);
-        desc.PS = Bytecode(kNw06ScenePsDxil);
+        // The legacy graphics PSO descriptor has no AS/MS members.
+        // Use the native pipeline-state stream, without a vertex/input-assembler stage.
+        struct MeshPipelineStream {
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, ID3D12RootSignature*> root;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS, D3D12_SHADER_BYTECODE> as;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, D3D12_SHADER_BYTECODE> ms;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, D3D12_SHADER_BYTECODE> ps;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, D3D12_BLEND_DESC> blend;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, UINT> sample_mask;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, D3D12_RASTERIZER_DESC> rasterizer;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL, D3D12_DEPTH_STENCIL_DESC> depth;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY, D3D12_PRIMITIVE_TOPOLOGY_TYPE> topology;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS, D3D12_RT_FORMAT_ARRAY> rt_formats;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT, DXGI_FORMAT> ds_format;
+            PipelineSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, DXGI_SAMPLE_DESC> samples;
+        } stream{};
+        stream.root.value = desc.pRootSignature;
+        stream.as.value = Bytecode(kNw11TorusAsDxil);
+        stream.ms.value = Bytecode(kNw11TorusMsDxil);
+        stream.ps.value = Bytecode(kNw06ScenePsDxil);
+        stream.blend.value = desc.BlendState;
+        stream.sample_mask.value = desc.SampleMask;
+        stream.rasterizer.value = desc.RasterizerState;
+        stream.depth.value = desc.DepthStencilState;
+        stream.topology.value = desc.PrimitiveTopologyType;
+        stream.rt_formats.value.NumRenderTargets = desc.NumRenderTargets;
+        stream.rt_formats.value.RTFormats[0] = desc.RTVFormats[0];
+        stream.ds_format.value = desc.DSVFormat;
+        stream.samples.value = desc.SampleDesc;
+        ComPtr<ID3D12Device2> device2;
+        ThrowIfFailed(device_.As(&device2), "QueryInterface(ID3D12Device2)");
+        D3D12_PIPELINE_STATE_STREAM_DESC stream_desc{sizeof(stream), &stream};
+        ThrowIfFailed(device2->CreatePipelineState(
+                          &stream_desc, IID_PPV_ARGS(&graphics_pipeline_)),
+                      "CreatePipelineState(mesh)");
+        return;
 #else
         throw std::runtime_error("mesh variant code was stripped from this artifact");
 #endif
@@ -1363,6 +1420,15 @@ void SceneRenderer::RecordInitialization() {
             Transition(list_.Get(), resource,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        } else if (resource == resources_.vertices.Get() ||
+                   resource == resources_.indices.Get()) {
+            D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            if (options_.variant != Variant::OptionalMesh) {
+                state |= resource == resources_.vertices.Get()
+                    ? D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
+                    : D3D12_RESOURCE_STATE_INDEX_BUFFER;
+            }
+            Transition(list_.Get(), resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, state);
         } else if (resource == resources_.albedo.Get() ||
             resource == resources_.materials.Get() ||
             resource == resources_.light.Get()) {
@@ -1386,7 +1452,7 @@ void SceneRenderer::UpdatePeakVideoMemory() {
     }
     DXGI_QUERY_VIDEO_MEMORY_INFO info{};
     if (SUCCEEDED(adapter3_->QueryVideoMemoryInfo(
-            0u, D3D12_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
+            0u, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
         video_memory_observed_ = true;
         if (info.CurrentUsage > peak_video_memory_bytes_) {
             peak_video_memory_bytes_ = info.CurrentUsage;
@@ -1490,22 +1556,24 @@ void SceneRenderer::BuildAccelerationStructures() {
         throw std::runtime_error("BLAS prebuild info is empty");
     }
     auto create_acceleration = [&](std::uint64_t bytes,
-                                   ComPtr<ID3D12Resource>& target) {
+                                   ComPtr<ID3D12Resource>& target,
+                                   D3D12_RESOURCE_STATES initial_state) {
         const D3D12_HEAP_PROPERTIES heap = Heap(D3D12_HEAP_TYPE_DEFAULT);
         const D3D12_RESOURCE_DESC desc = BufferDesc(
             bytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ThrowIfFailed(
             device_->CreateCommittedResource(
                 &heap, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_COMMON, nullptr,
+                initial_state, nullptr,
                 IID_PPV_ARGS(&target)),
             "CreateCommittedResource(acceleration structure)");
         resources_.bytes += bytes;
     };
-    create_acceleration(blas_info.ResultDataMaxSizeInBytes, resources_.blas);
+    create_acceleration(blas_info.ResultDataMaxSizeInBytes, resources_.blas,
+                        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     create_acceleration(
         Align(blas_info.ScratchDataSizeInBytes, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT),
-        resources_.blas_scratch);
+        resources_.blas_scratch, D3D12_RESOURCE_STATE_COMMON);
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC blas_build{};
     blas_build.Inputs = blas_inputs;
@@ -1520,8 +1588,6 @@ void SceneRenderer::BuildAccelerationStructures() {
     Transition(list_.Get(), resources_.blas_scratch.Get(),
                D3D12_RESOURCE_STATE_COMMON,
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    Transition(list_.Get(), resources_.blas.Get(), D3D12_RESOURCE_STATE_COMMON,
-               D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     list4_->BuildRaytracingAccelerationStructure(&blas_build, 0, nullptr);
     UavBarrier(list_.Get(), resources_.blas.Get());
     ThrowIfFailed(list_->Close(), "ID3D12GraphicsCommandList::Close(blas)");
@@ -1572,10 +1638,11 @@ void SceneRenderer::BuildAccelerationStructures() {
     if (tlas_info.ResultDataMaxSizeInBytes == 0) {
         throw std::runtime_error("TLAS prebuild info is empty");
     }
-    create_acceleration(tlas_info.ResultDataMaxSizeInBytes, resources_.tlas);
+    create_acceleration(tlas_info.ResultDataMaxSizeInBytes, resources_.tlas,
+                        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     create_acceleration(
         Align(tlas_info.ScratchDataSizeInBytes, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT),
-        resources_.tlas_scratch);
+        resources_.tlas_scratch, D3D12_RESOURCE_STATE_COMMON);
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tlas_build{};
     tlas_build.Inputs = tlas_inputs;
     tlas_build.ScratchBufferStartAddress =
@@ -1589,11 +1656,6 @@ void SceneRenderer::BuildAccelerationStructures() {
     Transition(list_.Get(), resources_.tlas_scratch.Get(),
                D3D12_RESOURCE_STATE_COMMON,
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    Transition(list_.Get(), resources_.tlas.Get(), D3D12_RESOURCE_STATE_COMMON,
-               D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
-    Transition(list_.Get(), resources_.blas.Get(),
-               D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-               D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     list4_->BuildRaytracingAccelerationStructure(&tlas_build, 0, nullptr);
     UavBarrier(list_.Get(), resources_.tlas.Get());
     ThrowIfFailed(list_->Close(), "ID3D12GraphicsCommandList::Close(tlas)");
@@ -1685,8 +1747,6 @@ void SceneRenderer::RenderFrame(
 
     list_->SetGraphicsRootSignature(graphics_root_.Get());
     SetGraphicsConstants(tick);
-    list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
     if (options_.variant == Variant::OptionalMesh) {
 #if NW11_VARIANT_MESH
         if (list6_ == nullptr) {
@@ -1699,6 +1759,7 @@ void SceneRenderer::RenderFrame(
         throw std::runtime_error("mesh dispatch is not available in this artifact");
 #endif
     } else {
+        list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         D3D12_VERTEX_BUFFER_VIEW vertex_view{};
         vertex_view.BufferLocation = resources_.vertices->GetGPUVirtualAddress();
         vertex_view.SizeInBytes =

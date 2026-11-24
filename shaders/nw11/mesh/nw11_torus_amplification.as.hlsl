@@ -24,18 +24,17 @@ struct NwMeshPayload
     uint meshlet_index;
 };
 
+groupshared NwMeshPayload payload;
+
 [numthreads(1, 1, 1)]
-void AmplificationMain(
-    uint group_thread_id : SV_GroupThreadID,
-    uint group_id : SV_GroupID,
-    out NwMeshPayload payload)
+void AmplificationMain(uint3 group_id : SV_GroupID)
 {
     // The launch grid is exactly instances * meshlets.  Keeping the mapping
     // explicit makes the dispatch bound auditable and prevents a partial or
     // duplicated torus geometry emission.
     uint meshlets = max(1u, MeshletsPerInstance);
-    payload.instance_index = group_id / meshlets;
-    payload.meshlet_index = group_id % meshlets;
+    payload.instance_index = group_id.x / meshlets;
+    payload.meshlet_index = group_id.x % meshlets;
     if (payload.instance_index >= InstanceCount)
     {
         payload.instance_index = 0u;
