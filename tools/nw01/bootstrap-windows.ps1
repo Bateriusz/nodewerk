@@ -364,7 +364,7 @@ function Ensure-VisualStudio {
 
             # If the individual-component repair was insufficient, add only the
             # still-missing explicit entries (which may include the workload)
-            # to the same instance. Never use --includeRecommended.
+            # to the same instance. Never request the broad recommended-component set.
             $remaining = @(Get-MissingVisualStudioComponents -TargetInstallPath $modifyTarget)
             if ($remaining.Count -gt 0) {
                 Invoke-VisualStudioInstanceModify -InstallPath $modifyTarget -Components $remaining
