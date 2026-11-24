@@ -1660,3 +1660,31 @@ def test_nw11_production_windows_runtime_preserves_platform_definitions() -> Non
     assert 'queried(has_options7, MeshTierName' in probe
     assert 'queried(has_options5, RaytracingTierName' in probe
     assert ' : "null";' in probe
+
+
+def test_nw11_native_package_and_dxil_binding_fail_closed() -> None:
+    import nw11_production_binding as binding
+    import struct
+    payloads = {name: b"DXBC" + name.encode() for name in binding.PAYLOADS}
+    package = b"canonical-nwp"
+    template = b"MZ" + b"".join(data for name, data in payloads.items() if binding.PAYLOADS[name] == "mesh")
+    def image(code: bytes, commit: str = COMMIT) -> bytes:
+        overlay = json.dumps({"format": "nw11-production-specialization.v1",
+            "tested_commit": commit, "specialization": "mesh",
+            "canonical_package_sha256": contract.sha256_bytes(package),
+            "canonical_link_manifest_sha256": "f" * 64,
+            "template_sha256": contract.sha256_bytes(code)}).encode()
+        return code + package + overlay + binding.FOOTER.pack(binding.MAGIC, 1,
+            len(package), len(overlay), bytes.fromhex(contract.sha256_bytes(package)),
+            bytes.fromhex(contract.sha256_bytes(overlay)))
+    def inspect(executable: bytes):
+        return binding.inspect(executable, commit=COMMIT, specialization="mesh",
+            package_sha256=contract.sha256_bytes(package), manifest_sha256="f" * 64,
+            payloads=payloads)
+    assert len(inspect(image(template))["linked_specialization_payloads"]) == 2
+    with pytest.raises(ValueError):
+        inspect(image(template, "0" * 40))
+    with pytest.raises(ValueError):
+        inspect(image(template + payloads["nw11_deform_cs_dxil.dxil"]))
+    with pytest.raises(ValueError):
+        inspect(image(b"MZ"))

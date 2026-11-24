@@ -27,6 +27,7 @@ import nw11_bundle as bundle  # noqa: E402
 import nw11_contract as contract  # noqa: E402
 import nw11_experiment as experiment  # noqa: E402
 import nw11_toolchain_identity as toolchain_identity  # noqa: E402
+import nw11_production_binding as production_binding  # noqa: E402
 
 TOOL_FILES = (
     "nw11_contract.py",
@@ -37,6 +38,7 @@ TOOL_FILES = (
     "nw11_followup.py",
     "nw11_verify.py",
     "nw11_toolchain_identity.py",
+    "nw11_production_binding.py",
 )
 SUPPORT_FILES = (
     ("tools/schema_validator.py", "tools/nw11/schema_validator.py"),
@@ -123,6 +125,35 @@ def build(
     _copy(Path(fallback_executable), output / "bin/fallback_common.exe")
     if capability_probe is not None:
         _copy(Path(capability_probe), output / "bin/nw11_capability_probe.exe")
+    production_records: dict[str, Any] = {}
+    if require_head:
+        # Only CI production bundles have native measurement artifacts. Unit
+        # tests can still exercise the generic manifest logic with test blobs.
+        native = Path(baseline_executable).parent
+        proof = json.loads((native / "nw11-common-regression.json").read_text(encoding="utf-8"))
+        package_hash, manifest_hash = production_binding.verify_proof(proof, commit)
+        payloads = production_binding.read_payloads(native / "compiled-specializations")
+        bindings = json.loads((native / "nw11-production-binding.json").read_text(encoding="utf-8"))
+        if bindings.get("commit") != commit:
+            raise BuildError("production binding commit mismatch")
+        by_name = {record["file"]: record for record in bindings["artifacts"]}
+        variant_kind = "mesh" if experiment_id == contract.EXPERIMENT_MESH_ID else "ray"
+        base_kind = "common" if variant_kind == "mesh" else "analytic"
+        for role, source, kind in (
+            ("common_baseline", baseline_executable, base_kind),
+            ("optional_variant", variant_executable, variant_kind),
+            ("fallback_common", fallback_executable, base_kind),
+        ):
+            source = Path(source)
+            observed = production_binding.inspect(source.read_bytes(), commit=commit,
+                specialization=kind, package_sha256=package_hash,
+                manifest_sha256=manifest_hash, payloads=payloads)
+            if by_name.get(source.name) != {"file": source.name, **observed}:
+                raise BuildError(f"native artifact {source.name} does not match production binding")
+            production_records[role] = observed
+        _copy(native / "nw11-common-regression.json", output / "manifests/nw11-common-regression.json")
+        for name in production_binding.PAYLOADS:
+            _copy(native / "compiled-specializations" / name, output / "manifests/compiled-specializations" / name)
     _copy(profile_path, output / "manifests/capability-profile.json")
     _copy(
         root / contract.PROFILE_PATH_BY_ID[contract.COMMON_PROFILE_ID],
@@ -257,6 +288,7 @@ def build(
             profile_id=contract.COMMON_PROFILE_ID,
             shader_targets=contract.COMMON_SHADER_TARGETS,
             dependencies=[item["name"] for item in dependency_ledger if not item["optional"]],
+            metadata=production_records.get("common_baseline"),
         ),
         bundle.make_entry(
             output,
@@ -266,6 +298,7 @@ def build(
             optional=True,
             shader_targets=[shader["target"] for shader in document["pipeline"]["variant_shaders"]],
             dependencies=[item["name"] for item in dependency_ledger],
+            metadata=production_records.get("optional_variant"),
         ),
         bundle.make_entry(
             output,
@@ -274,8 +307,15 @@ def build(
             profile_id=contract.COMMON_PROFILE_ID,
             shader_targets=contract.COMMON_SHADER_TARGETS,
             dependencies=[item["name"] for item in dependency_ledger if not item["optional"]],
+            metadata=production_records.get("fallback_common"),
         ),
     ]
+    if production_records:
+        artifacts.append(bundle.make_entry(output, "manifests/nw11-common-regression.json",
+                                           role=bundle.ROLE_READING))
+        for name in production_binding.PAYLOADS:
+            artifacts.append(bundle.make_entry(output, f"manifests/compiled-specializations/{name}",
+                                               role=bundle.ROLE_READING))
     if capability_probe is not None:
         artifacts.append(
             bundle.make_entry(

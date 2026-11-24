@@ -10,6 +10,7 @@ from pathlib import Path
 import nw05_export
 import nw11_contract as contract
 from nw11_common_regression import FILES, identity
+import nw11_production_binding as binding
 
 VARIANTS = {
     "nw11_common_baseline": "common",
@@ -40,6 +41,8 @@ def embed(proof_dir: Path, executable_dir: Path, commit: str) -> None:
     package = (candidate / FILES[1]).read_bytes()
     manifest = (candidate / FILES[2]).read_bytes()
     link = json.loads(manifest)
+    package_hash, manifest_hash = binding.verify_proof(proof, commit)
+    payloads = binding.read_payloads(executable_dir / "compiled-specializations")
     bindings = []
     for name, specialization in VARIANTS.items():
         path = executable_dir / (name + ".exe")
@@ -58,8 +61,12 @@ def embed(proof_dir: Path, executable_dir: Path, commit: str) -> None:
         if nw05_export.extract_embedded_package(image) != (package, payload):
             raise ValueError("embedded image round trip failed")
         path.write_bytes(image)
-        bindings.append({"file": path.name, "specialization": specialization,
-                         "sha256": sha(image), "package_sha256": sha(package)})
+        record = binding.inspect(image, commit=commit, specialization=specialization,
+                                 package_sha256=package_hash, manifest_sha256=manifest_hash,
+                                 payloads=payloads)
+        bindings.append({"file": path.name, **record})
+    (executable_dir / "nw11-common-regression.json").write_bytes(
+        (proof_dir / "common-regression.json").read_bytes())
     (executable_dir / "nw11-production-binding.json").write_text(
         json.dumps({"commit": commit, "artifacts": bindings}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

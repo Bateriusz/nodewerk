@@ -590,6 +590,27 @@ def verify_bundle(
         if sha256_bytes(data) != artifact.get("sha256"):
             raise BundleError(f"bundle artifact hash changed: {relative}")
 
+    proof_path = bundle_root / "manifests/nw11-common-regression.json"
+    measured = [item for item in manifest["artifacts"] if item["role"] in
+                {ROLE_COMMON_BASELINE, ROLE_OPTIONAL_VARIANT, ROLE_FALLBACK}]
+    if proof_path.is_file() or any(item.get("metadata", {}).get("specialization") for item in measured):
+        try:
+            import nw11_production_binding as binding
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            package_hash, manifest_hash = binding.verify_proof(proof, manifest["commit"])
+            payloads = binding.read_payloads(bundle_root / "manifests/compiled-specializations")
+            ray = manifest["experiment_id"] == "nw11.ray-query-vs-analytic-reflection.v1"
+            for item in measured:
+                specialization = ("ray" if ray else "mesh") if item["role"] == ROLE_OPTIONAL_VARIANT else ("analytic" if ray else "common")
+                observed = binding.inspect((bundle_root / item["path"]).read_bytes(),
+                    commit=manifest["commit"], specialization=specialization,
+                    package_sha256=package_hash, manifest_sha256=manifest_hash,
+                    payloads=payloads)
+                if observed != item.get("metadata"):
+                    raise ValueError("recorded native binding differs from executable bytes")
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise BundleError(f"production binding verification failed: {exc}") from exc
+
     for key, role in (
         ("capability_profile", ROLE_CAPABILITY_PROFILE),
         ("experiment_definition", ROLE_EXPERIMENT_DEFINITION),

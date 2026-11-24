@@ -154,6 +154,10 @@ jobs:
             Copy-Item $exe.FullName "build/nw11-artifacts/$name.exe"
           }
           Copy-Item "build/nw11-experiments/generated/nw11_scene_generated.json" "build/nw11-artifacts/nw11_scene_generated.json"
+          New-Item -ItemType Directory -Force -Path "build/nw11-artifacts/compiled-specializations" | Out-Null
+          foreach ($name in @("nw11_torus_amplification_as_dxil", "nw11_torus_meshlet_ms_dxil", "nw11_scene_rayquery_ps_dxil", "nw11_deform_cs_dxil", "nw11_analytic_reflection_ps_dxil")) {
+            Copy-Item "build/nw11-experiments/shaders/$name.dxil" "build/nw11-artifacts/compiled-specializations/$name.dxil" -ErrorAction Stop
+          }
       - name: Record measured toolchain, DXIL payloads, and PE dependencies
         shell: pwsh
         run: |
