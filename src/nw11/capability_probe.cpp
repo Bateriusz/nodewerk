@@ -232,17 +232,17 @@ const char* FeatureLevelName(D3D_FEATURE_LEVEL level) {
     }
 }
 
-const char* ShaderModelName(D3D12_SHADER_MODEL model) {
+const char* ShaderModelName(D3D_SHADER_MODEL model) {
     switch (model) {
-        case static_cast<D3D12_SHADER_MODEL>(0x68): return "D3D12_SHADER_MODEL_6_8";
-        case static_cast<D3D12_SHADER_MODEL>(0x67): return "D3D12_SHADER_MODEL_6_7";
-        case D3D12_SHADER_MODEL_6_6: return "D3D12_SHADER_MODEL_6_6";
-        case D3D12_SHADER_MODEL_6_5: return "D3D12_SHADER_MODEL_6_5";
-        case D3D12_SHADER_MODEL_6_4: return "D3D12_SHADER_MODEL_6_4";
-        case D3D12_SHADER_MODEL_6_3: return "D3D12_SHADER_MODEL_6_3";
-        case D3D12_SHADER_MODEL_6_2: return "D3D12_SHADER_MODEL_6_2";
-        case D3D12_SHADER_MODEL_6_1: return "D3D12_SHADER_MODEL_6_1";
-        case D3D12_SHADER_MODEL_6_0: return "D3D12_SHADER_MODEL_6_0";
+        case static_cast<D3D_SHADER_MODEL>(0x68): return "D3D12_SHADER_MODEL_6_8";
+        case static_cast<D3D_SHADER_MODEL>(0x67): return "D3D12_SHADER_MODEL_6_7";
+        case D3D_SHADER_MODEL_6_6: return "D3D12_SHADER_MODEL_6_6";
+        case D3D_SHADER_MODEL_6_5: return "D3D12_SHADER_MODEL_6_5";
+        case D3D_SHADER_MODEL_6_4: return "D3D12_SHADER_MODEL_6_4";
+        case D3D_SHADER_MODEL_6_3: return "D3D12_SHADER_MODEL_6_3";
+        case D3D_SHADER_MODEL_6_2: return "D3D12_SHADER_MODEL_6_2";
+        case D3D_SHADER_MODEL_6_1: return "D3D12_SHADER_MODEL_6_1";
+        case D3D_SHADER_MODEL_6_0: return "D3D12_SHADER_MODEL_6_0";
         default: return "D3D12_SHADER_MODEL_UNSUPPORTED";
     }
 }
@@ -460,14 +460,25 @@ int main(int argc, char** argv) {
         feature_level = levels.MaxSupportedFeatureLevel;
     }
 
-    D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+    D3D12_FEATURE_DATA_D3D12_OPTIONS feature_options{};
     const bool has_options = SUCCEEDED(
-        device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)));
+        device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &feature_options, sizeof(feature_options)));
 
     D3D12_FEATURE_DATA_SHADER_MODEL shader_model{};
-    shader_model.HighestShaderModel = static_cast<D3D12_SHADER_MODEL>(0x68);
-    const bool has_shader_model = SUCCEEDED(
-        device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model)));
+    bool has_shader_model = false;
+    // Older inbox runtimes reject unknown requested enumerators with E_INVALIDARG.
+    // Descend through known shader-model values; never report an unsupported
+    // feature merely because a newer enum was not recognized.
+    for (unsigned requested = 0x68; requested >= 0x60; --requested) {
+        shader_model.HighestShaderModel = static_cast<D3D_SHADER_MODEL>(requested);
+        const HRESULT query = device->CheckFeatureSupport(
+            D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model));
+        if (SUCCEEDED(query)) {
+            has_shader_model = true;
+            break;
+        }
+        if (query != E_INVALIDARG) break;
+    }
 
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5{};
     const bool has_options5 = SUCCEEDED(
@@ -519,11 +530,11 @@ int main(int argc, char** argv) {
     payload += "  \"features\": {\n";
     payload += "    \"d3d_feature_level\": \"" + std::string(FeatureLevelName(feature_level)) + "\",\n";
     payload += "    \"resource_binding_tier\": \"" +
-               std::string(has_options ? BindingTierName(options.ResourceBindingTier)
+               std::string(has_options ? BindingTierName(feature_options.ResourceBindingTier)
                                        : "D3D12_RESOURCE_BINDING_TIER_UNSUPPORTED") +
                "\",\n";
     payload += "    \"resource_heap_tier\": \"" +
-               std::string(has_options ? HeapTierName(options.ResourceHeapTier)
+               std::string(has_options ? HeapTierName(feature_options.ResourceHeapTier)
                                        : "D3D12_RESOURCE_HEAP_TIER_UNSUPPORTED") +
                "\",\n";
     payload += "    \"highest_shader_model\": \"" + shader_model_name + "\",\n";
