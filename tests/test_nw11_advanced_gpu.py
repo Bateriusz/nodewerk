@@ -1741,6 +1741,7 @@ def test_nw11_python_runtime_archive_is_deterministic_and_self_contained(tmp_pat
     (root / "DLLs").mkdir()
     (root / "python.exe").write_bytes(b"MZ-python")
     (root / "python312.dll").write_bytes(b"dll")
+    (root / "LICENSE.txt").write_text("Python license", encoding="utf-8")
     (root / "Lib/json/__init__.py").write_text("# json", encoding="utf-8")
     (root / "Lib/encodings/__init__.py").write_text("# encodings", encoding="utf-8")
     (root / "DLLs/_hashlib.pyd").write_bytes(b"pyd")
@@ -1752,7 +1753,7 @@ def test_nw11_python_runtime_archive_is_deterministic_and_self_contained(tmp_pat
     import zipfile
     with zipfile.ZipFile(first) as archive:
         names = set(archive.namelist())
-    assert {"python.exe", "python312.dll", "Lib/json/__init__.py", "Lib/encodings/__init__.py", "DLLs/_hashlib.pyd"} <= names
+    assert {"python.exe", "python312.dll", "LICENSE.txt", "Lib/json/__init__.py", "Lib/encodings/__init__.py", "DLLs/_hashlib.pyd"} <= names
 
 
 def test_nw11_validation_bundle_uses_only_bundled_python_runtime() -> None:

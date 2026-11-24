@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
-ROOT_PATTERNS = ("python*.exe", "python*.dll", "vcruntime*.dll", "*.zip", "*._pth")
+ROOT_PATTERNS = ("python*.exe", "python*.dll", "vcruntime*.dll", "*.zip", "*._pth", "LICENSE.txt")
 EXCLUDED_PARTS = {"__pycache__", "site-packages", "test", "tests"}
 
 
@@ -20,7 +20,7 @@ class RuntimePackError(ValueError):
 def _files(root: Path) -> list[Path]:
     if not (root / "python.exe").is_file():
         raise RuntimePackError("python.exe is missing from the selected runtime root")
-    for required in ("Lib/json/__init__.py", "Lib/encodings/__init__.py"):
+    for required in ("LICENSE.txt", "Lib/json/__init__.py", "Lib/encodings/__init__.py"):
         if not (root / required).is_file():
             raise RuntimePackError(f"required standard-library file is missing: {required}")
     selected: set[Path] = set()
