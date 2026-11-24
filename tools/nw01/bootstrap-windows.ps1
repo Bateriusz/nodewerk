@@ -4,6 +4,8 @@ param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
     [string]$ToolsRoot = "C:\Tools",
     [string]$ProvenancePath = "",
+    [string]$DownloadCacheRoot = $env:NW01_DOWNLOAD_CACHE,
+    [switch]$SkipLlvm,
     [switch]$Ci
 )
 
@@ -23,6 +25,10 @@ $retry = $sources.download_retry
 New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "nodewerk-nw01-bootstrap"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+if (-not [string]::IsNullOrWhiteSpace($DownloadCacheRoot)) {
+    $DownloadCacheRoot = [System.IO.Path]::GetFullPath($DownloadCacheRoot)
+    New-Item -ItemType Directory -Force -Path $DownloadCacheRoot | Out-Null
+}
 
 $git = Get-Command git -ErrorAction Stop
 $sourceCommit = (& $git.Source -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
@@ -56,6 +62,55 @@ function Find-Exact([string]$Name, [string]$Tool, [string]$Expected, [string[]]$
     return Find-NwExactCommand -Name $Name -Tool $Tool -Expected $Expected -AdditionalCandidates $Candidates
 }
 
+function Get-PinnedPayload(
+    [string]$Name,
+    [string]$Uri,
+    [string]$Sha256,
+    [string]$FileName,
+    [scriptblock]$FallbackProbe
+) {
+    $cacheEnabled = -not [string]::IsNullOrWhiteSpace($DownloadCacheRoot)
+    $payloadPath = if ($cacheEnabled) {
+        Join-Path $DownloadCacheRoot $FileName
+    } else {
+        Join-Path $tempRoot $FileName
+    }
+
+    if (Test-Path -LiteralPath $payloadPath -PathType Leaf) {
+        try {
+            Assert-NwSha256 -Path $payloadPath -Expected $Sha256
+            Write-Host "[NW-BOOTSTRAP] CACHE_HIT $Name $payloadPath"
+            return [pscustomobject]@{
+                Path = $payloadPath
+                CacheHit = $true
+                FallbackUsed = $false
+                FallbackValue = $null
+            }
+        } catch {
+            Write-Host "[NW-BOOTSTRAP] CACHE_INVALID $Name $payloadPath"
+            Remove-Item -LiteralPath $payloadPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $download = Invoke-NwDownloadWithFallback -Name $Name -Uri $Uri -OutFile $payloadPath -RetryPolicy $retry -FallbackProbe $FallbackProbe
+    if ($download.FallbackUsed) {
+        return [pscustomobject]@{
+            Path = $null
+            CacheHit = $false
+            FallbackUsed = $true
+            FallbackValue = $download.FallbackValue
+        }
+    }
+    Assert-NwSha256 -Path $payloadPath -Expected $Sha256
+    Write-Host "[NW-BOOTSTRAP] CACHE_MISS $Name $payloadPath"
+    return [pscustomobject]@{
+        Path = $payloadPath
+        CacheHit = $false
+        FallbackUsed = $false
+        FallbackValue = $null
+    }
+}
+
 function Ensure-ZipTool(
     [string]$Name,
     [string]$Command,
@@ -74,8 +129,6 @@ function Ensure-ZipTool(
         return (Split-Path -Parent $exact)
     }
 
-    $archive = Join-Path $tempRoot ("{0}.zip" -f ($Name -replace '[^A-Za-z0-9_.-]', '_'))
-    Remove-Item -Force -ErrorAction SilentlyContinue $archive
     $probeCommand = $Command
     $probeTool = $Tool
     $probeExpected = $Expected
@@ -84,7 +137,9 @@ function Ensure-ZipTool(
     $fallbackProbe = {
         & $findExact -Name $probeCommand -Tool $probeTool -Expected $probeExpected -AdditionalCandidates @($probeCandidate)
     }.GetNewClosure()
-    $download = Invoke-NwDownloadWithFallback -Name $Name -Uri $Uri -OutFile $archive -RetryPolicy $retry -FallbackProbe $fallbackProbe
+    $payloadName = ("{0}.zip" -f ($Name -replace '[^A-Za-z0-9_.-]', '_'))
+    $download = Get-PinnedPayload -Name $Name -Uri $Uri -Sha256 $Sha256 -FileName $payloadName -FallbackProbe $fallbackProbe
+    $archive = [string]$download.Path
     if ($download.FallbackUsed) {
         $found = [string]$download.FallbackValue
         Record-Selection $Name $Expected $found "runner-preinstalled-after-transient-download-failure"
@@ -99,7 +154,8 @@ function Ensure-ZipTool(
     Expand-Archive -Path $archive -DestinationPath $InstallRoot -Force
     $installedExe = Join-Path $InstallRoot $ExecutableRelative
     Assert-NwExactToolVersion -Tool $Tool -Executable $installedExe -Expected $Expected -Label "$Name archive installed" -RepoRoot $RepoRoot
-    Record-Selection $Name $Expected $installedExe "downloaded-pinned-artifact"
+    $payloadSource = if ($download.CacheHit) { "cached-pinned-artifact" } else { "downloaded-pinned-artifact" }
+    Record-Selection $Name $Expected $installedExe $payloadSource
     return (Join-Path $InstallRoot $PathRelative)
 }
 
@@ -115,8 +171,6 @@ function Ensure-Llvm {
     }
 
     $uri = Expand-NwTemplate -Template ([string]$sources.llvm.url_template) -Version $contract.LlvmVersion
-    $installer = Join-Path $tempRoot "LLVM-$($contract.LlvmVersion)-win64.exe"
-    Remove-Item -Force -ErrorAction SilentlyContinue $installer
     $probeClang = $clang
     $probeLld = $lld
     $probeVersion = $contract.LlvmVersion
@@ -127,7 +181,8 @@ function Ensure-Llvm {
         if ($c -and $l) { return (Split-Path -Parent $c) }
         return $null
     }.GetNewClosure()
-    $download = Invoke-NwDownloadWithFallback -Name "LLVM" -Uri $uri -OutFile $installer -RetryPolicy $retry -FallbackProbe $fallbackProbe
+    $download = Get-PinnedPayload -Name "LLVM" -Uri $uri -Sha256 ([string]$sources.llvm.sha256) -FileName "LLVM-$($contract.LlvmVersion)-win64.exe" -FallbackProbe $fallbackProbe
+    $installer = [string]$download.Path
     if ($download.FallbackUsed) {
         $foundClangDir = [string]$download.FallbackValue
         Record-Selection "LLVM clang-cl/lld-link" $contract.LlvmVersion (Join-Path $foundClangDir "clang-cl.exe") "runner-preinstalled-after-transient-download-failure"
@@ -139,27 +194,198 @@ function Ensure-Llvm {
     if ($process.ExitCode -ne 0) { throw "LLVM installer failed with exit code $($process.ExitCode)" }
     Assert-NwExactToolVersion -Tool "clang-cl" -Executable $clang -Expected $contract.LlvmVersion -Label "LLVM clang-cl installation" -RepoRoot $RepoRoot
     Assert-NwExactToolVersion -Tool "lld-link" -Executable $lld -Expected $contract.LlvmVersion -Label "LLVM lld-link installation" -RepoRoot $RepoRoot
-    Record-Selection "LLVM clang-cl/lld-link" $contract.LlvmVersion $clang "downloaded-pinned-artifact"
+    $payloadSource = if ($download.CacheHit) { "cached-pinned-artifact" } else { "downloaded-pinned-artifact" }
+    Record-Selection "LLVM clang-cl/lld-link" $contract.LlvmVersion $clang $payloadSource
     return (Split-Path -Parent $clang)
 }
 
 function Test-ExistingVisualStudio {
+    param([ref]$FailureReason)
     try {
         # Import validates the exact toolset, the selected cl/link versions and
         # their ownership by VCToolsInstallDir. It throws on any mismatch.
         Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion -MsvcCompilerVersion $contract.MsvcCompilerVersion -MsvcLinkerVersion $contract.MsvcLinkerVersion -RepoRoot $RepoRoot | Out-Null
         return $true
     } catch {
+        if ($null -ne $FailureReason) {
+            $FailureReason.Value = [string]$_.Exception.Message
+        }
         return $false
     }
 }
 
+function Get-MissingVisualStudioComponents {
+    param([string]$TargetInstallPath = "")
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        return @($visualStudio.Components)
+    }
+
+    $target = ""
+    if (-not [string]::IsNullOrWhiteSpace($TargetInstallPath)) {
+        $target = [System.IO.Path]::GetFullPath($TargetInstallPath).TrimEnd('\')
+    }
+
+    $missing = @()
+    foreach ($component in $visualStudio.Components) {
+        # Scope the probe to VS 17.x, then (when a target is supplied) require
+        # the component to belong to that exact instance. A component present in
+        # Enterprise must not make a separate Build Tools instance look complete,
+        # and vice versa.
+        $installations = @(& $vswhere -version "[17.0,18.0)" -products * -requires ([string]$component) -property installationPath 2>$null)
+        $present = $false
+        if ($LASTEXITCODE -eq 0) {
+            foreach ($installation in $installations) {
+                $candidate = ([string]$installation).Trim()
+                if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+                if ([string]::IsNullOrWhiteSpace($target)) {
+                    $present = $true
+                    break
+                }
+                try {
+                    $normalized = [System.IO.Path]::GetFullPath($candidate).TrimEnd('\')
+                    if ([string]::Equals($normalized, $target, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $present = $true
+                        break
+                    }
+                } catch { }
+            }
+        }
+        if (-not $present) {
+            $missing += [string]$component
+        }
+    }
+    return @($missing)
+}
+
+function Get-VisualStudioModifyTarget {
+    # Get-NwVisualStudioInstallPaths already restricts candidates to VS 17.x
+    # installations with native x64 VC tools and prefers Build Tools before
+    # other editions. On windows-2022 this resolves to the preinstalled
+    # Enterprise 2022 instance, avoiding a second split VS installation.
+    foreach ($path in @(Get-NwVisualStudioInstallPaths)) {
+        $candidate = ([string]$path).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate -PathType Container)) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Get-VisualStudioChannelId {
+    param([Parameter(Mandatory)][string]$InstallPath)
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+        try {
+            $raw = (& $vswhere -version "[17.0,18.0)" -products * -format json -utf8 2>$null | Out-String)
+            foreach ($instance in @($raw | ConvertFrom-Json)) {
+                $candidate = [string]$instance.installationPath
+                if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+                $a = [System.IO.Path]::GetFullPath($candidate).TrimEnd('\')
+                $b = [System.IO.Path]::GetFullPath($InstallPath).TrimEnd('\')
+                if ([string]::Equals($a, $b, [System.StringComparison]::OrdinalIgnoreCase) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$instance.channelId)) {
+                    return [string]$instance.channelId
+                }
+            }
+        } catch { }
+    }
+    return "VisualStudio.17.Release"
+}
+
+function Invoke-VisualStudioInstanceModify {
+    param(
+        [Parameter(Mandatory)][string]$InstallPath,
+        [Parameter(Mandatory)][string[]]$Components
+    )
+
+    if ($Components.Count -eq 0) { return }
+    $setup = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+    if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
+        throw "Visual Studio Installer setup.exe was not found for in-place modification."
+    }
+    Assert-NwAuthenticodeSignature -Path $setup -SubjectContains $visualStudio.BootstrapperSubjectContains
+
+    Write-Host "[NW-BOOTSTRAP] VS_MODIFY_TARGET=$InstallPath"
+    Write-Host "[NW-BOOTSTRAP] VS_MODIFY_COMPONENTS=$($Components -join ',')"
+
+    # ProcessStartInfo.ArgumentList preserves install-path quoting without relying
+    # on Start-Process's string re-serialization. The local installer already
+    # owns the target instance, so a modify operation does not need a channel
+    # override. Preventing an installer self-update removes an unrelated network
+    # dependency from the critical path. Keep the package cache: the runner is
+    # ephemeral, so deleting freshly downloaded packages only adds cleanup I/O.
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $setup
+    $startInfo.UseShellExecute = $false
+    foreach ($arg in @("modify", "--installPath", $InstallPath, "--quiet", "--norestart", "--noUpdateInstaller")) {
+        [void]$startInfo.ArgumentList.Add([string]$arg)
+    }
+    foreach ($component in $Components) {
+        [void]$startInfo.ArgumentList.Add("--add")
+        [void]$startInfo.ArgumentList.Add([string]$component)
+    }
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) { throw "Visual Studio Installer modify process could not be started." }
+    $process.WaitForExit()
+    if ($process.ExitCode -notin @(0, 3010)) {
+        throw "Visual Studio existing-instance modification failed with exit code $($process.ExitCode)"
+    }
+}
+
 function Ensure-VisualStudio {
-    if (Test-ExistingVisualStudio) {
+    $initialFailure = ""
+    if (Test-ExistingVisualStudio -FailureReason ([ref]$initialFailure)) {
         Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "preinstalled-exact"
         return
     }
 
+    # Prefer modifying a compatible existing VS 2022 instance. This is the fast
+    # path on windows-2022: the image already owns VS2022, x64 VC tools and SDK
+    # 26100, so normally only the pinned legacy MSVC component is added.
+    $modifyTarget = Get-VisualStudioModifyTarget
+    if (-not [string]::IsNullOrWhiteSpace([string]$modifyTarget)) {
+        try {
+            $missing = @(Get-MissingVisualStudioComponents -TargetInstallPath $modifyTarget)
+            $individualMissing = @($missing | Where-Object { [string]$_ -like "Microsoft.VisualStudio.Component.*" })
+            if ($individualMissing.Count -eq 0) {
+                # Exact selection can fail even when vswhere reports every
+                # individual component. Re-assert the explicit individual set
+                # before escalating to workload-level repair.
+                $individualMissing = @($visualStudio.Components | Where-Object { [string]$_ -like "Microsoft.VisualStudio.Component.*" })
+            }
+            Invoke-VisualStudioInstanceModify -InstallPath $modifyTarget -Components $individualMissing
+
+            $modifyFailure = ""
+            if (Test-ExistingVisualStudio -FailureReason ([ref]$modifyFailure)) {
+                Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "modified-existing-vs-instance"
+                return
+            }
+
+            # If the individual-component repair was insufficient, add only the
+            # still-missing explicit entries (which may include the workload)
+            # to the same instance. Never request the broad recommended-component set.
+            $remaining = @(Get-MissingVisualStudioComponents -TargetInstallPath $modifyTarget)
+            if ($remaining.Count -gt 0) {
+                Invoke-VisualStudioInstanceModify -InstallPath $modifyTarget -Components $remaining
+                $modifyFailure = ""
+                if (Test-ExistingVisualStudio -FailureReason ([ref]$modifyFailure)) {
+                    Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "modified-existing-vs-instance"
+                    return
+                }
+            }
+            Write-Warning "[NW-BOOTSTRAP] existing VS2022 instance remained non-exact after modify: $modifyFailure"
+        } catch {
+            Write-Warning "[NW-BOOTSTRAP] existing VS2022 modification failed; falling back to isolated Build Tools provisioning: $($_.Exception.Message)"
+        }
+    }
+
+    # Fallback for hosts without a compatible VS2022 instance. A new Build Tools
+    # instance must receive the complete explicit component set so its contract
+    # does not depend on components owned by another side-by-side VS instance.
     $bootstrapper = Join-Path $tempRoot "vs_buildtools.exe"
     Remove-Item -Force -ErrorAction SilentlyContinue $bootstrapper
     $probeSdk = $visualStudio.WindowsSdkVersion
@@ -193,15 +419,18 @@ function Ensure-VisualStudio {
     }
     Assert-NwAuthenticodeSignature -Path $bootstrapper -SubjectContains $visualStudio.BootstrapperSubjectContains
 
+    $componentsToInstall = @($visualStudio.Components)
+    Write-Host "[NW-BOOTSTRAP] VS_BOOTSTRAP_COMPONENTS=$($componentsToInstall -join ',')"
     $args = @("--quiet", "--wait", "--norestart", "--nocache")
-    foreach ($component in $visualStudio.Components) { $args += @("--add", [string]$component) }
-    $args += "--includeRecommended"
+    foreach ($component in $componentsToInstall) { $args += @("--add", [string]$component) }
     $process = Start-Process -Wait -PassThru -FilePath $bootstrapper -ArgumentList $args
     if ($process.ExitCode -notin @(0, 3010)) { throw "Visual Studio Build Tools installation failed with exit code $($process.ExitCode)" }
-    if (-not (Test-ExistingVisualStudio)) {
-        throw "Visual Studio installation completed, but exact MSVC $($contract.MsvcCompilerVersion), linker $($contract.MsvcLinkerVersion), and SDK $($contract.WindowsSdkVersion) were not selected."
+
+    $finalFailure = ""
+    if (-not (Test-ExistingVisualStudio -FailureReason ([ref]$finalFailure))) {
+        throw "Visual Studio provisioning completed, but exact MSVC $($contract.MsvcCompilerVersion), linker $($contract.MsvcLinkerVersion), and SDK $($contract.WindowsSdkVersion) were not selected: $finalFailure"
     }
-    Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "installed-vs-components"
+    Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "installed-vs-buildtools-components"
 }
 
 try {
@@ -216,14 +445,26 @@ try {
     $ninjaRoot = Join-Path $ToolsRoot ("Ninja-{0}" -f $contract.NinjaVersion)
     $ninjaBin = Ensure-ZipTool "Ninja" "ninja.exe" "ninja" $contract.NinjaVersion $ninjaUri ([string]$sources.ninja.sha256) $ninjaRoot "ninja.exe" "."
 
-    $llvmBin = Ensure-Llvm
+    $llvmBin = $null
+    if (-not $SkipLlvm) {
+        $llvmBin = Ensure-Llvm
+    } else {
+        Write-Host "[NW-BOOTSTRAP] LLVM provisioning skipped for MSVC-only consumer"
+        $provenance.tools["LLVM clang-cl/lld-link"] = [ordered]@{
+            expected_version = $contract.LlvmVersion
+            executable = $null
+            source = "not-required-msvc-only"
+        }
+    }
 
     $dxcUri = Expand-NwTemplate -Template ([string]$sources.dxc.url_template) -Version $contract.DxcVersion
     $dxcRoot = Join-Path $ToolsRoot ("dxc-{0}" -f $contract.DxcVersion)
     $dxcBin = Ensure-ZipTool "DXC" "dxc.exe" "dxc" $contract.DxcVersion $dxcUri ([string]$sources.dxc.sha256) $dxcRoot "bin\x64\dxc.exe" "bin\x64"
 
     foreach ($path in @($cmakeBin, $ninjaBin, $llvmBin, $dxcBin)) {
-        Add-NwPathEntry -Path $path -ExportGitHubPath:$Ci
+        if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+            Add-NwPathEntry -Path $path -ExportGitHubPath:$Ci
+        }
     }
 
     if ([string]::IsNullOrWhiteSpace($ProvenancePath)) {

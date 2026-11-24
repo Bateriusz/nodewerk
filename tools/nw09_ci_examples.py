@@ -166,6 +166,7 @@ def _stage_asteroid_tunnel(
     staged_root: Path,
     player_template: Path,
     dxc_executable: Path,
+    smoke_launch: bool = True,
 ) -> Path:
     export_root = temporary_root / "export-asteroid-tunnel"
     report_path = temporary_root / "asteroid-tunnel-export-report.json"
@@ -198,11 +199,12 @@ def _stage_asteroid_tunnel(
     # Smoke-test the exact bytes that will be uploaded.  Asteroid Tunnel is a
     # stateless NW-07/NW-09A showcase, so it must verify link metadata and the
     # explicit tick but must not claim to carry NW-09 History state.
-    _smoke_launch(
-        staged,
-        example=ASTEROID_TUNNEL_NAME,
-        require_history=False,
-    )
+    if smoke_launch:
+        _smoke_launch(
+            staged,
+            example=ASTEROID_TUNNEL_NAME,
+            require_history=False,
+        )
     return staged
 
 
@@ -211,6 +213,7 @@ def build_examples(
     player_template: Path,
     output_directory: Path,
     dxc_executable: Path,
+    smoke_launch: bool = True,
 ) -> None:
     if os.name != "nt":
         raise ExampleBuildError("downloadable showcase examples require Windows")
@@ -270,7 +273,8 @@ def build_examples(
             if staged.stat().st_size == 0:
                 raise ExampleBuildError(f"{name}: staged executable is empty")
 
-            _smoke_launch(staged, example=name, require_history=True)
+            if smoke_launch:
+                _smoke_launch(staged, example=name, require_history=True)
             staged_executables.append(staged)
 
         staged_executables.append(
@@ -279,6 +283,7 @@ def build_examples(
                 staged_root=staged_root,
                 player_template=player_template,
                 dxc_executable=dxc_executable,
+                smoke_launch=smoke_launch,
             )
         )
 
@@ -310,17 +315,34 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--player-template", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--dxc", required=True, type=Path)
+    parser.add_argument("--dxc", type=Path)
+    parser.add_argument("--skip-smoke-launch", action="store_true")
+    parser.add_argument("--smoke-only", action="store_true")
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
     try:
+        if args.smoke_only:
+            root = args.output_dir.resolve()
+            _verify_sha256_manifest(root, root / "SHA256SUMS.txt")
+            for name, _, filename in EXAMPLES:
+                _smoke_launch(root / name / filename, example=name, require_history=True)
+            _smoke_launch(
+                root / ASTEROID_TUNNEL_NAME / ASTEROID_TUNNEL_FILENAME,
+                example=ASTEROID_TUNNEL_NAME,
+                require_history=False,
+            )
+            print(f"showcase bundle smoke validation passed at {root}")
+            return 0
+        if args.dxc is None:
+            raise ExampleBuildError("--dxc is required unless --smoke-only is used")
         build_examples(
             player_template=args.player_template,
             output_directory=args.output_dir,
             dxc_executable=args.dxc,
+            smoke_launch=not args.skip_smoke_launch,
         )
     except (
         ExampleBuildError,

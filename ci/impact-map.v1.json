@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "description": "Repository-owned dependency-aware CI routing map. Unknown paths fail safe to all scopes.",
+  "docs_patterns": [
+    "README.md",
+    "docs/**",
+    "**/*.md",
+    ".github/ISSUE_TEMPLATE/**"
+  ],
+  "ci_infrastructure_patterns": [
+    ".github/workflows/**",
+    "tools/ci/**",
+    "ci/**",
+    "tests/test_ci_*.py"
+  ],
+  "scopes": {
+    "core": {
+      "patterns": [
+        "CMakeLists.txt",
+        "CMakePresets.json",
+        "cmake/**",
+        "src/**",
+        "include/**",
+        "shaders/**",
+        "tools/nodewerkc.py",
+        "tools/dependency_check.py",
+        "tools/schema_validator.py",
+        "tools/nw02*",
+        "tools/nw03*",
+        "tools/nw04*",
+        "tools/nw05*",
+        "tools/nw06*",
+        "tools/nw09*",
+        "tests/test_architecture_and_cmake_contracts.py",
+        "tests/test_dependency_closure_and_accounting.py",
+        "tests/test_exit_codes_experiments_and_verify_runner.py",
+        "tests/test_offline_shader_and_compute_fixture.py",
+        "tests/test_schemas_and_manifests.py",
+        "tests/test_nw02_*",
+        "tests/test_nw03_*",
+        "tests/test_nw04_*",
+        "tests/test_nw05_*",
+        "tests/test_nw06_*",
+        "tests/test_nw09_*",
+        "tests/test_nw09a_*",
+        "fixtures/**",
+        "schemas/nw0[2-6]*",
+        "schemas/nw09*",
+        "benchmarks/capability-manifest.v1.json"
+      ],
+      "propagates_to": [
+        "nw01",
+        "nw07",
+        "nw08",
+        "nw08a",
+        "nw10"
+      ]
+    },
+    "nw01": {
+      "patterns": [
+        "tools/nw01/**",
+        "tests/test_nw01_*",
+        "benchmarks/toolchain-manifest.v1.json",
+        "benchmarks/ledgers/**",
+        "benchmarks/hardware/**",
+        "benchmarks/clean-system/**"
+      ],
+      "propagates_to": [
+        "nw07",
+        "nw08",
+        "nw08a",
+        "nw10"
+      ]
+    },
+    "nw07": {
+      "patterns": [
+        "tools/nw07_*.py",
+        "tests/test_nw07_*",
+        "benchmarks/nw07/**",
+        "schemas/nw07*"
+      ],
+      "propagates_to": [
+        "nw08",
+        "nw08a",
+        "nw10"
+      ]
+    },
+    "nw08": {
+      "patterns": [
+        "tools/nw08_*.py",
+        "tests/test_nw08_*",
+        "benchmarks/nw08/**",
+        "schemas/nw08*"
+      ],
+      "propagates_to": [
+        "nw08a"
+      ]
+    },
+    "nw08a": {
+      "patterns": [
+        "tools/nw08a_*.py",
+        "tests/test_nw08a_*",
+        "benchmarks/nw08a/**",
+        "schemas/nw08a*"
+      ],
+      "propagates_to": []
+    },
+    "nw10": {
+      "patterns": [
+        "tools/nw10/**",
+        "tools/nw10_*.py",
+        "tests/test_nw10_*",
+        "benchmarks/nw10/**",
+        "schemas/nw10*"
+      ],
+      "propagates_to": []
+    }
+  }
+}

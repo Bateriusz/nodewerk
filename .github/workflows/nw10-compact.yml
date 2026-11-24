@@ -12,7 +12,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci-impact:
+    name: CI impact routing
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.classify.outputs.core }}
+      nw01: ${{ steps.classify.outputs.nw01 }}
+      nw07: ${{ steps.classify.outputs.nw07 }}
+      nw08: ${{ steps.classify.outputs.nw08 }}
+      nw08a: ${{ steps.classify.outputs.nw08a }}
+      nw10: ${{ steps.classify.outputs.nw10 }}
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      full_regression: ${{ steps.classify.outputs.full_regression }}
+      fail_safe: ${{ steps.classify.outputs.fail_safe }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Classify changed scope
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python tools/ci/changed_scope.py
+          --event-name "${{ github.event_name }}"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
   contracts:
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw10 == 'true'
     name: NW-10 codec, accounting, profile, and evidence contracts
     runs-on: ubuntu-latest
     steps:
@@ -103,24 +137,45 @@ jobs:
             ${{ runner.temp }}/nw07-contracts.json
 
   windows-compact-export:
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw10 == 'true'
     name: Windows x64 compact export attempt
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install pytest
-        run: python -m pip install pytest
+      - name: Compute pinned portable-tool cache key
+        id: nw01-portable-cache-key
+        shell: pwsh
+        run: >-
+          python tools/ci/portable_cache_key.py
+          --runner-os "${{ runner.os }}"
+          --runner-arch "${{ runner.arch }}"
+          --github-output "$env:GITHUB_OUTPUT"
+
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Bootstrap exact NW-01 Windows toolchain
         shell: pwsh
         run: >-
           pwsh ./tools/nw01/bootstrap-windows.ps1
           -Ci
+          -SkipLlvm
           -ProvenancePath "$env:RUNNER_TEMP\nw10-bootstrap-provenance.json"
       - name: Export exact build environment
         shell: pwsh
-        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv -SkipLlvm
       - name: Configure release player template
         run: >-
           cmake --preset nw07-release
@@ -388,13 +443,13 @@ jobs:
           $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
           $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
 
-          cmake --preset nw07-release -B "$PWD/build/nw10-decoder-off" -DNW10_COMPACT_PACKAGE=OFF -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build "$PWD/build/nw10-decoder-off" --target nw_procedural_image_player --parallel 2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $canonicalTemplate = Join-Path $PWD "build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
+          # Reuse the decoder-off template built earlier in this same current-head job.
+          # This is not a clean-build reproducibility boundary; rebuilding the
+          # identical CMake target here only adds latency without strengthening
+          # the PE-ledger control.
+          $canonicalTemplate = Join-Path $PWD "build/nw07-release-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
           if (-not (Test-Path $canonicalTemplate -PathType Leaf)) {
-            throw "Decoder-off PE-ledger control template was not built: $canonicalTemplate"
+            throw "Decoder-off PE-ledger control template was not retained from the current-head build: $canonicalTemplate"
           }
           # The link-control export must select the same embedded payload mode
           # as the final artifact.  Otherwise the compact payload/decoder cost
@@ -429,7 +484,7 @@ jobs:
             "--final-executable", "$PWD/build/nw10-intro/compact/$stem.exe",
             "--linker-baseline-executable", "$PWD/build/nw10-intro-link-control/compact/$stem.exe",
             "--decoder-on-template", $template,
-            "--decoder-off-template", "$PWD/build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe",
+            "--decoder-off-template", $canonicalTemplate,
             "--final-package", "$PWD/build/nw10-intro/$stem.nwp",
             "--linker-baseline-package", "$PWD/build/nw10-intro-link-control/$stem.nwp",
             "--final-manifest", "$PWD/build/nw10-intro/$stem.manifest.json",
@@ -564,6 +619,7 @@ jobs:
         run: |
           ./tools/nw10/run-correctness-evidence.ps1 `
             -PrepareTransferBundle `
+            -SkipLlvm `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier blackwell `
             -ExpectedBranch ""
@@ -581,8 +637,10 @@ jobs:
         run: |
           ./tools/nw10/run-correctness-evidence.ps1 `
             -PrepareTransferBundle `
+            -SkipLlvm `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier ada `
+            -ReusePreparedTransfer "$PWD/build/nw10-correctness-scripted/transfer-blackwell/transfer-package" `
             -ExpectedBranch ""
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -598,6 +656,7 @@ jobs:
         run: |
           ./tools/nw10/run-correctness-evidence.ps1 `
             -PrepareTransferBundle `
+            -SkipLlvm `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier blackwell `
             -PackagingMode packed `
@@ -616,9 +675,11 @@ jobs:
         run: |
           ./tools/nw10/run-correctness-evidence.ps1 `
             -PrepareTransferBundle `
+            -SkipLlvm `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier ada `
             -PackagingMode packed `
+            -ReusePreparedTransfer "$PWD/build/nw10-correctness-scripted/transfer-blackwell-packed/transfer-package" `
             -ExpectedBranch ""
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

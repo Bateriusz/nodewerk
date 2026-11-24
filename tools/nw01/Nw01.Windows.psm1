@@ -767,17 +767,24 @@ function Get-NwStandaloneToolPaths {
 
 function Get-NwExactStandaloneToolSelection {
     [CmdletBinding()]
-    param([string]$RepoRoot = "")
+    param(
+        [string]$RepoRoot = "",
+        [bool]$RequireLlvm = $true
+    )
 
     $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
     $paths = Get-NwStandaloneToolPaths -RepoRoot $RepoRoot
     $specs = @(
         @{ Key = "CMake"; Name = "cmake.exe"; Tool = "cmake"; Expected = $contract.CMakeVersion; Canonical = (Join-Path $paths.CMakeBin "cmake.exe") },
         @{ Key = "Ninja"; Name = "ninja.exe"; Tool = "ninja"; Expected = $contract.NinjaVersion; Canonical = (Join-Path $paths.NinjaBin "ninja.exe") },
-        @{ Key = "Clang"; Name = "clang-cl.exe"; Tool = "clang-cl"; Expected = $contract.LlvmVersion; Canonical = (Join-Path $paths.LlvmBin "clang-cl.exe") },
-        @{ Key = "Lld"; Name = "lld-link.exe"; Tool = "lld-link"; Expected = $contract.LlvmVersion; Canonical = (Join-Path $paths.LlvmBin "lld-link.exe") },
         @{ Key = "Dxc"; Name = "dxc.exe"; Tool = "dxc"; Expected = $contract.DxcVersion; Canonical = (Join-Path $paths.DxcBin "dxc.exe") }
     )
+    if ($RequireLlvm) {
+        $specs += @(
+            @{ Key = "Clang"; Name = "clang-cl.exe"; Tool = "clang-cl"; Expected = $contract.LlvmVersion; Canonical = (Join-Path $paths.LlvmBin "clang-cl.exe") },
+            @{ Key = "Lld"; Name = "lld-link.exe"; Tool = "lld-link"; Expected = $contract.LlvmVersion; Canonical = (Join-Path $paths.LlvmBin "lld-link.exe") }
+        )
+    }
 
     $resolved = [ordered]@{}
     foreach ($spec in $specs) {
@@ -788,17 +795,21 @@ function Get-NwExactStandaloneToolSelection {
         $resolved[$spec.Key] = [System.IO.Path]::GetFullPath([string]$exe)
     }
 
-    $clangDir = Split-Path -Parent $resolved.Clang
-    $lldDir = Split-Path -Parent $resolved.Lld
-    if ([System.IO.Path]::GetFullPath($clangDir) -ne [System.IO.Path]::GetFullPath($lldDir)) {
-        throw "Pinned clang-cl and lld-link were resolved from different tool directories: '$clangDir' vs '$lldDir'"
+    $clangDir = $null
+    $lldDir = $null
+    if ($RequireLlvm) {
+        $clangDir = Split-Path -Parent $resolved.Clang
+        $lldDir = Split-Path -Parent $resolved.Lld
+        if ([System.IO.Path]::GetFullPath($clangDir) -ne [System.IO.Path]::GetFullPath($lldDir)) {
+            throw "Pinned clang-cl and lld-link were resolved from different tool directories: '$clangDir' vs '$lldDir'"
+        }
     }
 
     return [pscustomobject]@{
         CMakeExecutable = $resolved.CMake
         NinjaExecutable = $resolved.Ninja
-        ClangExecutable = $resolved.Clang
-        LldExecutable = $resolved.Lld
+        ClangExecutable = if ($RequireLlvm) { $resolved.Clang } else { $null }
+        LldExecutable = if ($RequireLlvm) { $resolved.Lld } else { $null }
         DxcExecutable = $resolved.Dxc
         CMakeBin = (Split-Path -Parent $resolved.CMake)
         NinjaBin = (Split-Path -Parent $resolved.Ninja)
@@ -811,7 +822,8 @@ function Enter-NwBuildEnvironment {
     [CmdletBinding()]
     param(
         [string]$RepoRoot = "",
-        [switch]$ExportGitHubEnv
+        [switch]$ExportGitHubEnv,
+        [switch]$SkipLlvm
     )
     if (-not $IsWindows) { throw "NW-01 Windows build environment can only be entered on Windows." }
     $contract = Get-NwToolchainContract -RepoRoot $RepoRoot
@@ -822,10 +834,12 @@ function Enter-NwBuildEnvironment {
     # ahead of the SDK. This prevents Windows SDK's newer dxc.exe from
     # shadowing the pinned DXC 1.8.2407 used by NW-01.
     Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion -MsvcCompilerVersion $contract.MsvcCompilerVersion -MsvcLinkerVersion $contract.MsvcLinkerVersion -RepoRoot $RepoRoot | Out-Null
-    $selection = Get-NwExactStandaloneToolSelection -RepoRoot $RepoRoot
+    $selection = Get-NwExactStandaloneToolSelection -RepoRoot $RepoRoot -RequireLlvm:(-not $SkipLlvm)
 
     foreach ($entry in @($selection.CMakeBin, $selection.NinjaBin, $selection.LlvmBin, $selection.DxcBin)) {
-        Add-NwPathEntry -Path $entry
+        if (-not [string]::IsNullOrWhiteSpace([string]$entry)) {
+            Add-NwPathEntry -Path $entry
+        }
     }
 
     # Fail immediately if command resolution still disagrees with the exact

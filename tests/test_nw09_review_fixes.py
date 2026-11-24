@@ -757,9 +757,38 @@ def test_native_bloom_tonemap_chain_validation_when_available(
     assert int(metrics["NW_PLAYER_DISPLAY_IMAGE_NONZERO_BYTES"]) > 0
 
 
+def _assert_real_generated_stateful_player(executable: Path) -> None:
+    launched = subprocess.run(
+        [
+            str(executable),
+            "--tick",
+            "3200",
+            "--frames",
+            "1",
+            "--allow-software-adapter",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert launched.returncode == 0, launched.stderr + launched.stdout
+    assert "NW05_LINK_MANIFEST_VERIFIED=1" in launched.stdout
+    assert "NW05_EXPLICIT_TICK=3200" in launched.stdout
+    assert "NW05_HISTORY_SIMULATION_TICK=8" in launched.stdout
+    assert "NW05_HISTORY_PENDING_TICKS=0" in launched.stdout
+
+
 def test_real_generated_stateful_player_launches_with_link_metadata(
     tmp_path: Path,
 ) -> None:
+    runtime_input = os.environ.get("NW09_REAL_PLAYER_RUNTIME_INPUT", "")
+    if runtime_input:
+        executable = Path(runtime_input)
+        assert executable.is_file()
+        _assert_real_generated_stateful_player(executable)
+        return
+
     required = os.environ.get("NW09_REQUIRE_REAL_PLAYER") == "1"
     template_value = os.environ.get("NW05_REAL_PLAYER_TEMPLATE", "")
     if os.name != "nt" or not template_value:
@@ -787,23 +816,13 @@ def test_real_generated_stateful_player_launches_with_link_metadata(
     artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
     assert artifact.executable_bytes is not None
     executable = tmp_path / "stateful" / artifact.executable_name
-    launched = subprocess.run(
-        [
-            str(executable),
-            "--tick",
-            "3200",
-            "--frames",
-            "1",
-            "--allow-software-adapter",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
-    assert launched.returncode == 0, launched.stderr + launched.stdout
-    # This marker is printed only after ParseEmbeddedLinkMetadata succeeds.
-    assert "NW05_LINK_MANIFEST_VERIFIED=1" in launched.stdout
-    assert "NW05_EXPLICIT_TICK=3200" in launched.stdout
-    assert "NW05_HISTORY_SIMULATION_TICK=8" in launched.stdout
-    assert "NW05_HISTORY_PENDING_TICKS=0" in launched.stdout
+
+    build_output = os.environ.get("NW09_REAL_PLAYER_BUILD_OUTPUT", "")
+    if build_output:
+        output = Path(build_output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(executable, output)
+        return
+
+    _assert_real_generated_stateful_player(executable)
+
