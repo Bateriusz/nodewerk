@@ -131,6 +131,10 @@ def test_windows_bootstrap_cache_is_digest_verified_and_vs_install_is_minimal():
     assert "VS_MODIFY_TARGET" in bootstrap
     assert '"modify"' in bootstrap
     assert '"--installPath"' in bootstrap
+    assert '"--noUpdateInstaller"' in bootstrap
+    modify_block = bootstrap.split("function Invoke-VisualStudioInstanceModify", 1)[1].split("function Ensure-VisualStudio", 1)[0]
+    assert '"--channelId"' not in modify_block
+    assert '"--nocache"' not in modify_block
     assert "VS_BOOTSTRAP_COMPONENTS" in bootstrap
     assert "$componentsToInstall = @($visualStudio.Components)" in bootstrap
     sources = json.loads((ROOT / "tools" / "nw01" / "toolchain-sources.json").read_text(encoding="utf-8"))
