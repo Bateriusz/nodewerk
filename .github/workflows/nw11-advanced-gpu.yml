@@ -64,7 +64,7 @@ jobs:
           tools/nw11_bundle.py tools/nw11_evidence.py tools/nw11_followup.py
           tools/nw11_build_bundle.py tools/nw11_verify.py tools/nw11_graph_scene.py
           tools/nw11_toolchain_identity.py tools/nw11_shader_payloads.py
-          tools/nw11_pe_dependencies.py
+          tools/nw11_pe_dependencies.py tools/nw11_pack_python_runtime.py
           tools/nw11/collect-evidence.py tools/nw11/compare-captures.py
       - name: Validate schemas and tracked evidence state
         run: |
@@ -337,6 +337,12 @@ jobs:
           $commit = (git rev-parse HEAD).Trim()
           if ($commit -ne "${{ github.event.pull_request.head.sha || github.sha }}") { throw "checkout HEAD does not match github.sha" }
           "commit=$commit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Pack the self-contained validation Python runtime
+        shell: pwsh
+        run: |
+          $pythonRoot = python -c "import sys; print(sys.base_prefix)"
+          python tools/nw11_pack_python_runtime.py --python-root "$pythonRoot" --output build/nw11-python-runtime.zip --json-out build/nw11-python-runtime.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build deterministic bundle from repository artifacts
         shell: pwsh
         run: |
@@ -353,6 +359,7 @@ jobs:
             --toolchain-identity "build/nw11-artifacts/nw11-toolchain-identity.json" `
             --shader-payloads "build/nw11-artifacts/nw11-shader-payloads.json" `
             --dependency-report "build/nw11-artifacts/nw11-pe-dependencies.json" `
+            --python-runtime-zip "build/nw11-python-runtime.zip" `
             --json-out "build/nw11-bundle-${{ matrix.slug }}-manifest.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/nw11_verify.py bundle `
@@ -415,7 +422,7 @@ jobs:
             -OutputDirectory $evidenceDirectory
           $code = $LASTEXITCODE
           if ($code -eq 0) { exit 0 }
-          if ($code -eq 3) { Write-Host "Capability absence is explicitly unsupported."; exit 3 }
+          if ($code -eq 3) { Write-Host "Capability absence is explicitly unsupported; common/fallback evidence was preserved."; exit 0 }
           if ($code -eq 11) { Write-Host "Required device coverage remains pending."; exit 11 }
           if ($code -eq 10) { Write-Host "Measured decision is rejected; evidence is preserved."; exit 0 }
           throw "NW-11 physical validation failed with exit code $code"

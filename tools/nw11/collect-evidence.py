@@ -203,13 +203,18 @@ def collect(
         raise evidence.EvidenceError(
             "collector requires the capability decisions produced before execution"
         )
-    if image_result is None or fallback_image_result is None:
+    optional_status = str(eligibility.get("status"))
+    if optional_status not in {"eligible", "unsupported", "pending"}:
         raise evidence.EvidenceError(
-            "collector requires the independent fixed-tick image comparisons"
+            "optional capability decision must be eligible, unsupported, or pending"
         )
-    if eligibility.get("status") != "eligible":
+    if fallback_image_result is None:
         raise evidence.EvidenceError(
-            "optional capability decision is not eligible; no variant may be measured"
+            "collector requires the independent baseline/fallback image comparison"
+        )
+    if optional_status == "eligible" and image_result is None:
+        raise evidence.EvidenceError(
+            "eligible optional coverage requires the independent variant image comparison"
         )
     if common_eligibility.get("status") != "eligible":
         raise evidence.EvidenceError(
@@ -245,6 +250,10 @@ def collect(
         if not isinstance(capability_decision, Mapping):
             raise evidence.EvidenceError(
                 f"raw run report '{path}' has no capability decision"
+            )
+        if role == "variant" and optional_status != "eligible":
+            raise evidence.EvidenceError(
+                "optional variant was executed despite unsupported or pending capability"
             )
         expected_decision = eligibility if role == "variant" else common_eligibility
         if dict(capability_decision) != dict(expected_decision):
@@ -311,13 +320,24 @@ def collect(
             )
         record["raw_report_file"] = Path(path).name
         by_role[role].append(record)
-    for role in EXPECTED_ROLE_ARTIFACT:
+    required_roles = {"baseline", "fallback"}
+    if optional_status == "eligible":
+        required_roles.add("variant")
+    for role in required_roles:
         if not by_role[role]:
             raise evidence.EvidenceError(
                 f"no raw run reports for required role '{role}'"
             )
-    runs = [_merge_role_reports(role, reports) for role, reports in by_role.items()]
-    if image_result is not None:
+    if optional_status != "eligible" and by_role["variant"]:
+        raise evidence.EvidenceError(
+            "unsupported or pending optional coverage must not contain variant reports"
+        )
+    runs = [
+        _merge_role_reports(role, reports)
+        for role, reports in by_role.items()
+        if reports
+    ]
+    if optional_status == "eligible" and image_result is not None:
         criteria = experiment_document["criteria"]
         expected_kind = criteria["image"]["reference_kind"]
         expected_ticks = list(criteria["image"]["fixed_ticks"])
@@ -386,6 +406,8 @@ def collect(
         "fallback_artifact_id": manifest["fallback_artifact_id"],
         "capability_profile_sha256": manifest["capability_profile"]["sha256"],
         "artifact_hashes": artifact_hashes,
+        "optional_eligibility": eligibility,
+        "common_eligibility": common_eligibility,
         "runs": runs,
         "evidence_file": evidence_file,
         "generated_by": "tools/nw11/collect-evidence.py",

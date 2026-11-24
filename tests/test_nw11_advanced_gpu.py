@@ -24,6 +24,7 @@ import nw11_experiment as experiment  # noqa: E402
 import nw11_followup as followup  # noqa: E402
 import nw11_graph_scene as graph_scene  # noqa: E402
 import nw11_pe_dependencies as pe_dependencies  # noqa: E402
+import nw11_pack_python_runtime as python_runtime  # noqa: E402
 import nw11_shader_payloads as shader_payloads  # noqa: E402
 import nw11_toolchain_identity as toolchain_identity  # noqa: E402
 import nw11_verify as verify  # noqa: E402
@@ -1735,3 +1736,101 @@ def test_nw11_distribution_size_is_reported_not_gated(tmp_path: Path) -> None:
     assert result["status"] == "accepted"
     assert result["reasons"] == []
     assert result["aggregate"]["incremental_distribution_bytes"] == accounting["incremental_distribution_bytes"]
+
+
+def test_nw11_python_runtime_archive_is_deterministic_and_self_contained(tmp_path: Path) -> None:
+    root = tmp_path / "python"
+    (root / "Lib/json").mkdir(parents=True)
+    (root / "Lib/encodings").mkdir(parents=True)
+    (root / "DLLs").mkdir()
+    (root / "python.exe").write_bytes(b"MZ-python")
+    (root / "python312.dll").write_bytes(b"dll")
+    (root / "Lib/json/__init__.py").write_text("# json", encoding="utf-8")
+    (root / "Lib/encodings/__init__.py").write_text("# encodings", encoding="utf-8")
+    (root / "DLLs/_hashlib.pyd").write_bytes(b"pyd")
+    first = tmp_path / "a.zip"
+    second = tmp_path / "b.zip"
+    python_runtime.pack(root, first)
+    python_runtime.pack(root, second)
+    assert first.read_bytes() == second.read_bytes()
+    import zipfile
+    with zipfile.ZipFile(first) as archive:
+        names = set(archive.namelist())
+    assert {"python.exe", "python312.dll", "Lib/json/__init__.py", "Lib/encodings/__init__.py", "DLLs/_hashlib.pyd"} <= names
+
+
+def test_nw11_validation_bundle_uses_only_bundled_python_runtime() -> None:
+    launcher = (REPO_ROOT / "tools/nw11/run-validation.ps1").read_text(encoding="utf-8")
+    workflow = (REPO_ROOT / ".github/workflows/nw11-advanced-gpu.yml").read_text(encoding="utf-8")
+    builder = (REPO_ROOT / "tools/nw11_build_bundle.py").read_text(encoding="utf-8")
+    assert "runtime/python-runtime.zip" in launcher
+    assert "Expand-Archive" in launcher
+    assert 'Get-Command $candidate' not in launcher
+    assert "--python-runtime-zip" in workflow
+    assert "production validation bundles require a bundled Python runtime" in builder
+
+
+def test_nw11_unsupported_optional_still_collects_common_and_fallback(tmp_path: Path) -> None:
+    collector = _load_collector()
+    root, manifest = _build_bundle(tmp_path)
+    common = {
+        "status": "eligible",
+        "marketing_name_used_for_eligibility": False,
+        "device_key": "pci:10de:2805",
+        "environment_key": "sha256:v1:" + "a" * 64,
+        "adapter": {"adapter_luid": "00000000:0000ABCD"},
+    }
+    optional = dict(common)
+    optional["status"] = "unsupported"
+    optional["diagnostics"] = [{"code": "NW11-CAPABILITY-UNSUPPORTED"}]
+    common_path = tmp_path / "common.json"
+    optional_path = tmp_path / "optional.json"
+    common_path.write_text(json.dumps(common), encoding="utf-8")
+    optional_path.write_text(json.dumps(optional), encoding="utf-8")
+    fallback_image = _write_image_result(tmp_path / "fallback-image.json")
+    reports = []
+    accounting = manifest["accounting"]
+    inventory = manifest["shader_inventory"]["roles"]
+    for role, artifact, distribution in (
+        ("baseline", "bin/common_baseline.exe", accounting["baseline_distribution_bytes"]),
+        ("fallback", "bin/fallback_common.exe", accounting["fallback_distribution_bytes"]),
+    ):
+        for index in range(contract.PERF_RUN_COUNT):
+            measurement = _measurement(
+                distribution=distribution,
+                shaders=len(inventory[role]),
+                shader_ids=inventory[role],
+            )
+            report = _run(role, measurement=measurement)
+            report["status"] = "measured"
+            report["device_key"] = common["device_key"]
+            report["environment_key"] = common["environment_key"]
+            report["adapter"] = {"adapter_luid": "00000000:0000ABCD"}
+            report["artifact_path"] = artifact
+            report["capability_decision"] = common
+            path = tmp_path / f"{role}-{index}.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            reports.append(path)
+    document = collector.collect(
+        bundle_root=root,
+        run_reports=reports,
+        expected_commit=COMMIT,
+        eligibility_file=str(optional_path),
+        common_eligibility_file=str(common_path),
+        fallback_image_result_file=str(fallback_image),
+        device_tier="desktop_ada_representative",
+    )
+    assert {run["role"] for run in document["runs"]} == {"baseline", "fallback"}
+    decisions = evidence.compute_decisions(document, _experiment())
+    observed = decisions["decisions"]
+    assert len(observed) == 1
+    assert observed[0]["status"] == "unsupported"
+    assert observed[0]["fallback_tested"] is True
+
+
+def test_nw11_launcher_blocks_only_optional_variant_for_unsupported_or_pending() -> None:
+    launcher = (REPO_ROOT / "tools/nw11/run-validation.ps1").read_text(encoding="utf-8")
+    assert "$optionalRunnable = $eligibilityCode -eq 0" in launcher
+    assert "common/fallback validation continues" in launcher
+    assert "if ($optionalRunnable)" in launcher
+    assert "$pairs = @(" in launcher

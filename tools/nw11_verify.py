@@ -254,7 +254,7 @@ def command_evidence(args: argparse.Namespace) -> int:
         return EXIT_UNSUPPORTED
     if decisions["aggregate_status"] == "rejected":
         return EXIT_REJECTED if args.require_accepted else EXIT_OK
-    if args.require_accepted and not decisions["satisfies_completion"]:
+    if args.require_accepted and decisions["aggregate_status"] != "accepted":
         return EXIT_PENDING
     return EXIT_OK
 

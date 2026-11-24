@@ -288,6 +288,32 @@ def validate_evidence(
                 f"evidence does not bind the current hash of '{path}'; regenerate evidence"
             )
 
+    optional_eligibility = _mapping(
+        record.get("optional_eligibility"), "optional_eligibility"
+    )
+    common_eligibility = _mapping(
+        record.get("common_eligibility"), "common_eligibility"
+    )
+    optional_status = str(optional_eligibility.get("status"))
+    if optional_status not in {"eligible", "unsupported", "pending"}:
+        raise EvidenceError("optional eligibility status is malformed")
+    if common_eligibility.get("status") != "eligible":
+        raise EvidenceError("common eligibility must be eligible before common artifacts run")
+    for decision, label in (
+        (optional_eligibility, "optional"),
+        (common_eligibility, "common"),
+    ):
+        if decision.get("marketing_name_used_for_eligibility") is not False:
+            raise EvidenceError(f"{label} eligibility used a GPU marketing name")
+        _string(decision.get("device_key"), f"{label}_eligibility.device_key")
+        _string(decision.get("environment_key"), f"{label}_eligibility.environment_key")
+    if (
+        optional_eligibility.get("device_key") != common_eligibility.get("device_key")
+        or optional_eligibility.get("environment_key")
+        != common_eligibility.get("environment_key")
+    ):
+        raise EvidenceError("optional and common eligibility do not describe the same device/environment")
+
     runs = record.get("runs")
     if not isinstance(runs, list) or not runs:
         raise EvidenceError("evidence must preserve at least one device run record")
@@ -304,6 +330,11 @@ def validate_evidence(
         if status not in EVIDENCE_STATUSES:
             raise EvidenceError("run evidence status is not a known NW-11 status")
         eligibility = _mapping(entry.get("capability_decision"), "capability_decision")
+        expected_eligibility = optional_eligibility if role == "variant" else common_eligibility
+        if dict(eligibility) != dict(expected_eligibility):
+            raise EvidenceError(
+                f"{role} run capability decision disagrees with the preserved probe decision"
+            )
         if eligibility.get("marketing_name_used_for_eligibility") is not False:
             raise EvidenceError(
                 "evidence must not derive eligibility from a GPU marketing name"
@@ -357,8 +388,12 @@ def validate_evidence(
         }:
             raise EvidenceError("measured run has no preserved measurement")
 
-    if "baseline" not in roles_seen or "variant" not in roles_seen:
-        raise EvidenceError("evidence must contain matched baseline and variant runs")
+    if "baseline" not in roles_seen:
+        raise EvidenceError("evidence must contain the common baseline run")
+    if optional_status == "eligible" and "variant" not in roles_seen:
+        raise EvidenceError("eligible evidence must contain a matched variant run")
+    if optional_status != "eligible" and "variant" in roles_seen:
+        raise EvidenceError("unsupported or pending evidence must not execute the optional variant")
     if "fallback" not in roles_seen:
         raise EvidenceError(
             "the separately exported common fallback artifact was never executed"
@@ -427,16 +462,13 @@ def compute_decisions(
         by_tier[tier].append(entry)
 
     decisions: list[dict[str, Any]] = []
+    optional_eligibility = _mapping(
+        _mapping(evidence, "evidence").get("optional_eligibility"),
+        "optional_eligibility",
+    )
     for tier in DEVICE_TIERS:
         tier_runs = by_tier[tier]
         if not tier_runs:
-            decisions.append(
-                _pending_decision(
-                    document,
-                    tier,
-                    "no matched physical baseline/variant run recorded for this device tier",
-                )
-            )
             continue
         grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
         for run in tier_runs:
@@ -447,7 +479,11 @@ def compute_decisions(
             grouped.setdefault(key, []).append(run)
         for (device_key, environment_key), group in sorted(grouped.items()):
             decision = _decide_group(
-                document, group, device_key=device_key, environment_key=environment_key
+                document,
+                group,
+                device_key=device_key,
+                environment_key=environment_key,
+                optional_eligibility=optional_eligibility,
             )
             decision["device_tier"] = tier
             decisions.append(decision)
@@ -467,15 +503,36 @@ def _decide_group(
     *,
     device_key: str,
     environment_key: str,
+    optional_eligibility: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if len(group) < 2:
+    baseline = next((run for run in group if run.get("role") == "baseline"), None)
+    fallback = next((run for run in group if run.get("role") == "fallback"), None)
+    if baseline is None or fallback is None:
         return {
             "device_key": device_key,
             "environment_key": environment_key,
             "status": "pending",
             "satisfies_completion": False,
-            "reason": "a matched baseline and variant pair is required",
+            "reason": "common baseline and separately exported fallback are both required",
             "metrics": None,
+            "fallback_tested": False,
+        }
+    optional_status = str(optional_eligibility.get("status"))
+    if optional_status in {"unsupported", "pending"}:
+        return {
+            "device_key": device_key,
+            "environment_key": environment_key,
+            "status": optional_status,
+            "satisfies_completion": False,
+            "reason": (
+                "required D3D12 capability is absent; optional variant was not executed"
+                if optional_status == "unsupported"
+                else "required D3D12 capability query is pending; optional variant was not executed"
+            ),
+            "metrics": None,
+            "fallback_tested": True,
+            "common_baseline_tested": True,
+            "diagnostics": list(optional_eligibility.get("diagnostics") or []),
         }
     statuses = {
         "eligible" if str(run.get("status")) == "measured" else str(run.get("status"))
@@ -514,10 +571,8 @@ def _decide_group(
             "metrics": None,
         }
 
-    baseline = next((run for run in group if run.get("role") == "baseline"), None)
     variant = next((run for run in group if run.get("role") == "variant"), None)
-    fallback = next((run for run in group if run.get("role") == "fallback"), None)
-    if baseline is None or variant is None:
+    if variant is None:
         return {
             "device_key": device_key,
             "environment_key": environment_key,
@@ -525,16 +580,6 @@ def _decide_group(
             "satisfies_completion": False,
             "reason": "group does not contain one baseline and one variant run",
             "metrics": None,
-        }
-    if fallback is None:
-        return {
-            "device_key": device_key,
-            "environment_key": environment_key,
-            "status": "pending",
-            "satisfies_completion": False,
-            "reason": "the separately exported common fallback was not executed",
-            "metrics": None,
-            "fallback_tested": False,
         }
     try:
         evaluation = evaluate_experiment(
@@ -611,8 +656,9 @@ def build_decision_document(
         "aggregate_status": aggregate_status,
         "fallback_tested": bool(decisions)
         and all(item.get("fallback_tested") is True for item in decisions),
-        "satisfies_completion": all(
-            item["status"] == "accepted" for item in decisions
+        "satisfies_completion": (
+            {item["device_tier"] for item in decisions} == set(DEVICE_TIERS)
+            and all(item["status"] == "accepted" for item in decisions)
         ),
         "per_device_decision_isolation": True,
         "pending_is_not_pass": True,

@@ -100,6 +100,7 @@ def build(
     measured_toolchain: Path | str | None = None,
     shader_payloads: Path | str | None = None,
     dependency_report: Path | str | None = None,
+    python_runtime_zip: Path | str | None = None,
     bundle_version: str = "1.0.0",
     repository: str = "nodewerk",
     repo_root: Path | str | None = None,
@@ -108,6 +109,8 @@ def build(
     root = Path(repo_root or REPO_ROOT)
     if require_head:
         verify_repository_commit(root, commit)
+        if python_runtime_zip is None:
+            raise BuildError("production validation bundles require a bundled Python runtime")
     bundle.validate_variant_sources(root)
     output = Path(output_directory)
     if output.exists() and any(output.iterdir()):
@@ -192,6 +195,8 @@ def build(
     if graph_scene is not None:
         _copy(Path(graph_scene), output / "manifests/graph-scene.json")
     _copy(root / LAUNCHER, output / "run-validation.ps1")
+    if python_runtime_zip is not None:
+        _copy(Path(python_runtime_zip), output / "runtime/python-runtime.zip")
     for name in TOOL_FILES:
         _copy(root / "tools" / name, output / "tools/nw11" / name)
     _copy(root / COLLECTOR, output / "tools/nw11/collect-evidence.py")
@@ -360,6 +365,7 @@ def build(
                 output, "manifests/canonical-production.json", role=bundle.ROLE_READING
             ),
             bundle.make_entry(output, "run-validation.ps1", role=bundle.ROLE_LAUNCHER),
+            *([bundle.make_entry(output, "runtime/python-runtime.zip", role=bundle.ROLE_TOOL)] if python_runtime_zip is not None else []),
         ]
     )
     if measured_toolchain is not None:
@@ -582,6 +588,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--toolchain-identity")
     parser.add_argument("--shader-payloads")
     parser.add_argument("--dependency-report")
+    parser.add_argument("--python-runtime-zip")
     parser.add_argument("--bundle-version", default="1.0.0")
     parser.add_argument("--repository", default="nodewerk")
     parser.add_argument("--repo-root")
@@ -606,6 +613,7 @@ def main(argv: list[str] | None = None) -> int:
             measured_toolchain=args.toolchain_identity,
             shader_payloads=args.shader_payloads,
             dependency_report=args.dependency_report,
+            python_runtime_zip=args.python_runtime_zip,
             bundle_version=args.bundle_version,
             repository=args.repository,
             repo_root=args.repo_root,

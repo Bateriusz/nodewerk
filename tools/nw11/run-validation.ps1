@@ -13,9 +13,9 @@
     repository-owned verifier before reporting anything as verified.
 
     Capability absence exits 3; a required query that was not answered exits 11
-    (pending); initialization or execution failures exit 4.  No measured
-    artifact is launched when the optional profile is unsupported or pending,
-    and no effect is ever substituted.
+    (pending); initialization or execution failures exit 4.  The common baseline
+    and separately exported fallback are still measured when the optional
+    profile is unsupported or pending; only the optional variant is blocked.
 #>
 param(
     [string]$BundleRoot = "",
@@ -45,16 +45,30 @@ function Write-Nw11Error {
 }
 
 function Resolve-Nw11Python {
-    foreach ($candidate in @("python3", "python", "py")) {
-        $command = Get-Command $candidate -ErrorAction SilentlyContinue
-        if ($null -ne $command) {
-            if ($candidate -eq "py") {
-                return @{ Command = $command.Source; Prefix = @("-3") }
-            }
-            return @{ Command = $command.Source; Prefix = @() }
-        }
+    param($Manifest)
+    $relative = "runtime/python-runtime.zip"
+    try {
+        Assert-Nw11ArtifactHash $Manifest $relative
+    } catch {
+        Write-Nw11Error 6 "python_runtime" $_.Exception.Message
+        return $null
     }
-    return $null
+    $archive = Join-Path $root $relative
+    $runtimeKey = ([string]$Manifest.bundle_id).Replace(":", "-")
+    $runtimeRoot = Join-Path $env:TEMP ("nodewerk-nw11-python-" + $runtimeKey)
+    $pythonExe = Join-Path $runtimeRoot "python.exe"
+    if (-not (Test-Path -LiteralPath $pythonExe)) {
+        if (Test-Path -LiteralPath $runtimeRoot) {
+            Remove-Item -LiteralPath $runtimeRoot -Recurse -Force
+        }
+        New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+        Expand-Archive -LiteralPath $archive -DestinationPath $runtimeRoot -Force
+    }
+    if (-not (Test-Path -LiteralPath $pythonExe)) {
+        Write-Nw11Error 6 "python_runtime" "The bundled Python runtime did not contain python.exe."
+        return $null
+    }
+    return @{ Command = $pythonExe; Prefix = @() }
 }
 
 function Invoke-Nw11Python {
@@ -117,11 +131,14 @@ if (-not $OutputDirectory) {
 }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
-$python = Resolve-Nw11Python
-if ($null -eq $python) {
-    Write-Nw11Error 2 "python_runtime" "A Python 3.11+ runtime is required for the repository-owned verifier."
-    exit 2
+$manifestPath = Join-Path $root "bundle-manifest.json"
+if (-not (Test-Path -LiteralPath $manifestPath)) {
+    Write-Nw11Error 6 "bundle_identity" "The bundle manifest is missing."
+    exit 6
 }
+$manifest = Read-Nw11Json $manifestPath
+$python = Resolve-Nw11Python -Manifest $manifest
+if ($null -eq $python) { exit 6 }
 
 $verifier = Join-Path $root "tools/nw11/nw11_verify.py"
 if (-not (Test-Path -LiteralPath $verifier)) {
@@ -139,7 +156,6 @@ if ($bundleCode -ne 0) {
     exit $bundleCode
 }
 
-$manifest = Read-Nw11Json (Join-Path $root "bundle-manifest.json")
 $profilePath = Join-Path $root $manifest.capability_profile.path
 $commonProfilePath = Join-Path $root "manifests/common-capability-profile.json"
 $experimentPath = Join-Path $root $manifest.experiment_definition.path
@@ -221,32 +237,16 @@ $eligibilityCode = Invoke-Nw11Python -Python $python -Arguments @(
     "--observation", $capabilitySnapshot,
     "--json-out", $eligibilityPath
 )
-if ($eligibilityCode -eq 3) {
-    Write-Nw11Error 3 "unsupported" "The queried D3D12 capabilities do not satisfy the optional profile; no optional artifact was executed."
-    Write-Nw11Json (Join-Path $OutputDirectory "summary.json") ([ordered]@{
-        status = "unsupported"
-        profile_id = $manifest.profile_id
-        fallback_artifact_id = $manifest.fallback_artifact_id
-        completion_satisfied = $false
-        policy = "No effect substitution occurred; the separate common fallback artifact remains available."
-    })
-    exit 3
-}
-if ($eligibilityCode -eq 11) {
-    Write-Nw11Error 11 "pending" "A required D3D12 capability query was not answered; the optional artifact must not run."
-    Write-Nw11Json (Join-Path $OutputDirectory "summary.json") ([ordered]@{
-        status = "pending"
-        profile_id = $manifest.profile_id
-        fallback_artifact_id = $manifest.fallback_artifact_id
-        completion_satisfied = $false
-    })
-    exit 11
-}
-if ($eligibilityCode -ne 0) {
+$optionalRunnable = $eligibilityCode -eq 0
+if ($eligibilityCode -notin @(0, 3, 11)) {
     Write-Nw11Error $eligibilityCode "eligibility" "Eligibility evaluation failed."
     exit $eligibilityCode
 }
 $eligibility = Read-Nw11Json $eligibilityPath
+if (-not $optionalRunnable) {
+    Write-Host ("[NW11] optional profile status={0}; variant execution is blocked, common/fallback validation continues." -f $eligibility.status)
+}
+
 $commonEligibility = Read-Nw11Json $commonEligibilityPath
 
 if ($VerifyOnly) {
@@ -310,11 +310,18 @@ $captureDirectory = Join-Path $OutputDirectory "captures"
 New-Item -ItemType Directory -Force -Path $rawDirectory, $captureDirectory | Out-Null
 $runReports = @()
 
-foreach ($pair in @(
+$pairs = @(
     @{ Role = "baseline"; Exe = $baselineExe; Artifact = "bin/common_baseline.exe"; Bytes = $baselineBytes; Ids = $baselineIds; Decision = $commonEligibilityPath },
-    @{ Role = "variant"; Exe = $variantExe; Artifact = "bin/optional_variant.exe"; Bytes = $variantBytes; Ids = $variantIds; Decision = $eligibilityPath },
     @{ Role = "fallback"; Exe = $fallbackExe; Artifact = "bin/fallback_common.exe"; Bytes = $fallbackBytes; Ids = $fallbackIds; Decision = $commonEligibilityPath }
-)) {
+)
+if ($optionalRunnable) {
+    $pairs = @(
+        $pairs[0],
+        @{ Role = "variant"; Exe = $variantExe; Artifact = "bin/optional_variant.exe"; Bytes = $variantBytes; Ids = $variantIds; Decision = $eligibilityPath },
+        $pairs[1]
+    )
+}
+foreach ($pair in $pairs) {
     for ($index = 1; $index -le $runs; $index++) {
         $reportPath = Join-Path $rawDirectory ("{0}-run-{1}.json" -f $pair.Role, $index)
         $captureRoot = Join-Path $captureDirectory ("{0}-run-{1}" -f $pair.Role, $index)
@@ -376,15 +383,17 @@ $variantCapture = Join-Path $captureDirectory ("variant-run-{0}/captures.json" -
 $fallbackCapture = Join-Path $captureDirectory ("fallback-run-{0}/captures.json" -f $runs)
 $comparator = Join-Path $root "tools/nw11/compare-captures.py"
 
-$compareCode = Invoke-Nw11Python -Python $python -Arguments @(
-    $comparator, "--baseline-manifest", $baselineCapture,
-    "--variant-manifest", $variantCapture,
-    "--reference-kind", $referenceKind,
-    "--out", $imageResult
-)
-if ($compareCode -eq 2) {
-    Write-Nw11Error 2 "image_comparison" "The fixed-tick capture comparison is malformed."
-    exit 2
+if ($optionalRunnable) {
+    $compareCode = Invoke-Nw11Python -Python $python -Arguments @(
+        $comparator, "--baseline-manifest", $baselineCapture,
+        "--variant-manifest", $variantCapture,
+        "--reference-kind", $referenceKind,
+        "--out", $imageResult
+    )
+    if ($compareCode -eq 2) {
+        Write-Nw11Error 2 "image_comparison" "The fixed-tick capture comparison is malformed."
+        exit 2
+    }
 }
 $fallbackCompareCode = Invoke-Nw11Python -Python $python -Arguments @(
     $comparator, "--baseline-manifest", $baselineCapture,
@@ -404,10 +413,12 @@ $collectArgs = @(
     "--evidence-name", "evidence.json",
     "--eligibility", $eligibilityPath,
     "--common-eligibility", $commonEligibilityPath,
-    "--image-result", $imageResult,
     "--fallback-image-result", $fallbackImageResult,
     "--device-tier", $DeviceTier
 )
+if ($optionalRunnable) {
+    $collectArgs += @("--image-result", $imageResult)
+}
 if ($ExpectedCommit) {
     $collectArgs += @("--expected-commit", $ExpectedCommit)
 }
