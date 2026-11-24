@@ -6,7 +6,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, benchmark/NW-10A-final-base ]
   schedule:
     - cron: "17 3 * * *"
 
