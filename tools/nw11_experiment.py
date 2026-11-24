@@ -350,7 +350,7 @@ def _validate_pipeline(
     variant_shaders = pipeline.get("variant_shaders")
     if not isinstance(variant_shaders, list) or not variant_shaders:
         raise ExperimentError("the variant must declare its shaders")
-    allowed_targets = set(profile_definition(profile_id)["shader_targets"]) | set(profile_definition(COMMON_PROFILE_ID)["shader_targets"])
+    allowed_targets = set(profile_definition(profile_id)["shader_targets"])
     for shader in variant_shaders:
         entry = _mapping(shader, "variant shader")
         path = _string(entry.get("path"), "variant shader path")
@@ -359,7 +359,13 @@ def _validate_pipeline(
             raise ExperimentError(
                 "optional shader implementations must live under shaders/nw11/"
             )
-        if target not in allowed_targets:
+        is_ray_deformation = (
+            profile_id == RAY_QUERY_PROFILE_ID
+            and path == "shaders/nw11/reflection/nw11_deform_cs.hlsl"
+            and target == "cs_6_0"
+            and entry.get("entry_point") == "DeformCS"
+        )
+        if target not in allowed_targets and not is_ray_deformation:
             raise ExperimentError(
                 f"variant shader target '{target}' is not declared by the profile"
             )
