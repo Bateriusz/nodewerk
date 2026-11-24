@@ -154,11 +154,31 @@ def test_workflows_route_heavy_pr_jobs_and_cache_portable_payloads():
         assert f"needs.ci-impact.outputs.{scope}" in workflow
         assert job + ":" in workflow
         assert "runs-on: windows-latest" not in workflow
-        assert "runs-on: windows-2022" in workflow
         if job.startswith("windows"):
             assert "actions/cache@v4" in workflow
             assert "portable_cache_key.py" in workflow
             assert "NW01_DOWNLOAD_CACHE" in workflow
+
+
+def test_nw01_splits_build_and_runtime_by_host_capability():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    build = workflow.split("  windows-reproducibility-and-fixtures:", 1)[1].split("  windows-runtime-smoke:", 1)[0]
+    runtime = workflow.split("  windows-runtime-smoke:", 1)[1].split("  nw04-native-verification:", 1)[0]
+    native = workflow.split("  nw04-native-verification:", 1)[1].split("  windows-physical-evidence:", 1)[0]
+
+    assert "runs-on: windows-2022" in build
+    assert "Verify real-PE NW-05 and NW-09 generated-player exports" not in build
+    assert "nw01-runtime-smoke-inputs-${{ github.sha }}" in build
+    assert "source_commit = (git rev-parse HEAD).Trim()" in build
+
+    assert "runs-on: windows-2025" in runtime
+    assert "actions/download-artifact@v4" in runtime
+    assert "needs: [ci-impact, windows-reproducibility-and-fixtures]" in runtime
+    assert "source_commit does not match the checked-out current head" in runtime
+    assert "Assert-NwExactToolVersion" in runtime
+    assert "Verify real-PE NW-05 and NW-09 generated-player exports" in runtime
+
+    assert "runs-on: windows-2025" in native
 
 
 def test_windows_full_pytest_is_not_duplicated():
