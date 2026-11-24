@@ -181,6 +181,18 @@ def test_nw01_splits_build_and_runtime_by_host_capability():
     assert "runs-on: windows-2025" in native
 
 
+def test_runtime_sensitive_workflows_use_windows_2025():
+    nw08 = (ROOT / ".github" / "workflows" / "nw08-studio.yml").read_text(encoding="utf-8")
+    nw08a = (ROOT / ".github" / "workflows" / "nw08a-presentation-geometry.yml").read_text(encoding="utf-8")
+    nw07 = (ROOT / ".github" / "workflows" / "nw07-regression.yml").read_text(encoding="utf-8")
+
+    assert "runs-on: windows-2025" in nw08
+    assert "runs-on: windows-2022" not in nw08
+    assert "runs-on: windows-2025" in nw08a
+    assert "runs-on: windows-2022" not in nw08a
+    assert "runs-on: windows-2022" in nw07
+
+
 def test_windows_full_pytest_is_not_duplicated():
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     marker = "- name: Run NW-01 contract test suite on Windows"
