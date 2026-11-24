@@ -85,6 +85,17 @@ std::string Narrow(const wchar_t* text) {
     return output;
 }
 
+std::string LuidString(const LUID& luid) {
+    char buffer[32] = {};
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%08lX:%08lX",
+        static_cast<unsigned long>(luid.HighPart),
+        static_cast<unsigned long>(luid.LowPart));
+    return buffer;
+}
+
 std::string WindowsBuild() {
     using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -492,6 +503,7 @@ int main(int argc, char** argv) {
     payload += "    \"vendor_id\": " + JsonNumber(description.VendorId) + ",\n";
     payload += "    \"device_id\": " + JsonNumber(description.DeviceId) + ",\n";
     payload += "    \"adapter_name\": \"" + JsonEscape(adapter_name) + "\",\n";
+    payload += "    \"adapter_luid\": \"" + LuidString(description.AdapterLuid) + "\",\n";
     payload += "    \"dedicated_video_memory_bytes\": " + std::to_string(description.DedicatedVideoMemory) + "\n";
     payload += "  },\n";
     payload += "  \"driver_version\": \"" + JsonEscape(driver) + "\",\n";

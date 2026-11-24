@@ -92,6 +92,22 @@ function Get-ArtifactPath {
     return (Join-Path $root $entry.path)
 }
 
+function Assert-Nw11ArtifactHash {
+    param($Manifest, [string]$RelativePath)
+    $entry = $Manifest.artifacts | Where-Object { $_.path -eq $RelativePath } | Select-Object -First 1
+    if ($null -eq $entry) {
+        throw "bundle manifest does not record '$RelativePath'"
+    }
+    $target = Join-Path $root $RelativePath
+    if (-not (Test-Path -LiteralPath $target)) {
+        throw "bundle artifact '$RelativePath' is missing before execution"
+    }
+    $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne [string]$entry.sha256) {
+        throw "bundle artifact '$RelativePath' changed after bundle verification"
+    }
+}
+
 $root = (Resolve-Path -LiteralPath $BundleRoot).Path
 if (-not $OutputDirectory) {
     $bundleLeaf = Split-Path -Leaf $root
@@ -173,6 +189,15 @@ if ($probeCode -eq 3) {
 if ($probeCode -ne 0 -or -not (Test-Path -LiteralPath $capabilitySnapshot)) {
     Write-Nw11Error 4 "capability_probe" "The capability probe failed to execute."
     exit 4
+}
+
+$capabilitySnapshotDocument = Read-Nw11Json $capabilitySnapshot
+$adapterLuid = ""
+if ($null -ne $capabilitySnapshotDocument.PSObject.Properties["adapter"]) {
+    $adapterRecord = $capabilitySnapshotDocument.adapter
+    if ($null -ne $adapterRecord -and $null -ne $adapterRecord.PSObject.Properties["adapter_luid"]) {
+        $adapterLuid = [string]$adapterRecord.adapter_luid
+    }
 }
 
 $commonEligibilityPath = Join-Path $OutputDirectory "common-eligibility.json"
@@ -311,6 +336,10 @@ foreach ($pair in @(
             $resolved += @("--capture-dir", $captureRoot, "--capture-manifest", $captureManifest)
         }
         Write-Host ("[NW11] {0} run {1}/{2}: {3}" -f $pair.Role, $index, $runs, $pair.Exe)
+        Assert-Nw11ArtifactHash $manifest $pair.Artifact
+        if ($adapterLuid) {
+            $resolved += @("--adapter-luid", $adapterLuid)
+        }
         & $pair.Exe @resolved
         $executionCode = $LASTEXITCODE
         if ($executionCode -ne 0) {

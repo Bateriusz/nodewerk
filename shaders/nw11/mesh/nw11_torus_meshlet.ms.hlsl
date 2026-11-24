@@ -84,17 +84,20 @@ struct NwVertex
 NwVertex LoadGeneratedVertex(uint vertex_index)
 {
     NwVertex vertex;
-    uint offset = vertex_index * 32u;
+    // NwVertices is a Buffer<uint>, so Load() takes a 32-bit element index.
+    // The frozen nw06_generate_cs stage writes a 32-byte vertex record, i.e.
+    // eight uint elements per vertex.
+    uint offset = vertex_index * 8u;
     float4 first = asfloat(uint4(
         NwVertices.Load(offset + 0u),
-        NwVertices.Load(offset + 4u),
-        NwVertices.Load(offset + 8u),
-        NwVertices.Load(offset + 12u)));
+        NwVertices.Load(offset + 1u),
+        NwVertices.Load(offset + 2u),
+        NwVertices.Load(offset + 3u)));
     float4 second = asfloat(uint4(
-        NwVertices.Load(offset + 16u),
-        NwVertices.Load(offset + 20u),
-        NwVertices.Load(offset + 24u),
-        NwVertices.Load(offset + 28u)));
+        NwVertices.Load(offset + 4u),
+        NwVertices.Load(offset + 5u),
+        NwVertices.Load(offset + 6u),
+        NwVertices.Load(offset + 7u)));
     vertex.position = first.xyz;
     vertex.normal = float3(first.w, second.x, second.y);
     vertex.uv = second.zw;
@@ -130,6 +133,9 @@ float4x4 LookAt(float3 eye, float3 target, float3 up)
         -dot(right, eye), -dot(actual_up, eye), -dot(forward, eye), 1.0);
 }
 
+// One group thread owns exactly one vertex of the 9x9 wrapped local patch.
+// Launching fewer threads than NW_VERTS_PER_MESHLET would leave mesh output
+// vertices unwritten along the patch boundary.
 [numthreads(NW_VERTS_PER_MESHLET, 1, 1)]
 [outputtopology("triangle")]
 void MeshMain(
@@ -216,7 +222,9 @@ void MeshMain(
             // Consume the exact generated index buffer instead of deriving an
             // assumed topology.  Each global vertex maps to the 9x9 local
             // patch, including the wrapped torus boundary rows/columns.
-            uint global_index = NwIndices.Load((quad * 6u + corner) * 4u);
+            // NwIndices is a Buffer<uint>: the element index is the triangle
+            // corner, not a byte offset.
+            uint global_index = NwIndices.Load(quad * 6u + corner);
             uint global_major = global_index / MinorSegments;
             uint global_minor = global_index % MinorSegments;
             uint local_major = (global_major + MajorSegments -

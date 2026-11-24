@@ -147,9 +147,13 @@ initialization compute shaders (`generate`, `instances`, `material`, `camera`,
 camera curve, and light, then renders all variants from those same buffers.
 The ray-query artifact builds a BLAS from the generated vertex/index buffers
 and a TLAS from the generated instance transforms, fences the build with a UAV
-barrier and fence wait, and keeps every resource alive until the frame command
-list has completed. No hand-authored geometry, second renderer, or second
-production backend exists.
+barrier and fence wait, transitions both acceleration-structure scratch
+buffers to `D3D12_RESOURCE_STATE_UNORDERED_ACCESS` before the build, and keeps
+every resource alive until the frame command list has completed. No
+hand-authored geometry, second renderer, or second production backend exists.
+The probe publishes the selected adapter LUID; the launcher passes that exact
+LUID to every measured executable, and the renderer fails initialization
+rather than silently measuring a different GPU.
 
 The CMake project compiles every shader offline with the pinned DXC
 (`as_6_5`, `ms_6_5`, `ps_6_5`, and the frozen `cs_6_0`/`vs_6_0`/`ps_6_0`
@@ -170,7 +174,12 @@ link mesh or DXR code, shaders, or payload headers.
   initialization dispatch. Segment counts and radii arrive through
   graph-derived root constants; the shader does not reconstruct a hard-coded
   torus, so a graph parameter change cannot silently drift from the workload.
-- Meshlets: 8×8 vertices, 32 meshlets per instance × 256 instances.
+- Generated buffers are bound as `Buffer<uint>` SRVs, so the mesh stage loads
+  `NwVertices` and `NwIndices` in 32-bit element units (eight uint elements per
+  32-byte vertex), never as byte offsets. One group thread owns each of the
+  81 wrapped local-patch vertices, so every declared mesh vertex is written.
+- Meshlets: 8×8 cells (9×9 including the wrapped boundary vertices), 32
+  meshlets per instance × 256 instances.
 - Synchronization: `SetMeshOutputCounts` and
   `GroupMemoryBarrierWithGroupSync()` are declared and enforced by static
   bundle checks.
@@ -281,14 +290,16 @@ editing. It:
    OS build, inbox `d3d12.dll`/`dxgi.dll` versions, Agility `D3D12Core`
    presence, and queried D3D12 features/shader-model support;
 3. determines eligibility from those queries;
-4. stops with an explicit unsupported (`3`) or pending (`11`) diagnostic before
+4. re-checks each measured artifact SHA-256 immediately before execution and
+   passes the probe-selected adapter LUID to every measured executable;
+5. stops with an explicit unsupported (`3`) or pending (`11`) diagnostic before
    running any measured artifact if the optional profile is not eligible;
-5. runs the common/baseline, eligible variant, and separately exported common
+6. runs the common/baseline, eligible variant, and separately exported common
    fallback under identical frozen settings, warm-up, and repeated fresh
    processes;
-6. preserves raw outputs and compares fixed-tick captures with the
+7. preserves raw outputs and compares fixed-tick captures with the
    repository-owned comparator;
-7. invokes the repository-owned verifier locally and writes
+8. invokes the repository-owned verifier locally and writes
    `evidence.json`, `decisions.json`, and a short `summary.txt` into a sibling
    output directory (never into the immutable bundle root, so unrecorded
    payload detection stays strict).
@@ -315,7 +326,11 @@ keys, and a `measurement` object containing raw GPU/CPU/frame-time samples,
 cold-initialization milliseconds, distribution bytes, shader count, peak
 engine-committed GPU bytes, and the fixed-quality image result. The launcher
 merges repeated processes for the same role only when every identity and
-capability snapshot agrees; it never fabricates or reorders samples.
+capability snapshot agrees, including the probe-selected adapter LUID; it
+never fabricates or reorders samples. The collector replaces baseline,
+variant, and fallback image metrics with results computed directly from the
+fixed-tick capture bytes, so a measured binary cannot self-report a passing
+quality result.
 
 ## 5. Physical coverage and published decisions
 

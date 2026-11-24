@@ -22,6 +22,9 @@ struct RendererOptions {
     std::string device_tier;
     std::string device_key;
     std::string environment_key;
+    // LUID of the exact probe-selected adapter, formatted "<high>:<low>".
+    // When set, the renderer must measure that adapter or fail initialization.
+    std::string adapter_luid;
     std::string capability_decision_path;
     std::string reference_kind = "raster_reference";
     std::string fixed_quality = "nw07.quality.v1";

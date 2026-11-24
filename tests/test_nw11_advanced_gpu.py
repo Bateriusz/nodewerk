@@ -78,6 +78,7 @@ def _observation(
             "vendor_id": 0x10DE,
             "device_id": device_id,
             "adapter_name": "metadata only",
+            "adapter_luid": "00000000:0000ABCD",
         },
         "driver_version": "610.88",
         "os_build": "10.0.26300.9818",
@@ -153,6 +154,13 @@ def _run(
             "marketing_name_used_for_eligibility": False,
             "device_key": device_key,
             "environment_key": environment_key,
+            "adapter": {"adapter_luid": "00000000:0000ABCD"},
+        },
+        "adapter": {
+            "adapter_name": "metadata only",
+            "adapter_luid": "00000000:0000ABCD",
+            "vendor_id": 0x10DE,
+            "device_id": 0x2805,
         },
         "measurement": measurement or _measurement(),
     }
@@ -825,6 +833,12 @@ def test_nw11_collected_evidence_preserves_raw_runs_and_pending_coverage(
             measurement["image"]["reference_kind"] = document["criteria"]["image"][
                 "reference_kind"
             ]
+            if role == "baseline":
+                # A measured binary must never be able to self-report a
+                # passing fixed-quality result.  The collector must replace
+                # this with the independent capture comparison.
+                measurement["image"]["max_abs_channel_error"] = 5.0
+                measurement["image"]["rmse"] = 5.0
             report = _run(role, measurement=measurement)
             report["device_key"] = eligibility["device_key"]
             report["environment_key"] = eligibility["environment_key"]
@@ -867,6 +881,11 @@ def test_nw11_collected_evidence_preserves_raw_runs_and_pending_coverage(
     assert len(collected["runs"]) == 3
     assert collected["runs"][0]["process_run_count"] == contract.PERF_RUN_COUNT
     assert collected["raw_per_sample_results_preserved"] is True
+    baseline_run = next(
+        run for run in collected["runs"] if run["role"] == "baseline"
+    )
+    assert baseline_run["measurement"]["image"]["max_abs_channel_error"] == 0.0
+    assert baseline_run["measurement"]["image"]["rmse"] == 0.0
 
     decisions_path = tmp_path / "decisions.json"
     code = verify.main(
@@ -907,6 +926,25 @@ def test_nw11_launcher_is_one_command_and_verifies_before_measuring() -> None:
     verify_position = launcher.index('"bundle", "--bundle-root"')
     measure_position = launcher.index("foreach ($pair in @(")
     assert verify_position < measure_position
+
+
+def test_nw11_evidence_rejects_adapter_luid_mismatch(tmp_path: Path) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    document = _experiment()
+    runs = [_run("baseline"), _run("variant"), _run("fallback")]
+    runs[1]["adapter"]["adapter_luid"] = "00000000:0000FFFF"
+    document_evidence = _evidence(root, manifest, document, runs)
+    manifest_sha = contract.sha256_bytes(
+        (root / bundle.MANIFEST_NAME).read_bytes()
+    )
+    with pytest.raises(evidence.EvidenceError):
+        evidence.build_decision_document(
+            evidence=document_evidence,
+            experiment=document,
+            bundle_manifest=manifest,
+            bundle_manifest_sha256=manifest_sha,
+            schema_root=root,
+        )
 
 
 def test_nw11_shader_manifest_declares_synchronization_and_lifetimes() -> None:
@@ -1127,6 +1165,51 @@ def test_nw11_mesh_shader_consumes_graph_generated_geometry() -> None:
     assert document["torus"]["minor_segments"] == 32
     assert document["torus"]["major_radius"] == 0.7
     assert document["instances"]["count"] == 256
+
+
+def test_nw11_mesh_shader_indexes_generated_buffers_in_elements() -> None:
+    source = (
+        REPO_ROOT / "shaders/nw11/mesh/nw11_torus_meshlet.ms.hlsl"
+    ).read_text(encoding="utf-8")
+    compact = "".join(source.split())
+    # Buffer<uint>.Load takes an element index.  The generated vertex record is
+    # 32 bytes = eight uint elements, and the index buffer is one uint per
+    # triangle corner.
+    assert "vertex_index*8u" in compact
+    assert "NwIndices.Load(quad*6u+corner)" in compact
+    assert "NwIndices.Load((quad*6u+corner)*4u)" not in compact
+    assert "numthreads(NW_VERTS_PER_MESHLET,1,1)" in compact
+    assert "SetMeshOutputCounts(NW_VERTS_PER_MESHLET,NW_PRIMS_PER_MESHLET)" in compact
+    bundle.validate_variant_sources(REPO_ROOT)
+
+
+def test_nw11_acceleration_structure_scratch_buffers_are_uav_state() -> None:
+    harness = (
+        REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
+    ).read_text(encoding="utf-8")
+    for scratch in ("resources_.blas_scratch", "resources_.tlas_scratch"):
+        assert (
+            f"Transition(list_.Get(), {scratch}.Get(),\n"
+            "               D3D12_RESOURCE_STATE_COMMON,\n"
+            "               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);"
+        ) in harness
+
+
+def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
+    probe = (REPO_ROOT / "src/nw11/capability_probe.cpp").read_text(encoding="utf-8")
+    harness = (
+        REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
+    ).read_text(encoding="utf-8")
+    main = (REPO_ROOT / "src/nw11/render/nw11_main.cpp").read_text(encoding="utf-8")
+    launcher = (REPO_ROOT / "tools/nw11/run-validation.ps1").read_text(encoding="utf-8")
+    assert "adapter_luid" in probe
+    assert '"--adapter-luid"' in main
+    assert "ParseAdapterLuid" in harness
+    assert "probe-selected DXGI adapter LUID is unavailable" in harness
+    assert '$adapterLuid = [string]$adapterRecord.adapter_luid' in launcher
+    assert '@("--adapter-luid", $adapterLuid)' in launcher
+    assert "Assert-Nw11ArtifactHash $manifest $pair.Artifact" in launcher
+    assert "Get-FileHash -LiteralPath $target -Algorithm SHA256" in launcher
 
 
 def test_nw11_experiment_runtime_validator_enforces_frozen_guardrails() -> None:

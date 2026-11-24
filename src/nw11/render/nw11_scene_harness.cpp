@@ -101,6 +101,48 @@ std::uint64_t Align(std::uint64_t value, std::uint64_t alignment) {
     return (value + alignment - 1u) & ~(alignment - 1u);
 }
 
+bool ParseAdapterLuid(const std::string& text, LUID& luid) {
+    if (text.empty()) {
+        return false;
+    }
+    unsigned long long high = 0;
+    unsigned long long low = 0;
+    if (std::sscanf(text.c_str(), "%llx:%llx", &high, &low) != 2 &&
+        std::sscanf(text.c_str(), "%llu:%llu", &high, &low) != 2) {
+        return false;
+    }
+    luid.HighPart = static_cast<LONG>(high);
+    luid.LowPart = static_cast<DWORD>(low);
+    return true;
+}
+
+std::string LuidString(const LUID& luid) {
+    char buffer[32] = {};
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%08lX:%08lX",
+        static_cast<unsigned long>(luid.HighPart),
+        static_cast<unsigned long>(luid.LowPart));
+    return buffer;
+}
+
+std::string WideToUtf8(const wchar_t* text) {
+    if (text == nullptr || text[0] == L'\0') {
+        return {};
+    }
+    const int bytes =
+        WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    if (bytes <= 1) {
+        return {};
+    }
+    std::string output(static_cast<std::size_t>(bytes), '\0');
+    WideCharToMultiByte(
+        CP_UTF8, 0, text, -1, output.data(), bytes, nullptr, nullptr);
+    output.resize(static_cast<std::size_t>(bytes - 1));
+    return output;
+}
+
 std::uint32_t FloatBits(float value) {
     std::uint32_t bits = 0;
     std::memcpy(&bits, &value, sizeof(bits));
@@ -349,6 +391,12 @@ void SceneRenderer::InitializeDevice() {
     ThrowIfFailed(
         CreateDXGIFactory2(0, IID_PPV_ARGS(&factory_)),
         "CreateDXGIFactory2");
+    LUID requested_luid{};
+    const bool has_requested_luid = !options_.adapter_luid.empty();
+    if (has_requested_luid && !ParseAdapterLuid(options_.adapter_luid, requested_luid)) {
+        throw std::runtime_error(
+            "invalid --adapter-luid value; expected '<high>:<low>' in hex or decimal");
+    }
     ComPtr<IDXGIAdapter1> best;
     DXGI_ADAPTER_DESC1 best_desc{};
     for (UINT index = 0;; ++index) {
@@ -360,6 +408,18 @@ void SceneRenderer::InitializeDevice() {
         if (FAILED(candidate->GetDesc1(&desc))) {
             continue;
         }
+        if (has_requested_luid) {
+            // The probe and every measured artifact must observe the exact
+            // same adapter.  Never fall back to another GPU when the
+            // probe-selected LUID is absent.
+            if (desc.AdapterLuid.HighPart == requested_luid.HighPart &&
+                desc.AdapterLuid.LowPart == requested_luid.LowPart) {
+                best = candidate;
+                best_desc = desc;
+                break;
+            }
+            continue;
+        }
         if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
             continue;
         }
@@ -369,7 +429,10 @@ void SceneRenderer::InitializeDevice() {
         }
     }
     if (best == nullptr) {
-        throw std::runtime_error("no hardware DXGI adapter available");
+        throw std::runtime_error(
+            has_requested_luid
+                ? "the probe-selected DXGI adapter LUID is unavailable"
+                : "no hardware DXGI adapter available");
     }
     adapter_ = best;
     ThrowIfFailed(
@@ -1153,6 +1216,9 @@ void SceneRenderer::BuildAccelerationStructures() {
 
     ThrowIfFailed(allocator_->Reset(), "ID3D12CommandAllocator::Reset(blas)");
     ThrowIfFailed(list_->Reset(allocator_.Get(), nullptr), "ID3D12GraphicsCommandList::Reset(blas)");
+    Transition(list_.Get(), resources_.blas_scratch.Get(),
+               D3D12_RESOURCE_STATE_COMMON,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     Transition(list_.Get(), resources_.blas.Get(), D3D12_RESOURCE_STATE_COMMON,
                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     list4_->BuildRaytracingAccelerationStructure(&blas_build, 0, nullptr);
@@ -1218,6 +1284,9 @@ void SceneRenderer::BuildAccelerationStructures() {
 
     ThrowIfFailed(allocator_->Reset(), "ID3D12CommandAllocator::Reset(tlas)");
     ThrowIfFailed(list_->Reset(allocator_.Get(), nullptr), "ID3D12GraphicsCommandList::Reset(tlas)");
+    Transition(list_.Get(), resources_.tlas_scratch.Get(),
+               D3D12_RESOURCE_STATE_COMMON,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     Transition(list_.Get(), resources_.tlas.Get(), D3D12_RESOURCE_STATE_COMMON,
                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     Transition(list_.Get(), resources_.blas.Get(),
@@ -1517,6 +1586,18 @@ void SceneRenderer::WriteReport() {
     json << "  \"device_key\": \"" << JsonEscape(options_.device_key) << "\",\n";
     json << "  \"environment_key\": \"" << JsonEscape(options_.environment_key)
          << "\",\n";
+    DXGI_ADAPTER_DESC1 selected_adapter{};
+    if (adapter_ != nullptr &&
+        SUCCEEDED(adapter_->GetDesc1(&selected_adapter))) {
+        json << "  \"adapter\": {\n";
+        json << "    \"adapter_name\": \""
+             << JsonEscape(WideToUtf8(selected_adapter.Description)) << "\",\n";
+        json << "    \"adapter_luid\": \""
+             << JsonEscape(LuidString(selected_adapter.AdapterLuid)) << "\",\n";
+        json << "    \"vendor_id\": " << selected_adapter.VendorId << ",\n";
+        json << "    \"device_id\": " << selected_adapter.DeviceId << "\n";
+        json << "  },\n";
+    }
     json << "  \"status\": \"eligible\",\n";
     json << "  \"artifact_path\": \"" << JsonEscape(options_.artifact_path)
          << "\",\n";

@@ -106,6 +106,8 @@ int main(int argc, char** argv) {
             options.device_key = text;
         } else if (Consume(index, argc, argv, "--environment-key", text)) {
             options.environment_key = text;
+        } else if (Consume(index, argc, argv, "--adapter-luid", text)) {
+            options.adapter_luid = text;
         } else if (Consume(index, argc, argv, "--capability-decision", text)) {
             options.capability_decision_path = text;
         } else if (Consume(index, argc, argv, "--reference-kind", text)) {

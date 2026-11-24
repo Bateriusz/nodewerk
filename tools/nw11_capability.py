@@ -314,6 +314,7 @@ def evaluate_observation(
             "adapter": {
                 "vendor_id": vendor_id,
                 "device_id": device_id,
+                "adapter_luid": adapter.get("adapter_luid"),
                 "adapter_name_metadata_only": adapter.get("adapter_name"),
             },
             "queried": {},
@@ -379,6 +380,7 @@ def evaluate_observation(
         "adapter": {
             "vendor_id": vendor_id,
             "device_id": device_id,
+            "adapter_luid": adapter.get("adapter_luid"),
             "adapter_name_metadata_only": adapter.get("adapter_name"),
         },
         "driver_version": driver,

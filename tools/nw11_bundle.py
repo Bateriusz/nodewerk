@@ -128,6 +128,32 @@ def validate_variant_sources(repo_root: Path | str) -> dict[str, Any]:
                     f"mesh shader '{source_path}' must consume the graph-generated "
                     "vertex buffer instead of reconstructing hard-coded geometry"
                 )
+            normalized = re.sub(r"\s+", "", text)
+            if "numthreads(NW_VERTS_PER_MESHLET,1,1)" not in normalized:
+                raise BundleError(
+                    f"mesh shader '{source_path}' must launch one thread per local "
+                    "patch vertex so every mesh output vertex is written"
+                )
+            if "SetMeshOutputCounts(NW_VERTS_PER_MESHLET,NW_PRIMS_PER_MESHLET)" not in normalized:
+                raise BundleError(
+                    f"mesh shader '{source_path}' vertex output count must match "
+                    "the emitted local patch size"
+                )
+            if "vertex_index*8u" not in normalized:
+                raise BundleError(
+                    f"mesh shader '{source_path}' must index NwVertices in 32-bit "
+                    "elements (eight per generated 32-byte vertex)"
+                )
+            if "NwIndices.Load((quad*6u+corner)*4u)" in normalized:
+                raise BundleError(
+                    f"mesh shader '{source_path}' treats NwIndices as byte-addressed; "
+                    "Buffer<uint>.Load takes an element index"
+                )
+            if "NwIndices.Load(quad*6u+corner)" not in normalized:
+                raise BundleError(
+                    f"mesh shader '{source_path}' must consume the generated index "
+                    "buffer in 32-bit element units"
+                )
         if "RayQuery<" in text:
             for token in ("TraceRayInline", "Proceed", "CommittedStatus"):
                 if token not in text:
@@ -548,6 +574,12 @@ def verify_bundle(
 ) -> dict[str, Any]:
     bundle_root = Path(root).resolve()
     manifest = load_manifest(bundle_root)
+    _validate_with_schema(
+        bundle_root,
+        "schemas/nw11-bundle-manifest.schema.json",
+        manifest,
+        "bundle manifest",
+    )
     if expected_commit is not None and manifest["commit"] != expected_commit:
         raise BundleError(
             "bundle commit does not match the expected tested commit; evidence is stale"

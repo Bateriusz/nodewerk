@@ -57,6 +57,12 @@ def _merge_role_reports(role: str, reports: list[dict[str, Any]]) -> dict[str, A
             raise evidence.EvidenceError(
                 f"matched {role} runs disagree on '{key}'; observations are not comparable"
             )
+    adapter_identity = [report.get("adapter") for report in reports]
+    if any(item != adapter_identity[0] for item in adapter_identity[1:]):
+        raise evidence.EvidenceError(
+            f"matched {role} runs disagree on the measured adapter; "
+            "per-device decisions cannot mix adapters"
+        )
     capability_decisions = [report.get("capability_decision") for report in reports]
     if any(decision != capability_decisions[0] for decision in capability_decisions[1:]):
         raise evidence.EvidenceError(
@@ -118,6 +124,7 @@ def _merge_role_reports(role: str, reports: list[dict[str, Any]]) -> dict[str, A
         "fixed_ticks": list(images[0].get("fixed_ticks") or []),
     }
     merged = {key: first.get(key) for key in identity_keys}
+    merged["adapter"] = adapter_identity[0]
     merged["role"] = role
     merged["capability_decision"] = capability_decisions[0]
     merged["measurement"] = merged_measurement
@@ -242,6 +249,24 @@ def collect(
                 f"raw run report '{path}' capability decision does not match the "
                 "decision the launcher obtained from the probe"
             )
+        decision_adapter = capability_decision.get("adapter") or {}
+        decision_luid = (
+            decision_adapter.get("adapter_luid")
+            if isinstance(decision_adapter, Mapping)
+            else None
+        )
+        if decision_luid is not None:
+            observed_adapter = record.get("adapter") or {}
+            observed_luid = (
+                observed_adapter.get("adapter_luid")
+                if isinstance(observed_adapter, Mapping)
+                else None
+            )
+            if observed_luid != decision_luid:
+                raise evidence.EvidenceError(
+                    f"raw run report '{path}' adapter LUID does not match the "
+                    "probe-selected adapter"
+                )
         measurement = record.get("measurement")
         if not isinstance(measurement, Mapping):
             raise evidence.EvidenceError(
@@ -322,6 +347,20 @@ def collect(
             raise evidence.EvidenceError(
                 "fallback image comparison did not cover the frozen fixed ticks"
             )
+        # The baseline is the fixed-quality reference, so its own metric must
+        # also come from the repository-owned capture comparison rather than
+        # from a self-reported value in the measured binary.  The separately
+        # built common fallback exercises the same common pipeline, so the
+        # baseline-vs-fallback comparison is the independent baseline check.
+        baseline_run = next(run for run in runs if run["role"] == "baseline")
+        baseline_run["measurement"]["image"] = {
+            "max_abs_channel_error": float(
+                fallback_image_result["max_abs_channel_error"]
+            ),
+            "rmse": float(fallback_image_result["rmse"]),
+            "reference_kind": expected_kind,
+            "fixed_ticks": expected_ticks,
+        }
         fallback_run = next(run for run in runs if run["role"] == "fallback")
         fallback_run["measurement"]["image"] = {
             "max_abs_channel_error": float(

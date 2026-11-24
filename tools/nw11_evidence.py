@@ -327,6 +327,24 @@ def validate_evidence(
             raise EvidenceError(
                 "run environment key disagrees with the capability decision it was launched under"
             )
+        decision_adapter = eligibility.get("adapter") or {}
+        decision_luid = (
+            decision_adapter.get("adapter_luid")
+            if isinstance(decision_adapter, Mapping)
+            else None
+        )
+        if decision_luid is not None:
+            observed_adapter = entry.get("adapter") or {}
+            observed_luid = (
+                observed_adapter.get("adapter_luid")
+                if isinstance(observed_adapter, Mapping)
+                else None
+            )
+            if observed_luid != decision_luid:
+                raise EvidenceError(
+                    "run adapter LUID disagrees with the probe-selected adapter; "
+                    "the measured device cannot be attributed to another GPU"
+                )
         if entry.get("device_tier") not in DEVICE_TIERS:
             raise EvidenceError(f"unknown device tier '{entry.get('device_tier')}'")
         if entry.get("measurement") is not None:
