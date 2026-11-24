@@ -31,9 +31,129 @@ def _hashes(directory: Path) -> dict[str, str]:
     }
 
 
+def _run_real_pe_runtime_checks(
+    baseline: Path,
+    changed: Path,
+    *,
+    graph_width: int,
+    graph_height: int,
+) -> None:
+    completed = subprocess.run(
+        [
+            str(baseline),
+            "--frames",
+            "1",
+            "--allow-software-adapter",
+            "--emit-image-hash",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+    assert "NW05_FRAMES=1" in completed.stdout
+    assert "NW05_PRESENTS=1" in completed.stdout
+    image_bytes = re.search(r"NW05_IMAGE_BYTES=(\d+)", completed.stdout)
+    nonzero = re.search(r"NW05_IMAGE_NONZERO_BYTES=(\d+)", completed.stdout)
+    image_hash = re.search(r"NW05_IMAGE_FNV64=([0-9a-f]{16})", completed.stdout)
+    assert image_bytes is not None
+    assert nonzero is not None
+    assert image_hash is not None
+    assert int(image_bytes.group(1)) == graph_width * graph_height * 16
+    assert int(nonzero.group(1)) > 0
+
+    non_aliased = subprocess.run(
+        [
+            str(baseline),
+            "--frames",
+            "1",
+            "--allow-software-adapter",
+            "--force-non-aliased-plan",
+            "--emit-image-hash",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert non_aliased.returncode == 0, non_aliased.stdout + "\n" + non_aliased.stderr
+    non_aliased_hash = re.search(
+        r"NW05_IMAGE_FNV64=([0-9a-f]{16})", non_aliased.stdout
+    )
+    assert non_aliased_hash is not None
+    assert non_aliased_hash.group(1) == image_hash.group(1)
+
+    changed_run = subprocess.run(
+        [
+            str(changed),
+            "--frames",
+            "1",
+            "--allow-software-adapter",
+            "--emit-image-hash",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert changed_run.returncode == 0, changed_run.stdout + "\n" + changed_run.stderr
+    changed_hash = re.search(
+        r"NW05_IMAGE_FNV64=([0-9a-f]{16})", changed_run.stdout
+    )
+    assert changed_hash is not None
+    assert changed_hash.group(1) != image_hash.group(1)
+
+
+def _write_real_pe_runtime_bundle(
+    root: Path,
+    baseline: Path,
+    changed: Path,
+    *,
+    graph_width: int,
+    graph_height: int,
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    baseline_out = root / "baseline.exe"
+    changed_out = root / "changed.exe"
+    shutil.copy2(baseline, baseline_out)
+    shutil.copy2(changed, changed_out)
+    metadata = {
+        "schema_version": 1,
+        "graph_width": graph_width,
+        "graph_height": graph_height,
+        "baseline_sha256": hashlib.sha256(baseline_out.read_bytes()).hexdigest(),
+        "changed_sha256": hashlib.sha256(changed_out.read_bytes()).hexdigest(),
+    }
+    (root / "runtime.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _run_real_pe_runtime_bundle(root: Path) -> None:
+    metadata = json.loads((root / "runtime.json").read_text(encoding="utf-8"))
+    baseline = root / "baseline.exe"
+    changed = root / "changed.exe"
+    assert hashlib.sha256(baseline.read_bytes()).hexdigest() == metadata["baseline_sha256"]
+    assert hashlib.sha256(changed.read_bytes()).hexdigest() == metadata["changed_sha256"]
+    _run_real_pe_runtime_checks(
+        baseline,
+        changed,
+        graph_width=int(metadata["graph_width"]),
+        graph_height=int(metadata["graph_height"]),
+    )
+
+
 def test_real_pe_export_is_byte_identical_in_clean_directories(
     tmp_path: Path,
 ) -> None:
+    runtime_input = os.environ.get("NW05_RUNTIME_BUNDLE_INPUT", "")
+    if runtime_input:
+        assert os.name == "nt"
+        _run_real_pe_runtime_bundle(Path(runtime_input))
+        return
+
     template_value = os.environ.get("NW05_REAL_PLAYER_TEMPLATE", "")
     if os.name != "nt" or not template_value:
         pytest.skip("real PE export reproducibility runs in Windows CI")
@@ -66,24 +186,15 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     assert payload[:2] == b"MZ"
     pe_offset = int.from_bytes(payload[0x3C:0x40], "little")
     assert payload[pe_offset : pe_offset + 4] == b"PE\x00\x00"
-    assert (
-        common.executable_bytes
-        == second.artifacts[nwp.COMMON_PROFILE_ID].executable_bytes
-    )
-    assert (
-        first.report["provenance"]["player_template_sha256"]
-        == hashlib.sha256(template.read_bytes()).hexdigest()
-    )
+    assert common.executable_bytes == second.artifacts[nwp.COMMON_PROFILE_ID].executable_bytes
+    assert first.report["provenance"]["player_template_sha256"] == hashlib.sha256(template.read_bytes()).hexdigest()
     template_bytes = template.read_bytes()
     assert common.executable_bytes[: len(template_bytes)] != template_bytes
     assert common.manifest["dependencies_source"] == "specialized-pe-imports"
-    optimized = nw05_optimizer.optimize_graph(
-        nw03_compiler.load_graph(PROCEDURAL)
-    )
+
+    optimized = nw05_optimizer.optimize_graph(nw03_compiler.load_graph(PROCEDURAL))
     materialized = optimized.materialize_document()
-    graph_width, graph_height = nw05_export._graph_render_dimensions(
-        materialized, optimized
-    )
+    graph_width, graph_height = nw05_export._graph_render_dimensions(materialized, optimized)
     thread_group = (max(1, min(1024, graph_width)), 1, 1)
     dispatch_groups = (
         (graph_width + thread_group[0] - 1) // thread_group[0],
@@ -92,9 +203,7 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     )
     generated, diagnostics = nw03_compiler.lower_to_selective_hlsl(
         materialized,
-        fused_roots={
-            record.root_node for record in optimized.fusions if record.accepted
-        },
+        fused_roots={record.root_node for record in optimized.fusions if record.accepted},
         thread_group=thread_group,
         dispatch_groups=dispatch_groups,
         image_width=graph_width,
@@ -104,122 +213,50 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     assert len(generated) == 6
     assert all(shader.unfused for shader in generated)
     expected_hlsl = {shader.hlsl_sha256 for shader in generated}
-    manifest_hlsl = {
-        item["hlsl_sha256"]
-        for item in common.manifest.get("shaders", [])
-    }
+    manifest_hlsl = {item["hlsl_sha256"] for item in common.manifest.get("shaders", [])}
     assert manifest_hlsl == expected_hlsl
-    assert common.manifest["image_oracle_sha256"] == (
-        nw05_export._graph_image_oracle_sha256(
-            nw03_compiler.load_graph(PROCEDURAL)
-        )
+    assert common.manifest["image_oracle_sha256"] == nw05_export._graph_image_oracle_sha256(
+        nw03_compiler.load_graph(PROCEDURAL)
     )
     decoded = nwp.decode_package(common.package_bytes)
-    manifest_blobs = {
-        item["blob_sha256"] for item in common.manifest.get("shaders", [])
-    }
-    assert {
-        hashlib.sha256(shader.blob).hexdigest()
-        for shader in decoded.shaders
-    } == manifest_blobs
-    present = [
-        instruction
-        for instruction in decoded.frame
-        if instruction.opcode == "frame.present"
-    ]
+    manifest_blobs = {item["blob_sha256"] for item in common.manifest.get("shaders", [])}
+    assert {hashlib.sha256(shader.blob).hexdigest() for shader in decoded.shaders} == manifest_blobs
+    present = [instruction for instruction in decoded.frame if instruction.opcode == "frame.present"]
     assert present
     present_id = present[-1].operands[0].value
-    assert any(
-        resource.resource_id == present_id and resource.usage == "uav"
-        for resource in decoded.resources
-    )
-    completed = subprocess.run(
-        [
-            str(executable),
-            "--frames",
-            "1",
-            "--allow-software-adapter",
-            "--emit-image-hash",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=False,
-    )
-    assert completed.returncode == 0, (
-        completed.stdout + "\n" + completed.stderr
-    )
-    assert "NW05_FRAMES=1" in completed.stdout
-    assert "NW05_PRESENTS=1" in completed.stdout
-    image_bytes = re.search(r"NW05_IMAGE_BYTES=(\d+)", completed.stdout)
-    nonzero = re.search(
-        r"NW05_IMAGE_NONZERO_BYTES=(\d+)", completed.stdout
-    )
-    image_hash = re.search(r"NW05_IMAGE_FNV64=([0-9a-f]{16})", completed.stdout)
-    assert image_bytes is not None
-    assert nonzero is not None
-    assert image_hash is not None
-    assert int(image_bytes.group(1)) == graph_width * graph_height * 16
-    assert int(nonzero.group(1)) > 0
-    non_aliased = subprocess.run(
-        [
-            str(executable),
-            "--frames",
-            "1",
-            "--allow-software-adapter",
-            "--force-non-aliased-plan",
-            "--emit-image-hash",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=False,
-    )
-    assert non_aliased.returncode == 0, (
-        non_aliased.stdout + "\n" + non_aliased.stderr
-    )
-    non_aliased_hash = re.search(
-        r"NW05_IMAGE_FNV64=([0-9a-f]{16})", non_aliased.stdout
-    )
-    assert non_aliased_hash is not None
-    assert non_aliased_hash.group(1) == image_hash.group(1)
+    assert any(resource.resource_id == present_id and resource.usage == "uav" for resource in decoded.resources)
 
     changed_source = PROCEDURAL.read_text(encoding="utf-8").replace(
         "sin(uv.x * 31.0 + time)", "sin(uv.x * 37.0 + time)"
     )
     changed_graph = tmp_path / "changed.nwgraph"
     changed_graph.write_text(changed_source, encoding="utf-8")
-    changed = nw05_export.export_graph(
+    changed_result = nw05_export.export_graph(
         changed_graph,
         tmp_path / "changed",
         settings=settings,
         dxc_executable=dxc,
     )
-    changed_common = changed.artifacts[nwp.COMMON_PROFILE_ID]
-    changed_executable = (
-        tmp_path / "changed" / changed_common.executable_name
+    changed_common = changed_result.artifacts[nwp.COMMON_PROFILE_ID]
+    changed_executable = tmp_path / "changed" / changed_common.executable_name
+
+    runtime_output = os.environ.get("NW05_RUNTIME_BUNDLE_OUTPUT", "")
+    if runtime_output:
+        _write_real_pe_runtime_bundle(
+            Path(runtime_output),
+            executable,
+            changed_executable,
+            graph_width=graph_width,
+            graph_height=graph_height,
+        )
+        return
+
+    _run_real_pe_runtime_checks(
+        executable,
+        changed_executable,
+        graph_width=graph_width,
+        graph_height=graph_height,
     )
-    changed_run = subprocess.run(
-        [
-            str(changed_executable),
-            "--frames",
-            "1",
-            "--allow-software-adapter",
-            "--emit-image-hash",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=False,
-    )
-    assert changed_run.returncode == 0, (
-        changed_run.stdout + "\n" + changed_run.stderr
-    )
-    changed_hash = re.search(
-        r"NW05_IMAGE_FNV64=([0-9a-f]{16})", changed_run.stdout
-    )
-    assert changed_hash is not None
-    assert changed_hash.group(1) != image_hash.group(1)
 
 
 def test_unused_nw06_runtime_is_absent_from_legacy_real_pe(
