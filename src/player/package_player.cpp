@@ -107,6 +107,9 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
+#include "nw11_production_extension.h"
+#endif
 #if NW_PACKAGE_PLAYER_D3D12_VALIDATION
 #include <d3d12sdklayers.h>
 #endif
@@ -752,6 +755,9 @@ struct PlatformState {
     ID3D12Resource* timestamp_readback = nullptr;
     std::uint64_t timestamp_frequency = 0u;
     std::uint64_t gpu_local_usage_bytes = 0u;
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW11_VARIANT_RAY
+    ::nw11::production::RayState nw11_ray;
+#endif
 #endif
 };
 
@@ -2522,6 +2528,17 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     }
 
     ID3D12Device* device = nullptr;
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
+    char adapter_luid[32]{};
+    const DWORD luid_length = GetEnvironmentVariableA("NW11_ADAPTER_LUID", adapter_luid, sizeof(adapter_luid));
+    unsigned long luid_high = 0, luid_low = 0;
+    char trailing = 0;
+    if (luid_length >= sizeof(adapter_luid) ||
+        (luid_length != 0 && std::sscanf(adapter_luid, "%8lx:%8lx%c", &luid_high, &luid_low, &trailing) != 2)) {
+        return Fail(ExitCode::InvalidArguments, "device", "nw11_invalid_adapter_luid",
+                    "adapter_luid", "high:low", "invalid", "adapter", "Malformed selected LUID");
+    }
+#endif
     for (UINT index = 0u;; ++index) {
         IDXGIAdapter1* candidate = nullptr;
         const HRESULT enum_hr =
@@ -2541,6 +2558,14 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             candidate->Release();
             continue;
         }
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
+        if (luid_length != 0 &&
+            (static_cast<unsigned long>(adapter_desc.AdapterLuid.HighPart) != luid_high ||
+             adapter_desc.AdapterLuid.LowPart != luid_low)) {
+            candidate->Release();
+            continue;
+        }
+#endif
         if ((adapter_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0u &&
             !config_.allow_software_adapter) {
             candidate->Release();
@@ -2580,6 +2605,15 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
                     "no hardware adapter supports D3D_FEATURE_LEVEL_12_0");
     }
     platform_->device = device;
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
+    const int nw11_capability = ::nw11::production::Capability(device);
+    if (nw11_capability != 0) {
+        return Fail(nw11_capability == 3 ? ExitCode::OptionalFeatureUnsupported : ExitCode::D3D12DeviceCreationFailed,
+                    "device", "nw11_optional_capability", "optional_profile",
+                    "eligible", nw11_capability == 3 ? "unsupported" : "query_failed",
+                    "capability_validation", "Exact optional D3D12 requirements are not satisfied");
+    }
+#endif
 #if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     if (config_.enable_validation) {
         if (FAILED(device->QueryInterface(
@@ -3803,11 +3837,20 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
             PlatformState::RootSlot root_slot{};
             root_slot.root_signature_id = root_id;
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && (NW11_VARIANT_MESH || NW11_VARIANT_RAY)
+            const HRESULT root_hr = record->family == "graphics.nw06.instanced"
+                ? ::nw11::production::GraphicsRoot(state->device, &root_slot.root_signature)
+                : (record->blob.empty() ? E_INVALIDARG : state->device->CreateRootSignature(
+                    0u, record->blob.data(), record->blob.size(),
+                    IID_PPV_ARGS(&root_slot.root_signature)));
+            if (FAILED(root_hr) || root_slot.root_signature == nullptr) {
+#else
             if (record->blob.empty() ||
                 FAILED(state->device->CreateRootSignature(
                     0u, record->blob.data(), record->blob.size(),
                     IID_PPV_ARGS(&root_slot.root_signature))) ||
                 root_slot.root_signature == nullptr) {
+#endif
                 return Fail(ExitCode::RootSignatureCreationFailed,
                             "pipeline", "root_signature_failed",
                             "root_signature", std::to_string(root_id),
@@ -3963,9 +4006,21 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             desc.SampleDesc.Count = 1u;
             PlatformState::PipelineSlot pipeline{};
             pipeline.shader_id = vertex_id;
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
+#if NW11_VARIANT_RAY
+            desc.PS = ::nw11::production::Code(::kNw11SceneRayQueryDxil);
+#elif NW11_BASELINE_ANALYTIC
+            desc.PS = ::nw11::production::Code(::kNw11AnalyticReflectionDxil);
+#endif
+#endif
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW11_VARIANT_MESH
+            if (FAILED(::nw11::production::MeshPipeline(state->device, desc, &pipeline.pipeline_state)) ||
+                pipeline.pipeline_state == nullptr) {
+#else
             if (FAILED(state->device->CreateGraphicsPipelineState(
                     &desc, IID_PPV_ARGS(&pipeline.pipeline_state))) ||
                 pipeline.pipeline_state == nullptr) {
+#endif
                 return Fail(ExitCode::PipelineStateCreationFailed, "pipeline",
                             "graphics_pso_failed", "pipeline",
                             std::to_string(vertex_id), "creation failed",
@@ -4656,6 +4711,45 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
         const ExitCode wait = WaitForAllFrames("initialization_complete");
         if (wait != ExitCode::Success) return wait;
     }
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW11_VARIANT_RAY
+    // Reuse the production queue and retirement path for the one-time
+    // graph-generated instance readback. All optional allocations use the
+    // same adapter allocation-info accounting as the common package.
+    const auto note = [this](std::uint64_t bytes, bool upload) {
+        NoteEngineAllocation(upload ? 0u : bytes, upload ? bytes : 0u, false, false, false);
+    };
+    if (FAILED(::nw11::production::PrepareRay(*state, note)) || state->frames.empty()) {
+        return Fail(ExitCode::ResourceAllocationFailed, "resource", "nw11_ray_allocation_failed",
+                    "ray_resources", "created", "failed", "initialization_complete",
+                    "Could not prepare graph-derived acceleration-structure resources");
+    }
+    {
+        auto& frame = state->frames.front();
+        if (FAILED(frame.allocator->Reset()) ||
+            FAILED(frame.command_list->Reset(frame.allocator, nullptr)) ||
+            FAILED(::nw11::production::CopyInstances(*state, frame.command_list)) ||
+            FAILED(frame.command_list->Close())) {
+            return Fail(ExitCode::CommandListRecordingFailed, "command_list", "nw11_instance_copy_failed",
+                        "instance_copy", "recorded", "failed", "initialization_complete",
+                        "Could not record graph instance readback");
+        }
+        ID3D12CommandList* lists[] = {frame.command_list};
+        state->queue->ExecuteCommandLists(1u, lists);
+        const std::uint64_t fence_value = next_fence_value_++;
+        if (FAILED(state->queue->Signal(state->fence, fence_value))) {
+            return Fail(ExitCode::GpuSubmissionFailed, "gpu_execution", "nw11_instance_signal_failed",
+                        "fence", "signaled", "failed", "initialization_complete", "Instance copy signal failed");
+        }
+        frame.fence_value = fence_value;
+        const ExitCode wait = WaitForAllFrames("nw11_instance_copy");
+        if (wait != ExitCode::Success) return wait;
+        if (FAILED(::nw11::production::PopulateInstances(state->nw11_ray))) {
+            return Fail(ExitCode::ResourceAllocationFailed, "resource", "nw11_instances_failed",
+                        "instance_descriptors", "populated", "failed", "initialization_complete",
+                        "Could not populate TLAS instance descriptors from generated instance data");
+        }
+    }
+#endif
 #else
     // Host simulation still executes the same ordered initialization contract.
     std::array<bool, kMaxFramesInFlight> upload_slots_used{};
@@ -5408,6 +5502,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "graphics pipeline was not created");
                 }
                 list->SetPipelineState(pipeline);
+#if !(defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW11_VARIANT_MESH)
                 list->IASetPrimitiveTopology(
                     D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 for (auto& slot : state->resources) {
@@ -5434,6 +5529,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         list->IASetIndexBuffer(&view);
                     }
                 }
+#endif
                 state->graphics_pipeline_shader = op.shader_id;
                 break;
 #endif
@@ -5557,9 +5653,25 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                     arguments->state =
                         D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
                 }
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW11_VARIANT_MESH
+                if (FAILED(::nw11::production::DispatchMesh(*state, list))) {
+                    return Fail(ExitCode::CommandListRecordingFailed, "command_list", "nw11_mesh_dispatch_failed",
+                                "mesh_dispatch", "recorded", "failed", "renderAtTick", "Mesh dispatch failed");
+                }
+#else
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW11_VARIANT_RAY
+                ID3D12PipelineState* graphics = nullptr;
+                for (const auto& candidate : state->pipelines)
+                    if (candidate.shader_id == state->graphics_pipeline_shader) graphics = candidate.pipeline_state;
+                if (FAILED(::nw11::production::BuildRayFrame(*state, list, static_cast<std::uint32_t>(frame_tick), graphics))) {
+                    return Fail(ExitCode::CommandListRecordingFailed, "command_list", "nw11_ray_build_failed",
+                                "ray_build", "recorded", "failed", "renderAtTick", "Ray acceleration-structure build failed");
+                }
+#endif
                 list->ExecuteIndirect(
                     state->indirect_signature, op.max_draw_count,
                     arguments->resource, 0u, nullptr, 0u);
+#endif
                 break;
 #endif
             }
@@ -6010,6 +6122,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 #if NW_PACKAGE_PLAYER_D3D12_VALIDATION
     TraceD3D12ValidationStage(config_.enable_validation,
                               "frame.queue.execute.before");
+#endif
+#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW_PLAYER_DIAGNOSTICS
+    instrumentation_.BeginFrame(frame_tick);
 #endif
     state->queue->ExecuteCommandLists(1u, lists);
 #if NW_PACKAGE_PLAYER_D3D12_VALIDATION

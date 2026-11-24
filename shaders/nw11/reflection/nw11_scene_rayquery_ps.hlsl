@@ -22,8 +22,8 @@ Texture2D<float4> NwAlbedo : register(t0, space0);
 Buffer<uint> NwMaterials : register(t2, space0);
 Buffer<uint> NwLight : register(t4, space0);
 RaytracingAccelerationStructure NwScene : register(t5, space0);
-Buffer<uint> NwVertices : register(t6, space0);
-Buffer<uint> NwIndices : register(t7, space0);
+ByteAddressBuffer NwVertices : register(t6, space0);
+ByteAddressBuffer NwIndices : register(t7, space0);
 
 struct PSInput
 {
@@ -37,10 +37,7 @@ struct PSInput
 
 float3 LoadPosition(uint vertex)
 {
-    uint offset = vertex * 8u;
-    return asfloat(uint3(NwVertices.Load(offset),
-                         NwVertices.Load(offset + 1u),
-                         NwVertices.Load(offset + 2u)));
+    return asfloat(NwVertices.Load3(vertex * 12u));
 }
 
 float3 TraceReflection(float3 origin, float3 direction)
@@ -67,9 +64,9 @@ float3 TraceReflection(float3 origin, float3 direction)
     // a geometry-normal intrinsic. Reconstruct the normal from the exact
     // indexed triangle used to build the BLAS, including instance scale.
     uint first = query.CommittedPrimitiveIndex() * 3u;
-    float3 p0 = LoadPosition(NwIndices.Load(first));
-    float3 p1 = LoadPosition(NwIndices.Load(first + 1u));
-    float3 p2 = LoadPosition(NwIndices.Load(first + 2u));
+    float3 p0 = LoadPosition(NwIndices.Load(first * 4u));
+    float3 p1 = LoadPosition(NwIndices.Load((first + 1u) * 4u));
+    float3 p2 = LoadPosition(NwIndices.Load((first + 2u) * 4u));
     float3x4 transform = query.CommittedObjectToWorld3x4();
     float3 e1 = mul(transform, float4(p1 - p0, 0.0));
     float3 e2 = mul(transform, float4(p2 - p0, 0.0));

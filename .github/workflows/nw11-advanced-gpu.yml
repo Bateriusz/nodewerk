@@ -50,6 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -82,6 +84,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -189,7 +193,7 @@ jobs:
       - name: Upload same-revision build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nw11-executables-${{ github.sha }}
+          name: nw11-executables-${{ github.event.pull_request.head.sha || github.sha }}
           path: build/nw11-artifacts/**
           if-no-files-found: error
 
@@ -248,14 +252,29 @@ jobs:
 
   windows-runtime-smoke:
     name: NW-11 D3D12 command-path smoke (hosted WARP)
-    needs: [ci-impact, windows-experiment-build]
-    if: needs.windows-experiment-build.result == 'success'
+    needs: [ci-impact, windows-experiment-build, common-production-regression]
+    if: needs.windows-experiment-build.result == 'success' && needs.common-production-regression.result == 'success'
     runs-on: windows-2025
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/download-artifact@v4
         with:
-          name: nw11-executables-${{ github.sha }}
+          name: nw11-executables-${{ github.event.pull_request.head.sha || github.sha }}
           path: build/nw11-artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-common-production-proof-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-common-proof
+      - name: Embed the same verified canonical package into every specialized executable
+        shell: pwsh
+        run: |
+          python tools/nw11_embed_production.py --proof build/nw11-common-proof --executables build/nw11-artifacts --commit "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise common and fallback D3D12 paths on WARP
         shell: pwsh
         run: |
@@ -268,6 +287,13 @@ jobs:
               throw "$name WARP smoke produced no GPU timestamp samples"
             }
           }
+
+      - name: Upload the production-package-bound executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-production-executables-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-artifacts/**
+          if-no-files-found: error
 
   build-validation-bundles:
     name: Build immutable validation bundle (${{ matrix.experiment }})
@@ -290,20 +316,22 @@ jobs:
             slug: ray-query
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Download same-revision executables
         uses: actions/download-artifact@v4
         with:
-          name: nw11-executables-${{ github.sha }}
+          name: nw11-production-executables-${{ github.event.pull_request.head.sha || github.sha }}
           path: build/nw11-artifacts
       - name: Record the tested revision
         id: revision
         shell: pwsh
         run: |
           $commit = (git rev-parse HEAD).Trim()
-          if ($commit -ne "${{ github.sha }}") { throw "checkout HEAD does not match github.sha" }
+          if ($commit -ne "${{ github.event.pull_request.head.sha || github.sha }}") { throw "checkout HEAD does not match github.sha" }
           "commit=$commit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       - name: Build deterministic bundle from repository artifacts
         shell: pwsh
@@ -330,7 +358,7 @@ jobs:
       - name: Upload immutable bundle
         uses: actions/upload-artifact@v4
         with:
-          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.sha }}
+          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: build/nw11-bundle-${{ matrix.slug }}/**
           if-no-files-found: error
 
@@ -358,7 +386,7 @@ jobs:
       - name: Download the CI-built immutable bundle
         uses: actions/download-artifact@v4
         with:
-          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.sha }}
+          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/nw11-bundle-${{ matrix.slug }}
       - name: Verify and execute the immutable bundle
         shell: pwsh
@@ -369,7 +397,7 @@ jobs:
           $evidenceDirectory = Join-Path $env:RUNNER_TEMP "nw11-evidence-${{ matrix.device_tier }}-${{ matrix.slug }}"
           & $launcher `
             -BundleRoot $bundle `
-            -ExpectedCommit "${{ github.sha }}" `
+            -ExpectedCommit "${{ github.event.pull_request.head.sha || github.sha }}" `
             -DeviceTier "${{ matrix.device_tier }}" `
             -OutputDirectory $evidenceDirectory
           $code = $LASTEXITCODE

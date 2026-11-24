@@ -350,7 +350,7 @@ def _validate_pipeline(
     variant_shaders = pipeline.get("variant_shaders")
     if not isinstance(variant_shaders, list) or not variant_shaders:
         raise ExperimentError("the variant must declare its shaders")
-    allowed_targets = set(profile_definition(profile_id)["shader_targets"])
+    allowed_targets = set(profile_definition(profile_id)["shader_targets"]) | set(profile_definition(COMMON_PROFILE_ID)["shader_targets"])
     for shader in variant_shaders:
         entry = _mapping(shader, "variant shader")
         path = _string(entry.get("path"), "variant shader path")

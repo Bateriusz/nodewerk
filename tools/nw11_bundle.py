@@ -139,21 +139,10 @@ def validate_variant_sources(repo_root: Path | str) -> dict[str, Any]:
                     f"mesh shader '{source_path}' vertex output count must match "
                     "the emitted local patch size"
                 )
-            if "vertex_index*8u" not in normalized:
-                raise BundleError(
-                    f"mesh shader '{source_path}' must index NwVertices in 32-bit "
-                    "elements (eight per generated 32-byte vertex)"
-                )
-            if "NwIndices.Load((quad*6u+corner)*4u)" in normalized:
-                raise BundleError(
-                    f"mesh shader '{source_path}' treats NwIndices as byte-addressed; "
-                    "Buffer<uint>.Load takes an element index"
-                )
-            if "NwIndices.Load(quad*6u+corner)" not in normalized:
-                raise BundleError(
-                    f"mesh shader '{source_path}' must consume the generated index "
-                    "buffer in 32-bit element units"
-                )
+            if "vertex_index*32u" not in normalized or "ByteAddressBufferNwVertices" not in normalized:
+                raise BundleError(f"mesh shader '{source_path}' must use 32-byte raw vertex records")
+            if "NwIndices.Load((quad*6u+corner)*4u)" not in normalized or "ByteAddressBufferNwIndices" not in normalized:
+                raise BundleError(f"mesh shader '{source_path}' must use byte-addressed generated indices")
         if "RayQuery<" in text:
             for token in ("TraceRayInline", "Proceed", "CommittedStatus"):
                 if token not in text:

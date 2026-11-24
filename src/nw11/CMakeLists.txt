@@ -119,8 +119,8 @@ nw11_add_shader("nw06_bloom_cs_dxil" "${NW11_REPO_ROOT}/shaders/nw06/nw06_bloom_
     "BloomCS" "cs_6_0" "kNw06BloomDxil")
 nw11_add_shader("nw06_tonemap_cs_dxil" "${NW11_REPO_ROOT}/shaders/nw06/nw06_tonemap_cs.hlsl"
     "TonemapCS" "cs_6_0" "kNw06TonemapDxil")
-nw11_add_shader("display_fixture_cs_dxil" "${NW11_REPO_ROOT}/shaders/display_fixture.hlsl"
-    "DisplayCS" "cs_6_0" "kNw11DisplayDxil")
+nw11_add_shader("display_fixture_dxil" "${NW11_REPO_ROOT}/shaders/display_fixture.hlsl"
+    "DisplayCS" "cs_6_0" "kDisplayFixtureDxil")
 nw11_add_shader("nw11_analytic_reflection_ps_dxil"
     "${NW11_REPO_ROOT}/shaders/nw11/reflection/nw11_analytic_reflection_ps.hlsl"
     "ScenePS" "ps_6_0" "kNw11AnalyticReflectionDxil")
@@ -134,7 +134,14 @@ nw11_add_shader("nw11_torus_meshlet_ms_dxil"
     "${NW11_REPO_ROOT}/shaders/nw11/mesh/nw11_torus_meshlet.ms.hlsl"
     "MeshMain" "ms_6_5" "kNw11TorusMsDxil")
 
+nw11_add_shader("compute_fixture_dxil" "${NW11_REPO_ROOT}/shaders/compute_fixture.hlsl"
+    "CSMain" "cs_6_0" "kComputeFixtureDxil")
+nw11_add_shader("nw11_deform_cs_dxil" "${NW11_REPO_ROOT}/shaders/nw11/reflection/nw11_deform_cs.hlsl"
+    "DeformCS" "cs_6_0" "kNw11DeformDxil")
+
 add_custom_target(nw11_all_shaders DEPENDS
+    compute_fixture_dxil
+    nw11_deform_cs_dxil
     nw06_generate_cs_dxil
     nw06_instances_cs_dxil
     nw06_material_cs_dxil
@@ -144,7 +151,7 @@ add_custom_target(nw11_all_shaders DEPENDS
     nw06_scene_ps_dxil
     nw06_bloom_cs_dxil
     nw06_tonemap_cs_dxil
-    display_fixture_cs_dxil
+    display_fixture_dxil
     nw11_analytic_reflection_ps_dxil
     nw11_scene_rayquery_ps_dxil
     nw11_torus_amplification_as_dxil
@@ -158,54 +165,83 @@ if(MSVC)
     target_compile_options(nw11_capability_probe PRIVATE /W4 /permissive- /EHsc)
 endif()
 
+# Build the same runtime translation units as the production PackagePlayer.
+# Only package_player.cpp is specialized per optional profile.
+set(NW11_RUNTIME_SOURCES
+    src/player/diagnostics.cpp
+    src/player/capability_check.cpp
+    src/player/d3d12_bootstrap.cpp
+    src/player/capability_requirements.cpp
+    src/player/package_loader.cpp
+    src/player/embedded_package.cpp
+    src/player/resource_plan.cpp
+    src/player/player_instrumentation.cpp
+    src/player/player.cpp
+    src/platform/win32_window.cpp
+    src/package/nwp_format.cpp)
+list(TRANSFORM NW11_RUNTIME_SOURCES PREPEND "${NW11_REPO_ROOT}/")
+add_library(nw11_production_runtime STATIC ${NW11_RUNTIME_SOURCES})
+# Match the namespace emitted by the root production shader generator.
+foreach(shader IN ITEMS compute display)
+    if(shader STREQUAL "compute")
+        set(symbol kComputeFixtureDxil)
+    else()
+        set(symbol kDisplayFixtureDxil)
+    endif()
+    file(WRITE "${NW11_GENERATED_DIR}/${shader}_fixture_dxil.h"
+        "#pragma once\n#include \"${NW11_SHADER_DIR}/${shader}_fixture_dxil.h\"\nnamespace nw::shaders { using ::${symbol}; }\n")
+endforeach()
+target_include_directories(nw11_production_runtime PUBLIC
+    "${NW11_REPO_ROOT}/src" "${NW11_REPO_ROOT}/src/player"
+    "${NW11_REPO_ROOT}/src/platform" "${NW11_GENERATED_DIR}" "${NW11_SHADER_DIR}")
+target_compile_features(nw11_production_runtime PUBLIC cxx_std_20)
+target_compile_definitions(nw11_production_runtime PUBLIC NW_PROFILE_DEV=1
+    NW05_FROZEN_EMBEDDED_SPECIALIZATION=1
+    NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=0
+    NW05_COMPILE_PROCEDURAL_TEXTURE_R8=0
+    NW05_COMPILE_PROCEDURAL_TEXTURE_RGBA32F=0
+    NW06_COMPILE_GPU_INITIALIZATION=1
+    NW06_COMPILE_INDEXED_INSTANCED_INDIRECT=1
+    NW06_COMPILE_ANALYTIC_LIGHTING_TWIST=1
+    NW06_COMPILE_ABSOLUTE_TICK_CAMERA=1
+    NW06_COMPILE_HALF_RESOLUTION_BLOOM=1
+    NW06_COMPILE_TONEMAP=1)
+target_link_libraries(nw11_production_runtime PUBLIC d3d12 dxgi user32 kernel32 gdi32 psapi)
+add_dependencies(nw11_production_runtime compute_fixture_dxil display_fixture_dxil)
+if(MSVC)
+    target_compile_options(nw11_production_runtime PRIVATE /W4 /permissive- /EHsc /Gy /Gw /Zc:inline /guard:cf /Brepro /O1 /Os /GL)
+endif()
+
 function(nw11_add_renderer target_name variant baseline_kind)
     add_executable(${target_name}
-        render/nw11_main.cpp
-        render/nw11_scene_harness.cpp
-        "${NW11_REPO_ROOT}/src/platform/win32_window.cpp")
+        render/nw11_main.cpp render/nw11_scene_harness.cpp
+        "${NW11_REPO_ROOT}/src/player/package_player.cpp")
     target_include_directories(${target_name} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/render"
-        "${NW11_REPO_ROOT}/src/platform"
-        "${NW11_GENERATED_DIR}"
-        "${NW11_SHADER_DIR}")
-    target_link_libraries(${target_name} PRIVATE d3d12 dxgi user32 gdi32)
-    target_compile_features(${target_name} PRIVATE cxx_std_20)
+        "${CMAKE_CURRENT_SOURCE_DIR}/production"
+        "${NW11_GENERATED_DIR}" "${NW11_SHADER_DIR}")
+    target_link_libraries(${target_name} PRIVATE nw11_production_runtime)
+    target_compile_definitions(${target_name} PRIVATE NW11_PRODUCTION_EXPERIMENT=1)
     if(variant STREQUAL "mesh")
         target_compile_definitions(${target_name} PRIVATE
             NW11_VARIANT_MESH=1 NW11_VARIANT_RAY=0 NW11_BASELINE_ANALYTIC=0)
+        add_dependencies(${target_name} nw11_torus_amplification_as_dxil nw11_torus_meshlet_ms_dxil)
     elseif(variant STREQUAL "ray")
         target_compile_definitions(${target_name} PRIVATE
             NW11_VARIANT_MESH=0 NW11_VARIANT_RAY=1 NW11_BASELINE_ANALYTIC=0)
+        add_dependencies(${target_name} nw11_scene_rayquery_ps_dxil nw11_deform_cs_dxil)
     elseif(baseline_kind STREQUAL "analytic")
         target_compile_definitions(${target_name} PRIVATE
             NW11_VARIANT_MESH=0 NW11_VARIANT_RAY=0 NW11_BASELINE_ANALYTIC=1)
+        add_dependencies(${target_name} nw11_analytic_reflection_ps_dxil)
     else()
         target_compile_definitions(${target_name} PRIVATE
             NW11_VARIANT_MESH=0 NW11_VARIANT_RAY=0 NW11_BASELINE_ANALYTIC=0)
     endif()
-    add_dependencies(${target_name} nw11_all_shaders)
-    add_dependencies(${target_name} nw11_scene_generated)
+    add_dependencies(${target_name} nw11_all_shaders nw11_scene_generated)
     if(MSVC)
-        target_compile_options(${target_name} PRIVATE
-            /W4 /permissive- /EHsc
-            /Gy /Gw /Zc:inline
-            /guard:cf
-            /Brepro
-            $<$<CONFIG:Release>:/O1>
-            $<$<CONFIG:Release>:/Os>
-            $<$<CONFIG:Release>:/GL>
-        )
-        target_link_options(${target_name} PRIVATE
-            /OPT:REF
-            /OPT:ICF
-            /Brepro
-            /INCREMENTAL:NO
-            /DYNAMICBASE
-            /HIGHENTROPYVA
-            /NXCOMPAT
-            /guard:cf
-            $<$<CONFIG:Release>:/LTCG>
-        )
+        target_compile_options(${target_name} PRIVATE /W4 /permissive- /EHsc /Gy /Gw /Zc:inline /guard:cf /Brepro /O1 /Os /GL)
+        target_link_options(${target_name} PRIVATE /OPT:REF /OPT:ICF /Brepro /INCREMENTAL:NO /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf /LTCG)
     endif()
 endfunction()
 

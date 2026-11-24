@@ -1196,9 +1196,9 @@ def test_nw11_mesh_shader_indexes_generated_buffers_in_elements() -> None:
     # Buffer<uint>.Load takes an element index.  The generated vertex record is
     # 32 bytes = eight uint elements, and the index buffer is one uint per
     # triangle corner.
-    assert "vertex_index*8u" in compact
-    assert "NwIndices.Load(quad*6u+corner)" in compact
-    assert "NwIndices.Load((quad*6u+corner)*4u)" not in compact
+    assert "vertex_index*32u" in compact
+    assert "ByteAddressBufferNwIndices" in compact
+    assert "NwIndices.Load((quad*6u+corner)*4u)" in compact
     assert "numthreads(NW_VERTS_PER_MESHLET,1,1)" in compact
     assert "SetMeshOutputCounts(NW_VERTS_PER_MESHLET,NW_PRIMS_PER_MESHLET)" in compact
     bundle.validate_variant_sources(REPO_ROOT)
@@ -1233,15 +1233,11 @@ def test_nw11_generated_constants_bind_the_canonical_production_contract() -> No
 
 
 def test_nw11_acceleration_structure_scratch_buffers_are_uav_state() -> None:
-    harness = (
-        REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
-    ).read_text(encoding="utf-8")
-    for scratch in ("resources_.blas_scratch", "resources_.tlas_scratch"):
-        assert (
-            f"Transition(list_.Get(), {scratch}.Get(),\n"
-            "               D3D12_RESOURCE_STATE_COMMON,\n"
-            "               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);"
-        ) in harness
+    extension = (REPO_ROOT / "src/nw11/production/nw11_production_extension.h").read_text(encoding="utf-8")
+    assert "constexpr auto scratch = D3D12_RESOURCE_STATE_UNORDERED_ACCESS" in extension
+    for name in ("blas", "tlas"):
+        assert f"scratch, ray.{name}_scratch" in extension
+        assert f"UavBarrier(list, ray.{name}_scratch.Get())" in extension
 
 
 def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
@@ -1253,8 +1249,10 @@ def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
     launcher = (REPO_ROOT / "tools/nw11/run-validation.ps1").read_text(encoding="utf-8")
     assert "adapter_luid" in probe
     assert '"--adapter-luid"' in main
-    assert "ParseAdapterLuid" in harness
-    assert "probe-selected DXGI adapter LUID is unavailable" in harness
+    assert "NW11_ADAPTER_LUID" in harness
+    production = (REPO_ROOT / "src/player/package_player.cpp").read_text(encoding="utf-8")
+    assert "NW11_ADAPTER_LUID" in production
+    assert "adapter_desc.AdapterLuid" in production
     assert '$adapterLuid = [string]$adapterRecord.adapter_luid' in launcher
     assert '@("--adapter-luid", $adapterLuid)' in launcher
     assert "Assert-Nw11ArtifactHash $manifest $pair.Artifact" in launcher
@@ -1445,22 +1443,18 @@ def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
     harness = (
         REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
     ).read_text(encoding="utf-8")
-    for token in (
-        "BuildRaytracingAccelerationStructure",
-        "D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL",
-        "D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL",
-        "DispatchMesh",
-        "ExecuteIndirect",
-        "SetDescriptorHeaps",
-        "CreateSwapChainForHwnd",
-        "CreateQueryHeap",
-        "QueryVideoMemoryInfo",
-        "Present(",
-        "CreateCommandSignature",
-        "nw06_bloom_cs_dxil.h",
-        "nw06_tonemap_cs_dxil.h",
-    ):
-        assert token in harness
+    production = (REPO_ROOT / "src/player/package_player.cpp").read_text(encoding="utf-8")
+    extension = (REPO_ROOT / "src/nw11/production/nw11_production_extension.h").read_text(encoding="utf-8")
+    assert "PackagePlayer player(config)" in harness
+    assert "LoadEmbeddedPackage" in harness
+    assert "readbackPresentedOutput" in harness
+    assert "instrumentation().timing()" in harness
+    assert "CreateSwapChain" not in harness
+    assert "CreateCommandQueue" not in harness
+    for token in ("BuildRaytracingAccelerationStructure", "DispatchMesh", "GetResourceAllocationInfo"):
+        assert token in extension
+    for token in ("ExecuteIndirect", "NW11_PRODUCTION_EXPERIMENT", "BuildRayFrame"):
+        assert token in production
 
 
 def test_nw11_capability_probe_selects_a_real_adapter_safely() -> None:

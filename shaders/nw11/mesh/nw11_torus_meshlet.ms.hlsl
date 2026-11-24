@@ -42,8 +42,8 @@ cbuffer Nw11MeshParams : register(b1, space0)
 
 Buffer<uint> NwInstances : register(t1, space0);
 Buffer<uint> NwCamera : register(t3, space0);
-Buffer<uint> NwVertices : register(t6, space0);
-Buffer<uint> NwIndices : register(t7, space0);
+ByteAddressBuffer NwVertices : register(t6, space0);
+ByteAddressBuffer NwIndices : register(t7, space0);
 
 struct NwMeshPayload
 {
@@ -84,20 +84,10 @@ struct NwVertex
 NwVertex LoadGeneratedVertex(uint vertex_index)
 {
     NwVertex vertex;
-    // NwVertices is a Buffer<uint>, so Load() takes a 32-bit element index.
-    // The frozen nw06_generate_cs stage writes a 32-byte vertex record, i.e.
-    // eight uint elements per vertex.
-    uint offset = vertex_index * 8u;
-    float4 first = asfloat(uint4(
-        NwVertices.Load(offset + 0u),
-        NwVertices.Load(offset + 1u),
-        NwVertices.Load(offset + 2u),
-        NwVertices.Load(offset + 3u)));
-    float4 second = asfloat(uint4(
-        NwVertices.Load(offset + 4u),
-        NwVertices.Load(offset + 5u),
-        NwVertices.Load(offset + 6u),
-        NwVertices.Load(offset + 7u)));
+    // Raw root SRV addressing: each generated vertex occupies 32 bytes.
+    uint offset = vertex_index * 32u;
+    float4 first = asfloat(NwVertices.Load4(offset));
+    float4 second = asfloat(NwVertices.Load4(offset + 16u));
     vertex.position = first.xyz;
     vertex.normal = float3(first.w, second.x, second.y);
     vertex.uv = second.zw;
@@ -251,9 +241,8 @@ void MeshMain(
             // Consume the exact generated index buffer instead of deriving an
             // assumed topology.  Each global vertex maps to the 9x9 local
             // patch, including the wrapped torus boundary rows/columns.
-            // NwIndices is a Buffer<uint>: the element index is the triangle
-            // corner, not a byte offset.
-            uint global_index = NwIndices.Load(quad * 6u + corner);
+            // Raw root SRV uses byte offsets for the generated uint indices.
+            uint global_index = NwIndices.Load((quad * 6u + corner) * 4u);
             uint global_major = global_index / MinorSegments;
             uint global_minor = global_index % MinorSegments;
             uint local_major = (global_major + MajorSegments -

@@ -26,7 +26,7 @@ IDENTITY_FIELDS = ("profile_id", "requirements_digest", "artifact_key",
                    "executable_sha256", "executable_bytes", "package_sha256",
                    "package_bytes", "manifest_sha256", "manifest_bytes",
                    "dependency_closure", "capability", "init_opcodes",
-                   "frame_opcodes", "size_accounting")
+                   "frame_opcodes")
 
 
 def run(args: list[str], cwd: Path) -> None:
