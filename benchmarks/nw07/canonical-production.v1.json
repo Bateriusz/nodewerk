@@ -200,7 +200,7 @@
     "stretch_distribution_bytes_ceiling": 131072,
     "stretch_is_mandatory_gate": false,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000
+    "process_start_to_first_present_ms_ceiling": 2000.0
   },
   "fixed_tick_evaluation": {
     "ticks": [
@@ -250,7 +250,7 @@
   },
   "image_tolerances": {
     "numeric": {
-      "absolute": 0.00001,
+      "absolute": 1e-05,
       "relative": 0.0001,
       "mode": "absolute_or_relative"
     },
@@ -261,19 +261,19 @@
     },
     "per_device": {
       "desktop_ada_representative": {
-        "numeric_absolute": 0.00001,
+        "numeric_absolute": 1e-05,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_representative": {
-        "numeric_absolute": 0.00001,
+        "numeric_absolute": 1e-05,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001
       },
       "desktop_blackwell_development_series": {
-        "numeric_absolute": 0.00001,
+        "numeric_absolute": 1e-05,
         "numeric_relative": 0.0001,
         "image_absolute": 0.0001,
         "image_relative": 0.0001

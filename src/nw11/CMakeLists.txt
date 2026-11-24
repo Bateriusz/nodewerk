@@ -181,16 +181,6 @@ set(NW11_RUNTIME_SOURCES
     src/package/nwp_format.cpp)
 list(TRANSFORM NW11_RUNTIME_SOURCES PREPEND "${NW11_REPO_ROOT}/")
 add_library(nw11_production_runtime STATIC ${NW11_RUNTIME_SOURCES})
-# Match the namespace emitted by the root production shader generator.
-foreach(shader IN ITEMS compute display)
-    if(shader STREQUAL "compute")
-        set(symbol kComputeFixtureDxil)
-    else()
-        set(symbol kDisplayFixtureDxil)
-    endif()
-    file(WRITE "${NW11_GENERATED_DIR}/${shader}_fixture_dxil.h"
-        "#pragma once\n#include \"${NW11_SHADER_DIR}/${shader}_fixture_dxil.h\"\nnamespace nw::shaders { using ::${symbol}; }\n")
-endforeach()
 target_include_directories(nw11_production_runtime PUBLIC
     "${NW11_REPO_ROOT}/src" "${NW11_REPO_ROOT}/src/player"
     "${NW11_REPO_ROOT}/src/platform" "${NW11_GENERATED_DIR}" "${NW11_SHADER_DIR}")

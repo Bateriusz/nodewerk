@@ -19,7 +19,7 @@
     "new_operators": [],
     "hand_authored_renderer": false,
     "second_production_backend": false,
-    "description": "Both arms execute the identical embedded NW-07 package through the production PackagePlayer. The ray specialization deforms the generated vertex buffer at the current tick, builds BLAS/TLAS on the production direct queue, and substitutes the ray-query fragment stage; all other frame instructions remain common."
+    "description": "Both arms execute the identical embedded NW-07 package through PackagePlayer. The ray specialization deforms the generated vertex buffer at the current tick, builds BLAS and TLAS on the production direct queue and replaces the fragment shader; the other frame instructions remain common."
   },
   "workload": {
     "graph": "fixtures/nw07/production_loop.nwgraph",
@@ -67,22 +67,10 @@
   "reference": {
     "quality_profile_id": "nw07.quality.v1",
     "capture_protocol": "nw07-correctness-capture.v1",
-    "fixed_ticks": [
-      0,
-      240000,
-      480000,
-      720000,
-      959999
-    ],
-    "loop_boundary_ticks": [
-      0,
-      960000
-    ],
+    "fixed_ticks": [0, 240000, 480000, 720000, 959999],
+    "loop_boundary_ticks": [0, 960000],
     "capture_format": "rgba32f",
-    "resolution": {
-      "width": 1920,
-      "height": 1080
-    }
+    "resolution": {"width": 1920, "height": 1080}
   },
   "protocol": {
     "perf_contract": "nw07_perf_ref_v1",
@@ -95,7 +83,7 @@
     "min_raw_samples_per_run": 600,
     "fresh_process_per_run": true,
     "application_pipeline_cache": false,
-    "percentile": 99,
+    "percentile": 99.0,
     "percentile_method": "nearest-rank",
     "matched_environment_required": true,
     "independent_per_device": true
@@ -104,7 +92,7 @@
     "primary": {
       "metric": "p99_gpu_time_ms",
       "comparison": "variant_vs_matched_baseline",
-      "relative_reduction_percent_min": 10,
+      "relative_reduction_percent_min": 10.0,
       "evaluation": "independent_per_device_environment",
       "statistic": "nearest-rank p99 across raw per-frame GPU samples"
     },
@@ -115,7 +103,7 @@
       "complete_distribution_bytes_ceiling": 262144,
       "incremental_distribution_bytes_ceiling": 65536,
       "shader_count_increment_ceiling": 1,
-      "cold_initialization_ms_ceiling": 2000,
+      "cold_initialization_ms_ceiling": 2000.0,
       "peak_engine_committed_gpu_bytes_ceiling": 536870912
     },
     "image": {
@@ -124,17 +112,8 @@
       "rmse": 0.0001,
       "fixed_quality": true,
       "reference_kind": "analytic_reference",
-      "fixed_ticks": [
-        0,
-        240000,
-        480000,
-        720000,
-        959999
-      ],
-      "loop_boundary_ticks": [
-        0,
-        960000
-      ]
+      "fixed_ticks": [0, 240000, 480000, 720000, 959999],
+      "loop_boundary_ticks": [0, 960000]
     }
   },
   "artifact_budget": {
@@ -142,7 +121,7 @@
     "incremental_distribution_bytes_ceiling": 65536,
     "shader_count_increment_ceiling": 1,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000,
+    "process_start_to_first_present_ms_ceiling": 2000.0,
     "optional_dependency_bytes_policy": "Every optional byte is counted; no RTX Kit, DLSS, model weights, or vendor SDK component is permitted in the common/fallback closure."
   },
   "execution": {
