@@ -3,6 +3,7 @@
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
     [switch]$ExportGitHubEnv,
+    [switch]$SkipLlvm,
     [switch]$InteractiveShell,
     [string]$Command = ""
 )
@@ -16,11 +17,12 @@ if (-not $IsWindows) {
 
 Import-Module (Join-Path $PSScriptRoot "Nw01.Windows.psm1") -Force
 try {
-    $entered = Enter-NwBuildEnvironment -RepoRoot $RepoRoot -ExportGitHubEnv:$ExportGitHubEnv
+    $entered = Enter-NwBuildEnvironment -RepoRoot $RepoRoot -ExportGitHubEnv:$ExportGitHubEnv -SkipLlvm:$SkipLlvm
     Write-Host "[NW-ENV] MSVC/SDK environment initialized."
     Write-Host "[NW-ENV] selected toolchain contract: $($entered.Contract.SelectedToolchain)"
     Write-Host "[NW-ENV] MSVC toolset: $($entered.VisualStudio.VcVarsVersion); Windows SDK: $($entered.VisualStudio.WindowsSdkVersion)"
     Write-Host "[NW-ENV] INCLUDE/LIB/LIBPATH are set for the selected toolset and SDK."
+    if ($SkipLlvm) { Write-Host "[NW-ENV] LLVM alternative toolchain not required by this MSVC-only consumer." }
 
     if (-not [string]::IsNullOrWhiteSpace($Command)) {
         & pwsh -NoProfile -Command $Command
