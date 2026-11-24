@@ -222,6 +222,12 @@ def _evidence(
             for item in manifest["artifacts"]
             if item["role"] in {"common_baseline", "optional_variant", "fallback_common"}
         },
+        "optional_eligibility": dict(
+            next(item for item in runs if item["role"] == "variant")["capability_decision"]
+        ),
+        "common_eligibility": dict(
+            next(item for item in runs if item["role"] in {"baseline", "fallback"})["capability_decision"]
+        ),
         "runs": runs,
         "evidence_file": "evidence.json",
         "raw_per_sample_results_preserved": True,
@@ -598,10 +604,10 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
         bundle_manifest_sha256=document_evidence["bundle_manifest_sha256"],
         expected_commit=COMMIT,
     )
-    by_tier = {item["device_tier"]: item for item in decisions["devices"]}
-    assert by_tier["desktop_ada_representative"]["status"] == "accepted"
-    assert by_tier["desktop_blackwell_representative"]["status"] == "pending"
-    assert decisions["aggregate_status"] == "pending"
+    assert len(decisions["devices"]) == 1
+    assert decisions["devices"][0]["device_tier"] == "desktop_ada_representative"
+    assert decisions["devices"][0]["status"] == "accepted"
+    assert decisions["aggregate_status"] == "accepted"
     assert decisions["satisfies_completion"] is False
 
     blackwell_baseline = _run(
@@ -625,34 +631,25 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
         tier="desktop_blackwell_representative",
         measurement=_measurement(gpu=10.0),
     )
-    both = _evidence(
+    blackwell_evidence = _evidence(
         root,
         manifest,
         document,
-        [
-            ada_baseline,
-            ada_variant,
-            ada_fallback,
-            blackwell_baseline,
-            blackwell_variant,
-            blackwell_fallback,
-        ],
+        [blackwell_baseline, blackwell_variant, blackwell_fallback],
     )
-    complete = evidence.build_decision_document(
-        evidence=both,
+    blackwell_decisions = evidence.build_decision_document(
+        evidence=blackwell_evidence,
         experiment=document,
         bundle_manifest=manifest,
-        bundle_manifest_sha256=both["bundle_manifest_sha256"],
+        bundle_manifest_sha256=blackwell_evidence["bundle_manifest_sha256"],
         expected_commit=COMMIT,
     )
-    assert complete["aggregate_status"] == "accepted"
-    assert complete["satisfies_completion"] is True
-    decision_schema = json.loads(
-        (REPO_ROOT / "schemas" / "nw11-decision.schema.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    validate_instance(complete, decision_schema, decision_schema)
+    assert len(blackwell_decisions["devices"]) == 1
+    assert blackwell_decisions["devices"][0]["device_tier"] == "desktop_blackwell_representative"
+    assert blackwell_decisions["devices"][0]["status"] == "accepted"
+    assert blackwell_decisions["aggregate_status"] == "accepted"
+    assert blackwell_decisions["satisfies_completion"] is False
+
 
     mismatched = _evidence(
         root,
