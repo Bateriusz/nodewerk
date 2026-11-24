@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import struct
 import sys
 from array import array
 from pathlib import Path
@@ -22,6 +23,9 @@ import nw11_evidence as evidence  # noqa: E402
 import nw11_experiment as experiment  # noqa: E402
 import nw11_followup as followup  # noqa: E402
 import nw11_graph_scene as graph_scene  # noqa: E402
+import nw11_pe_dependencies as pe_dependencies  # noqa: E402
+import nw11_shader_payloads as shader_payloads  # noqa: E402
+import nw11_toolchain_identity as toolchain_identity  # noqa: E402
 import nw11_verify as verify  # noqa: E402
 from schema_validator import validate_instance  # noqa: E402
 
@@ -495,7 +499,11 @@ def test_nw11_zero_cost_stripping_rejects_optional_payload_in_common(tmp_path: P
             "dependency_ledger",
             "accounting",
             "shader_inventory",
+            "shader_payloads",
+            "dependency_report",
+            "canonical_production",
         )
+        if key in tampered
     }
     tampered["bundle_id"] = contract.digest_value(identity)
     bundle.write_manifest(root, tampered)
@@ -1146,8 +1154,15 @@ def test_nw11_bundle_accounts_optional_and_shared_shader_bytes(
     assert all(item["distributed_bytes"] == item["bytes"] for item in shader_entries)
     paths = {item["path"] for item in manifest["artifacts"]}
     assert "shaders/nw06/nw06_scene_ps.hlsl" in paths
+    assert "shaders/nw06/nw06_bloom_cs.hlsl" in paths
+    assert "shaders/nw06/nw06_tonemap_cs.hlsl" in paths
+    assert "shaders/display_fixture.hlsl" in paths
     assert "manifests/shader-manifest.json" in paths
     assert (root / "shaders/nw06/nw06_scene_ps.hlsl").is_file()
+    for role in ("baseline", "variant", "fallback"):
+        assert {"nw06_bloom_cs", "nw06_tonemap_cs", "display_fixture"} <= set(
+            manifest["shader_inventory"]["roles"][role]
+        )
 
 
 def test_nw11_mesh_shader_consumes_graph_generated_geometry() -> None:
@@ -1183,6 +1198,34 @@ def test_nw11_mesh_shader_indexes_generated_buffers_in_elements() -> None:
     bundle.validate_variant_sources(REPO_ROOT)
 
 
+def test_nw11_camera_interpolation_matches_nw06_semantics() -> None:
+    document = graph_scene.lower(
+        REPO_ROOT / contract.BASE_GRAPH, repo_root=REPO_ROOT
+    )
+    header = graph_scene.emit_header(document)
+    # nw06_scene_vs treats 1 as step/hold and 0 as linear.
+    assert "kCameraInterpolation = 0u" in header
+    mesh = (
+        REPO_ROOT / "shaders/nw11/mesh/nw11_torus_meshlet.ms.hlsl"
+    ).read_text(encoding="utf-8")
+    assert "SampleCameraCurve" in mesh
+    assert "NwCamera.Load(11u)" in mesh
+
+
+def test_nw11_generated_constants_bind_the_canonical_production_contract() -> None:
+    document = graph_scene.lower(
+        REPO_ROOT / contract.BASE_GRAPH, repo_root=REPO_ROOT
+    )
+    canonical = document["canonical_production"]
+    assert canonical["path"] == contract.CANONICAL_PRODUCTION_CONFIG
+    assert len(canonical["sha256"]) == 64
+    assert canonical["quality_profile_id"] == contract.QUALITY_PROFILE_ID
+    header = graph_scene.emit_header(document)
+    assert "kCanonicalProductionSha256" in header
+    assert "kBloomThreshold" in header
+    assert "kTonemapOperator" in header
+
+
 def test_nw11_acceleration_structure_scratch_buffers_are_uav_state() -> None:
     harness = (
         REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
@@ -1210,6 +1253,141 @@ def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
     assert '@("--adapter-luid", $adapterLuid)' in launcher
     assert "Assert-Nw11ArtifactHash $manifest $pair.Artifact" in launcher
     assert "Get-FileHash -LiteralPath $target -Algorithm SHA256" in launcher
+
+
+def test_nw11_windows_ci_runs_command_path_and_binds_toolchain_payloads() -> None:
+    workflow = (
+        REPO_ROOT / ".github/workflows/nw11-advanced-gpu.yml"
+    ).read_text(encoding="utf-8")
+    assert "bootstrap-windows.ps1" in workflow
+    assert "enter-build-env.ps1" in workflow
+    assert "--allow-software" in workflow
+    assert "nw11_toolchain_identity.py" in workflow
+    assert "nw11_shader_payloads.py" in workflow
+    assert "nw11_pe_dependencies.py" in workflow
+    assert "--toolchain-identity" in workflow
+    assert "--shader-payloads" in workflow
+    assert "--dependency-report" in workflow
+
+
+def test_nw11_toolchain_payload_and_dependency_records(
+    tmp_path: Path,
+) -> None:
+    good = {
+        "format": "nw11-toolchain-identity",
+        "version": 1,
+        "task": contract.TASK,
+        "implementation_base": contract.IMPLEMENTATION_BASE,
+        "dxc_version": contract.TOOLCHAIN_DXC_MEASURED_VERSION,
+    }
+    assert toolchain_identity.verify(good)["dxc_version"].startswith(
+        contract.TOOLCHAIN_DXC_VERSION
+    )
+    bad = dict(good, dxc_version="1.9.0.0")
+    with pytest.raises(toolchain_identity.ToolchainIdentityError):
+        toolchain_identity.verify(bad)
+
+    shader_dir = tmp_path / "shaders"
+    shader_dir.mkdir()
+    (shader_dir / "a.dxil").write_bytes(b"dxil-bytes")
+    (shader_dir / "a_dxil.h").write_text("static const unsigned char a[] = {};", encoding="utf-8")
+    payloads = shader_payloads.collect(shader_dir)
+    assert len(payloads["payloads"]) == 2
+    assert all(len(item["sha256"]) == 64 for item in payloads["payloads"])
+
+    assert pe_dependencies.forbidden(["VCRUNTIME140.dll"]) == ["VCRUNTIME140.dll"]
+    assert pe_dependencies.forbidden(["d3d12.dll", "KERNEL32.dll"]) == []
+
+
+def test_nw11_pe_dependency_parser_reads_import_table(tmp_path: Path) -> None:
+    data = bytearray(0x400)
+    data[0:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x40)
+    data[0x40:0x44] = b"PE\0\0"
+    coff = 0x44
+    struct.pack_into("<H", data, coff, 0x8664)
+    struct.pack_into("<H", data, coff + 2, 1)
+    struct.pack_into("<H", data, coff + 16, 0xF0)
+    optional = coff + 20
+    struct.pack_into("<H", data, optional, 0x20B)
+    struct.pack_into("<I", data, optional + 108, 16)
+    directory = optional + 112
+    struct.pack_into("<I", data, directory + 8, 0x1000)
+    struct.pack_into("<I", data, directory + 12, 40)
+    section = optional + 0xF0
+    struct.pack_into("<I", data, section + 8, 0x200)
+    struct.pack_into("<I", data, section + 12, 0x1000)
+    struct.pack_into("<I", data, section + 16, 0x200)
+    struct.pack_into("<I", data, section + 20, 0x200)
+    struct.pack_into("<I", data, 0x200 + 12, 0x1050)
+    data[0x250:0x25D] = b"KERNEL32.dll\0"
+    executable = tmp_path / "sample.exe"
+    executable.write_bytes(data)
+    assert pe_dependencies.imports(executable) == ["KERNEL32.dll"]
+
+
+def test_nw11_bundle_records_toolchain_shader_and_dependency_manifests(
+    tmp_path: Path,
+) -> None:
+    files = _source_artifacts(tmp_path)
+    toolchain = tmp_path / "toolchain.json"
+    toolchain.write_text(
+        json.dumps(
+            {
+                "format": "nw11-toolchain-identity",
+                "version": 1,
+                "task": contract.TASK,
+                "implementation_base": contract.IMPLEMENTATION_BASE,
+                "dxc_version": contract.TOOLCHAIN_DXC_MEASURED_VERSION,
+            }
+        ),
+        encoding="utf-8",
+    )
+    payloads = tmp_path / "payloads.json"
+    payloads.write_text(
+        json.dumps(
+            {
+                "format": "nw11-shader-payloads",
+                "version": 1,
+                "task": contract.TASK,
+                "implementation_base": contract.IMPLEMENTATION_BASE,
+                "payloads": [{"path": "a.dxil", "bytes": 3, "sha256": "a" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    deps = tmp_path / "deps.json"
+    deps.write_text(
+        json.dumps(
+            {
+                "format": "nw11-pe-dependencies",
+                "version": 1,
+                "task": contract.TASK,
+                "implementation_base": contract.IMPLEMENTATION_BASE,
+                "executables": [{"path": "baseline.exe", "dlls": ["d3d12.dll"]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "bundle"
+    manifest = build_bundle.build(
+        output_directory=target,
+        experiment_id=contract.EXPERIMENT_MESH_ID,
+        commit=COMMIT,
+        baseline_executable=files["baseline.exe"],
+        variant_executable=files["variant.exe"],
+        fallback_executable=files["fallback.exe"],
+        capability_probe=files["probe.exe"],
+        measured_toolchain=toolchain,
+        shader_payloads=payloads,
+        dependency_report=deps,
+        repo_root=REPO_ROOT,
+    )
+    assert manifest["toolchain"]["measured"]["dxc_version"]
+    assert manifest["shader_payloads"]["payload_count"] == 1
+    assert manifest["dependency_report"]["sha256"]
+    verified = bundle.verify_bundle(target, expected_commit=COMMIT)
+    assert verified["status"] == "verified"
 
 
 def test_nw11_experiment_runtime_validator_enforces_frozen_guardrails() -> None:
@@ -1258,7 +1436,15 @@ def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
         "D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL",
         "D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL",
         "DispatchMesh",
-        "DrawIndexedInstanced",
+        "ExecuteIndirect",
+        "SetDescriptorHeaps",
+        "CreateSwapChainForHwnd",
+        "CreateQueryHeap",
+        "QueryVideoMemoryInfo",
+        "Present(",
+        "CreateCommandSignature",
+        "nw06_bloom_cs_dxil.h",
+        "nw06_tonemap_cs_dxil.h",
     ):
         assert token in harness
 
@@ -1428,6 +1614,9 @@ def test_nw11_bundle_rejects_tampered_experiment_definition(
             "dependency_ledger",
             "accounting",
             "shader_inventory",
+                "shader_payloads",
+                "dependency_report",
+                "canonical_production",
         )
         if key in tampered
     }

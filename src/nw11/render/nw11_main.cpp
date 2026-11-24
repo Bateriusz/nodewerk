@@ -90,6 +90,10 @@ int main(int argc, char** argv) {
         std::string text;
         if (std::strcmp(argv[index], "--self-check") == 0) {
             options.self_check = true;
+        } else if (std::strcmp(argv[index], "--allow-software") == 0) {
+            options.allow_software_adapter = true;
+        } else if (std::strcmp(argv[index], "--headless") == 0) {
+            options.headless = true;
         } else if (Consume(index, argc, argv, "--benchmark-json", text)) {
             options.benchmark_json = text;
         } else if (Consume(index, argc, argv, "--capture-dir", text)) {

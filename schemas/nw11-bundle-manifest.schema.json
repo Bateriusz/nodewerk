@@ -115,6 +115,31 @@
         }
       }
     },
+    "shader_payloads": {
+      "type": "object",
+      "required": ["path", "sha256", "payload_count"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "payload_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "dependency_report": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "canonical_production": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "accounting": {
       "type": "object",
       "required": [

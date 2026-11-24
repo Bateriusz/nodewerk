@@ -10,7 +10,10 @@ deliberately **not** part of the root NW-07 production build:
   frozen NW-06 initialization compute shaders and renders the indexed
   baseline, the mesh-shader variant, or the inline DXR ray-query variant.  The
   launcher passes the probe-selected adapter LUID so a measurement can never
-  silently move to another GPU.
+  silently move to another GPU.  The baseline consumes the generated indirect
+  draw arguments, both arms run the frozen bloom/tonemap/display/present chain,
+  GPU time comes from timestamp queries, and VRAM comes from
+  `IDXGIAdapter3::QueryVideoMemoryInfo`.
 - `CMakeLists.txt` builds `nw11_common_baseline` (raster scene PS),
   `nw11_common_analytic` (analytic reflection baseline), separately built
   `nw11_fallback_common`/`nw11_fallback_analytic`, `nw11_optional_mesh`,
@@ -21,10 +24,17 @@ deliberately **not** part of the root NW-07 production build:
 the harness and shaders. The mesh stage reads the generated vertex buffer and
 cannot drift to hard-coded torus geometry.  `Buffer<uint>` SRVs are indexed in
 32-bit elements, and one group thread writes each of the 81 wrapped local-patch
-vertices.
+vertices.  The generated constants also carry the canonical NW-07 production
+contract digest, bloom/tonemap settings, and the NW-06 camera-interpolation
+encoding.
 
 Compile-time `NW11_VARIANT_*` definitions select one optional pipeline per
 executable. The common and fallback artifacts are built from the same source
 but never reference mesh or DXR shader payload headers, so unused optional
 implementations, shaders, models, or vendor SDK components are not linked into
 them.
+
+All experiment executables use the static MSVC CRT. `tools/nw11_toolchain_identity.py`,
+`tools/nw11_shader_payloads.py`, and `tools/nw11_pe_dependencies.py` are used by
+hosted CI to bind the measured compiler/SDK identity, compiled DXIL/header
+payload hashes, and inbox-only PE import set into the validation bundle.

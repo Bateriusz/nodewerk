@@ -34,6 +34,8 @@ struct RendererOptions {
     std::uint64_t distribution_bytes = 0;
     std::vector<std::string> shader_ids;
     bool self_check = false;
+    bool allow_software_adapter = false;
+    bool headless = false;
 };
 
 int RunSceneRenderer(const RendererOptions& options);

@@ -336,7 +336,12 @@ foreach ($pair in @(
             $resolved += @("--capture-dir", $captureRoot, "--capture-manifest", $captureManifest)
         }
         Write-Host ("[NW11] {0} run {1}/{2}: {3}" -f $pair.Role, $index, $runs, $pair.Exe)
-        Assert-Nw11ArtifactHash $manifest $pair.Artifact
+        try {
+            Assert-Nw11ArtifactHash $manifest $pair.Artifact
+        } catch {
+            Write-Nw11Error 6 "bundle_identity" $_.Exception.Message
+            exit 6
+        }
         if ($adapterLuid) {
             $resolved += @("--adapter-luid", $adapterLuid)
         }

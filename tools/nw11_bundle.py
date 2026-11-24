@@ -559,6 +559,9 @@ def verify_manifest_structure(record: Mapping[str, Any]) -> dict[str, Any]:
             "dependency_ledger",
             "accounting",
             "shader_inventory",
+            "shader_payloads",
+            "dependency_report",
+            "canonical_production",
         )
         if key in manifest
     }
@@ -670,6 +673,67 @@ def verify_bundle(
         raise BundleError("bundle experiment identity disagrees with the definition")
     if experiment_document.get("variant_profile_id") != manifest.get("profile_id"):
         raise BundleError("bundle profile identity disagrees with the experiment definition")
+    if "shader_payloads" in manifest:
+        record = _mapping(manifest["shader_payloads"], "shader_payloads")
+        payload_path = bundle_root / str(record.get("path", ""))
+        if not payload_path.is_file():
+            raise BundleError("bundle shader payload manifest is missing")
+        payload_bytes = payload_path.read_bytes()
+        if sha256_bytes(payload_bytes) != record.get("sha256"):
+            raise BundleError("bundle shader payload manifest hash changed")
+        try:
+            payload_document = json.loads(payload_bytes.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise BundleError(f"bundle shader payload manifest is malformed: {exc}") from exc
+        if payload_document.get("format") != "nw11-shader-payloads" or not payload_document.get(
+            "payloads"
+        ):
+            raise BundleError("bundle shader payload manifest is malformed")
+    if "dependency_report" in manifest:
+        record = _mapping(manifest["dependency_report"], "dependency_report")
+        report_path = bundle_root / str(record.get("path", ""))
+        if not report_path.is_file():
+            raise BundleError("bundle dependency report is missing")
+        report_bytes = report_path.read_bytes()
+        if sha256_bytes(report_bytes) != record.get("sha256"):
+            raise BundleError("bundle dependency report hash changed")
+        try:
+            report_document = json.loads(report_bytes.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise BundleError(f"bundle dependency report is malformed: {exc}") from exc
+        if report_document.get("format") != "nw11-pe-dependencies":
+            raise BundleError("bundle dependency report has the wrong format")
+    canonical = _mapping(
+        manifest.get("canonical_production"), "canonical_production"
+    )
+    canonical_path = bundle_root / str(canonical.get("path", ""))
+    if not canonical_path.is_file():
+        raise BundleError("bundle canonical production contract is missing")
+    canonical_bytes = canonical_path.read_bytes()
+    if sha256_bytes(canonical_bytes) != canonical.get("sha256"):
+        raise BundleError("bundle canonical production contract hash changed")
+    try:
+        canonical_document = json.loads(canonical_bytes.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BundleError(
+            f"bundle canonical production contract is malformed: {exc}"
+        ) from exc
+    if canonical_document.get("format") != "nw07-canonical-production":
+        raise BundleError("bundle canonical production contract has the wrong format")
+    if canonical_document.get("graph_sha256") != BASE_GRAPH_SHA256:
+        raise BundleError(
+            "bundle canonical production contract does not match the frozen graph"
+        )
+    measured_toolchain = (
+        _mapping(manifest.get("toolchain"), "toolchain").get("measured")
+    )
+    if measured_toolchain is not None:
+        try:
+            import nw11_toolchain_identity as toolchain_identity
+
+            toolchain_identity.verify(dict(measured_toolchain))
+        except Exception as exc:
+            raise BundleError(f"bundle measured toolchain identity is invalid: {exc}") from exc
     graph_scene_path = bundle_root / "manifests" / "graph-scene.json"
     if graph_scene_path.is_file():
         try:

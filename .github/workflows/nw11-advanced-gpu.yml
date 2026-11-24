@@ -61,6 +61,8 @@ jobs:
           tools/nw11_contract.py tools/nw11_capability.py tools/nw11_experiment.py
           tools/nw11_bundle.py tools/nw11_evidence.py tools/nw11_followup.py
           tools/nw11_build_bundle.py tools/nw11_verify.py tools/nw11_graph_scene.py
+          tools/nw11_toolchain_identity.py tools/nw11_shader_payloads.py
+          tools/nw11_pe_dependencies.py
           tools/nw11/collect-evidence.py tools/nw11/compare-captures.py
       - name: Validate schemas and tracked evidence state
         run: |
@@ -83,6 +85,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Provision the pinned NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh tools/nw01/bootstrap-windows.ps1
+          -Ci -SkipLlvm -ProvenancePath build/nw01-bootstrap.json
+      - name: Export the pinned MSVC/SDK build environment
+        shell: pwsh
+        run: pwsh tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
       - name: Confirm pinned offline DXC is available
         shell: pwsh
         run: |
@@ -96,6 +106,23 @@ jobs:
           --target nw11_capability_probe nw11_common_baseline nw11_common_analytic
           nw11_fallback_common nw11_fallback_analytic nw11_optional_mesh
           nw11_optional_ray
+      - name: Exercise the D3D12 command path on WARP
+        shell: pwsh
+        run: |
+          $root = "build/nw11-experiments"
+          $baseline = Get-ChildItem -Recurse $root -Filter "nw11_common_baseline.exe" | Select-Object -First 1
+          if (-not $baseline) { throw "missing baseline executable" }
+          & $baseline.FullName `
+            --allow-software `
+            --benchmark-json "build/nw11-warp-smoke.json" `
+            --warmup-seconds 0 `
+            --runs 1 `
+            --run-seconds 1
+          if ($LASTEXITCODE -ne 0) { throw "WARP command-path smoke failed" }
+          $report = Get-Content "build/nw11-warp-smoke.json" -Raw | ConvertFrom-Json
+          if ($report.measurement.gpu_time_samples.Count -lt 1) {
+            throw "WARP smoke produced no GPU timestamp samples"
+          }
       - name: Launch every artifact in self-check mode
         shell: pwsh
         run: |
@@ -116,6 +143,35 @@ jobs:
             Copy-Item $exe.FullName "build/nw11-artifacts/$name.exe"
           }
           Copy-Item "build/nw11-experiments/generated/nw11_scene_generated.json" "build/nw11-artifacts/nw11_scene_generated.json"
+      - name: Record measured toolchain, DXIL payloads, and PE dependencies
+        shell: pwsh
+        run: |
+          $dxc = Get-Command dxc.exe -ErrorAction Stop
+          $cache = Get-Content "build/nw11-experiments/CMakeCache.txt"
+          $compilerLine = $cache | Where-Object { $_ -like "CMAKE_CXX_COMPILER:*" } | Select-Object -First 1
+          $compiler = $compilerLine.Split("=", 2)[1]
+          $sdkRoot = "C:\Program Files (x86)\Windows Kits\10\Include"
+          $sdk = if (Test-Path $sdkRoot) {
+            Get-ChildItem $sdkRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          } else { $null }
+          $sdkVersion = if ($null -ne $sdk) { $sdk.Name } else { "unavailable" }
+          python tools/nw11_toolchain_identity.py `
+            --dxc $dxc.Source `
+            --cl $compiler `
+            --cmake cmake `
+            --windows-sdk-version $sdkVersion `
+            --out "build/nw11-artifacts/nw11-toolchain-identity.json"
+          python tools/nw11_shader_payloads.py `
+            --directory "build/nw11-experiments/shaders" `
+            --out "build/nw11-artifacts/nw11-shader-payloads.json"
+          python tools/nw11_pe_dependencies.py `
+            --exe "build/nw11-artifacts/nw11_common_baseline.exe" `
+            --exe "build/nw11-artifacts/nw11_common_analytic.exe" `
+            --exe "build/nw11-artifacts/nw11_fallback_common.exe" `
+            --exe "build/nw11-artifacts/nw11_fallback_analytic.exe" `
+            --exe "build/nw11-artifacts/nw11_optional_mesh.exe" `
+            --exe "build/nw11-artifacts/nw11_optional_ray.exe" `
+            --out "build/nw11-artifacts/nw11-pe-dependencies.json"
       - name: Upload same-revision build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -172,6 +228,9 @@ jobs:
             --fallback-executable "build/nw11-artifacts/${{ matrix.fallback }}" `
             --capability-probe "build/nw11-artifacts/nw11_capability_probe.exe" `
             --graph-scene "build/nw11-artifacts/nw11_scene_generated.json" `
+            --toolchain-identity "build/nw11-artifacts/nw11-toolchain-identity.json" `
+            --shader-payloads "build/nw11-artifacts/nw11-shader-payloads.json" `
+            --dependency-report "build/nw11-artifacts/nw11-pe-dependencies.json" `
             --json-out "build/nw11-bundle-${{ matrix.slug }}-manifest.json"
           python tools/nw11_verify.py bundle `
             --bundle-root "build/nw11-bundle-${{ matrix.slug }}" `

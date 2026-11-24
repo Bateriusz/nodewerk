@@ -133,6 +133,47 @@ float4x4 LookAt(float3 eye, float3 target, float3 up)
         -dot(right, eye), -dot(actual_up, eye), -dot(forward, eye), 1.0);
 }
 
+// Keep the camera path identical to the frozen nw06_scene_vs stage.  The
+// interpolation code comes from the generated camera buffer, so a graph
+// change cannot make the mesh arm silently use linear samples while the
+// baseline uses step samples.
+float SampleCameraCurve(uint tick, uint interpolation)
+{
+    uint tick0 = NwCamera.Load(0u);
+    uint tick1 = NwCamera.Load(1u);
+    uint tick2 = NwCamera.Load(2u);
+    uint tick3 = NwCamera.Load(3u);
+    if (tick3 != 0u)
+    {
+        tick = tick % tick3;
+    }
+    float value0 = asfloat(NwCamera.Load(4u));
+    float value1 = asfloat(NwCamera.Load(5u));
+    float value2 = asfloat(NwCamera.Load(6u));
+    float value3 = asfloat(NwCamera.Load(7u));
+    float t = float(tick);
+    if (t <= float(tick0)) return value0;
+    if (t >= float(tick3)) return value3;
+    if (interpolation == 1u)
+    {
+        if (t < float(tick1)) return value0;
+        if (t < float(tick2)) return value1;
+        return value2;
+    }
+    if (t <= float(tick1))
+    {
+        float d = max(1.0, float(tick1 - tick0));
+        return lerp(value0, value1, saturate((t - float(tick0)) / d));
+    }
+    if (t <= float(tick2))
+    {
+        float d = max(1.0, float(tick2 - tick1));
+        return lerp(value1, value2, saturate((t - float(tick1)) / d));
+    }
+    float d = max(1.0, float(tick3 - tick2));
+    return lerp(value2, value3, saturate((t - float(tick2)) / d));
+}
+
 // One group thread owns exactly one vertex of the 9x9 wrapped local patch.
 // Launching fewer threads than NW_VERTS_PER_MESHLET would leave mesh output
 // vertices unwritten along the patch boundary.
@@ -182,19 +223,8 @@ void MeshMain(
     // consumed by the rasterizer.
     GroupMemoryBarrierWithGroupSync();
 
-    float t0 = float(NwCamera.Load(0u));
-    float t3 = float(NwCamera.Load(3u));
-    float v0 = asfloat(NwCamera.Load(4u));
-    float v1 = asfloat(NwCamera.Load(5u));
-    float v2 = asfloat(NwCamera.Load(6u));
-    float v3 = asfloat(NwCamera.Load(7u));
-    float tick = float(wrapped_tick);
-    float camera_angle = v0;
-    if (tick <= t0) camera_angle = v0;
-    else if (tick >= t3) camera_angle = v3;
-    else if (tick <= t0 + (t3 - t0) / 3.0) camera_angle = lerp(v0, v1, saturate((tick - t0) / ((t3 - t0) / 3.0)));
-    else if (tick <= t0 + 2.0 * (t3 - t0) / 3.0) camera_angle = lerp(v1, v2, saturate((tick - t0 - (t3 - t0) / 3.0) / ((t3 - t0) / 3.0)));
-    else camera_angle = lerp(v2, v3, saturate((tick - t0 - 2.0 * (t3 - t0) / 3.0) / ((t3 - t0) / 3.0)));
+    uint camera_interpolation = NwCamera.Load(11u);
+    float camera_angle = SampleCameraCurve(wrapped_tick, camera_interpolation);
     float radius = 0.5 * (asfloat(NwCamera.Load(8u)) + asfloat(NwCamera.Load(9u)));
     float3 eye = float3(cos(camera_angle) * radius, asfloat(NwCamera.Load(10u)), sin(camera_angle) * radius);
     float4x4 view = LookAt(eye, float3(0.0, 0.0, 0.0), float3(0.0, 1.0, 0.0));

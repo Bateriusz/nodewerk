@@ -155,6 +155,19 @@ The probe publishes the selected adapter LUID; the launcher passes that exact
 LUID to every measured executable, and the renderer fails initialization
 rather than silently measuring a different GPU.
 
+Every command list binds the shader-visible descriptor heap before any root
+descriptor table is used. The conventional scene path consumes the generated
+`DRAW_INDEXED_INSTANCED` argument record through `ExecuteIndirect`; the mesh
+path uses `DispatchMesh`. Both arms then execute the frozen NW-06 post chain
+(half-resolution bloom, ACES tonemap to the RGBA32F present resource, display
+conversion) and present through a flip-discard swap chain. Post settings,
+exposure, gamma, and the canonical production-contract digest are generated
+from `benchmarks/nw07/canonical-production.v1.json`, not duplicated literals.
+The measured executables use the static MSVC CRT so a clean validation machine
+does not need VCRUNTIME/MSVCP redistributables. Hosted CI records the actual
+DXC/MSVC/SDK/CMake identities, SHA-256 identities for every compiled
+DXIL/header payload, and the PE import DLL set in the bundle.
+
 The CMake project compiles every shader offline with the pinned DXC
 (`as_6_5`, `ms_6_5`, `ps_6_5`, and the frozen `cs_6_0`/`vs_6_0`/`ps_6_0`
 payloads). Compile-time `NW11_VARIANT_*` definitions select exactly one
@@ -178,6 +191,9 @@ link mesh or DXR code, shaders, or payload headers.
   `NwVertices` and `NwIndices` in 32-bit element units (eight uint elements per
   32-byte vertex), never as byte offsets. One group thread owns each of the
   81 wrapped local-patch vertices, so every declared mesh vertex is written.
+- Camera interpolation uses the same encoding as `nw06_scene_vs`: the generated
+  constant is 0 for linear and 1 for step, and the mesh stage calls the same
+  `NwCamera.Load(11u)` curve semantics as the raster path.
 - Meshlets: 8×8 cells (9×9 including the wrapped boundary vertices), 32
   meshlets per instance × 256 instances.
 - Synchronization: `SetMeshOutputCounts` and
@@ -265,6 +281,18 @@ Bundles are built by hosted CI from the executables compiled by the same
 workflow run. `tools/nw11_build_bundle.py --require-head` refuses a `--commit`
 that does not equal the checked-out repository HEAD, so hashing an arbitrary
 operator-supplied file cannot be presented as same-revision evidence.
+The same workflow provisions the pinned NW-01 toolchain, records the measured
+DXC/MSVC/SDK/CMake identity, hashes every compiled DXIL/header payload, parses
+the measured PE import tables (rejecting redistributable VC runtimes), and
+carries the canonical NW-07 production contract, so the bundle binds the
+actual toolchain, shader payloads, dependencies, and production contract rather
+than restating static profile values.
+
+Hosted Windows CI also runs the common baseline on the software adapter through
+the real D3D12 command list and presentation path, with a short warm-up and
+sample loop, so descriptor-heap binding, `ExecuteIndirect`, post-processing,
+resource transitions, timestamp queries, and swap-chain presentation are
+exercised before physical evidence is requested.
 
 The bundle manifest also enforces zero-cost stripping:
 
@@ -296,7 +324,8 @@ editing. It:
    running any measured artifact if the optional profile is not eligible;
 6. runs the common/baseline, eligible variant, and separately exported common
    fallback under identical frozen settings, warm-up, and repeated fresh
-   processes;
+   processes, taking GPU time from timestamp queries and CPU submit time from
+   the `ExecuteCommandLists` call;
 7. preserves raw outputs and compares fixed-tick captures with the
    repository-owned comparator;
 8. invokes the repository-owned verifier locally and writes

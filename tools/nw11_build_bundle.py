@@ -26,6 +26,7 @@ sys.path.insert(0, str(THIS_DIR))
 import nw11_bundle as bundle  # noqa: E402
 import nw11_contract as contract  # noqa: E402
 import nw11_experiment as experiment  # noqa: E402
+import nw11_toolchain_identity as toolchain_identity  # noqa: E402
 
 TOOL_FILES = (
     "nw11_contract.py",
@@ -35,6 +36,7 @@ TOOL_FILES = (
     "nw11_evidence.py",
     "nw11_followup.py",
     "nw11_verify.py",
+    "nw11_toolchain_identity.py",
 )
 SUPPORT_FILES = (
     ("tools/schema_validator.py", "tools/nw11/schema_validator.py"),
@@ -92,6 +94,9 @@ def build(
     capability_probe: Path | str | None = None,
     graph_scene: Path | str | None = None,
     runtime_dependencies: list[Path | str] | None = None,
+    measured_toolchain: Path | str | None = None,
+    shader_payloads: Path | str | None = None,
+    dependency_report: Path | str | None = None,
     bundle_version: str = "1.0.0",
     repository: str = "nodewerk",
     repo_root: Path | str | None = None,
@@ -125,6 +130,33 @@ def build(
     _copy(experiment_path, output / "manifests/experiment.json")
     _copy(root / contract.FOLLOWUP_MATRIX_PATH, output / "manifests/follow-up-matrix.json")
     _copy(root / contract.SHADER_MANIFEST_PATH, output / "manifests/shader-manifest.json")
+    _copy(
+        root / contract.CANONICAL_PRODUCTION_CONFIG,
+        output / "manifests/canonical-production.json",
+    )
+    measured_toolchain_document: dict[str, Any] | None = None
+    if measured_toolchain is not None:
+        measured_toolchain_document = toolchain_identity.verify(
+            json.loads(Path(measured_toolchain).read_text(encoding="utf-8"))
+        )
+        _copy(Path(measured_toolchain), output / "manifests/toolchain-identity.json")
+    if shader_payloads is not None:
+        payload_document = json.loads(
+            Path(shader_payloads).read_text(encoding="utf-8")
+        )
+        if payload_document.get("format") != "nw11-shader-payloads":
+            raise BuildError("shader payload manifest has the wrong format")
+        if not payload_document.get("payloads"):
+            raise BuildError("shader payload manifest has no payloads")
+        _copy(Path(shader_payloads), output / "manifests/shader-payloads.json")
+    dependency_document: dict[str, Any] | None = None
+    if dependency_report is not None:
+        dependency_document = json.loads(
+            Path(dependency_report).read_text(encoding="utf-8")
+        )
+        if dependency_document.get("format") != "nw11-pe-dependencies":
+            raise BuildError("dependency report has the wrong format")
+        _copy(Path(dependency_report), output / "manifests/pe-dependencies.json")
     if graph_scene is not None:
         _copy(Path(graph_scene), output / "manifests/graph-scene.json")
     _copy(root / LAUNCHER, output / "run-validation.ps1")
@@ -161,6 +193,8 @@ def build(
         shared = document["pipeline"].get(key)
         if shared:
             shader_sources.append((shared, "", False, contract.COMMON_PROFILE_ID))
+    for shared in SHARED_POST_SHADERS:
+        shader_sources.append((shared, "cs_6_0", False, contract.COMMON_PROFILE_ID))
     seen_shaders: set[str] = set()
     for source_relative, _target, _optional, _profile_id in shader_sources:
         if source_relative in seen_shaders:
@@ -193,6 +227,26 @@ def build(
                 "distributed_bytes": destination.stat().st_size,
             }
         )
+    if dependency_document is not None:
+        known = {str(item["name"]).casefold() for item in dependency_ledger}
+        for executable in dependency_document.get("executables", []):
+            for dll in executable.get("dlls", []):
+                name = str(dll)
+                if name.casefold().endswith(".dll"):
+                    name = name[:-4]
+                if name.casefold() in known:
+                    continue
+                known.add(name.casefold())
+                dependency_ledger.append(
+                    {
+                        "name": name,
+                        "kind": "windows_inbox",
+                        "optional": False,
+                        "counted": True,
+                        "in_common_closure": True,
+                        "distributed_bytes": 0,
+                    }
+                )
 
     artifacts = [
         bundle.make_entry(
@@ -261,9 +315,30 @@ def build(
             bundle.make_entry(
                 output, "manifests/shader-manifest.json", role=bundle.ROLE_READING
             ),
+            bundle.make_entry(
+                output, "manifests/canonical-production.json", role=bundle.ROLE_READING
+            ),
             bundle.make_entry(output, "run-validation.ps1", role=bundle.ROLE_LAUNCHER),
         ]
     )
+    if measured_toolchain is not None:
+        artifacts.append(
+            bundle.make_entry(
+                output, "manifests/toolchain-identity.json", role=bundle.ROLE_READING
+            )
+        )
+    if shader_payloads is not None:
+        artifacts.append(
+            bundle.make_entry(
+                output, "manifests/shader-payloads.json", role=bundle.ROLE_READING
+            )
+        )
+    if dependency_report is not None:
+        artifacts.append(
+            bundle.make_entry(
+                output, "manifests/pe-dependencies.json", role=bundle.ROLE_READING
+            )
+        )
     for name in TOOL_FILES:
         artifacts.append(
             bundle.make_entry(output, f"tools/nw11/{name}", role=bundle.ROLE_TOOL)
@@ -310,6 +385,8 @@ def build(
         "commit": commit,
         "evidence_contract": contract.PERF_CONTRACT_ID,
     }
+    if measured_toolchain_document is not None:
+        toolchain["measured"] = measured_toolchain_document
     required_capabilities = [
         query["query_id"] for query in profile["queried_capabilities"]
     ] + list(profile["shader_targets"])
@@ -366,6 +443,23 @@ def build(
         },
         "roles": _role_shader_ids(document),
     }
+    if shader_payloads is not None:
+        manifest["shader_payloads"] = {
+            "path": "manifests/shader-payloads.json",
+            "sha256": contract.sha256_bytes(Path(shader_payloads).read_bytes()),
+            "payload_count": len(payload_document["payloads"]),
+        }
+    if dependency_report is not None:
+        manifest["dependency_report"] = {
+            "path": "manifests/pe-dependencies.json",
+            "sha256": contract.sha256_bytes(Path(dependency_report).read_bytes()),
+        }
+    manifest["canonical_production"] = {
+        "path": "manifests/canonical-production.json",
+        "sha256": contract.sha256_bytes(
+            (root / contract.CANONICAL_PRODUCTION_CONFIG).read_bytes()
+        ),
+    }
     # Recompute the identity after adding the bundle-relative paths.
     identity = {
         key: manifest[key]
@@ -384,6 +478,9 @@ def build(
             "dependency_ledger",
             "accounting",
             "shader_inventory",
+            "shader_payloads",
+            "dependency_report",
+            "canonical_production",
         )
         if key in manifest
     }
@@ -400,6 +497,15 @@ INITIALIZATION_SHADER_IDS = (
     "nw06_light_cs",
 )
 
+# The NW-07 production post chain is common-profile payload shared by every
+# NW-11 artifact; it must be present in the bundle inventory even though only
+# the scene stage changes between experiment arms.
+SHARED_POST_SHADERS = (
+    "shaders/nw06/nw06_bloom_cs.hlsl",
+    "shaders/nw06/nw06_tonemap_cs.hlsl",
+    "shaders/display_fixture.hlsl",
+)
+
 
 def _shader_id(path: str) -> str:
     return Path(str(path)).stem
@@ -408,8 +514,13 @@ def _shader_id(path: str) -> str:
 def _role_shader_ids(document: dict[str, Any]) -> dict[str, list[str]]:
     pipeline = document["pipeline"]
     init = list(INITIALIZATION_SHADER_IDS)
-    baseline = init + [_shader_id(item["path"]) for item in pipeline["baseline_shaders"]]
-    variant = init + [_shader_id(item["path"]) for item in pipeline["variant_shaders"]]
+    post = [_shader_id(path) for path in SHARED_POST_SHADERS]
+    baseline = init + post + [
+        _shader_id(item["path"]) for item in pipeline["baseline_shaders"]
+    ]
+    variant = init + post + [
+        _shader_id(item["path"]) for item in pipeline["variant_shaders"]
+    ]
     for key in ("shared_fragment_shader", "shared_vertex_shader"):
         shared = pipeline.get(key)
         if shared:
@@ -432,6 +543,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--capability-probe")
     parser.add_argument("--graph-scene")
     parser.add_argument("--runtime-dependency", action="append", default=[])
+    parser.add_argument("--toolchain-identity")
+    parser.add_argument("--shader-payloads")
+    parser.add_argument("--dependency-report")
     parser.add_argument("--bundle-version", default="1.0.0")
     parser.add_argument("--repository", default="nodewerk")
     parser.add_argument("--repo-root")
@@ -453,12 +567,21 @@ def main(argv: list[str] | None = None) -> int:
             capability_probe=args.capability_probe,
             graph_scene=args.graph_scene,
             runtime_dependencies=args.runtime_dependency,
+            measured_toolchain=args.toolchain_identity,
+            shader_payloads=args.shader_payloads,
+            dependency_report=args.dependency_report,
             bundle_version=args.bundle_version,
             repository=args.repository,
             repo_root=args.repo_root,
             require_head=args.require_head,
         )
-    except (BuildError, bundle.BundleError, experiment.ExperimentError, OSError) as exc:
+    except (
+        BuildError,
+        bundle.BundleError,
+        experiment.ExperimentError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
         print(f"[NW11-BUILD-ERR] {exc}", file=sys.stderr)
         return 2
     if args.json_out:
