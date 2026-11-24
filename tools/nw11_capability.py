@@ -101,6 +101,17 @@ def requirements_digest_inputs(profile: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def compute_requirements_digest(profile: Mapping[str, Any]) -> str:
+    """Return the requirements digest a profile must publish.
+
+    The common profile identity is inherited unchanged from the completed
+    NW-01/NW-03..NW-07 contract, so its digest is the frozen
+    ``COMMON_REQUIREMENTS_DIGEST`` value rather than a re-hash of the
+    NW-11 presentation of those same requirements.  Optional profiles are
+    content-addressed: their digest is a canonical hash over the exact
+    queried capabilities, shader targets, runtime, and toolchain fields.
+    """
+    if profile.get("profile_kind") == "common":
+        return COMMON_REQUIREMENTS_DIGEST
     return digest_value(requirements_digest_inputs(profile))
 
 
@@ -168,18 +179,51 @@ def validate_profile(record: Mapping[str, Any]) -> dict[str, Any]:
             )
 
     digest = _require_str(profile.get("requirements_digest"), "requirements_digest")
+    # Recompute for both kinds so the published digest is always verifiable.
+    # For the common profile this intentionally returns the inherited NW-07
+    # identity; for optional profiles it hashes the actual profile content.
+    computed = compute_requirements_digest(profile)
+    if digest != computed:
+        raise CapabilityProfileError(
+            f"profile '{profile_id}' requirements digest does not match its content",
+        )
+
+    fallback_artifact = profile.get("fallback_artifact")
     if definition["profile_kind"] == "optional":
-        computed = compute_requirements_digest(profile)
-        if digest != computed:
+        fallback_record = _require_mapping(
+            fallback_artifact, "fallback_artifact"
+        )
+        if fallback_record.get("artifact_id") != definition["fallback_artifact_id"]:
             raise CapabilityProfileError(
-                f"profile '{profile_id}' requirements digest does not match its content",
+                f"profile '{profile_id}' declares the wrong fallback artifact identity"
             )
+        if fallback_record.get("profile_id") != COMMON_PROFILE_ID:
+            raise CapabilityProfileError(
+                f"profile '{profile_id}' fallback must use the common profile"
+            )
+        if fallback_record.get("requirements_digest") != COMMON_REQUIREMENTS_DIGEST:
+            raise CapabilityProfileError(
+                f"profile '{profile_id}' fallback requirements digest is stale"
+            )
+        if fallback_record.get("separately_exported") is not True or fallback_record.get(
+            "separately_tested"
+        ) is not True:
+            raise CapabilityProfileError(
+                f"profile '{profile_id}' fallback must be separately exported and tested"
+            )
+        if fallback_record.get("optional_payloads") != []:
+            raise CapabilityProfileError(
+                f"profile '{profile_id}' fallback must not carry optional payloads"
+            )
+    elif fallback_artifact is not None:
+        raise CapabilityProfileError("the common profile must not declare a fallback")
 
     status = profile.get("evidence_status")
     allowed_statuses = set(EVIDENCE_STATUSES)
     if definition["profile_kind"] == "common":
-        # The common profile is already verified by the completed NW-01/NW-07
-        # evidence chain; it does not carry a pending optional-experiment state.
+        # "verified" is retained for compatibility with historical profile
+        # documents, but the published common profile must not use it until
+        # physical common-artifact correctness coverage exists on both targets.
         allowed_statuses.add("verified")
     if status not in allowed_statuses:
         raise CapabilityProfileError("profile evidence_status is not a known NW-11 status")
@@ -406,6 +450,15 @@ def profile_manifest_template(profile_id: str) -> dict[str, Any]:
         ],
         "evidence_status": "pending",
     }
+    if definition["profile_kind"] == "optional":
+        document["fallback_artifact"] = {
+            "artifact_id": definition["fallback_artifact_id"],
+            "profile_id": COMMON_PROFILE_ID,
+            "requirements_digest": COMMON_REQUIREMENTS_DIGEST,
+            "separately_exported": True,
+            "separately_tested": True,
+            "optional_payloads": [],
+        }
     document["requirements_digest"] = compute_requirements_digest(document)
     return document
 

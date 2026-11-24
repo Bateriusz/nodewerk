@@ -3,7 +3,7 @@
   "bundle_id": null,
   "bundle_manifest_sha256": null,
   "commit": null,
-  "decision_id": "sha256:v1:b3a4bf8c7f2f7cec4168b65f2b1ad229fdd57aca92603a24fb65fcfe25246dbf",
+  "decision_id": "sha256:v1:b60360bb40accbc51e36f8114864181d0b5200f760885b34027d68ade1b973d8",
   "devices": [
     {
       "device_key": null,
@@ -27,6 +27,7 @@
   "evidence_file": null,
   "experiment_id": "nw11.ray-query-vs-analytic-reflection.v1",
   "fallback_artifact_id": "nw11.fallback.common.d3d12.fl12_0.sm6_0.v1",
+  "fallback_tested": false,
   "format": "nw11-decisions",
   "implementation_base": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b",
   "pending_is_not_pass": true,

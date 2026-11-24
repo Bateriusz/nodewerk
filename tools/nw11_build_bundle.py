@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Build a deterministic, self-contained NW-11 validation bundle.
 
-CI supplies same-revision executable artifacts.  This tool copies them plus
-the repository-owned verifier, launcher, profile, experiment definition, and
-optional shader sources into a bundle, records SHA-256 identities for every
-file, and writes a versioned bundle manifest.  It never edits evidence or
-marks a result verified.
+CI compiles the executables and then invokes this tool on those same-revision
+artifacts.  The tool copies them plus the repository-owned verifier, launcher,
+profile, experiment definition, schemas, shared/optional shader sources, and
+graph-derived constants into a bundle, records SHA-256 identities for every
+file, and writes a versioned bundle manifest.  It never edits evidence or marks
+a result verified.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import shutil
 import sys
 from pathlib import Path
@@ -34,8 +36,37 @@ TOOL_FILES = (
     "nw11_followup.py",
     "nw11_verify.py",
 )
+SUPPORT_FILES = (
+    ("tools/schema_validator.py", "tools/nw11/schema_validator.py"),
+    ("tools/evidence_checks.py", "tools/nw11/evidence_checks.py"),
+)
+SCHEMA_FILES = (
+    "nw11-capability-profile.schema.json",
+    "nw11-experiment.schema.json",
+    "nw11-evidence.schema.json",
+    "nw11-bundle-manifest.schema.json",
+)
 COLLECTOR = "tools/nw11/collect-evidence.py"
+CAPTURE_COMPARATOR = "tools/nw11/compare-captures.py"
 LAUNCHER = "tools/nw11/run-validation.ps1"
+
+
+def verify_repository_commit(root: Path, commit: str) -> None:
+    """Fail unless the working tree HEAD is the commit being published."""
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise BuildError(f"cannot resolve repository HEAD: {exc}") from exc
+    if head != commit:
+        raise BuildError(
+            f"bundle commit {commit} does not match repository HEAD {head}"
+        )
 
 
 class BuildError(ValueError):
@@ -59,12 +90,16 @@ def build(
     variant_executable: Path | str,
     fallback_executable: Path | str,
     capability_probe: Path | str | None = None,
+    graph_scene: Path | str | None = None,
     runtime_dependencies: list[Path | str] | None = None,
     bundle_version: str = "1.0.0",
     repository: str = "nodewerk",
     repo_root: Path | str | None = None,
+    require_head: bool = False,
 ) -> dict[str, Any]:
     root = Path(repo_root or REPO_ROOT)
+    if require_head:
+        verify_repository_commit(root, commit)
     bundle.validate_variant_sources(root)
     output = Path(output_directory)
     if output.exists() and any(output.iterdir()):
@@ -83,18 +118,55 @@ def build(
     if capability_probe is not None:
         _copy(Path(capability_probe), output / "bin/nw11_capability_probe.exe")
     _copy(profile_path, output / "manifests/capability-profile.json")
+    _copy(
+        root / contract.PROFILE_PATH_BY_ID[contract.COMMON_PROFILE_ID],
+        output / "manifests/common-capability-profile.json",
+    )
     _copy(experiment_path, output / "manifests/experiment.json")
     _copy(root / contract.FOLLOWUP_MATRIX_PATH, output / "manifests/follow-up-matrix.json")
+    _copy(root / contract.SHADER_MANIFEST_PATH, output / "manifests/shader-manifest.json")
+    if graph_scene is not None:
+        _copy(Path(graph_scene), output / "manifests/graph-scene.json")
     _copy(root / LAUNCHER, output / "run-validation.ps1")
     for name in TOOL_FILES:
         _copy(root / "tools" / name, output / "tools/nw11" / name)
     _copy(root / COLLECTOR, output / "tools/nw11/collect-evidence.py")
-    for shader in document["pipeline"]["variant_shaders"]:
-        _copy(root / shader["path"], output / "shaders" / Path(shader["path"]).name)
+    _copy(root / CAPTURE_COMPARATOR, output / "tools/nw11/compare-captures.py")
+    for source_relative, destination_relative in SUPPORT_FILES:
+        _copy(root / source_relative, output / destination_relative)
+    for schema_name in SCHEMA_FILES:
+        _copy(
+            root / "schemas" / schema_name,
+            output / "schemas" / schema_name,
+        )
+
+    # Copy every shader that participates in either arm, including shared
+    # NW-06 shader payloads.  The bundle preserves the repository-relative
+    # path so experiment definitions remain meaningful inside the bundle.
+    shader_sources: list[tuple[str, str, bool, str]] = []
     for shader in document["pipeline"]["baseline_shaders"]:
-        source = root / shader["path"]
-        if source.is_file() and str(shader["path"]).startswith("shaders/nw11/"):
-            _copy(source, output / "shaders" / Path(shader["path"]).name)
+        shader_sources.append(
+            (shader["path"], shader["target"], False, contract.COMMON_PROFILE_ID)
+        )
+    for shader in document["pipeline"]["variant_shaders"]:
+        shader_sources.append(
+            (
+                shader["path"],
+                shader["target"],
+                True,
+                document["variant_profile_id"],
+            )
+        )
+    for key in ("shared_fragment_shader", "shared_vertex_shader"):
+        shared = document["pipeline"].get(key)
+        if shared:
+            shader_sources.append((shared, "", False, contract.COMMON_PROFILE_ID))
+    seen_shaders: set[str] = set()
+    for source_relative, _target, _optional, _profile_id in shader_sources:
+        if source_relative in seen_shaders:
+            continue
+        seen_shaders.add(source_relative)
+        _copy(root / source_relative, output / source_relative)
 
     dependency_ledger: list[dict[str, Any]] = []
     for dependency in profile.get("dependencies", []):
@@ -174,11 +246,20 @@ def build(
             ),
             bundle.make_entry(
                 output,
+                "manifests/common-capability-profile.json",
+                role=bundle.ROLE_READING,
+                profile_id=contract.COMMON_PROFILE_ID,
+            ),
+            bundle.make_entry(
+                output,
                 "manifests/experiment.json",
                 role=bundle.ROLE_EXPERIMENT_DEFINITION,
             ),
             bundle.make_entry(
                 output, "manifests/follow-up-matrix.json", role=bundle.ROLE_READING
+            ),
+            bundle.make_entry(
+                output, "manifests/shader-manifest.json", role=bundle.ROLE_READING
             ),
             bundle.make_entry(output, "run-validation.ps1", role=bundle.ROLE_LAUNCHER),
         ]
@@ -190,32 +271,37 @@ def build(
     artifacts.append(
         bundle.make_entry(output, "tools/nw11/collect-evidence.py", role=bundle.ROLE_TOOL)
     )
-    for shader in document["pipeline"]["variant_shaders"]:
-        relative = f"shaders/{Path(shader['path']).name}"
+    artifacts.append(
+        bundle.make_entry(output, "tools/nw11/compare-captures.py", role=bundle.ROLE_TOOL)
+    )
+    if graph_scene is not None:
+        artifacts.append(
+            bundle.make_entry(output, "manifests/graph-scene.json", role=bundle.ROLE_READING)
+        )
+    for source_relative, destination_relative in SUPPORT_FILES:
+        artifacts.append(
+            bundle.make_entry(output, destination_relative, role=bundle.ROLE_TOOL)
+        )
+    for schema_name in SCHEMA_FILES:
         artifacts.append(
             bundle.make_entry(
-                output,
-                relative,
-                role=bundle.ROLE_SHADER,
-                profile_id=document["variant_profile_id"],
-                optional=True,
-                shader_targets=[shader["target"]],
+                output, f"schemas/{schema_name}", role=bundle.ROLE_READING
             )
         )
-    for shader in document["pipeline"]["baseline_shaders"]:
-        if not str(shader["path"]).startswith("shaders/nw11/"):
+    shader_entries: dict[str, dict[str, Any]] = {}
+    for source_relative, target, optional, profile_id in shader_sources:
+        if source_relative in shader_entries:
             continue
-        relative = f"shaders/{Path(shader['path']).name}"
-        artifacts.append(
-            bundle.make_entry(
-                output,
-                relative,
-                role=bundle.ROLE_SHADER,
-                profile_id=contract.COMMON_PROFILE_ID,
-                optional=False,
-                shader_targets=[shader["target"]],
-            )
+        entry = bundle.make_entry(
+            output,
+            source_relative,
+            role=bundle.ROLE_SHADER,
+            profile_id=profile_id,
+            optional=optional,
+            shader_targets=[target] if target else [],
         )
+        shader_entries[source_relative] = entry
+        artifacts.append(entry)
 
     toolchain = {
         "dxc": profile["toolchain"]["dxc"],
@@ -261,6 +347,25 @@ def build(
     manifest["experiment_definition"]["sha256"] = contract.sha256_bytes(
         experiment_path.read_bytes()
     )
+    optional_shaders = {
+        path: entry for path, entry in shader_entries.items() if entry["optional"]
+    }
+    common_shaders = {
+        path: entry for path, entry in shader_entries.items() if not entry["optional"]
+    }
+    manifest["shader_inventory"] = {
+        "optional": {
+            "count": len(optional_shaders),
+            "bytes": sum(int(entry["bytes"]) for entry in optional_shaders.values()),
+            "paths": sorted(optional_shaders),
+        },
+        "common": {
+            "count": len(common_shaders),
+            "bytes": sum(int(entry["bytes"]) for entry in common_shaders.values()),
+            "paths": sorted(common_shaders),
+        },
+        "roles": _role_shader_ids(document),
+    }
     # Recompute the identity after adding the bundle-relative paths.
     identity = {
         key: manifest[key]
@@ -278,11 +383,42 @@ def build(
             "required_capabilities",
             "dependency_ledger",
             "accounting",
+            "shader_inventory",
         )
+        if key in manifest
     }
     manifest["bundle_id"] = contract.digest_value(identity)
     bundle.write_manifest(output, manifest)
     return manifest
+
+
+INITIALIZATION_SHADER_IDS = (
+    "nw06_generate_cs",
+    "nw06_instances_cs",
+    "nw06_material_cs",
+    "nw06_camera_cs",
+    "nw06_light_cs",
+)
+
+
+def _shader_id(path: str) -> str:
+    return Path(str(path)).stem
+
+
+def _role_shader_ids(document: dict[str, Any]) -> dict[str, list[str]]:
+    pipeline = document["pipeline"]
+    init = list(INITIALIZATION_SHADER_IDS)
+    baseline = init + [_shader_id(item["path"]) for item in pipeline["baseline_shaders"]]
+    variant = init + [_shader_id(item["path"]) for item in pipeline["variant_shaders"]]
+    for key in ("shared_fragment_shader", "shared_vertex_shader"):
+        shared = pipeline.get(key)
+        if shared:
+            variant.append(_shader_id(shared))
+    return {
+        "baseline": sorted(set(baseline)),
+        "variant": sorted(set(variant)),
+        "fallback": sorted(set(baseline)),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -294,10 +430,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--variant-executable", required=True)
     parser.add_argument("--fallback-executable", required=True)
     parser.add_argument("--capability-probe")
+    parser.add_argument("--graph-scene")
     parser.add_argument("--runtime-dependency", action="append", default=[])
     parser.add_argument("--bundle-version", default="1.0.0")
     parser.add_argument("--repository", default="nodewerk")
     parser.add_argument("--repo-root")
+    parser.add_argument(
+        "--require-head",
+        action="store_true",
+        help="fail unless --commit equals the repository working-tree HEAD",
+    )
     parser.add_argument("--json-out")
     args = parser.parse_args(argv)
     try:
@@ -309,10 +451,12 @@ def main(argv: list[str] | None = None) -> int:
             variant_executable=args.variant_executable,
             fallback_executable=args.fallback_executable,
             capability_probe=args.capability_probe,
+            graph_scene=args.graph_scene,
             runtime_dependencies=args.runtime_dependency,
             bundle_version=args.bundle_version,
             repository=args.repository,
             repo_root=args.repo_root,
+            require_head=args.require_head,
         )
     except (BuildError, bundle.BundleError, experiment.ExperimentError, OSError) as exc:
         print(f"[NW11-BUILD-ERR] {exc}", file=sys.stderr)

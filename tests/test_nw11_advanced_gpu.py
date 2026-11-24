@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 import sys
+from array import array
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ import nw11_contract as contract  # noqa: E402
 import nw11_evidence as evidence  # noqa: E402
 import nw11_experiment as experiment  # noqa: E402
 import nw11_followup as followup  # noqa: E402
+import nw11_graph_scene as graph_scene  # noqa: E402
 import nw11_verify as verify  # noqa: E402
 from schema_validator import validate_instance  # noqa: E402
 
@@ -100,6 +103,7 @@ def _measurement(
     cpu: float = 5.0,
     distribution: int = 3000,
     shaders: int = 10,
+    shader_ids: list[str] | None = None,
     cold_init: float = 900.0,
     vram: int = 300_000_000,
     image_error: float = 1e-5,
@@ -112,6 +116,7 @@ def _measurement(
         "cold_initialization_ms": cold_init,
         "distribution_bytes": distribution,
         "shader_count": shaders,
+        "shader_ids": list(shader_ids or []),
         "peak_engine_committed_gpu_bytes": vram,
         "image": {
             "max_abs_channel_error": image_error,
@@ -138,12 +143,16 @@ def _run(
         "device_key": device_key,
         "environment_key": environment_key,
         "status": status,
-        "artifact_path": (
-            "bin/common_baseline.exe" if role == "baseline" else "bin/optional_variant.exe"
-        ),
+        "artifact_path": {
+            "baseline": "bin/common_baseline.exe",
+            "variant": "bin/optional_variant.exe",
+            "fallback": "bin/fallback_common.exe",
+        }[role],
         "capability_decision": {
             "status": capability_status,
             "marketing_name_used_for_eligibility": False,
+            "device_key": device_key,
+            "environment_key": environment_key,
         },
         "measurement": measurement or _measurement(),
     }
@@ -158,6 +167,31 @@ def _evidence(
     manifest_sha = contract.sha256_bytes(
         (bundle_root / bundle.MANIFEST_NAME).read_bytes()
     )
+    runs = [dict(item) for item in runs]
+    accounting = manifest["accounting"]
+    inventory = manifest["shader_inventory"]["roles"]
+    distributed = {
+        "baseline": accounting["baseline_distribution_bytes"],
+        "variant": accounting["variant_distribution_bytes"],
+        "fallback": accounting["fallback_distribution_bytes"],
+    }
+    for item in runs:
+        role = item["role"]
+        measurement = dict(item["measurement"])
+        measurement["distribution_bytes"] = distributed[role]
+        measurement["shader_ids"] = list(inventory[role])
+        measurement["shader_count"] = len(inventory[role])
+        image = dict(measurement["image"])
+        image["reference_kind"] = experiment_document["criteria"]["image"][
+            "reference_kind"
+        ]
+        image["fixed_ticks"] = list(
+            experiment_document["reference"]["fixed_ticks"]
+        )
+        measurement["image"] = image
+        item["measurement"] = measurement
+        item["device_key"] = item["capability_decision"]["device_key"]
+        item["environment_key"] = item["capability_decision"]["environment_key"]
     return {
         "format": evidence.EVIDENCE_FORMAT,
         "version": evidence.EVIDENCE_VERSION,
@@ -177,6 +211,8 @@ def _evidence(
         },
         "runs": runs,
         "evidence_file": "evidence.json",
+        "raw_per_sample_results_preserved": True,
+        "operator_supplied_values": False,
     }
 
 
@@ -184,6 +220,43 @@ def _experiment(experiment_id: str = contract.EXPERIMENT_MESH_ID) -> dict:
     return experiment.load_experiment(
         REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[experiment_id]
     )
+
+
+def _write_image_result(path: Path, reference_kind: str = "raster_reference") -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "format": "nw11-image-result",
+                "version": 1,
+                "task": contract.TASK,
+                "implementation_base": contract.IMPLEMENTATION_BASE,
+                "reference_kind": reference_kind,
+                "fixed_ticks": list(contract.REFERENCE_FIXED_TICKS),
+                "max_abs_channel_error": 0.0,
+                "rmse": 0.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _load_collector():
+    path = REPO_ROOT / "tools" / "nw11" / "collect-evidence.py"
+    spec = importlib.util.spec_from_file_location("nw11_collect_evidence", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_comparator():
+    path = REPO_ROOT / "tools" / "nw11" / "compare-captures.py"
+    spec = importlib.util.spec_from_file_location("nw11_compare_captures", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_nw11_profiles_are_frozen_and_digest_bound() -> None:
@@ -213,7 +286,11 @@ def test_nw11_profiles_are_frozen_and_digest_bound() -> None:
     assert mesh["fallback_artifact"]["optional_payloads"] == []
     assert ray["runtime"]["agility_sdk"]["required"] is False
     assert mesh["evidence_status"] == "pending"
-    assert common["evidence_status"] == "verified"
+    assert common["requirements_digest"] == capability.compute_requirements_digest(common)
+    assert common["evidence_status"] == "pending"
+    assert all(
+        device["status"] == "pending" for device in common["device_coverage"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -409,6 +486,7 @@ def test_nw11_zero_cost_stripping_rejects_optional_payload_in_common(tmp_path: P
             "required_capabilities",
             "dependency_ledger",
             "accounting",
+            "shader_inventory",
         )
     }
     tampered["bundle_id"] = contract.digest_value(identity)
@@ -492,7 +570,10 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
     document = _experiment()
     ada_baseline = _run("baseline", measurement=_measurement(gpu=10.0))
     ada_variant = _run("variant", measurement=_measurement(gpu=7.5))
-    document_evidence = _evidence(root, manifest, document, [ada_baseline, ada_variant])
+    ada_fallback = _run("fallback", measurement=_measurement(gpu=10.0))
+    document_evidence = _evidence(
+        root, manifest, document, [ada_baseline, ada_variant, ada_fallback]
+    )
     decisions = evidence.build_decision_document(
         evidence=document_evidence,
         experiment=document,
@@ -520,11 +601,25 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
         tier="desktop_blackwell_representative",
         measurement=_measurement(gpu=7.5),
     )
+    blackwell_fallback = _run(
+        "fallback",
+        device_key="pci:10de:2c05",
+        environment_key="sha256:v1:" + "c" * 64,
+        tier="desktop_blackwell_representative",
+        measurement=_measurement(gpu=10.0),
+    )
     both = _evidence(
         root,
         manifest,
         document,
-        [ada_baseline, ada_variant, blackwell_baseline, blackwell_variant],
+        [
+            ada_baseline,
+            ada_variant,
+            ada_fallback,
+            blackwell_baseline,
+            blackwell_variant,
+            blackwell_fallback,
+        ],
     )
     complete = evidence.build_decision_document(
         evidence=both,
@@ -554,6 +649,7 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
                 environment_key="sha256:v1:" + "c" * 64,
                 measurement=_measurement(gpu=7.5),
             ),
+            ada_fallback,
         ],
     )
     isolated = evidence.build_decision_document(
@@ -574,7 +670,11 @@ def test_nw11_stale_evidence_and_artifact_hashes_are_rejected(tmp_path: Path) ->
         root,
         manifest,
         document,
-        [_run("baseline", measurement=_measurement(gpu=10.0)), _run("variant", measurement=_measurement(gpu=7.5))],
+        [
+            _run("baseline", measurement=_measurement(gpu=10.0)),
+            _run("variant", measurement=_measurement(gpu=7.5)),
+            _run("fallback", measurement=_measurement(gpu=10.0)),
+        ],
     )
     stale = copy.deepcopy(base_evidence)
     stale["commit"] = "1" * 40
@@ -649,7 +749,8 @@ def test_nw11_collected_evidence_preserves_raw_runs_and_pending_coverage(
 ) -> None:
     import subprocess
 
-    root, _manifest = _build_bundle(tmp_path)
+    root, manifest = _build_bundle(tmp_path)
+    document = _experiment()
     observation_path = tmp_path / "observation.json"
     observation_path.write_text(json.dumps(_observation()), encoding="utf-8")
     eligibility_path = tmp_path / "eligibility.json"
@@ -669,21 +770,78 @@ def test_nw11_collected_evidence_preserves_raw_runs_and_pending_coverage(
         stdout=subprocess.DEVNULL,
     )
     eligibility = json.loads(eligibility_path.read_text(encoding="utf-8"))
+    common_eligibility_path = tmp_path / "common-eligibility.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools" / "nw11_verify.py"),
+            "capability",
+            "--profile",
+            str(root / "manifests/common-capability-profile.json"),
+            "--observation",
+            str(observation_path),
+            "--json-out",
+            str(common_eligibility_path),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    common_eligibility = json.loads(
+        common_eligibility_path.read_text(encoding="utf-8")
+    )
+    accounting = manifest["accounting"]
+    inventory = manifest["shader_inventory"]["roles"]
     reports = []
-    for role, gpu, artifact in (
-        ("baseline", 10.0, "bin/common_baseline.exe"),
-        ("variant", 7.5, "bin/optional_variant.exe"),
+    for role, gpu, artifact, decision, distribution in (
+        (
+            "baseline",
+            10.0,
+            "bin/common_baseline.exe",
+            common_eligibility,
+            accounting["baseline_distribution_bytes"],
+        ),
+        (
+            "variant",
+            7.5,
+            "bin/optional_variant.exe",
+            eligibility,
+            accounting["variant_distribution_bytes"],
+        ),
+        (
+            "fallback",
+            10.0,
+            "bin/fallback_common.exe",
+            common_eligibility,
+            accounting["fallback_distribution_bytes"],
+        ),
     ):
         for run_index in range(contract.PERF_RUN_COUNT):
-            report = _run(role, measurement=_measurement(gpu=gpu))
+            measurement = _measurement(
+                gpu=gpu,
+                distribution=distribution,
+                shaders=len(inventory[role]),
+                shader_ids=inventory[role],
+            )
+            measurement["image"]["reference_kind"] = document["criteria"]["image"][
+                "reference_kind"
+            ]
+            report = _run(role, measurement=measurement)
             report["device_key"] = eligibility["device_key"]
             report["environment_key"] = eligibility["environment_key"]
             report["artifact_path"] = artifact
-            report["capability_decision"] = eligibility
+            report["capability_decision"] = decision
             path = tmp_path / f"{role}-{run_index}.json"
             path.write_text(json.dumps(report), encoding="utf-8")
             reports.append(path)
     evidence_path = tmp_path / "collected.json"
+    image_result = _write_image_result(
+        tmp_path / "image-result.json",
+        document["criteria"]["image"]["reference_kind"],
+    )
+    fallback_image_result = _write_image_result(
+        tmp_path / "fallback-image-result.json",
+        document["criteria"]["image"]["reference_kind"],
+    )
     arguments = [
         sys.executable,
         str(REPO_ROOT / "tools" / "nw11" / "collect-evidence.py"),
@@ -691,6 +849,14 @@ def test_nw11_collected_evidence_preserves_raw_runs_and_pending_coverage(
         str(root),
         "--expected-commit",
         COMMIT,
+        "--eligibility",
+        str(eligibility_path),
+        "--common-eligibility",
+        str(common_eligibility_path),
+        "--image-result",
+        str(image_result),
+        "--fallback-image-result",
+        str(fallback_image_result),
         "--out",
         str(evidence_path),
     ]
@@ -698,7 +864,7 @@ def test_nw11_collected_evidence_preserves_raw_runs_and_pending_coverage(
         arguments.extend(["--run-report", str(report)])
     subprocess.run(arguments, check=True)
     collected = json.loads(evidence_path.read_text(encoding="utf-8"))
-    assert len(collected["runs"]) == 2
+    assert len(collected["runs"]) == 3
     assert collected["runs"][0]["process_run_count"] == contract.PERF_RUN_COUNT
     assert collected["raw_per_sample_results_preserved"] is True
 
@@ -797,3 +963,409 @@ def test_nw11_follow_up_matrix_is_bounded_and_complete() -> None:
     missing["features"] = missing["features"][:-1]
     with pytest.raises(followup.FollowupMatrixError):
         followup.validate_matrix(missing)
+
+
+def test_nw11_common_digest_is_self_consistent_and_templates_validate() -> None:
+    common = capability.load_profile(
+        REPO_ROOT / contract.PROFILE_PATH_BY_ID[contract.COMMON_PROFILE_ID]
+    )
+    assert capability.compute_requirements_digest(common) == contract.COMMON_REQUIREMENTS_DIGEST
+    for profile_id in (
+        contract.COMMON_PROFILE_ID,
+        contract.MESH_PROFILE_ID,
+        contract.RAY_QUERY_PROFILE_ID,
+    ):
+        template = capability.profile_manifest_template(profile_id)
+        capability.validate_profile(template)
+
+
+def test_nw11_pending_capability_query_never_reaches_optional_execution(
+    tmp_path: Path,
+) -> None:
+    mesh_profile = REPO_ROOT / contract.PROFILE_PATH_BY_ID[contract.MESH_PROFILE_ID]
+    observation = _observation()
+    del observation["features"]["mesh_shader_tier"]
+    path = tmp_path / "pending.json"
+    path.write_text(json.dumps(observation), encoding="utf-8")
+    assert verify.main(
+        ["capability", "--profile", str(mesh_profile), "--observation", str(path)]
+    ) == verify.EXIT_PENDING
+    launcher = (
+        REPO_ROOT / "tools" / "nw11" / "run-validation.ps1"
+    ).read_text(encoding="utf-8")
+    assert "$eligibilityCode -eq 11" in launcher
+    assert "$eligibilityCode -eq 3" in launcher
+    pending_position = launcher.index("$eligibilityCode -eq 11")
+    loop_position = launcher.index("foreach ($pair in @(")
+    assert pending_position < loop_position
+
+
+def test_nw11_malformed_run_status_and_missing_constants_fail_closed(
+    tmp_path: Path,
+) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    document = _experiment()
+    runs = [
+        _run("baseline", measurement=_measurement(gpu=10.0)),
+        _run("variant", measurement=_measurement(gpu=7.5)),
+        _run("fallback", measurement=_measurement(gpu=10.0)),
+    ]
+    evidence_document = _evidence(root, manifest, document, runs)
+    malformed = copy.deepcopy(evidence_document)
+    malformed["runs"][0]["status"] = "definitely-not-a-status"
+    with pytest.raises(evidence.EvidenceError):
+        evidence.validate_evidence(
+            malformed,
+            bundle_manifest=manifest,
+            experiment=document,
+            bundle_manifest_sha256=evidence_document["bundle_manifest_sha256"],
+            expected_commit=COMMIT,
+            schema_root=root,
+        )
+
+    no_constants = copy.deepcopy(evidence_document)
+    del no_constants["raw_per_sample_results_preserved"]
+    with pytest.raises(evidence.EvidenceError):
+        evidence.validate_evidence(
+            no_constants,
+            bundle_manifest=manifest,
+            experiment=document,
+            bundle_manifest_sha256=evidence_document["bundle_manifest_sha256"],
+            expected_commit=COMMIT,
+            schema_root=root,
+        )
+
+    operator_values = copy.deepcopy(evidence_document)
+    operator_values["operator_supplied_values"] = True
+    with pytest.raises(evidence.EvidenceError):
+        evidence.validate_evidence(
+            operator_values,
+            bundle_manifest=manifest,
+            experiment=document,
+            bundle_manifest_sha256=evidence_document["bundle_manifest_sha256"],
+            expected_commit=COMMIT,
+            schema_root=root,
+        )
+
+
+def test_nw11_fallback_must_be_executed_and_role_bound(tmp_path: Path) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    document = _experiment()
+    without_fallback = _evidence(
+        root,
+        manifest,
+        document,
+        [
+            _run("baseline", measurement=_measurement(gpu=10.0)),
+            _run("variant", measurement=_measurement(gpu=7.5)),
+        ],
+    )
+    with pytest.raises(evidence.EvidenceError, match="fallback"):
+        evidence.validate_evidence(
+            without_fallback,
+            bundle_manifest=manifest,
+            experiment=document,
+            bundle_manifest_sha256=without_fallback["bundle_manifest_sha256"],
+            expected_commit=COMMIT,
+        )
+
+    wrong_role = _evidence(
+        root,
+        manifest,
+        document,
+        [
+            _run("baseline", measurement=_measurement(gpu=10.0)),
+            _run("variant", measurement=_measurement(gpu=7.5)),
+            _run("fallback", measurement=_measurement(gpu=10.0)),
+        ],
+    )
+    wrong_role["runs"][2]["artifact_path"] = "bin/optional_variant.exe"
+    with pytest.raises(evidence.EvidenceError, match="fallback"):
+        evidence.validate_evidence(
+            wrong_role,
+            bundle_manifest=manifest,
+            experiment=document,
+            bundle_manifest_sha256=wrong_role["bundle_manifest_sha256"],
+            expected_commit=COMMIT,
+        )
+
+
+def test_nw11_bundle_accounts_optional_and_shared_shader_bytes(
+    tmp_path: Path,
+) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    accounting = manifest["accounting"]
+    assert accounting["optional_shader_bytes"] > 0
+    assert accounting["optional_shader_count"] >= 2
+    assert accounting["variant_distribution_bytes"] >= (
+        accounting["optional_distribution_bytes"]
+        + accounting["optional_shader_bytes"]
+    )
+    shader_entries = [
+        item for item in manifest["artifacts"] if item["role"] == "shader"
+    ]
+    assert shader_entries
+    assert all(item["distributed_bytes"] == item["bytes"] for item in shader_entries)
+    paths = {item["path"] for item in manifest["artifacts"]}
+    assert "shaders/nw06/nw06_scene_ps.hlsl" in paths
+    assert "manifests/shader-manifest.json" in paths
+    assert (root / "shaders/nw06/nw06_scene_ps.hlsl").is_file()
+
+
+def test_nw11_mesh_shader_consumes_graph_generated_geometry() -> None:
+    source = (
+        REPO_ROOT / "shaders/nw11/mesh/nw11_torus_meshlet.ms.hlsl"
+    ).read_text(encoding="utf-8")
+    assert "NwVertices.Load" in source
+    assert "NwIndices" in source
+    assert "NW_MAJOR_SEGMENTS" not in source
+    assert "0.7" not in source and "0.3 * cos" not in source
+    document = graph_scene.lower(
+        REPO_ROOT / contract.BASE_GRAPH, repo_root=REPO_ROOT
+    )
+    assert document["torus"]["major_segments"] == 64
+    assert document["torus"]["minor_segments"] == 32
+    assert document["torus"]["major_radius"] == 0.7
+    assert document["instances"]["count"] == 256
+
+
+def test_nw11_experiment_runtime_validator_enforces_frozen_guardrails() -> None:
+    document = _experiment()
+    weakened = copy.deepcopy(document)
+    weakened["criteria"]["guardrails"]["cpu_submit_ms_max"] = 100.0
+    with pytest.raises(experiment.ExperimentError):
+        experiment.validate_experiment(weakened)
+
+    weakened = copy.deepcopy(document)
+    weakened["criteria"]["image"]["fixed_ticks"] = [0]
+    with pytest.raises(experiment.ExperimentError):
+        experiment.validate_experiment(weakened)
+
+    weakened = copy.deepcopy(document)
+    weakened["criteria"]["guardrails"][
+        "incremental_distribution_bytes_ceiling"
+    ] = 10_000_000
+    with pytest.raises(experiment.ExperimentError):
+        experiment.validate_experiment(weakened)
+
+    weakened = copy.deepcopy(document)
+    weakened["criteria"]["guardrails"]["shader_count_increment_ceiling"] = 100
+    with pytest.raises(experiment.ExperimentError):
+        experiment.validate_experiment(weakened)
+
+
+def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
+    cmake = (REPO_ROOT / "src/nw11/CMakeLists.txt").read_text(encoding="utf-8")
+    for target in (
+        "nw11_common_baseline",
+        "nw11_common_analytic",
+        "nw11_optional_mesh",
+        "nw11_optional_ray",
+        "nw11_fallback_common",
+        "nw11_fallback_analytic",
+    ):
+        assert target in cmake
+    for profile in ("as_6_5", "ms_6_5", "ps_6_5"):
+        assert profile in cmake
+    harness = (
+        REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
+    ).read_text(encoding="utf-8")
+    for token in (
+        "BuildRaytracingAccelerationStructure",
+        "D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL",
+        "D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL",
+        "DispatchMesh",
+        "DrawIndexedInstanced",
+    ):
+        assert token in harness
+
+
+def test_nw11_capability_probe_selects_a_real_adapter_safely() -> None:
+    source = (REPO_ROOT / "src/nw11/capability_probe.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "--adapter-luid" in source
+    assert "--adapter-index" in source
+    assert "DedicatedVideoMemory" in source
+    assert "DXGI_ADAPTER_FLAG_SOFTWARE" in source
+    # Narrow must allocate the full NUL-inclusive byte count before resizing.
+    assert "std::string output(static_cast<size_t>(bytes), '\\0');" in source
+    assert "output.resize(static_cast<size_t>(bytes - 1));" in source
+
+
+def test_nw11_collector_requires_three_fresh_processes_per_role(
+    tmp_path: Path,
+) -> None:
+    collector = _load_collector()
+    root, manifest = _build_bundle(tmp_path)
+    decision = {
+        "status": "eligible",
+        "marketing_name_used_for_eligibility": False,
+        "device_key": "pci:10de:2805",
+        "environment_key": "sha256:v1:" + "a" * 64,
+    }
+    eligibility_path = tmp_path / "eligibility.json"
+    eligibility_path.write_text(json.dumps(decision), encoding="utf-8")
+    image_result = _write_image_result(tmp_path / "image-result.json")
+    fallback_image_result = _write_image_result(
+        tmp_path / "fallback-image-result.json"
+    )
+    inventory = manifest["shader_inventory"]["roles"]
+    accounting = manifest["accounting"]
+    reports: list[Path] = []
+    for role, artifact, distribution in (
+        ("baseline", "bin/common_baseline.exe", accounting["baseline_distribution_bytes"]),
+        ("variant", "bin/optional_variant.exe", accounting["variant_distribution_bytes"]),
+        ("fallback", "bin/fallback_common.exe", accounting["fallback_distribution_bytes"]),
+    ):
+        measurement = _measurement(
+            distribution=distribution,
+            shaders=len(inventory[role]),
+            shader_ids=inventory[role],
+        )
+        report = _run(role, measurement=measurement)
+        report["device_key"] = decision["device_key"]
+        report["environment_key"] = decision["environment_key"]
+        report["artifact_path"] = artifact
+        report["capability_decision"] = decision
+        path = tmp_path / f"{role}-only.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        reports.append(path)
+    with pytest.raises(evidence.EvidenceError, match="exactly"):
+        collector.collect(
+            bundle_root=root,
+            run_reports=reports,
+            expected_commit=COMMIT,
+            eligibility_file=str(eligibility_path),
+            common_eligibility_file=str(eligibility_path),
+            image_result_file=str(image_result),
+            fallback_image_result_file=str(fallback_image_result),
+        )
+
+    # A single report cannot satisfy the repeated-sample protocol even when it
+    # contains 600 samples, because the frozen policy requires three fresh
+    # processes per role.
+    with pytest.raises(evidence.EvidenceError):
+        collector.collect(
+            bundle_root=root,
+            run_reports=reports[:1],
+            expected_commit=COMMIT,
+            eligibility_file=str(eligibility_path),
+            common_eligibility_file=str(eligibility_path),
+            image_result_file=str(image_result),
+            fallback_image_result_file=str(fallback_image_result),
+        )
+
+
+def test_nw11_capture_comparator_computes_metrics_from_pixels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    comparator = _load_comparator()
+    monkeypatch.setattr(contract, "OUTPUT_WIDTH", 2)
+    monkeypatch.setattr(contract, "OUTPUT_HEIGHT", 2)
+    monkeypatch.setattr(contract, "REFERENCE_FIXED_TICKS", (0, 1))
+    ticks = [0, 1]
+    baseline_dir = tmp_path / "baseline"
+    variant_dir = tmp_path / "variant"
+    baseline_dir.mkdir()
+    variant_dir.mkdir()
+
+    def write_set(directory: Path, offset: float) -> Path:
+        images = []
+        for tick in ticks:
+            values = array("f", [offset] * 16)
+            name = f"{tick}.rgba"
+            (directory / name).write_bytes(values.tobytes())
+            images.append(
+                {
+                    "tick": tick,
+                    "path": name,
+                    "width": 2,
+                    "height": 2,
+                    "format": "rgba32f",
+                }
+            )
+        manifest = directory / "captures.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "format": "nw11-capture-set",
+                    "version": 1,
+                    "fixed_ticks": ticks,
+                    "images": images,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest
+
+    baseline_manifest = write_set(baseline_dir, 0.0)
+    variant_manifest = write_set(variant_dir, 0.00005)
+    result = comparator.compare(
+        baseline_manifest=baseline_manifest,
+        variant_manifest=variant_manifest,
+        reference_kind="raster_reference",
+    )
+    assert result["max_abs_channel_error"] == pytest.approx(0.00005, abs=1e-7)
+    assert result["rmse"] == pytest.approx(0.00005, abs=1e-7)
+    assert result["fixed_ticks"] == ticks
+
+
+def test_nw11_bundle_rejects_tampered_experiment_definition(
+    tmp_path: Path,
+) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    experiment_path = root / "manifests/experiment.json"
+    document = json.loads(experiment_path.read_text(encoding="utf-8"))
+    document["criteria"]["primary"]["relative_reduction_percent_min"] = 1.0
+    payload = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    experiment_path.write_text(payload, encoding="utf-8", newline="\n")
+    data = experiment_path.read_bytes()
+    tampered = copy.deepcopy(manifest)
+    for artifact in tampered["artifacts"]:
+        if artifact["path"] == "manifests/experiment.json":
+            artifact["bytes"] = len(data)
+            artifact["sha256"] = contract.sha256_bytes(data)
+    tampered["experiment_definition"]["bytes"] = len(data)
+    tampered["experiment_definition"]["sha256"] = contract.sha256_bytes(data)
+    identity = {
+        key: tampered[key]
+        for key in (
+            "repository",
+            "commit",
+            "experiment_id",
+            "profile_id",
+            "fallback_artifact_id",
+            "bundle_version",
+            "artifacts",
+            "capability_profile",
+            "experiment_definition",
+            "toolchain",
+            "required_capabilities",
+            "dependency_ledger",
+            "accounting",
+            "shader_inventory",
+        )
+        if key in tampered
+    }
+    tampered["bundle_id"] = contract.digest_value(identity)
+    bundle.write_manifest(root, tampered)
+    with pytest.raises(bundle.BundleError, match="experiment definition is invalid"):
+        bundle.verify_bundle(root)
+
+
+def test_nw11_same_device_key_cannot_span_device_tiers(tmp_path: Path) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    document = _experiment()
+    runs = [
+        _run("baseline", measurement=_measurement(gpu=10.0)),
+        _run("fallback", measurement=_measurement(gpu=10.0)),
+        _run(
+            "variant",
+            tier="desktop_blackwell_representative",
+            measurement=_measurement(gpu=7.5),
+        ),
+    ]
+    evidence_document = _evidence(root, manifest, document, runs)
+    with pytest.raises(evidence.EvidenceError, match="two device tiers"):
+        evidence.compute_decisions(evidence_document, document)

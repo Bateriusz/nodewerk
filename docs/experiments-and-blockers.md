@@ -71,12 +71,12 @@ NW-11 reuses the same NW-01B experiment-record schema with an additive
 ### Mesh shaders versus indexed rendering
 - **Record:** [`benchmarks/experiments/nw11-mesh-shader-experiment.json`](../benchmarks/experiments/nw11-mesh-shader-experiment.json)
 - **Definition:** [`benchmarks/nw11/experiments/mesh-shader-vs-indexed.v1.json`](../benchmarks/nw11/experiments/mesh-shader-vs-indexed.v1.json)
-- **Outcome:** The optional `as_6_5`/`ms_6_5` variant extends the frozen NW-07 graph and shares the common fragment stage. Matched physical runs on RTX 4060 Ti and RTX 5070 Ti are pending; no GPU-less result is promoted.
+- **Outcome:** `nw11_optional_mesh` implements the `as_6_5`/`ms_6_5` variant, consumes the NW-06-generated torus vertex buffer, and shares the common fragment stage. `nw11_common_baseline` and the separately built `nw11_fallback_common` remain distinct artifacts. Matched physical runs on RTX 4060 Ti and RTX 5070 Ti are pending; no GPU-less result is promoted.
 
 ### DXR ray queries versus analytic reflection
 - **Record:** [`benchmarks/experiments/nw11-ray-query-experiment.json`](../benchmarks/experiments/nw11-ray-query-experiment.json)
 - **Definition:** [`benchmarks/nw11/experiments/ray-query-vs-analytic.v1.json`](../benchmarks/nw11/experiments/ray-query-vs-analytic.v1.json)
-- **Outcome:** The `ps_6_5` inline-ray-query variant shares the NW-07 graph, geometry, capture, quality, and present path with the common `ps_6_0` analytic baseline. Physical evidence and the separate common fallback remain pending/available respectively.
+- **Outcome:** `nw11_optional_ray` implements the `ps_6_5` inline-ray-query variant, builds BLAS/TLAS from the same generated geometry and instance transforms, and shares the NW-07 graph, capture, quality, and present path with the common `ps_6_0` analytic baseline. Physical evidence and separate-fallback execution remain pending.
 
 ## Inbox-Runtime Blocker Log
 

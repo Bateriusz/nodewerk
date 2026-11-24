@@ -44,6 +44,8 @@ from nw11_contract import (  # type: ignore[import-not-found]
     PROCESS_START_TO_FIRST_PRESENT_MS,
     QUALITY_PROFILE_ID,
     RAY_QUERY_PROFILE_ID,
+    REFERENCE_FIXED_TICKS,
+    REFERENCE_LOOP_BOUNDARY_TICKS,
     SHADER_COUNT_INCREMENT_MAX,
     TASK,
     TICKS_PER_SECOND,
@@ -200,6 +202,18 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
             "the primary criterion must be evaluated independently per device/environment"
         )
     guardrails = _mapping(criteria.get("guardrails"), "criteria.guardrails")
+    for key in (
+        "end_to_end_frame_time_must_not_regress",
+        "microbenchmark_gain_alone_is_sufficient",
+        "cpu_submit_ms_max",
+        "complete_distribution_bytes_ceiling",
+        "incremental_distribution_bytes_ceiling",
+        "shader_count_increment_ceiling",
+        "cold_initialization_ms_ceiling",
+        "peak_engine_committed_gpu_bytes_ceiling",
+    ):
+        if key not in guardrails:
+            raise ExperimentError(f"criteria.guardrails.{key} is required")
     if guardrails.get("end_to_end_frame_time_must_not_regress") is not True:
         raise ExperimentError("microbenchmark-only gains cannot justify adoption")
     if guardrails.get("microbenchmark_gain_alone_is_sufficient") is not False:
@@ -210,6 +224,58 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         raise ExperimentError("experiment weakened the cold-initialization ceiling")
     if _number(guardrails.get("peak_engine_committed_gpu_bytes_ceiling"), "peak_engine_committed_gpu_bytes_ceiling") > PEAK_ENGINE_COMMITTED_GPU_BYTES:
         raise ExperimentError("experiment weakened the VRAM ceiling")
+    if _number(guardrails.get("cpu_submit_ms_max"), "guardrails.cpu_submit_ms_max") > CPU_SUBMIT_MS_MAX:
+        raise ExperimentError("experiment weakened the preserved CPU-submit gate")
+
+    budget = _mapping(document.get("artifact_budget"), "artifact_budget")
+    for key in (
+        "complete_distribution_bytes_ceiling",
+        "incremental_distribution_bytes_ceiling",
+        "shader_count_increment_ceiling",
+        "peak_engine_committed_gpu_bytes_ceiling",
+        "process_start_to_first_present_ms_ceiling",
+    ):
+        if key not in budget:
+            raise ExperimentError(f"artifact_budget.{key} is required")
+    for key, frozen in (
+        ("complete_distribution_bytes_ceiling", COMPLETE_DISTRIBUTION_CEILING_BYTES),
+        ("peak_engine_committed_gpu_bytes_ceiling", PEAK_ENGINE_COMMITTED_GPU_BYTES),
+        ("process_start_to_first_present_ms_ceiling", PROCESS_START_TO_FIRST_PRESENT_MS),
+    ):
+        if _number(budget.get(key), f"artifact_budget.{key}") > frozen:
+            raise ExperimentError(f"experiment weakened artifact budget '{key}'")
+    profile_id = str(document.get("variant_profile_id"))
+    if profile_id in (MESH_PROFILE_ID, RAY_QUERY_PROFILE_ID):
+        profile_budget = int(profile_definition(profile_id)["incremental_budget_bytes"])
+        if _number(
+            guardrails.get("incremental_distribution_bytes_ceiling"),
+            "guardrails.incremental_distribution_bytes_ceiling",
+        ) > profile_budget:
+            raise ExperimentError(
+                "experiment guardrail incremental byte budget exceeds the frozen profile budget"
+            )
+        if _number(
+            guardrails.get("incremental_distribution_bytes_ceiling"),
+            "guardrails.incremental_distribution_bytes_ceiling",
+        ) > _number(
+            budget.get("incremental_distribution_bytes_ceiling"),
+            "artifact_budget.incremental_distribution_bytes_ceiling",
+        ):
+            raise ExperimentError(
+                "experiment guardrail incremental byte budget is weaker than its artifact budget"
+            )
+        if int(
+            guardrails.get("shader_count_increment_ceiling", -1)
+        ) > SHADER_COUNT_INCREMENT_MAX:
+            raise ExperimentError(
+                "experiment weakened the shader-count increment guardrail"
+            )
+        if int(guardrails.get("shader_count_increment_ceiling", -1)) > int(
+            budget.get("shader_count_increment_ceiling", -1)
+        ):
+            raise ExperimentError(
+                "experiment guardrail shader-count budget is weaker than its artifact budget"
+            )
 
     image = _mapping(criteria.get("image"), "criteria.image")
     if image.get("criterion") not in {"max_abs_channel_error_and_rmse", "perceptual_reference"}:
@@ -221,6 +287,21 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
             raise ExperimentError("experiment weakened the fixed-quality RMSE criterion")
     if image.get("fixed_quality") is not True:
         raise ExperimentError("optional experiments must compare fixed-quality images")
+    image_ticks = image.get("fixed_ticks")
+    reference = _mapping(document.get("reference"), "reference")
+    reference_ticks = reference.get("fixed_ticks")
+    if list(image_ticks or []) != list(REFERENCE_FIXED_TICKS):
+        raise ExperimentError(
+            "experiment must compare images at the frozen NW-07 fixed ticks"
+        )
+    if list(reference_ticks or []) != list(REFERENCE_FIXED_TICKS):
+        raise ExperimentError("experiment reference changed the frozen NW-07 fixed ticks")
+    if list(reference.get("loop_boundary_ticks") or []) != list(
+        REFERENCE_LOOP_BOUNDARY_TICKS
+    ):
+        raise ExperimentError(
+            "experiment reference changed the frozen NW-07 loop boundary ticks"
+        )
     if kind == "ray_query_reflection" and image.get("reference_kind") not in {
         "analytic_reference",
         "sdf_reference",
@@ -288,12 +369,24 @@ def _validate_pipeline(
         raise ExperimentError("the baseline must declare its shaders")
     for shader in baseline_shaders:
         entry = _mapping(shader, "baseline shader")
-        _string(entry.get("path"), "baseline shader path")
+        path = _string(entry.get("path"), "baseline shader path")
         target = _string(entry.get("target"), "baseline shader target")
         if target not in common_targets:
             raise ExperimentError(
                 f"baseline shader target '{target}' is not valid for the common profile"
             )
+        if not path.startswith(("shaders/nw06/", "shaders/nw11/")):
+            raise ExperimentError(
+                "baseline shaders must reuse the frozen NW-06 production shaders "
+                "or a common-profile shader under shaders/nw11/"
+            )
+    for key in ("shared_fragment_shader", "shared_vertex_shader"):
+        shared = pipeline.get(key)
+        if shared is None:
+            continue
+        shared_path = _string(shared, key)
+        if not shared_path.startswith(("shaders/nw06/", "shaders/nw11/")):
+            raise ExperimentError(f"{key} must reference a frozen NW-06/common shader")
 
 
 def validate_experiment(
@@ -341,6 +434,15 @@ def validate_experiment(
     frozen_budget = frozen_artifact_budget()
     for key in (
         "complete_distribution_bytes_ceiling",
+        "incremental_distribution_bytes_ceiling",
+        "shader_count_increment_ceiling",
+        "peak_engine_committed_gpu_bytes_ceiling",
+        "process_start_to_first_present_ms_ceiling",
+    ):
+        if key not in budget:
+            raise ExperimentError(f"artifact_budget.{key} is required")
+    for key in (
+        "complete_distribution_bytes_ceiling",
         "peak_engine_committed_gpu_bytes_ceiling",
         "process_start_to_first_present_ms_ceiling",
     ):
@@ -372,6 +474,14 @@ def validate_experiment(
             target = root / shader["path"]
             if not target.is_file():
                 raise ExperimentError(f"variant shader is unavailable: {shader['path']}")
+        for shader in document["pipeline"]["baseline_shaders"]:
+            target = root / shader["path"]
+            if not target.is_file():
+                raise ExperimentError(f"baseline shader is unavailable: {shader['path']}")
+        for key in ("shared_fragment_shader", "shared_vertex_shader"):
+            shared = document["pipeline"].get(key)
+            if shared and not (root / shared).is_file():
+                raise ExperimentError(f"shared shader is unavailable: {shared}")
 
     # The protocol block is normalized into the returned record so downstream
     # evidence evaluation cannot silently use a different sample policy.
@@ -586,10 +696,21 @@ def evaluate_experiment(
         )
     if variant["image"]["rmse"] > float(image["rmse"]):
         reject("NW11-IMAGE-RMSE", "variant fixed-quality RMSE exceeds the criterion")
-    if not variant["image"]["fixed_ticks"]:
+    expected_ticks = list(image["fixed_ticks"])
+    if list(variant["image"]["fixed_ticks"]) != expected_ticks:
         reject(
             "NW11-IMAGE-TICKS",
             "variant image results do not record the frozen fixed-tick coverage",
+        )
+    if list(baseline["image"]["fixed_ticks"]) != expected_ticks:
+        reject(
+            "NW11-IMAGE-TICKS",
+            "baseline image results do not record the frozen fixed-tick coverage",
+        )
+    if variant["image"]["reference_kind"] != image["reference_kind"]:
+        reject(
+            "NW11-IMAGE-REFERENCE",
+            "variant image result does not use the frozen experiment reference",
         )
 
     status = "accepted" if not reasons else "rejected"

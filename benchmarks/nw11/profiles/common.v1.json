@@ -42,13 +42,13 @@
       "architecture": "Ada",
       "device_tier": "desktop_ada_representative",
       "representative_model_metadata_only": "NVIDIA GeForce RTX 4060 Ti",
-      "status": "accepted"
+      "status": "pending"
     },
     {
       "architecture": "Blackwell",
       "device_tier": "desktop_blackwell_representative",
       "representative_model_metadata_only": "NVIDIA GeForce RTX 5070 Ti",
-      "status": "accepted"
+      "status": "pending"
     }
   ],
   "eligibility": {
@@ -57,7 +57,7 @@
     "silent_effect_substitution": false,
     "source": "queried_capabilities"
   },
-  "evidence_status": "verified",
+  "evidence_status": "pending",
   "fallback_artifact_id": null,
   "format": "nw11-capability-profile",
   "implementation_base": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b",

@@ -53,6 +53,8 @@
         "group_barrier": "GroupMemoryBarrierWithGroupSync"
       },
       "resource_lifetime": {
+        "consumes_nw06_generated_vertex_buffer": true,
+        "consumes_nw06_generated_index_buffer": true,
         "group_shared_payload_consumed_within_dispatch": true,
         "instance_buffer_outlives_frame": true,
         "fragment_stage_reuses_nw06_scene_ps": true

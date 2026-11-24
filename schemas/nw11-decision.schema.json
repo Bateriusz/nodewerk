@@ -13,6 +13,7 @@
     "fallback_artifact_id",
     "devices",
     "aggregate_status",
+    "fallback_tested",
     "satisfies_completion",
     "per_device_decision_isolation",
     "pending_is_not_pass",
@@ -73,6 +74,7 @@
     "aggregate_status": {
       "enum": ["accepted", "rejected", "failed", "pending", "unsupported"]
     },
+    "fallback_tested": { "type": "boolean" },
     "satisfies_completion": { "type": "boolean" },
     "per_device_decision_isolation": { "const": true },
     "pending_is_not_pass": { "const": true },

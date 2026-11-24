@@ -55,7 +55,19 @@ def _string(value: Any, label: str) -> str:
 
 def classify_measurement(record: Mapping[str, Any]) -> str:
     """Map a raw run record to one of the frozen NW-11 evidence statuses."""
-    eligibility = str(record.get("eligibility_status") or record.get("status") or "pending")
+    eligibility = str(record.get("eligibility_status") or record.get("status") or "")
+    if eligibility not in {
+        "eligible",
+        "measured",
+        "pending",
+        "unsupported",
+        "failed",
+        "accepted",
+        "rejected",
+    }:
+        raise EvidenceError(
+            f"run evidence status '{eligibility}' is not a known NW-11 status"
+        )
     if eligibility == "unsupported":
         return "unsupported"
     if eligibility == "failed":
@@ -73,7 +85,7 @@ def classify_measurement(record: Mapping[str, Any]) -> str:
         return "pending"
     if eligibility in {"accepted", "rejected"}:
         return eligibility
-    return "pending"
+    raise EvidenceError(f"run evidence status '{eligibility}' is malformed")
 
 
 def _artifact_hashes(manifest: Mapping[str, Any], roles: set[str]) -> dict[str, str]:
@@ -84,6 +96,132 @@ def _artifact_hashes(manifest: Mapping[str, Any], roles: set[str]) -> dict[str, 
     return result
 
 
+ROLE_ARTIFACT_ROLE = {
+    "baseline": "common_baseline",
+    "variant": "optional_variant",
+    "fallback": "fallback_common",
+}
+
+
+def _role_artifact(manifest: Mapping[str, Any], role: str) -> Mapping[str, Any]:
+    artifact_role = ROLE_ARTIFACT_ROLE.get(role)
+    if artifact_role is None:
+        raise EvidenceError(f"unknown measured run role '{role}'")
+    for artifact in manifest.get("artifacts", []):
+        if artifact.get("role") == artifact_role:
+            return artifact
+    raise EvidenceError(f"bundle has no artifact for measured role '{role}'")
+
+
+def _expected_distribution_bytes(manifest: Mapping[str, Any], role: str) -> int:
+    accounting = _mapping(manifest.get("accounting"), "bundle.accounting")
+    key = {
+        "baseline": "baseline_distribution_bytes",
+        "variant": "variant_distribution_bytes",
+        "fallback": "fallback_distribution_bytes",
+    }.get(role)
+    if key is None or key not in accounting:
+        raise EvidenceError(f"bundle accounting has no distribution bytes for '{role}'")
+    return int(accounting[key])
+
+
+def _expected_shader_ids(manifest: Mapping[str, Any], role: str) -> list[str]:
+    inventory = manifest.get("shader_inventory")
+    if not isinstance(inventory, Mapping):
+        raise EvidenceError("bundle has no shader inventory")
+    roles = inventory.get("roles")
+    if not isinstance(roles, Mapping) or role not in roles:
+        raise EvidenceError(f"bundle shader inventory has no '{role}' role")
+    ids = roles[role]
+    if not isinstance(ids, list) or not ids:
+        raise EvidenceError(f"bundle shader inventory role '{role}' is empty")
+    return sorted(str(item) for item in ids)
+
+
+def _validate_evidence_shape(record: Mapping[str, Any]) -> None:
+    if record.get("raw_per_sample_results_preserved") is not True:
+        raise EvidenceError(
+            "evidence must preserve raw per-sample results"
+        )
+    if record.get("operator_supplied_values") is not False:
+        raise EvidenceError(
+            "evidence must be produced without operator-supplied measured values"
+        )
+
+
+def _validate_evidence_schema(record: Mapping[str, Any], schema_root: Path) -> None:
+    schema_path = Path(schema_root) / "schemas" / "nw11-evidence.schema.json"
+    if not schema_path.is_file():
+        raise EvidenceError("the evidence schema is missing from the bundle")
+    try:
+        import schema_validator  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover - import guard
+        raise EvidenceError(f"the evidence schema validator is unavailable: {exc}") from exc
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    try:
+        schema_validator.validate_instance(record, schema, schema)
+    except Exception as exc:
+        raise EvidenceError(f"evidence failed schema validation: {exc}") from exc
+
+
+def _validate_run_measurement(
+    run: Mapping[str, Any],
+    *,
+    role: str,
+    manifest: Mapping[str, Any],
+    document: Mapping[str, Any],
+) -> None:
+    measurement = _mapping(run.get("measurement"), "run.measurement")
+    artifact = _role_artifact(manifest, role)
+    if run.get("artifact_path") != artifact.get("path"):
+        raise EvidenceError(
+            f"{role} run is not bound to the bundle's {artifact.get('role')} artifact"
+        )
+    expected_bytes = _expected_distribution_bytes(manifest, role)
+    if int(measurement.get("distribution_bytes", -1)) != expected_bytes:
+        raise EvidenceError(
+            f"{role} run distribution bytes disagree with the verified bundle manifest"
+        )
+    expected_shaders = _expected_shader_ids(manifest, role)
+    reported_ids = measurement.get("shader_ids")
+    if not isinstance(reported_ids, list):
+        raise EvidenceError(f"{role} run did not report its linked shader identities")
+    if sorted(str(item) for item in reported_ids) != expected_shaders:
+        raise EvidenceError(
+            f"{role} run shader identities disagree with the verified bundle inventory"
+        )
+    if int(measurement.get("shader_count", -1)) != len(expected_shaders):
+        raise EvidenceError(
+            f"{role} run shader count disagrees with the verified bundle inventory"
+        )
+    image = _mapping(measurement.get("image"), "run.measurement.image")
+    reference = _mapping(document.get("reference"), "experiment.reference")
+    criteria_image = _mapping(
+        _mapping(document.get("criteria"), "experiment.criteria").get("image"),
+        "experiment.criteria.image",
+    )
+    if list(image.get("fixed_ticks") or []) != list(reference.get("fixed_ticks") or []):
+        raise EvidenceError(f"{role} run image ticks are not the frozen reference ticks")
+    expected_kind = criteria_image.get("reference_kind")
+    if image.get("reference_kind") != expected_kind:
+        raise EvidenceError(
+            f"{role} run image reference kind does not match the frozen experiment"
+        )
+    if role in {"baseline", "fallback"}:
+        if float(image.get("max_abs_channel_error", 1.0)) > float(
+            criteria_image.get("max_abs_channel_error", 0.0)
+        ):
+            raise EvidenceError(
+                f"{role} run does not match the fixed-quality reference image"
+            )
+        if float(image.get("rmse", 1.0)) > float(
+            criteria_image.get("rmse", 0.0)
+        ):
+            raise EvidenceError(
+                f"{role} run RMSE exceeds the fixed-quality reference criterion"
+            )
+
+
 def validate_evidence(
     evidence: Mapping[str, Any],
     *,
@@ -91,8 +229,11 @@ def validate_evidence(
     experiment: Mapping[str, Any],
     bundle_manifest_sha256: str,
     expected_commit: str | None = None,
+    schema_root: Path | str | None = None,
 ) -> dict[str, Any]:
     record = _mapping(evidence, "evidence")
+    if schema_root is not None:
+        _validate_evidence_schema(record, Path(schema_root))
     if record.get("format") != EVIDENCE_FORMAT:
         raise EvidenceError("evidence format is not nw11-validation-evidence")
     if record.get("version") != EVIDENCE_VERSION:
@@ -150,9 +291,15 @@ def validate_evidence(
     runs = record.get("runs")
     if not isinstance(runs, list) or not runs:
         raise EvidenceError("evidence must preserve at least one device run record")
+    _validate_evidence_shape(record)
 
+    roles_seen: set[str] = set()
     for run in runs:
         entry = _mapping(run, "evidence run")
+        role = str(entry.get("role"))
+        if role not in ROLE_ARTIFACT_ROLE:
+            raise EvidenceError(f"run role '{role}' is not baseline, variant, or fallback")
+        roles_seen.add(role)
         status = classify_measurement(entry)
         if status not in EVIDENCE_STATUSES:
             raise EvidenceError("run evidence status is not a known NW-11 status")
@@ -172,8 +319,32 @@ def validate_evidence(
         environment_key = _string(entry.get("environment_key"), "run.environment_key")
         if not device_key or not environment_key:
             raise EvidenceError("run must identify both device and environment")
+        if eligibility.get("device_key") != device_key:
+            raise EvidenceError(
+                "run device key disagrees with the capability decision it was launched under"
+            )
+        if eligibility.get("environment_key") != environment_key:
+            raise EvidenceError(
+                "run environment key disagrees with the capability decision it was launched under"
+            )
         if entry.get("device_tier") not in DEVICE_TIERS:
             raise EvidenceError(f"unknown device tier '{entry.get('device_tier')}'")
+        if entry.get("measurement") is not None:
+            _validate_run_measurement(
+                entry, role=role, manifest=bundle_manifest, document=document
+            )
+        elif str(entry.get("status")) in {"eligible", "measured"} or status in {
+            "accepted",
+            "rejected",
+        }:
+            raise EvidenceError("measured run has no preserved measurement")
+
+    if "baseline" not in roles_seen or "variant" not in roles_seen:
+        raise EvidenceError("evidence must contain matched baseline and variant runs")
+    if "fallback" not in roles_seen:
+        raise EvidenceError(
+            "the separately exported common fallback artifact was never executed"
+        )
 
     return dict(record)
 
@@ -222,11 +393,19 @@ def compute_decisions(
     document = validate_experiment(experiment)
     runs = list(_mapping(evidence, "evidence").get("runs") or [])
     by_tier: dict[str, list[Mapping[str, Any]]] = {tier: [] for tier in DEVICE_TIERS}
+    tier_by_device: dict[str, str] = {}
     for run in runs:
         entry = _mapping(run, "evidence run")
         tier = str(entry.get("device_tier"))
         if tier not in by_tier:
             raise EvidenceError(f"run references unknown device tier '{tier}'")
+        device_key = _string(entry.get("device_key"), "run.device_key")
+        previous = tier_by_device.setdefault(device_key, tier)
+        if previous != tier:
+            raise EvidenceError(
+                "the same device key was attributed to two device tiers; "
+                "per-device decisions cannot be reused across tiers"
+            )
         by_tier[tier].append(entry)
 
     decisions: list[dict[str, Any]] = []
@@ -280,7 +459,10 @@ def _decide_group(
             "reason": "a matched baseline and variant pair is required",
             "metrics": None,
         }
-    statuses = {str(run.get("status")) for run in group}
+    statuses = {
+        "eligible" if str(run.get("status")) == "measured" else str(run.get("status"))
+        for run in group
+    }
     if "failed" in statuses:
         return {
             "device_key": device_key,
@@ -316,6 +498,7 @@ def _decide_group(
 
     baseline = next((run for run in group if run.get("role") == "baseline"), None)
     variant = next((run for run in group if run.get("role") == "variant"), None)
+    fallback = next((run for run in group if run.get("role") == "fallback"), None)
     if baseline is None or variant is None:
         return {
             "device_key": device_key,
@@ -324,6 +507,16 @@ def _decide_group(
             "satisfies_completion": False,
             "reason": "group does not contain one baseline and one variant run",
             "metrics": None,
+        }
+    if fallback is None:
+        return {
+            "device_key": device_key,
+            "environment_key": environment_key,
+            "status": "pending",
+            "satisfies_completion": False,
+            "reason": "the separately exported common fallback was not executed",
+            "metrics": None,
+            "fallback_tested": False,
         }
     try:
         evaluation = evaluate_experiment(
@@ -346,6 +539,7 @@ def _decide_group(
         else "; ".join(reason["message"] for reason in evaluation["reasons"])
     )
     evaluation["metrics"] = evaluation["aggregate"]
+    evaluation["fallback_tested"] = True
     return evaluation
 
 
@@ -356,6 +550,7 @@ def build_decision_document(
     bundle_manifest: Mapping[str, Any],
     bundle_manifest_sha256: str,
     expected_commit: str | None = None,
+    schema_root: Path | str | None = None,
 ) -> dict[str, Any]:
     validate_evidence(
         evidence,
@@ -363,6 +558,7 @@ def build_decision_document(
         experiment=experiment,
         bundle_manifest_sha256=bundle_manifest_sha256,
         expected_commit=expected_commit,
+        schema_root=schema_root,
     )
     computed = compute_decisions(evidence, experiment)
     decisions = computed["decisions"]
@@ -395,6 +591,8 @@ def build_decision_document(
         "evidence_file": evidence.get("evidence_file"),
         "devices": decisions,
         "aggregate_status": aggregate_status,
+        "fallback_tested": bool(decisions)
+        and all(item.get("fallback_tested") is True for item in decisions),
         "satisfies_completion": all(
             item["status"] == "accepted" for item in decisions
         ),
@@ -414,6 +612,7 @@ def build_decision_document(
             "evidence_file",
             "devices",
             "aggregate_status",
+            "fallback_tested",
             "satisfies_completion",
         )
     }
@@ -450,6 +649,10 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
             raise EvidenceError(
                 "completion requires accepted evidence for every qualified device"
             )
+        if record.get("fallback_tested") is not True:
+            raise EvidenceError(
+                "completion requires the separate common fallback to be executed"
+            )
     identity = {
         key: record[key]
         for key in (
@@ -462,6 +665,7 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
             "evidence_file",
             "devices",
             "aggregate_status",
+            "fallback_tested",
             "satisfies_completion",
         )
         if key in record

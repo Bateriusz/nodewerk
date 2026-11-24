@@ -16,7 +16,9 @@
     "fallback_artifact_id",
     "capability_profile_sha256",
     "artifact_hashes",
-    "runs"
+    "runs",
+    "raw_per_sample_results_preserved",
+    "operator_supplied_values"
   ],
   "properties": {
     "format": { "const": "nw11-validation-evidence" },
@@ -50,7 +52,7 @@
           "measurement"
         ],
         "properties": {
-          "role": { "enum": ["baseline", "variant"] },
+          "role": { "enum": ["baseline", "variant", "fallback"] },
           "device_tier": {
             "enum": [
               "desktop_ada_representative",
@@ -80,6 +82,7 @@
               "cold_initialization_ms",
               "distribution_bytes",
               "shader_count",
+              "shader_ids",
               "peak_engine_committed_gpu_bytes",
               "image"
             ],
@@ -90,6 +93,10 @@
               "cold_initialization_ms": { "type": "number", "minimum": 0 },
               "distribution_bytes": { "type": "integer", "minimum": 1 },
               "shader_count": { "type": "integer", "minimum": 0 },
+              "shader_ids": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
               "peak_engine_committed_gpu_bytes": { "type": "integer", "minimum": 0 },
               "image": {
                 "type": "object",

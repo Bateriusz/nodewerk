@@ -17,6 +17,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
 from nw11_contract import (  # type: ignore[import-not-found]
+    BASE_GRAPH,
+    BASE_GRAPH_SHA256,
     COMMON_PROFILE_ID,
     IMPLEMENTATION_BASE,
     TASK,
@@ -58,6 +60,7 @@ DISTRIBUTED_ROLES = {
     ROLE_OPTIONAL_VARIANT,
     ROLE_FALLBACK,
     ROLE_RUNTIME_DEPENDENCY,
+    ROLE_SHADER,
 }
 
 # Any dependency whose name matches these tokens is optional; it may never be
@@ -120,6 +123,11 @@ def validate_variant_sources(repo_root: Path | str) -> dict[str, Any]:
                 raise BundleError(
                     f"mesh shader '{source_path}' is missing a required output-count or group barrier"
                 )
+            if "NwVertices" not in text or "NwVertices.Load" not in text:
+                raise BundleError(
+                    f"mesh shader '{source_path}' must consume the graph-generated "
+                    "vertex buffer instead of reconstructing hard-coded geometry"
+                )
         if "RayQuery<" in text:
             for token in ("TraceRayInline", "Proceed", "CommittedStatus"):
                 if token not in text:
@@ -157,6 +165,37 @@ def _safe_relative(path: str) -> str:
     if candidate.is_absolute() or ".." in candidate.parts:
         raise BundleError(f"artifact path must be bundle-relative: {path}")
     return candidate.as_posix()
+
+
+def _schema_validator():
+    """Return the repository-owned zero-dependency schema validator.
+
+    The validator is copied into every bundle so verification never depends
+    on a repository checkout or an installed third-party package.
+    """
+    try:
+        import schema_validator as validator  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover - import guard
+        raise BundleError(
+            f"the bundle schema validator is unavailable: {exc}"
+        ) from exc
+    return validator
+
+
+def _validate_with_schema(
+    bundle_root: Path, relative_schema: str, document: Mapping[str, Any], label: str
+) -> None:
+    schema_path = bundle_root / relative_schema
+    if not schema_path.is_file():
+        raise BundleError(f"bundle schema is missing: {relative_schema}")
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BundleError(f"bundle schema '{relative_schema}' is malformed: {exc}") from exc
+    try:
+        _schema_validator().validate_instance(document, schema, schema)
+    except Exception as exc:
+        raise BundleError(f"bundle {label} failed schema validation: {exc}") from exc
 
 
 def make_entry(
@@ -223,17 +262,44 @@ def _accounting(
         for item in dependency_ledger
         if item.get("optional")
     )
-    variant_distribution = optional + optional_dependencies
-    incremental = variant_distribution - common
-    complete = max(common, variant_distribution)
+    common_shaders = sum(
+        item["distributed_bytes"]
+        for item in artifacts
+        if item["role"] == ROLE_SHADER and not item.get("optional")
+    )
+    # The variant distribution is the optional executable plus every optional
+    # shader and dependency byte that must ship with it.  Common/fallback
+    # shaders are part of the common distribution so incremental accounting
+    # reflects the actual payload added by the optional profile.
+    baseline_distribution = common + common_shaders
+    # Include the shared/common shader payloads the variant also needs so the
+    # reported variant and incremental distributions reflect every shipped
+    # byte.  Common shader bytes cancel in the incremental difference.
+    variant_distribution = (
+        optional + optional_shaders + common_shaders + optional_dependencies
+    )
+    incremental = variant_distribution - baseline_distribution
+    complete = max(baseline_distribution, variant_distribution)
+    fallback_distribution = fallback + common_shaders
     return {
         "common_distribution_bytes": common,
-        "baseline_distribution_bytes": common,
-        "fallback_distribution_bytes": fallback,
+        "baseline_distribution_bytes": baseline_distribution,
+        "fallback_distribution_bytes": fallback_distribution,
         "optional_distribution_bytes": optional,
         "optional_shader_bytes": optional_shaders,
+        "common_shader_bytes": common_shaders,
         "optional_dependency_bytes": optional_dependencies,
         "variant_distribution_bytes": variant_distribution,
+        "optional_shader_count": sum(
+            1
+            for item in artifacts
+            if item["role"] == ROLE_SHADER and item.get("optional")
+        ),
+        "common_shader_count": sum(
+            1
+            for item in artifacts
+            if item["role"] == ROLE_SHADER and not item.get("optional")
+        ),
         "incremental_distribution_bytes": incremental,
         "complete_distribution_bytes": complete,
         "total_bundle_bytes": sum(item["bytes"] for item in artifacts),
@@ -369,6 +435,10 @@ def _assert_optional_closure_separation(
     for item in artifacts:
         if item["role"] not in {ROLE_COMMON_BASELINE, ROLE_FALLBACK}:
             continue
+        if item.get("profile_id") != COMMON_PROFILE_ID:
+            raise BundleError(
+                f"common/fallback artifact '{item['path']}' must use the common profile"
+            )
         if item.get("optional"):
             raise BundleError(
                 f"common/fallback artifact '{item['path']}' must not be optional"
@@ -462,6 +532,7 @@ def verify_manifest_structure(record: Mapping[str, Any]) -> dict[str, Any]:
             "required_capabilities",
             "dependency_ledger",
             "accounting",
+            "shader_inventory",
         )
         if key in manifest
     }
@@ -519,22 +590,85 @@ def verify_bundle(
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
         capability.validate_profile(profile)
+        _validate_with_schema(
+            bundle_root,
+            "schemas/nw11-capability-profile.schema.json",
+            profile,
+            "capability profile",
+        )
     except Exception as exc:
         raise BundleError(f"bundle capability profile is invalid: {exc}") from exc
     if manifest["capability_profile"].get("requirements_digest") != profile.get(
         "requirements_digest"
     ):
         raise BundleError("bundle capability profile requirements digest is stale")
+    if manifest["capability_profile"].get("profile_id") != profile.get("profile_id"):
+        raise BundleError("bundle capability profile identity is stale")
+    if manifest.get("profile_id") != profile.get("profile_id"):
+        raise BundleError("bundle profile identity disagrees with the profile artifact")
+    common_profile_path = bundle_root / "manifests" / "common-capability-profile.json"
+    if not common_profile_path.is_file():
+        raise BundleError("bundle common capability profile is missing")
+    try:
+        common_profile = json.loads(common_profile_path.read_text(encoding="utf-8"))
+        capability.validate_profile(common_profile)
+        _validate_with_schema(
+            bundle_root,
+            "schemas/nw11-capability-profile.schema.json",
+            common_profile,
+            "common capability profile",
+        )
+    except Exception as exc:
+        raise BundleError(f"bundle common capability profile is invalid: {exc}") from exc
+    if common_profile.get("profile_id") != COMMON_PROFILE_ID:
+        raise BundleError("bundle common capability profile has the wrong identity")
     experiment_path = bundle_root / manifest["experiment_definition"]["path"]
     try:
         experiment_document = json.loads(experiment_path.read_text(encoding="utf-8"))
         experiment.validate_experiment(experiment_document)
+        _validate_with_schema(
+            bundle_root,
+            "schemas/nw11-experiment.schema.json",
+            experiment_document,
+            "experiment definition",
+        )
     except Exception as exc:
         raise BundleError(f"bundle experiment definition is invalid: {exc}") from exc
     if experiment_document.get("experiment_id") != manifest.get("experiment_id"):
         raise BundleError("bundle experiment identity disagrees with the definition")
     if experiment_document.get("variant_profile_id") != manifest.get("profile_id"):
         raise BundleError("bundle profile identity disagrees with the experiment definition")
+    graph_scene_path = bundle_root / "manifests" / "graph-scene.json"
+    if graph_scene_path.is_file():
+        try:
+            graph_scene = json.loads(graph_scene_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise BundleError(f"bundle graph-scene manifest is malformed: {exc}") from exc
+        if (
+            graph_scene.get("graph_path") != BASE_GRAPH
+            or graph_scene.get("graph_sha256") != BASE_GRAPH_SHA256
+        ):
+            raise BundleError(
+                "bundle graph-scene manifest does not match the frozen NW-07 graph"
+            )
+    recorded_budget = _mapping(
+        _mapping(manifest.get("accounting"), "accounting").get("artifact_budget"),
+        "accounting.artifact_budget",
+    )
+    experiment_budget = _mapping(
+        experiment_document.get("artifact_budget"), "experiment.artifact_budget"
+    )
+    for key in (
+        "complete_distribution_bytes_ceiling",
+        "incremental_distribution_bytes_ceiling",
+        "shader_count_increment_ceiling",
+    ):
+        if int(recorded_budget.get(key, -1)) > int(
+            experiment_budget.get(key, -1)
+        ):
+            raise BundleError(
+                f"bundle accounting weakened the experiment budget '{key}'"
+            )
 
     # Fail closed on unrecorded payload files anywhere in the bundle.  Raw
     # evidence is written outside the immutable bundle root by the launcher.

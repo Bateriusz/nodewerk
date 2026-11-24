@@ -61,6 +61,12 @@ TICKS_PER_SECOND = 48_000
 LOOP_SECONDS = 20
 FRAME_RATE_HZ = 60
 
+# Frozen fixed-tick coverage for the NW-07 correctness captures.  Both
+# experiments must compare images at exactly these ticks against the matching
+# NW-07 reference, so a runtime-loaded experiment cannot choose easier ticks.
+REFERENCE_FIXED_TICKS = (0, 240_000, 480_000, 720_000, 959_999)
+REFERENCE_LOOP_BOUNDARY_TICKS = (0, 960_000)
+
 # Frozen NW-07 evidence contracts.  NW-11 reuses these instead of defining a
 # parallel qualification system.
 PERF_CONTRACT_ID = "nw07_perf_ref_v1"
@@ -376,6 +382,8 @@ def frozen_workload() -> dict[str, Any]:
         "loop_seconds": LOOP_SECONDS,
         "frame_rate_hz": FRAME_RATE_HZ,
         "quality_profile_id": QUALITY_PROFILE_ID,
+        "reference_fixed_ticks": list(REFERENCE_FIXED_TICKS),
+        "reference_loop_boundary_ticks": list(REFERENCE_LOOP_BOUNDARY_TICKS),
     }
 
 
@@ -462,6 +470,8 @@ __all__ = [
     "TICKS_PER_SECOND",
     "LOOP_SECONDS",
     "FRAME_RATE_HZ",
+    "REFERENCE_FIXED_TICKS",
+    "REFERENCE_LOOP_BOUNDARY_TICKS",
     "PERF_CONTRACT_ID",
     "PERF_RUN_PROTOCOL",
     "STARTUP_PROTOCOL",

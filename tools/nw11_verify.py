@@ -102,6 +102,37 @@ def _validate_tracked(root: Path) -> dict[str, Any]:
     evidence_status = _load_json(root / contract.EVIDENCE_STATUS_PATH)
     if evidence_status.get("format") != "nw11-evidence-status":
         raise evidence.EvidenceError("evidence-status.v1.json has the wrong format")
+    common_profile = profiles[contract.COMMON_PROFILE_ID]
+    correctness = evidence_status.get("common_correctness") or {}
+    for device in common_profile["device_coverage"]:
+        tier = device["device_tier"]
+        if correctness.get(tier) != "verified" and device["status"] in {
+            "accepted",
+            "verified",
+        }:
+            raise evidence.EvidenceError(
+                "the common profile claims verified device coverage that the "
+                "tracked evidence status does not support"
+            )
+    if evidence_status.get("physical_evidence") != "verified" and common_profile.get(
+        "evidence_status"
+    ) in {"accepted", "verified"}:
+        raise evidence.EvidenceError(
+            "the common profile claims physical evidence that is still pending"
+        )
+    for experiment_id, document in decisions.items():
+        optional_profile_id = (
+            contract.MESH_PROFILE_ID
+            if experiment_id == contract.EXPERIMENT_MESH_ID
+            else contract.RAY_QUERY_PROFILE_ID
+        )
+        optional_profile = profiles[optional_profile_id]
+        aggregate = document.get("aggregate_status")
+        if optional_profile.get("evidence_status") == "accepted" and aggregate != "accepted":
+            raise evidence.EvidenceError(
+                f"optional profile '{optional_profile_id}' claims acceptance that "
+                "the per-device decisions do not support"
+            )
     payload = {
         "status": "verified",
         "task": contract.TASK,
@@ -148,6 +179,7 @@ def command_self_check(args: argparse.Namespace) -> int:
         experiment.ExperimentError,
         followup.FollowupMatrixError,
         evidence.EvidenceError,
+        bundle.BundleError,
         OSError,
     ) as exc:
         return _emit_error(EXIT_MALFORMED, "self-check", str(exc))
@@ -176,8 +208,14 @@ def command_capability(args: argparse.Namespace) -> int:
     except (capability.CapabilityProfileError, evidence.EvidenceError) as exc:
         return _emit_error(EXIT_MALFORMED, "capability", str(exc))
     _write_json(args.json_out, result)
-    if result["status"] in {"unsupported", "failed"}:
-        return EXIT_UNSUPPORTED if result["status"] == "unsupported" else EXIT_EXECUTION_FAILED
+    if result["status"] == "unsupported":
+        return EXIT_UNSUPPORTED
+    if result["status"] == "failed":
+        return EXIT_EXECUTION_FAILED
+    if result["status"] != "eligible":
+        # A required query that was not answered is pending coverage, never a
+        # pass and never permission to execute the optional artifact.
+        return EXIT_PENDING
     return EXIT_OK
 
 
@@ -197,6 +235,7 @@ def command_evidence(args: argparse.Namespace) -> int:
             bundle_manifest=manifest,
             bundle_manifest_sha256=manifest_sha,
             expected_commit=args.expected_commit,
+            schema_root=bundle_root,
         )
         evidence.validate_decision_document(decisions)
     except evidence.StaleEvidenceError as exc:

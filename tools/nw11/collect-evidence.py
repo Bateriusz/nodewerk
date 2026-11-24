@@ -23,6 +23,13 @@ sys.path.insert(0, str(THIS_DIR.parent))
 import nw11_bundle as bundle  # noqa: E402
 import nw11_contract as contract  # noqa: E402
 import nw11_evidence as evidence  # noqa: E402
+import nw11_experiment as experiment  # noqa: E402
+
+EXPECTED_ROLE_ARTIFACT = {
+    "baseline": "common_baseline",
+    "variant": "optional_variant",
+    "fallback": "fallback_common",
+}
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -38,6 +45,11 @@ def _load(path: Path) -> dict[str, Any]:
 def _merge_role_reports(role: str, reports: list[dict[str, Any]]) -> dict[str, Any]:
     if not reports:
         raise evidence.EvidenceError(f"no raw run reports for role '{role}'")
+    if len(reports) != contract.PERF_RUN_COUNT:
+        raise evidence.EvidenceError(
+            f"role '{role}' requires exactly {contract.PERF_RUN_COUNT} fresh-process "
+            f"reports, observed {len(reports)}"
+        )
     identity_keys = ("device_tier", "device_key", "environment_key", "status", "artifact_path")
     first = reports[0]
     for key in identity_keys:
@@ -60,9 +72,13 @@ def _merge_role_reports(role: str, reports: list[dict[str, Any]]) -> dict[str, A
                     f"{role} raw report has no measurement object"
                 )
             values = measurement.get(metric)
-            if not isinstance(values, list) or not values:
+            if (
+                not isinstance(values, list)
+                or len(values) < contract.MIN_RAW_SAMPLES_PER_RUN
+            ):
                 raise evidence.EvidenceError(
-                    f"{role} raw report has no raw '{metric}' samples"
+                    f"{role} raw report does not preserve at least "
+                    f"{contract.MIN_RAW_SAMPLES_PER_RUN} raw '{metric}' samples per run"
                 )
             samples.extend(values)
         merged_measurement[metric] = samples
@@ -77,6 +93,15 @@ def _merge_role_reports(role: str, reports: list[dict[str, Any]]) -> dict[str, A
                 f"matched {role} runs disagree on '{metric}'"
             )
         merged_measurement[metric] = values[0]
+    shader_ids = [report["measurement"].get("shader_ids") for report in reports]
+    if any(
+        not isinstance(value, list) or list(value) != list(shader_ids[0])
+        for value in shader_ids
+    ):
+        raise evidence.EvidenceError(
+            f"matched {role} runs disagree on linked shader identities"
+        )
+    merged_measurement["shader_ids"] = list(shader_ids[0])
     cold_initialization = [
         float(report["measurement"].get("cold_initialization_ms")) for report in reports
     ]
@@ -93,11 +118,48 @@ def _merge_role_reports(role: str, reports: list[dict[str, Any]]) -> dict[str, A
         "fixed_ticks": list(images[0].get("fixed_ticks") or []),
     }
     merged = {key: first.get(key) for key in identity_keys}
+    merged["role"] = role
     merged["capability_decision"] = capability_decisions[0]
     merged["measurement"] = merged_measurement
     merged["raw_report_files"] = [report["raw_report_file"] for report in reports]
     merged["process_run_count"] = len(reports)
     return merged
+
+
+def _expected_artifact(manifest: Mapping[str, Any], role: str) -> str:
+    artifact_role = EXPECTED_ROLE_ARTIFACT[role]
+    for artifact in manifest.get("artifacts", []):
+        if artifact.get("role") == artifact_role:
+            return str(artifact["path"])
+    raise evidence.EvidenceError(f"bundle lacks the '{artifact_role}' artifact")
+
+
+def _expected_distribution(manifest: Mapping[str, Any], role: str) -> int:
+    accounting = manifest["accounting"]
+    key = {
+        "baseline": "baseline_distribution_bytes",
+        "variant": "variant_distribution_bytes",
+        "fallback": "fallback_distribution_bytes",
+    }[role]
+    return int(accounting[key])
+
+
+def _expected_shader_ids(manifest: Mapping[str, Any], role: str) -> list[str]:
+    inventory = manifest.get("shader_inventory")
+    if not isinstance(inventory, Mapping):
+        raise evidence.EvidenceError("verified bundle has no shader inventory")
+    roles = inventory.get("roles")
+    if not isinstance(roles, Mapping) or role not in roles:
+        raise evidence.EvidenceError(
+            f"verified bundle shader inventory has no '{role}' role"
+        )
+    return sorted(str(item) for item in roles[role])
+
+
+def _load_optional_json(path: str | None, label: str) -> dict[str, Any] | None:
+    if not path:
+        return None
+    return _load(Path(path))
 
 
 def collect(
@@ -106,10 +168,43 @@ def collect(
     run_reports: list[Path | str],
     expected_commit: str | None,
     evidence_file: str | None = None,
+    eligibility_file: str | None = None,
+    common_eligibility_file: str | None = None,
+    image_result_file: str | None = None,
+    fallback_image_result_file: str | None = None,
+    device_tier: str | None = None,
 ) -> dict[str, Any]:
     root = Path(bundle_root)
     verified = bundle.verify_bundle(root, expected_commit=expected_commit)
     manifest = verified["manifest"]
+    experiment_document = _load(
+        root / str(manifest["experiment_definition"]["path"])
+    )
+    experiment.validate_experiment(experiment_document)
+    eligibility = _load_optional_json(eligibility_file, "eligibility")
+    common_eligibility = _load_optional_json(
+        common_eligibility_file, "common eligibility"
+    )
+    image_result = _load_optional_json(image_result_file, "image result")
+    fallback_image_result = _load_optional_json(
+        fallback_image_result_file, "fallback image result"
+    )
+    if eligibility is None or common_eligibility is None:
+        raise evidence.EvidenceError(
+            "collector requires the capability decisions produced before execution"
+        )
+    if image_result is None or fallback_image_result is None:
+        raise evidence.EvidenceError(
+            "collector requires the independent fixed-tick image comparisons"
+        )
+    if eligibility.get("status") != "eligible":
+        raise evidence.EvidenceError(
+            "optional capability decision is not eligible; no variant may be measured"
+        )
+    if common_eligibility.get("status") != "eligible":
+        raise evidence.EvidenceError(
+            "common capability decision is not eligible; baseline cannot be measured"
+        )
     manifest_sha = contract.sha256_bytes((root / bundle.MANIFEST_NAME).read_bytes())
     artifact_hashes = {
         artifact["path"]: artifact["sha256"]
@@ -117,29 +212,125 @@ def collect(
         if artifact["role"]
         in {"common_baseline", "optional_variant", "fallback_common"}
     }
-    by_role: dict[str, list[dict[str, Any]]] = {"baseline": [], "variant": []}
+    by_role: dict[str, list[dict[str, Any]]] = {
+        "baseline": [],
+        "variant": [],
+        "fallback": [],
+    }
     for path in run_reports:
         record = _load(Path(path))
         role = record.get("role")
-        if role not in {"baseline", "variant"}:
+        if role not in EXPECTED_ROLE_ARTIFACT:
             raise evidence.EvidenceError(
                 f"raw run report '{path}' has unsupported role '{role}'"
             )
         artifact_path = record.get("artifact_path")
-        if artifact_path not in artifact_hashes:
+        expected_artifact = _expected_artifact(manifest, role)
+        if artifact_path != expected_artifact or artifact_path not in artifact_hashes:
             raise evidence.EvidenceError(
-                f"raw run report '{path}' is not bound to a measured bundle artifact"
+                f"raw run report '{path}' is not bound to the bundle's "
+                f"'{EXPECTED_ROLE_ARTIFACT[role]}' artifact"
             )
         capability_decision = record.get("capability_decision")
         if not isinstance(capability_decision, Mapping):
             raise evidence.EvidenceError(
                 f"raw run report '{path}' has no capability decision"
             )
+        expected_decision = eligibility if role == "variant" else common_eligibility
+        if dict(capability_decision) != dict(expected_decision):
+            raise evidence.EvidenceError(
+                f"raw run report '{path}' capability decision does not match the "
+                "decision the launcher obtained from the probe"
+            )
+        measurement = record.get("measurement")
+        if not isinstance(measurement, Mapping):
+            raise evidence.EvidenceError(
+                f"raw run report '{path}' has no measurement object"
+            )
+        if int(measurement.get("distribution_bytes", -1)) != _expected_distribution(
+            manifest, role
+        ):
+            raise evidence.EvidenceError(
+                f"raw run report '{path}' distribution bytes disagree with the "
+                "verified bundle manifest"
+            )
+        expected_ids = _expected_shader_ids(manifest, role)
+        reported_ids = measurement.get("shader_ids")
+        if not isinstance(reported_ids, list) or sorted(
+            str(item) for item in reported_ids
+        ) != expected_ids:
+            raise evidence.EvidenceError(
+                f"raw run report '{path}' shader identities disagree with the "
+                "verified bundle inventory"
+            )
+        if int(measurement.get("shader_count", -1)) != len(expected_ids):
+            raise evidence.EvidenceError(
+                f"raw run report '{path}' shader count disagrees with the "
+                "verified bundle inventory"
+            )
+        if record.get("device_key") != expected_decision.get("device_key"):
+            raise evidence.EvidenceError(
+                f"raw run report '{path}' device key disagrees with the probe decision"
+            )
+        if record.get("environment_key") != expected_decision.get("environment_key"):
+            raise evidence.EvidenceError(
+                f"raw run report '{path}' environment key disagrees with the probe decision"
+            )
+        if device_tier is not None and record.get("device_tier") != device_tier:
+            raise evidence.EvidenceError(
+                f"raw run report '{path}' device tier disagrees with the "
+                "qualification tier declared by the launcher"
+            )
         record["raw_report_file"] = Path(path).name
         by_role[role].append(record)
-    runs = [_merge_role_reports(role, reports) for role, reports in by_role.items() if reports]
-    if not runs:
-        raise evidence.EvidenceError("no raw run reports were supplied")
+    for role in EXPECTED_ROLE_ARTIFACT:
+        if not by_role[role]:
+            raise evidence.EvidenceError(
+                f"no raw run reports for required role '{role}'"
+            )
+    runs = [_merge_role_reports(role, reports) for role, reports in by_role.items()]
+    if image_result is not None:
+        criteria = experiment_document["criteria"]
+        expected_kind = criteria["image"]["reference_kind"]
+        expected_ticks = list(criteria["image"]["fixed_ticks"])
+        if image_result.get("reference_kind") != expected_kind:
+            raise evidence.EvidenceError(
+                "independent image comparison used the wrong reference kind"
+            )
+        if list(image_result.get("fixed_ticks") or []) != expected_ticks:
+            raise evidence.EvidenceError(
+                "independent image comparison did not cover the frozen fixed ticks"
+            )
+        variant_run = next(run for run in runs if run["role"] == "variant")
+        variant_run["measurement"]["image"] = {
+            "max_abs_channel_error": float(
+                image_result["max_abs_channel_error"]
+            ),
+            "rmse": float(image_result["rmse"]),
+            "reference_kind": expected_kind,
+            "fixed_ticks": expected_ticks,
+        }
+    if fallback_image_result is not None:
+        criteria = experiment_document["criteria"]
+        expected_kind = criteria["image"]["reference_kind"]
+        expected_ticks = list(criteria["image"]["fixed_ticks"])
+        if fallback_image_result.get("reference_kind") != expected_kind:
+            raise evidence.EvidenceError(
+                "fallback image comparison used the wrong reference kind"
+            )
+        if list(fallback_image_result.get("fixed_ticks") or []) != expected_ticks:
+            raise evidence.EvidenceError(
+                "fallback image comparison did not cover the frozen fixed ticks"
+            )
+        fallback_run = next(run for run in runs if run["role"] == "fallback")
+        fallback_run["measurement"]["image"] = {
+            "max_abs_channel_error": float(
+                fallback_image_result["max_abs_channel_error"]
+            ),
+            "rmse": float(fallback_image_result["rmse"]),
+            "reference_kind": expected_kind,
+            "fixed_ticks": expected_ticks,
+        }
     return {
         "format": evidence.EVIDENCE_FORMAT,
         "version": evidence.EVIDENCE_VERSION,
@@ -168,6 +359,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-report", action="append", default=[])
     parser.add_argument("--run-reports", nargs="*", default=[])
     parser.add_argument("--evidence-name")
+    parser.add_argument("--eligibility")
+    parser.add_argument("--common-eligibility")
+    parser.add_argument("--image-result")
+    parser.add_argument("--fallback-image-result")
+    parser.add_argument("--device-tier")
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     reports = list(args.run_report) + list(args.run_reports)
@@ -177,6 +373,11 @@ def main(argv: list[str] | None = None) -> int:
             run_reports=reports,
             expected_commit=args.expected_commit,
             evidence_file=args.evidence_name,
+            eligibility_file=args.eligibility,
+            common_eligibility_file=args.common_eligibility,
+            image_result_file=args.image_result,
+            fallback_image_result_file=args.fallback_image_result,
+            device_tier=args.device_tier,
         )
     except (bundle.BundleError, evidence.EvidenceError) as exc:
         print(f"[NW11-COLLECT-ERR] {exc}", file=sys.stderr)

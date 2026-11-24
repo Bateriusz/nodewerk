@@ -6,33 +6,38 @@
     Runs entirely from an immutable validation bundle.  It verifies bundle
     identities and hashes before touching measured artifacts, records the
     actual adapter/driver/OS and the queried D3D12 capability snapshot, decides
-    optional-profile eligibility from those queries, executes matched
-    common/baseline and eligible variant runs under identical frozen settings,
-    preserves raw results, and invokes the repository-owned verifier before
-    reporting anything as verified.
+    common and optional-profile eligibility from those queries, executes the
+    common/baseline, the eligible optional variant, and the separately exported
+    common fallback under identical frozen settings, compares fixed-tick
+    captures independently, preserves raw results, and invokes the
+    repository-owned verifier before reporting anything as verified.
 
-    Capability absence exits 3 and is reported as unsupported.  Initialization
-    or execution failures exit 4.  Stale or malformed evidence exits 5/2.
-    Operators cannot supply measured values, hashes, capabilities, or a
-    verified state; all of those are produced from executed artifacts.
+    Capability absence exits 3; a required query that was not answered exits 11
+    (pending); initialization or execution failures exit 4.  No measured
+    artifact is launched when the optional profile is unsupported or pending,
+    and no effect is ever substituted.
 #>
 param(
     [string]$BundleRoot = "",
     [string]$ExpectedCommit = "",
     [string]$OutputDirectory = "",
+    [string]$DeviceTier = "",
     [switch]$VerifyOnly,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-# Do not write interpreter caches into the immutable bundle root; the bundle
-# verifier rejects unrecorded payload files.
 $env:PYTHONDONTWRITEBYTECODE = "1"
 
 if (-not $BundleRoot) {
     $BundleRoot = $PSScriptRoot
 }
+if (-not $DeviceTier) {
+    $DeviceTier = "$env:NW11_DEVICE_TIER"
+}
+
+$knownTiers = @("desktop_ada_representative", "desktop_blackwell_representative")
 
 function Write-Nw11Error {
     param([int]$Code, [string]$Kind, [string]$Message)
@@ -78,10 +83,17 @@ function Write-Nw11Json {
     $Value | ConvertTo-Json -Depth 64 | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
+function Get-ArtifactPath {
+    param($Manifest, [string]$Role)
+    $entry = $Manifest.artifacts | Where-Object { $_.role -eq $Role } | Select-Object -First 1
+    if ($null -eq $entry) {
+        throw "bundle has no artifact for role '$Role'"
+    }
+    return (Join-Path $root $entry.path)
+}
+
 $root = (Resolve-Path -LiteralPath $BundleRoot).Path
 if (-not $OutputDirectory) {
-    # Evidence must never be written into the immutable bundle root: the
-    # verifier intentionally rejects unrecorded payload files there.
     $bundleLeaf = Split-Path -Leaf $root
     $OutputDirectory = Join-Path (Split-Path -Parent $root) ("nw11-evidence-" + $bundleLeaf)
 }
@@ -111,10 +123,13 @@ if ($bundleCode -ne 0) {
 
 $manifest = Read-Nw11Json (Join-Path $root "bundle-manifest.json")
 $profilePath = Join-Path $root $manifest.capability_profile.path
+$commonProfilePath = Join-Path $root "manifests/common-capability-profile.json"
 $experimentPath = Join-Path $root $manifest.experiment_definition.path
-if (-not (Test-Path -LiteralPath $profilePath) -or -not (Test-Path -LiteralPath $experimentPath)) {
-    Write-Nw11Error 6 "bundle_identity" "Bundle capability or experiment definition is missing."
-    exit 6
+foreach ($requiredManifest in @($profilePath, $commonProfilePath, $experimentPath)) {
+    if (-not (Test-Path -LiteralPath $requiredManifest)) {
+        Write-Nw11Error 6 "bundle_identity" "A bundle capability or experiment manifest is missing."
+        exit 6
+    }
 }
 $experiment = Read-Nw11Json $experimentPath
 
@@ -145,7 +160,11 @@ if (-not (Test-Path -LiteralPath $probe)) {
 }
 
 $capabilitySnapshot = Join-Path $OutputDirectory "capability-snapshot.json"
-& $probe --json $capabilitySnapshot | Out-Null
+$probeArgs = @("--json", $capabilitySnapshot)
+if ($env:NW11_ADAPTER_LUID) {
+    $probeArgs += @("--adapter-luid", $env:NW11_ADAPTER_LUID)
+}
+& $probe @probeArgs | Out-Null
 $probeCode = $LASTEXITCODE
 if ($probeCode -eq 3) {
     Write-Nw11Error 3 "capability_probe" "The capability probe reported an unsupported platform or device."
@@ -156,6 +175,18 @@ if ($probeCode -ne 0 -or -not (Test-Path -LiteralPath $capabilitySnapshot)) {
     exit 4
 }
 
+$commonEligibilityPath = Join-Path $OutputDirectory "common-eligibility.json"
+$commonEligibilityCode = Invoke-Nw11Python -Python $python -Arguments @(
+    $verifier, "capability",
+    "--profile", $commonProfilePath,
+    "--observation", $capabilitySnapshot,
+    "--json-out", $commonEligibilityPath
+)
+if ($commonEligibilityCode -ne 0) {
+    Write-Nw11Error $commonEligibilityCode "common_eligibility" "The common profile is not eligible on this device."
+    exit $commonEligibilityCode
+}
+
 $eligibilityPath = Join-Path $OutputDirectory "eligibility.json"
 $eligibilityCode = Invoke-Nw11Python -Python $python -Arguments @(
     $verifier, "capability",
@@ -164,7 +195,7 @@ $eligibilityCode = Invoke-Nw11Python -Python $python -Arguments @(
     "--json-out", $eligibilityPath
 )
 if ($eligibilityCode -eq 3) {
-    Write-Nw11Error 3 "unsupported" "The queried D3D12 capabilities do not satisfy the optional profile."
+    Write-Nw11Error 3 "unsupported" "The queried D3D12 capabilities do not satisfy the optional profile; no optional artifact was executed."
     Write-Nw11Json (Join-Path $OutputDirectory "summary.json") ([ordered]@{
         status = "unsupported"
         profile_id = $manifest.profile_id
@@ -174,11 +205,22 @@ if ($eligibilityCode -eq 3) {
     })
     exit 3
 }
+if ($eligibilityCode -eq 11) {
+    Write-Nw11Error 11 "pending" "A required D3D12 capability query was not answered; the optional artifact must not run."
+    Write-Nw11Json (Join-Path $OutputDirectory "summary.json") ([ordered]@{
+        status = "pending"
+        profile_id = $manifest.profile_id
+        fallback_artifact_id = $manifest.fallback_artifact_id
+        completion_satisfied = $false
+    })
+    exit 11
+}
 if ($eligibilityCode -ne 0) {
     Write-Nw11Error $eligibilityCode "eligibility" "Eligibility evaluation failed."
     exit $eligibilityCode
 }
 $eligibility = Read-Nw11Json $eligibilityPath
+$commonEligibility = Read-Nw11Json $commonEligibilityPath
 
 if ($VerifyOnly) {
     Write-Nw11Json (Join-Path $OutputDirectory "summary.json") ([ordered]@{
@@ -190,13 +232,18 @@ if ($VerifyOnly) {
     exit 0
 }
 
-function Get-ArtifactPath {
-    param($Manifest, [string]$Role)
-    $entry = $Manifest.artifacts | Where-Object { $_.role -eq $Role } | Select-Object -First 1
-    if ($null -eq $entry) {
-        throw "bundle has no artifact for role '$Role'"
-    }
-    return (Join-Path $root $entry.path)
+if (-not $DeviceTier) {
+    Write-Nw11Error 11 "device_tier" "A qualified device tier is required; coverage stays pending."
+    Write-Nw11Json (Join-Path $OutputDirectory "summary.json") ([ordered]@{
+        status = "pending"
+        reason = "device_tier_not_declared"
+        completion_satisfied = $false
+    })
+    exit 11
+}
+if ($knownTiers -notcontains $DeviceTier) {
+    Write-Nw11Error 2 "device_tier" "Unknown device tier '$DeviceTier'."
+    exit 2
 }
 
 $baselineExe = Get-ArtifactPath $manifest "common_baseline"
@@ -219,19 +266,49 @@ if ($null -eq $execution) {
 }
 $arguments = @($execution.arguments)
 $runs = [int]$experiment.protocol.runs
+$deviceKey = [string]$eligibility.device_key
+$environmentKey = [string]$eligibility.environment_key
+$referenceKind = [string]$experiment.criteria.image.reference_kind
+
+$baselineIds = @($manifest.shader_inventory.roles.baseline)
+$variantIds = @($manifest.shader_inventory.roles.variant)
+$fallbackIds = @($manifest.shader_inventory.roles.fallback)
+$baselineBytes = [int]$manifest.accounting.baseline_distribution_bytes
+$variantBytes = [int]$manifest.accounting.variant_distribution_bytes
+$fallbackBytes = [int]$manifest.accounting.fallback_distribution_bytes
+
 $rawDirectory = Join-Path $OutputDirectory "raw"
-New-Item -ItemType Directory -Force -Path $rawDirectory | Out-Null
+$captureDirectory = Join-Path $OutputDirectory "captures"
+New-Item -ItemType Directory -Force -Path $rawDirectory, $captureDirectory | Out-Null
 $runReports = @()
 
 foreach ($pair in @(
-    @{ Role = "baseline"; Exe = $baselineExe },
-    @{ Role = "variant"; Exe = $variantExe }
+    @{ Role = "baseline"; Exe = $baselineExe; Artifact = "bin/common_baseline.exe"; Bytes = $baselineBytes; Ids = $baselineIds; Decision = $commonEligibilityPath },
+    @{ Role = "variant"; Exe = $variantExe; Artifact = "bin/optional_variant.exe"; Bytes = $variantBytes; Ids = $variantIds; Decision = $eligibilityPath },
+    @{ Role = "fallback"; Exe = $fallbackExe; Artifact = "bin/fallback_common.exe"; Bytes = $fallbackBytes; Ids = $fallbackIds; Decision = $commonEligibilityPath }
 )) {
     for ($index = 1; $index -le $runs; $index++) {
         $reportPath = Join-Path $rawDirectory ("{0}-run-{1}.json" -f $pair.Role, $index)
+        $captureRoot = Join-Path $captureDirectory ("{0}-run-{1}" -f $pair.Role, $index)
+        $captureManifest = Join-Path $captureRoot "captures.json"
         $resolved = @()
         foreach ($argument in $arguments) {
             $resolved += $argument.Replace("{output}", $reportPath)
+        }
+        $resolved += @(
+            "--role", $pair.Role,
+            "--artifact-path", $pair.Artifact,
+            "--device-tier", $DeviceTier,
+            "--device-key", $deviceKey,
+            "--environment-key", $environmentKey,
+            "--capability-decision", $pair.Decision,
+            "--reference-kind", $referenceKind,
+            "--distribution-bytes", [string]$pair.Bytes,
+            "--shader-ids", ($pair.Ids -join ";")
+        )
+        if ($index -eq $runs) {
+            New-Item -ItemType Directory -Force -Path $captureRoot | Out-Null
+            $resolved += @("--capture-dir", $captureRoot, "--capture-manifest", $captureManifest)
         }
         Write-Host ("[NW11] {0} run {1}/{2}: {3}" -f $pair.Role, $index, $runs, $pair.Exe)
         & $pair.Exe @resolved
@@ -248,9 +325,45 @@ foreach ($pair in @(
     }
 }
 
+$imageResult = Join-Path $OutputDirectory "image-result.json"
+$fallbackImageResult = Join-Path $OutputDirectory "fallback-image-result.json"
+$baselineCapture = Join-Path $captureDirectory ("baseline-run-{0}/captures.json" -f $runs)
+$variantCapture = Join-Path $captureDirectory ("variant-run-{0}/captures.json" -f $runs)
+$fallbackCapture = Join-Path $captureDirectory ("fallback-run-{0}/captures.json" -f $runs)
+$comparator = Join-Path $root "tools/nw11/compare-captures.py"
+
+$compareCode = Invoke-Nw11Python -Python $python -Arguments @(
+    $comparator, "--baseline-manifest", $baselineCapture,
+    "--variant-manifest", $variantCapture,
+    "--reference-kind", $referenceKind,
+    "--out", $imageResult
+)
+if ($compareCode -eq 2) {
+    Write-Nw11Error 2 "image_comparison" "The fixed-tick capture comparison is malformed."
+    exit 2
+}
+$fallbackCompareCode = Invoke-Nw11Python -Python $python -Arguments @(
+    $comparator, "--baseline-manifest", $baselineCapture,
+    "--variant-manifest", $fallbackCapture,
+    "--reference-kind", $referenceKind,
+    "--out", $fallbackImageResult
+)
+if ($fallbackCompareCode -eq 2) {
+    Write-Nw11Error 2 "image_comparison" "The fallback fixed-tick capture comparison is malformed."
+    exit 2
+}
+
 $evidencePath = Join-Path $OutputDirectory "evidence.json"
 $collector = Join-Path $root "tools/nw11/collect-evidence.py"
-$collectArgs = @($collector, "--bundle-root", $root, "--out", $evidencePath, "--evidence-name", "evidence.json")
+$collectArgs = @(
+    $collector, "--bundle-root", $root, "--out", $evidencePath,
+    "--evidence-name", "evidence.json",
+    "--eligibility", $eligibilityPath,
+    "--common-eligibility", $commonEligibilityPath,
+    "--image-result", $imageResult,
+    "--fallback-image-result", $fallbackImageResult,
+    "--device-tier", $DeviceTier
+)
 if ($ExpectedCommit) {
     $collectArgs += @("--expected-commit", $ExpectedCommit)
 }
@@ -285,8 +398,12 @@ $summary = [ordered]@{
     commit = $manifest.commit
     experiment_id = $manifest.experiment_id
     profile_id = $manifest.profile_id
+    device_tier = $DeviceTier
+    device_key = $deviceKey
+    environment_key = $environmentKey
     fallback_artifact_id = $manifest.fallback_artifact_id
     capability_snapshot = "capability-snapshot.json"
+    common_eligibility = "common-eligibility.json"
     eligibility = "eligibility.json"
     evidence = "evidence.json"
     decisions = "decisions.json"
@@ -301,6 +418,9 @@ Write-Nw11Json (Join-Path $OutputDirectory "summary.json") $summary
     "commit: $($summary.commit)",
     "experiment: $($summary.experiment_id)",
     "profile: $($summary.profile_id)",
+    "device_tier: $($summary.device_tier)",
+    "device_key: $($summary.device_key)",
+    "environment_key: $($summary.environment_key)",
     "fallback: $($summary.fallback_artifact_id)",
     "completion_satisfied: $($summary.completion_satisfied)",
     "exit_code: $($summary.exit_code)"

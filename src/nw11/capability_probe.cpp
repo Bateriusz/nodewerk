@@ -38,6 +38,10 @@ constexpr int kExitInitializationFailed = 4;
 struct Options {
     std::string json_path;
     bool self_check = false;
+    bool has_adapter_luid = false;
+    LUID adapter_luid{};
+    bool has_adapter_index = false;
+    UINT adapter_index = 0;
 };
 
 std::string JsonEscape(const std::string& input) {
@@ -71,8 +75,13 @@ std::string Narrow(const wchar_t* text) {
     if (bytes <= 1) {
         return {};
     }
-    std::string output(static_cast<size_t>(bytes - 1), '\0');
+    // WideCharToMultiByte writes `bytes` characters including the terminating
+    // NUL when cchWideChar is -1.  Allocate exactly that many characters and
+    // only then discard the NUL; passing a bytes-1 buffer here would write one
+    // byte past the string.
+    std::string output(static_cast<size_t>(bytes), '\0');
     WideCharToMultiByte(CP_UTF8, 0, text, -1, output.data(), bytes, nullptr, nullptr);
+    output.resize(static_cast<size_t>(bytes - 1));
     return output;
 }
 
@@ -267,6 +276,27 @@ bool ParseArguments(int argc, char** argv, Options& options) {
             options.json_path = argv[++index];
         } else if (std::strcmp(argv[index], "--self-check") == 0) {
             options.self_check = true;
+        } else if (std::strcmp(argv[index], "--adapter-index") == 0) {
+            if (index + 1 >= argc) {
+                return false;
+            }
+            options.adapter_index =
+                static_cast<UINT>(std::strtoul(argv[++index], nullptr, 10));
+            options.has_adapter_index = true;
+        } else if (std::strcmp(argv[index], "--adapter-luid") == 0) {
+            if (index + 1 >= argc) {
+                return false;
+            }
+            const char* text = argv[++index];
+            unsigned long long high = 0;
+            unsigned long long low = 0;
+            if (std::sscanf(text, "%llx:%llx", &high, &low) != 2 &&
+                std::sscanf(text, "%llu:%llu", &high, &low) != 2) {
+                return false;
+            }
+            options.adapter_luid.HighPart = static_cast<LONG>(high);
+            options.adapter_luid.LowPart = static_cast<DWORD>(low);
+            options.has_adapter_luid = true;
         } else {
             return false;
         }
@@ -303,7 +333,9 @@ int main(int argc, char** argv) {
     Options options;
     if (!ParseArguments(argc, argv, options)) {
         std::fputs(
-            "[NW11-PROBE][exit_code=2] usage: nw11_capability_probe.exe [--json <path>] [--self-check]\n",
+            "[NW11-PROBE][exit_code=2] usage: nw11_capability_probe.exe "
+            "[--json <path>] [--adapter-index <n>] [--adapter-luid <high>:<low>] "
+            "[--self-check]\n",
             stderr);
         return kExitMalformedArgs;
     }
@@ -325,23 +357,73 @@ int main(int argc, char** argv) {
     }
 
     ComPtr<IDXGIAdapter1> adapter;
-    hr = factory->EnumAdapters1(0, &adapter);
-    if (FAILED(hr) || adapter == nullptr) {
+    std::vector<std::string> adapter_records;
+    DXGI_ADAPTER_DESC1 best_desc{};
+    bool have_best = false;
+    for (UINT index = 0;; ++index) {
+        ComPtr<IDXGIAdapter1> candidate;
+        hr = factory->EnumAdapters1(index, &candidate);
+        if (hr == DXGI_ERROR_NOT_FOUND) {
+            break;
+        }
+        if (FAILED(hr) || candidate == nullptr) {
+            continue;
+        }
+        DXGI_ADAPTER_DESC1 candidate_desc{};
+        if (FAILED(candidate->GetDesc1(&candidate_desc))) {
+            continue;
+        }
+        char record[1024] = {};
+        std::snprintf(
+            record,
+            sizeof(record),
+            "{\"index\": %u, \"adapter_name\": \"%s\", "
+            "\"vendor_id\": %u, \"device_id\": %u, "
+            "\"dedicated_video_memory_bytes\": %llu, \"software\": %s}",
+            index,
+            JsonEscape(Narrow(candidate_desc.Description)).c_str(),
+            candidate_desc.VendorId,
+            candidate_desc.DeviceId,
+            static_cast<unsigned long long>(candidate_desc.DedicatedVideoMemory),
+            (candidate_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0
+                ? "true"
+                : "false");
+        adapter_records.emplace_back(record);
+
+        bool selected = false;
+        if (options.has_adapter_luid) {
+            selected = candidate_desc.AdapterLuid.HighPart ==
+                           options.adapter_luid.HighPart &&
+                       candidate_desc.AdapterLuid.LowPart ==
+                           options.adapter_luid.LowPart;
+        } else if (options.has_adapter_index) {
+            selected = index == options.adapter_index;
+        } else {
+            // Default selection avoids an integrated GPU on multi-GPU
+            // validation hosts: choose the hardware adapter with the largest
+            // dedicated video memory.  Marketing names never decide this.
+            const bool software =
+                (candidate_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
+            selected =
+                !software &&
+                (!have_best ||
+                 candidate_desc.DedicatedVideoMemory >
+                     best_desc.DedicatedVideoMemory);
+        }
+        if (selected) {
+            adapter = candidate;
+            best_desc = candidate_desc;
+            have_best = true;
+        }
+    }
+    if (!have_best || adapter == nullptr) {
         WriteOutput(
             options.json_path,
             "{\"format\":\"nw11-capability-snapshot\",\"version\":1,\"status\":\"unsupported\","
-            "\"reason\":\"no DXGI adapter\"}");
+            "\"reason\":\"no matching hardware DXGI adapter\"}");
         return kExitUnsupported;
     }
-    DXGI_ADAPTER_DESC1 description{};
-    hr = adapter->GetDesc1(&description);
-    if (FAILED(hr)) {
-        WriteOutput(
-            options.json_path,
-            "{\"format\":\"nw11-capability-snapshot\",\"version\":1,\"status\":\"unsupported\","
-            "\"reason\":\"GetDesc1 failed\"}");
-        return kExitUnsupported;
-    }
+    DXGI_ADAPTER_DESC1 description = best_desc;
 
     ComPtr<ID3D12Device> device;
     hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device));
@@ -398,6 +480,14 @@ int main(int argc, char** argv) {
     payload += "  \"format\": \"nw11-capability-snapshot\",\n";
     payload += "  \"version\": 1,\n";
     payload += "  \"status\": \"ok\",\n";
+    payload += "  \"adapters\": [";
+    for (size_t index = 0; index < adapter_records.size(); ++index) {
+        if (index != 0) {
+            payload += ", ";
+        }
+        payload += adapter_records[index];
+    }
+    payload += "],\n";
     payload += "  \"adapter\": {\n";
     payload += "    \"vendor_id\": " + JsonNumber(description.VendorId) + ",\n";
     payload += "    \"device_id\": " + JsonNumber(description.DeviceId) + ",\n";
