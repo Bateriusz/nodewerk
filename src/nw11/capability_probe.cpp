@@ -455,8 +455,9 @@ int main(int argc, char** argv) {
     levels.NumFeatureLevels = static_cast<UINT>(sizeof(requested_levels) / sizeof(requested_levels[0]));
     levels.pFeatureLevelsRequested = requested_levels;
     D3D_FEATURE_LEVEL feature_level = D3D_FEATURE_LEVEL_11_0;
-    if (SUCCEEDED(device->CheckFeatureSupport(
-            D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels)))) {
+    const bool has_feature_level = SUCCEEDED(device->CheckFeatureSupport(
+            D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels)));
+    if (has_feature_level) {
         feature_level = levels.MaxSupportedFeatureLevel;
     }
 
@@ -528,26 +529,17 @@ int main(int argc, char** argv) {
     payload += "\n";
     payload += "  },\n";
     payload += "  \"features\": {\n";
-    payload += "    \"d3d_feature_level\": \"" + std::string(FeatureLevelName(feature_level)) + "\",\n";
-    payload += "    \"resource_binding_tier\": \"" +
-               std::string(has_options ? BindingTierName(feature_options.ResourceBindingTier)
-                                       : "D3D12_RESOURCE_BINDING_TIER_UNSUPPORTED") +
-               "\",\n";
-    payload += "    \"resource_heap_tier\": \"" +
-               std::string(has_options ? HeapTierName(feature_options.ResourceHeapTier)
-                                       : "D3D12_RESOURCE_HEAP_TIER_UNSUPPORTED") +
-               "\",\n";
-    payload += "    \"highest_shader_model\": \"" + shader_model_name + "\",\n";
-    payload += "    \"highest_shader_model_mesh\": \"" + shader_model_name + "\",\n";
-    payload += "    \"highest_shader_model_ray\": \"" + shader_model_name + "\",\n";
-    payload += "    \"mesh_shader_tier\": \"" +
-               std::string(has_options7 ? MeshTierName(options7.MeshShaderTier)
-                                        : "D3D12_MESH_SHADER_TIER_NOT_SUPPORTED") +
-               "\",\n";
-    payload += "    \"raytracing_tier\": \"" +
-               std::string(has_options5 ? RaytracingTierName(options5.RaytracingTier)
-                                        : "D3D12_RAYTRACING_TIER_NOT_SUPPORTED") +
-               "\"\n";
+    const auto queried = [](bool success, const char* value) -> std::string {
+        return success ? "\"" + std::string(value) + "\"" : "null";
+    };
+    payload += "    \"d3d_feature_level\": " + queried(has_feature_level, FeatureLevelName(feature_level)) + ",\n";
+    payload += "    \"resource_binding_tier\": " + queried(has_options, BindingTierName(feature_options.ResourceBindingTier)) + ",\n";
+    payload += "    \"resource_heap_tier\": " + queried(has_options, HeapTierName(feature_options.ResourceHeapTier)) + ",\n";
+    payload += "    \"highest_shader_model\": " + queried(has_shader_model, shader_model_name.c_str()) + ",\n";
+    payload += "    \"highest_shader_model_mesh\": " + queried(has_shader_model, shader_model_name.c_str()) + ",\n";
+    payload += "    \"highest_shader_model_ray\": " + queried(has_shader_model, shader_model_name.c_str()) + ",\n";
+    payload += "    \"mesh_shader_tier\": " + queried(has_options7, MeshTierName(options7.MeshShaderTier)) + ",\n";
+    payload += "    \"raytracing_tier\": " + queried(has_options5, RaytracingTierName(options5.RaytracingTier)) + "\n";
     payload += "  },\n";
     payload += "  \"initialization\": {\"status\": \"ok\", \"stage\": \"device_and_capability_query\"}\n";
     payload += "}\n";

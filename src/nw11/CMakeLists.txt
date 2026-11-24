@@ -185,7 +185,10 @@ target_include_directories(nw11_production_runtime PUBLIC
     "${NW11_REPO_ROOT}/src" "${NW11_REPO_ROOT}/src/player"
     "${NW11_REPO_ROOT}/src/platform" "${NW11_GENERATED_DIR}" "${NW11_SHADER_DIR}")
 target_compile_features(nw11_production_runtime PUBLIC cxx_std_20)
-target_compile_definitions(nw11_production_runtime PUBLIC NW_PROFILE_DEV=1
+target_compile_definitions(nw11_production_runtime PUBLIC
+    WIN32_LEAN_AND_MEAN NOMINMAX
+    NW10_COMPACT_PACKAGE=0
+    NW_PROFILE_DEV=1
     NW05_FROZEN_EMBEDDED_SPECIALIZATION=1
     NW05_COMPILE_PROCEDURAL_TEXTURE_UPLOAD=0
     NW05_COMPILE_PROCEDURAL_TEXTURE_R8=0

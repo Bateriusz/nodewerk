@@ -1649,3 +1649,14 @@ def test_nw11_same_device_key_cannot_span_device_tiers(tmp_path: Path) -> None:
     evidence_document = _evidence(root, manifest, document, runs)
     with pytest.raises(evidence.EvidenceError, match="two device tiers"):
         evidence.compute_decisions(evidence_document, document)
+
+
+def test_nw11_production_windows_runtime_preserves_platform_definitions() -> None:
+    cmake = (REPO_ROOT / "src/nw11/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "target_compile_definitions(nw11_production_runtime PUBLIC" in cmake
+    assert "WIN32_LEAN_AND_MEAN NOMINMAX" in cmake
+    assert "NW10_COMPACT_PACKAGE=0" in cmake
+    probe = (REPO_ROOT / "src/nw11/capability_probe.cpp").read_text(encoding="utf-8")
+    assert 'queried(has_options7, MeshTierName' in probe
+    assert 'queried(has_options5, RaytracingTierName' in probe
+    assert ' : "null";' in probe
