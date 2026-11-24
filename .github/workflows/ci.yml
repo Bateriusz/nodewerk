@@ -186,45 +186,61 @@ jobs:
           pwsh ./tools/nw01/run-build-checks.ps1
           -SummaryPath "$env:RUNNER_TEMP\nw01-build-checks.json"
 
-      - name: Verify real-PE NW-05 and NW-09 generated-player exports
+      - name: Build current-head runtime-smoke inputs without launching
         shell: pwsh
         run: |
           cmake --preset clang-cl-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build --preset clang-cl-release --target nw_procedural_image_player
+          cmake --build --preset clang-cl-release --target nw_procedural_image_player --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $template = "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
-          if (-not (Test-Path $template -PathType Leaf)) {
-            Write-Error "NW-05 procedural player template was not built: $template"
-            exit 1
-          }
-          $env:NW05_REAL_PLAYER_TEMPLATE = (Resolve-Path $template).Path
+
+          $root = Join-Path $env:RUNNER_TEMP "nw01-runtime-smoke-inputs"
+          $playerDir = Join-Path $root "player"
+          $dxcDir = Join-Path $root "dxc"
+          $nw05Dir = Join-Path $root "nw05"
+          $nw09Dir = Join-Path $root "nw09"
+          $examplesDir = Join-Path $root "examples"
+          New-Item -ItemType Directory -Force -Path $playerDir,$dxcDir,$nw05Dir,$nw09Dir | Out-Null
+
+          $template = (Resolve-Path "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe").Path
+          $env:NW05_REAL_PLAYER_TEMPLATE = $template
+          Copy-Item $template (Join-Path $playerDir "nw_procedural_image_player.exe") -Force
+
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          Copy-Item (Join-Path (Split-Path $dxc -Parent) "*") $dxcDir -Recurse -Force
+
+          $env:NW05_RUNTIME_BUNDLE_OUTPUT = $nw05Dir
           python -m pytest tests/test_nw05_real_export.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           $env:NW09_REQUIRE_REAL_PLAYER = "1"
+          $env:NW09_REAL_PLAYER_BUILD_OUTPUT = (Join-Path $nw09Dir "stateful.exe")
           python -m pytest -v tests/test_nw09_review_fixes.py::test_real_generated_stateful_player_launches_with_link_metadata
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build and smoke-test runnable NW-09 examples and Asteroid Tunnel
-        shell: pwsh
-        run: |
-          $template = "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
-          if (-not (Test-Path $template -PathType Leaf)) {
-            Write-Error "NW-09A generated-player template is unavailable: $template"
-            exit 1
-          }
-          $dxc = (Get-Command dxc -ErrorAction Stop).Source
-          $output = Join-Path $env:RUNNER_TEMP "nw09-examples"
-          python tools/nw09_ci_examples.py --player-template $template --output-dir $output --dxc $dxc
+          python tools/nw09_ci_examples.py --player-template $env:NW05_REAL_PLAYER_TEMPLATE --output-dir $examplesDir --dxc $dxc --skip-smoke-launch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Upload runnable NW-09 examples and Asteroid Tunnel
+          $manifestFiles = @()
+          foreach ($file in @(Get-ChildItem $root -File -Recurse | Sort-Object FullName)) {
+            $manifestFiles += [ordered]@{
+              path = [System.IO.Path]::GetRelativePath($root, $file.FullName)
+              sha256 = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            }
+          }
+          [ordered]@{
+            schema_version = 1
+            source_commit = (git rev-parse HEAD).Trim()
+            files = $manifestFiles
+          } | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $root "manifest.json")
+
+      - name: Upload current-head runtime-smoke inputs
         uses: actions/upload-artifact@v4
         with:
-          name: nw09-examples-${{ github.sha }}
-          path: ${{ runner.temp }}/nw09-examples/
+          name: nw01-runtime-smoke-inputs-${{ github.sha }}
+          path: ${{ runner.temp }}/nw01-runtime-smoke-inputs/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
       - name: Upload NW-01 build-check evidence
         if: always()
@@ -240,11 +256,87 @@ jobs:
             benchmarks/toolchain-manifest.v1.json
           if-no-files-found: warn
 
+  windows-runtime-smoke:
+    needs: [ci-impact, windows-reproducibility-and-fixtures]
+    if: needs.ci-impact.outputs.nw01 == 'true' && needs.windows-reproducibility-and-fixtures.result == 'success'
+    name: Windows 11 x64 Generated Player Runtime Smoke Gate
+    runs-on: windows-2025
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Download current-head runtime-smoke inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: nw01-runtime-smoke-inputs-${{ github.sha }}
+          path: ${{ runner.temp }}/nw01-runtime-smoke-inputs
+
+      - name: Verify transferred player and pinned DXC
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "nw01-runtime-smoke-inputs"
+          $manifestPath = Join-Path $root "manifest.json"
+          if (-not (Test-Path $manifestPath -PathType Leaf)) { throw "Runtime-smoke manifest is missing." }
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $checkout = (git rev-parse HEAD).Trim()
+          if (-not [string]::Equals([string]$manifest.source_commit, $checkout, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Runtime-smoke source_commit does not match the checked-out current head."
+          }
+          foreach ($entry in @($manifest.files)) {
+            $path = Join-Path $root ([string]$entry.path)
+            if (-not (Test-Path $path -PathType Leaf)) { throw "Transferred runtime-smoke file is missing: $($entry.path)" }
+            $actual = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
+            if ($actual -ne ([string]$entry.sha256).ToLowerInvariant()) {
+              throw "Transferred runtime-smoke hash mismatch: $($entry.path)"
+            }
+          }
+
+          Import-Module "$PWD/tools/nw01/Nw01.Windows.psm1" -Force
+          $contract = Get-NwToolchainContract -RepoRoot $PWD
+          $dxc = Join-Path $root "dxc/dxc.exe"
+          Assert-NwExactToolVersion -Tool "dxc" -Executable $dxc -Expected $contract.DxcVersion -Label "transferred runtime-smoke DXC" -RepoRoot $PWD
+
+          $player = Join-Path $root "player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $player -PathType Leaf)) { throw "Transferred player template is missing." }
+          "NW05_REAL_PLAYER_TEMPLATE=$player" | Out-File -FilePath $env:GITHUB_ENV -Append
+          (Split-Path $dxc -Parent) | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Run transferred NW-05 and NW-09 runtime behavior
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "nw01-runtime-smoke-inputs"
+          $env:NW05_RUNTIME_BUNDLE_INPUT = Join-Path $root "nw05"
+          python -m pytest tests/test_nw05_real_export.py::test_real_pe_export_is_byte_identical_in_clean_directories -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $env:NW09_REAL_PLAYER_RUNTIME_INPUT = Join-Path $root "nw09/stateful.exe"
+          python -m pytest -v tests/test_nw09_review_fixes.py::test_real_generated_stateful_player_launches_with_link_metadata
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          python tools/nw09_ci_examples.py --player-template (Join-Path $root "player/nw_procedural_image_player.exe") --output-dir (Join-Path $root "examples") --smoke-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload runnable NW-09 examples and Asteroid Tunnel
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw09-examples-${{ github.sha }}
+          path: ${{ runner.temp }}/nw01-runtime-smoke-inputs/examples/
+          if-no-files-found: error
+          retention-days: 14
+
   nw04-native-verification:
     needs: ci-impact
     if: needs.ci-impact.outputs.nw01 == 'true'
     name: NW-04 Native Player Lifecycle & D3D12 Validation (hosted WARP)
-    runs-on: windows-2022
+    runs-on: windows-2025
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
