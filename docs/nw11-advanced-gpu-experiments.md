@@ -412,3 +412,23 @@ NW-09 is required only for future temporal/stateful experiments; the two NW-11
 experiments are stateless and do not depend on it. NW-11 is independent of
 NW-10's 64 KiB result: it neither raises nor lowers that compact target, and
 the common distribution ceiling remains the frozen NW-07 256 KiB gate.
+
+
+### Frozen source isolation and budget-rejected validation bundles
+
+NW-11 generates its specialized translation unit from the original production
+`src/player/package_player.cpp` using a source-SHA- and context-checked overlay.
+NW-07 and NW-10 continue to compile their original frozen input; historical
+NW-10 reports and physical evidence are not rewritten. If the shared source
+changes later, the generator fails until the overlay is explicitly rebased.
+
+Bundle integrity and adoption are separate results. An oversized experimental
+measurement executable is retained with its full actual byte cost and
+`adoption_budget_status: rejected`; a verified bundle does not imply an
+accepted experiment. The 256 KiB complete-distribution and per-profile
+incremental ceilings remain unchanged and the measurement evaluator rejects
+any over-budget baseline, variant or fallback. This is intentionally
+conservative: the instrumented executable is counted in full, not estimated
+as a hypothetical smaller release executable. A size-optimized release
+specialization must be built and measured separately before adoption if the
+instrumented distribution exceeds the ceiling.

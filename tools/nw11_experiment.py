@@ -663,12 +663,12 @@ def evaluate_experiment(
             "NW11-CPU-REGRESSION",
             "variant p99 CPU submit time regressed against the matched baseline",
         )
-    if variant["distribution_bytes"] > int(
+    if max(baseline["distribution_bytes"], variant["distribution_bytes"]) > int(
         guardrails["complete_distribution_bytes_ceiling"]
     ):
         reject(
             "NW11-DISTRIBUTION-CEILING",
-            "variant complete distribution exceeds the preserved 256 KiB ceiling",
+            "baseline or variant complete distribution exceeds the preserved 256 KiB ceiling",
         )
     incremental_bytes = variant["distribution_bytes"] - baseline["distribution_bytes"]
     if incremental_bytes > int(

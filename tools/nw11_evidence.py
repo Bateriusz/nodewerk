@@ -550,6 +550,15 @@ def _decide_group(
         )
     except ExperimentError as exc:
         raise EvidenceError(f"invalid matched measurement: {exc}") from exc
+    if int(fallback["measurement"]["distribution_bytes"]) > int(
+        experiment["artifact_budget"]["complete_distribution_bytes_ceiling"]
+    ):
+        evaluation["reasons"].append({
+            "code": "NW11-FALLBACK-DISTRIBUTION-CEILING",
+            "message": "fallback complete distribution exceeds the preserved 256 KiB ceiling",
+        })
+        evaluation["status"] = "rejected"
+        evaluation["satisfies_completion"] = False
     evaluation["device_tier"] = None
     evaluation["reason"] = (
         "matched p99 GPU-time, end-to-end, distribution, and fixed-quality criteria passed"

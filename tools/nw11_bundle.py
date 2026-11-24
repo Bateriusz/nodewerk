@@ -294,9 +294,12 @@ def _accounting(
         optional + optional_shaders + common_shaders + optional_dependencies
     )
     incremental = variant_distribution - baseline_distribution
-    complete = max(baseline_distribution, variant_distribution)
     fallback_distribution = fallback + common_shaders
+    complete = max(baseline_distribution, variant_distribution, fallback_distribution)
+    within_complete = complete <= int(artifact_budget["complete_distribution_bytes_ceiling"])
+    within_incremental = incremental <= int(artifact_budget["incremental_distribution_bytes_ceiling"])
     return {
+        "adoption_budget_status": "within_budget" if within_complete and within_incremental else "rejected",
         "common_distribution_bytes": common,
         "baseline_distribution_bytes": baseline_distribution,
         "fallback_distribution_bytes": fallback_distribution,
@@ -377,10 +380,8 @@ def build_manifest(
         artifact_budget=artifact_budget,
         dependency_ledger=dependency_ledger,
     )
-    if not accounting["within_complete_ceiling"]:
-        raise BundleError("complete distribution exceeds the frozen artifact budget")
-    if not accounting["within_incremental_budget"]:
-        raise BundleError("incremental distribution exceeds the optional byte budget")
+    # A valid experiment may exceed its frozen budget. Preserve the actual
+    # bytes and explicit rejection; integrity verification is not adoption.
 
     identity = {
         "repository": repository,
@@ -427,7 +428,8 @@ def build_manifest(
             "queried D3D12 capabilities, executes common/baseline and eligible "
             "variants under identical declared settings, and runs the repository-"
             "owned verifier before reporting verified evidence. Capability absence "
-            "is unsupported, never a silent effect substitution."
+            "is unsupported, never a silent effect substitution. A verified bundle "
+            "may contain a budget-rejected experiment; it is not an adopted export."
         ),
         **identity,
     }
@@ -587,6 +589,9 @@ def verify_bundle(
         data = path.read_bytes()
         if len(data) != int(artifact.get("bytes", -1)):
             raise BundleError(f"bundle artifact size changed: {relative}")
+        expected_distributed = len(data) if artifact["role"] in DISTRIBUTED_ROLES else 0
+        if artifact.get("distributed_bytes") != expected_distributed:
+            raise BundleError(f"bundle distribution accounting changed: {relative}")
         if sha256_bytes(data) != artifact.get("sha256"):
             raise BundleError(f"bundle artifact hash changed: {relative}")
 
@@ -805,10 +810,8 @@ def verify_bundle(
         ],
         dependency_ledger=list(manifest.get("dependency_ledger") or []),
     )
-    if not accounting["within_complete_ceiling"]:
-        raise BundleError("complete distribution exceeds the frozen artifact budget")
-    if not accounting["within_incremental_budget"]:
-        raise BundleError("incremental distribution exceeds the optional byte budget")
+    # A valid experiment may exceed its frozen budget. Preserve the actual
+    # bytes and explicit rejection; integrity verification is not adoption.
     if accounting != manifest["accounting"]:
         raise BundleError("bundle accounting does not match recorded artifact bytes")
     return {

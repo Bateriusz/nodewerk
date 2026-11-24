@@ -1250,7 +1250,9 @@ def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
     assert "adapter_luid" in probe
     assert '"--adapter-luid"' in main
     assert "NW11_ADAPTER_LUID" in harness
-    production = (REPO_ROOT / "src/player/package_player.cpp").read_text(encoding="utf-8")
+    from nw11_specialize_player import specialize
+    production = specialize(REPO_ROOT / "src/player/package_player.cpp",
+        REPO_ROOT / "src/nw11/production/package_player.overlay.json")
     assert "NW11_ADAPTER_LUID" in production
     assert "adapter_desc.AdapterLuid" in production
     assert '$adapterLuid = [string]$adapterRecord.adapter_luid' in launcher
@@ -1443,7 +1445,9 @@ def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
     harness = (
         REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
     ).read_text(encoding="utf-8")
-    production = (REPO_ROOT / "src/player/package_player.cpp").read_text(encoding="utf-8")
+    from nw11_specialize_player import specialize
+    production = specialize(REPO_ROOT / "src/player/package_player.cpp",
+        REPO_ROOT / "src/nw11/production/package_player.overlay.json")
     extension = (REPO_ROOT / "src/nw11/production/nw11_production_extension.h").read_text(encoding="utf-8")
     assert "PackagePlayer player(config)" in harness
     assert "LoadEmbeddedPackage" in harness
@@ -1688,3 +1692,45 @@ def test_nw11_native_package_and_dxil_binding_fail_closed() -> None:
         inspect(image(template + payloads["nw11_deform_cs_dxil.dxil"]))
     with pytest.raises(ValueError):
         inspect(image(b"MZ"))
+
+
+def test_nw11_specialization_is_isolated_from_frozen_player(tmp_path: Path) -> None:
+    from nw11_specialize_player import specialize
+    import hashlib
+    source = REPO_ROOT / "src/player/package_player.cpp"
+    overlay = REPO_ROOT / "src/nw11/production/package_player.overlay.json"
+    original = source.read_text(encoding="utf-8")
+    result = specialize(source, overlay)
+    assert "NW11_PRODUCTION_EXPERIMENT" not in original
+    assert "NW11_PRODUCTION_EXPERIMENT" in result
+    # The generated translation unit reproduces the previously native-tested
+    # specialization, rather than silently replacing the common renderer.
+    assert hashlib.sha256(result.encode()).hexdigest() == "a7a86f3c8d07100c05980ae288425557a100144e0db048af6aa95b494b681889"
+    changed = tmp_path / "player.cpp"
+    changed.write_text(original + "\n// upstream change\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="rebase"):
+        specialize(changed, overlay)
+
+
+def test_nw11_oversize_bundle_is_verified_but_not_adoptable(tmp_path: Path) -> None:
+    files = _source_artifacts(tmp_path)
+    files["variant.exe"].write_bytes(b"MZ" + b"x" * 300_000)
+    root = tmp_path / "oversize"
+    manifest = build_bundle.build(
+        output_directory=root, experiment_id=contract.EXPERIMENT_MESH_ID,
+        commit=COMMIT, baseline_executable=files["baseline.exe"],
+        variant_executable=files["variant.exe"], fallback_executable=files["fallback.exe"],
+        capability_probe=files["probe.exe"], repo_root=REPO_ROOT,
+    )
+    accounting = manifest["accounting"]
+    assert accounting["complete_distribution_bytes"] > 262144
+    assert accounting["within_complete_ceiling"] is False
+    assert accounting["adoption_budget_status"] == "rejected"
+    assert bundle.verify_bundle(root, expected_commit=COMMIT)["accounting"] == accounting
+    result = experiment.evaluate_experiment(_experiment(), {
+        "device_key": "device", "environment_key": "environment",
+        "baseline": _measurement(gpu=10.0, distribution=accounting["baseline_distribution_bytes"]),
+        "variant": _measurement(gpu=7.5, distribution=accounting["variant_distribution_bytes"]),
+    }, device_key="device", environment_key="environment")
+    assert result["status"] == "rejected"
+    assert any(reason["code"] == "NW11-DISTRIBUTION-CEILING" for reason in result["reasons"])

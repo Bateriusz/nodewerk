@@ -78,7 +78,7 @@
     "tools/nw07_contract.py",
     "tools/nw07_export.py"
   ],
-  "build_inputs_digest": "sha256:v1:b9aeb722cd523c4a7b6bb7a1ae594374dcaa57d7c0b361bbc9e9452323bb83a6",
+  "build_inputs_digest": "sha256:v1:ae3057296c5d2eb4155b1ca094e15df2f266b1c85ec4f46b3d16987a5669f31d",
   "build_inputs_provenance": {
     "superseded_digests": [
       "sha256:v1:d9ad24057ae7c273ad4c757dafc5d3b54047fcb360b8845a6413136b78c232ab",
@@ -86,10 +86,9 @@
       "sha256:v1:8e050b388703e599c011eab83b9f9299034035939aec6e4f77f085eba06dba7c",
       "sha256:v1:ad8fa6d383f37232e824f75f7774dcdfb33dea4eca34416397640f5d89a0d744",
       "sha256:v1:fd452ecf2f54eb529fcfb75738bcd57b9c3478919a703f8d727d2bd04f3c8d81",
-      "sha256:v1:de1ad5c7a17ef8145c499d19afecfe62b6ce792a0703ca8d3f93bed81adbce6a",
-      "sha256:v1:ae3057296c5d2eb4155b1ca094e15df2f266b1c85ec4f46b3d16987a5669f31d"
+      "sha256:v1:de1ad5c7a17ef8145c499d19afecfe62b6ce792a0703ca8d3f93bed81adbce6a"
     ],
-    "reason": "The current digest preserves the existing NW-07 canonical graph, profile, quality settings, budgets, and evidence methodology while incorporating the NW-10 fix that makes an explicit release shader specialization survive the NW-05 fullscreen/selective-lowering path. The prior exporter path silently substituted the graph placeholder shader for the restricted NW-10 SDF intro; changing tools/nw05_export.py is therefore an implementation-correctness fix to a pinned build input, not a relaxation of any NW-07 contract. Superseded digests remain attributable to prior artifacts. The NW-10 revision adds an opt-in decoder-fuzz CMake target and a decoder-OFF canonical template path, which changes the pinned build input digest without changing the canonical production graph, quality profile, budgets, or evidence methodology. The Astra review fix replaces undefined self-range std::vector::insert behavior in the shipped compact decoder with resize plus explicit copy. Because src/package/nw_compact.cpp is a frozen NW-07 build input, the digest changes while the canonical graph, profile, budgets, dependency policy, and evidence methodology remain unchanged; the prior digest is retained as superseded provenance. NW-11 adds compile-time opt-in graphics specializations to PackagePlayer. The common configuration excludes every NW-11 hook. A separate native CI gate compares the actual canonical release EXE, package, manifest and PE imports against dc8edbaf; no historical hardware measurement is rewritten."
+    "reason": "The current digest preserves the existing NW-07 canonical graph, profile, quality settings, budgets, and evidence methodology while incorporating the NW-10 fix that makes an explicit release shader specialization survive the NW-05 fullscreen/selective-lowering path. The prior exporter path silently substituted the graph placeholder shader for the restricted NW-10 SDF intro; changing tools/nw05_export.py is therefore an implementation-correctness fix to a pinned build input, not a relaxation of any NW-07 contract. Superseded digests remain attributable to prior artifacts. The NW-10 revision adds an opt-in decoder-fuzz CMake target and a decoder-OFF canonical template path, which changes the pinned build input digest without changing the canonical production graph, quality profile, budgets, or evidence methodology. The Astra review fix replaces undefined self-range std::vector::insert behavior in the shipped compact decoder with resize plus explicit copy. Because src/package/nw_compact.cpp is a frozen NW-07 build input, the digest changes while the canonical graph, profile, budgets, dependency policy, and evidence methodology remain unchanged; the prior digest is retained as superseded provenance."
   },
   "loop": {
     "looping": true,
