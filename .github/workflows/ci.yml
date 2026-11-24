@@ -87,7 +87,7 @@ jobs:
     needs: ci-impact
     if: needs.ci-impact.outputs.nw01 == 'true'
     name: Windows 11 x64 Build, Reproducibility & Concrete Check Gate
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -244,7 +244,7 @@ jobs:
     needs: ci-impact
     if: needs.ci-impact.outputs.nw01 == 'true'
     name: NW-04 Native Player Lifecycle & D3D12 Validation (hosted WARP)
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -18,6 +18,8 @@ GitHub Actions caches only immutable downloaded payloads, not generated products
 
 Visual Studio provisioning no longer requests `--includeRecommended`. It probes the explicit repository-owned component list with `vswhere`, asks the installer only for missing explicit components when possible, and still fails unless the exact pinned MSVC/linker/SDK environment verifies afterwards.
 
+Hosted heavy Windows jobs pin `windows-2022` rather than the moving `windows-latest` alias. The Windows 2022 image already carries Visual Studio 2022, the x64 VC tools workload component, and Windows SDK 10.0.26100.0, so the bootstrap normally needs to add only the repository-pinned legacy MSVC 14.40 component. Exact compiler, linker, SDK and portable-tool verification remains mandatory, so the runner image is an optimization input rather than a trust boundary.
+
 ## NW-10 in-job reuse
 
 Correctness transfer preparation reuses the already-built package for the second hardware tier of the same packaging mode. Reuse is permitted only after format, packaging mode, common-artifact identity, executable hash, and file-manifest hashes are verified. The tier-specific transfer metadata and manifest are regenerated. Packed and unpacked modes still build independently, and no NW-07/NW-01 clean-build reproducibility check is deduplicated.

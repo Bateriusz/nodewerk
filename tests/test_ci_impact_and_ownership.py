@@ -146,6 +146,8 @@ def test_workflows_route_heavy_pr_jobs_and_cache_portable_payloads():
         assert "tools/ci/changed_scope.py" in workflow
         assert f"needs.ci-impact.outputs.{scope}" in workflow
         assert job + ":" in workflow
+        assert "runs-on: windows-latest" not in workflow
+        assert "runs-on: windows-2022" in workflow
         if job.startswith("windows"):
             assert "actions/cache@v4" in workflow
             assert "portable_cache_key.py" in workflow

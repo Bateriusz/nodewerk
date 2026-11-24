@@ -48,7 +48,7 @@ jobs:
     needs: ci-impact
     if: needs.ci-impact.outputs.nw08a == 'true'
     name: Windows x64 canonical NW-07 BuildChecks and real-player geometry
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4

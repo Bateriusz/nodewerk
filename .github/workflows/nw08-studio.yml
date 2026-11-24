@@ -77,7 +77,7 @@ jobs:
     needs: ci-impact
     if: needs.ci-impact.outputs.nw08 == 'true'
     name: Windows 11 x64 GUI/CLI, preview and device-recreation integration
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -245,7 +245,7 @@ jobs:
     needs: ci-impact
     name: Windows 11 x64 real preview (opt-in hardware host)
     if: vars.NW08_REAL_PREVIEW == '1' && needs.ci-impact.outputs.nw08 == 'true'
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       NW08_PREVIEW_EXECUTABLE: ${{ vars.NW08_PREVIEW_EXECUTABLE }}
       NW08_PLAYER_TEMPLATE: ${{ vars.NW08_PLAYER_TEMPLATE }}

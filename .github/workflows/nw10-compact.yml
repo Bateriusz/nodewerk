@@ -140,7 +140,7 @@ jobs:
     needs: ci-impact
     if: needs.ci-impact.outputs.nw10 == 'true'
     name: Windows x64 compact export attempt
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

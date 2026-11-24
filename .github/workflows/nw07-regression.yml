@@ -113,7 +113,7 @@ jobs:
     needs: ci-impact
     name: Windows x64 release export and diagnostic sibling build
     if: github.event_name != 'schedule' && needs.ci-impact.outputs.nw07 == 'true'
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
