@@ -5,7 +5,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main, benchmark/NW-10A-base ]
+    branches: [ main ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -173,10 +173,11 @@ jobs:
         run: >-
           pwsh ./tools/nw01/bootstrap-windows.ps1
           -Ci
+          -SkipLlvm
           -ProvenancePath "$env:RUNNER_TEMP\nw10-bootstrap-provenance.json"
       - name: Export exact build environment
         shell: pwsh
-        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+        run: pwsh ./tools/nw01/enter-build-env.ps1 -ExportGitHubEnv -SkipLlvm
       - name: Configure release player template
         run: >-
           cmake --preset nw07-release

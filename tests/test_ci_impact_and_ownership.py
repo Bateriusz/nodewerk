@@ -115,6 +115,19 @@ def test_portable_cache_key_changes_when_source_identity_changes(tmp_path):
     assert "0" * 64 in second
 
 
+def test_nw10_windows_job_uses_msvc_only_bootstrap_profile():
+    workflow = (ROOT / ".github" / "workflows" / "nw10-compact.yml").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "tools" / "nw01" / "bootstrap-windows.ps1").read_text(encoding="utf-8")
+    env_script = (ROOT / "tools" / "nw01" / "enter-build-env.ps1").read_text(encoding="utf-8")
+    module = (ROOT / "tools" / "nw01" / "Nw01.Windows.psm1").read_text(encoding="utf-8")
+
+    assert workflow.count("-SkipLlvm") >= 2
+    assert "LLVM provisioning skipped for MSVC-only consumer" in bootstrap
+    assert "[switch]$SkipLlvm" in env_script
+    assert "-RequireLlvm:(-not $SkipLlvm)" in module
+    assert "cmake --preset nw07-release" in workflow
+
+
 def test_windows_bootstrap_cache_is_digest_verified_and_vs_install_is_minimal():
     bootstrap = (ROOT / "tools" / "nw01" / "bootstrap-windows.ps1").read_text(encoding="utf-8")
     assert "NW01_DOWNLOAD_CACHE" in bootstrap
