@@ -54,8 +54,8 @@ def _run_real_pe_runtime_checks(
     assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
     assert "NW05_FRAMES=1" in completed.stdout
     assert "NW05_PRESENTS=1" in completed.stdout
-    image_bytes = re.search(r"NW05_IMAGE_BYTES=(\\d+)", completed.stdout)
-    nonzero = re.search(r"NW05_IMAGE_NONZERO_BYTES=(\\d+)", completed.stdout)
+    image_bytes = re.search(r"NW05_IMAGE_BYTES=(\d+)", completed.stdout)
+    nonzero = re.search(r"NW05_IMAGE_NONZERO_BYTES=(\d+)", completed.stdout)
     image_hash = re.search(r"NW05_IMAGE_FNV64=([0-9a-f]{16})", completed.stdout)
     assert image_bytes is not None
     assert nonzero is not None
@@ -185,7 +185,7 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     payload = executable.read_bytes()
     assert payload[:2] == b"MZ"
     pe_offset = int.from_bytes(payload[0x3C:0x40], "little")
-    assert payload[pe_offset : pe_offset + 4] == b"PE\\x00\\x00"
+    assert payload[pe_offset : pe_offset + 4] == b"PE\x00\x00"
     assert common.executable_bytes == second.artifacts[nwp.COMMON_PROFILE_ID].executable_bytes
     assert first.report["provenance"]["player_template_sha256"] == hashlib.sha256(template.read_bytes()).hexdigest()
     template_bytes = template.read_bytes()
