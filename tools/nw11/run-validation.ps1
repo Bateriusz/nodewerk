@@ -57,13 +57,11 @@ function Resolve-Nw11Python {
     $runtimeKey = ([string]$Manifest.bundle_id).Replace(":", "-")
     $runtimeRoot = Join-Path $env:TEMP ("nodewerk-nw11-python-" + $runtimeKey)
     $pythonExe = Join-Path $runtimeRoot "python.exe"
-    if (-not (Test-Path -LiteralPath $pythonExe)) {
-        if (Test-Path -LiteralPath $runtimeRoot) {
-            Remove-Item -LiteralPath $runtimeRoot -Recurse -Force
-        }
-        New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
-        Expand-Archive -LiteralPath $archive -DestinationPath $runtimeRoot -Force
+    if (Test-Path -LiteralPath $runtimeRoot) {
+        Remove-Item -LiteralPath $runtimeRoot -Recurse -Force
     }
+    New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+    Expand-Archive -LiteralPath $archive -DestinationPath $runtimeRoot -Force
     if (-not (Test-Path -LiteralPath $pythonExe)) {
         Write-Nw11Error 6 "python_runtime" "The bundled Python runtime did not contain python.exe."
         return $null
