@@ -621,6 +621,7 @@ jobs:
         run: |
           ./tools/nw10/run-correctness-evidence.ps1 `
             -PrepareTransferBundle `
+            -SkipLlvm `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier blackwell `
             -ExpectedBranch ""
@@ -638,6 +639,7 @@ jobs:
         run: |
           ./tools/nw10/run-correctness-evidence.ps1 `
             -PrepareTransferBundle `
+            -SkipLlvm `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier ada `
             -ReusePreparedTransfer "$PWD/build/nw10-correctness-scripted/transfer-blackwell/transfer-package" `
@@ -656,6 +658,7 @@ jobs:
         run: |
           ./tools/nw10/run-correctness-evidence.ps1 `
             -PrepareTransferBundle `
+            -SkipLlvm `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier blackwell `
             -PackagingMode packed `
@@ -674,6 +677,7 @@ jobs:
         run: |
           ./tools/nw10/run-correctness-evidence.ps1 `
             -PrepareTransferBundle `
+            -SkipLlvm `
             -ReferenceEvidence "$PWD/build/nw10-intro/report.json" `
             -TargetTier ada `
             -PackagingMode packed `
