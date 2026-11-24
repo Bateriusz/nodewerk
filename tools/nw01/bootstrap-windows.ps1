@@ -199,42 +199,190 @@ function Ensure-Llvm {
 }
 
 function Test-ExistingVisualStudio {
+    param([ref]$FailureReason)
     try {
         # Import validates the exact toolset, the selected cl/link versions and
         # their ownership by VCToolsInstallDir. It throws on any mismatch.
         Import-NwVcVarsEnvironment -WindowsSdkVersion $visualStudio.WindowsSdkVersion -VcVarsVersion $visualStudio.VcVarsVersion -VcVarsFallbackVersion $visualStudio.VcVarsFallbackVersion -MsvcCompilerVersion $contract.MsvcCompilerVersion -MsvcLinkerVersion $contract.MsvcLinkerVersion -RepoRoot $RepoRoot | Out-Null
         return $true
     } catch {
+        if ($null -ne $FailureReason) {
+            $FailureReason.Value = [string]$_.Exception.Message
+        }
         return $false
     }
 }
 
 function Get-MissingVisualStudioComponents {
+    param([string]$TargetInstallPath = "")
+
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
         return @($visualStudio.Components)
     }
+
+    $target = ""
+    if (-not [string]::IsNullOrWhiteSpace($TargetInstallPath)) {
+        $target = [System.IO.Path]::GetFullPath($TargetInstallPath).TrimEnd('\')
+    }
+
     $missing = @()
     foreach ($component in $visualStudio.Components) {
-        # The bootstrapper URL is explicitly VS 17.x. Do not let a component
-        # installed only in a newer side-by-side VS instance satisfy this probe:
-        # vcvars selection below intentionally searches VS 2022 ([17,18)) only.
-        # In particular, Windows11SDK may be present in the runner's VS 2026
-        # image while absent from the VS 2022 Build Tools instance we provision.
-        $installation = @(& $vswhere -version "[17.0,18.0)" -products * -requires ([string]$component) -property installationPath 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $installation.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string]$installation[0])) {
+        # Scope the probe to VS 17.x, then (when a target is supplied) require
+        # the component to belong to that exact instance. A component present in
+        # Enterprise must not make a separate Build Tools instance look complete,
+        # and vice versa.
+        $installations = @(& $vswhere -version "[17.0,18.0)" -products * -requires ([string]$component) -property installationPath 2>$null)
+        $present = $false
+        if ($LASTEXITCODE -eq 0) {
+            foreach ($installation in $installations) {
+                $candidate = ([string]$installation).Trim()
+                if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+                if ([string]::IsNullOrWhiteSpace($target)) {
+                    $present = $true
+                    break
+                }
+                try {
+                    $normalized = [System.IO.Path]::GetFullPath($candidate).TrimEnd('\')
+                    if ([string]::Equals($normalized, $target, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $present = $true
+                        break
+                    }
+                } catch { }
+            }
+        }
+        if (-not $present) {
             $missing += [string]$component
         }
     }
     return @($missing)
 }
 
+function Get-VisualStudioModifyTarget {
+    # Get-NwVisualStudioInstallPaths already restricts candidates to VS 17.x
+    # installations with native x64 VC tools and prefers Build Tools before
+    # other editions. On windows-2022 this resolves to the preinstalled
+    # Enterprise 2022 instance, avoiding a second split VS installation.
+    foreach ($path in @(Get-NwVisualStudioInstallPaths)) {
+        $candidate = ([string]$path).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate -PathType Container)) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Get-VisualStudioChannelId {
+    param([Parameter(Mandatory)][string]$InstallPath)
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+        try {
+            $raw = (& $vswhere -version "[17.0,18.0)" -products * -format json -utf8 2>$null | Out-String)
+            foreach ($instance in @($raw | ConvertFrom-Json)) {
+                $candidate = [string]$instance.installationPath
+                if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+                $a = [System.IO.Path]::GetFullPath($candidate).TrimEnd('\')
+                $b = [System.IO.Path]::GetFullPath($InstallPath).TrimEnd('\')
+                if ([string]::Equals($a, $b, [System.StringComparison]::OrdinalIgnoreCase) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$instance.channelId)) {
+                    return [string]$instance.channelId
+                }
+            }
+        } catch { }
+    }
+    return "VisualStudio.17.Release"
+}
+
+function Invoke-VisualStudioInstanceModify {
+    param(
+        [Parameter(Mandatory)][string]$InstallPath,
+        [Parameter(Mandatory)][string[]]$Components
+    )
+
+    if ($Components.Count -eq 0) { return }
+    $setup = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+    if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
+        throw "Visual Studio Installer setup.exe was not found for in-place modification."
+    }
+    Assert-NwAuthenticodeSignature -Path $setup -SubjectContains $visualStudio.BootstrapperSubjectContains
+
+    $channelId = Get-VisualStudioChannelId -InstallPath $InstallPath
+    Write-Host "[NW-BOOTSTRAP] VS_MODIFY_TARGET=$InstallPath"
+    Write-Host "[NW-BOOTSTRAP] VS_MODIFY_COMPONENTS=$($Components -join ',')"
+
+    # ProcessStartInfo.ArgumentList preserves install-path quoting without relying
+    # on Start-Process's string re-serialization. setup.exe does not support
+    # --wait; Process.WaitForExit() is the documented automation boundary.
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $setup
+    $startInfo.UseShellExecute = $false
+    foreach ($arg in @("modify", "--installPath", $InstallPath, "--channelId", $channelId, "--quiet", "--norestart", "--nocache")) {
+        [void]$startInfo.ArgumentList.Add([string]$arg)
+    }
+    foreach ($component in $Components) {
+        [void]$startInfo.ArgumentList.Add("--add")
+        [void]$startInfo.ArgumentList.Add([string]$component)
+    }
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) { throw "Visual Studio Installer modify process could not be started." }
+    $process.WaitForExit()
+    if ($process.ExitCode -notin @(0, 3010)) {
+        throw "Visual Studio existing-instance modification failed with exit code $($process.ExitCode)"
+    }
+}
+
 function Ensure-VisualStudio {
-    if (Test-ExistingVisualStudio) {
+    $initialFailure = ""
+    if (Test-ExistingVisualStudio -FailureReason ([ref]$initialFailure)) {
         Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "preinstalled-exact"
         return
     }
 
+    # Prefer modifying a compatible existing VS 2022 instance. This is the fast
+    # path on windows-2022: the image already owns VS2022, x64 VC tools and SDK
+    # 26100, so normally only the pinned legacy MSVC component is added.
+    $modifyTarget = Get-VisualStudioModifyTarget
+    if (-not [string]::IsNullOrWhiteSpace([string]$modifyTarget)) {
+        try {
+            $missing = @(Get-MissingVisualStudioComponents -TargetInstallPath $modifyTarget)
+            $individualMissing = @($missing | Where-Object { [string]$_ -like "Microsoft.VisualStudio.Component.*" })
+            if ($individualMissing.Count -eq 0) {
+                # Exact selection can fail even when vswhere reports every
+                # individual component. Re-assert the explicit individual set
+                # before escalating to workload-level repair.
+                $individualMissing = @($visualStudio.Components | Where-Object { [string]$_ -like "Microsoft.VisualStudio.Component.*" })
+            }
+            Invoke-VisualStudioInstanceModify -InstallPath $modifyTarget -Components $individualMissing
+
+            $modifyFailure = ""
+            if (Test-ExistingVisualStudio -FailureReason ([ref]$modifyFailure)) {
+                Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "modified-existing-vs-instance"
+                return
+            }
+
+            # If the individual-component repair was insufficient, add only the
+            # still-missing explicit entries (which may include the workload)
+            # to the same instance. Never use --includeRecommended.
+            $remaining = @(Get-MissingVisualStudioComponents -TargetInstallPath $modifyTarget)
+            if ($remaining.Count -gt 0) {
+                Invoke-VisualStudioInstanceModify -InstallPath $modifyTarget -Components $remaining
+                $modifyFailure = ""
+                if (Test-ExistingVisualStudio -FailureReason ([ref]$modifyFailure)) {
+                    Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "modified-existing-vs-instance"
+                    return
+                }
+            }
+            Write-Warning "[NW-BOOTSTRAP] existing VS2022 instance remained non-exact after modify: $modifyFailure"
+        } catch {
+            Write-Warning "[NW-BOOTSTRAP] existing VS2022 modification failed; falling back to isolated Build Tools provisioning: $($_.Exception.Message)"
+        }
+    }
+
+    # Fallback for hosts without a compatible VS2022 instance. A new Build Tools
+    # instance must receive the complete explicit component set so its contract
+    # does not depend on components owned by another side-by-side VS instance.
     $bootstrapper = Join-Path $tempRoot "vs_buildtools.exe"
     Remove-Item -Force -ErrorAction SilentlyContinue $bootstrapper
     $probeSdk = $visualStudio.WindowsSdkVersion
@@ -268,22 +416,18 @@ function Ensure-VisualStudio {
     }
     Assert-NwAuthenticodeSignature -Path $bootstrapper -SubjectContains $visualStudio.BootstrapperSubjectContains
 
-    $componentsToInstall = @(Get-MissingVisualStudioComponents)
-    if ($componentsToInstall.Count -eq 0) {
-        # Exact toolchain verification failed even though vswhere sees every
-        # component. Re-assert the explicit component set, never the broad
-        # recommended workload, and let post-install exact verification decide.
-        $componentsToInstall = @($visualStudio.Components)
-    }
-    Write-Host "[NW-BOOTSTRAP] VS_MISSING_COMPONENTS=$($componentsToInstall -join ',')"
+    $componentsToInstall = @($visualStudio.Components)
+    Write-Host "[NW-BOOTSTRAP] VS_BOOTSTRAP_COMPONENTS=$($componentsToInstall -join ',')"
     $args = @("--quiet", "--wait", "--norestart", "--nocache")
     foreach ($component in $componentsToInstall) { $args += @("--add", [string]$component) }
     $process = Start-Process -Wait -PassThru -FilePath $bootstrapper -ArgumentList $args
     if ($process.ExitCode -notin @(0, 3010)) { throw "Visual Studio Build Tools installation failed with exit code $($process.ExitCode)" }
-    if (-not (Test-ExistingVisualStudio)) {
-        throw "Visual Studio installation completed, but exact MSVC $($contract.MsvcCompilerVersion), linker $($contract.MsvcLinkerVersion), and SDK $($contract.WindowsSdkVersion) were not selected."
+
+    $finalFailure = ""
+    if (-not (Test-ExistingVisualStudio -FailureReason ([ref]$finalFailure))) {
+        throw "Visual Studio provisioning completed, but exact MSVC $($contract.MsvcCompilerVersion), linker $($contract.MsvcLinkerVersion), and SDK $($contract.WindowsSdkVersion) were not selected: $finalFailure"
     }
-    Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "installed-vs-components"
+    Record-Selection "MSVC/Windows SDK" "$($contract.MsvcCompilerVersion) / $($contract.WindowsSdkVersion)" ((Get-Command cl.exe).Source) "installed-vs-buildtools-components"
 }
 
 try {
