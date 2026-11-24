@@ -162,11 +162,17 @@
       "type": "object",
       "required": [
         "distribution_size_policy",
+        "complete_distribution_bytes_ceiling",
+        "incremental_distribution_bytes_ceiling",
         "peak_engine_committed_gpu_bytes_ceiling",
         "process_start_to_first_present_ms_ceiling"
       ],
       "properties": {
-        "distribution_size_policy": { "const": "report_only" },
+        "distribution_size_policy": { "const": "gated" },
+        "complete_distribution_bytes_ceiling": { "type": "integer", "maximum": 262144 },
+        "incremental_distribution_bytes_ceiling": { "type": "integer", "maximum": 65536 },
+        "stretch_distribution_bytes_ceiling": { "type": "integer", "maximum": 131072 },
+        "stretch_is_mandatory_gate": { "const": false },
         "peak_engine_committed_gpu_bytes_ceiling": { "const": 536870912 },
         "process_start_to_first_present_ms_ceiling": { "const": 2000.0 }
       },

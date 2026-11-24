@@ -27,7 +27,7 @@ The common profile is inherited unchanged from NW-01/NW-03..NW-07:
 | Requirements digest | `sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a` |
 | API | D3D12 Feature Level 12_0, shader model 6_0 |
 | Fallback | none (this *is* the common artifact profile) |
-| Distribution size | Measured and reported; no NW-11 experimental byte ceiling |
+| Distribution size | Gated at 262,144 complete bytes and 0 incremental bytes |
 | Evidence status | `pending` until RTX 4060 Ti and RTX 5070 Ti common-artifact correctness is physically verified |
 
 The common requirements digest is the **inherited NW-07 identity**
@@ -47,8 +47,8 @@ The two optional profiles are separately exported and separately tested:
 
 | Profile | ID | Requirements digest | Shader targets | Fallback |
 |---|---|---|---|---|
-| Mesh shaders | `nw.optional.d3d12.mesh_shaders.ms6_5.v1` | `sha256:v1:cc0636631f844cca1840c848849fd0056a5c688d6228f97cec0a70fb78f237b8` | `as_6_5`, `ms_6_5`, `ps_6_0` | `nw11.fallback.common.d3d12.fl12_0.sm6_0.v1` |
-| Ray queries | `nw.optional.d3d12.ray_query.ps6_5.v1` | `sha256:v1:efe3d0e61d837c57bf102267bbfc7afd60c4a2fbaf401ea000b7fa9174e77ebd` | `ps_6_5` | `nw11.fallback.common.d3d12.fl12_0.sm6_0.v1` |
+| Mesh shaders | `nw.optional.d3d12.mesh_shaders.ms6_5.v1` | `sha256:v1:cc0636631f844cca1840c848849fd0056a5c688d6228f97cec0a70fb78f237b8` | `as_6_5`, `ms_6_5`, `ps_6_0` | `nw11.fallback.mesh.indexed.d3d12.fl12_0.sm6_0.v1` |
+| Ray queries | `nw.optional.d3d12.ray_query.ps6_5.v1` | `sha256:v1:efe3d0e61d837c57bf102267bbfc7afd60c4a2fbaf401ea000b7fa9174e77ebd` | `ps_6_5` | `nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1` |
 
 Every profile document (`benchmarks/nw11/profiles/`) declares:
 
@@ -124,7 +124,8 @@ Definitions live in `benchmarks/nw11/experiments/`. Each is marked
   cold-initialization, and VRAM guardrails;
 - a fixed-quality image criterion (`max_abs_channel_error <= 1e-4`,
   `RMSE <= 1e-4`) at frozen fixed ticks;
-- actual complete and incremental distribution sizes (informational), and shader-count guardrails;
+- actual complete and incremental distribution sizes against the declared
+  complete/incremental byte ceilings, and shader-count guardrails;
 - the fallback artifact identity and execution arguments.
 
 ### 2.0 End-to-end implementation
@@ -199,7 +200,8 @@ link mesh or DXR code, shaders, or payload headers.
 - Synchronization: `SetMeshOutputCounts` and
   `GroupMemoryBarrierWithGroupSync()` are declared and enforced by static
   bundle checks.
-- Shader-count increment ≤ 2; distribution bytes reported.
+- Shader-count increment ≤ 2; complete distribution ≤ 262,144 bytes;
+  incremental distribution ≤ 32,768 bytes.
 
 ### 2.2 DXR ray queries versus analytic reflection
 
@@ -211,9 +213,15 @@ link mesh or DXR code, shaders, or payload headers.
 - Variant: `nw11_scene_rayquery_ps` (`ps_6_5`) with inline
   `RayQuery<RAY_FLAG_NONE>` over a BLAS/TLAS built from the same
   graph-generated geometry.
+- Hit and miss both resolve the same analytic environment reference used by the
+  baseline, so the DXR traversal is measured at the frozen 1e-4 fixed-quality
+  criterion instead of producing an unmatchable scene-lit color. A 1e-6
+  hit/miss marker keeps the committed traversal live without changing the
+  reference image beyond tolerance.
 - The acceleration structure and all bound buffers must outlive the frame
   command list; BLAS/TLAS build work is fenced before shading.
-- Shader-count increment ≤ 1; distribution bytes reported.
+- Shader-count increment ≤ 1; complete distribution ≤ 262,144 bytes;
+  incremental distribution ≤ 65,536 bytes.
 - Missing DXR capability is explicitly unsupported and the separately exported
   common analytic fallback remains available; initialization/execution failure
   is reported as failure, never silently substituted.
@@ -300,15 +308,19 @@ The bundle manifest also enforces zero-cost stripping:
 - common and fallback artifacts carry no mesh, ray-tracing, Agility, DLSS,
   RTX Kit, model-weight, or vendor SDK payload/dependency;
 - common/fallback shader targets are restricted to the common profile;
-- every optional byte is counted in the distribution report.
+- every optional byte is counted in the incremental distribution budget.
 
 ### One-command physical validation
 
 On a clean validation machine with PowerShell 7; no system Python installation is required:
 
 ```powershell
-pwsh .\run-validation.ps1 -BundleRoot . -ExpectedCommit <tested-commit>
+pwsh .\run-validation.ps1 -BundleRoot . -ExpectedCommit <tested-commit> -DeviceTier desktop_ada_representative
 ```
+
+`-DeviceTier` must be one of `desktop_ada_representative` or
+`desktop_blackwell_representative`; `NW11_DEVICE_TIER` may be set instead.
+Measured runs without a qualified tier exit `11` (pending).
 
 The launcher verifies the bundled `runtime/python-runtime.zip`, rehydrates it
 into a fresh temporary directory for each validation, and uses only that
@@ -420,7 +432,7 @@ NW-10's 64 KiB result: it neither raises nor lowers that compact target, and
 the original NW-07 256 KiB proof and its exact-byte regression gate remain unchanged.
 
 
-### Frozen source isolation and informational distribution accounting
+### Frozen source isolation and gated distribution accounting
 
 NW-11 generates its specialized translation unit from the original production
 `src/player/package_player.cpp` using a source-SHA- and context-checked overlay.
@@ -429,7 +441,13 @@ NW-10 reports and physical evidence are not rewritten. If the shared source
 changes later, the generator fails until the overlay is explicitly rebased.
 
 Bundle integrity and adoption are separate results. Complete and incremental
-experimental distribution bytes are reported without a size acceptance gate.
+experimental distribution bytes are gated by the predeclared experiment and
+profile ceilings; a variant that grows the distribution beyond the allowance is
+rejected even when its GPU microbenchmark improves.
+An over-budget CI bundle can still be published for physical validation with
+`accounting.adoption_budget_status: rejected`; bundle verification proves the
+artifact identities, not experiment acceptance, and the measured decision
+cannot be accepted.
 The original NW-07 common production export must still remain byte-identical,
 and unused optional code, shaders and dependencies must remain excluded.
 Performance, quality, resource, shader-count and capability checks are unchanged.

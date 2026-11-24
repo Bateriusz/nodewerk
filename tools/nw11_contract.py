@@ -37,9 +37,12 @@ COMMON_REQUIREMENTS_DIGEST = (
 MESH_PROFILE_ID = "nw.optional.d3d12.mesh_shaders.ms6_5.v1"
 RAY_QUERY_PROFILE_ID = "nw.optional.d3d12.ray_query.ps6_5.v1"
 
-# A separately exported, separately tested common-profile artifact that every
-# optional bundle must carry.  It always uses the indexed/analytic baseline.
-COMMON_FALLBACK_ARTIFACT_ID = "nw11.fallback.common.d3d12.fl12_0.sm6_0.v1"
+# Separately exported, separately tested common-profile fallback artifacts.
+# The mesh experiment falls back to the indexed raster artifact; the ray
+# experiment falls back to the analytic-reflection common artifact.  They are
+# distinct executables and therefore carry distinct artifact identities.
+MESH_FALLBACK_ARTIFACT_ID = "nw11.fallback.mesh.indexed.d3d12.fl12_0.sm6_0.v1"
+RAY_FALLBACK_ARTIFACT_ID = "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1"
 
 EXPERIMENT_MESH_ID = "nw11.mesh-shader-vs-indexed.v1"
 EXPERIMENT_RAY_ID = "nw11.ray-query-vs-analytic-reflection.v1"
@@ -96,10 +99,16 @@ NUMERIC_ABSOLUTE_TOLERANCE = 1e-5
 NUMERIC_RELATIVE_TOLERANCE = 1e-4
 
 # Preserved NW-07 absolute gates.
+COMPLETE_DISTRIBUTION_CEILING_BYTES = 262_144
+STRETCH_DISTRIBUTION_CEILING_BYTES = 131_072
 PEAK_ENGINE_COMMITTED_GPU_BYTES = 512 * 1024 * 1024
 PROCESS_START_TO_FIRST_PRESENT_MS = 2_000.0
 
-# Shader-count guardrail; distribution size is reported, not gated.
+# Optional-profile incremental budgets.  These count every optional byte that
+# is added to the common baseline distribution.  Distribution growth is a
+# predeclared acceptance criterion, not an informational report.
+DEFAULT_INCREMENTAL_DISTRIBUTION_CEILING_BYTES = 32_768
+RAY_QUERY_INCREMENTAL_DISTRIBUTION_CEILING_BYTES = 65_536
 SHADER_COUNT_INCREMENT_MAX = 2
 
 TOOLCHAIN_DXC_VERSION = "1.8.2407"
@@ -222,18 +231,21 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "queries": COMMON_QUERIES,
         "shader_targets": COMMON_SHADER_TARGETS,
         "fallback_artifact_id": None,
+        "incremental_budget_bytes": 0,
     },
     MESH_PROFILE_ID: {
         "profile_kind": "optional",
         "queries": MESH_QUERIES,
         "shader_targets": MESH_SHADER_TARGETS,
-        "fallback_artifact_id": COMMON_FALLBACK_ARTIFACT_ID,
+        "fallback_artifact_id": MESH_FALLBACK_ARTIFACT_ID,
+        "incremental_budget_bytes": DEFAULT_INCREMENTAL_DISTRIBUTION_CEILING_BYTES,
     },
     RAY_QUERY_PROFILE_ID: {
         "profile_kind": "optional",
         "queries": RAY_QUERIES,
         "shader_targets": RAY_QUERY_SHADER_TARGETS,
-        "fallback_artifact_id": COMMON_FALLBACK_ARTIFACT_ID,
+        "fallback_artifact_id": RAY_FALLBACK_ARTIFACT_ID,
+        "incremental_budget_bytes": RAY_QUERY_INCREMENTAL_DISTRIBUTION_CEILING_BYTES,
     },
 }
 
@@ -381,13 +393,17 @@ def frozen_workload() -> dict[str, Any]:
 
 def frozen_artifact_budget() -> dict[str, Any]:
     return {
-        "distribution_size_policy": "report_only",
+        "distribution_size_policy": "gated",
+        "complete_distribution_bytes_ceiling": COMPLETE_DISTRIBUTION_CEILING_BYTES,
+        "stretch_distribution_bytes_ceiling": STRETCH_DISTRIBUTION_CEILING_BYTES,
+        "stretch_is_mandatory_gate": False,
+        "incremental_distribution_bytes_ceiling": DEFAULT_INCREMENTAL_DISTRIBUTION_CEILING_BYTES,
         "peak_engine_committed_gpu_bytes_ceiling": PEAK_ENGINE_COMMITTED_GPU_BYTES,
         "process_start_to_first_present_ms_ceiling": PROCESS_START_TO_FIRST_PRESENT_MS,
         "shader_count_increment_ceiling": SHADER_COUNT_INCREMENT_MAX,
         "optional_dependency_bytes_policy": (
             "Every optional SDK, SDK component, model weight, or vendor runtime "
-            "byte is counted in the distribution report and is "
+            "byte is counted in the incremental distribution budget and is "
             "absent from common/fallback artifacts."
         ),
     }
@@ -446,7 +462,8 @@ __all__ = [
     "COMMON_REQUIREMENTS_DIGEST",
     "MESH_PROFILE_ID",
     "RAY_QUERY_PROFILE_ID",
-    "COMMON_FALLBACK_ARTIFACT_ID",
+    "MESH_FALLBACK_ARTIFACT_ID",
+    "RAY_FALLBACK_ARTIFACT_ID",
     "EXPERIMENT_MESH_ID",
     "EXPERIMENT_RAY_ID",
     "BASE_GRAPH",
@@ -481,8 +498,12 @@ __all__ = [
     "IMAGE_RMSE_TOLERANCE",
     "NUMERIC_ABSOLUTE_TOLERANCE",
     "NUMERIC_RELATIVE_TOLERANCE",
+    "COMPLETE_DISTRIBUTION_CEILING_BYTES",
+    "STRETCH_DISTRIBUTION_CEILING_BYTES",
     "PEAK_ENGINE_COMMITTED_GPU_BYTES",
     "PROCESS_START_TO_FIRST_PRESENT_MS",
+    "DEFAULT_INCREMENTAL_DISTRIBUTION_CEILING_BYTES",
+    "RAY_QUERY_INCREMENTAL_DISTRIBUTION_CEILING_BYTES",
     "SHADER_COUNT_INCREMENT_MAX",
     "TOOLCHAIN_DXC_VERSION",
     "TOOLCHAIN_DXC_MEASURED_VERSION",

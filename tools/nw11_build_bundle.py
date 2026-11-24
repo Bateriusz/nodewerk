@@ -312,7 +312,10 @@ def build(
             profile_id=contract.COMMON_PROFILE_ID,
             shader_targets=contract.COMMON_SHADER_TARGETS,
             dependencies=[item["name"] for item in dependency_ledger if not item["optional"]],
-            metadata=production_records.get("fallback_common"),
+            metadata={
+                **(production_records.get("fallback_common") or {}),
+                "fallback_artifact_id": document["fallback_artifact_id"],
+            },
         ),
     ]
     if production_records:
@@ -438,7 +441,13 @@ def build(
         query["query_id"] for query in profile["queried_capabilities"]
     ] + list(profile["shader_targets"])
     budget = {
-        "distribution_size_policy": "report_only",
+        "distribution_size_policy": "gated",
+        "complete_distribution_bytes_ceiling": int(
+            document["artifact_budget"]["complete_distribution_bytes_ceiling"]
+        ),
+        "incremental_distribution_bytes_ceiling": int(
+            document["artifact_budget"]["incremental_distribution_bytes_ceiling"]
+        ),
         "shader_count_increment_ceiling": int(
             document["artifact_budget"]["shader_count_increment_ceiling"]
         ),

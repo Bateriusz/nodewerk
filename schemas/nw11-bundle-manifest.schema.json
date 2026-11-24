@@ -149,9 +149,17 @@
         "complete_distribution_bytes",
         "optional_dependency_bytes",
         "artifact_budget",
-        "distribution_size_policy"
+        "distribution_size_policy",
+        "within_complete_ceiling",
+        "within_incremental_budget",
+        "adoption_budget_status"
       ],
-      "properties": { "distribution_size_policy": { "const": "report_only" } }
+      "properties": {
+        "distribution_size_policy": { "const": "gated" },
+        "within_complete_ceiling": { "type": "boolean" },
+        "within_incremental_budget": { "type": "boolean" },
+        "adoption_budget_status": { "enum": ["accepted", "rejected"] }
+      }
     },
     "verification": {
       "type": "object",

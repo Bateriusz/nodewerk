@@ -296,8 +296,14 @@ def _accounting(
     incremental = variant_distribution - baseline_distribution
     fallback_distribution = fallback + common_shaders
     complete = max(baseline_distribution, variant_distribution, fallback_distribution)
+    complete_ceiling = int(artifact_budget["complete_distribution_bytes_ceiling"])
+    incremental_ceiling = int(
+        artifact_budget["incremental_distribution_bytes_ceiling"]
+    )
+    within_complete = complete <= complete_ceiling
+    within_incremental = incremental <= incremental_ceiling
     return {
-        "distribution_size_policy": "report_only",
+        "distribution_size_policy": "gated",
         "common_distribution_bytes": common,
         "baseline_distribution_bytes": baseline_distribution,
         "fallback_distribution_bytes": fallback_distribution,
@@ -320,6 +326,11 @@ def _accounting(
         "complete_distribution_bytes": complete,
         "total_bundle_bytes": sum(item["bytes"] for item in artifacts),
         "artifact_budget": dict(artifact_budget),
+        "within_complete_ceiling": within_complete,
+        "within_incremental_budget": within_incremental,
+        "adoption_budget_status": (
+            "accepted" if within_complete and within_incremental else "rejected"
+        ),
     }
 
 
@@ -680,6 +691,29 @@ def verify_bundle(
         raise BundleError("bundle experiment identity disagrees with the definition")
     if experiment_document.get("variant_profile_id") != manifest.get("profile_id"):
         raise BundleError("bundle profile identity disagrees with the experiment definition")
+    if experiment_document.get("fallback_artifact_id") != manifest.get(
+        "fallback_artifact_id"
+    ):
+        raise BundleError(
+            "bundle fallback identity disagrees with the experiment definition"
+        )
+    fallback_artifact = next(
+        (
+            item
+            for item in manifest["artifacts"]
+            if item.get("role") == ROLE_FALLBACK
+        ),
+        None,
+    )
+    if fallback_artifact is None:
+        raise BundleError("bundle has no separately exported fallback artifact")
+    fallback_metadata = fallback_artifact.get("metadata") or {}
+    if fallback_metadata.get("fallback_artifact_id") != manifest.get(
+        "fallback_artifact_id"
+    ):
+        raise BundleError(
+            "fallback artifact is not bound to the experiment fallback identity"
+        )
     if "shader_payloads" in manifest:
         record = _mapping(manifest["shader_payloads"], "shader_payloads")
         payload_path = bundle_root / str(record.get("path", ""))
@@ -761,9 +795,17 @@ def verify_bundle(
     experiment_budget = _mapping(
         experiment_document.get("artifact_budget"), "experiment.artifact_budget"
     )
-    if recorded_budget != {"distribution_size_policy": "report_only",
-                           "shader_count_increment_ceiling": experiment_budget["shader_count_increment_ceiling"]}:
-        raise BundleError("bundle accounting policy does not match experiment")
+    if recorded_budget.get("distribution_size_policy") != "gated":
+        raise BundleError("bundle accounting distribution policy is not gated")
+    for key in (
+        "complete_distribution_bytes_ceiling",
+        "incremental_distribution_bytes_ceiling",
+        "shader_count_increment_ceiling",
+    ):
+        if int(recorded_budget.get(key, -1)) != int(experiment_budget.get(key, -2)):
+            raise BundleError(
+                f"bundle accounting budget '{key}' does not match the experiment"
+            )
 
     # Fail closed on unrecorded payload files anywhere in the bundle.  Raw
     # evidence is written outside the immutable bundle root by the launcher.
@@ -794,6 +836,14 @@ def verify_bundle(
         ],
         dependency_ledger=list(manifest.get("dependency_ledger") or []),
     )
+    expected_adoption = (
+        "accepted"
+        if accounting["within_complete_ceiling"]
+        and accounting["within_incremental_budget"]
+        else "rejected"
+    )
+    if accounting.get("adoption_budget_status") != expected_adoption:
+        raise BundleError("bundle adoption budget status is inconsistent")
     if accounting != manifest["accounting"]:
         raise BundleError("bundle accounting does not match recorded artifact bytes")
     return {

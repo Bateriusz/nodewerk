@@ -21,12 +21,14 @@ from nw11_contract import (  # type: ignore[import-not-found]
     AGILITY_SDK_REQUIRED,
     COMMON_PROFILE_ID,
     COMMON_REQUIREMENTS_DIGEST,
+    COMPLETE_DISTRIBUTION_CEILING_BYTES,
     DEVICE_TIERS,
     EVIDENCE_STATUSES,
     IMPLEMENTATION_BASE,
     MIN_WINDOWS_BUILD,
     PROFILE_DEFINITIONS,
     SHADER_MODEL_ORDER,
+    STRETCH_DISTRIBUTION_CEILING_BYTES,
     TASK,
     TOOLCHAIN_DXC_MEASURED_VERSION,
     TOOLCHAIN_DXC_VERSION,
@@ -229,10 +231,22 @@ def validate_profile(record: Mapping[str, Any]) -> dict[str, Any]:
         raise CapabilityProfileError("profile evidence_status is not a known NW-11 status")
 
     budgets = _require_mapping(profile.get("artifact_budget"), "artifact_budget")
-    if budgets.get("distribution_size_policy") != "report_only":
-        raise CapabilityProfileError("distribution size must be informational only")
-    if any(key in budgets for key in ("complete_distribution_bytes_ceiling", "incremental_distribution_bytes_ceiling", "stretch_distribution_bytes_ceiling")):
-        raise CapabilityProfileError("NW-11 profiles must not impose distribution size ceilings")
+    if budgets.get("distribution_size_policy") != "gated":
+        raise CapabilityProfileError(
+            "distribution size must be a gated predeclared budget"
+        )
+    for key in ("complete_distribution_bytes_ceiling", "incremental_distribution_bytes_ceiling"):
+        if key not in budgets:
+            raise CapabilityProfileError(f"profile artifact_budget.{key} is required")
+    if int(budgets["complete_distribution_bytes_ceiling"]) > COMPLETE_DISTRIBUTION_CEILING_BYTES:
+        raise CapabilityProfileError(
+            "profile weakened the complete distribution ceiling"
+        )
+    expected_incremental = int(definition["incremental_budget_bytes"])
+    if int(budgets["incremental_distribution_bytes_ceiling"]) != expected_incremental:
+        raise CapabilityProfileError(
+            f"profile '{profile_id}' changed its frozen incremental byte budget"
+        )
 
     device_coverage = profile.get("device_coverage")
     if not isinstance(device_coverage, list) or not device_coverage:
@@ -430,7 +444,13 @@ def profile_manifest_template(profile_id: str) -> dict[str, Any]:
         },
         "fallback_artifact_id": definition["fallback_artifact_id"],
         "artifact_budget": {
-            "distribution_size_policy": "report_only",
+            "distribution_size_policy": "gated",
+            "complete_distribution_bytes_ceiling": COMPLETE_DISTRIBUTION_CEILING_BYTES,
+            "incremental_distribution_bytes_ceiling": int(
+                definition["incremental_budget_bytes"]
+            ),
+            "stretch_distribution_bytes_ceiling": STRETCH_DISTRIBUTION_CEILING_BYTES,
+            "stretch_is_mandatory_gate": False,
             "peak_engine_committed_gpu_bytes_ceiling": 536870912,
             "process_start_to_first_present_ms_ceiling": 2000.0,
         },

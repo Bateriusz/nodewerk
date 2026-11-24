@@ -1,8 +1,12 @@
 {
   "artifact_budget": {
-    "distribution_size_policy": "report_only",
+    "complete_distribution_bytes_ceiling": 262144,
+    "distribution_size_policy": "gated",
+    "incremental_distribution_bytes_ceiling": 0,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000.0
+    "process_start_to_first_present_ms_ceiling": 2000.0,
+    "stretch_distribution_bytes_ceiling": 131072,
+    "stretch_is_mandatory_gate": false
   },
   "dependencies": [
     {
@@ -31,6 +35,34 @@
       "distributed_bytes": 0,
       "kind": "windows_inbox",
       "name": "kernel32",
+      "optional": false
+    },
+    {
+      "counted": true,
+      "distributed_bytes": 0,
+      "kind": "windows_inbox",
+      "name": "gdi32",
+      "optional": false
+    },
+    {
+      "counted": true,
+      "distributed_bytes": 0,
+      "kind": "windows_inbox",
+      "name": "psapi",
+      "optional": false
+    },
+    {
+      "counted": true,
+      "distributed_bytes": 0,
+      "kind": "windows_inbox",
+      "name": "advapi32",
+      "optional": false
+    },
+    {
+      "counted": true,
+      "distributed_bytes": 0,
+      "kind": "windows_inbox",
+      "name": "version",
       "optional": false
     }
   ],

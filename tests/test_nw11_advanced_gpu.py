@@ -285,9 +285,20 @@ def test_nw11_profiles_are_frozen_and_digest_bound() -> None:
 
     assert common["requirements_digest"] == contract.COMMON_REQUIREMENTS_DIGEST
     assert common["fallback_artifact_id"] is None
-    assert common["artifact_budget"]["distribution_size_policy"] == "report_only"
-    assert mesh["fallback_artifact_id"] == contract.COMMON_FALLBACK_ARTIFACT_ID
-    assert ray["fallback_artifact_id"] == contract.COMMON_FALLBACK_ARTIFACT_ID
+    assert common["artifact_budget"]["distribution_size_policy"] == "gated"
+    assert common["artifact_budget"]["incremental_distribution_bytes_ceiling"] == 0
+    assert mesh["fallback_artifact_id"] == contract.MESH_FALLBACK_ARTIFACT_ID
+    assert ray["fallback_artifact_id"] == contract.RAY_FALLBACK_ARTIFACT_ID
+    assert mesh["fallback_artifact_id"] != ray["fallback_artifact_id"]
+    assert mesh["artifact_budget"]["incremental_distribution_bytes_ceiling"] == 32768
+    assert ray["artifact_budget"]["incremental_distribution_bytes_ceiling"] == 65536
+    for profile in (common, mesh, ray):
+        names = {entry["name"] for entry in profile["dependencies"]}
+        assert {"gdi32", "psapi", "advapi32", "version"} <= names
+        assert all(
+            entry["counted"] is True and entry["distributed_bytes"] == 0
+            for entry in profile["dependencies"]
+        )
     assert mesh["requirements_digest"] == capability.compute_requirements_digest(mesh)
     assert ray["requirements_digest"] == capability.compute_requirements_digest(ray)
     assert mesh["requirements_digest"] != ray["requirements_digest"]
@@ -334,7 +345,19 @@ def test_nw11_experiments_freeze_the_nw07_workload_and_success_criterion(
     assert document["criteria"]["image"]["max_abs_channel_error"] <= 0.0001
     assert document["graph_derivation"]["new_operators"] == []
     assert document["graph_derivation"]["second_production_backend"] is False
-    assert document["fallback_artifact_id"] == contract.COMMON_FALLBACK_ARTIFACT_ID
+    assert document["fallback_artifact_id"] == (
+        contract.MESH_FALLBACK_ARTIFACT_ID
+        if experiment_id == contract.EXPERIMENT_MESH_ID
+        else contract.RAY_FALLBACK_ARTIFACT_ID
+    )
+    assert (
+        document["artifact_budget"]["distribution_size_policy"] == "gated"
+    )
+    assert document["artifact_budget"]["complete_distribution_bytes_ceiling"] <= 262144
+    assert (
+        document["artifact_budget"]["incremental_distribution_bytes_ceiling"]
+        <= (32768 if experiment_id == contract.EXPERIMENT_MESH_ID else 65536)
+    )
     for shader in document["pipeline"]["variant_shaders"]:
         assert (REPO_ROOT / shader["path"]).is_file()
 
@@ -459,13 +482,17 @@ def test_nw11_bundle_is_deterministic_and_self_contained(tmp_path: Path) -> None
     ):
         assert required in paths
     assert first_manifest["verification"]["operator_supplied_values_allowed"] is False
-    assert first_manifest["accounting"]["distribution_size_policy"] == "report_only"
+    assert first_manifest["accounting"]["distribution_size_policy"] == "gated"
     fallback = next(
         artifact
         for artifact in first_manifest["artifacts"]
         if artifact["role"] == "fallback_common"
     )
     assert fallback["profile_id"] == contract.COMMON_PROFILE_ID
+    assert (
+        fallback["metadata"]["fallback_artifact_id"]
+        == first_manifest["fallback_artifact_id"]
+    )
     assert set(fallback["shader_targets"]) <= set(contract.COMMON_SHADER_TARGETS)
     assert fallback["optional"] is False
     manifest_schema = json.loads(
@@ -534,7 +561,7 @@ def test_nw11_malformed_bundle_and_stale_commit_fail_closed(tmp_path: Path) -> N
         ({}, "accepted"),
         ({"variant": _measurement(gpu=9.5)}, "rejected"),
         ({"variant": _measurement(gpu=7.5, frame=17.0)}, "rejected"),
-        ({"variant": _measurement(gpu=7.5, distribution=2_000_000)}, "accepted"),
+            ({"variant": _measurement(gpu=7.5, distribution=2_000_000)}, "rejected"),
         ({"variant": _measurement(gpu=7.5, image_error=0.01)}, "rejected"),
     ),
 )
@@ -977,10 +1004,9 @@ def test_nw11_shader_manifest_declares_synchronization_and_lifetimes() -> None:
     assert "RayQuery<" in ray_source
     assert "TraceRayInline" in ray_source
     assert "CommittedStatus" in ray_source
-    assert "CommittedPrimitiveIndex()" in ray_source
-    assert "CommittedObjectToWorld3x4()" in ray_source
     assert "CommittedWorldSpaceGeometryNormal" not in ray_source
-    assert "NwIndices.Load" in ray_source and "NwVertices.Load" in ray_source
+    assert "AnalyticEnvironment" in ray_source
+    assert "hit_marker" in ray_source
 
     analytic = entries["nw11_analytic_reflection_ps"]
     assert analytic["optional"] is False
@@ -1425,6 +1451,16 @@ def test_nw11_experiment_runtime_validator_enforces_frozen_guardrails() -> None:
     with pytest.raises(experiment.ExperimentError):
         experiment.validate_experiment(weakened)
 
+    weakened = copy.deepcopy(document)
+    weakened["artifact_budget"]["distribution_size_policy"] = "report_only"
+    with pytest.raises(experiment.ExperimentError):
+        experiment.validate_experiment(weakened)
+
+    weakened = copy.deepcopy(document)
+    weakened["criteria"]["guardrails"]["complete_distribution_bytes_ceiling"] = 10_000_000
+    with pytest.raises(experiment.ExperimentError):
+        experiment.validate_experiment(weakened)
+
 
 def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
     cmake = (REPO_ROOT / "src/nw11/CMakeLists.txt").read_text(encoding="utf-8")
@@ -1709,29 +1745,63 @@ def test_nw11_specialization_is_isolated_from_frozen_player(tmp_path: Path) -> N
         specialize(changed, overlay)
 
 
-def test_nw11_distribution_size_is_reported_not_gated(tmp_path: Path) -> None:
+def test_nw11_distribution_budget_is_gated(tmp_path: Path) -> None:
     files = _source_artifacts(tmp_path)
+    complete = tmp_path / "complete-oversize"
     files["variant.exe"].write_bytes(b"MZ" + b"x" * 300_000)
-    root = tmp_path / "oversize"
-    manifest = build_bundle.build(
-        output_directory=root, experiment_id=contract.EXPERIMENT_MESH_ID,
-        commit=COMMIT, baseline_executable=files["baseline.exe"],
-        variant_executable=files["variant.exe"], fallback_executable=files["fallback.exe"],
-        capability_probe=files["probe.exe"], repo_root=REPO_ROOT,
+    complete_manifest = build_bundle.build(
+        output_directory=complete,
+        experiment_id=contract.EXPERIMENT_MESH_ID,
+        commit=COMMIT,
+        baseline_executable=files["baseline.exe"],
+        variant_executable=files["variant.exe"],
+        fallback_executable=files["fallback.exe"],
+        capability_probe=files["probe.exe"],
+        repo_root=REPO_ROOT,
     )
-    accounting = manifest["accounting"]
-    assert accounting["complete_distribution_bytes"] > 262144
-    assert accounting["distribution_size_policy"] == "report_only"
-    assert accounting["incremental_distribution_bytes"] > 32768
-    assert bundle.verify_bundle(root, expected_commit=COMMIT)["accounting"] == accounting
-    result = experiment.evaluate_experiment(_experiment(), {
-        "device_key": "device", "environment_key": "environment",
-        "baseline": _measurement(gpu=10.0, distribution=accounting["baseline_distribution_bytes"]),
-        "variant": _measurement(gpu=7.5, distribution=accounting["variant_distribution_bytes"]),
-    }, device_key="device", environment_key="environment")
-    assert result["status"] == "accepted"
-    assert result["reasons"] == []
-    assert result["aggregate"]["incremental_distribution_bytes"] == accounting["incremental_distribution_bytes"]
+    assert complete_manifest["accounting"]["within_complete_ceiling"] is False
+    assert (
+        complete_manifest["accounting"]["adoption_budget_status"] == "rejected"
+    )
+    assert (
+        bundle.verify_bundle(complete, expected_commit=COMMIT)["accounting"][
+            "adoption_budget_status"
+        ]
+        == "rejected"
+    )
+
+    files["variant.exe"].write_bytes(b"MZ" + b"x" * 40_000)
+    incremental = tmp_path / "incremental-oversize"
+    incremental_manifest = build_bundle.build(
+        output_directory=incremental,
+        experiment_id=contract.EXPERIMENT_MESH_ID,
+        commit=COMMIT,
+        baseline_executable=files["baseline.exe"],
+        variant_executable=files["variant.exe"],
+        fallback_executable=files["fallback.exe"],
+        capability_probe=files["probe.exe"],
+        repo_root=REPO_ROOT,
+    )
+    assert incremental_manifest["accounting"]["within_incremental_budget"] is False
+    assert (
+        incremental_manifest["accounting"]["adoption_budget_status"] == "rejected"
+    )
+
+    result = experiment.evaluate_experiment(
+        _experiment(),
+        {
+            "device_key": "device",
+            "environment_key": "environment",
+            "baseline": _measurement(gpu=10.0, distribution=5_000),
+            "variant": _measurement(gpu=7.5, distribution=45_000),
+        },
+        device_key="device",
+        environment_key="environment",
+    )
+    assert result["status"] == "rejected"
+    assert "NW11-INCREMENTAL-BUDGET" in {
+        reason["code"] for reason in result["reasons"]
+    }
 
 
 def test_nw11_python_runtime_archive_is_deterministic_and_self_contained(tmp_path: Path) -> None:
