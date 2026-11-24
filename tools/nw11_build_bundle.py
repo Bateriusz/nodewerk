@@ -41,6 +41,7 @@ TOOL_FILES = (
 SUPPORT_FILES = (
     ("tools/schema_validator.py", "tools/nw11/schema_validator.py"),
     ("tools/evidence_checks.py", "tools/nw11/evidence_checks.py"),
+    ("tools/nw01/tool-version-identities.json", "tools/nw11/tool-version-identities.json"),
 )
 SCHEMA_FILES = (
     "nw11-capability-profile.schema.json",

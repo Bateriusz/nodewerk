@@ -54,6 +54,26 @@ def _first_version(text: str) -> str:
     return match.group(0)
 
 
+def _allowed_dxc_identities() -> set[str]:
+    candidates = (
+        THIS_DIR / "nw01" / "tool-version-identities.json",
+        THIS_DIR / "tool-version-identities.json",
+    )
+    for path in candidates:
+        if path.is_file():
+            mapping = json.loads(path.read_text(encoding="utf-8"))
+            return set(mapping["dxc"][contract.TOOLCHAIN_DXC_VERSION]["reported_versions"])
+    raise ToolchainIdentityError("NW-01 exact DXC identity mapping is missing")
+
+
+def _dxc_identity(banner: str) -> str:
+    tokens = set(re.findall(r"(?<![\d.])\d+\.\d+\.\d+\.\d+(?![\d.])", banner))
+    matched = tokens & _allowed_dxc_identities()
+    if len(matched) != 1:
+        raise ToolchainIdentityError(f"unrecognized or ambiguous pinned DXC banner: {banner!r}")
+    return matched.pop()
+
+
 def _run_allow_failure(command: list[str]) -> str:
     try:
         result = subprocess.run(
@@ -79,8 +99,10 @@ def collect(
     windows_sdk_version: str | None = None,
 ) -> dict[str, Any]:
     dxc_output = _run([dxc, "--version"])
-    dxc_version = _first_version(dxc_output)
-    if not dxc_version.startswith(contract.TOOLCHAIN_DXC_VERSION):
+    # DXC prints a short DLL version ("1.8") before the actual pinned
+    # binary identity. Reuse the NW-01 repository-owned identity mapping.
+    dxc_version = _dxc_identity(dxc_output)
+    if dxc_version not in _allowed_dxc_identities():
         raise ToolchainIdentityError(
             f"dxc {dxc_version} does not match pinned "
             f"{contract.TOOLCHAIN_DXC_VERSION}"
@@ -93,7 +115,7 @@ def collect(
         "dxc_version": dxc_version,
         "dxc_banner": dxc_output.splitlines()[0] if dxc_output else "",
         "required_dxc_version": contract.TOOLCHAIN_DXC_VERSION,
-        "measured_dxc_version": contract.TOOLCHAIN_DXC_MEASURED_VERSION,
+        "measured_dxc_version": dxc_version,
     }
     if cl:
         cl_output = _run_allow_failure([cl])
@@ -115,7 +137,7 @@ def verify(document: dict[str, Any]) -> dict[str, Any]:
     if document.get("implementation_base") != contract.IMPLEMENTATION_BASE:
         raise ToolchainIdentityError("toolchain identity is bound to a different base")
     dxc = str(document.get("dxc_version", ""))
-    if not dxc.startswith(contract.TOOLCHAIN_DXC_VERSION):
+    if dxc not in _allowed_dxc_identities():
         raise ToolchainIdentityError(
             f"recorded dxc version '{dxc}' is not the pinned "
             f"{contract.TOOLCHAIN_DXC_VERSION}"

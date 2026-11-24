@@ -85,7 +85,6 @@ constexpr std::uint32_t kMeshletVertices = kMeshletMajor * kMeshletMinor;
 constexpr std::uint32_t kMeshletPrimitives = kMeshletVertices * 2;
 constexpr std::uint32_t kMeshletsPerInstance =
     (scene::kMajorSegments / kMeshletMajor) * (scene::kMinorSegments / kMeshletMinor);
-constexpr std::uint32_t kMaxFrames = 61u * 60u;
 constexpr std::uint32_t kGraphicsConstantDwords = 8;
 constexpr std::uint32_t kMeshConstantDwords = 8;
 constexpr std::uint32_t kInitConstantDwords = 16;
@@ -310,9 +309,10 @@ private:
     std::vector<std::uint8_t> ReadCapture(const std::string& path);
     void SetGraphicsConstants(std::uint32_t tick);
     std::uint64_t TotalGpuBytes() const {
-        return peak_video_memory_bytes_ != 0u
-                   ? peak_video_memory_bytes_
-                   : resources_.bytes;
+        if (!video_memory_observed_) {
+            throw std::runtime_error("DXGI process video-memory measurement unavailable");
+        }
+        return peak_video_memory_bytes_;
     }
 
     RendererOptions options_;
@@ -367,6 +367,7 @@ private:
     double last_gpu_ms_ = 0.0;
     LARGE_INTEGER qpc_frequency_{};
     std::uint64_t peak_video_memory_bytes_ = 0u;
+    bool video_memory_observed_ = false;
 };
 
 }  // namespace
@@ -459,6 +460,9 @@ void SceneRenderer::InitializeDevice() {
             best = candidate;
             best_desc = desc;
         }
+    }
+    if (best == nullptr && options_.allow_software_adapter && !has_requested_luid) {
+        ThrowIfFailed(factory_->EnumWarpAdapter(IID_PPV_ARGS(&best)), "EnumWarpAdapter");
     }
     if (best == nullptr) {
         throw std::runtime_error(
@@ -1383,6 +1387,7 @@ void SceneRenderer::UpdatePeakVideoMemory() {
     DXGI_QUERY_VIDEO_MEMORY_INFO info{};
     if (SUCCEEDED(adapter3_->QueryVideoMemoryInfo(
             0u, D3D12_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
+        video_memory_observed_ = true;
         if (info.CurrentUsage > peak_video_memory_bytes_) {
             peak_video_memory_bytes_ = info.CurrentUsage;
         }
@@ -1853,20 +1858,24 @@ void SceneRenderer::RenderFrame(
                double(qpc_frequency_.QuadPart);
     };
     last_cpu_ms_ = ms(submit_start, submit_end);
-    last_gpu_ms_ = ms(submit_end, frame_end);
-    if (timestamp_supported_) {
+    if (!timestamp_supported_) {
+        throw std::runtime_error("GPU timestamp queries unavailable; CPU wait cannot certify GPU timing");
+    }
+    {
         std::uint64_t* timestamps = nullptr;
         const D3D12_RANGE timestamp_range{0u, 2u * sizeof(std::uint64_t)};
         ThrowIfFailed(
             timestamp_readback_->Map(
                 0u, &timestamp_range, reinterpret_cast<void**>(&timestamps)),
             "ID3D12Resource::Map(timestamp readback)");
-        if (timestamps[1] > timestamps[0]) {
-            last_gpu_ms_ =
-                1000.0 * double(timestamps[1] - timestamps[0]) /
-                double(timestamp_frequency_);
-        }
+        const auto begin_timestamp = timestamps[0];
+        const auto end_timestamp = timestamps[1];
         timestamp_readback_->Unmap(0u, nullptr);
+        if (end_timestamp <= begin_timestamp) {
+            throw std::runtime_error("Invalid GPU timestamp interval");
+        }
+        last_gpu_ms_ = 1000.0 * double(end_timestamp - begin_timestamp) /
+                       double(timestamp_frequency_);
     }
     (void)ms(frame_start, frame_end);
 
@@ -1916,22 +1925,34 @@ void SceneRenderer::RunSamples() {
     gpu_samples_ms_.clear();
     cpu_samples_ms_.clear();
     frame_samples_ms_.clear();
-    const std::uint32_t warmup_frames = options_.warmup_seconds * 60u;
-    const std::uint32_t sample_frames =
-        std::min(options_.run_seconds * 60u, kMaxFrames);
-    std::uint32_t frame = 0;
-    for (std::uint32_t index = 0; index < warmup_frames; ++index) {
-        const std::uint32_t tick =
-            (frame * scene::kTicksPerSecond / 60u) % scene::kLoopTicks;
-        RenderFrame(tick, false, std::string());
-        ++frame;
+    // The protocol measures elapsed seconds, not an assumed number of frames
+    // at 60 Hz. Uncapped rendering advances the frozen timeline by real time.
+    LARGE_INTEGER origin{};
+    QueryPerformanceCounter(&origin);
+    auto elapsed = [&](LARGE_INTEGER now) {
+        return double(now.QuadPart - origin.QuadPart) /
+               double(qpc_frequency_.QuadPart);
+    };
+    auto tick_at = [&](double seconds) {
+        return static_cast<std::uint32_t>(
+            std::fmod(seconds * scene::kTicksPerSecond, double(scene::kLoopTicks)));
+    };
+    for (;;) {
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        const double seconds = elapsed(now);
+        if (seconds >= options_.warmup_seconds) break;
+        RenderFrame(tick_at(seconds), false, std::string());
     }
-    for (std::uint32_t index = 0; index < sample_frames; ++index) {
-        const std::uint32_t tick =
-            (frame * scene::kTicksPerSecond / 60u) % scene::kLoopTicks;
+    LARGE_INTEGER sample_start{};
+    QueryPerformanceCounter(&sample_start);
+    for (;;) {
         LARGE_INTEGER begin{};
         LARGE_INTEGER end{};
         QueryPerformanceCounter(&begin);
+        if (double(begin.QuadPart - sample_start.QuadPart) /
+                double(qpc_frequency_.QuadPart) >= options_.run_seconds) break;
+        const std::uint32_t tick = tick_at(elapsed(begin));
         RenderFrame(tick, false, std::string());
         QueryPerformanceCounter(&end);
         gpu_samples_ms_.push_back(static_cast<float>(last_gpu_ms_));
@@ -1940,7 +1961,9 @@ void SceneRenderer::RunSamples() {
             static_cast<float>(
                 1000.0 * double(end.QuadPart - begin.QuadPart) /
                 double(qpc_frequency_.QuadPart)));
-        ++frame;
+    }
+    if (gpu_samples_ms_.empty()) {
+        throw std::runtime_error("No GPU samples measured");
     }
 }
 
@@ -2092,6 +2115,8 @@ int SceneRenderer::Run() {
         BuildAccelerationStructures();
     }
     UpdatePeakVideoMemory();
+    // Initialization includes the first submitted/presented production frame.
+    RenderFrame(0u, false, std::string());
     LARGE_INTEGER initialized{};
     QueryPerformanceCounter(&initialized);
     cold_initialization_ms_ =

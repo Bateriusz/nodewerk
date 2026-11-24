@@ -91,7 +91,6 @@ def _merge_role_reports(role: str, reports: list[dict[str, Any]]) -> dict[str, A
     for metric in (
         "distribution_bytes",
         "shader_count",
-        "peak_engine_committed_gpu_bytes",
     ):
         values = [report["measurement"].get(metric) for report in reports]
         if any(value != values[0] for value in values[1:]):
@@ -99,6 +98,10 @@ def _merge_role_reports(role: str, reports: list[dict[str, Any]]) -> dict[str, A
                 f"matched {role} runs disagree on '{metric}'"
             )
         merged_measurement[metric] = values[0]
+    memory = [report["measurement"].get("peak_engine_committed_gpu_bytes") for report in reports]
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in memory):
+        raise evidence.EvidenceError(f"{role} has an invalid observed peak GPU memory measurement")
+    merged_measurement["peak_engine_committed_gpu_bytes"] = max(memory)
     shader_ids = [report["measurement"].get("shader_ids") for report in reports]
     if any(
         not isinstance(value, list) or list(value) != list(shader_ids[0])

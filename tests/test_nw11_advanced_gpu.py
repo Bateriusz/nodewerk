@@ -928,6 +928,8 @@ def test_nw11_launcher_is_one_command_and_verifies_before_measuring() -> None:
     assert "collect-evidence.py" in launcher
     assert "capability-snapshot.json" in launcher
     assert "exit 3" in launcher
+    assert "& $Python.Command @all | Out-Host" in launcher
+    assert '$resolved += @("--runs", "1")' in launcher
     assert "pip install" not in launcher
     assert "cmake" not in launcher.lower()
     assert "visual studio" not in launcher.lower()
@@ -1260,7 +1262,12 @@ def test_nw11_windows_ci_runs_command_path_and_binds_toolchain_payloads() -> Non
         REPO_ROOT / ".github/workflows/nw11-advanced-gpu.yml"
     ).read_text(encoding="utf-8")
     assert "bootstrap-windows.ps1" in workflow
-    assert "enter-build-env.ps1" in workflow
+    assert "enter-build-env.ps1 -ExportGitHubEnv -SkipLlvm" in workflow
+    assert "-Ci -SkipLlvm" in workflow
+    assert "portable_cache_key.py" in workflow
+    assert "-G Ninja" in workflow
+    assert "windows-runtime-smoke:" in workflow
+    assert "runs-on: windows-2025" in workflow
     assert "--allow-software" in workflow
     assert "nw11_toolchain_identity.py" in workflow
     assert "nw11_shader_payloads.py" in workflow
@@ -1283,6 +1290,9 @@ def test_nw11_toolchain_payload_and_dependency_records(
     assert toolchain_identity.verify(good)["dxc_version"].startswith(
         contract.TOOLCHAIN_DXC_VERSION
     )
+    assert toolchain_identity._dxc_identity("dxcompiler.dll: 1.8 - 1.8.2407.12") == "1.8.2407.12"
+    with pytest.raises(toolchain_identity.ToolchainIdentityError):
+        toolchain_identity._dxc_identity("dxcompiler.dll: 1.8 - 1.8.2407.99")
     bad = dict(good, dxc_version="1.9.0.0")
     with pytest.raises(toolchain_identity.ToolchainIdentityError):
         toolchain_identity.verify(bad)

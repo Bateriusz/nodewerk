@@ -65,8 +65,10 @@ function Invoke-Nw11Python {
     $all = @()
     $all += $Python.Prefix
     $all += $Arguments
-    & $Python.Command @all
-    return $LASTEXITCODE
+    # Keep verifier stdout out of the numeric return value. PowerShell otherwise
+    # returns an array containing JSON/log lines as well as the process exit code.
+    & $Python.Command @all | Out-Host
+    return [int]$LASTEXITCODE
 }
 
 function Read-Nw11Json {
@@ -293,6 +295,7 @@ $arguments = @($execution.arguments)
 $runs = [int]$experiment.protocol.runs
 $deviceKey = [string]$eligibility.device_key
 $environmentKey = [string]$eligibility.environment_key
+if ($runs -ne 3) { throw "Unexpected frozen process-run count" }
 $referenceKind = [string]$experiment.criteria.image.reference_kind
 
 $baselineIds = @($manifest.shader_inventory.roles.baseline)
@@ -317,15 +320,22 @@ foreach ($pair in @(
         $captureRoot = Join-Path $captureDirectory ("{0}-run-{1}" -f $pair.Role, $index)
         $captureManifest = Join-Path $captureRoot "captures.json"
         $resolved = @()
-        foreach ($argument in $arguments) {
+        for ($argumentIndex = 0; $argumentIndex -lt $arguments.Count; $argumentIndex++) {
+            $argument = [string]$arguments[$argumentIndex]
+            if ($argument -eq "--runs") {
+                # The launcher owns the fresh-process loop, not the executable.
+                $argumentIndex++
+                $resolved += @("--runs", "1")
+                continue
+            }
             $resolved += $argument.Replace("{output}", $reportPath)
         }
         $resolved += @(
             "--role", $pair.Role,
             "--artifact-path", $pair.Artifact,
             "--device-tier", $DeviceTier,
-            "--device-key", $deviceKey,
-            "--environment-key", $environmentKey,
+            "--device-key", [string]$(if ($pair.Role -eq "variant") { $eligibility.device_key } else { $commonEligibility.device_key }),
+            "--environment-key", [string]$(if ($pair.Role -eq "variant") { $eligibility.environment_key } else { $commonEligibility.environment_key }),
             "--capability-decision", $pair.Decision,
             "--reference-kind", $referenceKind,
             "--distribution-bytes", [string]$pair.Bytes,

@@ -85,6 +85,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Compute pinned portable-tool cache key
+        id: nw01-portable-cache-key
+        shell: pwsh
+        run: >-
+          python tools/ci/portable_cache_key.py
+          --runner-os "${{ runner.os }}"
+          --runner-arch "${{ runner.arch }}"
+          --github-output "$env:GITHUB_OUTPUT"
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Provision the pinned NW-01 Windows toolchain
         shell: pwsh
         run: >-
@@ -92,37 +110,26 @@ jobs:
           -Ci -SkipLlvm -ProvenancePath build/nw01-bootstrap.json
       - name: Export the pinned MSVC/SDK build environment
         shell: pwsh
-        run: pwsh tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+        run: pwsh tools/nw01/enter-build-env.ps1 -ExportGitHubEnv -SkipLlvm
       - name: Confirm pinned offline DXC is available
         shell: pwsh
         run: |
           $dxc = Get-Command dxc.exe -ErrorAction Stop
           & $dxc.Source --version
       - name: Configure optional-profile experiment tools
-        run: cmake -S src/nw11 -B build/nw11-experiments -G "Visual Studio 17 2022" -A x64
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $ninja = (Get-Command ninja.exe -ErrorAction Stop).Source
+          cmake -S src/nw11 -B build/nw11-experiments -G Ninja "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_CXX_COMPILER=$cl" "-DCMAKE_MAKE_PROGRAM=$ninja" "-DNW11_DXC_EXECUTABLE=$dxc"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build capability probe and experiment executables
         run: >-
-          cmake --build build/nw11-experiments --config Release --parallel 2
+          cmake --build build/nw11-experiments --parallel 2
           --target nw11_capability_probe nw11_common_baseline nw11_common_analytic
           nw11_fallback_common nw11_fallback_analytic nw11_optional_mesh
           nw11_optional_ray
-      - name: Exercise the D3D12 command path on WARP
-        shell: pwsh
-        run: |
-          $root = "build/nw11-experiments"
-          $baseline = Get-ChildItem -Recurse $root -Filter "nw11_common_baseline.exe" | Select-Object -First 1
-          if (-not $baseline) { throw "missing baseline executable" }
-          & $baseline.FullName `
-            --allow-software `
-            --benchmark-json "build/nw11-warp-smoke.json" `
-            --warmup-seconds 0 `
-            --runs 1 `
-            --run-seconds 1
-          if ($LASTEXITCODE -ne 0) { throw "WARP command-path smoke failed" }
-          $report = Get-Content "build/nw11-warp-smoke.json" -Raw | ConvertFrom-Json
-          if ($report.measurement.gpu_time_samples.Count -lt 1) {
-            throw "WARP smoke produced no GPU timestamp samples"
-          }
       - name: Launch every artifact in self-check mode
         shell: pwsh
         run: |
@@ -150,21 +157,27 @@ jobs:
           $cache = Get-Content "build/nw11-experiments/CMakeCache.txt"
           $compilerLine = $cache | Where-Object { $_ -like "CMAKE_CXX_COMPILER:*" } | Select-Object -First 1
           $compiler = $compilerLine.Split("=", 2)[1]
-          $sdkRoot = "C:\Program Files (x86)\Windows Kits\10\Include"
-          $sdk = if (Test-Path $sdkRoot) {
-            Get-ChildItem $sdkRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          } else { $null }
-          $sdkVersion = if ($null -ne $sdk) { $sdk.Name } else { "unavailable" }
+          if (-not $compiler) { throw "CMake compiler identity missing" }
+          $activeCl = (Get-Command cl.exe -ErrorAction Stop).Source
+          if ((Resolve-Path $compiler).Path -ne (Resolve-Path $activeCl).Path) { throw "CMake did not use pinned active MSVC" }
+          if (-not $env:WindowsSDKVersion) { throw "Pinned SDK environment is missing" }
+          $sdkVersion = $env:WindowsSDKVersion.TrimEnd('\')
+          $pins = Get-Content "benchmarks/toolchain-manifest.v1.json" -Raw | ConvertFrom-Json
+          if ($sdkVersion -ne $pins.pinned_dependencies.windows_sdk_version) { throw "Active SDK does not match pinned SDK" }
           python tools/nw11_toolchain_identity.py `
             --dxc $dxc.Source `
             --cl $compiler `
             --cmake cmake `
+            --ninja ninja `
             --windows-sdk-version $sdkVersion `
             --out "build/nw11-artifacts/nw11-toolchain-identity.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/nw11_shader_payloads.py `
             --directory "build/nw11-experiments/shaders" `
             --out "build/nw11-artifacts/nw11-shader-payloads.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/nw11_pe_dependencies.py `
+            --exe "build/nw11-artifacts/nw11_capability_probe.exe" `
             --exe "build/nw11-artifacts/nw11_common_baseline.exe" `
             --exe "build/nw11-artifacts/nw11_common_analytic.exe" `
             --exe "build/nw11-artifacts/nw11_fallback_common.exe" `
@@ -172,6 +185,7 @@ jobs:
             --exe "build/nw11-artifacts/nw11_optional_mesh.exe" `
             --exe "build/nw11-artifacts/nw11_optional_ray.exe" `
             --out "build/nw11-artifacts/nw11-pe-dependencies.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload same-revision build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -179,10 +193,33 @@ jobs:
           path: build/nw11-artifacts/**
           if-no-files-found: error
 
+  windows-runtime-smoke:
+    name: NW-11 D3D12 command-path smoke (hosted WARP)
+    needs: [ci-impact, windows-experiment-build]
+    if: needs.windows-experiment-build.result == 'success'
+    runs-on: windows-2025
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-executables-${{ github.sha }}
+          path: build/nw11-artifacts
+      - name: Exercise common and fallback D3D12 paths on WARP
+        shell: pwsh
+        run: |
+          foreach ($name in @("nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic")) {
+            $reportPath = "build/$name-warp-smoke.json"
+            & "build/nw11-artifacts/$name.exe" --allow-software --benchmark-json $reportPath --warmup-seconds 0 --runs 1 --run-seconds 1
+            if ($LASTEXITCODE -ne 0) { throw "$name WARP command-path smoke failed" }
+            $report = Get-Content $reportPath -Raw | ConvertFrom-Json
+            if ($report.measurement.gpu_time_samples.Count -lt 1) {
+              throw "$name WARP smoke produced no GPU timestamp samples"
+            }
+          }
+
   build-validation-bundles:
     name: Build immutable validation bundle (${{ matrix.experiment }})
-    needs: [ci-impact, windows-experiment-build]
-    if: needs.ci-impact.outputs.nw11 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    needs: [ci-impact, windows-experiment-build, windows-runtime-smoke]
+    if: needs.windows-runtime-smoke.result == 'success'
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -232,6 +269,7 @@ jobs:
             --shader-payloads "build/nw11-artifacts/nw11-shader-payloads.json" `
             --dependency-report "build/nw11-artifacts/nw11-pe-dependencies.json" `
             --json-out "build/nw11-bundle-${{ matrix.slug }}-manifest.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/nw11_verify.py bundle `
             --bundle-root "build/nw11-bundle-${{ matrix.slug }}" `
             --expected-commit "${{ steps.revision.outputs.commit }}" `
