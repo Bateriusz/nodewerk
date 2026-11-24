@@ -56,8 +56,157 @@
     }
   },
   "after": {
-    "status": "pending_representative_runs",
-    "note": "Cross-cutting/full-regression timing will be measured on the NW-10A PR. NW-10-only cold/warm acceptance requires representative NW-10-only revisions after this routing exists; no synthetic timing is claimed."
+    "status": "accepted",
+    "measured_candidate_head_sha": "cf95df50ffc0e01aab683c4ab60311d98eee5df2",
+    "note": "Performance was measured on the final runtime/CI candidate head. The subsequent benchmark-record commit changes only this non-runtime JSON record. Queue time is excluded; job durations are derived from first/last GitHub job-log timestamps.",
+    "full_regression": {
+      "pull_request": 38,
+      "workflow_runs": {
+        "nw01": {
+          "run_id": 45381613011,
+          "critical_job_id": 138401934006,
+          "critical_job_seconds": 804.418
+        },
+        "nw07": {
+          "run_id": 45381612909,
+          "critical_job_id": 138401865406,
+          "critical_job_seconds": 443.322
+        },
+        "nw08": {
+          "run_id": 45381612819,
+          "critical_job_id": 138401857712,
+          "critical_job_seconds": 725.226
+        },
+        "nw08a": {
+          "run_id": 45381612867,
+          "critical_job_id": 138401875019,
+          "critical_job_seconds": 594.066
+        },
+        "nw10": {
+          "run_id": 45381612812,
+          "critical_job_id": 138401885400,
+          "critical_job_seconds": 568.931
+        }
+      },
+      "critical_path_seconds": 804.418,
+      "non_skipped_runner_seconds": 3792.985,
+      "non_skipped_runner_minutes": 63.216,
+      "critical_path_change_percent_vs_fresh_main": -19.809,
+      "runner_minutes_change_percent_vs_fresh_main": -6.476,
+      "acceptance": "pass"
+    },
+    "nw10_only": {
+      "benchmark_base_branch": "benchmark/NW-10A-final-base",
+      "harness_note": "The benchmark base contains the exact measured candidate content plus benchmark-only pull_request trigger wiring and a unique actions/cache key suffix. Each benchmark PR diff contains only benchmarks/nw10/**. GitHub Actions PR caches are scoped to each refs/pull/<n>/merge ref, so cold and warm measurements are distinguished by sequential revisions of the same PR.",
+      "routing": {
+        "selected_scope": "nw10",
+        "always_on_broad_contract_gate": true,
+        "skipped_heavy_jobs": [
+          "NW-01 Windows 11 x64 Build, Reproducibility & Concrete Check Gate",
+          "NW-07 Windows x64 release export and diagnostic sibling build",
+          "NW-08 Windows 11 x64 GUI/CLI, preview and device-recreation integration",
+          "NW-08A Windows x64 canonical NW-07 BuildChecks and real-player geometry"
+        ],
+        "acceptance": "pass"
+      },
+      "cold_runs": [
+        {
+          "pull_request": 41,
+          "head_sha": "ffb5be4b533084b6ce9ccf7050057cbd6138642e",
+          "nw10_run_id": 45381784394,
+          "windows_job_id": 138402489897,
+          "cache_state": "miss",
+          "critical_path_seconds": 551.058,
+          "non_skipped_runner_seconds": 731.878,
+          "non_skipped_runner_minutes": 12.198
+        },
+        {
+          "pull_request": 42,
+          "head_sha": "5f2d022811aa330340b7952784dc74d67da212b2",
+          "nw10_run_id": 45383462324,
+          "windows_job_id": 138408280521,
+          "cache_state": "miss",
+          "critical_path_seconds": 481.704,
+          "non_skipped_runner_seconds": 735.348,
+          "non_skipped_runner_minutes": 12.256
+        },
+        {
+          "pull_request": 43,
+          "head_sha": "40c937a68f862751c4b3c5439f664dcd603b54ca",
+          "nw10_run_id": 45383483986,
+          "windows_job_id": 138408351370,
+          "cache_state": "miss",
+          "critical_path_seconds": 502.86,
+          "non_skipped_runner_seconds": 755.845,
+          "non_skipped_runner_minutes": 12.597
+        }
+      ],
+      "warm_runs": [
+        {
+          "pull_request": 42,
+          "head_sha": "fab8c7639cc7accf4d3e8d6030b8b0a156d4c32c",
+          "nw10_run_id": 45384889185,
+          "windows_job_id": 138413192525,
+          "cache_state": "hit",
+          "critical_path_seconds": 562.081,
+          "non_skipped_runner_seconds": 808.986,
+          "non_skipped_runner_minutes": 13.483
+        },
+        {
+          "pull_request": 43,
+          "head_sha": "13a3d402aa96a591d8c2911c878b69a1fb2d85c8",
+          "nw10_run_id": 45384928877,
+          "windows_job_id": 138413350341,
+          "cache_state": "hit",
+          "critical_path_seconds": 562.454,
+          "non_skipped_runner_seconds": 792.043,
+          "non_skipped_runner_minutes": 13.201
+        }
+      ],
+      "summary": {
+        "cold_run_count": 3,
+        "cold_critical_path_mean_seconds": 511.874,
+        "cold_critical_path_max_seconds": 551.058,
+        "cold_runner_minutes_max": 12.597,
+        "warm_run_count": 2,
+        "warm_critical_path_mean_seconds": 562.268,
+        "warm_critical_path_max_seconds": 562.454,
+        "warm_runner_minutes_max": 13.483,
+        "cold_target_seconds_max": 720,
+        "warm_target_seconds_max": 600,
+        "runner_minutes_target_max": 25,
+        "acceptance": "pass"
+      },
+      "representative_step_seconds": {
+        "cold_pr41": {
+          "cache_restore_or_miss": 0.374,
+          "bootstrap_exact_toolchain": 234.4,
+          "build_release_player_and_fixture": 63.082,
+          "export_proof_and_intro": 96.455,
+          "pe_ledger_and_link_control": 50.869,
+          "correctness_transfer_blackwell_unpacked": 28.274,
+          "correctness_transfer_blackwell_packed": 30.436
+        },
+        "warm_pr42": {
+          "cache_restore": 2.28,
+          "bootstrap_exact_toolchain": 242.007,
+          "build_release_player_and_fixture": 64.797,
+          "export_proof_and_intro": 96.908,
+          "pe_ledger_and_link_control": 51.035,
+          "correctness_transfer_blackwell_unpacked": 29.219,
+          "correctness_transfer_blackwell_packed": 30.942
+        },
+        "warm_pr43": {
+          "cache_restore": 2.48,
+          "bootstrap_exact_toolchain": 248.598,
+          "build_release_player_and_fixture": 63.802,
+          "export_proof_and_intro": 94.303,
+          "pe_ledger_and_link_control": 50.227,
+          "correctness_transfer_blackwell_unpacked": 28.569,
+          "correctness_transfer_blackwell_packed": 30.021
+        }
+      }
+    }
   },
   "targets": {
     "nw10_only_cold_seconds_max": 720,
