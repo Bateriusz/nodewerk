@@ -5,6 +5,7 @@ param(
     [string]$ToolsRoot = "C:\Tools",
     [string]$ProvenancePath = "",
     [string]$DownloadCacheRoot = $env:NW01_DOWNLOAD_CACHE,
+    [switch]$SkipLlvm,
     [switch]$Ci
 )
 
@@ -444,14 +445,26 @@ try {
     $ninjaRoot = Join-Path $ToolsRoot ("Ninja-{0}" -f $contract.NinjaVersion)
     $ninjaBin = Ensure-ZipTool "Ninja" "ninja.exe" "ninja" $contract.NinjaVersion $ninjaUri ([string]$sources.ninja.sha256) $ninjaRoot "ninja.exe" "."
 
-    $llvmBin = Ensure-Llvm
+    $llvmBin = $null
+    if (-not $SkipLlvm) {
+        $llvmBin = Ensure-Llvm
+    } else {
+        Write-Host "[NW-BOOTSTRAP] LLVM provisioning skipped for MSVC-only consumer"
+        $provenance.tools["LLVM clang-cl/lld-link"] = [ordered]@{
+            expected_version = $contract.LlvmVersion
+            executable = $null
+            source = "not-required-msvc-only"
+        }
+    }
 
     $dxcUri = Expand-NwTemplate -Template ([string]$sources.dxc.url_template) -Version $contract.DxcVersion
     $dxcRoot = Join-Path $ToolsRoot ("dxc-{0}" -f $contract.DxcVersion)
     $dxcBin = Ensure-ZipTool "DXC" "dxc.exe" "dxc" $contract.DxcVersion $dxcUri ([string]$sources.dxc.sha256) $dxcRoot "bin\x64\dxc.exe" "bin\x64"
 
     foreach ($path in @($cmakeBin, $ninjaBin, $llvmBin, $dxcBin)) {
-        Add-NwPathEntry -Path $path -ExportGitHubPath:$Ci
+        if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+            Add-NwPathEntry -Path $path -ExportGitHubPath:$Ci
+        }
     }
 
     if ([string]::IsNullOrWhiteSpace($ProvenancePath)) {
