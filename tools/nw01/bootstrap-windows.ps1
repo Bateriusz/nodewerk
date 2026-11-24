@@ -307,17 +307,19 @@ function Invoke-VisualStudioInstanceModify {
     }
     Assert-NwAuthenticodeSignature -Path $setup -SubjectContains $visualStudio.BootstrapperSubjectContains
 
-    $channelId = Get-VisualStudioChannelId -InstallPath $InstallPath
     Write-Host "[NW-BOOTSTRAP] VS_MODIFY_TARGET=$InstallPath"
     Write-Host "[NW-BOOTSTRAP] VS_MODIFY_COMPONENTS=$($Components -join ',')"
 
     # ProcessStartInfo.ArgumentList preserves install-path quoting without relying
-    # on Start-Process's string re-serialization. setup.exe does not support
-    # --wait; Process.WaitForExit() is the documented automation boundary.
+    # on Start-Process's string re-serialization. The local installer already
+    # owns the target instance, so a modify operation does not need a channel
+    # override. Preventing an installer self-update removes an unrelated network
+    # dependency from the critical path. Keep the package cache: the runner is
+    # ephemeral, so deleting freshly downloaded packages only adds cleanup I/O.
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $setup
     $startInfo.UseShellExecute = $false
-    foreach ($arg in @("modify", "--installPath", $InstallPath, "--channelId", $channelId, "--quiet", "--norestart", "--nocache")) {
+    foreach ($arg in @("modify", "--installPath", $InstallPath, "--quiet", "--norestart", "--noUpdateInstaller")) {
         [void]$startInfo.ArgumentList.Add([string]$arg)
     }
     foreach ($component in $Components) {

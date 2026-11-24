@@ -131,6 +131,10 @@ def test_windows_bootstrap_cache_is_digest_verified_and_vs_install_is_minimal():
     assert "VS_MODIFY_TARGET" in bootstrap
     assert '"modify"' in bootstrap
     assert '"--installPath"' in bootstrap
+    assert '"--noUpdateInstaller"' in bootstrap
+    modify_block = bootstrap.split("function Invoke-VisualStudioInstanceModify", 1)[1].split("function Ensure-VisualStudio", 1)[0]
+    assert '"--channelId"' not in modify_block
+    assert '"--nocache"' not in modify_block
     assert "VS_BOOTSTRAP_COMPONENTS" in bootstrap
     assert "$componentsToInstall = @($visualStudio.Components)" in bootstrap
     sources = json.loads((ROOT / "tools" / "nw01" / "toolchain-sources.json").read_text(encoding="utf-8"))
@@ -154,11 +158,60 @@ def test_workflows_route_heavy_pr_jobs_and_cache_portable_payloads():
         assert f"needs.ci-impact.outputs.{scope}" in workflow
         assert job + ":" in workflow
         assert "runs-on: windows-latest" not in workflow
-        assert "runs-on: windows-2022" in workflow
         if job.startswith("windows"):
             assert "actions/cache@v4" in workflow
             assert "portable_cache_key.py" in workflow
             assert "NW01_DOWNLOAD_CACHE" in workflow
+
+
+def test_nw01_splits_build_and_runtime_by_host_capability():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    build = workflow.split("  windows-reproducibility-and-fixtures:", 1)[1].split("  windows-runtime-smoke:", 1)[0]
+    runtime = workflow.split("  windows-runtime-smoke:", 1)[1].split("  nw04-native-verification:", 1)[0]
+    native = workflow.split("  nw04-native-verification:", 1)[1].split("  windows-physical-evidence:", 1)[0]
+
+    assert "runs-on: windows-2022" in build
+    assert "Build current-head runtime-smoke inputs without launching" in build
+    assert "NW05_RUNTIME_BUNDLE_OUTPUT" in build
+    assert "NW09_REAL_PLAYER_BUILD_OUTPUT" in build
+    assert "--skip-smoke-launch" in build
+    assert "nw01-runtime-smoke-inputs-${{ github.sha }}" in build
+    assert "source_commit = (git rev-parse HEAD).Trim()" in build
+
+    assert "runs-on: windows-2025" in runtime
+    assert "actions/download-artifact@v4" in runtime
+    assert "needs: [ci-impact, windows-reproducibility-and-fixtures]" in runtime
+    assert "source_commit does not match the checked-out current head" in runtime
+    assert "Assert-NwExactToolVersion" in runtime
+    assert "NW05_RUNTIME_BUNDLE_INPUT" in runtime
+    assert "NW09_REAL_PLAYER_RUNTIME_INPUT" in runtime
+    assert "--smoke-only" in runtime
+
+    assert "runs-on: windows-2025" in native
+
+
+def test_runtime_sensitive_workflows_use_windows_2025():
+    nw08 = (ROOT / ".github" / "workflows" / "nw08-studio.yml").read_text(encoding="utf-8")
+    nw08a = (ROOT / ".github" / "workflows" / "nw08a-presentation-geometry.yml").read_text(encoding="utf-8")
+    nw07 = (ROOT / ".github" / "workflows" / "nw07-regression.yml").read_text(encoding="utf-8")
+
+    assert "runs-on: windows-2025" in nw08
+    assert "runs-on: windows-2022" not in nw08
+    assert "runs-on: windows-2025" in nw08a
+    assert "runs-on: windows-2022" not in nw08a
+    assert "runs-on: windows-2022" in nw07
+
+
+def test_runtime_split_helpers_preserve_build_and_launch_phases():
+    nw05 = (ROOT / "tests" / "test_nw05_real_export.py").read_text(encoding="utf-8")
+    nw09 = (ROOT / "tests" / "test_nw09_review_fixes.py").read_text(encoding="utf-8")
+    examples = (ROOT / "tools" / "nw09_ci_examples.py").read_text(encoding="utf-8")
+    assert "NW05_RUNTIME_BUNDLE_OUTPUT" in nw05
+    assert "NW05_RUNTIME_BUNDLE_INPUT" in nw05
+    assert "NW09_REAL_PLAYER_BUILD_OUTPUT" in nw09
+    assert "NW09_REAL_PLAYER_RUNTIME_INPUT" in nw09
+    assert "--skip-smoke-launch" in examples
+    assert "--smoke-only" in examples
 
 
 def test_windows_full_pytest_is_not_duplicated():
