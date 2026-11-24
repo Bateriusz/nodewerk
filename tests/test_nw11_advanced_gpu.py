@@ -666,15 +666,14 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
             ada_fallback,
         ],
     )
-    isolated = evidence.build_decision_document(
-        evidence=mismatched,
-        experiment=document,
-        bundle_manifest=manifest,
-        bundle_manifest_sha256=mismatched["bundle_manifest_sha256"],
-        expected_commit=COMMIT,
-    )
-    assert isolated["satisfies_completion"] is False
-    assert all(item["status"] == "pending" for item in isolated["devices"])
+    with pytest.raises(evidence.EvidenceError, match="same device/environment"):
+        evidence.build_decision_document(
+            evidence=mismatched,
+            experiment=document,
+            bundle_manifest=manifest,
+            bundle_manifest_sha256=mismatched["bundle_manifest_sha256"],
+            expected_commit=COMMIT,
+        )
 
 
 def test_nw11_stale_evidence_and_artifact_hashes_are_rejected(tmp_path: Path) -> None:
