@@ -5,7 +5,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, benchmark/NW-10A-final-base ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -159,7 +159,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}\nw01-download-cache
-          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}-nw10a-final-cold-v1
 
       - name: Export portable-tool payload cache root
         shell: pwsh
