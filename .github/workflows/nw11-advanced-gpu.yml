@@ -193,6 +193,59 @@ jobs:
           path: build/nw11-artifacts/**
           if-no-files-found: error
 
+  common-production-regression:
+    name: NW-07 common export before/after NW-11 (native byte identity)
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw11 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compute pinned portable-tool cache key
+        id: nw01-portable-cache-key
+        shell: pwsh
+        run: >-
+          python tools/ci/portable_cache_key.py
+          --runner-os "${{ runner.os }}"
+          --runner-arch "${{ runner.arch }}"
+          --github-output "$env:GITHUB_OUTPUT"
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Bootstrap and activate exact common export toolchain
+        shell: pwsh
+        run: |
+          pwsh tools/nw01/bootstrap-windows.ps1 -Ci -SkipLlvm
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh tools/nw01/enter-build-env.ps1 -ExportGitHubEnv -SkipLlvm
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Export both real production artifacts and compare SHA-256 and dependencies
+        shell: pwsh
+        run: |
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $candidate = (git rev-parse HEAD).Trim()
+          python tools/nw11_common_regression.py --candidate $candidate --dxc $dxc --out build/nw11-common-proof
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain common artifact comparison and actual exports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-common-production-proof-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-common-proof/**
+          if-no-files-found: warn
+
   windows-runtime-smoke:
     name: NW-11 D3D12 command-path smoke (hosted WARP)
     needs: [ci-impact, windows-experiment-build]
@@ -218,8 +271,8 @@ jobs:
 
   build-validation-bundles:
     name: Build immutable validation bundle (${{ matrix.experiment }})
-    needs: [ci-impact, windows-experiment-build, windows-runtime-smoke]
-    if: needs.windows-runtime-smoke.result == 'success'
+    needs: [ci-impact, windows-experiment-build, windows-runtime-smoke, common-production-regression]
+    if: needs.windows-runtime-smoke.result == 'success' && needs.common-production-regression.result == 'success'
     runs-on: windows-2022
     strategy:
       fail-fast: false
