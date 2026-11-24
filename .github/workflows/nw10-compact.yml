@@ -484,7 +484,7 @@ jobs:
             "--final-executable", "$PWD/build/nw10-intro/compact/$stem.exe",
             "--linker-baseline-executable", "$PWD/build/nw10-intro-link-control/compact/$stem.exe",
             "--decoder-on-template", $template,
-            "--decoder-off-template", "$PWD/build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe",
+            "--decoder-off-template", $canonicalTemplate,
             "--final-package", "$PWD/build/nw10-intro/$stem.nwp",
             "--linker-baseline-package", "$PWD/build/nw10-intro-link-control/$stem.nwp",
             "--final-manifest", "$PWD/build/nw10-intro/$stem.manifest.json",
