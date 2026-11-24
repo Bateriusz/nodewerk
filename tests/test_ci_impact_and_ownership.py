@@ -132,8 +132,10 @@ def test_nw10_windows_job_uses_msvc_only_bootstrap_profile():
 
     windows = workflow.split("  windows-compact-export:", 1)[1]
     assert "- name: Install pytest" not in windows
-    assert "build/nw10-decoder-off" not in windows
+    assert 'cmake --preset nw07-release -B "$PWD/build/nw10-decoder-off"' not in windows
+    assert 'cmake --build "$PWD/build/nw10-decoder-off"' not in windows
     assert "build/nw07-release-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe" in windows
+    assert '"--decoder-off-template", $canonicalTemplate,' in windows
 
 
 def test_windows_bootstrap_cache_is_digest_verified_and_vs_install_is_minimal():
