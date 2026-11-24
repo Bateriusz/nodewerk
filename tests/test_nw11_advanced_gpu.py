@@ -907,9 +907,9 @@ def test_nw11_collected_evidence_preserves_raw_runs_and_pending_coverage(
             str(decisions_path),
         ]
     )
-    assert code == verify.EXIT_PENDING
+    assert code == verify.EXIT_OK
     decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
-    assert decisions["aggregate_status"] == "pending"
+    assert decisions["aggregate_status"] == "accepted"
     assert decisions["satisfies_completion"] is False
 
 
@@ -931,7 +931,7 @@ def test_nw11_launcher_is_one_command_and_verifies_before_measuring() -> None:
     assert "cmake" not in launcher.lower()
     assert "visual studio" not in launcher.lower()
     verify_position = launcher.index('"bundle", "--bundle-root"')
-    measure_position = launcher.index("foreach ($pair in @(")
+    measure_position = launcher.index("foreach ($pair in $pairs)")
     assert verify_position < measure_position
 
 
@@ -1042,11 +1042,11 @@ def test_nw11_pending_capability_query_never_reaches_optional_execution(
     launcher = (
         REPO_ROOT / "tools" / "nw11" / "run-validation.ps1"
     ).read_text(encoding="utf-8")
-    assert "$eligibilityCode -eq 11" in launcher
-    assert "$eligibilityCode -eq 3" in launcher
-    pending_position = launcher.index("$eligibilityCode -eq 11")
-    loop_position = launcher.index("foreach ($pair in @(")
-    assert pending_position < loop_position
+    assert "$optionalRunnable = $eligibilityCode -eq 0" in launcher
+    assert "$eligibilityCode -notin @(0, 3, 11)" in launcher
+    gate_position = launcher.index("$optionalRunnable = $eligibilityCode -eq 0")
+    loop_position = launcher.index("foreach ($pair in $pairs)")
+    assert gate_position < loop_position
 
 
 def test_nw11_malformed_run_status_and_missing_constants_fail_closed(
