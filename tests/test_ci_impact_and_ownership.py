@@ -121,7 +121,10 @@ def test_nw10_windows_job_uses_msvc_only_bootstrap_profile():
     env_script = (ROOT / "tools" / "nw01" / "enter-build-env.ps1").read_text(encoding="utf-8")
     module = (ROOT / "tools" / "nw01" / "Nw01.Windows.psm1").read_text(encoding="utf-8")
 
-    assert workflow.count("-SkipLlvm") >= 2
+    correctness = (ROOT / "tools" / "nw10" / "run-correctness-evidence.ps1").read_text(encoding="utf-8")
+    assert workflow.count("-SkipLlvm") >= 6
+    assert "[switch]$SkipLlvm" in correctness
+    assert "Enter-NwBuildEnvironment -RepoRoot $repo -SkipLlvm:$SkipLlvm" in correctness
     assert "LLVM provisioning skipped for MSVC-only consumer" in bootstrap
     assert "[switch]$SkipLlvm" in env_script
     assert "-RequireLlvm:(-not $SkipLlvm)" in module
@@ -187,6 +190,8 @@ def test_nw01_splits_build_and_runtime_by_host_capability():
     assert "Build current-head runtime-smoke inputs without launching" in build
     assert "NW05_RUNTIME_BUNDLE_OUTPUT" in build
     assert "NW09_REAL_PLAYER_BUILD_OUTPUT" in build
+    assert '$env:NW05_REAL_PLAYER_TEMPLATE = $template' in build
+    assert 'Copy-Item $template (Join-Path $playerDir "nw_procedural_image_player.exe")' in build
     assert "--skip-smoke-launch" in build
     assert "nw01-runtime-smoke-inputs-${{ github.sha }}" in build
     assert "source_commit = (git rev-parse HEAD).Trim()" in build

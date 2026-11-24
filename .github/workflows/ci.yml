@@ -202,9 +202,9 @@ jobs:
           $examplesDir = Join-Path $root "examples"
           New-Item -ItemType Directory -Force -Path $playerDir,$dxcDir,$nw05Dir,$nw09Dir | Out-Null
 
-          $template = Resolve-Path "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          $template = (Resolve-Path "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe").Path
+          $env:NW05_REAL_PLAYER_TEMPLATE = $template
           Copy-Item $template (Join-Path $playerDir "nw_procedural_image_player.exe") -Force
-          $env:NW05_REAL_PLAYER_TEMPLATE = (Join-Path $playerDir "nw_procedural_image_player.exe")
 
           $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
           Copy-Item (Join-Path (Split-Path $dxc -Parent) "*") $dxcDir -Recurse -Force

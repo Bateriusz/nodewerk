@@ -11,6 +11,7 @@ param(
     [string]$TargetTier,
     [ValidateSet("unpacked", "packed")]
     [string]$PackagingMode = "unpacked",
+    [switch]$SkipLlvm,
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
     [string]$ExpectedBranch = "agent/NW-10",
     [string]$ReferenceEvidence = "build/nw10-proof/report.json",
@@ -405,7 +406,7 @@ try {
 
         Write-Host "[NW10 CORRECTNESS] preparing diagnostic transfer bundle on qualified build host"
         Import-Module (Join-Path $repo "tools/nw01/Nw01.Windows.psm1") -Force
-        $entered = Enter-NwBuildEnvironment -RepoRoot $repo
+        $entered = Enter-NwBuildEnvironment -RepoRoot $repo -SkipLlvm:$SkipLlvm
         Write-Host "[NW10 CORRECTNESS] MSVC toolset=$($entered.VisualStudio.VcVarsVersion) SDK=$($entered.VisualStudio.WindowsSdkVersion)"
 
         $root = Resolve-NwRepoPath $WorkRoot
@@ -874,7 +875,7 @@ try {
 
     Write-Host "[NW10 CORRECTNESS] entering pinned MSVC/SDK/DXC environment"
     Import-Module (Join-Path $repo "tools/nw01/Nw01.Windows.psm1") -Force
-    $entered = Enter-NwBuildEnvironment -RepoRoot $repo
+    $entered = Enter-NwBuildEnvironment -RepoRoot $repo -SkipLlvm:$SkipLlvm
     Write-Host "[NW10 CORRECTNESS] MSVC toolset=$($entered.VisualStudio.VcVarsVersion) SDK=$($entered.VisualStudio.WindowsSdkVersion)"
 
     $root = Resolve-NwRepoPath $WorkRoot
