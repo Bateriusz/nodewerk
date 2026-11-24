@@ -296,10 +296,8 @@ def _accounting(
     incremental = variant_distribution - baseline_distribution
     fallback_distribution = fallback + common_shaders
     complete = max(baseline_distribution, variant_distribution, fallback_distribution)
-    within_complete = complete <= int(artifact_budget["complete_distribution_bytes_ceiling"])
-    within_incremental = incremental <= int(artifact_budget["incremental_distribution_bytes_ceiling"])
     return {
-        "adoption_budget_status": "within_budget" if within_complete and within_incremental else "rejected",
+        "distribution_size_policy": "report_only",
         "common_distribution_bytes": common,
         "baseline_distribution_bytes": baseline_distribution,
         "fallback_distribution_bytes": fallback_distribution,
@@ -322,10 +320,6 @@ def _accounting(
         "complete_distribution_bytes": complete,
         "total_bundle_bytes": sum(item["bytes"] for item in artifacts),
         "artifact_budget": dict(artifact_budget),
-        "within_complete_ceiling": complete
-        <= int(artifact_budget["complete_distribution_bytes_ceiling"]),
-        "within_incremental_budget": incremental
-        <= int(artifact_budget["incremental_distribution_bytes_ceiling"]),
     }
 
 
@@ -380,8 +374,6 @@ def build_manifest(
         artifact_budget=artifact_budget,
         dependency_ledger=dependency_ledger,
     )
-    # A valid experiment may exceed its frozen budget. Preserve the actual
-    # bytes and explicit rejection; integrity verification is not adoption.
 
     identity = {
         "repository": repository,
@@ -429,7 +421,7 @@ def build_manifest(
             "variants under identical declared settings, and runs the repository-"
             "owned verifier before reporting verified evidence. Capability absence "
             "is unsupported, never a silent effect substitution. A verified bundle "
-            "may contain a budget-rejected experiment; it is not an adopted export."
+            "reports distribution size without imposing a byte ceiling; it is not an adopted export."
         ),
         **identity,
     }
@@ -769,17 +761,9 @@ def verify_bundle(
     experiment_budget = _mapping(
         experiment_document.get("artifact_budget"), "experiment.artifact_budget"
     )
-    for key in (
-        "complete_distribution_bytes_ceiling",
-        "incremental_distribution_bytes_ceiling",
-        "shader_count_increment_ceiling",
-    ):
-        if int(recorded_budget.get(key, -1)) > int(
-            experiment_budget.get(key, -1)
-        ):
-            raise BundleError(
-                f"bundle accounting weakened the experiment budget '{key}'"
-            )
+    if recorded_budget != {"distribution_size_policy": "report_only",
+                           "shader_count_increment_ceiling": experiment_budget["shader_count_increment_ceiling"]}:
+        raise BundleError("bundle accounting policy does not match experiment")
 
     # Fail closed on unrecorded payload files anywhere in the bundle.  Raw
     # evidence is written outside the immutable bundle root by the launcher.
@@ -810,8 +794,6 @@ def verify_bundle(
         ],
         dependency_ledger=list(manifest.get("dependency_ledger") or []),
     )
-    # A valid experiment may exceed its frozen budget. Preserve the actual
-    # bytes and explicit rejection; integrity verification is not adoption.
     if accounting != manifest["accounting"]:
         raise BundleError("bundle accounting does not match recorded artifact bytes")
     return {

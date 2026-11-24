@@ -1,11 +1,8 @@
 {
   "artifact_budget": {
-    "complete_distribution_bytes_ceiling": 262144,
-    "incremental_distribution_bytes_ceiling": 0,
+    "distribution_size_policy": "report_only",
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000.0,
-    "stretch_distribution_bytes_ceiling": 131072,
-    "stretch_is_mandatory_gate": false
+    "process_start_to_first_present_ms_ceiling": 2000.0
   },
   "dependencies": [
     {

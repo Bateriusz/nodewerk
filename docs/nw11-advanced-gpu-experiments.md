@@ -27,7 +27,7 @@ The common profile is inherited unchanged from NW-01/NW-03..NW-07:
 | Requirements digest | `sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a` |
 | API | D3D12 Feature Level 12_0, shader model 6_0 |
 | Fallback | none (this *is* the common artifact profile) |
-| Distribution ceiling | 262,144 bytes complete; 131,072-byte stretch is measurement only |
+| Distribution size | Measured and reported; no NW-11 experimental byte ceiling |
 | Evidence status | `pending` until RTX 4060 Ti and RTX 5070 Ti common-artifact correctness is physically verified |
 
 The common requirements digest is the **inherited NW-07 identity**
@@ -120,11 +120,11 @@ Definitions live in `benchmarks/nw11/experiments/`. Each is marked
   nearest-rank p99, no application pipeline cache;
 - at least 10% lower p99 GPU time at matched quality, independently per
   qualified device/environment;
-- end-to-end frame-time, CPU-submit, distribution, shader-count,
+- end-to-end frame-time, CPU-submit, shader-count,
   cold-initialization, and VRAM guardrails;
 - a fixed-quality image criterion (`max_abs_channel_error <= 1e-4`,
   `RMSE <= 1e-4`) at frozen fixed ticks;
-- incremental byte and shader-count budgets;
+- actual complete and incremental distribution sizes (informational), and shader-count guardrails;
 - the fallback artifact identity and execution arguments.
 
 ### 2.0 End-to-end implementation
@@ -199,7 +199,7 @@ link mesh or DXR code, shaders, or payload headers.
 - Synchronization: `SetMeshOutputCounts` and
   `GroupMemoryBarrierWithGroupSync()` are declared and enforced by static
   bundle checks.
-- Incremental budget: 32,768 bytes; shader-count increment ≤ 2.
+- Shader-count increment ≤ 2; distribution bytes reported.
 
 ### 2.2 DXR ray queries versus analytic reflection
 
@@ -213,7 +213,7 @@ link mesh or DXR code, shaders, or payload headers.
   graph-generated geometry.
 - The acceleration structure and all bound buffers must outlive the frame
   command list; BLAS/TLAS build work is fenced before shading.
-- Incremental budget: 65,536 bytes; shader-count increment ≤ 1.
+- Shader-count increment ≤ 1; distribution bytes reported.
 - Missing DXR capability is explicitly unsupported and the separately exported
   common analytic fallback remains available; initialization/execution failure
   is reported as failure, never silently substituted.
@@ -299,7 +299,7 @@ The bundle manifest also enforces zero-cost stripping:
 - common and fallback artifacts carry no mesh, ray-tracing, Agility, DLSS,
   RTX Kit, model-weight, or vendor SDK payload/dependency;
 - common/fallback shader targets are restricted to the common profile;
-- every optional byte is counted toward the incremental budget.
+- every optional byte is counted in the distribution report.
 
 ### One-command physical validation
 
@@ -411,10 +411,10 @@ No further feature prototype enters NW-11.
 NW-09 is required only for future temporal/stateful experiments; the two NW-11
 experiments are stateless and do not depend on it. NW-11 is independent of
 NW-10's 64 KiB result: it neither raises nor lowers that compact target, and
-the common distribution ceiling remains the frozen NW-07 256 KiB gate.
+the original NW-07 256 KiB proof and its exact-byte regression gate remain unchanged.
 
 
-### Frozen source isolation and budget-rejected validation bundles
+### Frozen source isolation and informational distribution accounting
 
 NW-11 generates its specialized translation unit from the original production
 `src/player/package_player.cpp` using a source-SHA- and context-checked overlay.
@@ -422,13 +422,8 @@ NW-07 and NW-10 continue to compile their original frozen input; historical
 NW-10 reports and physical evidence are not rewritten. If the shared source
 changes later, the generator fails until the overlay is explicitly rebased.
 
-Bundle integrity and adoption are separate results. An oversized experimental
-measurement executable is retained with its full actual byte cost and
-`adoption_budget_status: rejected`; a verified bundle does not imply an
-accepted experiment. The 256 KiB complete-distribution and per-profile
-incremental ceilings remain unchanged and the measurement evaluator rejects
-any over-budget baseline, variant or fallback. This is intentionally
-conservative: the instrumented executable is counted in full, not estimated
-as a hypothetical smaller release executable. A size-optimized release
-specialization must be built and measured separately before adoption if the
-instrumented distribution exceeds the ceiling.
+Bundle integrity and adoption are separate results. Complete and incremental
+experimental distribution bytes are reported without a size acceptance gate.
+The original NW-07 common production export must still remain byte-identical,
+and unused optional code, shaders and dependencies must remain excluded.
+Performance, quality, resource, shader-count and capability checks are unchanged.

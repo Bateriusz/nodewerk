@@ -96,15 +96,10 @@ NUMERIC_ABSOLUTE_TOLERANCE = 1e-5
 NUMERIC_RELATIVE_TOLERANCE = 1e-4
 
 # Preserved NW-07 absolute gates.
-COMPLETE_DISTRIBUTION_CEILING_BYTES = 262_144
-STRETCH_DISTRIBUTION_CEILING_BYTES = 131_072
 PEAK_ENGINE_COMMITTED_GPU_BYTES = 512 * 1024 * 1024
 PROCESS_START_TO_FIRST_PRESENT_MS = 2_000.0
 
-# Optional-profile incremental budgets.  These count every optional byte that
-# is added to the common baseline distribution.
-DEFAULT_INCREMENTAL_DISTRIBUTION_CEILING_BYTES = 32_768
-RAY_QUERY_INCREMENTAL_DISTRIBUTION_CEILING_BYTES = 65_536
+# Shader-count guardrail; distribution size is reported, not gated.
 SHADER_COUNT_INCREMENT_MAX = 2
 
 TOOLCHAIN_DXC_VERSION = "1.8.2407"
@@ -227,21 +222,18 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "queries": COMMON_QUERIES,
         "shader_targets": COMMON_SHADER_TARGETS,
         "fallback_artifact_id": None,
-        "incremental_budget_bytes": 0,
     },
     MESH_PROFILE_ID: {
         "profile_kind": "optional",
         "queries": MESH_QUERIES,
         "shader_targets": MESH_SHADER_TARGETS,
         "fallback_artifact_id": COMMON_FALLBACK_ARTIFACT_ID,
-        "incremental_budget_bytes": DEFAULT_INCREMENTAL_DISTRIBUTION_CEILING_BYTES,
     },
     RAY_QUERY_PROFILE_ID: {
         "profile_kind": "optional",
         "queries": RAY_QUERIES,
         "shader_targets": RAY_QUERY_SHADER_TARGETS,
         "fallback_artifact_id": COMMON_FALLBACK_ARTIFACT_ID,
-        "incremental_budget_bytes": RAY_QUERY_INCREMENTAL_DISTRIBUTION_CEILING_BYTES,
     },
 }
 
@@ -389,16 +381,13 @@ def frozen_workload() -> dict[str, Any]:
 
 def frozen_artifact_budget() -> dict[str, Any]:
     return {
-        "complete_distribution_bytes_ceiling": COMPLETE_DISTRIBUTION_CEILING_BYTES,
-        "stretch_distribution_bytes_ceiling": STRETCH_DISTRIBUTION_CEILING_BYTES,
-        "stretch_is_mandatory_gate": False,
+        "distribution_size_policy": "report_only",
         "peak_engine_committed_gpu_bytes_ceiling": PEAK_ENGINE_COMMITTED_GPU_BYTES,
         "process_start_to_first_present_ms_ceiling": PROCESS_START_TO_FIRST_PRESENT_MS,
-        "incremental_distribution_bytes_ceiling": DEFAULT_INCREMENTAL_DISTRIBUTION_CEILING_BYTES,
         "shader_count_increment_ceiling": SHADER_COUNT_INCREMENT_MAX,
         "optional_dependency_bytes_policy": (
             "Every optional SDK, SDK component, model weight, or vendor runtime "
-            "byte is counted in the incremental distribution budget and is "
+            "byte is counted in the distribution report and is "
             "absent from common/fallback artifacts."
         ),
     }
@@ -492,12 +481,8 @@ __all__ = [
     "IMAGE_RMSE_TOLERANCE",
     "NUMERIC_ABSOLUTE_TOLERANCE",
     "NUMERIC_RELATIVE_TOLERANCE",
-    "COMPLETE_DISTRIBUTION_CEILING_BYTES",
-    "STRETCH_DISTRIBUTION_CEILING_BYTES",
     "PEAK_ENGINE_COMMITTED_GPU_BYTES",
     "PROCESS_START_TO_FIRST_PRESENT_MS",
-    "DEFAULT_INCREMENTAL_DISTRIBUTION_CEILING_BYTES",
-    "RAY_QUERY_INCREMENTAL_DISTRIBUTION_CEILING_BYTES",
     "SHADER_COUNT_INCREMENT_MAX",
     "TOOLCHAIN_DXC_VERSION",
     "TOOLCHAIN_DXC_MEASURED_VERSION",

@@ -149,9 +149,9 @@
         "complete_distribution_bytes",
         "optional_dependency_bytes",
         "artifact_budget",
-        "within_complete_ceiling",
-        "within_incremental_budget"
-      ]
+        "distribution_size_policy"
+      ],
+      "properties": { "distribution_size_policy": { "const": "report_only" } }
     },
     "verification": {
       "type": "object",

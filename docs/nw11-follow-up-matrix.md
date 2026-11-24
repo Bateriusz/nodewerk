@@ -13,12 +13,12 @@ NW-11; each requires a separately scoped follow-up issue.
 | Shader Execution Reordering (SER) | follow-up issue required | depends on the ray-query experiment first |
 | Opacity micromaps | not applicable | frozen torus content is fully opaque |
 | Micromesh / clustered geometry | blocked by licensing | vendor SDK terms and likely byte-positive torus payload |
-| Tensor / neural shading | follow-up issue required | model weights and vendor runtime dominate the budget |
+| Tensor / neural shading | follow-up issue required | model weights and vendor runtime dominate the distribution cost |
 
 ## Vendor-optional cost ledger
 
 DLSS, RTX Kit, model weights, and vendor SDK components are recorded as
 optional, fully counted items. NW-11 distributes zero bytes from them; any
 future use must count every DLL, data file, model weight, and notice in the
-incremental distribution budget and must never appear in a common or fallback
+incremental distribution accounting and must never appear in a common or fallback
 artifact.

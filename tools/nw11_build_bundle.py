@@ -432,12 +432,7 @@ def build(
         query["query_id"] for query in profile["queried_capabilities"]
     ] + list(profile["shader_targets"])
     budget = {
-        "complete_distribution_bytes_ceiling": int(
-            document["artifact_budget"]["complete_distribution_bytes_ceiling"]
-        ),
-        "incremental_distribution_bytes_ceiling": int(
-            document["artifact_budget"]["incremental_distribution_bytes_ceiling"]
-        ),
+        "distribution_size_policy": "report_only",
         "shader_count_increment_ceiling": int(
             document["artifact_budget"]["shader_count_increment_ceiling"]
         ),

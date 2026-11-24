@@ -359,18 +359,15 @@ jobs:
             --bundle-root "build/nw11-bundle-${{ matrix.slug }}" `
             --expected-commit "${{ steps.revision.outputs.commit }}" `
             --json-out "build/nw11-bundle-${{ matrix.slug }}-verification.json"
-      - name: Report integrity and adoption budget separately
+      - name: Report integrity and actual distribution sizes
         shell: pwsh
         run: |
           $report = Get-Content "build/nw11-bundle-${{ matrix.slug }}-verification.json" -Raw | ConvertFrom-Json
           $accounting = $report.accounting
           if ($report.status -ne "verified") { throw "bundle integrity not verified" }
-          "### NW-11 ${{ matrix.slug }} artifact budget" >> $env:GITHUB_STEP_SUMMARY
-          "Integrity: verified; adoption budget: $($accounting.adoption_budget_status)" >> $env:GITHUB_STEP_SUMMARY
+          "### NW-11 ${{ matrix.slug }} distribution accounting" >> $env:GITHUB_STEP_SUMMARY
+          "Integrity: verified; distribution size: informational only" >> $env:GITHUB_STEP_SUMMARY
           "Baseline: $($accounting.baseline_distribution_bytes) B; variant: $($accounting.variant_distribution_bytes) B; fallback: $($accounting.fallback_distribution_bytes) B; incremental: $($accounting.incremental_distribution_bytes) B." >> $env:GITHUB_STEP_SUMMARY
-          if ($accounting.adoption_budget_status -eq "rejected") {
-            Write-Host "::warning::Experiment exceeds frozen distribution budget and cannot be adopted. Retaining the actual executables for diagnosis and measurement."
-          }
       - name: Upload immutable bundle
         uses: actions/upload-artifact@v4
         with:

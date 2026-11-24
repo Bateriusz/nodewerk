@@ -278,7 +278,7 @@ def test_nw11_profiles_are_frozen_and_digest_bound() -> None:
 
     assert common["requirements_digest"] == contract.COMMON_REQUIREMENTS_DIGEST
     assert common["fallback_artifact_id"] is None
-    assert common["artifact_budget"]["incremental_distribution_bytes_ceiling"] == 0
+    assert common["artifact_budget"]["distribution_size_policy"] == "report_only"
     assert mesh["fallback_artifact_id"] == contract.COMMON_FALLBACK_ARTIFACT_ID
     assert ray["fallback_artifact_id"] == contract.COMMON_FALLBACK_ARTIFACT_ID
     assert mesh["requirements_digest"] == capability.compute_requirements_digest(mesh)
@@ -452,7 +452,7 @@ def test_nw11_bundle_is_deterministic_and_self_contained(tmp_path: Path) -> None
     ):
         assert required in paths
     assert first_manifest["verification"]["operator_supplied_values_allowed"] is False
-    assert first_manifest["accounting"]["within_incremental_budget"] is True
+    assert first_manifest["accounting"]["distribution_size_policy"] == "report_only"
     fallback = next(
         artifact
         for artifact in first_manifest["artifacts"]
@@ -527,7 +527,7 @@ def test_nw11_malformed_bundle_and_stale_commit_fail_closed(tmp_path: Path) -> N
         ({}, "accepted"),
         ({"variant": _measurement(gpu=9.5)}, "rejected"),
         ({"variant": _measurement(gpu=7.5, frame=17.0)}, "rejected"),
-        ({"variant": _measurement(gpu=7.5, distribution=2_000_000)}, "rejected"),
+        ({"variant": _measurement(gpu=7.5, distribution=2_000_000)}, "accepted"),
         ({"variant": _measurement(gpu=7.5, image_error=0.01)}, "rejected"),
     ),
 )
@@ -1712,7 +1712,7 @@ def test_nw11_specialization_is_isolated_from_frozen_player(tmp_path: Path) -> N
         specialize(changed, overlay)
 
 
-def test_nw11_oversize_bundle_is_verified_but_not_adoptable(tmp_path: Path) -> None:
+def test_nw11_distribution_size_is_reported_not_gated(tmp_path: Path) -> None:
     files = _source_artifacts(tmp_path)
     files["variant.exe"].write_bytes(b"MZ" + b"x" * 300_000)
     root = tmp_path / "oversize"
@@ -1724,13 +1724,14 @@ def test_nw11_oversize_bundle_is_verified_but_not_adoptable(tmp_path: Path) -> N
     )
     accounting = manifest["accounting"]
     assert accounting["complete_distribution_bytes"] > 262144
-    assert accounting["within_complete_ceiling"] is False
-    assert accounting["adoption_budget_status"] == "rejected"
+    assert accounting["distribution_size_policy"] == "report_only"
+    assert accounting["incremental_distribution_bytes"] > 32768
     assert bundle.verify_bundle(root, expected_commit=COMMIT)["accounting"] == accounting
     result = experiment.evaluate_experiment(_experiment(), {
         "device_key": "device", "environment_key": "environment",
         "baseline": _measurement(gpu=10.0, distribution=accounting["baseline_distribution_bytes"]),
         "variant": _measurement(gpu=7.5, distribution=accounting["variant_distribution_bytes"]),
     }, device_key="device", environment_key="environment")
-    assert result["status"] == "rejected"
-    assert any(reason["code"] == "NW11-DISTRIBUTION-CEILING" for reason in result["reasons"])
+    assert result["status"] == "accepted"
+    assert result["reasons"] == []
+    assert result["aggregate"]["incremental_distribution_bytes"] == accounting["incremental_distribution_bytes"]

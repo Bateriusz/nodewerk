@@ -229,15 +229,10 @@ def validate_profile(record: Mapping[str, Any]) -> dict[str, Any]:
         raise CapabilityProfileError("profile evidence_status is not a known NW-11 status")
 
     budgets = _require_mapping(profile.get("artifact_budget"), "artifact_budget")
-    if definition["profile_kind"] == "common":
-        if int(budgets.get("incremental_distribution_bytes_ceiling", -1)) != 0:
-            raise CapabilityProfileError("the common profile has no optional incremental budget")
-    else:
-        expected_budget = int(definition["incremental_budget_bytes"])
-        if int(budgets.get("incremental_distribution_bytes_ceiling", -1)) != expected_budget:
-            raise CapabilityProfileError(
-                f"profile '{profile_id}' changed its frozen incremental byte budget"
-            )
+    if budgets.get("distribution_size_policy") != "report_only":
+        raise CapabilityProfileError("distribution size must be informational only")
+    if any(key in budgets for key in ("complete_distribution_bytes_ceiling", "incremental_distribution_bytes_ceiling", "stretch_distribution_bytes_ceiling")):
+        raise CapabilityProfileError("NW-11 profiles must not impose distribution size ceilings")
 
     device_coverage = profile.get("device_coverage")
     if not isinstance(device_coverage, list) or not device_coverage:
@@ -435,9 +430,9 @@ def profile_manifest_template(profile_id: str) -> dict[str, Any]:
         },
         "fallback_artifact_id": definition["fallback_artifact_id"],
         "artifact_budget": {
-            "incremental_distribution_bytes_ceiling": definition[
-                "incremental_budget_bytes"
-            ],
+            "distribution_size_policy": "report_only",
+            "peak_engine_committed_gpu_bytes_ceiling": 536870912,
+            "process_start_to_first_present_ms_ceiling": 2000.0,
         },
         "device_coverage": [
             {

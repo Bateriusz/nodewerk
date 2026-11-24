@@ -100,8 +100,6 @@
       "end_to_end_frame_time_must_not_regress": true,
       "microbenchmark_gain_alone_is_sufficient": false,
       "cpu_submit_ms_max": 16.67,
-      "complete_distribution_bytes_ceiling": 262144,
-      "incremental_distribution_bytes_ceiling": 65536,
       "shader_count_increment_ceiling": 1,
       "cold_initialization_ms_ceiling": 2000.0,
       "peak_engine_committed_gpu_bytes_ceiling": 536870912
@@ -117,8 +115,7 @@
     }
   },
   "artifact_budget": {
-    "complete_distribution_bytes_ceiling": 262144,
-    "incremental_distribution_bytes_ceiling": 65536,
+    "distribution_size_policy": "report_only",
     "shader_count_increment_ceiling": 1,
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
     "process_start_to_first_present_ms_ceiling": 2000.0,

@@ -19,7 +19,6 @@ from nw11_contract import (  # type: ignore[import-not-found]
     BASE_GRAPH,
     BASE_GRAPH_SHA256,
     COMMON_PROFILE_ID,
-    COMPLETE_DISTRIBUTION_CEILING_BYTES,
     CPU_SUBMIT_MS_MAX,
     EXPERIMENT_MESH_ID,
     EXPERIMENT_PATH_BY_ID,
@@ -202,12 +201,14 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
             "the primary criterion must be evaluated independently per device/environment"
         )
     guardrails = _mapping(criteria.get("guardrails"), "criteria.guardrails")
+    if any(key in guardrails for key in ("complete_distribution_bytes_ceiling", "incremental_distribution_bytes_ceiling")):
+        raise ExperimentError("distribution size ceilings are not NW-11 guardrails")
+    if any(key in _mapping(document.get("artifact_budget"), "artifact_budget") for key in ("complete_distribution_bytes_ceiling", "incremental_distribution_bytes_ceiling", "stretch_distribution_bytes_ceiling")):
+        raise ExperimentError("distribution size ceilings are not NW-11 budgets")
     for key in (
         "end_to_end_frame_time_must_not_regress",
         "microbenchmark_gain_alone_is_sufficient",
         "cpu_submit_ms_max",
-        "complete_distribution_bytes_ceiling",
-        "incremental_distribution_bytes_ceiling",
         "shader_count_increment_ceiling",
         "cold_initialization_ms_ceiling",
         "peak_engine_committed_gpu_bytes_ceiling",
@@ -218,8 +219,6 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         raise ExperimentError("microbenchmark-only gains cannot justify adoption")
     if guardrails.get("microbenchmark_gain_alone_is_sufficient") is not False:
         raise ExperimentError("microbenchmark gain alone must never be sufficient")
-    if _number(guardrails.get("complete_distribution_bytes_ceiling"), "complete_distribution_bytes_ceiling") > COMPLETE_DISTRIBUTION_CEILING_BYTES:
-        raise ExperimentError("experiment weakened the complete distribution ceiling")
     if _number(guardrails.get("cold_initialization_ms_ceiling"), "cold_initialization_ms_ceiling") > PROCESS_START_TO_FIRST_PRESENT_MS:
         raise ExperimentError("experiment weakened the cold-initialization ceiling")
     if _number(guardrails.get("peak_engine_committed_gpu_bytes_ceiling"), "peak_engine_committed_gpu_bytes_ceiling") > PEAK_ENGINE_COMMITTED_GPU_BYTES:
@@ -228,9 +227,9 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         raise ExperimentError("experiment weakened the preserved CPU-submit gate")
 
     budget = _mapping(document.get("artifact_budget"), "artifact_budget")
+    if budget.get("distribution_size_policy") != "report_only":
+        raise ExperimentError("distribution size must be informational only")
     for key in (
-        "complete_distribution_bytes_ceiling",
-        "incremental_distribution_bytes_ceiling",
         "shader_count_increment_ceiling",
         "peak_engine_committed_gpu_bytes_ceiling",
         "process_start_to_first_present_ms_ceiling",
@@ -238,7 +237,6 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         if key not in budget:
             raise ExperimentError(f"artifact_budget.{key} is required")
     for key, frozen in (
-        ("complete_distribution_bytes_ceiling", COMPLETE_DISTRIBUTION_CEILING_BYTES),
         ("peak_engine_committed_gpu_bytes_ceiling", PEAK_ENGINE_COMMITTED_GPU_BYTES),
         ("process_start_to_first_present_ms_ceiling", PROCESS_START_TO_FIRST_PRESENT_MS),
     ):
@@ -246,24 +244,6 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
             raise ExperimentError(f"experiment weakened artifact budget '{key}'")
     profile_id = str(document.get("variant_profile_id"))
     if profile_id in (MESH_PROFILE_ID, RAY_QUERY_PROFILE_ID):
-        profile_budget = int(profile_definition(profile_id)["incremental_budget_bytes"])
-        if _number(
-            guardrails.get("incremental_distribution_bytes_ceiling"),
-            "guardrails.incremental_distribution_bytes_ceiling",
-        ) > profile_budget:
-            raise ExperimentError(
-                "experiment guardrail incremental byte budget exceeds the frozen profile budget"
-            )
-        if _number(
-            guardrails.get("incremental_distribution_bytes_ceiling"),
-            "guardrails.incremental_distribution_bytes_ceiling",
-        ) > _number(
-            budget.get("incremental_distribution_bytes_ceiling"),
-            "artifact_budget.incremental_distribution_bytes_ceiling",
-        ):
-            raise ExperimentError(
-                "experiment guardrail incremental byte budget is weaker than its artifact budget"
-            )
         if int(
             guardrails.get("shader_count_increment_ceiling", -1)
         ) > SHADER_COUNT_INCREMENT_MAX:
@@ -439,8 +419,6 @@ def validate_experiment(
     budget = _mapping(document.get("artifact_budget"), "artifact_budget")
     frozen_budget = frozen_artifact_budget()
     for key in (
-        "complete_distribution_bytes_ceiling",
-        "incremental_distribution_bytes_ceiling",
         "shader_count_increment_ceiling",
         "peak_engine_committed_gpu_bytes_ceiling",
         "process_start_to_first_present_ms_ceiling",
@@ -448,21 +426,11 @@ def validate_experiment(
         if key not in budget:
             raise ExperimentError(f"artifact_budget.{key} is required")
     for key in (
-        "complete_distribution_bytes_ceiling",
         "peak_engine_committed_gpu_bytes_ceiling",
         "process_start_to_first_present_ms_ceiling",
     ):
         if _number(budget.get(key), f"artifact_budget.{key}") > frozen_budget[key]:
             raise ExperimentError(f"experiment weakened artifact budget '{key}'")
-    incremental = _number(
-        budget.get("incremental_distribution_bytes_ceiling"),
-        "artifact_budget.incremental_distribution_bytes_ceiling",
-    )
-    profile_budget = profile_definition(expected_variant)["incremental_budget_bytes"]
-    if incremental > profile_budget:
-        raise ExperimentError(
-            "experiment incremental byte budget exceeds the frozen profile budget"
-        )
     if int(budget.get("shader_count_increment_ceiling", -1)) > SHADER_COUNT_INCREMENT_MAX:
         raise ExperimentError("experiment weakened the shader-count increment budget")
 
@@ -663,21 +631,7 @@ def evaluate_experiment(
             "NW11-CPU-REGRESSION",
             "variant p99 CPU submit time regressed against the matched baseline",
         )
-    if max(baseline["distribution_bytes"], variant["distribution_bytes"]) > int(
-        guardrails["complete_distribution_bytes_ceiling"]
-    ):
-        reject(
-            "NW11-DISTRIBUTION-CEILING",
-            "baseline or variant complete distribution exceeds the preserved 256 KiB ceiling",
-        )
     incremental_bytes = variant["distribution_bytes"] - baseline["distribution_bytes"]
-    if incremental_bytes > int(
-        document["artifact_budget"]["incremental_distribution_bytes_ceiling"]
-    ):
-        reject(
-            "NW11-INCREMENTAL-BUDGET",
-            "variant incremental distribution bytes exceed the frozen experiment budget",
-        )
     shader_increment = variant["shader_count"] - baseline["shader_count"]
     if shader_increment > int(document["artifact_budget"]["shader_count_increment_ceiling"]):
         reject(

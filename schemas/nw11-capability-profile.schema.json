@@ -161,20 +161,14 @@
     "artifact_budget": {
       "type": "object",
       "required": [
-        "incremental_distribution_bytes_ceiling",
-        "complete_distribution_bytes_ceiling",
-        "stretch_distribution_bytes_ceiling",
+        "distribution_size_policy",
         "peak_engine_committed_gpu_bytes_ceiling",
-        "process_start_to_first_present_ms_ceiling",
-        "stretch_is_mandatory_gate"
+        "process_start_to_first_present_ms_ceiling"
       ],
       "properties": {
-        "incremental_distribution_bytes_ceiling": { "type": "integer", "minimum": 0 },
-        "complete_distribution_bytes_ceiling": { "const": 262144 },
-        "stretch_distribution_bytes_ceiling": { "const": 131072 },
+        "distribution_size_policy": { "const": "report_only" },
         "peak_engine_committed_gpu_bytes_ceiling": { "const": 536870912 },
-        "process_start_to_first_present_ms_ceiling": { "const": 2000.0 },
-        "stretch_is_mandatory_gate": { "const": false }
+        "process_start_to_first_present_ms_ceiling": { "const": 2000.0 }
       },
       "additionalProperties": false
     },

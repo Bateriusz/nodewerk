@@ -217,7 +217,7 @@
       "byte_cost": {
         "status": "unmeasured_estimate",
         "estimate_bytes": 0,
-        "basis": "No model weights or SDK runtime are distributed in NW-11; a follow-up must count both, likely dominating the 256 KiB common budget."
+        "basis": "No model weights or SDK runtime are distributed in NW-11; a follow-up must count both, potentially dominating distribution size."
       },
       "prototypes_in_this_task": false,
       "follow_up_disposition": "follow_up_issue_required"

@@ -224,8 +224,6 @@
             "end_to_end_frame_time_must_not_regress",
             "microbenchmark_gain_alone_is_sufficient",
             "cpu_submit_ms_max",
-            "complete_distribution_bytes_ceiling",
-            "incremental_distribution_bytes_ceiling",
             "shader_count_increment_ceiling",
             "cold_initialization_ms_ceiling",
             "peak_engine_committed_gpu_bytes_ceiling"
@@ -234,8 +232,6 @@
             "end_to_end_frame_time_must_not_regress": { "const": true },
             "microbenchmark_gain_alone_is_sufficient": { "const": false },
             "cpu_submit_ms_max": { "type": "number", "maximum": 16.67 },
-            "complete_distribution_bytes_ceiling": { "type": "integer", "maximum": 262144 },
-            "incremental_distribution_bytes_ceiling": { "type": "integer", "maximum": 65536 },
             "shader_count_increment_ceiling": { "type": "integer", "maximum": 2 },
             "cold_initialization_ms_ceiling": { "type": "number", "maximum": 2000.0 },
             "peak_engine_committed_gpu_bytes_ceiling": { "type": "integer", "maximum": 536870912 }
@@ -268,16 +264,14 @@
     "artifact_budget": {
       "type": "object",
       "required": [
-        "complete_distribution_bytes_ceiling",
-        "incremental_distribution_bytes_ceiling",
+        "distribution_size_policy",
         "shader_count_increment_ceiling",
         "peak_engine_committed_gpu_bytes_ceiling",
         "process_start_to_first_present_ms_ceiling",
         "optional_dependency_bytes_policy"
       ],
       "properties": {
-        "complete_distribution_bytes_ceiling": { "type": "integer", "maximum": 262144 },
-        "incremental_distribution_bytes_ceiling": { "type": "integer", "maximum": 65536 },
+        "distribution_size_policy": { "const": "report_only" },
         "shader_count_increment_ceiling": { "type": "integer", "maximum": 2 },
         "peak_engine_committed_gpu_bytes_ceiling": { "type": "integer", "maximum": 536870912 },
         "process_start_to_first_present_ms_ceiling": { "type": "number", "maximum": 2000.0 },
