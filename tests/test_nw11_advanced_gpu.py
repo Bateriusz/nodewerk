@@ -965,7 +965,11 @@ def test_nw11_launcher_is_one_command_and_verifies_before_measuring() -> None:
 def test_nw11_evidence_rejects_adapter_luid_mismatch(tmp_path: Path) -> None:
     root, manifest = _build_bundle(tmp_path)
     document = _experiment()
-    runs = [_run("baseline"), _run("variant"), _run("fallback")]
+    runs = [
+        _run("baseline", measurement=_measurement(gpu=10.0)),
+        _run("variant", measurement=_measurement(gpu=7.5)),
+        _run("fallback", measurement=_measurement(gpu=10.0)),
+    ]
     runs[1]["adapter"]["adapter_luid"] = "00000000:0000FFFF"
     document_evidence = _evidence(root, manifest, document, runs)
     manifest_sha = contract.sha256_bytes(
@@ -979,6 +983,32 @@ def test_nw11_evidence_rejects_adapter_luid_mismatch(tmp_path: Path) -> None:
             bundle_manifest_sha256=manifest_sha,
             schema_root=root,
         )
+
+
+def test_nw11_bundle_distribution_rejection_reaches_decision(tmp_path: Path) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    document = _experiment()
+    runs = [
+        _run("baseline", measurement=_measurement(gpu=10.0)),
+        _run("variant", measurement=_measurement(gpu=7.5)),
+        _run("fallback", measurement=_measurement(gpu=10.0)),
+    ]
+    evidence_document = _evidence(root, manifest, document, runs)
+    manifest_sha = contract.sha256_bytes(
+        (root / bundle.MANIFEST_NAME).read_bytes()
+    )
+    decisions = evidence.build_decision_document(
+        evidence=evidence_document,
+        experiment=document,
+        bundle_manifest=manifest,
+        bundle_manifest_sha256=manifest_sha,
+        schema_root=root,
+        bundle_accounting={"adoption_budget_status": "rejected"},
+    )
+    assert decisions["bundle_adoption_budget_status"] == "rejected"
+    assert decisions["aggregate_status"] == "rejected"
+    assert decisions["satisfies_completion"] is False
+    assert all(item["status"] == "rejected" for item in decisions["devices"])
 
 
 def test_nw11_shader_manifest_declares_synchronization_and_lifetimes() -> None:
@@ -1302,6 +1332,10 @@ def test_nw11_windows_ci_runs_command_path_and_binds_toolchain_payloads() -> Non
     assert "--toolchain-identity" in workflow
     assert "--shader-payloads" in workflow
     assert "--dependency-report" in workflow
+    assert "adoption_budget_status" in workflow
+    assert "within_complete_ceiling" in workflow
+    assert "within_incremental_budget" in workflow
+    assert "::warning::" in workflow
 
 
 def test_nw11_toolchain_payload_and_dependency_records(
@@ -1725,6 +1759,74 @@ def test_nw11_native_package_and_dxil_binding_fail_closed() -> None:
         inspect(image(template + payloads["nw11_deform_cs_dxil.dxil"]))
     with pytest.raises(ValueError):
         inspect(image(b"MZ"))
+
+
+def test_nw11_verify_bundle_production_binding_ignores_fallback_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nw11_production_binding as binding
+
+    root, manifest = _build_bundle(tmp_path)
+    proof_path = root / "manifests/nw11-common-regression.json"
+    proof_path.write_text("{}", encoding="utf-8")
+    observed = {
+        "specialization": "mesh",
+        "sha256": "a" * 64,
+        "package_sha256": "b" * 64,
+        "template_sha256": "c" * 64,
+        "linked_specialization_payloads": [],
+    }
+    monkeypatch.setattr(binding, "verify_proof", lambda proof, commit: ("b" * 64, "d" * 64))
+    monkeypatch.setattr(binding, "read_payloads", lambda directory: {})
+    monkeypatch.setattr(binding, "inspect", lambda image, **kwargs: dict(observed))
+    for item in manifest["artifacts"]:
+        if item["role"] in {
+            bundle.ROLE_COMMON_BASELINE,
+            bundle.ROLE_OPTIONAL_VARIANT,
+            bundle.ROLE_FALLBACK,
+        }:
+            item["metadata"] = dict(observed)
+    fallback = next(
+        item for item in manifest["artifacts"] if item["role"] == bundle.ROLE_FALLBACK
+    )
+    fallback["metadata"]["fallback_artifact_id"] = manifest["fallback_artifact_id"]
+    manifest["artifacts"].append(
+        bundle.make_entry(
+            root,
+            "manifests/nw11-common-regression.json",
+            role=bundle.ROLE_READING,
+        )
+    )
+    manifest["artifacts"].sort(key=lambda item: item["path"])
+    manifest["accounting"] = bundle._accounting(
+        manifest["artifacts"],
+        artifact_budget=manifest["accounting"]["artifact_budget"],
+        dependency_ledger=manifest["dependency_ledger"],
+    )
+    identity_keys = (
+        "repository",
+        "commit",
+        "experiment_id",
+        "profile_id",
+        "fallback_artifact_id",
+        "bundle_version",
+        "artifacts",
+        "capability_profile",
+        "experiment_definition",
+        "toolchain",
+        "required_capabilities",
+        "dependency_ledger",
+        "accounting",
+        "shader_inventory",
+        "shader_payloads",
+        "dependency_report",
+        "canonical_production",
+    )
+    manifest["bundle_id"] = contract.digest_value(
+        {key: manifest[key] for key in identity_keys if key in manifest}
+    )
+    bundle.write_manifest(root, manifest)
+    assert bundle.verify_bundle(root, expected_commit=COMMIT)["status"] == "verified"
 
 
 def test_nw11_specialization_is_isolated_from_frozen_player(tmp_path: Path) -> None:

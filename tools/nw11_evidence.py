@@ -614,6 +614,7 @@ def build_decision_document(
     bundle_manifest_sha256: str,
     expected_commit: str | None = None,
     schema_root: Path | str | None = None,
+    bundle_accounting: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_evidence(
         evidence,
@@ -627,6 +628,34 @@ def build_decision_document(
     decisions = computed["decisions"]
     if not decisions:
         raise EvidenceError("decision document contains no device decisions")
+    bundle_adoption_status: str | None = None
+    if bundle_accounting is not None:
+        bundle_adoption_status = str(
+            bundle_accounting.get("adoption_budget_status") or ""
+        )
+        if bundle_adoption_status not in {"accepted", "rejected"}:
+            raise EvidenceError(
+                "the verified bundle does not expose a valid adoption budget status"
+            )
+        if bundle_adoption_status == "rejected":
+            for decision in decisions:
+                if decision["status"] != "accepted":
+                    continue
+                decision["status"] = "rejected"
+                decision["satisfies_completion"] = False
+                decision.setdefault("reasons", []).append(
+                    {
+                        "code": "NW11-BUNDLE-DISTRIBUTION-BUDGET",
+                        "message": (
+                            "the verified bundle's complete or incremental "
+                            "distribution exceeds the declared budget"
+                        ),
+                    }
+                )
+                decision["reason"] = (
+                    "the verified bundle's distribution budget is rejected; "
+                    "the measured variant cannot be accepted"
+                )
     order = list(DEVICE_TIERS)
     decisions.sort(key=lambda item: (order.index(item["device_tier"]), item["device_key"] or ""))
     aggregate_status = (
@@ -664,6 +693,8 @@ def build_decision_document(
         "pending_is_not_pass": True,
         "unsupported_is_not_failure_or_pass": True,
     }
+    if bundle_adoption_status is not None:
+        document["bundle_adoption_budget_status"] = bundle_adoption_status
     identity = {
         key: document[key]
         for key in (
@@ -678,7 +709,9 @@ def build_decision_document(
             "aggregate_status",
             "fallback_tested",
             "satisfies_completion",
+            "bundle_adoption_budget_status",
         )
+        if key in document
     }
     document["decision_id"] = digest_value(identity)
     return document
@@ -708,6 +741,16 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
     aggregate = record.get("aggregate_status")
     if aggregate not in EVIDENCE_STATUSES:
         raise EvidenceError("aggregate decision status is not a known NW-11 status")
+    bundle_adoption = record.get("bundle_adoption_budget_status")
+    if bundle_adoption is not None:
+        if bundle_adoption not in {"accepted", "rejected"}:
+            raise EvidenceError("bundle adoption budget status is not valid")
+        if bundle_adoption == "rejected" and any(
+            item.get("status") == "accepted" for item in devices
+        ):
+            raise EvidenceError(
+                "a rejected bundle distribution budget cannot contain an accepted device"
+            )
     if record.get("satisfies_completion") is True:
         if not all(item.get("status") == "accepted" for item in devices):
             raise EvidenceError(
@@ -731,6 +774,7 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
             "aggregate_status",
             "fallback_tested",
             "satisfies_completion",
+            "bundle_adoption_budget_status",
         )
         if key in record
     }

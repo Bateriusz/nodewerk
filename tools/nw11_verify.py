@@ -236,6 +236,7 @@ def command_evidence(args: argparse.Namespace) -> int:
             bundle_manifest_sha256=manifest_sha,
             expected_commit=args.expected_commit,
             schema_root=bundle_root,
+            bundle_accounting=verified.get("accounting"),
         )
         evidence.validate_decision_document(decisions)
     except evidence.StaleEvidenceError as exc:

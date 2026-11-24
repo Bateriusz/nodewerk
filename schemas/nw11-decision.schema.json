@@ -75,6 +75,9 @@
       "enum": ["accepted", "rejected", "failed", "pending", "unsupported"]
     },
     "fallback_tested": { "type": "boolean" },
+    "bundle_adoption_budget_status": {
+      "enum": ["accepted", "rejected"]
+    },
     "satisfies_completion": { "type": "boolean" },
     "per_device_decision_isolation": { "const": true },
     "pending_is_not_pass": { "const": true },

@@ -489,6 +489,18 @@ def _assert_optional_closure_separation(
             )
 
 
+def _production_binding_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return the binding-owned metadata projection.
+
+    The fallback artifact identity is bundle metadata added after the native
+    production binding is inspected.  It is not part of the binding record and
+    must not make a valid production executable fail verification.
+    """
+    result = dict(metadata or {})
+    result.pop("fallback_artifact_id", None)
+    return result
+
+
 def write_manifest(root: Path | str, manifest: Mapping[str, Any]) -> Path:
     target = Path(root) / MANIFEST_NAME
     target.write_text(
@@ -614,7 +626,7 @@ def verify_bundle(
                     commit=manifest["commit"], specialization=specialization,
                     package_sha256=package_hash, manifest_sha256=manifest_hash,
                     payloads=payloads)
-                if observed != item.get("metadata"):
+                if observed != _production_binding_metadata(item.get("metadata")):
                     raise ValueError("recorded native binding differs from executable bytes")
         except (ValueError, OSError, KeyError, TypeError) as exc:
             raise BundleError(f"production binding verification failed: {exc}") from exc
