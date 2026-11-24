@@ -324,12 +324,14 @@ editing. It:
 3. determines eligibility from those queries;
 4. re-checks each measured artifact SHA-256 immediately before execution and
    passes the probe-selected adapter LUID to every measured executable;
-5. stops with an explicit unsupported (`3`) or pending (`11`) diagnostic before
-   running any measured artifact if the optional profile is not eligible;
-6. runs the common/baseline, eligible variant, and separately exported common
-   fallback under identical frozen settings, warm-up, and repeated fresh
-   processes, taking GPU time from timestamp queries and CPU submit time from
-   the `ExecuteCommandLists` call;
+5. blocks the optional variant with an explicit unsupported (`3`) or
+   pending (`11`) decision when its required capability is absent or
+   unqueried, while still executing the common baseline and separately exported
+   common fallback;
+6. runs the common baseline, the variant only when eligible, and the separately
+   exported common fallback under identical frozen settings, warm-up, and
+   repeated fresh processes, taking GPU time from timestamp queries and CPU
+   submit time from the `ExecuteCommandLists` call;
 7. preserves raw outputs and compares fixed-tick captures with the
    repository-owned comparator;
 8. invokes the repository-owned verifier locally and writes
