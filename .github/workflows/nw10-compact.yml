@@ -146,8 +146,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install pytest
-        run: python -m pip install pytest
       - name: Compute pinned portable-tool cache key
         id: nw01-portable-cache-key
         shell: pwsh
@@ -445,13 +443,13 @@ jobs:
           $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
           $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
 
-          cmake --preset nw07-release -B "$PWD/build/nw10-decoder-off" -DNW10_COMPACT_PACKAGE=OFF -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build "$PWD/build/nw10-decoder-off" --target nw_procedural_image_player --parallel 2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $canonicalTemplate = Join-Path $PWD "build/nw10-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
+          # Reuse the decoder-off template built earlier in this same current-head job.
+          # This is not a clean-build reproducibility boundary; rebuilding the
+          # identical CMake target here only adds latency without strengthening
+          # the PE-ledger control.
+          $canonicalTemplate = Join-Path $PWD "build/nw07-release-decoder-off/staging/procedural_image_player/nw_procedural_image_player.exe"
           if (-not (Test-Path $canonicalTemplate -PathType Leaf)) {
-            throw "Decoder-off PE-ledger control template was not built: $canonicalTemplate"
+            throw "Decoder-off PE-ledger control template was not retained from the current-head build: $canonicalTemplate"
           }
           # The link-control export must select the same embedded payload mode
           # as the final artifact.  Otherwise the compact payload/decoder cost
