@@ -980,6 +980,10 @@ def test_nw11_shader_manifest_declares_synchronization_and_lifetimes() -> None:
     assert "RayQuery<" in ray_source
     assert "TraceRayInline" in ray_source
     assert "CommittedStatus" in ray_source
+    assert "CommittedPrimitiveIndex()" in ray_source
+    assert "CommittedObjectToWorld3x4()" in ray_source
+    assert "CommittedWorldSpaceGeometryNormal" not in ray_source
+    assert "NwIndices.Load" in ray_source and "NwVertices.Load" in ray_source
 
     analytic = entries["nw11_analytic_reflection_ps"]
     assert analytic["optional"] is False

@@ -80,7 +80,7 @@ function(nw11_add_shader target_name hlsl_file entry_point profile symbol)
     set(_header "${NW11_SHADER_DIR}/${target_name}.h")
     set(_dxil "${NW11_SHADER_DIR}/${target_name}.dxil")
     add_custom_command(
-        OUTPUT "${_header}"
+        OUTPUT "${_header}" "${_dxil}"
         COMMAND "${NW11_DXC_EXECUTABLE}"
             -T "${profile}"
             -E "${entry_point}"
@@ -94,7 +94,7 @@ function(nw11_add_shader target_name hlsl_file entry_point profile symbol)
             -Fh "${_header}"
             -Vn "${symbol}"
             "${hlsl_file}"
-        DEPENDS "${hlsl_file}"
+        DEPENDS "${hlsl_file}" "${NW11_REPO_ROOT}/shaders/nw06/nw06_scene_data_cs.hlsl"
         COMMENT "Compiling NW-11 offline shader ${hlsl_file} (${entry_point}, ${profile})"
         VERBATIM
     )

@@ -8,7 +8,7 @@
 
 cbuffer Nw06GraphicsParams : register(b0, space0)
 {
-    float Tick;
+    uint Tick;
     float FovDegrees;
     float Aspect;
     float NearPlane;
@@ -22,6 +22,8 @@ Texture2D<float4> NwAlbedo : register(t0, space0);
 Buffer<uint> NwMaterials : register(t2, space0);
 Buffer<uint> NwLight : register(t4, space0);
 RaytracingAccelerationStructure NwScene : register(t5, space0);
+Buffer<uint> NwVertices : register(t6, space0);
+Buffer<uint> NwIndices : register(t7, space0);
 
 struct PSInput
 {
@@ -32,6 +34,14 @@ struct PSInput
     nointerpolation uint material_index : TEXCOORD3;
     float3 camera_position : TEXCOORD4;
 };
+
+float3 LoadPosition(uint vertex)
+{
+    uint offset = vertex * 8u;
+    return asfloat(uint3(NwVertices.Load(offset),
+                         NwVertices.Load(offset + 1u),
+                         NwVertices.Load(offset + 2u)));
+}
 
 float3 TraceReflection(float3 origin, float3 direction)
 {
@@ -53,8 +63,18 @@ float3 TraceReflection(float3 origin, float3 direction)
         float horizon = saturate(direction.y * 0.5 + 0.5);
         return lerp(float3(0.21, 0.27, 0.36), float3(0.72, 0.78, 0.88), horizon);
     }
-    float3 hit_normal = normalize(query.CommittedWorldSpaceGeometryNormal());
-    float3 hit_position = query.WorldRayOrigin() + direction * query.CommittedRayT();
+    // DXR 1.1 exposes the primitive index and object-to-world matrix, not
+    // a geometry-normal intrinsic. Reconstruct the normal from the exact
+    // indexed triangle used to build the BLAS, including instance scale.
+    uint first = query.CommittedPrimitiveIndex() * 3u;
+    float3 p0 = LoadPosition(NwIndices.Load(first));
+    float3 p1 = LoadPosition(NwIndices.Load(first + 1u));
+    float3 p2 = LoadPosition(NwIndices.Load(first + 2u));
+    float3x4 transform = query.CommittedObjectToWorld3x4();
+    float3 e1 = mul(transform, float4(p1 - p0, 0.0));
+    float3 e2 = mul(transform, float4(p2 - p0, 0.0));
+    float3 hit_normal = normalize(cross(e1, e2));
+    if (dot(hit_normal, direction) > 0.0) hit_normal = -hit_normal;
     float3 light_direction = normalize(-float3(
         asfloat(NwLight.Load(0u)),
         asfloat(NwLight.Load(1u)),

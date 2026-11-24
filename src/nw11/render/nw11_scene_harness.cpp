@@ -1423,6 +1423,9 @@ void SceneRenderer::RecordInitialization() {
         } else if (resource == resources_.vertices.Get() ||
                    resource == resources_.indices.Get()) {
             D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            if (options_.variant == Variant::OptionalRayQuery) {
+                state |= D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            }
             if (options_.variant != Variant::OptionalMesh) {
                 state |= resource == resources_.vertices.Get()
                     ? D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
