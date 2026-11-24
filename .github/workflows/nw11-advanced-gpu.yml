@@ -366,6 +366,15 @@ jobs:
             --bundle-root "build/nw11-bundle-${{ matrix.slug }}" `
             --expected-commit "${{ steps.revision.outputs.commit }}" `
             --json-out "build/nw11-bundle-${{ matrix.slug }}-verification.json"
+      - name: Prove the validation bundle runs with its bundled Python runtime
+        shell: pwsh
+        run: |
+          $bundle = "build/nw11-bundle-${{ matrix.slug }}"
+          $output = "build/nw11-bundle-${{ matrix.slug }}-dry-run"
+          & (Join-Path $bundle "run-validation.ps1") -BundleRoot $bundle -ExpectedCommit "${{ steps.revision.outputs.commit }}" -OutputDirectory $output -DryRun
+          if ($LASTEXITCODE -ne 0) { throw "self-contained validation bundle dry-run failed with exit code $LASTEXITCODE" }
+          $summary = Get-Content (Join-Path $output "summary.json") -Raw | ConvertFrom-Json
+          if ($summary.status -ne "dry_run") { throw "self-contained validation bundle did not complete dry-run verification" }
       - name: Report integrity and actual distribution sizes
         shell: pwsh
         run: |
