@@ -102,6 +102,14 @@
       ],
       "broad_gate": "ci.yml:schema-and-contract-checks",
       "platform_gate": "nw10-compact.yml"
+    },
+    {
+      "name": "nw11",
+      "patterns": [
+        "tests/test_nw11_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw11-advanced-gpu.yml:contract-and-capability-checks"
     }
   ]
 }

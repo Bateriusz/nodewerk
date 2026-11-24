@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw11-capability-profile.schema.json",
+  "title": "Nodewerk NW-11 capability profile",
+  "description": "Common or optional D3D12 profile with exact queried capabilities, shader targets, runtime/toolchain requirements, requirements digest, artifact budget, fallback identity, and evidence status.",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "profile_id",
+    "profile_kind",
+    "requirements_digest",
+    "queried_capabilities",
+    "shader_targets",
+    "runtime",
+    "toolchain",
+    "eligibility",
+    "fallback_artifact_id",
+    "artifact_budget",
+    "device_coverage",
+    "dependencies",
+    "qualification",
+    "evidence_status"
+  ],
+  "properties": {
+    "format": { "const": "nw11-capability-profile" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-11" },
+    "implementation_base": { "const": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b" },
+    "profile_id": {
+      "enum": [
+        "nw.common.d3d12.fl12_0.sm6_0.v1",
+        "nw.optional.d3d12.mesh_shaders.ms6_5.v1",
+        "nw.optional.d3d12.ray_query.ps6_5.v1"
+      ]
+    },
+    "profile_kind": { "enum": ["common", "optional"] },
+    "requirements_digest": { "type": "string", "pattern": "^sha256:v1:[0-9a-f]{64}$" },
+    "queried_capabilities": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "required": [
+          "query_id",
+          "d3d12_query",
+          "method",
+          "member",
+          "accepted_values",
+          "minimum_rank"
+        ],
+        "properties": {
+          "query_id": { "type": "string", "minLength": 3 },
+          "d3d12_query": { "type": "string", "minLength": 3 },
+          "method": { "type": "string", "minLength": 3 },
+          "member": { "type": ["string", "null"] },
+          "accepted_values": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "minimum_rank": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "shader_targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^(vs|ps|cs|as|ms|lib)_[0-9]_[0-9]$" }
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "os",
+        "minimum_windows_build",
+        "minimum_nvidia_driver",
+        "d3d12_runtime",
+        "agility_sdk",
+        "runtime_shader_compilation",
+        "dxc_runtime_redistribution"
+      ],
+      "properties": {
+        "os": { "const": "windows_11_x64" },
+        "minimum_windows_build": { "const": 22631 },
+        "minimum_nvidia_driver": { "type": "string" },
+        "d3d12_runtime": { "const": "windows_inbox" },
+        "agility_sdk": {
+          "type": "object",
+          "required": ["required", "minimum_version", "note"],
+          "properties": {
+            "required": { "const": false },
+            "minimum_version": { "type": ["string", "null"] },
+            "note": { "type": "string", "minLength": 20 }
+          }
+        },
+        "runtime_shader_compilation": { "const": false },
+        "dxc_runtime_redistribution": { "const": false }
+      },
+      "additionalProperties": false
+    },
+    "toolchain": {
+      "type": "object",
+      "required": ["dxc", "msvc", "windows_sdk_minimum", "cmake_minimum", "ninja_required"],
+      "properties": {
+        "dxc": {
+          "type": "object",
+          "required": ["pinned_version", "measured_version", "compilation", "runtime_dependency"],
+          "properties": {
+            "pinned_version": { "const": "1.8.2407" },
+            "measured_version": { "type": "string" },
+            "compilation": { "const": "offline" },
+            "runtime_dependency": { "const": false }
+          }
+        },
+        "msvc": { "type": "object" },
+        "windows_sdk_minimum": { "type": "string" },
+        "cmake_minimum": { "type": "string" },
+        "ninja_required": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "eligibility": {
+      "type": "object",
+      "required": [
+        "source",
+        "gpu_marketing_name_used",
+        "fallback_on_unsupported",
+        "silent_effect_substitution"
+      ],
+      "properties": {
+        "source": { "const": "queried_capabilities" },
+        "gpu_marketing_name_used": { "const": false },
+        "fallback_on_unsupported": { "const": "separate_common_artifact_only" },
+        "silent_effect_substitution": { "const": false }
+      },
+      "additionalProperties": false
+    },
+    "fallback_artifact_id": { "type": ["string", "null"] },
+    "fallback_artifact": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "profile_id",
+        "requirements_digest",
+        "separately_exported",
+        "separately_tested",
+        "optional_payloads"
+      ],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 3 },
+        "profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
+        "requirements_digest": { "type": "string" },
+        "separately_exported": { "const": true },
+        "separately_tested": { "const": true },
+        "optional_payloads": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "artifact_budget": {
+      "type": "object",
+      "required": [
+        "incremental_distribution_bytes_ceiling",
+        "complete_distribution_bytes_ceiling",
+        "stretch_distribution_bytes_ceiling",
+        "peak_engine_committed_gpu_bytes_ceiling",
+        "process_start_to_first_present_ms_ceiling",
+        "stretch_is_mandatory_gate"
+      ],
+      "properties": {
+        "incremental_distribution_bytes_ceiling": { "type": "integer", "minimum": 0 },
+        "complete_distribution_bytes_ceiling": { "const": 262144 },
+        "stretch_distribution_bytes_ceiling": { "const": 131072 },
+        "peak_engine_committed_gpu_bytes_ceiling": { "const": 536870912 },
+        "process_start_to_first_present_ms_ceiling": { "const": 2000.0 },
+        "stretch_is_mandatory_gate": { "const": false }
+      },
+      "additionalProperties": false
+    },
+    "device_coverage": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "device_tier",
+          "architecture",
+          "representative_model_metadata_only",
+          "status"
+        ],
+        "properties": {
+          "device_tier": {
+            "enum": [
+              "desktop_ada_representative",
+              "desktop_blackwell_representative"
+            ]
+          },
+          "architecture": { "enum": ["Ada", "Blackwell"] },
+          "representative_model_metadata_only": { "type": "string", "minLength": 3 },
+          "status": {
+            "enum": ["accepted", "rejected", "failed", "pending", "unsupported", "verified"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "distributed_bytes", "optional", "counted"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "minLength": 1 },
+          "distributed_bytes": { "type": "integer", "minimum": 0 },
+          "optional": { "type": "boolean" },
+          "counted": { "const": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    "qualification": {
+      "type": "object",
+      "required": [
+        "nw01_policy_preserved",
+        "nw07_renderer_and_export_reused",
+        "nw01b_evidence_semantics_reused",
+        "canonical_production_contract",
+        "perf_contract",
+        "perf_protocol",
+        "quality_profile_id"
+      ],
+      "properties": {
+        "nw01_policy_preserved": { "const": true },
+        "nw07_renderer_and_export_reused": { "const": true },
+        "nw01b_evidence_semantics_reused": { "const": true },
+        "canonical_production_contract": { "const": "benchmarks/nw07/canonical-production.v1.json" },
+        "perf_contract": { "const": "nw07_perf_ref_v1" },
+        "perf_protocol": { "const": "nw07-perf-run.v1" },
+        "quality_profile_id": { "const": "nw07.quality.v1" }
+      },
+      "additionalProperties": false
+    },
+    "evidence_status": {
+      "enum": ["accepted", "rejected", "failed", "pending", "unsupported", "verified"]
+    }
+  },
+  "additionalProperties": false
+}

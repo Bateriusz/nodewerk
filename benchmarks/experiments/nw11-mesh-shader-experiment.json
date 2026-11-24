@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "nw11.mesh-shader-vs-indexed.v1",
+  "category": "advanced_gpu_feature",
+  "status": "pending_evaluation",
+  "verification_status": "unverified",
+  "substituted_silently": false,
+  "reproducible_command": "python tools/nw11_verify.py self-check && pwsh tools/nw11/run-validation.ps1 -BundleRoot <nw11-mesh-bundle> -ExpectedCommit <tested-commit>",
+  "configuration": {
+    "toolchain_id": "msvc-ltcg",
+    "profile_name": "nw.optional.d3d12.mesh_shaders.ms6_5.v1",
+    "compiler_flags": [
+      "/std:c++20",
+      "/O2",
+      "/GS",
+      "/guard:cf",
+      "/EHsc"
+    ],
+    "linker_flags": [
+      "/OPT:REF",
+      "/OPT:ICF",
+      "/DYNAMICBASE",
+      "/HIGHENTROPYVA",
+      "/NXCOMPAT",
+      "/CETCOMPAT",
+      "/guard:cf"
+    ],
+    "security_mitigations_retained": true
+  },
+  "initialization_and_cleanup_obligations": [
+    {
+      "obligation_id": "query_mesh_capability_before_launch",
+      "phase": "initialization",
+      "description": "Query D3D12_FEATURE_D3D12_OPTIONS7.MeshShaderTier and the highest shader model before launching the optional artifact; absence is an explicit unsupported outcome.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "retain_separate_fallback",
+      "phase": "runtime",
+      "description": "The common indexed fallback artifact remains separately exported and separately tested; the mesh variant never substitutes for it without explicit eligibility.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "mesh_resource_lifetimes",
+      "phase": "cleanup",
+      "description": "Group-shared meshlet payloads are consumed within the dispatch and the instance buffer outlives the frame command list; evidence records the group barrier and resource lifetimes.",
+      "satisfied": true
+    }
+  ],
+  "measurements": {
+    "fixture_id": "nw07_torus_20s_loop",
+    "total_distributed_bytes": null,
+    "delta_vs_release_baseline_bytes": null,
+    "notes": "Physical matched baseline/variant runs on RTX 4060 Ti and RTX 5070 Ti are pending. Contract and bundle checks do not promote GPU-less results."
+  },
+  "diagnostics": {
+    "exit_code": null,
+    "error_code": "NW11_PENDING_PHYSICAL_VALIDATION",
+    "summary": "The mesh-shader experiment definition, capability profile, shader sources, bundle verifier, and launcher are implemented; matched physical evidence is not yet captured.",
+    "preservation_statement": "The experiment remains pending rather than claiming a pass. The common indexed artifact and the NW-07 baseline contracts remain unchanged, and no optional mesh shader is part of the common or fallback closure."
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "measurements.total_distributed_bytes",
+      "reason": "No release-grade optional mesh artifact has been built on a qualified Windows validation host."
+    },
+    {
+      "metric": "measurements.delta_vs_release_baseline_bytes",
+      "reason": "The matched baseline and optional variant distributions have not been exported in the same tested revision."
+    },
+    {
+      "metric": "diagnostics.exit_code",
+      "reason": "Physical execution is pending; contract-only validation does not assign an execution exit code."
+    }
+  ]
+}

@@ -24,11 +24,21 @@
     "experiment_id": { "type": "string", "minLength": 3 },
     "category": {
       "type": "string",
-      "enum": ["toolchain_comparison", "compact_profile", "crt_elimination"]
+      "enum": [
+        "toolchain_comparison",
+        "compact_profile",
+        "crt_elimination",
+        "advanced_gpu_feature"
+      ]
     },
     "status": {
       "type": "string",
-      "enum": ["retained_in_baseline", "rejected_preserved", "failed_preserved"]
+      "enum": [
+        "retained_in_baseline",
+        "rejected_preserved",
+        "failed_preserved",
+        "pending_evaluation"
+      ]
     },
     "verification_status": {
       "type": "string",

@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "nw11.ray-query-vs-analytic-reflection.v1",
+  "category": "advanced_gpu_feature",
+  "status": "pending_evaluation",
+  "verification_status": "unverified",
+  "substituted_silently": false,
+  "reproducible_command": "python tools/nw11_verify.py self-check && pwsh tools/nw11/run-validation.ps1 -BundleRoot <nw11-ray-query-bundle> -ExpectedCommit <tested-commit>",
+  "configuration": {
+    "toolchain_id": "msvc-ltcg",
+    "profile_name": "nw.optional.d3d12.ray_query.ps6_5.v1",
+    "compiler_flags": [
+      "/std:c++20",
+      "/O2",
+      "/GS",
+      "/guard:cf",
+      "/EHsc"
+    ],
+    "linker_flags": [
+      "/OPT:REF",
+      "/OPT:ICF",
+      "/DYNAMICBASE",
+      "/HIGHENTROPYVA",
+      "/NXCOMPAT",
+      "/CETCOMPAT",
+      "/guard:cf"
+    ],
+    "security_mitigations_retained": true
+  },
+  "initialization_and_cleanup_obligations": [
+    {
+      "obligation_id": "query_raytracing_capability_before_launch",
+      "phase": "initialization",
+      "description": "Query D3D12_FEATURE_D3D12_OPTIONS5.RaytracingTier and the highest shader model before launching the optional artifact; absence is an explicit unsupported outcome.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "retain_analytic_fallback",
+      "phase": "runtime",
+      "description": "The common analytic reflection fallback artifact remains separately exported and separately tested; a ray-query initialization failure is reported as failure without silently switching effects.",
+      "satisfied": true
+    },
+    {
+      "obligation_id": "acceleration_structure_lifetime_and_fence",
+      "phase": "cleanup",
+      "description": "BLAS/TLAS build work is fenced before inline ray-query shading, and the acceleration structure and all bound buffers outlive the frame command list.",
+      "satisfied": true
+    }
+  ],
+  "measurements": {
+    "fixture_id": "nw07_torus_20s_loop",
+    "total_distributed_bytes": null,
+    "delta_vs_release_baseline_bytes": null,
+    "notes": "Physical matched baseline/variant runs on RTX 4060 Ti and RTX 5070 Ti are pending. Contract and bundle checks do not promote GPU-less results."
+  },
+  "diagnostics": {
+    "exit_code": null,
+    "error_code": "NW11_PENDING_PHYSICAL_VALIDATION",
+    "summary": "The ray-query experiment definition, capability profile, shader sources, bundle verifier, and launcher are implemented; matched physical evidence is not yet captured.",
+    "preservation_statement": "The experiment remains pending rather than claiming a pass. The analytic baseline stays in the common/fallback closure, and no DXR or vendor SDK component becomes a common profile requirement."
+  },
+  "unavailable_measurements": [
+    {
+      "metric": "measurements.total_distributed_bytes",
+      "reason": "No release-grade optional ray-query artifact has been built on a qualified Windows validation host."
+    },
+    {
+      "metric": "measurements.delta_vs_release_baseline_bytes",
+      "reason": "The matched analytic baseline and ray-query variant distributions have not been exported in the same tested revision."
+    },
+    {
+      "metric": "diagnostics.exit_code",
+      "reason": "Physical execution is pending; contract-only validation does not assign an execution exit code."
+    }
+  ]
+}

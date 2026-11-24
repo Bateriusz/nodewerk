@@ -1,0 +1,192 @@
+{
+  "artifact_budget": {
+    "complete_distribution_bytes_ceiling": 262144,
+    "incremental_distribution_bytes_ceiling": 65536,
+    "peak_engine_committed_gpu_bytes_ceiling": 536870912,
+    "process_start_to_first_present_ms_ceiling": 2000.0,
+    "stretch_distribution_bytes_ceiling": 131072,
+    "stretch_is_mandatory_gate": false
+  },
+  "dependencies": [
+    {
+      "counted": true,
+      "distributed_bytes": 0,
+      "kind": "windows_inbox",
+      "name": "d3d12",
+      "optional": false
+    },
+    {
+      "counted": true,
+      "distributed_bytes": 0,
+      "kind": "windows_inbox",
+      "name": "dxgi",
+      "optional": false
+    },
+    {
+      "counted": true,
+      "distributed_bytes": 0,
+      "kind": "windows_inbox",
+      "name": "user32",
+      "optional": false
+    },
+    {
+      "counted": true,
+      "distributed_bytes": 0,
+      "kind": "windows_inbox",
+      "name": "kernel32",
+      "optional": false
+    }
+  ],
+  "device_coverage": [
+    {
+      "architecture": "Ada",
+      "device_tier": "desktop_ada_representative",
+      "representative_model_metadata_only": "NVIDIA GeForce RTX 4060 Ti",
+      "status": "pending"
+    },
+    {
+      "architecture": "Blackwell",
+      "device_tier": "desktop_blackwell_representative",
+      "representative_model_metadata_only": "NVIDIA GeForce RTX 5070 Ti",
+      "status": "pending"
+    }
+  ],
+  "eligibility": {
+    "fallback_on_unsupported": "separate_common_artifact_only",
+    "gpu_marketing_name_used": false,
+    "silent_effect_substitution": false,
+    "source": "queried_capabilities"
+  },
+  "evidence_status": "pending",
+  "fallback_artifact": {
+    "artifact_id": "nw11.fallback.common.d3d12.fl12_0.sm6_0.v1",
+    "optional_payloads": [],
+    "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+    "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+    "separately_exported": true,
+    "separately_tested": true
+  },
+  "fallback_artifact_id": "nw11.fallback.common.d3d12.fl12_0.sm6_0.v1",
+  "format": "nw11-capability-profile",
+  "implementation_base": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b",
+  "profile_id": "nw.optional.d3d12.ray_query.ps6_5.v1",
+  "profile_kind": "optional",
+  "qualification": {
+    "canonical_production_contract": "benchmarks/nw07/canonical-production.v1.json",
+    "nw01_policy_preserved": true,
+    "nw01b_evidence_semantics_reused": true,
+    "nw07_renderer_and_export_reused": true,
+    "perf_contract": "nw07_perf_ref_v1",
+    "perf_protocol": "nw07-perf-run.v1",
+    "quality_profile_id": "nw07.quality.v1"
+  },
+  "queried_capabilities": [
+    {
+      "accepted_values": [
+        "D3D_FEATURE_LEVEL_12_0",
+        "D3D_FEATURE_LEVEL_12_1",
+        "D3D_FEATURE_LEVEL_12_2"
+      ],
+      "d3d12_query": "D3D12_FEATURE_FEATURE_LEVELS",
+      "member": "pFeatureLevels",
+      "method": "ID3D12Device::CheckFeatureSupport",
+      "minimum_rank": 0,
+      "query_id": "d3d_feature_level"
+    },
+    {
+      "accepted_values": [
+        "D3D12_RESOURCE_BINDING_TIER_2",
+        "D3D12_RESOURCE_BINDING_TIER_3"
+      ],
+      "d3d12_query": "D3D12_FEATURE_D3D12_OPTIONS",
+      "member": "ResourceBindingTier",
+      "method": "ID3D12Device::CheckFeatureSupport",
+      "minimum_rank": 0,
+      "query_id": "resource_binding_tier"
+    },
+    {
+      "accepted_values": [
+        "D3D12_RESOURCE_HEAP_TIER_2"
+      ],
+      "d3d12_query": "D3D12_FEATURE_D3D12_OPTIONS",
+      "member": "ResourceHeapTier",
+      "method": "ID3D12Device::CheckFeatureSupport",
+      "minimum_rank": 0,
+      "query_id": "resource_heap_tier"
+    },
+    {
+      "accepted_values": [
+        "D3D12_SHADER_MODEL_6_0",
+        "D3D12_SHADER_MODEL_6_1",
+        "D3D12_SHADER_MODEL_6_2",
+        "D3D12_SHADER_MODEL_6_3",
+        "D3D12_SHADER_MODEL_6_4",
+        "D3D12_SHADER_MODEL_6_5",
+        "D3D12_SHADER_MODEL_6_6",
+        "D3D12_SHADER_MODEL_6_7",
+        "D3D12_SHADER_MODEL_6_8"
+      ],
+      "d3d12_query": "D3D12_FEATURE_SHADER_MODEL",
+      "member": "HighestShaderModel",
+      "method": "ID3D12Device::CheckFeatureSupport",
+      "minimum_rank": 0,
+      "query_id": "highest_shader_model"
+    },
+    {
+      "accepted_values": [
+        "D3D12_RAYTRACING_TIER_1_1"
+      ],
+      "d3d12_query": "D3D12_FEATURE_D3D12_OPTIONS5",
+      "member": "RaytracingTier",
+      "method": "ID3D12Device::CheckFeatureSupport",
+      "minimum_rank": 0,
+      "query_id": "raytracing_tier"
+    },
+    {
+      "accepted_values": [
+        "D3D12_SHADER_MODEL_6_5",
+        "D3D12_SHADER_MODEL_6_6",
+        "D3D12_SHADER_MODEL_6_7",
+        "D3D12_SHADER_MODEL_6_8"
+      ],
+      "d3d12_query": "D3D12_FEATURE_SHADER_MODEL",
+      "member": "HighestShaderModel",
+      "method": "ID3D12Device::CheckFeatureSupport",
+      "minimum_rank": 0,
+      "query_id": "highest_shader_model_ray"
+    }
+  ],
+  "requirements_digest": "sha256:v1:efe3d0e61d837c57bf102267bbfc7afd60c4a2fbaf401ea000b7fa9174e77ebd",
+  "runtime": {
+    "agility_sdk": {
+      "minimum_version": null,
+      "note": "Mesh shaders and inline ray queries are queried through the inbox D3D12 feature set on Windows 11 23H2+.  No Agility SDK redistribution is required for these two experiments; any future Agility dependency would add separately counted bytes and require a new profile version.",
+      "required": false
+    },
+    "d3d12_runtime": "windows_inbox",
+    "dxc_runtime_redistribution": false,
+    "minimum_nvidia_driver": "610.88",
+    "minimum_windows_build": 22631,
+    "os": "windows_11_x64",
+    "runtime_shader_compilation": false
+  },
+  "shader_targets": [
+    "ps_6_5"
+  ],
+  "task": "NW-11",
+  "toolchain": {
+    "cmake_minimum": "3.24",
+    "dxc": {
+      "compilation": "offline",
+      "measured_version": "1.8.2407.7",
+      "pinned_version": "1.8.2407",
+      "runtime_dependency": false
+    },
+    "msvc": {
+      "version_family": "19.4x"
+    },
+    "ninja_required": true,
+    "windows_sdk_minimum": "10.0.22621.0"
+  },
+  "version": 1
+}

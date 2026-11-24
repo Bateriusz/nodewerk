@@ -967,6 +967,83 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     f"{doc_path}: verified PE ledger requires complete accounting"
                 )
 
+    elif schema_name == "nw11-capability-profile.schema.json":
+        try:
+            import nw11_capability as nw11_capability
+        except Exception as exc:  # pragma: no cover - import guard
+            raise SchemaValidationError(f"{doc_path}: cannot load NW-11 capability module: {exc}")
+        try:
+            nw11_capability.validate_profile(instance)
+        except nw11_capability.CapabilityProfileError as exc:
+            raise SchemaValidationError(f"{doc_path}: {exc}") from exc
+
+    elif schema_name == "nw11-experiment.schema.json":
+        try:
+            import nw11_experiment as nw11_experiment
+        except Exception as exc:  # pragma: no cover - import guard
+            raise SchemaValidationError(f"{doc_path}: cannot load NW-11 experiment module: {exc}")
+        try:
+            nw11_experiment.validate_experiment(instance)
+        except nw11_experiment.ExperimentError as exc:
+            raise SchemaValidationError(f"{doc_path}: {exc}") from exc
+        if instance.get("evidence_status") != "pending" and not instance.get("evidence_status"):
+            raise SchemaValidationError(f"{doc_path}: experiment evidence status is missing")
+
+    elif schema_name == "nw11-follow-up-matrix.schema.json":
+        try:
+            import nw11_followup as nw11_followup
+        except Exception as exc:  # pragma: no cover - import guard
+            raise SchemaValidationError(f"{doc_path}: cannot load NW-11 follow-up module: {exc}")
+        try:
+            nw11_followup.validate_matrix(instance)
+        except nw11_followup.FollowupMatrixError as exc:
+            raise SchemaValidationError(f"{doc_path}: {exc}") from exc
+
+    elif schema_name == "nw11-decision.schema.json":
+        try:
+            import nw11_evidence as nw11_evidence
+        except Exception as exc:  # pragma: no cover - import guard
+            raise SchemaValidationError(f"{doc_path}: cannot load NW-11 evidence module: {exc}")
+        try:
+            nw11_evidence.validate_decision_document(instance)
+        except nw11_evidence.EvidenceError as exc:
+            raise SchemaValidationError(f"{doc_path}: {exc}") from exc
+        if instance.get("aggregate_status") == "pending" and instance.get(
+            "satisfies_completion"
+        ) is not False:
+            raise SchemaValidationError(
+                f"{doc_path}: pending NW-11 decisions cannot satisfy completion"
+            )
+
+    elif schema_name == "nw11-evidence-status.schema.json":
+        status = instance.get("evidence_status")
+        source_head = instance.get("source_head_sha")
+        coverage = instance.get("required_physical_coverage", [])
+        if status == "pending_physical":
+            if source_head is not None:
+                raise SchemaValidationError(
+                    f"{doc_path}: pending physical evidence must not bind a source head"
+                )
+            if any(item.get("satisfies_completion") for item in coverage):
+                raise SchemaValidationError(
+                    f"{doc_path}: pending physical coverage cannot satisfy completion"
+                )
+        elif status == "verified_physical":
+            if not isinstance(source_head, str) or re.fullmatch(
+                r"[0-9a-f]{40}", source_head
+            ) is None:
+                raise SchemaValidationError(
+                    f"{doc_path}: verified physical evidence requires a source-head binding"
+                )
+            if not all(item.get("status") == "verified" for item in coverage):
+                raise SchemaValidationError(
+                    f"{doc_path}: verified physical evidence requires all coverage verified"
+                )
+            if instance.get("physical_evidence") != "verified":
+                raise SchemaValidationError(
+                    f"{doc_path}: verified physical evidence field disagrees"
+                )
+
 
 ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
     ("benchmarks/capability-manifest.v1.json", "schemas/capability-manifest.schema.json"),
@@ -987,6 +1064,17 @@ ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
     ("benchmarks/experiments/compact-profile-experiment.json", "schemas/experiment-record.schema.json"),
     ("benchmarks/experiments/crt-elimination-experiment.json", "schemas/experiment-record.schema.json"),
     ("benchmarks/nw04-hardware-evidence.json", "schemas/nw04-player-evidence.schema.json"),
+    ("benchmarks/nw11/profiles/common.v1.json", "schemas/nw11-capability-profile.schema.json"),
+    ("benchmarks/nw11/profiles/optional-mesh-shaders.v1.json", "schemas/nw11-capability-profile.schema.json"),
+    ("benchmarks/nw11/profiles/optional-ray-query.v1.json", "schemas/nw11-capability-profile.schema.json"),
+    ("benchmarks/nw11/experiments/mesh-shader-vs-indexed.v1.json", "schemas/nw11-experiment.schema.json"),
+    ("benchmarks/nw11/experiments/ray-query-vs-analytic.v1.json", "schemas/nw11-experiment.schema.json"),
+    ("benchmarks/nw11/follow-up-matrix.v1.json", "schemas/nw11-follow-up-matrix.schema.json"),
+    ("benchmarks/nw11/evidence-status.v1.json", "schemas/nw11-evidence-status.schema.json"),
+    ("benchmarks/nw11/decisions/mesh-shader.v1.json", "schemas/nw11-decision.schema.json"),
+    ("benchmarks/nw11/decisions/ray-query.v1.json", "schemas/nw11-decision.schema.json"),
+    ("benchmarks/experiments/nw11-mesh-shader-experiment.json", "schemas/experiment-record.schema.json"),
+    ("benchmarks/experiments/nw11-ray-query-experiment.json", "schemas/experiment-record.schema.json"),
 ]
 
 

@@ -1,0 +1,39 @@
+{
+  "aggregate_status": "pending",
+  "bundle_id": null,
+  "bundle_manifest_sha256": null,
+  "commit": null,
+  "decision_id": "sha256:v1:b3a4bf8c7f2f7cec4168b65f2b1ad229fdd57aca92603a24fb65fcfe25246dbf",
+  "devices": [
+    {
+      "device_key": null,
+      "device_tier": "desktop_ada_representative",
+      "environment_key": null,
+      "metrics": null,
+      "reason": "No matched physical baseline/variant run recorded at the current implementation base.",
+      "satisfies_completion": false,
+      "status": "pending"
+    },
+    {
+      "device_key": null,
+      "device_tier": "desktop_blackwell_representative",
+      "environment_key": null,
+      "metrics": null,
+      "reason": "No matched physical baseline/variant run recorded at the current implementation base.",
+      "satisfies_completion": false,
+      "status": "pending"
+    }
+  ],
+  "evidence_file": null,
+  "experiment_id": "nw11.ray-query-vs-analytic-reflection.v1",
+  "fallback_artifact_id": "nw11.fallback.common.d3d12.fl12_0.sm6_0.v1",
+  "format": "nw11-decisions",
+  "implementation_base": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b",
+  "pending_is_not_pass": true,
+  "per_device_decision_isolation": true,
+  "satisfies_completion": false,
+  "task": "NW-11",
+  "unsupported_is_not_failure_or_pass": true,
+  "variant_profile_id": "nw.optional.d3d12.ray_query.ps6_5.v1",
+  "version": 1
+}

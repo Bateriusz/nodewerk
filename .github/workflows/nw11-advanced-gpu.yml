@@ -1,0 +1,226 @@
+name: NW-11 Advanced GPU Feature Experiments
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_directory:
+        description: "Path to an immutable NW-11 validation bundle for physical validation"
+        required: false
+        default: ""
+      expected_commit:
+        description: "Commit SHA the bundle was built from"
+        required: false
+        default: ""
+      experiment_id:
+        description: "NW-11 experiment identifier"
+        required: false
+        default: "nw11.mesh-shader-vs-indexed.v1"
+      baseline_executable:
+        description: "Same-revision common/baseline executable path on the runner"
+        required: false
+        default: ""
+      variant_executable:
+        description: "Same-revision optional variant executable path on the runner"
+        required: false
+        default: ""
+      fallback_executable:
+        description: "Same-revision separately exported common fallback executable path"
+        required: false
+        default: ""
+      capability_probe_executable:
+        description: "Built capability probe executable path"
+        required: false
+        default: ""
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-impact:
+    name: NW-11 impact routing
+    runs-on: ubuntu-latest
+    outputs:
+      nw11: ${{ steps.classify.outputs.nw11 }}
+      full_regression: ${{ steps.classify.outputs.full_regression }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Classify changed scope
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python tools/ci/changed_scope.py
+          --event-name "${{ github.event_name }}"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
+
+  contract-and-capability-checks:
+    name: Contract, capability-manifest, absence, stripping & reproducibility checks
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw11 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Compile NW-11 Python implementation
+        run: python -m compileall -q tools/nw11_contract.py tools/nw11_capability.py tools/nw11_experiment.py tools/nw11_bundle.py tools/nw11_evidence.py tools/nw11_followup.py tools/nw11_build_bundle.py tools/nw11_verify.py tools/nw11/collect-evidence.py
+      - name: Validate schemas and tracked evidence state
+        run: |
+          python tools/schema_validator.py
+          python tools/nw11_verify.py self-check
+      - name: Run NW-11 contract tests
+        run: pytest -q -k nw11
+      - name: Absent-feature, malformed-manifest, stale-evidence & zero-cost stripping checks
+        run: pytest -q -k "nw11 and (capability_absence or malformed or stale or zero_cost or initialization_failure)"
+      - name: Reproducibility and per-device decision isolation checks
+        run: pytest -q -k "nw11 and (deterministic or isolation or device or shader_manifest)"
+      - name: Deterministic bundle build and verification dry run
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys, tempfile
+          from pathlib import Path
+          root = Path(".").resolve()
+          for experiment in ("nw11.mesh-shader-vs-indexed.v1", "nw11.ray-query-vs-analytic-reflection.v1"):
+              with tempfile.TemporaryDirectory() as temporary:
+                  base = Path(temporary)
+                  source = base / "src"
+                  source.mkdir()
+                  (source / "baseline.exe").write_bytes(b"nw11-baseline")
+                  (source / "variant.exe").write_bytes(b"nw11-variant")
+                  (source / "fallback.exe").write_bytes(b"nw11-fallback")
+                  (source / "probe.exe").write_bytes(b"MZ-nw11-probe")
+                  first = base / "bundle-a"
+                  second = base / "bundle-b"
+                  common = [
+                      sys.executable, "tools/nw11_build_bundle.py",
+                      "--experiment-id", experiment,
+                      "--commit", "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b",
+                      "--baseline-executable", str(source / "baseline.exe"),
+                      "--variant-executable", str(source / "variant.exe"),
+                      "--fallback-executable", str(source / "fallback.exe"),
+                      "--capability-probe", str(source / "probe.exe"),
+                  ]
+                  subprocess.run(common + ["--output", str(first)], check=True)
+                  subprocess.run(common + ["--output", str(second)], check=True)
+                  first_manifest = (first / "bundle-manifest.json").read_bytes()
+                  second_manifest = (second / "bundle-manifest.json").read_bytes()
+                  if first_manifest != second_manifest:
+                      raise SystemExit("NW-11 bundle manifests are not deterministic")
+                  subprocess.run(
+                      [sys.executable, "tools/nw11_verify.py", "bundle",
+                       "--bundle-root", str(first),
+                       "--expected-commit", "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b"],
+                      check=True,
+                      stdout=subprocess.DEVNULL,
+                  )
+          print("NW-11 deterministic bundle dry-run passed")
+          PY
+
+  windows-capability-probe-compile:
+    name: Windows capability probe compile and self-check
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw11 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure optional-profile tools
+        run: cmake -S src/nw11 -B build/nw11-probe -G "Visual Studio 17 2022" -A x64
+      - name: Build capability probe
+        run: cmake --build build/nw11-probe --config Release --parallel 2
+      - name: Probe self-check (no GPU required)
+        shell: pwsh
+        run: |
+          $probe = Get-ChildItem -Recurse build/nw11-probe -Filter nw11_capability_probe.exe | Select-Object -First 1
+          if (-not $probe) { throw "capability probe was not built" }
+          & $probe.FullName --self-check
+          if ($LASTEXITCODE -ne 0) { throw "capability probe self-check failed" }
+
+  build-validation-bundles:
+    name: Build immutable validation bundle
+    if: github.event_name == 'workflow_dispatch' && inputs.variant_executable != ''
+    needs: contract-and-capability-checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build deterministic bundle
+        run: |
+          python tools/nw11_build_bundle.py \
+            --output "$RUNNER_TEMP/nw11-bundle" \
+            --experiment-id "${{ inputs.experiment_id }}" \
+            --commit "${{ inputs.expected_commit }}" \
+            --baseline-executable "${{ inputs.baseline_executable }}" \
+            --variant-executable "${{ inputs.variant_executable }}" \
+            --fallback-executable "${{ inputs.fallback_executable }}" \
+            --capability-probe "${{ inputs.capability_probe_executable }}" \
+            --json-out "$RUNNER_TEMP/nw11-bundle-manifest.json"
+          python tools/nw11_verify.py bundle \
+            --bundle-root "$RUNNER_TEMP/nw11-bundle" \
+            --expected-commit "${{ inputs.expected_commit }}" \
+            --json-out "$RUNNER_TEMP/nw11-bundle-verification.json"
+      - name: Upload immutable bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-validation-bundle
+          path: |
+            ${{ runner.temp }}/nw11-bundle/**
+            ${{ runner.temp }}/nw11-bundle-manifest.json
+            ${{ runner.temp }}/nw11-bundle-verification.json
+          if-no-files-found: error
+
+  physical-validation:
+    name: Physical validation (${{ matrix.device_tier }})
+    if: github.event_name == 'workflow_dispatch' && inputs.bundle_directory != ''
+    needs: contract-and-capability-checks
+    strategy:
+      fail-fast: false
+      matrix:
+        device_tier: [desktop_ada_representative, desktop_blackwell_representative]
+    runs-on:
+      - self-hosted
+      - windows
+      - nw11-${{ matrix.device_tier }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and execute the immutable bundle
+        shell: pwsh
+        run: |
+          $bundle = "${{ inputs.bundle_directory }}"
+          $commit = "${{ inputs.expected_commit }}"
+          if (-not (Test-Path -LiteralPath $bundle)) { throw "bundle directory is missing" }
+          $launcher = Join-Path $bundle "run-validation.ps1"
+          if (-not (Test-Path -LiteralPath $launcher)) { throw "bundle launcher is missing" }
+          $evidenceDirectory = Join-Path $env:RUNNER_TEMP "nw11-evidence-${{ matrix.device_tier }}"
+          & $launcher -BundleRoot $bundle -ExpectedCommit $commit -OutputDirectory $evidenceDirectory
+          $code = $LASTEXITCODE
+          if ($code -eq 0) { exit 0 }
+          if ($code -eq 3) { Write-Host "Capability absence is explicitly unsupported."; exit 3 }
+          if ($code -eq 11) { Write-Host "Required device coverage remains pending."; exit 11 }
+          throw "NW-11 physical validation failed with exit code $code"
+      - name: Upload raw evidence and decisions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-evidence-${{ matrix.device_tier }}
+          path: |
+            ${{ runner.temp }}/nw11-evidence-${{ matrix.device_tier }}/**
+          if-no-files-found: warn

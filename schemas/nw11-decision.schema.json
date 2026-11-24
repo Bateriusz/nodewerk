@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw11-decision.schema.json",
+  "title": "Nodewerk NW-11 per-device experiment decision",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "experiment_id",
+    "variant_profile_id",
+    "fallback_artifact_id",
+    "devices",
+    "aggregate_status",
+    "satisfies_completion",
+    "per_device_decision_isolation",
+    "pending_is_not_pass",
+    "unsupported_is_not_failure_or_pass",
+    "decision_id"
+  ],
+  "properties": {
+    "format": { "const": "nw11-decisions" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-11" },
+    "implementation_base": { "const": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b" },
+    "commit": { "type": ["string", "null"] },
+    "bundle_id": { "type": ["string", "null"] },
+    "bundle_manifest_sha256": { "type": ["string", "null"] },
+    "evidence_file": { "type": ["string", "null"] },
+    "experiment_id": {
+      "enum": [
+        "nw11.mesh-shader-vs-indexed.v1",
+        "nw11.ray-query-vs-analytic-reflection.v1"
+      ]
+    },
+    "variant_profile_id": { "type": "string", "minLength": 3 },
+    "fallback_artifact_id": { "type": "string", "minLength": 3 },
+    "devices": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "device_tier",
+          "device_key",
+          "environment_key",
+          "status",
+          "satisfies_completion",
+          "reason",
+          "metrics"
+        ],
+        "properties": {
+          "device_tier": {
+            "enum": [
+              "desktop_ada_representative",
+              "desktop_blackwell_representative"
+            ]
+          },
+          "device_key": { "type": ["string", "null"] },
+          "environment_key": { "type": ["string", "null"] },
+          "status": {
+            "enum": ["accepted", "rejected", "failed", "pending", "unsupported"]
+          },
+          "satisfies_completion": { "type": "boolean" },
+          "reason": { "type": "string", "minLength": 10 },
+          "metrics": { "type": ["object", "null"] },
+          "diagnostics": { "type": "array" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "aggregate_status": {
+      "enum": ["accepted", "rejected", "failed", "pending", "unsupported"]
+    },
+    "satisfies_completion": { "type": "boolean" },
+    "per_device_decision_isolation": { "const": true },
+    "pending_is_not_pass": { "const": true },
+    "unsupported_is_not_failure_or_pass": { "const": true },
+    "decision_id": { "type": "string", "pattern": "^sha256:v1:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

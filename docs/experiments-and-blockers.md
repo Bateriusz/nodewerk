@@ -63,6 +63,21 @@ values.
 - **Record:** [`benchmarks/experiments/nw10-parameter-packing-rejections.json`](../benchmarks/experiments/nw10-parameter-packing-rejections.json)
 - **Outcome:** Varint/string-table parameter packing was byte-positive with zero measured error but is not integrated without a matching player decoder. Float16 and signed Q16 packing were rejected because the measured maximum absolute error exceeded the frozen `1e-5` numeric tolerance.
 
+## NW-11 Advanced GPU Experiments
+
+NW-11 reuses the same NW-01B experiment-record schema with an additive
+`advanced_gpu_feature` category and `pending_evaluation` status.
+
+### Mesh shaders versus indexed rendering
+- **Record:** [`benchmarks/experiments/nw11-mesh-shader-experiment.json`](../benchmarks/experiments/nw11-mesh-shader-experiment.json)
+- **Definition:** [`benchmarks/nw11/experiments/mesh-shader-vs-indexed.v1.json`](../benchmarks/nw11/experiments/mesh-shader-vs-indexed.v1.json)
+- **Outcome:** The optional `as_6_5`/`ms_6_5` variant extends the frozen NW-07 graph and shares the common fragment stage. Matched physical runs on RTX 4060 Ti and RTX 5070 Ti are pending; no GPU-less result is promoted.
+
+### DXR ray queries versus analytic reflection
+- **Record:** [`benchmarks/experiments/nw11-ray-query-experiment.json`](../benchmarks/experiments/nw11-ray-query-experiment.json)
+- **Definition:** [`benchmarks/nw11/experiments/ray-query-vs-analytic.v1.json`](../benchmarks/nw11/experiments/ray-query-vs-analytic.v1.json)
+- **Outcome:** The `ps_6_5` inline-ray-query variant shares the NW-07 graph, geometry, capture, quality, and present path with the common `ps_6_0` analytic baseline. Physical evidence and the separate common fallback remain pending/available respectively.
+
 ## Inbox-Runtime Blocker Log
 
 - **Current Status:** No inbox-runtime blocker was observed in the verified RTX 4060 Ti capture or in the preserved RTX 5070 Ti run (unverified for the desktop tier because its host CPU was mobile). The recorded dispatches succeeded on inbox Windows 11 `d3d12.dll` with Feature Level `12_0` + Shader Model `6.0`, bounded descriptor tables, ordinary barriers, and one direct queue without Agility SDK redistribution. If a future capture fails, the exact `win_build`, `d3d12_dll` version, HRESULT, and failed feature must be recorded here before any profile or redistributable change.

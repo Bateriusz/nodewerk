@@ -1,0 +1,272 @@
+{
+  "format": "nw11-follow-up-matrix",
+  "version": 1,
+  "task": "NW-11",
+  "implementation_base": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b",
+  "prototypes_allowed_in_this_task": false,
+  "policy": "This matrix is bounded. It records capability, deployment, licensing, dependency, byte-cost, and content-hypothesis facts only. No additional prototype enters NW-11; every further prototype requires a separately scoped follow-up issue.",
+  "features": [
+    {
+      "feature": "vulkan_1_4",
+      "content_hypothesis": "A Vulkan 1.4 backend could broaden supported platforms, but the frozen NW-07 production is a Windows D3D12 graph-derived artifact and a second production backend is explicitly out of scope.",
+      "exact_feature_queries": [
+        "vkEnumerateInstanceVersion >= VK_API_VERSION_1_4",
+        "VK_KHR_maintenance7",
+        "VK_KHR_shader_subgroup_rotate",
+        "VK_EXT_graphics_pipeline_library"
+      ],
+      "api_requirements": "Vulkan 1.4 loader plus instance/device extension promotion; SPIR-V 1.6 shader modules",
+      "shader_targets": ["SPIR-V 1.6 vertex/fragment/compute", "lib_6_5 equivalent SPIR-V"],
+      "toolchain_requirements": "glslang or DXC SPIR-V backend; Vulkan SDK validation layers during development only",
+      "runtime_requirements": "Vulkan 1.4 loader and ICD on the target machine; Windows 11 driver support",
+      "deployment_constraints": [
+        "requires a second production backend, forbidden by NW-11",
+        "loader/ICD discovery must not become a common-profile dependency",
+        "NW-07 D3D12 evidence contracts cannot be reused unchanged"
+      ],
+      "licensing_constraints": [
+        "Vulkan SDK and validation layers are optional development tools, never distributed",
+        "loader redistribution bytes must be counted if ever deployed"
+      ],
+      "dependencies": [
+        {"name": "vulkan-1.dll", "distributed_bytes": 0, "optional": true, "counted": true},
+        {"name": "Vulkan SDK", "distributed_bytes": 0, "optional": true, "counted": true}
+      ],
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No deployed loader/ICD bytes exist because NW-11 adds no Vulkan artifact; a future backend would count the loader and SPIR-V payload."
+      },
+      "prototypes_in_this_task": false,
+      "follow_up_disposition": "follow_up_issue_required"
+    },
+    {
+      "feature": "asynchronous_compute",
+      "content_hypothesis": "Overlapping NW-07 bloom/tonemap compute work with the instanced raster pass might reduce end-to-end frame time on devices with an independent compute queue.",
+      "exact_feature_queries": [
+        "ID3D12Device::CreateCommandQueue(D3D12_COMMAND_LIST_TYPE_COMPUTE) returns S_OK",
+        "D3D12_FEATURE_ARCHITECTURE1",
+        "D3D12_FEATURE_D3D12_OPTIONS1"
+      ],
+      "api_requirements": "D3D12 compute queue plus cross-queue fences; no new API tier",
+      "shader_targets": ["cs_6_0"],
+      "toolchain_requirements": "Existing pinned MSVC/DXC toolchain",
+      "runtime_requirements": "Windows 11 inbox D3D12 runtime",
+      "deployment_constraints": [
+        "no extra distributed bytes expected beyond command-list wiring",
+        "must not weaken the single-direct-queue common profile contract",
+        "requires capacity/occupancy measurements before adoption"
+      ],
+      "licensing_constraints": ["no vendor SDK or license change"],
+      "dependencies": [],
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "Reuses the existing compiled compute shaders; only common code paths would change, which NW-11 forbids."
+      },
+      "prototypes_in_this_task": false,
+      "follow_up_disposition": "follow_up_issue_required"
+    },
+    {
+      "feature": "work_graphs",
+      "content_hypothesis": "Work Graphs could collapse the NW-07 initialization dispatches into a single GPU-driven producer/consumer graph, but initialization is already amortized and the benefit is content-dependent.",
+      "exact_feature_queries": [
+        "D3D12_FEATURE_D3D12_OPTIONS21.WorkGraphsTier == D3D12_WORK_GRAPHS_TIER_1_0",
+        "D3D12_FEATURE_D3D12_OPTIONS21.WorkGraphsSupported",
+        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D12_SHADER_MODEL_6_8"
+      ],
+      "api_requirements": "Agility SDK exposing D3D12 Work Graphs; D3D12_FEATURE_D3D12_OPTIONS21",
+      "shader_targets": ["lib_6_8", "cs_6_8"],
+      "toolchain_requirements": "Agility SDK matching the Work Graphs contract; DXC with Work Graphs support",
+      "runtime_requirements": "Windows 11 plus Agility SDK redistributable or inbox-equivalent support",
+      "deployment_constraints": [
+        "Agility SDK binaries must be counted if bundled",
+        "Work Graphs can never become a common-profile requirement",
+        "requires a separate experimental profile and fallback"
+      ],
+      "licensing_constraints": [
+        "Agility SDK is Microsoft-licensed redistribution; bytes and notices must be counted",
+        "no vendor SDK license applies"
+      ],
+      "dependencies": [
+        {"name": "D3D12Core.dll (Agility SDK)", "distributed_bytes": 0, "optional": true, "counted": true},
+        {"name": "d3d12SDKLayers.dll (development only)", "distributed_bytes": 0, "optional": true, "counted": true}
+      ],
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No Work Graphs payload is distributed in NW-11; a future bundle must count the Agility SDK DLL bytes plus shader payload."
+      },
+      "prototypes_in_this_task": false,
+      "follow_up_disposition": "follow_up_issue_required"
+    },
+    {
+      "feature": "shader_execution_reordering",
+      "content_hypothesis": "SER might improve ray-query variant divergence if the NW-07 torus reflection workload showed coherent hit grouping, but the initial ray-query experiment must first establish end-to-end benefit.",
+      "exact_feature_queries": [
+        "D3D12_FEATURE_D3D12_OPTIONS21.ShaderExecutionReorderingTier >= D3D12_SHADER_EXECUTION_REORDERING_TIER_1",
+        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D12_SHADER_MODEL_6_6"
+      ],
+      "api_requirements": "D3D12 SER API; Agility SDK exposing D3D12_OPTIONS21",
+      "shader_targets": ["lib_6_6", "ps_6_6"],
+      "toolchain_requirements": "DXC with SER intrinsics; Agility SDK matching SER",
+      "runtime_requirements": "Windows 11 plus Agility SDK or driver support",
+      "deployment_constraints": [
+        "cannot be combined with the initial NW-11 ray-query experiment",
+        "must retain the separately exported common fallback",
+        "requires per-device matched evidence"
+      ],
+      "licensing_constraints": ["Microsoft Agility SDK redistribution only if deployed; bytes counted"],
+      "dependencies": [
+        {"name": "D3D12Core.dll (Agility SDK)", "distributed_bytes": 0, "optional": true, "counted": true}
+      ],
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No SER shader byte is part of NW-11; a follow-up must count shader payload and any Agility SDK bytes."
+      },
+      "prototypes_in_this_task": false,
+      "follow_up_disposition": "follow_up_issue_required"
+    },
+    {
+      "feature": "opacity_micromaps",
+      "content_hypothesis": "Opacity micromaps could accelerate alpha-tested foliage, but the NW-07 torus workload is fully opaque and contains no alpha-test content, so there is no content hypothesis for this task.",
+      "exact_feature_queries": [
+        "D3D12_FEATURE_D3D12_OPTIONS18.OpacityMicromapSupported",
+        "D3D12_FEATURE_D3D12_OPTIONS5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_2"
+      ],
+      "api_requirements": "D3D12 opacity micromap build/copy APIs; Agility SDK or equivalent",
+      "shader_targets": ["lib_6_5", "ps_6_5"],
+      "toolchain_requirements": "DXC with opacity micromap support; Agility SDK matching the API",
+      "runtime_requirements": "Windows 11 plus required Agility SDK redistribution",
+      "deployment_constraints": [
+        "no relevant content in the frozen torus workload",
+        "micromap data bytes would be content-specific and must be counted",
+        "never becomes a common-profile requirement"
+      ],
+      "licensing_constraints": ["Microsoft Agility SDK redistribution only if deployed; bytes counted"],
+      "dependencies": [
+        {"name": "D3D12Core.dll (Agility SDK)", "distributed_bytes": 0, "optional": true, "counted": true}
+      ],
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No micromap payload exists for the opaque torus scene; a future content set must count micromap storage."
+      },
+      "prototypes_in_this_task": false,
+      "follow_up_disposition": "not_applicable"
+    },
+    {
+      "feature": "micromesh_clustered_geometry",
+      "content_hypothesis": "Micromesh/clustered geometry could reduce the NW-07 torus vertex/index footprint or improve tiny-triangle rasterization, but the current torus is only 2,048 vertices and sparse; the byte/benefit hypothesis is weak.",
+      "exact_feature_queries": [
+        "D3D12_FEATURE_D3D12_OPTIONS7.MeshShaderTier >= D3D12_MESH_SHADER_TIER_1",
+        "VK_EXT_mesh_shader",
+        "VK_NV_mesh_shader"
+      ],
+      "api_requirements": "Mesh shaders plus vendor micromesh extension/SDK",
+      "shader_targets": ["ms_6_5", "amplification_6_5", "SPIR-V mesh shader"],
+      "toolchain_requirements": "Vendor SDK/toolchain for micromesh preprocessing; pinned DXC for mesh shaders",
+      "runtime_requirements": "Vendor driver support plus optional SDK runtime",
+      "deployment_constraints": [
+        "vendor SDK bytes and model/preprocessed data must be counted",
+        "substantial licensing review required",
+        "no common-profile inclusion"
+      ],
+      "licensing_constraints": [
+        "NVIDIA micromesh/clustered geometry SDK terms must be reviewed before distribution",
+        "preprocessed asset bytes are optional and fully counted"
+      ],
+      "dependencies": [
+        {"name": "vendor micromesh SDK", "distributed_bytes": 0, "optional": true, "counted": true},
+        {"name": "preprocessed micromesh payload", "distributed_bytes": 0, "optional": true, "counted": true}
+      ],
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "The frozen torus uses 2,048 vertices and 12,288 indices; a micromesh payload could be larger than the baseline and must be measured before any follow-up."
+      },
+      "prototypes_in_this_task": false,
+      "follow_up_disposition": "blocked_by_licensing"
+    },
+    {
+      "feature": "tensor_neural_shading",
+      "content_hypothesis": "Tensor/neural shading could denoise the ray-query reflection or infer material response, but it introduces model weights and vendor runtime dependencies that are disproportionate to the 256-instance torus scene.",
+      "exact_feature_queries": [
+        "cooperative matrix / tensor core extension queries exposed by the selected vendor runtime",
+        "D3D12_FEATURE_D3D12_OPTIONS.../shader model support for the selected neural shader target",
+        "vendor runtime capability enumeration before any model load"
+      ],
+      "api_requirements": "Vendor neural-shading SDK/runtime plus D3D12 or Vulkan cooperative-matrix support",
+      "shader_targets": ["neural shader target supplied by vendor toolkit", "cs_6_8"],
+      "toolchain_requirements": "Vendor model compiler/runtime; exact version must be pinned per experiment",
+      "runtime_requirements": "Vendor inference runtime and compatible driver",
+      "deployment_constraints": [
+        "model weights and runtime DLLs are optional and fully counted",
+        "model weights must never enter a common or fallback artifact",
+        "requires a separate bounded follow-up with quality and licensing review"
+      ],
+      "licensing_constraints": [
+        "SDK, model weights, and redistribution terms must be reviewed independently",
+        "no weight or SDK byte is distributed by NW-11"
+      ],
+      "dependencies": [
+        {"name": "vendor neural SDK runtime", "distributed_bytes": 0, "optional": true, "counted": true},
+        {"name": "model weights", "distributed_bytes": 0, "optional": true, "counted": true}
+      ],
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No model weights or SDK runtime are distributed in NW-11; a follow-up must count both, likely dominating the 256 KiB common budget."
+      },
+      "prototypes_in_this_task": false,
+      "follow_up_disposition": "follow_up_issue_required"
+    }
+  ],
+  "vendor_optional_costs": [
+    {
+      "item": "dlss",
+      "optional": true,
+      "counted": true,
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No DLSS runtime, NGX payload, or model is distributed by NW-11; a future profile must count every byte."
+      },
+      "licensing_note": "NVIDIA DLSS redistribution terms and SDK notice obligations apply only if a future experiment opts in."
+    },
+    {
+      "item": "rtx_kit",
+      "optional": true,
+      "counted": true,
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No RTX Kit component is distributed by NW-11; any future component must be counted."
+      },
+      "licensing_note": "NVIDIA RTX Kit SDK license review is required before any distribution."
+    },
+    {
+      "item": "model_weights",
+      "optional": true,
+      "counted": true,
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No model weight is distributed by NW-11; weights are explicitly optional and counted in any follow-up."
+      },
+      "licensing_note": "Model weight licenses are independent of code licenses and must be reviewed per model."
+    },
+    {
+      "item": "vendor_sdk_components",
+      "optional": true,
+      "counted": true,
+      "byte_cost": {
+        "status": "unmeasured_estimate",
+        "estimate_bytes": 0,
+        "basis": "No vendor SDK component is distributed by NW-11; every DLL, data file, and notice is optional and counted."
+      },
+      "licensing_note": "Each vendor SDK has separate redistribution terms; none is a common-profile dependency."
+    }
+  ]
+}
