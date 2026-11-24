@@ -167,7 +167,10 @@ def test_nw01_splits_build_and_runtime_by_host_capability():
     native = workflow.split("  nw04-native-verification:", 1)[1].split("  windows-physical-evidence:", 1)[0]
 
     assert "runs-on: windows-2022" in build
-    assert "Verify real-PE NW-05 and NW-09 generated-player exports" not in build
+    assert "Build current-head runtime-smoke inputs without launching" in build
+    assert "NW05_RUNTIME_BUNDLE_OUTPUT" in build
+    assert "NW09_REAL_PLAYER_BUILD_OUTPUT" in build
+    assert "--skip-smoke-launch" in build
     assert "nw01-runtime-smoke-inputs-${{ github.sha }}" in build
     assert "source_commit = (git rev-parse HEAD).Trim()" in build
 
@@ -176,7 +179,9 @@ def test_nw01_splits_build_and_runtime_by_host_capability():
     assert "needs: [ci-impact, windows-reproducibility-and-fixtures]" in runtime
     assert "source_commit does not match the checked-out current head" in runtime
     assert "Assert-NwExactToolVersion" in runtime
-    assert "Verify real-PE NW-05 and NW-09 generated-player exports" in runtime
+    assert "NW05_RUNTIME_BUNDLE_INPUT" in runtime
+    assert "NW09_REAL_PLAYER_RUNTIME_INPUT" in runtime
+    assert "--smoke-only" in runtime
 
     assert "runs-on: windows-2025" in native
 
@@ -191,6 +196,18 @@ def test_runtime_sensitive_workflows_use_windows_2025():
     assert "runs-on: windows-2025" in nw08a
     assert "runs-on: windows-2022" not in nw08a
     assert "runs-on: windows-2022" in nw07
+
+
+def test_runtime_split_helpers_preserve_build_and_launch_phases():
+    nw05 = (ROOT / "tests" / "test_nw05_real_export.py").read_text(encoding="utf-8")
+    nw09 = (ROOT / "tests" / "test_nw09_review_fixes.py").read_text(encoding="utf-8")
+    examples = (ROOT / "tools" / "nw09_ci_examples.py").read_text(encoding="utf-8")
+    assert "NW05_RUNTIME_BUNDLE_OUTPUT" in nw05
+    assert "NW05_RUNTIME_BUNDLE_INPUT" in nw05
+    assert "NW09_REAL_PLAYER_BUILD_OUTPUT" in nw09
+    assert "NW09_REAL_PLAYER_RUNTIME_INPUT" in nw09
+    assert "--skip-smoke-launch" in examples
+    assert "--smoke-only" in examples
 
 
 def test_windows_full_pytest_is_not_duplicated():

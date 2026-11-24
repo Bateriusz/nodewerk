@@ -186,7 +186,7 @@ jobs:
           pwsh ./tools/nw01/run-build-checks.ps1
           -SummaryPath "$env:RUNNER_TEMP\nw01-build-checks.json"
 
-      - name: Build current-head runtime-smoke player template
+      - name: Build current-head runtime-smoke inputs without launching
         shell: pwsh
         run: |
           cmake --preset clang-cl-release
@@ -197,18 +197,34 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP "nw01-runtime-smoke-inputs"
           $playerDir = Join-Path $root "player"
           $dxcDir = Join-Path $root "dxc"
-          New-Item -ItemType Directory -Force -Path $playerDir,$dxcDir | Out-Null
+          $nw05Dir = Join-Path $root "nw05"
+          $nw09Dir = Join-Path $root "nw09"
+          $examplesDir = Join-Path $root "examples"
+          New-Item -ItemType Directory -Force -Path $playerDir,$dxcDir,$nw05Dir,$nw09Dir | Out-Null
 
           $template = Resolve-Path "build/clang-cl-release/staging/procedural_image_player/nw_procedural_image_player.exe"
           Copy-Item $template (Join-Path $playerDir "nw_procedural_image_player.exe") -Force
+          $env:NW05_REAL_PLAYER_TEMPLATE = (Join-Path $playerDir "nw_procedural_image_player.exe")
 
           $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
           Copy-Item (Join-Path (Split-Path $dxc -Parent) "*") $dxcDir -Recurse -Force
 
+          $env:NW05_RUNTIME_BUNDLE_OUTPUT = $nw05Dir
+          python -m pytest tests/test_nw05_real_export.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $env:NW09_REQUIRE_REAL_PLAYER = "1"
+          $env:NW09_REAL_PLAYER_BUILD_OUTPUT = (Join-Path $nw09Dir "stateful.exe")
+          python -m pytest -v tests/test_nw09_review_fixes.py::test_real_generated_stateful_player_launches_with_link_metadata
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          python tools/nw09_ci_examples.py --player-template $env:NW05_REAL_PLAYER_TEMPLATE --output-dir $examplesDir --dxc $dxc --skip-smoke-launch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           $manifestFiles = @()
           foreach ($file in @(Get-ChildItem $root -File -Recurse | Sort-Object FullName)) {
             $manifestFiles += [ordered]@{
-              path = [System.IO.Path]::GetRelativePath($root, $file.FullName).Replace("\\", "/")
+              path = [System.IO.Path]::GetRelativePath($root, $file.FullName)
               sha256 = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
             }
           }
@@ -293,33 +309,26 @@ jobs:
           "NW05_REAL_PLAYER_TEMPLATE=$player" | Out-File -FilePath $env:GITHUB_ENV -Append
           (Split-Path $dxc -Parent) | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      - name: Verify real-PE NW-05 and NW-09 generated-player exports
+      - name: Run transferred NW-05 and NW-09 runtime behavior
         shell: pwsh
         run: |
-          python -m pytest tests/test_nw05_real_export.py -v
+          $root = Join-Path $env:RUNNER_TEMP "nw01-runtime-smoke-inputs"
+          $env:NW05_RUNTIME_BUNDLE_INPUT = Join-Path $root "nw05"
+          python -m pytest tests/test_nw05_real_export.py::test_real_pe_export_is_byte_identical_in_clean_directories -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:NW09_REQUIRE_REAL_PLAYER = "1"
+
+          $env:NW09_REAL_PLAYER_RUNTIME_INPUT = Join-Path $root "nw09/stateful.exe"
           python -m pytest -v tests/test_nw09_review_fixes.py::test_real_generated_stateful_player_launches_with_link_metadata
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build and smoke-test runnable NW-09 examples and Asteroid Tunnel
-        shell: pwsh
-        run: |
-          $template = $env:NW05_REAL_PLAYER_TEMPLATE
-          if (-not (Test-Path $template -PathType Leaf)) {
-            Write-Error "NW-09A generated-player template is unavailable: $template"
-            exit 1
-          }
-          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
-          $output = Join-Path $env:RUNNER_TEMP "nw09-examples"
-          python tools/nw09_ci_examples.py --player-template $template --output-dir $output --dxc $dxc
+          python tools/nw09_ci_examples.py --player-template (Join-Path $root "player/nw_procedural_image_player.exe") --output-dir (Join-Path $root "examples") --smoke-only
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload runnable NW-09 examples and Asteroid Tunnel
         uses: actions/upload-artifact@v4
         with:
           name: nw09-examples-${{ github.sha }}
-          path: ${{ runner.temp }}/nw09-examples/
+          path: ${{ runner.temp }}/nw01-runtime-smoke-inputs/examples/
           if-no-files-found: error
           retention-days: 14
 
