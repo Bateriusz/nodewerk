@@ -268,6 +268,7 @@ schemas/*.json
 shaders/nw06/... (shared payloads)
 shaders/nw11/...
 tools/nw11/*.py
+runtime/python-runtime.zip
 ```
 
 The manifest binds repository, commit, experiment/profile, toolchain/runtime
@@ -303,14 +304,17 @@ The bundle manifest also enforces zero-cost stripping:
 
 ### One-command physical validation
 
-On a clean validation machine with PowerShell 7 and a Python 3 runtime:
+On a clean validation machine with PowerShell 7; no system Python installation is required:
 
 ```powershell
 pwsh .\run-validation.ps1 -BundleRoot . -ExpectedCommit <tested-commit>
 ```
 
-The launcher does not need a source checkout, nodewerk build, Visual Studio
-changes, CMake configuration, Python package installation, or manual evidence
+The launcher verifies the bundled `runtime/python-runtime.zip`, rehydrates it
+into a fresh temporary directory for each validation, and uses only that
+runtime for the repository-owned verifier and evidence tools. It does not need
+a source checkout, nodewerk build, Visual Studio changes, CMake configuration,
+system Python installation, Python package installation, or manual evidence
 editing. It:
 
 1. verifies bundle identities and hashes;
