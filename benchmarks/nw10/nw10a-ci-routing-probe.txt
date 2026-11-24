@@ -1,2 +1,2 @@
 NW-10A isolated CI routing/performance probe.
-revision=1
+revision=2
