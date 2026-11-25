@@ -335,20 +335,7 @@ jobs:
             }
           }
 
-      - name: Exercise a windowed WARP swap chain and require Present
-        shell: pwsh
-        run: |
-          $reportPath = "build/nw11-windowed-warp.json"
-          & "build/nw11-artifacts/nw11_common_baseline.exe" --allow-software --benchmark-json $reportPath --warmup-seconds 0 --runs 1 --run-seconds 1
-          if ($LASTEXITCODE -ne 0) { throw "Windowed WARP command-path smoke failed" }
-          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
-          if ($report.measurement.presented_frames -lt 1 -or
-              $report.measurement.process_start_to_first_present_ms -le 0 -or
-              $report.measurement.cpu_submit_samples.Count -lt 1) {
-            throw "Windowed WARP did not observe a successful Present and CPU submission sample"
-          }
-
-      - name: Exercise eligible advanced paths on WARP and check absent features
+      - name: Exercise headless advanced paths on WARP and check absent features
         shell: pwsh
         run: |
           foreach ($name in @("nw11_optional_mesh", "nw11_optional_ray")) {
@@ -558,7 +545,7 @@ jobs:
         with:
           name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/nw11-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}
-      - name: Verify and execute the immutable bundle
+      - name: Execute the immutable bundle and verify windowed presentation
         shell: pwsh
         run: |
           $bundle = Join-Path $env:RUNNER_TEMP "nw11-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}"

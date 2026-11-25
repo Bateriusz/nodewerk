@@ -145,6 +145,9 @@ def _validate_launch(folder: Path, manifest: dict, decision: dict, relative: str
         raise evidence.EvidenceError(f"Invalid or reused process identity in {folder}")
     launch_ids.update((marker, identity))
     samples = report["measurement"]
+    presented = samples.get("presented_frames")
+    if type(presented) is not int or presented < 1:
+        raise evidence.EvidenceError(f"No successful windowed Present in {folder}")
     peak = samples["peak_engine_committed_gpu_bytes"]
     if type(peak) is not int or peak <= 0:
         raise evidence.EvidenceError(f"Invalid production allocation high-water mark in {folder}")

@@ -307,10 +307,12 @@ actual toolchain, shader payloads, dependencies, and production contract rather
 than restating static profile values.
 
 Hosted Windows CI runs headless WARP checks for descriptor heaps, draw and
-dispatch commands, resource transitions, and GPU timestamps. The separate
-windowed WARP regression runs the common baseline and requires a successful
-swap-chain Present and a CPU-submission sample. The physical workflow tests
-the one-frame canonical release and its composed desktop capture.
+dispatch commands, resource transitions, GPU timestamps, and optional
+capability handling. These checks gate bundle publication. On the interactive
+physical runners, the verifier requires a successful swap-chain Present in
+each measured process and checks CPU submission samples against the
+presentation trace. The same runs test the one-frame canonical release and
+its composed desktop capture.
 
 The bundle manifest also enforces zero-cost stripping:
 

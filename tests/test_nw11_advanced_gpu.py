@@ -1296,7 +1296,9 @@ def test_nw11_windows_ci_runs_command_path_and_binds_toolchain_payloads() -> Non
     assert "-G Ninja" in workflow
     assert "windows-runtime-smoke:" in workflow
     assert "runs-on: windows-2025" in workflow
-    assert "--allow-software" in workflow
+    smoke = workflow.split("  windows-runtime-smoke:", 1)[1].split("  build-validation-bundles:", 1)[0]
+    warp_launches = [line for line in smoke.splitlines() if "--allow-software" in line]
+    assert warp_launches and all("--headless" in line for line in warp_launches)
     assert "nw11_toolchain_identity.py" in workflow
     assert "nw11_shader_payloads.py" in workflow
     assert "nw11_pe_dependencies.py" in workflow
@@ -2026,7 +2028,7 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
             "format": "nw11-raw-run.v1", "adapter": {k: v for k, v in observation["adapter"].items() if k != "subsystem_id"},
             "timing": {"warmup_start_qpc_ms": 100, "measurement_start_qpc_ms": 5100,
                        "measurement_end_qpc_ms": 65100},
-            "measurement": {"process_start_to_first_present_ms": 900, "gpu_time_samples": [],
+            "measurement": {"presented_frames": 602, "process_start_to_first_present_ms": 900, "gpu_time_samples": [],
                             "cpu_submit_samples": [5.0] * 601, "shader_count": len(ids),
                             "shader_ids": ids, "peak_engine_committed_gpu_bytes": 300000000,
                             "distribution_bytes": manifest["accounting"].get(f"{role}_distribution_bytes", 0)},
@@ -2073,6 +2075,13 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
             "end_filetime": 3000 + index, "player_exit_code": 0, "capture_exit_code": 0,
             "command": ["canonical_release.exe", "--tick", str(tick), "--frames", "1"],
         })
+
+    windowed_report = output / "raw/baseline/run-1/report.json"
+    report = measurements.load_json(windowed_report)
+    put(windowed_report, {**report, "measurement": {**report["measurement"], "presented_frames": 0}})
+    with pytest.raises(evidence.EvidenceError, match="No successful windowed Present"):
+        measurements.collect(root, manifest, output, "evidence.json")
+    put(windowed_report, report)
 
     record = measurements.collect(root, manifest, output, "evidence.json")
     assert [len(run["measurement"]["process_runs"]) for run in record["runs"]] == [3, 3, 3]
