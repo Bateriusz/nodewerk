@@ -39,6 +39,7 @@ struct RendererOptions {
     bool allow_software_adapter = false;
     bool headless = false;
     bool capture_display = false;
+    std::string cache_preparation_json;
 };
 
 int RunSceneRenderer(const RendererOptions& options);

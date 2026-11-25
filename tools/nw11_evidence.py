@@ -707,10 +707,7 @@ def build_decision_document(
         "aggregate_status": aggregate_status,
         "fallback_tested": bool(decisions)
         and all(item.get("fallback_tested") is True for item in decisions),
-        "satisfies_completion": (
-            {item["device_tier"] for item in decisions} == set(DEVICE_TIERS)
-            and all(item["status"] in {"accepted", "rejected"} for item in decisions)
-        ),
+        "satisfies_completion": False,
         "per_device_decision_isolation": True,
         "pending_is_not_pass": True,
         "unsupported_is_not_failure_or_pass": True,
@@ -737,13 +734,15 @@ def decision_id(document: Mapping[str, Any]) -> str:
             "fallback_tested",
             "satisfies_completion",
             "bundle_adoption_budget_status",
+            "cross_device_equivalence",
         )
         if key in document
     }
     return digest_value(identity)
 
 
-def aggregate_verified_decisions(documents: list[dict[str, Any]]) -> dict[str, Any]:
+def aggregate_verified_decisions(documents: list[dict[str, Any]], *,
+                                 cross_device_equivalence: dict[str, Any] | None = None) -> dict[str, Any]:
     if not documents:
         raise EvidenceError("At least one verified physical evidence record is required")
     first = documents[0]
@@ -767,8 +766,11 @@ def aggregate_verified_decisions(documents: list[dict[str, Any]]) -> dict[str, A
     result["aggregate_status"] = next(status for status in ("failed", "pending", "unsupported", "rejected", "accepted")
                                       if status in statuses)
     result["fallback_tested"] = all(item.get("fallback_tested") is True for item in devices)
+    if cross_device_equivalence is not None:
+        result["cross_device_equivalence"] = cross_device_equivalence
     result["satisfies_completion"] = (
-        {item["device_tier"] for item in devices} == set(DEVICE_TIERS)
+        _cross_device_verified(cross_device_equivalence or {}, devices)
+        and {item["device_tier"] for item in devices} == set(DEVICE_TIERS)
         and statuses <= {"accepted", "rejected"}
         and result["fallback_tested"]
     )
@@ -776,6 +778,15 @@ def aggregate_verified_decisions(documents: list[dict[str, Any]]) -> dict[str, A
         result["evidence_file"] = None
     result["decision_id"] = decision_id(result)
     return validate_decision_document(result)
+
+
+def _cross_device_verified(comparison: Mapping[str, Any], devices: list[dict[str, Any]]) -> bool:
+    from nw07_contract import REQUIRED_FIXED_TICKS
+
+    return (comparison.get("status") == "verified"
+            and set(comparison.get("rows", {})) == {str(tick) for tick in REQUIRED_FIXED_TICKS}
+            and all(item.get("canonical_release_correctness", {}).get("numeric_loop_boundary", {})
+                    .get("status") == "verified" for item in devices))
 
 
 def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -813,6 +824,8 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
                 "a rejected bundle distribution budget cannot contain an accepted device"
             )
     if record.get("satisfies_completion") is True:
+        if not _cross_device_verified(record.get("cross_device_equivalence", {}), devices):
+            raise EvidenceError("completion requires verified crossed canonical release captures")
         if ({item["device_tier"] for item in devices} != set(DEVICE_TIERS)
                 or any(item["status"] not in {"accepted", "rejected"} for item in devices)):
             raise EvidenceError("completion requires a measured decision for both physical targets")

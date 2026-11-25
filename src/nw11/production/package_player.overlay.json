@@ -225,6 +225,25 @@
       ]
     },
     {
+      "start": 3928,
+      "old": [
+        "            const D3D12_INPUT_ELEMENT_DESC input_layout[] = {",
+        "                {\"POSITION\", 0u, DXGI_FORMAT_R32G32B32_FLOAT, 0u, 0u,"
+      ],
+      "new": [
+        "            // A specialized package retains the pipeline ID for a displaced",
+        "            // stage but carries no bytecode in that slot.",
+        "            if (vertex->blob.empty() != bool(NW11_VARIANT_MESH) ||",
+        "                pixel->blob.empty() != bool(NW11_VARIANT_RAY || NW11_BASELINE_ANALYTIC)) {",
+        "                return Fail(ExitCode::PackageValidationFailed, \"package_validation\",",
+        "                            \"nw11_shader_slots\", \"graphics bytecode\", \"specialized\", \"unexpected\",",
+        "                            \"init.create_graphics_pipeline\", \"Displaced shader slots do not match the linked specialization\");",
+        "            }",
+        "            const D3D12_INPUT_ELEMENT_DESC input_layout[] = {",
+        "                {\"POSITION\", 0u, DXGI_FORMAT_R32G32B32_FLOAT, 0u, 0u,"
+      ]
+    },
+    {
       "start": 3962,
       "old": [
         "            desc.SampleDesc.Count = 1u;",
@@ -415,6 +434,18 @@
       ]
     },
     {
+      "start": 6018,
+      "old": [
+        "#if NW_PLAYER_DIAGNOSTICS",
+        "    // CPU submission timing intentionally stops before Present/VSync. The",
+        "    // lifetime fence below is separate: it retires the complete frame,",
+        "    // including presentation when a swap chain is active.",
+        "    instrumentation_.EndFrame();",
+        "#endif"
+      ],
+      "new": []
+    },
+    {
       "start": 6089,
       "old": [
         "                        \"present_failed\", \"present\", \"succeeded\", \"failed\",",
@@ -433,6 +464,22 @@
         "                (std::uint64_t(now.dwHighDateTime) << 32u) | now.dwLowDateTime;",
         "        }",
         "        ++frames_presented_;"
+      ]
+    },
+    {
+      "start": 6096,
+      "old": [
+        "    // Present operations are ordered on the D3D12 queue used to create the",
+        "    // swap chain. Signal only after Present so frame retirement also covers"
+      ],
+      "new": [
+        "#if NW_PLAYER_DIAGNOSTICS",
+        "    // Include DXGI submission and stop before retirement or a fence wait.",
+        "    instrumentation_.EndFrame();",
+        "#endif",
+        "",
+        "    // Present operations are ordered on the D3D12 queue used to create the",
+        "    // swap chain. Signal only after Present so frame retirement also covers"
       ]
     }
   ]

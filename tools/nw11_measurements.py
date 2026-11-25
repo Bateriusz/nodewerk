@@ -28,11 +28,24 @@ def load_json(path: Path) -> dict:
     return record
 
 
-def evaluate_profiles(root: Path, manifest: dict, observation: dict) -> tuple[dict, dict]:
+def evaluate_profiles(root: Path, manifest: dict, observation: dict,
+                      host: dict | None = None) -> tuple[dict, dict]:
     common = capability.load_profile(root / "manifests/common-capability-profile.json")
     optional = capability.load_profile(root / manifest["capability_profile"]["path"])
-    return (capability.evaluate_observation(common, observation),
-            capability.evaluate_observation(optional, observation))
+    if host is not None:
+        observation = {**observation, "host_observation": host}
+    common_result = capability.evaluate_observation(common, observation)
+    optional_result = capability.evaluate_observation(optional, observation)
+    provenance = common_result.get("physical_provenance")
+    if provenance and optional_result["status"] == "eligible":
+        modes = provenance["environment"]["nvidia_power_management_mode"]
+        if modes["common_baseline.exe"]["value"] != modes["optional_variant.exe"]["value"]:
+            optional_result = {
+                **optional_result, "status": "pending", "satisfies_optional_profile": False,
+                "diagnostics": [{"code": "NW11-POWER-PROFILE-MISMATCH",
+                                 "message": "Baseline and variant effective NVIDIA power modes differ"}],
+            }
+    return common_result, optional_result
 
 
 def validate_release_adapter(observation: dict) -> None:
@@ -116,8 +129,8 @@ def _validate_launch(folder: Path, manifest: dict, decision: dict, relative: str
     }.items():
         _equal(report.get(key), expected, f"{folder.name} report {key}")
     expected_package = artifact["metadata"].get("package_sha256")
-    if mode == "canonical_reference":
-        expected_package = next(item["metadata"]["package_sha256"] for item in manifest["artifacts"]
+    if mode == "canonical_reference" and expected_package is None:
+        expected_package = next(item["metadata"]["canonical_package_sha256"] for item in manifest["artifacts"]
                                 if item["role"] == "common_baseline")
     _equal(report.get("package_sha256"), expected_package, "package_sha256")
     for key in ("launch_id", "process_id"):
@@ -214,6 +227,85 @@ def _comparison_tool() -> Any:
     return runpy.run_path(str(path))["compare"]
 
 
+def first_release_present(trace: Path, process_id: int, start_qpc: float) -> dict:
+    try:
+        stream = trace.open(encoding="utf-8-sig", newline="")
+    except OSError as exc:
+        raise LookupError("Presentation trace is unavailable") from exc
+    with stream:
+        for row in csv.DictReader(stream):
+            if row.get("ProcessID") != str(process_id):
+                continue
+            try:
+                submitted, delay = float(row["QPCTime"]), float(row["msUntilDisplayed"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            shown = submitted + delay
+            if math.isfinite(shown) and delay > 0 and start_qpc <= submitted <= shown:
+                return {"submitted_qpc_ms": submitted, "displayed_qpc_ms": shown}
+    raise LookupError("No displayed presentation for the release process")
+
+
+def numeric_loop(root: Path, release_start: Path, release_boundary: Path) -> dict:
+    from nw07_evidence import _validate_tolerance_section, compare_rgba32f_files
+
+    graph = load_json(root / "manifests/canonical-loop.json")
+    _equal(graph["graph_sha256"], contract.BASE_GRAPH_SHA256, "NW-07 loop graph")
+    loop = graph["loop_boundary"]
+    start, boundary = loop["start"], loop["boundary"]
+    if (loop["seamless_modulo_turn"] is not True
+            or [start["tick"], boundary["tick"]] != list(contract.REFERENCE_LOOP_BOUNDARY_TICKS)
+            or start["wrapped_tick"] != 0 or boundary["wrapped_tick"] != 0):
+        raise evidence.EvidenceError("Invalid NW-07 loop state provenance")
+    state_delta = {
+        "camera_angle_modulo_turn": abs(math.remainder(boundary["camera_angle_radians"] -
+                                                      start["camera_angle_radians"], math.tau)),
+        "twist_degrees": abs(boundary["twist_degrees"] - start["twist_degrees"]),
+    }
+    if any(not math.isfinite(error) or error > contract.NUMERIC_ABSOLUTE_TOLERANCE
+           for error in state_delta.values()):
+        raise evidence.EvidenceError("NW-07 deterministic scene state diverged at the loop boundary")
+    numeric = {**compare_rgba32f_files(release_boundary, release_start),
+               "tolerance": contract.NUMERIC_ABSOLUTE_TOLERANCE,
+               "relative_tolerance": contract.NUMERIC_RELATIVE_TOLERANCE}
+    state, reason = _validate_tolerance_section(
+        numeric, kind="numeric", absolute_tolerance=contract.NUMERIC_ABSOLUTE_TOLERANCE,
+        relative_tolerance=contract.NUMERIC_RELATIVE_TOLERANCE, relative_can_satisfy=True)
+    if state != "passed":
+        raise evidence.EvidenceError(f"Canonical numeric loop comparison failed: {reason}")
+    return {"status": "verified", "numeric": numeric, "scene_state_error": state_delta,
+            "ticks": list(contract.REFERENCE_LOOP_BOUNDARY_TICKS),
+            "start_sha256": contract.sha256_file(release_start),
+            "boundary_sha256": contract.sha256_file(release_boundary)}
+
+
+def cross_device_captures(records: list[tuple[str, Path, dict]]) -> dict:
+    from nw07_evidence import _cross_device_capture_equivalence
+    from nw07_contract import CORRECTNESS_COVERAGE_TARGETS, FIXED_TICK_CORRECTNESS_ROLE
+    from os.path import commonpath
+
+    ordered = {tier: (folder, correction) for tier, folder, correction in records}
+    if len(records) != 2 or set(ordered) != set(contract.DEVICE_TIERS):
+        return {"status": "pending", "reason": "Both devices must retain independent release captures"}
+    root = Path(commonpath([folder.resolve() for _, folder, _ in records]))
+    series = []
+    for tier, platform in zip(contract.DEVICE_TIERS, ("ada", "blackwell")):
+        folder, correction = ordered[tier]
+        if correction.get("numeric_loop_boundary", {}).get("status") != "verified":
+            return {"status": "pending", "reason": "Both devices need verified numeric loop results"}
+        capture_dir = (folder / "canonical-release").resolve()
+        artifacts = []
+        for row in correction["per_tick"]:
+            raw = capture_dir / f"{row['tick']}.rgba"
+            if contract.sha256_file(raw) != row["variant_sha256"]:
+                raise evidence.StaleEvidenceError("Cross-device canonical capture hash changed")
+            artifacts.append({"tick": row["tick"], "path": raw.relative_to(root).as_posix()})
+        series.append({"coverage_target": CORRECTNESS_COVERAGE_TARGETS[platform],
+                       "evidence_role": FIXED_TICK_CORRECTNESS_ROLE, "capture_artifacts": artifacts})
+    status, result = _cross_device_capture_equivalence(series, artifact_root=root)
+    return {"status": status, **result}
+
+
 def _canonical_capture(root: Path, directory: Path, manifest: dict, common: dict,
                        launch_ids: set, compare: Any, protocol: dict) -> dict:
     reference_folder = directory / "canonical-reference"
@@ -238,6 +330,17 @@ def _canonical_capture(root: Path, directory: Path, manifest: dict, common: dict
                 or command[1:] != ["--tick", str(tick), "--frames", "1"]
                 or Path(command[0].replace("\\", "/")).name != "canonical_release.exe"):
             raise evidence.EvidenceError(f"Invalid canonical release execution at {tick}")
+        trace = release / f"{tick}-present.csv"
+        _equal(contract.sha256_file(trace), execution["trace_sha256"], "canonical ETW trace")
+        try:
+            presented = first_release_present(trace, identity[0], execution["process_started_qpc_ms"])
+        except LookupError as exc:
+            raise evidence.EvidenceError("Canonical release never presented") from exc
+        _equal(presented, execution["first_presentation"], "first release presentation")
+        deadline = execution["process_started_qpc_ms"] + contract.PROCESS_START_TO_FIRST_PRESENT_MS
+        if (presented["displayed_qpc_ms"] > deadline
+                or not presented["displayed_qpc_ms"] <= execution["capture_started_qpc_ms"] <= deadline + 500):
+            raise evidence.EvidenceError("Canonical capture did not follow the first displayed frame")
         log = release / f"{tick}.log"
         _equal(contract.sha256_file(log), execution["player_log_sha256"], "canonical release process log")
         if f"NW05_EXPLICIT_TICK={tick}" not in log.read_text(encoding="utf-8").splitlines():
@@ -249,6 +352,7 @@ def _canonical_capture(root: Path, directory: Path, manifest: dict, common: dict
     for item in result["per_tick"]:
         _equal(item["variant_sha256"], image_sha.get(item["tick"]), "canonical release capture hash")
     _require_image(result, "canonical release/reference")
+    result["numeric_loop_boundary"] = numeric_loop(root, release / "0.rgba", release / f"{contract.LOOP_TICKS}.rgba")
     return result
 
 
@@ -275,7 +379,8 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
         raise evidence.EvidenceError("Invalid probe process timing")
     observation = load_json(snapshot)
     validate_release_adapter(observation)
-    common, optional = evaluate_profiles(root, manifest, observation)
+    host_path = directory / "host-observation.json"
+    common, optional = evaluate_profiles(root, manifest, observation, load_json(host_path))
     for name, decision in (("common-eligibility.json", common), ("eligibility.json", optional)):
         _equal(load_json(directory / name), decision, name)
     if (common["status"] != "eligible" or not common["physical_device_tier"]
@@ -297,16 +402,23 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
                                                    relative, "startup", role, launch_ids, protocol)
         reset = load_json(path / "cache-execution.json")
         preparation = load_json(path / "cache-preparation.json")
-        if (probe["end_filetime"] > reset["start_filetime"]
-                or reset["probe_sha256"] != contract.sha256_file(root / "bin/nw11_capability_probe.exe")
+        expected_cache = {
+            "format": "nw11-executable-cache-preparation.v1", "commit": manifest["commit"],
+            "executable_sha256": contract.sha256_file(root / relative),
+            "launch_id": reset["launch_id"], "process_id": reset["process_id"],
+            "adapter_luid": decision["adapter"]["adapter_luid"], "driver_cache_state": "unverified",
+        }
+        for key, value in expected_cache.items():
+            _equal(preparation.get(key), value, f"{role} cache preparation {key}")
+        if (reset["artifact_path"] != relative or reset["commit"] != manifest["commit"]
+                or reset["executable_sha256"] != preparation["executable_sha256"] or reset["exit_code"] != 0
                 or reset["result_sha256"] != contract.sha256_file(path / "cache-preparation.json")
-                or not reset["start_filetime"] < reset["end_filetime"] <= startup_launch["start_filetime"]):
+                or not probe["end_filetime"] <= reset["start_filetime"] <= preparation["process_creation_filetime"]
+                <= reset["end_filetime"] <= startup_launch["start_filetime"]
+                or reset["launch_id"] in launch_ids
+                or any(type(preparation.get(key)) is not int for key in ("windows_cache_hresult", "driver_hint_hresult"))):
             raise evidence.EvidenceError(f"Invalid cache preparation for {role}")
-        cleared = reset["exit_code"] == 0
-        if cleared:
-            _equal(preparation, {"format": "nw11-driver-cache-preparation.v1", "status": "cleared",
-                                 "method": "D3D12 ShaderCacheControl(CLEAR)",
-                                 "adapter_luid": decision["adapter"]["adapter_luid"]}, "cache reset")
+        launch_ids.add(reset["launch_id"])
         processes = []
         previous_end = startup_launch["end_filetime"]
         for index in range(1, protocol["runs"] + 1):
@@ -319,7 +431,8 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
         captures[role] = _capture(folder, report)
         metrics = {
             "process_runs": processes,
-            "cold_initialization_ms": startup["measurement"]["process_start_to_first_present_ms"] if cleared else None,
+            "cold_initialization_ms": None,
+            "unqualified_startup_ms": startup["measurement"]["process_start_to_first_present_ms"],
             "cache_preparation": preparation,
             "peak_engine_committed_gpu_bytes": max(startup["measurement"]["peak_engine_committed_gpu_bytes"],
                                                    *(run["peak_engine_committed_gpu_bytes"] for run in processes)),
@@ -343,6 +456,7 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
               for path in sorted((directory / folder).rglob("*"))
               if path.is_file() and path.suffix in {".json", ".csv", ".rgba", ".log"}}
     inputs[snapshot.name] = contract.sha256_file(snapshot)
+    inputs[host_path.name] = contract.sha256_file(host_path)
     for name in ("common-eligibility.json", "eligibility.json", "probe-execution.json"):
         inputs[name] = contract.sha256_file(directory / name)
     return {

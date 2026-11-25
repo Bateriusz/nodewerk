@@ -15,8 +15,10 @@ NW-11; each requires a separately scoped follow-up issue.
 | Micromesh / clustered geometry | blocked by licensing | vendor SDK terms and likely byte-positive torus payload |
 | Tensor / neural shading | follow-up issue required | model weights and vendor runtime dominate the distribution cost |
 
-The SER row pairs shader model 6.9 with the runtime query for actual
-reordering. The neural row names the specific FP16 vector-matrix operation
+The SER row pairs a shader model 6.9 ray-generation pipeline with the runtime
+query for actual reordering. It accounts for the DXR state object, shader
+table, and dispatch and composition code required to test that pipeline.
+The neural row names the specific FP16 vector-matrix operation
 that the preview runtime must report as supported before any model is loaded.
 [Microsoft SER device support](https://microsoft.github.io/DirectX-Specs/d3d/Raytracing.html#ser-device-support) · [Microsoft linear-algebra runtime queries](https://microsoft.github.io/DirectX-Specs/d3d/D3D12LinearAlgebraRuntimeFeatureSupport.html)
 

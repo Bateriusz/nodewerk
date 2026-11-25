@@ -28,6 +28,7 @@ import nw11_contract as contract  # noqa: E402
 import nw11_experiment as experiment  # noqa: E402
 import nw11_toolchain_identity as toolchain_identity  # noqa: E402
 import nw11_production_binding as production_binding  # noqa: E402
+import nw11_pe_dependencies as pe_dependencies  # noqa: E402
 
 TOOL_FILES = (
     "nw11_contract.py",
@@ -41,7 +42,12 @@ TOOL_FILES = (
     "nw11_production_binding.py",
     "nw11_pe_dependencies.py",
     "nw11_measurements.py",
+    "nw11_host.py",
     "nw07_presentmon_collector.py",
+    "nw07_evidence.py",
+    "nw07_contract.py",
+    "nwp_package.py",
+    "offline_shader_pack.py",
 )
 SUPPORT_FILES = (
     ("tools/schema_validator.py", "tools/nw11/schema_validator.py"),
@@ -142,11 +148,13 @@ def build(
         # tests can still exercise the generic manifest logic with test blobs.
         native = Path(baseline_executable).parent
         _copy(native / "nw11-canonical-release.exe", output / "bin/canonical_release.exe")
+        _copy(native / "nw11-canonical-loop.json", output / "manifests/canonical-loop.json")
         _copy(native / "nw11_common_baseline.exe", output / "bin/canonical_reference.exe")
         _copy(Path(presentmon), output / "runtime/presentmon.exe")
         _copy(Path(presentmon_license), output / "runtime/presentmon-license.txt")
         proof = json.loads((native / "nw11-common-regression.json").read_text(encoding="utf-8"))
         package_hash, manifest_hash = production_binding.verify_proof(proof, commit)
+        _, source_package, _ = production_binding.embedded_payloads((native / "nw11-canonical-release.exe").read_bytes())
         payloads = production_binding.read_payloads(native / "compiled-specializations")
         bindings = json.loads((native / "nw11-production-binding.json").read_text(encoding="utf-8"))
         if bindings.get("commit") != commit:
@@ -162,7 +170,7 @@ def build(
             source = Path(source)
             observed = production_binding.inspect(source.read_bytes(), commit=commit,
                 specialization=kind, package_sha256=package_hash,
-                manifest_sha256=manifest_hash, payloads=payloads)
+                manifest_sha256=manifest_hash, payloads=payloads, canonical_package=source_package)
             if by_name.get(source.name) != {"file": source.name, **observed}:
                 raise BuildError(f"native artifact {source.name} does not match production binding")
             production_records[role] = observed
@@ -277,26 +285,23 @@ def build(
                 "distributed_bytes": destination.stat().st_size,
             }
         )
-    if dependency_document is not None:
-        known = {str(item["name"]).casefold() for item in dependency_ledger}
-        for executable in dependency_document.get("executables", []):
-            for dll in executable.get("dlls", []):
-                name = str(dll)
-                if name.casefold().endswith(".dll"):
-                    name = name[:-4]
-                if name.casefold() in known:
-                    continue
-                known.add(name.casefold())
-                dependency_ledger.append(
-                    {
-                        "name": name,
-                        "kind": "windows_inbox",
-                        "optional": False,
-                        "counted": True,
-                        "in_common_closure": True,
-                        "distributed_bytes": 0,
-                    }
-                )
+    executable_dependencies: dict[str, list[str]] = {}
+    if production_records:
+        executable_dependencies, dependency_ledger = pe_dependencies.deployment_closure(
+            output, ["bin/common_baseline.exe", "bin/optional_variant.exe", "bin/fallback_common.exe",
+                     "bin/canonical_release.exe", "bin/canonical_reference.exe",
+                     "bin/nw11_capability_probe.exe", "runtime/presentmon.exe"],
+            [f"bin/{Path(dependency).name}" for dependency in runtime_dependencies or []],
+        )
+
+    def shader_targets(role: str, profile_targets: tuple | list) -> list[str]:
+        expected = set(profile_targets)
+        measured = production_records.get(role)
+        if measured is not None:
+            observed = {shader["target"] for shader in measured["shipped_shaders"]}
+            if observed != expected:
+                raise BuildError(f"{role} ships targets {sorted(observed)}, expected {sorted(expected)}")
+        return sorted(expected)
 
     artifacts = [
         bundle.make_entry(
@@ -304,8 +309,8 @@ def build(
             "bin/common_baseline.exe",
             role=bundle.ROLE_COMMON_BASELINE,
             profile_id=contract.COMMON_PROFILE_ID,
-            shader_targets=contract.COMMON_SHADER_TARGETS,
-            dependencies=[item["name"] for item in dependency_ledger if not item["optional"]],
+            shader_targets=shader_targets("common_baseline", contract.COMMON_SHADER_TARGETS),
+            dependencies=executable_dependencies.get("bin/common_baseline.exe", []),
             metadata=production_records.get("common_baseline"),
         ),
         bundle.make_entry(
@@ -314,8 +319,8 @@ def build(
             role=bundle.ROLE_OPTIONAL_VARIANT,
             profile_id=document["variant_profile_id"],
             optional=True,
-            shader_targets=[shader["target"] for shader in document["pipeline"]["variant_shaders"]],
-            dependencies=[item["name"] for item in dependency_ledger],
+            shader_targets=shader_targets("optional_variant", profile["shader_targets"]),
+            dependencies=executable_dependencies.get("bin/optional_variant.exe", []),
             metadata=production_records.get("optional_variant"),
         ),
         bundle.make_entry(
@@ -323,8 +328,8 @@ def build(
             "bin/fallback_common.exe",
             role=bundle.ROLE_FALLBACK,
             profile_id=contract.COMMON_PROFILE_ID,
-            shader_targets=contract.COMMON_SHADER_TARGETS,
-            dependencies=[item["name"] for item in dependency_ledger if not item["optional"]],
+            shader_targets=shader_targets("fallback_common", contract.COMMON_SHADER_TARGETS),
+            dependencies=executable_dependencies.get("bin/fallback_common.exe", []),
             metadata={
                 **(production_records.get("fallback_common") or {}),
                 "fallback_artifact_id": document["fallback_artifact_id"],
@@ -338,7 +343,12 @@ def build(
     if production_records:
         for path in ("bin/canonical_release.exe", "bin/canonical_reference.exe",
                      "runtime/presentmon.exe", "runtime/presentmon-license.txt"):
-            artifacts.append(bundle.make_entry(output, path, role=bundle.ROLE_TOOL))
+            artifacts.append(bundle.make_entry(output, path, role=bundle.ROLE_TOOL,
+                                               dependencies=executable_dependencies.get(path, [])))
+        for item in artifacts:
+            if item["path"] == "bin/canonical_reference.exe":
+                item["metadata"]["package_sha256"] = package_hash
+        artifacts.append(bundle.make_entry(output, "manifests/canonical-loop.json", role=bundle.ROLE_READING))
         artifacts.append(bundle.make_entry(output, "manifests/nw11-common-regression.json",
                                            role=bundle.ROLE_READING))
         for name in production_binding.PAYLOADS:
@@ -347,7 +357,8 @@ def build(
     if capability_probe is not None:
         artifacts.append(
             bundle.make_entry(
-                output, "bin/nw11_capability_probe.exe", role=bundle.ROLE_TOOL
+                output, "bin/nw11_capability_probe.exe", role=bundle.ROLE_TOOL,
+                dependencies=executable_dependencies.get("bin/nw11_capability_probe.exe", [])
             )
         )
     for dependency in runtime_dependencies or []:

@@ -2,6 +2,7 @@
 param(
     [string]$BundleRoot = "",
     [string]$ExpectedCommit = "",
+    [string]$TrustRecord = "",
     [string]$OutputDirectory = "",
     [string]$DeviceTier = "",
     [switch]$VerifyOnly,
@@ -30,14 +31,49 @@ Write-Host "[NW11] Evidence directory $actualOutput"
 $runtimeRoot = $null
 $code = 6
 try {
-    $manifest = Get-Content -LiteralPath (Join-Path $root "bundle-manifest.json") -Raw | ConvertFrom-Json
-    $relative = "runtime/python-runtime.zip"
-    $entries = @($manifest.artifacts | Where-Object { $_.path -ceq $relative })
-    $archive = Join-Path $root $relative
-    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
-    if ($entries.Count -ne 1 -or $hash -ne $entries[0].sha256) {
-        throw "Bundled Python runtime hash mismatch"
+    if (-not $TrustRecord) { throw "A separate trusted CI verification record is required" }
+    $trusted = Get-Content -LiteralPath $TrustRecord -Raw | ConvertFrom-Json
+    if ($trusted.status -ne "verified" -or $trusted.manifest_sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw "Invalid CI verification record"
     }
+    $manifestPath = Join-Path $root "bundle-manifest.json"
+    if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ne $trusted.manifest_sha256) {
+        throw "Bundle manifest does not match the trusted CI SHA-256"
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.commit -ne $trusted.commit -or $manifest.bundle_id -ne $trusted.bundle_id -or
+        ($ExpectedCommit -and $manifest.commit -ne $ExpectedCommit)) { throw "Unexpected bundle identity" }
+
+    $verifiedFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    [void]$verifiedFiles.Add("bundle-manifest.json")
+    foreach ($entry in $manifest.artifacts) {
+        $relative = [string]$entry.path
+        if ($relative -notmatch '^[a-z0-9_.-]+(/[a-z0-9_.-]+)*$' -or
+            ($relative -split '/') -contains '..' -or ($relative -split '/') -contains '.' -or
+            $relative -match '(^|/)__pycache__(/|$)|\.py[co]$' -or -not $verifiedFiles.Add($relative)) {
+            throw "Invalid or duplicate bundle path '$relative'"
+        }
+    }
+    foreach ($item in Get-ChildItem -LiteralPath $root -Force -Recurse) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Bundle contains a reparse point"
+        }
+        if (-not $item.PSIsContainer) {
+            $relative = [IO.Path]::GetRelativePath($root, $item.FullName).Replace([char]92, [char]47)
+            if (-not $verifiedFiles.Contains($relative)) { throw "Unexpected bundle file '$relative'" }
+        }
+    }
+    foreach ($entry in $manifest.artifacts) {
+        $file = Get-Item -LiteralPath (Join-Path $root $entry.path)
+        if ($file.PSIsContainer -or $file.Length -ne $entry.bytes -or
+            (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -ne $entry.sha256) {
+            throw "Bundle artifact mismatch '$($entry.path)'"
+        }
+    }
+    foreach ($required in @("runtime/python-runtime.zip", "tools/nw11/nw11_verify.py", "tools/nw11/validate-device.py")) {
+        if (-not $verifiedFiles.Contains($required)) { throw "Missing verification dependency '$required'" }
+    }
+    $archive = Join-Path $root "runtime/python-runtime.zip"
     # The cleanup target is created by this invocation and never derived from manifest data.
     $temporaryPath = Join-Path ([IO.Path]::GetTempPath()) ("nodewerk-nw11-" + [Guid]::NewGuid().ToString("N"))
     $runtimeRoot = (New-Item -ItemType Directory -Path $temporaryPath).FullName
@@ -47,7 +83,7 @@ try {
     $verifyArgs = @($verifier, "bundle", "--bundle-root", $root,
         "--json-out", (Join-Path $actualOutput "bundle-verification.json"))
     if ($ExpectedCommit) { $verifyArgs += @("--expected-commit", $ExpectedCommit) }
-    & $python @verifyArgs
+    & $python -I -B -S @verifyArgs
     $code = $LASTEXITCODE
     if ($code -ne 0) { throw "Bundle verification failed" }
 
@@ -58,7 +94,7 @@ try {
     if ($DryRun) { $runnerArgs += "--dry-run" }
     if ($VerifyOnly) { $runnerArgs += "--verify-only" }
     $code = 4
-    & $python @runnerArgs
+    & $python -I -B -S @runnerArgs
     $code = $LASTEXITCODE
     if (-not (Test-Path -LiteralPath (Join-Path $actualOutput "summary.json"))) {
         $code = 4

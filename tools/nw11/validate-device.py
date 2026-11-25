@@ -13,9 +13,11 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import nw11_bundle as bundle
 import nw11_contract as contract
+import nw11_host
 import nw11_measurements as measurements
 import nw11_verify as verifier
 
@@ -129,29 +131,67 @@ def launch_renderer(root: Path, manifest: dict, settings: dict, decision: dict,
     return launch
 
 
+@contextlib.contextmanager
+def release_trace(presentmon_exe: Path, target: Path, trace_path: Path):
+    # Legacy metrics emit the first presented frame without needing a second
+    # Present. The pinned collector flushes stdout after each CSV row.
+    command = [str(presentmon_exe), "--process_name", target.name, "--output_stdout",
+               "--v1_metrics", "--exclude_dropped", "--qpc_time_ms", "--session_name",
+               f"NW11-release-{uuid.uuid4().hex}", "--terminate_on_proc_exit",
+               "--timed", "12", "--terminate_after_timed"]
+    with trace_path.open("wb") as out, trace_path.with_suffix(".log").open("wb") as log:
+        with subprocess.Popen(command, stdout=out, stderr=log) as trace:
+            try:
+                time.sleep(0.3)
+                if trace.poll() is not None:
+                    raise ValidationError("Release presentation trace exited before launch")
+                yield
+                if trace.wait(timeout=14) != 0:
+                    raise ValidationError("Release presentation trace failed")
+            finally:
+                if trace.poll() is None:
+                    trace.kill()
+
+
+def wait_for_release_presentation(trace_path: Path, process: subprocess.Popen, started_qpc: float) -> dict:
+    deadline = started_qpc + contract.PROCESS_START_TO_FIRST_PRESENT_MS
+    while process.poll() is None and qpc_ms() <= deadline:
+        try:
+            present = measurements.first_release_present(trace_path, process.pid, started_qpc)
+        except LookupError:
+            time.sleep(0.01)
+            continue
+        if present["displayed_qpc_ms"] <= deadline:
+            return present
+        break
+    raise ValidationError("First visible release presentation was not observed within the startup ceiling")
+
+
 def capture_release(root: Path, manifest: dict, output: Path) -> None:
     relative = "bin/canonical_release.exe"
     release = checked_path(root, manifest, relative)
     probe = checked_path(root, manifest, "bin/nw11_capability_probe.exe")
+    monitor = checked_path(root, manifest, "runtime/presentmon.exe")
     output.mkdir()
     ticks = [*contract.REFERENCE_FIXED_TICKS, contract.LOOP_TICKS]
     images = []
     for tick in ticks:
         path = output / f"{tick}.rgba"
         command = [str(release), "--tick", str(tick), "--frames", "1"]
-        start = filetime()
-        with (output / f"{tick}.log").open("wb") as log, subprocess.Popen(
-            command, stdout=log, stderr=subprocess.STDOUT
-        ) as player:
-            try:
-                time.sleep(0.65)
-                capture = subprocess.run([str(probe), "--capture-release-pid", str(player.pid), str(path)],
-                                         check=False, timeout=8)
-                exit_code = player.wait(timeout=10)
-            except BaseException:
-                if player.poll() is None:
-                    player.kill()
-                raise
+        trace_path = output / f"{tick}-present.csv"
+        with release_trace(monitor, release, trace_path), (output / f"{tick}.log").open("wb") as log:
+            start = filetime()
+            started_qpc = qpc_ms()
+            with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as player:
+                try:
+                    presentation = wait_for_release_presentation(trace_path, player, started_qpc)
+                    capture_started_qpc = qpc_ms()
+                    capture = subprocess.run([str(probe), "--capture-release-pid", str(player.pid), str(path)],
+                                             check=False, timeout=8)
+                    exit_code = player.wait(timeout=10)
+                finally:
+                    if player.poll() is None:
+                        player.kill()
         execution = {
             "commit": manifest["commit"], "bundle_id": manifest["bundle_id"],
             "executable_sha256": contract.sha256_file(release),
@@ -159,6 +199,10 @@ def capture_release(root: Path, manifest: dict, output: Path) -> None:
             "start_filetime": start, "end_filetime": filetime(),
             "player_exit_code": exit_code, "capture_exit_code": capture.returncode,
             "player_log_sha256": contract.sha256_file(output / f"{tick}.log"),
+            "trace_sha256": contract.sha256_file(trace_path),
+            "process_started_qpc_ms": started_qpc,
+            "capture_started_qpc_ms": capture_started_qpc,
+            "first_presentation": presentation,
         }
         write_json(output / f"{tick}-execution.json", execution)
         if capture.returncode != 0 or exit_code != 0:
@@ -194,10 +238,10 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
         result = measurements.load_json(observation_path)
         raise ValidationError(f"Capability probe failed: {result.get('initialization')}")
     observation = measurements.load_json(observation_path)
-    common, optional = measurements.evaluate_profiles(root, manifest, observation)
+    host = nw11_host.observe(root / "bin")
+    write_json(output / "host-observation.json", host)
+    common, optional = measurements.evaluate_profiles(root, manifest, observation, host)
     tier = common["physical_device_tier"]
-    if not tier or (args.expected_device_tier and tier != args.expected_device_tier):
-        raise ValidationError(f"Physical board identity {common['device_key']} does not match the target")
     write_json(output / "common-eligibility.json", common)
     write_json(output / "eligibility.json", optional)
     if args.verify_only:
@@ -205,7 +249,11 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
         return 0
     if common["status"] != "eligible":
         raise ValidationError(f"Required common runtime/capability is {common['status']}: {common['diagnostics']}",
-                              11 if common["status"] == "pending" else 4)
+                              {"pending": 11, "unsupported": 3}.get(common["status"], 4))
+    if not tier:
+        raise ValidationError("Physical host, GPU, power, clock, or thermal provenance is unavailable", 11)
+    if args.expected_device_tier and tier != args.expected_device_tier:
+        raise ValidationError(f"Physical board identity {common['device_key']} does not match the target")
     if optional["status"] not in {"eligible", "pending", "unsupported"}:
         raise ValidationError(f"Optional capability evaluation failed: {optional['diagnostics']}")
     measurements.validate_release_adapter(observation)
@@ -216,14 +264,24 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
         directory.mkdir(parents=True)
         decision = optional if role == "variant" else common
         cache_record = directory / "cache-preparation.json"
+        executable = checked_path(root, manifest, relative)
+        launch_id = uuid.uuid4().hex
         reset_started = filetime()
-        reset = subprocess.run([str(probe), "--json", str(cache_record), "--reset-driver-cache",
-                                "--adapter-luid", decision["adapter"]["adapter_luid"]],
-                               check=False, timeout=60)
+        with subprocess.Popen([str(executable), "--prepare-cache", str(cache_record),
+                               "--adapter-luid", decision["adapter"]["adapter_luid"],
+                               "--commit", manifest["commit"], "--launch-id", launch_id]) as process:
+            try:
+                cache_code = process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                raise
+        if cache_code != 0:
+            raise ValidationError(f"{role} cache preparation could not produce an observation")
         write_json(directory / "cache-execution.json",
-                   {"probe_sha256": contract.sha256_file(probe), "start_filetime": reset_started,
-                    "end_filetime": filetime(), "exit_code": reset.returncode,
-                    "result_sha256": contract.sha256_file(cache_record)})
+                   {"executable_sha256": contract.sha256_file(executable), "launch_id": launch_id,
+                    "artifact_path": relative, "commit": manifest["commit"], "process_id": process.pid,
+                    "start_filetime": reset_started, "end_filetime": filetime(),
+                    "exit_code": cache_code, "result_sha256": contract.sha256_file(cache_record)})
         launch_renderer(root, manifest, settings, decision, directory / "startup",
                         role, relative, mode="startup")
         for index in range(1, settings["protocol"]["runs"] + 1):
@@ -241,8 +299,15 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
                           "--expected-commit", manifest["commit"], "--require-accepted",
                           "--json-out", str(output / "decisions.json")])
     result = {0: "verified", 3: "unsupported", 10: "rejected", 11: "pending"}.get(code, "failed")
+    common_fallback_verified = False
+    if code in (0, 3, 10, 11) and (output / "decisions.json").is_file():
+        device, = measurements.load_json(output / "decisions.json")["devices"]
+        common_fallback_verified = (device["fallback_tested"] is True
+                                    and device["canonical_release_correctness"]["numeric_loop_boundary"]["status"]
+                                    == "verified")
     write_summary(output, manifest, result, code, device_tier=tier,
                   device_key=common["device_key"], environment_key=common["environment_key"],
+                  common_fallback_verified=common_fallback_verified,
                   evidence="evidence.json", decisions="decisions.json")
     return code
 
@@ -279,7 +344,7 @@ def main() -> int:
         return validate_device(root, manifest, output, args)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError, KeyError) as exc:
         code = getattr(exc, "code", 4)
-        write_summary(output, manifest, "pending" if code == 11 else "failed", code, reason=str(exc))
+        write_summary(output, manifest, {3: "unsupported", 11: "pending"}.get(code, "failed"), code, reason=str(exc))
         print(f"[NW11-VALIDATION-ERR] {exc}", file=sys.stderr)
         return code
 

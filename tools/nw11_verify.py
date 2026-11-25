@@ -230,6 +230,7 @@ def command_evidence(args: argparse.Namespace) -> int:
         )
         import nw11_measurements as measurements
         documents = []
+        physical_captures = []
         for record_path in map(Path, args.evidence):
             observed = _load_json(record_path)
             evidence.assert_fresh(observed, expected_commit=manifest["commit"],
@@ -264,7 +265,10 @@ def command_evidence(args: argparse.Namespace) -> int:
             device["canonical_release_correctness"] = regenerated["canonical_release_correctness"]
             document["decision_id"] = evidence.decision_id(document)
             documents.append(document)
-        decisions = evidence.aggregate_verified_decisions(documents)
+            physical_captures.append((device["device_tier"], record_path.parent,
+                                      regenerated["canonical_release_correctness"]))
+        crossed = measurements.cross_device_captures(physical_captures)
+        decisions = evidence.aggregate_verified_decisions(documents, cross_device_equivalence=crossed)
         schema = _load_json(bundle_root / "schemas/nw11-decision.schema.json")
         import schema_validator
         schema_validator.validate_instance(decisions, schema, schema)
@@ -276,7 +280,7 @@ def command_evidence(args: argparse.Namespace) -> int:
         return _emit_error(EXIT_MALFORMED, "evidence", str(exc))
     _write_json(args.json_out, decisions)
     statuses = {item["status"] for item in decisions["devices"]}
-    if "failed" in statuses:
+    if "failed" in statuses or decisions.get("cross_device_equivalence", {}).get("status") == "failed":
         return EXIT_EXECUTION_FAILED
     if statuses == {"unsupported"}:
         return EXIT_UNSUPPORTED
@@ -292,7 +296,12 @@ def command_evidence(args: argparse.Namespace) -> int:
 def command_derive(args: argparse.Namespace) -> int:
     try:
         profile = capability.profile_manifest_template(args.profile_id)
-    except KeyError as exc:
+        capability.validate_profile(profile)
+        root = _repo_root()
+        if (THIS_DIR.parent.parent / "schemas/nw11-capability-profile.schema.json").is_file():
+            root = THIS_DIR.parent.parent
+        bundle._validate_with_schema(root, "schemas/nw11-capability-profile.schema.json", profile, "capability profile")
+    except (ValueError, KeyError, OSError) as exc:
         return _emit_error(EXIT_MALFORMED, "derive", str(exc))
     _write_json(args.json_out, profile)
     return EXIT_OK

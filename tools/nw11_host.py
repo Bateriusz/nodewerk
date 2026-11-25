@@ -1,0 +1,242 @@
+"""Observe the NW-07 host and operating conditions for an NW-11 launch."""
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+from typing import Any, Mapping
+import xml.etree.ElementTree as ET
+
+MEASURED_APPLICATIONS = ("common_baseline.exe", "optional_variant.exe", "fallback_common.exe",
+                         "canonical_release.exe", "canonical_reference.exe")
+
+
+def _power_profiles(system: Path, executables: Path) -> dict[str, dict]:
+    """Read the effective PREFERRED_PSTATE setting from the installed NVIDIA driver."""
+    # NVDRS_SETTING_V1 and NVDRS_APPLICATION_V4 from NVIDIA's public NVAPI ABI.
+    u32, handle = ctypes.c_uint32, ctypes.c_void_p
+    unicode_string = ctypes.c_uint16 * 2048
+
+    class Setting(ctypes.Structure):
+        _pack_ = 4
+        _fields_ = [("version", u32), ("name", unicode_string), ("setting_id", u32),
+                    ("value_type", u32), ("location", u32), ("predefined_flags", u32 * 2),
+                    ("predefined", u32 * 1025), ("current", u32 * 1025)]
+
+    class Application(ctypes.Structure):
+        _fields_ = [("version", u32), ("predefined", u32), ("app_name", unicode_string),
+                    ("friendly_name", unicode_string), ("launcher", unicode_string),
+                    ("file_in_folder", unicode_string), ("flags", u32), ("command_line", unicode_string)]
+
+    class SettingValues(ctypes.Structure):
+        _pack_ = 4
+        _fields_ = [("version", u32), ("count", u32), ("value_type", u32),
+                    ("default", u32 * 1025), ("values", (u32 * 1025) * 100)]
+
+    library = ctypes.CDLL(str(system / "nvapi64.dll"))
+    query = library.nvapi_QueryInterface
+    query.argtypes = [u32]
+    query.restype = handle
+
+    def bind(code: int, *types: Any):
+        address = query(code)
+        if not address:
+            raise ValueError(f"NVIDIA driver profile interface {code:#x} is unavailable")
+        return ctypes.CFUNCTYPE(ctypes.c_int32, *types)(address)
+
+    def checked(status: int) -> None:
+        if status != 0:
+            raise ValueError(f"NVIDIA driver profile query returned {status}")
+
+    create = bind(0x0694D52E, ctypes.POINTER(handle))
+    destroy = bind(0xDAD9CFF8, handle)
+    load = bind(0x375DBD6B, handle)
+    global_profile_query = bind(0x617BFF9F, handle, ctypes.POINTER(handle))
+    base_profile_query = bind(0xDA8466A0, handle, ctypes.POINTER(handle))
+    application_profile = bind(0xEEE566B2, handle, ctypes.c_wchar_p, ctypes.POINTER(handle),
+                               ctypes.POINTER(Application))
+    get_setting = bind(0x73BF8338, handle, handle, u32, ctypes.POINTER(Setting))
+    value_list = bind(0x2EC39F90, u32, ctypes.POINTER(u32), ctypes.POINTER(SettingValues))
+    power_mode_id = 0x1057EB71
+    session = handle()
+    checked(bind(0x0150E828)())
+    checked(create(ctypes.byref(session)))
+    modes = {}
+    try:
+        checked(load(session))
+        global_profile, base_profile = handle(), handle()
+        checked(global_profile_query(session, ctypes.byref(global_profile)))
+        checked(base_profile_query(session, ctypes.byref(base_profile)))
+        for name in MEASURED_APPLICATIONS:
+            application, profile = Application(), handle()
+            application.version = ctypes.sizeof(application) | (4 << 16)
+            found = application_profile(session, (executables / name).as_posix(),
+                                        ctypes.byref(profile), ctypes.byref(application))
+            if found != -166:  # NVAPI_EXECUTABLE_NOT_FOUND
+                checked(found)
+            setting = Setting()
+            for candidate in (profile, global_profile, base_profile):
+                if candidate:
+                    setting.version = ctypes.sizeof(setting) | (1 << 16)
+                    status = get_setting(session, candidate, power_mode_id, ctypes.byref(setting))
+                    if status != -160:  # NVAPI_SETTING_NOT_FOUND
+                        checked(status)
+                        break
+            else:
+                values = SettingValues()
+                values.version = ctypes.sizeof(values) | (1 << 16)
+                count = u32(len(values.values))
+                checked(value_list(power_mode_id, ctypes.byref(count), ctypes.byref(values)))
+                if values.value_type != 0:
+                    raise ValueError("NVIDIA default power management setting is not a DWORD")
+                modes[name] = {"value": values.default[0], "location": 3}
+                continue
+            if setting.setting_id != power_mode_id or setting.value_type != 0:
+                raise ValueError("NVIDIA power management setting is not a DWORD")
+            modes[name] = {"value": setting.current[0], "location": setting.location}
+    finally:
+        destroy(session)
+    return modes
+
+
+def observe(executables: Path) -> dict[str, Any]:
+    """Collect OS and NVIDIA driver telemetry using installed runtime tools."""
+    system = Path(os.environ["SystemRoot"]) / "System32"
+
+    def run(exe: Path, *args: str, timeout: int = 20) -> str:
+        return subprocess.run([str(exe), *args], capture_output=True, text=True,
+                              timeout=timeout, check=True,
+                              creationflags=subprocess.CREATE_NO_WINDOW).stdout
+
+    result = {}
+    try:
+        query = """
+$ErrorActionPreference = 'Stop'
+@{
+  system = Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,HypervisorPresent,PCSystemType,TotalPhysicalMemory,NumberOfLogicalProcessors
+  processor = @(Get-CimInstance Win32_Processor | Select-Object Name,Manufacturer,NumberOfCores)
+  motherboard = @(Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer,Product)
+} | ConvertTo-Json -Compress -Depth 4
+"""
+        result["cim"] = json.loads(run(system / "WindowsPowerShell/v1.0/powershell.exe",
+                                       "-NoProfile", "-NonInteractive", "-Command", query))
+        result["power_plan"] = run(system / "powercfg.exe", "/getactivescheme")
+        result["pcie_power"] = run(system / "powercfg.exe", "/query", "SCHEME_CURRENT",
+                                   "SUB_PCIEXPRESS", "ASPM")
+        nv_locations = (system / "nvidia-smi.exe",
+                        Path(os.environ.get("ProgramW6432", "C:/Program Files")) /
+                        "NVIDIA Corporation/NVSMI/nvidia-smi.exe")
+        nv_smi = next(path for path in nv_locations if path.is_file())
+        result["nvidia_smi_xml"] = run(nv_smi, "-q", "-x")
+        result["nvidia_power_profiles"] = _power_profiles(system, executables)
+        with tempfile.TemporaryDirectory(prefix="nw11-dxdiag-") as directory:
+            xml = Path(directory) / "dxdiag.xml"
+            run(system / "dxdiag.exe", "/whql:off", "/x", str(xml), timeout=60)
+            result["display_devices"] = [
+                {child.tag: child.text for child in item
+                 if child.tag in {"DeviceID", "VendorID", "SubSysID", "DriverModel"}}
+                for item in ET.parse(xml).findall("./DisplayDevices/DisplayDevice")
+            ]
+    except (OSError, AttributeError, ValueError, StopIteration, subprocess.SubprocessError, ET.ParseError) as exc:
+        result["unavailable"] = str(exc)
+    return result
+
+
+def _text(value: Any) -> str:
+    if not isinstance(value, str) or value.strip().lower() in {
+        "", "unknown", "unavailable", "n/a", "[n/a]", "not supported", "default string",
+        "to be filled by o.e.m.",
+    }:
+        raise ValueError("missing host telemetry")
+    return value.strip()
+
+
+def _observed_number(value: str, suffix: str) -> float:
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*" + suffix, _text(value))
+    if not match:
+        raise ValueError("malformed GPU telemetry")
+    return float(match[1])
+
+
+def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return stable bound provenance only when the physical host is identified."""
+    try:
+        if "unavailable" in raw:
+            return None
+        cim = raw["cim"]
+        system = cim["system"]
+        manufacturer, model = _text(system["Manufacturer"]), _text(system["Model"])
+        vm = re.search(r"virtual|vmware|qemu|kvm|hyper-v|xen|virtualbox|parallels",
+                       f"{manufacturer} {model}", flags=re.IGNORECASE)
+        # Hypervisor-present observations require independent passthrough
+        # documentation. This automatic collector does not infer it from PCI IDs.
+        if system["HypervisorPresent"] is not False or vm or system["PCSystemType"] not in (1, 3):
+            return None
+        processors = [{"model": _text(item["Name"]), "physical_cores": item["NumberOfCores"]}
+                      for item in cim["processor"]]
+        board = [{"manufacturer": _text(item["Manufacturer"]), "product": _text(item["Product"])}
+                 for item in cim["motherboard"]]
+        memory, logical = system["TotalPhysicalMemory"], system["NumberOfLogicalProcessors"]
+        if not processors or not board or type(memory) is not int or memory <= 0 or type(logical) is not int or logical <= 0:
+            return None
+        if any(type(item["physical_cores"]) is not int or item["physical_cores"] <= 0 for item in processors):
+            return None
+        plan = re.search(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
+                         raw["power_plan"], flags=re.IGNORECASE)
+        pcie = re.findall(r":\s*(0x[0-9a-f]{8})\s*$", raw["pcie_power"], flags=re.MULTILINE | re.IGNORECASE)
+        if plan is None or len(pcie) < 2:
+            return None
+
+        root = ET.fromstring(raw["nvidia_smi_xml"])
+        device_id, vendor_id = adapter["device_id"], adapter["vendor_id"]
+        query_pci = (device_id << 16) | vendor_id
+        def pci_match(gpu: ET.Element) -> bool:
+            observed = gpu.findtext("pci/pci_device_id") or ""
+            return observed.lower() == f"0x{query_pci:08x}"
+        gpu, = [item for item in root.findall("gpu") if pci_match(item)]
+        if int(_text(gpu.findtext("pci/pci_sub_system_id")), 16) != adapter["subsystem_id"]:
+            return None
+        displays = [row for row in raw["display_devices"] if
+                    str(row.get("VendorID", "")).casefold() == f"0x{vendor_id:04x}"
+                    and str(row.get("DeviceID", "")).casefold() == f"0x{device_id:04x}"
+                    and (not row.get("SubSysID") or
+                         row["SubSysID"].casefold() == f"0x{adapter['subsystem_id']:08x}")]
+        wddm = {_text(row["DriverModel"]) for row in displays}
+        if len(wddm) != 1 or not re.fullmatch(r"WDDM \d+\.\d+", next(iter(wddm))):
+            return None
+        limit = gpu.findtext("gpu_power_readings/enforced_power_limit") or gpu.findtext("power_readings/enforced_power_limit")
+        if not limit:
+            limit = gpu.findtext("gpu_power_readings/current_power_limit") or gpu.findtext("power_readings/power_limit")
+        clocks = {}
+        for kind in ("graphics_clock", "mem_clock"):
+            clocks[kind] = {"observed_mhz": _observed_number(gpu.findtext(f"clocks/{kind}"), "MHz"),
+                            "maximum_mhz": _observed_number(gpu.findtext(f"max_clocks/{kind}"), "MHz")}
+        modes = raw["nvidia_power_profiles"]
+        if set(modes) != set(MEASURED_APPLICATIONS) or any(
+            type(mode["value"]) is not int or mode["value"] not in range(6)
+            or type(mode["location"]) is not int or mode["location"] not in range(4)
+            for mode in modes.values()
+        ):
+            return None
+        return {
+            "execution_environment": {"kind": "physical", "hypervisor_present": False, "documentation": ""},
+            "host": {"manufacturer": manufacturer, "model": model, "cpu": processors,
+                     "motherboard": board, "memory_bytes": memory, "logical_processors": logical},
+            "environment": {
+                "wddm_driver_version": next(iter(wddm)), "windows_power_plan": plan[0].lower(),
+                "nvidia_power_management_mode": modes,
+                "gpu_power_state": {"pstate": _text(gpu.findtext("performance_state")),
+                                    "enforced_limit_w": _observed_number(limit, "W")},
+                "pcie_power_management": {"ac": pcie[-2].lower(), "dc": pcie[-1].lower()},
+                "gpu_clocks": clocks, "temperature_c": _observed_number(gpu.findtext("temperature/gpu_temp"), "C"),
+                "nvidia_driver_reported_version": _text(root.findtext("driver_version")),
+                "gpu_uuid": _text(gpu.findtext("uuid")),
+                "gpu_pci_bus": _text(gpu.findtext("pci/pci_bus_id")),
+            },
+        }
+    except (AttributeError, ValueError, TypeError, KeyError, ET.ParseError):
+        return None

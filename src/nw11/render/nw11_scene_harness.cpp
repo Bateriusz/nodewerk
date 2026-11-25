@@ -7,6 +7,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -237,6 +240,56 @@ void WriteReport(const RendererOptions& options_, const nw::player::PackagePlaye
 }
 
 
+std::string ExecutableSha256() {
+    wchar_t module[32768]{};
+    const DWORD length = GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));
+    if (length == 0 || length >= std::size(module))
+        throw std::runtime_error("cannot identify running executable");
+    std::ifstream image(std::filesystem::path(module), std::ios::binary);
+    const std::string image_bytes{std::istreambuf_iterator<char>(image), {}};
+    if (image_bytes.empty()) throw std::runtime_error("cannot hash running executable");
+    return nw::package::Sha256Hex(image_bytes);
+}
+
+int PrepareCache(const RendererOptions& options) {
+    using Microsoft::WRL::ComPtr;
+    unsigned long high = 0, low = 0;
+    char trailing = 0;
+    if (std::sscanf(options.adapter_luid.c_str(), "%8lx:%8lx%c", &high, &low, &trailing) != 2)
+        throw std::runtime_error("cache preparation requires the probe-selected adapter");
+    const LUID luid{static_cast<DWORD>(low), static_cast<LONG>(high)};
+    ComPtr<IDXGIFactory4> factory;
+    ComPtr<IDXGIAdapter1> adapter;
+    ComPtr<ID3D12Device9> device;
+    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
+    if (SUCCEEDED(hr)) hr = factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter));
+    if (SUCCEEDED(hr)) hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device));
+    // Windows caches are executable-local. Driver-managed clearance is a
+    // hint and supplies no evidence that the driver's cache is cold.
+    HRESULT windows_cache = hr;
+    HRESULT driver_hint = hr;
+    if (SUCCEEDED(hr)) {
+        const auto kinds = static_cast<D3D12_SHADER_CACHE_KIND_FLAGS>(
+            D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_D3D_CACHE_FOR_DRIVER |
+            D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_D3D_CONVERSIONS);
+        windows_cache = device->ShaderCacheControl(kinds, D3D12_SHADER_CACHE_CONTROL_FLAG_CLEAR);
+        driver_hint = device->ShaderCacheControl(D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_DRIVER_MANAGED,
+                                                 D3D12_SHADER_CACHE_CONTROL_FLAG_CLEAR);
+    }
+    std::ofstream report(options.cache_preparation_json, std::ios::binary);
+    report << "{\"format\":\"nw11-executable-cache-preparation.v1\","
+           << "\"launch_id\":\"" << JsonEscape(options.launch_id) << "\","
+           << "\"commit\":\"" << JsonEscape(options.commit) << "\","
+           << "\"executable_sha256\":\"" << ExecutableSha256() << "\","
+           << "\"adapter_luid\":\"" << JsonEscape(options.adapter_luid) << "\","
+           << "\"process_id\":" << GetCurrentProcessId() << ","
+           << "\"process_creation_filetime\":" << ProcessCreationFiletime() << ","
+           << "\"windows_cache_hresult\":" << windows_cache << ","
+           << "\"driver_hint_hresult\":" << driver_hint << ","
+           << "\"driver_cache_state\":\"unverified\"}\n";
+    return report ? kExitOk : kExitInitializationFailed;
+}
+
 int RunProduction(const RendererOptions& options) {
     if (options.fixed_quality != "nw07.quality.v1")
         throw std::runtime_error("unexpected fixed-quality profile");
@@ -253,14 +306,7 @@ int RunProduction(const RendererOptions& options) {
         throw std::runtime_error("missing or invalid embedded NW-07 production package");
     RunIdentity run;
     if (!options.launch_id.empty()) {
-        wchar_t module[32768]{};
-        const DWORD length = GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));
-        if (length == 0 || length >= std::size(module))
-            throw std::runtime_error("cannot identify running executable");
-        std::ifstream image(std::filesystem::path(module), std::ios::binary);
-        const std::string image_bytes{std::istreambuf_iterator<char>(image), {}};
-        if (image_bytes.empty()) throw std::runtime_error("cannot hash running executable");
-        run.executable_hash = nw::package::Sha256Hex(image_bytes);
+        run.executable_hash = ExecutableSha256();
         run.package_hash = nw::package::Sha256Hex(embedded.bytes, embedded.size);
     }
     nw::player::PlayerConfig config;
@@ -361,6 +407,7 @@ int RunSceneRenderer(const RendererOptions& options) {
             std::puts("{\"format\":\"nw11-production-player\",\"status\":\"self_check_ok\"}");
             return kExitOk;
         }
+        if (!options.cache_preparation_json.empty()) return PrepareCache(options);
         return RunProduction(options);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "[NW11-PRODUCTION-ERR] %s\n", error.what());

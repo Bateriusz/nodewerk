@@ -41,6 +41,9 @@ def embed(proof_dir: Path, executable_dir: Path, commit: str) -> None:
     candidate = proof_dir / "candidate"
     shutil.copyfile(candidate / FILES[0], executable_dir / "nw11-canonical-release.exe")
     package = (candidate / FILES[1]).read_bytes()
+    graph = json.loads((candidate / "export-report.json").read_bytes())["graph"]
+    loop = {"graph_sha256": graph["graph_sha256"], "loop_boundary": graph["loop_boundary"]}
+    (executable_dir / "nw11-canonical-loop.json").write_bytes(contract.canonical_json_bytes(loop))
     manifest = (candidate / FILES[2]).read_bytes()
     link = json.loads(manifest)
     package_hash, manifest_hash = binding.verify_proof(proof, commit)
@@ -49,23 +52,26 @@ def embed(proof_dir: Path, executable_dir: Path, commit: str) -> None:
     for name, specialization in VARIANTS.items():
         path = executable_dir / (name + ".exe")
         template = path.read_bytes()
+        specialized, displaced = binding.specialize_package(package, specialization)
         overlay = {
             "format": "nw11-production-specialization.v1",
             "tested_commit": commit,
             "specialization": specialization,
             "canonical_package_sha256": sha(package),
+            "specialized_package_sha256": sha(specialized),
+            "displaced_canonical_shaders": displaced,
             "canonical_link_manifest_sha256": sha(manifest),
             "template_sha256": sha(template),
             "link_metadata": link["link_metadata"],
         }
         payload = json.dumps(overlay, sort_keys=True, separators=(",", ":")).encode()
-        image = nw05_export.embed_package(template, package, payload)
-        if nw05_export.extract_embedded_package(image) != (package, payload):
+        image = nw05_export.embed_package(template, specialized, payload)
+        if nw05_export.extract_embedded_package(image) != (specialized, payload):
             raise ValueError("embedded image round trip failed")
         path.write_bytes(image)
         record = binding.inspect(image, commit=commit, specialization=specialization,
                                  package_sha256=package_hash, manifest_sha256=manifest_hash,
-                                 payloads=payloads)
+                                 payloads=payloads, canonical_package=package)
         bindings.append({"file": path.name, **record})
     (executable_dir / "nw11-common-regression.json").write_bytes(
         (proof_dir / "common-regression.json").read_bytes())

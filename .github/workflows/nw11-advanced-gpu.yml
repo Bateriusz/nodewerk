@@ -65,7 +65,8 @@ jobs:
           tools/nw11_build_bundle.py tools/nw11_verify.py tools/nw11_graph_scene.py
           tools/nw11_toolchain_identity.py tools/nw11_shader_payloads.py
           tools/nw11_pe_dependencies.py tools/nw11_pack_python_runtime.py
-          tools/nw11_measurements.py tools/nw11/validate-device.py
+          tools/nw11_host.py tools/nw11_measurements.py tools/nw11_production_binding.py
+          tools/nw11/validate-device.py
           tools/nw11/collect-evidence.py tools/nw11/compare-captures.py
       - name: Validate schemas and tracked evidence state
         run: |
@@ -443,13 +444,25 @@ jobs:
         run: |
           $bundle = "build/nw11-bundle-${{ matrix.slug }}"
           $output = "build/nw11-bundle-${{ matrix.slug }}-dry-run"
-          & (Join-Path $bundle "run-validation.ps1") -BundleRoot $bundle -ExpectedCommit "${{ steps.revision.outputs.commit }}" -OutputDirectory $output -DryRun
+          & (Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1") -BundleRoot $bundle -ExpectedCommit "${{ steps.revision.outputs.commit }}" -OutputDirectory $output -TrustRecord "$bundle-verification.json" -DryRun
           if ($LASTEXITCODE -ne 0) { throw "self-contained validation bundle dry-run failed with exit code $LASTEXITCODE" }
           $summaries = @(Get-ChildItem -Recurse $output -Filter "summary.json")
           if ($summaries.Count -ne 1) { throw "dry run must emit exactly one summary" }
           $summaryPath = $summaries[0].FullName
           $summary = Get-Content $summaryPath -Raw | ConvertFrom-Json
           if ($summary.status -ne "dry_run") { throw "self-contained validation bundle did not complete dry-run verification" }
+      - name: Reject an unlisted Python import before starting the runtime
+        shell: pwsh
+        run: |
+          $bundle = "build/nw11-bundle-${{ matrix.slug }}"
+          $unexpected = Join-Path $bundle "tools/nw11/nw11_evidence.pyc"
+          try {
+            Set-Content -LiteralPath $unexpected -Value "unexpected bytecode"
+            & (Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1") -BundleRoot $bundle -OutputDirectory "$bundle-unlisted-test" -TrustRecord "$bundle-verification.json" -DryRun
+            if ($LASTEXITCODE -ne 6) { throw "launcher did not reject the unlisted Python import" }
+          } finally {
+            Remove-Item -LiteralPath $unexpected -Force
+          }
       - name: Report integrity and actual distribution sizes
         shell: pwsh
         run: |
@@ -464,6 +477,12 @@ jobs:
           if ($accounting.adoption_budget_status -ne "accepted") {
             Write-Host "::warning::NW-11 ${{ matrix.slug }} bundle is identity-verified but adoption is rejected by the declared distribution budget."
           }
+      - name: Publish a separate CI trust record
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-validation-trust-${{ matrix.slug }}-${{ steps.revision.outputs.commit }}
+          path: build/nw11-bundle-${{ matrix.slug }}-verification.json
+          if-no-files-found: error
       - name: Upload immutable bundle
         uses: actions/upload-artifact@v4
         with:
@@ -492,6 +511,18 @@ jobs:
       - windows
       - nw11-${{ matrix.device_tier }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: tools/nw11/run-validation.ps1
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Download the trusted CI verification record
+        uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-trust-${{ matrix.slug }}-${{ github.sha }}
+          path: ${{ runner.temp }}/nw11-trust-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}
+
       - name: Download the CI-built immutable bundle
         uses: actions/download-artifact@v4
         with:
@@ -501,17 +532,30 @@ jobs:
         shell: pwsh
         run: |
           $bundle = Join-Path $env:RUNNER_TEMP "nw11-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}"
-          $launcher = Join-Path $bundle "run-validation.ps1"
+          $launcher = Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1"
+          $trust = Join-Path $env:RUNNER_TEMP "nw11-trust-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}/nw11-bundle-${{ matrix.slug }}-verification.json"
           if (-not (Test-Path -LiteralPath $launcher)) { throw "bundle launcher is missing" }
           $evidenceDirectory = Join-Path $env:RUNNER_TEMP "nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}"
           & $launcher `
             -BundleRoot $bundle `
+            -TrustRecord $trust `
             -ExpectedCommit "${{ github.event.pull_request.head.sha || github.sha }}" `
             -DeviceTier "${{ matrix.device_tier }}" `
             -OutputDirectory $evidenceDirectory
           $code = $LASTEXITCODE
           if ($code -eq 0) { exit 0 }
-          if ($code -eq 3) { Write-Host "Common and fallback correctness verified. Optional capability unsupported and coverage incomplete."; exit 0 }
+          if ($code -eq 3) {
+            $files = @(Get-ChildItem -LiteralPath $evidenceDirectory -Recurse -File -Filter "summary.json")
+            if ($files.Count -eq 1) {
+              $summary = Get-Content -LiteralPath $files[0].FullName -Raw | ConvertFrom-Json
+              if ($summary.status -eq "unsupported" -and $summary.common_fallback_verified -eq $true) {
+                Write-Host "Common and fallback correctness verified. Optional capability unsupported and coverage incomplete."
+                exit 0
+              }
+            }
+            Write-Host "Required common capability unsupported. Common and fallback correctness unverified."
+            exit 3
+          }
           if ($code -eq 11) { Write-Host "Required device coverage remains pending."; exit 11 }
           if ($code -eq 10) { Write-Host "Measured decision is rejected; evidence is preserved."; exit 0 }
           throw "NW-11 physical validation failed with exit code $code"
@@ -534,9 +578,17 @@ jobs:
       matrix:
         slug: [mesh, ray-query]
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-trust-${{ matrix.slug }}-${{ github.sha }}
+          path: build/nw11-trust
       - uses: actions/download-artifact@v4
         with:
           name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.sha }}
@@ -550,13 +602,17 @@ jobs:
         run: |
           $records = @(Get-ChildItem build/nw11-device-evidence -Recurse -File -Filter "evidence.json")
           if ($records.Count -ne 2) { throw "Expected exactly two physical evidence files" }
-          $env:PYTHONDONTWRITEBYTECODE = "1"
           $bundle = "build/nw11-bundle"
-          $arguments = @("$bundle/tools/nw11/nw11_verify.py", "evidence",
+          $trust = Get-Content -LiteralPath "build/nw11-trust/nw11-bundle-${{ matrix.slug }}-verification.json" -Raw | ConvertFrom-Json
+          if ($trust.status -ne "verified" -or $trust.commit -ne "${{ github.sha }}" -or
+              (Get-FileHash -LiteralPath "$bundle/bundle-manifest.json" -Algorithm SHA256).Hash -ne $trust.manifest_sha256) {
+            throw "Bundle does not match the trusted CI verification record"
+          }
+          $arguments = @("tools/nw11_verify.py", "evidence",
             "--bundle-root", $bundle, "--expected-commit", "${{ github.sha }}",
             "--require-complete", "--json-out", "build/nw11-decisions.json")
           foreach ($record in $records) { $arguments += @("--evidence", $record.FullName) }
-          python @arguments
+          python -I -B -S @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:

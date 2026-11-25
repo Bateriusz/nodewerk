@@ -47,8 +47,8 @@ The two optional profiles are separately exported and separately tested:
 
 | Profile | ID | Requirements digest | Shader targets | Fallback |
 |---|---|---|---|---|
-| Mesh shaders | `nw.optional.d3d12.mesh_shaders.ms6_5.v1` | `sha256:v1:cc0636631f844cca1840c848849fd0056a5c688d6228f97cec0a70fb78f237b8` | `as_6_5`, `ms_6_5`, `ps_6_0` | `nw11.fallback.mesh.indexed.d3d12.fl12_0.sm6_0.v1` |
-| Ray queries | `nw.optional.d3d12.ray_query.ps6_5.v1` | `sha256:v1:d864eb2025494e9817c14ae05542a5e601c256407e77cca9cb5d87e2e2da2515` | `ps_6_5`, `cs_6_0` | `nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1` |
+| Mesh shaders | `nw.optional.d3d12.mesh_shaders.ms6_5.v1` | `sha256:v1:a522ce6f0f5163ecbcf6045ab8c52fe72ee9855c902db40b2094ffc530bc4d62` | `as_6_5`, `ms_6_5`, `ps_6_0`, `cs_6_0` | `nw11.fallback.mesh.indexed.d3d12.fl12_0.sm6_0.v1` |
+| Ray queries | `nw.optional.d3d12.ray_query.ps6_5.v1` | `sha256:v1:7f18259d05889226ad52e72c36dda206a1ba58bac205417aa15ce665e78602f3` | `ps_6_5`, `cs_6_0`, `vs_6_0` | `nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1` |
 
 Every profile document (`benchmarks/nw11/profiles/`) declares:
 
@@ -70,6 +70,10 @@ The common queries are:
 | `resource_binding_tier` | `D3D12_FEATURE_D3D12_OPTIONS` | `ResourceBindingTier` |
 | `resource_heap_tier` | `D3D12_FEATURE_D3D12_OPTIONS` | `ResourceHeapTier` |
 | `highest_shader_model` | `D3D12_FEATURE_SHADER_MODEL` | `HighestShaderModel` |
+| `DXGI_FORMAT_R8G8B8A8_UNORM` | `D3D12_FEATURE_FORMAT_SUPPORT` | Texture 2D, render target, SRV, UAV |
+| `DXGI_FORMAT_R32G32B32A32_FLOAT` | `D3D12_FEATURE_FORMAT_SUPPORT` | Buffer, texture 2D, render target, SRV, UAV |
+| `DXGI_FORMAT_R32_UINT` | `D3D12_FEATURE_FORMAT_SUPPORT` | Buffer, index buffer, SRV, UAV |
+| `DXGI_FORMAT_D32_FLOAT` | `D3D12_FEATURE_FORMAT_SUPPORT` | Texture 2D, depth stencil |
 
 The optional profiles add:
 
@@ -322,32 +326,49 @@ permission to collect PresentMon ETW events. Use an SDR desktop that can show
 the entire 1920×1080 client area at native scale. The release capture reads the
 visible window, and desktop overlays or occlusion affect the comparison.
 
+From the authenticated GitHub Actions run for the tested commit, download the
+validation bundle and its separate `nw11-validation-trust-*` artifact. Get
+`tools/nw11/run-validation.ps1` from the same commit through the authenticated
+repository and run that copy as the bootstrap.
+
 ```powershell
-pwsh .\run-validation.ps1 -ExpectedCommit <tested-commit>
+pwsh -NoProfile -File C:\trusted\run-validation.ps1 -BundleRoot C:\validation\bundle -TrustRecord C:\trusted\nw11-bundle-mesh-verification.json
 ```
 
-The probe assigns the physical tier from the selected PCI identity
-(`10de:2805` for Ada and `10de:2c05` for Blackwell). Use `-DeviceTier` to
-assert the expected board on an assigned runner. The verifier checks Windows
-build 22631 or later, the NVIDIA driver floor of 610.88, inbox runtime versions,
-and the queried profile requirements. [NVIDIA board IDs](https://download.nvidia.com/XFree86/Linux-x86_64/615.78.08/README/supportedchips.html)
+Physical coverage requires the selected PCI identity
+(`10de:2805` for Ada and `10de:2c05` for Blackwell) and automatically collected
+host, board, WDDM, power, clock, and thermal provenance. The environment key
+includes these observations, including the Windows power plan, PCIe power
+settings, the effective NVIDIA driver power mode per executable, GPU
+performance state and power limit, and the observed clocks and temperature.
+The launcher reads these values using Windows inbox tools and the installed
+NVIDIA driver's `nvidia-smi.exe` and `nvapi64.dll`. These driver components
+carry zero distributed bytes and are used only during physical validation.
+A different power mode on the baseline and variant leaves the matched
+optional result pending. Observations with a detected hypervisor remain pending by this
+launcher. Use `-DeviceTier` to assert the expected board on an assigned runner.
+Preflight checks Windows build 22631 or later, the NVIDIA driver floor of
+610.88, inbox runtime versions, and the queried capabilities, including
+production format support. [NVIDIA board IDs](https://download.nvidia.com/XFree86/Linux-x86_64/615.78.08/README/supportedchips.html)
 
-The launcher extracts the bundled Python runtime into a unique temporary
-directory and verifies the immutable bundle before launching measured artifacts.
+The launcher authenticates the manifest against the separate CI trust record.
+It checks the path, length, and SHA-256 of every bundled file and rejects
+unexpected files before extracting and starting the isolated Python runtime.
 Each invocation writes a fresh evidence directory containing the probe snapshot,
 raw reports, presentation traces, capture pixels, `evidence.json`,
 `decisions.json`, and a short `summary.txt`.
 
-The startup sequence requests a D3D12 driver-cache reset on the validation host
-and records its result before launching one cold process per role. Use a
-dedicated validation host with Windows Developer Mode and a driver that supports
-the cache clear operation. A failed or unavailable reset leaves cold coverage
-pending. Warm measurements begin after the identical executable exits, then
-use a five-second warm-up and three fresh 60-second uncapped processes.
-[Microsoft shader cache control](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device9-shadercachecontrol)
+The executable measured for startup issues its own D3D12 cache-clear requests
+in a preceding, separately bound invocation. The verifier records the
+executable-local Windows result and the driver-managed hint independently.
+The hint cannot establish driver cache state, so startup observations remain
+unqualified and cold coverage stays pending until the cache state can be
+established. Warm measurements run in three fresh 60-second uncapped processes
+with a five-second warm-up each.
+[Microsoft shader cache specification](https://microsoft.github.io/DirectX-Specs/d3d/ShaderCache.html)
 
 The per-process windows bind production CPU command-recording and submission
-samples with PresentMon GPU frame times and displayed intervals. Dropped
+samples through DXGI Present with PresentMon GPU frame times and displayed intervals. Dropped
 presents affect delivered frame counts and intervals. Every matched run pair
 must meet the relative GPU criterion and the end-to-end guardrails. The Ada
 baseline and variant must each pass the strict GPU and CPU reference thresholds
@@ -356,24 +377,28 @@ in every run. The Blackwell comparison uses its own matched measurements.
 
 The canonical correctness check launches the exact NW-07 release executable
 covered by the byte-equivalence proof. It uses the release fixed-tick
-`--tick N --frames 1` interface and an external desktop capture. It compares
+`--tick N --frames 1` interface and waits for the target's first displayed
+presentation before the bounded external desktop capture. It compares
 the normalized SDR presentation bytes with a separately linked NW-07 package
-reference, including the `0 / 960000` loop boundary. Optional arm comparisons
-retain the RGBA32F production readback. The verifier recomputes both comparisons
-from the bound pixels.
+reference. It checks the numeric scene state and retained pixels at the
+`0 / 960000` loop boundary under the NW-07 tolerances. Optional arm comparisons
+retain the RGBA32F production readback. The verifier recomputes the comparisons
+from the bound pixels, including the Ada and Blackwell release captures at the
+five fixed NW-07 ticks during aggregation.
 
 The executable distribution ledger counts each measured PE image and any
-required redistributable runtime payload. The shader count includes every DXIL
-container in the PE or its embedded package, including retained canonical
-stages. HLSL source, PresentMon, Python, and the separately shipped verification
-copies of DXIL contribute to bundle size. Their bytes carry no measured runtime
-distribution charge.
+required redistributable runtime payload. Each executable's PE imports must
+resolve to a recognized Windows inbox component or a hashed, costed payload.
+Shader count and targets come from the DXIL containers in the executable and
+embedded package. Specialized exports remove the displaced canonical bytecode
+and retain its identity in the proof. HLSL source, PresentMon, Python, and the
+separately shipped verification copies of DXIL contribute to bundle size.
 
 | Code | Meaning |
 |---:|---|
 | 0 | Verified device record with an accepted decision |
 | 2 | Malformed manifest, profile, experiment, or evidence |
-| 3 | Optional capability unsupported after verified common and fallback captures |
+| 3 | Capability explicitly unsupported. The summary indicates whether common and fallback correctness was verified. |
 | 4 | Initialization, capture, or execution failure |
 | 5 | Stale evidence |
 | 6 | Bundle identity mismatch |
@@ -388,7 +413,8 @@ Required acceptance coverage is:
 - desktop Blackwell representative: NVIDIA GeForce RTX 5070 Ti.
 
 Each optional-profile claim must use matched baseline/variant runs on the same
-qualified device and environment. Cross-SKU equivalence is not assumed. The
+qualified device and environment. The canonical release captures on both
+devices must agree within the NW-07 image tolerance. The
 tracked `evidence-status.v1.json` keeps physical evidence
 `pending_physical` until both tiers have verified matched bundles. Contract
 implementation is verified by pytest and does not substitute for physical
@@ -398,8 +424,10 @@ After ordinary CI is green, collect both devices for each experiment from
 the same tested bundle. Pass `--evidence` twice to the bundled verifier's
 `evidence` command and use `--require-complete` when generating the aggregate.
 The verifier reopens each record's raw evidence, derives the matching device
-and environment, and binds the two evidence-file hashes to the bundle. A
-verified rejection completes a measured evaluation on its own device.
+and environment, and binds the two evidence-file hashes to the bundle. It
+requires both numeric loop checks and recomputes cross-device image equivalence
+before reporting completion. A verified rejection completes a measured
+evaluation on its own device.
 
 Publish the tested bundle identities, raw evidence locations, and generated
 decision record in PR #44 after both devices are verified. The tracked status

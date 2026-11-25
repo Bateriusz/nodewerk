@@ -101,14 +101,14 @@
     },
     {
       "feature": "shader_execution_reordering",
-      "content_hypothesis": "SER might improve ray-query variant divergence if the NW-07 torus reflection workload showed coherent hit grouping, but the initial ray-query experiment must first establish end-to-end benefit.",
+      "content_hypothesis": "A ray-generation pass for torus reflection could reduce hit-shading divergence by reordering rays by material. Include dispatch, shader table, and composition overhead in the comparison.",
       "exact_feature_queries": [
         "D3D12_FEATURE_D3D12_OPTIONS22.ShaderExecutionReorderingActuallyReorders == TRUE",
-        "D3D12_FEATURE_D3D12_OPTIONS5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1 for inline traversal",
+        "D3D12_FEATURE_D3D12_OPTIONS5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1 for the scheduled ray-generation workload",
         "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D_SHADER_MODEL_6_9"
       ],
-      "api_requirements": "Agility SDK 1.619; CheckFeatureSupport(OPTIONS22, SHADER_MODEL, OPTIONS5); RaytracingTier >= 1.1 for inline ray queries",
-      "shader_targets": ["lib_6_9", "ps_6_9"],
+      "api_requirements": "Agility SDK 1.619, DXR state object and shader table, ID3D12GraphicsCommandList4::DispatchRays, and MaybeReorderThread in the ray-generation shader",
+      "shader_targets": ["lib_6_9"],
       "toolchain_requirements": "DXC 1.9.2602.16 with Shader Model 6.9, and Agility SDK 1.619 headers",
       "runtime_requirements": "Windows 11 with the Agility SDK 1.619 runtime and a driver exposing the queried features",
       "deployment_constraints": [
@@ -123,7 +123,7 @@
       "byte_cost": {
         "status": "unmeasured_estimate",
         "estimate_bytes": 0,
-        "basis": "No SER shader byte is part of NW-11; a follow-up must count shader payload and any Agility SDK bytes."
+        "basis": "Unmeasured for the follow-up. Count the ray-generation library, state-object setup, shader table data shipped on disk, composition shaders, and redistributed Agility SDK DLLs. Track runtime shader table and composition allocations separately."
       },
       "prototypes_in_this_task": false,
       "follow_up_disposition": "follow_up_issue_required"

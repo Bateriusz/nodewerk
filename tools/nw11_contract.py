@@ -128,8 +128,15 @@ NVIDIA_DRIVER_FLOOR = "610.88"
 PRESENTMON_SHA256 = "364e5d98d4d134bd54dd25c22ed2ca2f4883f8bc3ed6502bee0c151e3436d30c"
 
 COMMON_SHADER_TARGETS = ("vs_6_0", "ps_6_0", "cs_6_0")
-MESH_SHADER_TARGETS = ("as_6_5", "ms_6_5", "ps_6_0")
-RAY_QUERY_SHADER_TARGETS = ("ps_6_5", "cs_6_0")
+MESH_SHADER_TARGETS = ("as_6_5", "ms_6_5", "ps_6_0", "cs_6_0")
+RAY_QUERY_SHADER_TARGETS = ("ps_6_5", "cs_6_0", "vs_6_0")
+
+PRODUCTION_FORMATS = {
+    "DXGI_FORMAT_R8G8B8A8_UNORM": "TEXTURE2D | RENDER_TARGET; SRV; UAV",
+    "DXGI_FORMAT_R32G32B32A32_FLOAT": "BUFFER | TEXTURE2D | RENDER_TARGET; SRV; UAV",
+    "DXGI_FORMAT_R32_UINT": "BUFFER | IA_INDEX_BUFFER; SRV; UAV",
+    "DXGI_FORMAT_D32_FLOAT": "TEXTURE2D | DEPTH_STENCIL",
+}
 
 # Exact D3D12 capabilities queried before eligibility is decided.  Names are
 # recorded verbatim so evidence can be checked against the DX12 headers.
@@ -176,7 +183,14 @@ COMMON_QUERIES = (
         ],
         "minimum_rank": 0,
     },
-)
+) + tuple({
+    "query_id": format_name,
+    "d3d12_query": "D3D12_FEATURE_FORMAT_SUPPORT",
+    "method": "ID3D12Device::CheckFeatureSupport",
+    "member": f"Format={format_name}; Support1/Support2: {usage}",
+    "accepted_values": ["production_usage_supported"],
+    "minimum_rank": 0,
+} for format_name, usage in PRODUCTION_FORMATS.items())
 
 MESH_QUERIES = COMMON_QUERIES + (
     {

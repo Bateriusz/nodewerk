@@ -29,6 +29,7 @@ from nw11_contract import (  # type: ignore[import-not-found]
     MIN_WINDOWS_BUILD,
     NVIDIA_DRIVER_FLOOR,
     PROFILE_DEFINITIONS,
+    PRODUCTION_FORMATS,
     SHADER_MODEL_ORDER,
     STRETCH_DISTRIBUTION_CEILING_BYTES,
     TASK,
@@ -66,6 +67,36 @@ def _require_int(value: Any, label: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise CapabilityProfileError(f"{label} must be an integer")
     return value
+
+
+def _production_format_value(query_id: str, observation: Mapping[str, Any]) -> str | None:
+    # D3D12_FORMAT_SUPPORT1 and SUPPORT2 flags used by the frozen PackagePlayer.
+    buffer, index, texture2d, target, depth = 0x1, 0x4, 0x20, 0x4000, 0x10000
+    shader_resource = 0x100 | 0x200 | 0x800000  # SHADER_LOAD, SHADER_SAMPLE, SHADER_GATHER
+    typed_uav, typed_store = 0x2000000, 0x80
+    required, srv, uav = {
+        "DXGI_FORMAT_R8G8B8A8_UNORM": (texture2d | target, True, True),
+        "DXGI_FORMAT_R32G32B32A32_FLOAT": (buffer | texture2d | target, True, True),
+        "DXGI_FORMAT_R32_UINT": (buffer | index, True, True),
+        "DXGI_FORMAT_D32_FLOAT": (texture2d | depth, False, False),
+    }[query_id]
+    queries = _require_mapping(observation.get("format_queries", {}), "observation.format_queries")
+    if query_id not in queries:
+        return None
+    result = _require_mapping(queries[query_id], query_id)
+    hresult = _require_int(result.get("hresult"), f"{query_id}.hresult")
+    if not -(2**31) <= hresult < 2**31:
+        raise CapabilityProfileError(f"{query_id} HRESULT is out of range")
+    if hresult < 0:
+        return None
+    support1 = _require_int(result.get("support1"), f"{query_id}.support1")
+    support2 = _require_int(result.get("support2"), f"{query_id}.support2")
+    if not (0 <= support1 < 2**32 and 0 <= support2 < 2**32):
+        raise CapabilityProfileError(f"{query_id} support masks are out of range")
+    supported = ((support1 & required) == required
+                 and (not srv or support1 & shader_resource)
+                 and (not uav or support1 & typed_uav or support2 & typed_store))
+    return "production_usage_supported" if supported else "unsupported"
 
 
 def requirements_digest_inputs(profile: Mapping[str, Any]) -> dict[str, Any]:
@@ -375,12 +406,15 @@ def evaluate_observation(
             "satisfies_optional_profile": False,
         }
 
+    from nw11_host import qualify
+    provenance = qualify(observation.get("host_observation") or {}, adapter)
     diagnostics = _runtime_diagnostics(observation, vendor_id)
     queried: dict[str, Any] = {}
     pending = any(item["code"] == "NW11-RUNTIME-PENDING" for item in diagnostics)
     for requirement in record["queried_capabilities"]:
         query_id = requirement["query_id"]
-        value = features.get(query_id)
+        value = (_production_format_value(query_id, observation)
+                 if query_id in PRODUCTION_FORMATS else features.get(query_id))
         if value is None:
             pending = True
             diagnostics.append(
@@ -436,7 +470,7 @@ def evaluate_observation(
             {"probe": observation.get("toolchain_identity"),
              "runtime": observation.get("runtime"),
              "board": {key: adapter.get(key) for key in ("subsystem_id", "revision", "dedicated_video_memory_bytes")},
-             "adapter_luid": adapter.get("adapter_luid")},
+             "adapter_luid": adapter.get("adapter_luid"), "physical_provenance": provenance},
         ),
         "adapter": {
             "vendor_id": vendor_id,
@@ -444,7 +478,8 @@ def evaluate_observation(
             "adapter_luid": adapter.get("adapter_luid"),
             "adapter_name_metadata_only": adapter.get("adapter_name"),
         },
-        "physical_device_tier": physical_device_tier(device_key(vendor_id, device_id)),
+        "physical_device_tier": physical_device_tier(device_key(vendor_id, device_id)) if provenance else None,
+        "physical_provenance": provenance,
         "driver_version": driver,
         "os_build": os_build,
         "queried": queried,
@@ -518,6 +553,20 @@ def profile_manifest_template(profile_id: str) -> dict[str, Any]:
             }
             for tier in DEVICE_TIERS
         ],
+        "dependencies": [
+            {"name": name, "kind": "windows_inbox", "counted": True,
+             "distributed_bytes": 0, "optional": False}
+            for name in ("d3d12", "dxgi", "user32", "kernel32", "gdi32", "psapi", "advapi32", "version")
+        ],
+        "qualification": {
+            "canonical_production_contract": "benchmarks/nw07/canonical-production.v1.json",
+            "nw01_policy_preserved": True,
+            "nw01b_evidence_semantics_reused": True,
+            "nw07_renderer_and_export_reused": True,
+            "perf_contract": "nw07_perf_ref_v1",
+            "perf_protocol": "nw07-perf-run.v1",
+            "quality_profile_id": "nw07.quality.v1",
+        },
         "evidence_status": "pending",
     }
     if definition["profile_kind"] == "optional":

@@ -78,6 +78,7 @@
     "bundle_adoption_budget_status": {
       "enum": ["accepted", "rejected"]
     },
+    "cross_device_equivalence": { "type": "object" },
     "satisfies_completion": { "type": "boolean" },
     "per_device_decision_isolation": { "const": true },
     "pending_is_not_pass": { "const": true },

@@ -39,7 +39,6 @@ constexpr int kExitInitializationFailed = 4;
 struct Options {
     std::string json_path;
     bool self_check = false;
-    bool reset_driver_cache = false;
     bool has_adapter_luid = false;
     LUID adapter_luid{};
     bool has_adapter_index = false;
@@ -252,8 +251,6 @@ bool ParseArguments(int argc, char** argv, Options& options) {
                 return false;
             }
             options.json_path = argv[++index];
-        } else if (std::strcmp(argv[index], "--reset-driver-cache") == 0) {
-            options.reset_driver_cache = true;
         } else if (std::strcmp(argv[index], "--self-check") == 0) {
             options.self_check = true;
         } else if (std::strcmp(argv[index], "--adapter-index") == 0) {
@@ -371,7 +368,7 @@ int main(int argc, char** argv) {
         const bool software = (candidate_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
         // The byte-frozen NW-07 release selects the first hardware adapter
         // that can create its FL12.0 device. Prove its use before capture.
-        if (!options.reset_driver_cache && !software && release_default_luid.empty() &&
+        if (!software && release_default_luid.empty() &&
             SUCCEEDED(D3D12CreateDevice(candidate.Get(), D3D_FEATURE_LEVEL_12_0,
                                        __uuidof(ID3D12Device), nullptr))) {
             release_default_luid = LuidString(candidate_desc.AdapterLuid);
@@ -424,28 +421,6 @@ int main(int argc, char** argv) {
     hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device));
     if (FAILED(hr) || device == nullptr) {
         return fail("D3D12CreateDevice(D3D_FEATURE_LEVEL_12_0)", FAILED(hr) ? hr : E_POINTER);
-    }
-
-    if (options.reset_driver_cache) {
-        ComPtr<ID3D12Device9> device9;
-        hr = device.As(&device9);
-        if (FAILED(hr)) return fail("ID3D12Device9", hr);
-        D3D12_FEATURE_DATA_SHADER_CACHE cache{};
-        hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_CACHE, &cache, sizeof(cache));
-        if (FAILED(hr)) return fail("D3D12_FEATURE_SHADER_CACHE", hr);
-        if ((cache.SupportFlags & D3D12_SHADER_CACHE_SUPPORT_SHADER_CONTROL_CLEAR) == 0)
-            return fail("shader cache clear capability", E_NOTIMPL);
-        const auto kinds = static_cast<D3D12_SHADER_CACHE_KIND_FLAGS>(
-            D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_D3D_CACHE_FOR_DRIVER |
-            D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_D3D_CONVERSIONS |
-            D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_DRIVER_MANAGED);
-        hr = device9->ShaderCacheControl(kinds, D3D12_SHADER_CACHE_CONTROL_FLAG_CLEAR);
-        if (hr != S_OK) return fail("ShaderCacheControl(CLEAR)", hr);
-        WriteOutput(options.json_path,
-            "{\"format\":\"nw11-driver-cache-preparation.v1\","
-            "\"status\":\"cleared\",\"method\":\"D3D12 ShaderCacheControl(CLEAR)\","
-            "\"adapter_luid\":\"" + LuidString(best_desc.AdapterLuid) + "\"}");
-        return kExitOk;
     }
 
     D3D12_FEATURE_DATA_FEATURE_LEVELS levels{};
@@ -548,6 +523,30 @@ int main(int argc, char** argv) {
     payload += "    \"mesh_shader_tier\": " + queried(has_options7, MeshTierName(options7.MeshShaderTier)) + ",\n";
     payload += "    \"raytracing_tier\": " + (has_options5 ? JsonNumber(static_cast<unsigned>(options5.RaytracingTier)) : "null") + "\n";
     payload += "  },\n";
+    struct FormatRequirement {
+        const char* name;
+        DXGI_FORMAT format;
+    };
+    const FormatRequirement formats[] = {
+        {"DXGI_FORMAT_R8G8B8A8_UNORM", DXGI_FORMAT_R8G8B8A8_UNORM},
+        {"DXGI_FORMAT_R32G32B32A32_FLOAT", DXGI_FORMAT_R32G32B32A32_FLOAT},
+        {"DXGI_FORMAT_R32_UINT", DXGI_FORMAT_R32_UINT},
+        {"DXGI_FORMAT_D32_FLOAT", DXGI_FORMAT_D32_FLOAT},
+    };
+    std::string format_queries = "{";
+    for (const auto& requirement : formats) {
+        D3D12_FEATURE_DATA_FORMAT_SUPPORT support{};
+        support.Format = requirement.format;
+        const HRESULT result = device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support));
+        UINT flags[2]{};
+        static_assert(sizeof(support) == 3 * sizeof(UINT));
+        std::memcpy(flags, reinterpret_cast<const unsigned char*>(&support) + sizeof(DXGI_FORMAT), sizeof(flags));
+        if (format_queries.size() > 1) format_queries += ", ";
+        format_queries += "\"" + std::string(requirement.name) + "\": {\"hresult\": " +
+            std::to_string(result) + ", \"support1\": " + JsonNumber(flags[0]) +
+            ", \"support2\": " + JsonNumber(flags[1]) + "}";
+    }
+    payload += "  \"format_queries\": " + format_queries + "},\n";
     payload += "  \"initialization\": {\"status\": \"ok\", \"stage\": \"device_and_capability_query\"}\n";
     payload += "}\n";
     WriteOutput(options.json_path, payload);
