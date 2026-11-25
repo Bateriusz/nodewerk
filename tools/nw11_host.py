@@ -11,6 +11,8 @@ import tempfile
 from typing import Any, Mapping
 import xml.etree.ElementTree as ET
 
+import hardware_evidence_host as hardware_host
+
 MEASURED_APPLICATIONS = ("common_baseline.exe", "optional_variant.exe", "fallback_common.exe",
                          "canonical_release.exe", "canonical_reference.exe")
 
@@ -107,44 +109,10 @@ def _system() -> Path:
     return Path(os.environ["SystemRoot"]) / "System32"
 
 
-def _windows_code_pages() -> tuple[str, ...]:
-    """Return explicit Windows console/ANSI encodings without consulting Python locale."""
-    if os.name != "nt":
-        return ()
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    pages = []
-    for getter_name in ("GetOEMCP", "GetACP"):
-        getter = getattr(kernel32, getter_name)
-        getter.argtypes = []
-        getter.restype = ctypes.c_uint
-        page = int(getter())
-        if page > 0:
-            encoding = f"cp{page}"
-            if encoding not in pages:
-                pages.append(encoding)
-    return tuple(pages)
-
-
-def _decode_process_output(payload: bytes) -> str:
-    """Decode trusted Windows tool output deterministically and fail closed."""
-    if payload.startswith((b"\\xff\\xfe", b"\\xfe\\xff")):
-        return payload.decode("utf-16")
-    if payload.startswith(b"\\xef\\xbb\\xbf"):
-        return payload.decode("utf-8-sig")
-    errors = []
-    for encoding in ("utf-8", *_windows_code_pages()):
-        try:
-            return payload.decode(encoding)
-        except (UnicodeDecodeError, LookupError) as exc:
-            errors.append(f"{encoding}: {exc}")
-    raise UnicodeError("unable to decode subprocess output; " + "; ".join(errors))
-
-
 def _run(exe: Path, *args: str, timeout: int = 10) -> str:
-    completed = subprocess.run([str(exe), *args], capture_output=True,
-                               timeout=timeout, check=True,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
-    return _decode_process_output(completed.stdout)
+    return hardware_host.run_windows_text(
+        [exe, *args], timeout=timeout, check=True
+    ).stdout
 
 
 def observe_operating(executables: Path) -> dict[str, Any]:
@@ -180,6 +148,7 @@ $ErrorActionPreference = 'Stop'
 """
         result["cim"] = json.loads(_run(system / "WindowsPowerShell/v1.0/powershell.exe",
                                        "-NoProfile", "-NonInteractive", "-Command", query))
+        result["virtualization_probe"] = hardware_host.windows_virtualization_probe()
         with tempfile.TemporaryDirectory(prefix="nw11-dxdiag-") as directory:
             xml = Path(directory) / "dxdiag.xml"
             _run(system / "dxdiag.exe", "/whql:off", "/x", str(xml), timeout=60)
@@ -214,17 +183,21 @@ def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any
     try:
         if "unavailable" in raw:
             return None
+        probe = raw.get("virtualization_probe")
+        host_evaluation = hardware_host.evaluate_physical_virtualization_probe(probe)
+        if host_evaluation["valid"] is not True:
+            return None
         cim = raw["cim"]
         system = cim["system"]
         manufacturer, model = _text(system["Manufacturer"]), _text(system["Model"])
-        vm = re.search(r"virtual|vmware|qemu|kvm|hyper-v|xen|virtualbox|parallels",
-                       f"{manufacturer} {model}", flags=re.IGNORECASE)
-        # A Windows hypervisor can be active on a physical host because of VBS,
-        # Hyper-V or WSL2. Reject hosts that identify as virtual machines, but do
-        # not treat HypervisorPresent alone as proof that the measured GPU is
-        # virtualized; NVIDIA's per-GPU virtualization state is checked below.
         hypervisor_present = system["HypervisorPresent"]
-        if type(hypervisor_present) is not bool or vm or system["PCSystemType"] not in (1, 3):
+        if (
+            type(hypervisor_present) is not bool
+            or system["PCSystemType"] not in (1, 3)
+            or hypervisor_present is not probe.get("hypervisor_present")
+            or manufacturer.casefold() != _text(probe.get("manufacturer")).casefold()
+            or model.casefold() != _text(probe.get("model")).casefold()
+        ):
             return None
         processors = [{"model": _text(item["Name"]), "physical_cores": item["NumberOfCores"]}
                       for item in cim["processor"]]
@@ -245,16 +218,19 @@ def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any
         device_id, vendor_id = adapter["device_id"], adapter["vendor_id"]
         query_pci = (device_id << 16) | vendor_id
         def pci_match(gpu: ET.Element) -> bool:
-            observed = _text(gpu.findtext("pci/pci_device_id"))
             try:
-                return int(observed, 16) == query_pci
+                return hardware_host.parse_pci_hex(
+                    gpu.findtext("pci/pci_device_id")
+                ) == query_pci
             except ValueError:
                 return False
         gpu, = [item for item in root.findall("gpu") if pci_match(item)]
         virtualization = _text(gpu.findtext("gpu_virtualization_mode/virtualization_mode"))
         if virtualization.casefold() != "none":
             return None
-        if int(_text(gpu.findtext("pci/pci_sub_system_id")), 16) != adapter["subsystem_id"]:
+        if hardware_host.parse_pci_hex(
+            gpu.findtext("pci/pci_sub_system_id")
+        ) != adapter["subsystem_id"]:
             return None
         displays = [row for row in raw["display_devices"] if
                     str(row.get("VendorID", "")).casefold() == f"0x{vendor_id:04x}"
@@ -282,9 +258,13 @@ def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any
             "execution_environment": {
                 "kind": "physical",
                 "hypervisor_present": hypervisor_present,
+                "hypervisor_explained_by_vbs": host_evaluation[
+                    "hypervisor_explained_by_vbs"
+                ],
                 "gpu_virtualization_mode": virtualization,
                 "documentation": (
-                    "Windows hypervisor present; NVIDIA reports the measured GPU virtualization mode as None."
+                    "Shared physical-host probe accepts the active hypervisor because VBS "
+                    "independently explains it; NVIDIA reports GPU virtualization mode None."
                     if hypervisor_present else ""
                 ),
             },
