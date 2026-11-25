@@ -219,9 +219,12 @@ def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any
         manufacturer, model = _text(system["Manufacturer"]), _text(system["Model"])
         vm = re.search(r"virtual|vmware|qemu|kvm|hyper-v|xen|virtualbox|parallels",
                        f"{manufacturer} {model}", flags=re.IGNORECASE)
-        # Hypervisor-present observations require independent passthrough
-        # documentation. This automatic collector does not infer it from PCI IDs.
-        if system["HypervisorPresent"] is not False or vm or system["PCSystemType"] not in (1, 3):
+        # A Windows hypervisor can be active on a physical host because of VBS,
+        # Hyper-V or WSL2. Reject hosts that identify as virtual machines, but do
+        # not treat HypervisorPresent alone as proof that the measured GPU is
+        # virtualized; NVIDIA's per-GPU virtualization state is checked below.
+        hypervisor_present = system["HypervisorPresent"]
+        if type(hypervisor_present) is not bool or vm or system["PCSystemType"] not in (1, 3):
             return None
         processors = [{"model": _text(item["Name"]), "physical_cores": item["NumberOfCores"]}
                       for item in cim["processor"]]
@@ -242,9 +245,15 @@ def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any
         device_id, vendor_id = adapter["device_id"], adapter["vendor_id"]
         query_pci = (device_id << 16) | vendor_id
         def pci_match(gpu: ET.Element) -> bool:
-            observed = gpu.findtext("pci/pci_device_id") or ""
-            return observed.lower() == f"0x{query_pci:08x}"
+            observed = _text(gpu.findtext("pci/pci_device_id"))
+            try:
+                return int(observed, 16) == query_pci
+            except ValueError:
+                return False
         gpu, = [item for item in root.findall("gpu") if pci_match(item)]
+        virtualization = _text(gpu.findtext("gpu_virtualization_mode/virtualization_mode"))
+        if virtualization.casefold() != "none":
+            return None
         if int(_text(gpu.findtext("pci/pci_sub_system_id")), 16) != adapter["subsystem_id"]:
             return None
         displays = [row for row in raw["display_devices"] if
@@ -270,7 +279,15 @@ def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any
         ):
             return None
         return {
-            "execution_environment": {"kind": "physical", "hypervisor_present": False, "documentation": ""},
+            "execution_environment": {
+                "kind": "physical",
+                "hypervisor_present": hypervisor_present,
+                "gpu_virtualization_mode": virtualization,
+                "documentation": (
+                    "Windows hypervisor present; NVIDIA reports the measured GPU virtualization mode as None."
+                    if hypervisor_present else ""
+                ),
+            },
             "host": {"manufacturer": manufacturer, "model": model, "cpu": processors,
                      "motherboard": board, "memory_bytes": memory, "logical_processors": logical},
             "environment": {
