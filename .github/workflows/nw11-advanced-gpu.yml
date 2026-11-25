@@ -444,7 +444,7 @@ jobs:
         run: |
           $bundle = "build/nw11-bundle-${{ matrix.slug }}"
           $output = "build/nw11-bundle-${{ matrix.slug }}-dry-run"
-          & (Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1") -BundleRoot $bundle -ExpectedCommit "${{ steps.revision.outputs.commit }}" -OutputDirectory $output -TrustRecord "$bundle-verification.json" -DryRun
+          & pwsh -NoProfile -File (Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1") -BundleRoot $bundle -ExpectedCommit "${{ steps.revision.outputs.commit }}" -OutputDirectory $output -TrustRecord "$bundle-verification.json" -DryRun
           if ($LASTEXITCODE -ne 0) { throw "self-contained validation bundle dry-run failed with exit code $LASTEXITCODE" }
           $summaries = @(Get-ChildItem -Recurse $output -Filter "summary.json")
           if ($summaries.Count -ne 1) { throw "dry run must emit exactly one summary" }
@@ -458,7 +458,7 @@ jobs:
           $unexpected = Join-Path $bundle "tools/nw11/nw11_evidence.pyc"
           try {
             Set-Content -LiteralPath $unexpected -Value "unexpected bytecode"
-            & (Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1") -BundleRoot $bundle -OutputDirectory "$bundle-unlisted-test" -TrustRecord "$bundle-verification.json" -DryRun
+            & pwsh -NoProfile -File (Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1") -BundleRoot $bundle -OutputDirectory "$bundle-unlisted-test" -TrustRecord "$bundle-verification.json" -DryRun
             if ($LASTEXITCODE -ne 6) { throw "launcher did not reject the unlisted Python import" }
           } finally {
             Remove-Item -LiteralPath $unexpected -Force
@@ -536,7 +536,7 @@ jobs:
           $trust = Join-Path $env:RUNNER_TEMP "nw11-trust-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}/nw11-bundle-${{ matrix.slug }}-verification.json"
           if (-not (Test-Path -LiteralPath $launcher)) { throw "bundle launcher is missing" }
           $evidenceDirectory = Join-Path $env:RUNNER_TEMP "nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}"
-          & $launcher `
+          & pwsh -NoProfile -File $launcher `
             -BundleRoot $bundle `
             -TrustRecord $trust `
             -ExpectedCommit "${{ github.event.pull_request.head.sha || github.sha }}" `
