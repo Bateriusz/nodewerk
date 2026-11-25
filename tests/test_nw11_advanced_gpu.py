@@ -23,6 +23,7 @@ import nw11_evidence as evidence  # noqa: E402
 import nw11_experiment as experiment  # noqa: E402
 import nw11_followup as followup  # noqa: E402
 import nw11_measurements as measurements  # noqa: E402
+import nw11_host as host  # noqa: E402
 from nw11_host import MEASURED_APPLICATIONS  # noqa: E402
 import nw11_graph_scene as graph_scene  # noqa: E402
 import nw11_pe_dependencies as pe_dependencies  # noqa: E402
@@ -935,6 +936,13 @@ def test_nw11_runtime_floors_and_future_dxr_tier() -> None:
     observation["os_build"] = "10.0.22631"
     observation["driver_version"] = "32.0.16.1087"
     assert capability.evaluate_observation(ray, observation)["status"] == "unsupported"
+
+
+def test_nw11_host_output_decoding_is_independent_of_cp1250(monkeypatch) -> None:
+    monkeypatch.setattr(host, "_windows_code_pages", lambda: ("cp852", "cp1250"))
+    payload = b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c \\x98"
+    decoded = host._decode_process_output(payload)
+    assert decoded.endswith("ś")
 
 
 def test_nw11_launcher_is_one_command_and_verifies_before_measuring() -> None:
