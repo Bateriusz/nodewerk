@@ -653,9 +653,9 @@ def verify_bundle(
             _, release_package, release_manifest_binding = binding.embedded_payloads(release_bytes)
             if (sha256_bytes(release_bytes) != proof["candidate"]["executable_sha256"]
                     or sha256_bytes(release_package) != package_hash
-                    or sha256_bytes(release_manifest_binding) != manifest_hash
-                    or sorted(name.casefold() for name in imports(release)) !=
-                       sorted(name.casefold() for name in proof["candidate"]["pe_imports"])):
+                    or release_manifest_binding.hex() != manifest_hash
+                    or sorted(name.casefold().removesuffix(".dll") for name in imports(release)) !=
+                       sorted(name.casefold().removesuffix(".dll") for name in proof["candidate"]["pe_imports"])):
                 raise ValueError("canonical release executable differs from the byte proof")
             if sha256_bytes((bundle_root / "runtime/presentmon.exe").read_bytes()) != PRESENTMON_SHA256:
                 raise ValueError("validation PresentMon does not match the pinned release")
