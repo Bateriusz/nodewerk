@@ -69,6 +69,7 @@ jobs:
           tools/nw11_build_bundle.py tools/nw11_verify.py tools/nw11_graph_scene.py
           tools/nw11_toolchain_identity.py tools/nw11_shader_payloads.py
           tools/nw11_pe_dependencies.py tools/nw11_pack_python_runtime.py
+          tools/hardware_evidence_host.py
           tools/nw11_host.py tools/nw11_cold_start.py tools/nw11_measurements.py tools/nw11_production_binding.py
           tools/nw11/validate-device.py
           tools/nw11/collect-evidence.py tools/nw11/compare-captures.py
@@ -78,6 +79,8 @@ jobs:
           python tools/nw11_verify.py self-check
       - name: Run NW-11 contract tests
         run: pytest -q -k nw11
+      - name: Run shared physical-host regression tests
+        run: pytest -q tests/test_hardware_evidence_host.py
       - name: Absent-feature, malformed-manifest, stale-evidence & zero-cost stripping checks
         run: pytest -q -k "nw11 and (capability_absence or malformed or stale or zero_cost or initialization_failure)"
       - name: Reproducibility and per-device decision isolation checks
