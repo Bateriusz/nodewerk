@@ -106,8 +106,6 @@ int main(int argc, char** argv) {
             options.role = text;
         } else if (Consume(index, argc, argv, "--artifact-path", text)) {
             options.artifact_path = text;
-        } else if (Consume(index, argc, argv, "--prepare-cache", text)) {
-            options.cache_preparation_json = text;
         } else if (Consume(index, argc, argv, "--launch-id", text)) {
             options.launch_id = text;
         } else if (Consume(index, argc, argv, "--commit", text)) {

@@ -11,6 +11,8 @@ from typing import Any
 import nw11_bundle as bundle
 import nw11_capability as capability
 import nw11_contract as contract
+import nw11_cold_start
+import nw11_host
 import nw11_evidence as evidence
 from nw07_presentmon_collector import extract_samples
 
@@ -188,6 +190,57 @@ def presentation_samples(path: Path, launch: dict, timing: dict, minimum: int) -
             "dropped_presents": dropped, "displayed_presents": len(rows) - dropped}
 
 
+def operating_conditions(folder: Path, launch: dict, report: dict, host: dict,
+                         adapter: dict, initial: dict) -> dict:
+    raw = load_json(folder / "operating-conditions.json")
+    for key in ("launch_id", "process_id", "executable_sha256"):
+        _equal(raw.get(key), launch[key], f"operating conditions {key}")
+    timing = report["timing"]
+    windows = raw["window"]
+    if not isinstance(windows, list):
+        raise evidence.EvidenceError("Operating sample windows must be a list")
+    start, end = launch["start_qpc_ms"], launch["end_qpc_ms"]
+    conditions = [(raw["before"], 0, start), (raw["after"], end, float("inf"))]
+    reasons = []
+    if launch["mode"] == "warm":
+        if len(windows) != 4:
+            reasons.append("four in-window operating samples are required")
+        conditions.extend((row, timing["measurement_start_qpc_ms"], timing["measurement_end_qpc_ms"])
+                          for row in windows)
+    elif windows != []:
+        raise evidence.EvidenceError("Unexpected operating samples for a startup launch")
+    stable = ("windows_power_plan", "pcie_power_management", "gpu_uuid", "gpu_pci_bus",
+              "nvidia_driver_reported_version", "nvidia_power_management_mode")
+    telemetry = []
+    for sample, earliest, latest in conditions:
+        a, b = sample["start_qpc_ms"], sample["end_qpc_ms"]
+        if (type(a) not in (int, float) or type(b) not in (int, float)
+                or not math.isfinite(a) or not math.isfinite(b) or not earliest <= a <= b <= latest):
+            reasons.append("operating sample did not coincide with its declared process interval")
+            continue
+        operating = sample["observation"]
+        required = {"power_plan", "pcie_power", "nvidia_smi_xml", "nvidia_power_profiles"}
+        observed = (nw11_host.qualify(host | operating, adapter)
+                    if isinstance(operating, dict) and required <= operating.keys() else None)
+        if observed is None:
+            reasons.append("operating controls or clock and thermal telemetry are unavailable")
+            continue
+        environment = observed["environment"]
+        for key in stable:
+            if environment[key] != initial[key]:
+                reasons.append(f"{key} changed after preflight")
+        if environment["gpu_power_state"]["enforced_limit_w"] != initial["gpu_power_state"]["enforced_limit_w"]:
+            reasons.append("GPU enforced power limit changed after preflight")
+        if any(clock["maximum_mhz"] != initial["gpu_clocks"][name]["maximum_mhz"]
+               for name, clock in environment["gpu_clocks"].items()):
+            reasons.append("GPU maximum clocks changed after preflight")
+        telemetry.append({"start_qpc_ms": a, "end_qpc_ms": b, "environment": environment})
+    if any(first["end_qpc_ms"] > second["start_qpc_ms"] for first, second in zip(windows, windows[1:])):
+        reasons.append("operating measurement windows overlap or are out of order")
+    return {"status": "pending" if reasons else "matched", "reasons": sorted(set(reasons)),
+            "samples": sorted(telemetry, key=lambda sample: sample["start_qpc_ms"])}
+
+
 def _warm_run(folder: Path, launch: dict, report: dict, protocol: dict) -> dict:
     timing = report["timing"]
     warmup = timing["warmup_start_qpc_ms"]
@@ -225,25 +278,6 @@ def _comparison_tool() -> Any:
     if not path.exists():
         path = here / "nw11/compare-captures.py"
     return runpy.run_path(str(path))["compare"]
-
-
-def first_release_present(trace: Path, process_id: int, start_qpc: float) -> dict:
-    try:
-        stream = trace.open(encoding="utf-8-sig", newline="")
-    except OSError as exc:
-        raise LookupError("Presentation trace is unavailable") from exc
-    with stream:
-        for row in csv.DictReader(stream):
-            if row.get("ProcessID") != str(process_id):
-                continue
-            try:
-                submitted, delay = float(row["QPCTime"]), float(row["msUntilDisplayed"])
-            except (KeyError, ValueError, TypeError):
-                continue
-            shown = submitted + delay
-            if math.isfinite(shown) and delay > 0 and start_qpc <= submitted <= shown:
-                return {"submitted_qpc_ms": submitted, "displayed_qpc_ms": shown}
-    raise LookupError("No displayed presentation for the release process")
 
 
 def numeric_loop(root: Path, release_start: Path, release_boundary: Path) -> dict:
@@ -330,17 +364,21 @@ def _canonical_capture(root: Path, directory: Path, manifest: dict, common: dict
                 or command[1:] != ["--tick", str(tick), "--frames", "1"]
                 or Path(command[0].replace("\\", "/")).name != "canonical_release.exe"):
             raise evidence.EvidenceError(f"Invalid canonical release execution at {tick}")
-        trace = release / f"{tick}-present.csv"
-        _equal(contract.sha256_file(trace), execution["trace_sha256"], "canonical ETW trace")
-        try:
-            presented = first_release_present(trace, identity[0], execution["process_started_qpc_ms"])
-        except LookupError as exc:
-            raise evidence.EvidenceError("Canonical release never presented") from exc
-        _equal(presented, execution["first_presentation"], "first release presentation")
-        deadline = execution["process_started_qpc_ms"] + contract.PROCESS_START_TO_FIRST_PRESENT_MS
-        if (presented["displayed_qpc_ms"] > deadline
-                or not presented["displayed_qpc_ms"] <= execution["capture_started_qpc_ms"] <= deadline + 500):
-            raise evidence.EvidenceError("Canonical capture did not follow the first displayed frame")
+        display_record = release / f"{tick}-display.json"
+        _equal(contract.sha256_file(display_record), execution["display_observation_sha256"],
+               "canonical display observation hash")
+        _equal(contract.sha256_file(root / "bin/nw11_capability_probe.exe"),
+               execution["capture_probe_sha256"], "canonical display observer executable")
+        _equal(contract.sha256_file(reference_folder / f"{tick}.rgba"),
+               execution["reference_sha256"], "canonical display observer reference")
+        displayed = load_json(display_record)
+        _equal(displayed.get("source"), "dwm_composed_client", "canonical display observation source")
+        _equal(displayed.get("process_id"), identity[0], "canonical display observation PID")
+        stamp = displayed.get("observed_qpc_ms")
+        start = execution["process_started_qpc_ms"]
+        if (type(stamp) not in (int, float) or not math.isfinite(stamp)
+                or not start <= stamp <= start + contract.PROCESS_START_TO_FIRST_PRESENT_MS):
+            raise evidence.EvidenceError("Canonical scene was not observed on the desktop within the startup ceiling")
         log = release / f"{tick}.log"
         _equal(contract.sha256_file(log), execution["player_log_sha256"], "canonical release process log")
         if f"NW05_EXPLICIT_TICK={tick}" not in log.read_text(encoding="utf-8").splitlines():
@@ -380,7 +418,8 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
     observation = load_json(snapshot)
     validate_release_adapter(observation)
     host_path = directory / "host-observation.json"
-    common, optional = evaluate_profiles(root, manifest, observation, load_json(host_path))
+    host = load_json(host_path)
+    common, optional = evaluate_profiles(root, manifest, observation, host)
     for name, decision in (("common-eligibility.json", common), ("eligibility.json", optional)):
         _equal(load_json(directory / name), decision, name)
     if (common["status"] != "eligible" or not common["physical_device_tier"]
@@ -395,45 +434,47 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
     launch_ids: set = set()
     runs = {}
     captures = {}
+    audit = load_json(directory / "reboot-audit.json")
+    for key in ("commit", "bundle_id"):
+        _equal(audit.get(key), manifest[key], f"reboot audit {key}")
+    if not 0 < audit["start_filetime"] <= audit["end_filetime"] or audit["collected_by_process_id"] <= 0:
+        raise evidence.EvidenceError("Invalid reboot audit collection identity")
     for role, relative in roles.items():
         path = directory / "raw" / role
         decision = optional if role == "variant" else common
         startup_launch, startup = _validate_launch(path / "startup", manifest, decision,
                                                    relative, "startup", role, launch_ids, protocol)
-        reset = load_json(path / "cache-execution.json")
-        preparation = load_json(path / "cache-preparation.json")
-        expected_cache = {
-            "format": "nw11-executable-cache-preparation.v1", "commit": manifest["commit"],
-            "executable_sha256": contract.sha256_file(root / relative),
-            "launch_id": reset["launch_id"], "process_id": reset["process_id"],
-            "adapter_luid": decision["adapter"]["adapter_luid"], "driver_cache_state": "unverified",
-        }
-        for key, value in expected_cache.items():
-            _equal(preparation.get(key), value, f"{role} cache preparation {key}")
-        if (reset["artifact_path"] != relative or reset["commit"] != manifest["commit"]
-                or reset["executable_sha256"] != preparation["executable_sha256"] or reset["exit_code"] != 0
-                or reset["result_sha256"] != contract.sha256_file(path / "cache-preparation.json")
-                or not probe["end_filetime"] <= reset["start_filetime"] <= preparation["process_creation_filetime"]
-                <= reset["end_filetime"] <= startup_launch["start_filetime"]
-                or reset["launch_id"] in launch_ids
-                or any(type(preparation.get(key)) is not int for key in ("windows_cache_hresult", "driver_hint_hresult"))):
-            raise evidence.EvidenceError(f"Invalid cache preparation for {role}")
-        launch_ids.add(reset["launch_id"])
+        if not probe["end_filetime"] <= startup_launch["start_filetime"] < startup_launch["end_filetime"] <= audit["start_filetime"]:
+            raise evidence.EvidenceError(f"Invalid reboot evidence timing for {role}")
+        preparation = nw11_cold_start.qualify(audit["observation"], startup_launch, startup,
+                                             audit["start_filetime"], audit["end_filetime"])
+        initial = common["physical_provenance"]["environment"]
+        startup_conditions = operating_conditions(path / "startup", startup_launch, startup,
+                                                   host, observation["adapter"], initial)
         processes = []
-        previous_end = startup_launch["end_filetime"]
+        previous_end = audit["end_filetime"]
         for index in range(1, protocol["runs"] + 1):
             folder = path / f"run-{index}"
             launch, report = _validate_launch(folder, manifest, decision, relative, "warm", role, launch_ids, protocol)
             if launch["start_filetime"] < previous_end:
                 raise evidence.EvidenceError("Warm run started before the preceding process exited")
             previous_end = launch["end_filetime"]
-            processes.append(_warm_run(folder, launch, report, protocol))
+            processes.append({
+                **_warm_run(folder, launch, report, protocol),
+                "operating_conditions": operating_conditions(folder, launch, report,
+                                                              host, observation["adapter"], initial),
+            })
         captures[role] = _capture(folder, report)
+        startup_ms = startup["measurement"]["process_start_to_first_present_ms"]
+        cold = preparation["status"] == "cold_driver_cache" and startup_conditions["status"] == "matched"
+        operating = [startup_conditions, *(run["operating_conditions"] for run in processes)]
         metrics = {
             "process_runs": processes,
-            "cold_initialization_ms": None,
-            "unqualified_startup_ms": startup["measurement"]["process_start_to_first_present_ms"],
+            "cold_initialization_ms": startup_ms if cold else None,
+            "unqualified_startup_ms": None if cold else startup_ms,
             "cache_preparation": preparation,
+            "operating_conditions": operating,
+            "operating_conditions_matched": all(item["status"] == "matched" for item in operating),
             "peak_engine_committed_gpu_bytes": max(startup["measurement"]["peak_engine_committed_gpu_bytes"],
                                                    *(run["peak_engine_committed_gpu_bytes"] for run in processes)),
             **{key: report["measurement"][key] for key in ("shader_count", "shader_ids", "distribution_bytes")},
@@ -457,7 +498,7 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
               if path.is_file() and path.suffix in {".json", ".csv", ".rgba", ".log"}}
     inputs[snapshot.name] = contract.sha256_file(snapshot)
     inputs[host_path.name] = contract.sha256_file(host_path)
-    for name in ("common-eligibility.json", "eligibility.json", "probe-execution.json"):
+    for name in ("common-eligibility.json", "eligibility.json", "probe-execution.json", "reboot-audit.json"):
         inputs[name] = contract.sha256_file(directory / name)
     return {
         "format": evidence.EVIDENCE_FORMAT, "version": evidence.EVIDENCE_VERSION,

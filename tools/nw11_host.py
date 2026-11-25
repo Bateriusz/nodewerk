@@ -103,16 +103,38 @@ def _power_profiles(system: Path, executables: Path) -> dict[str, dict]:
     return modes
 
 
+def _system() -> Path:
+    return Path(os.environ["SystemRoot"]) / "System32"
+
+
+def _run(exe: Path, *args: str, timeout: int = 10) -> str:
+    return subprocess.run([str(exe), *args], capture_output=True, text=True,
+                          timeout=timeout, check=True,
+                          creationflags=subprocess.CREATE_NO_WINDOW).stdout
+
+
+def observe_operating(executables: Path) -> dict[str, Any]:
+    """Read matching controls and instantaneous clock/thermal telemetry."""
+    system = _system()
+    try:
+        nv_locations = (system / "nvidia-smi.exe",
+                        Path(os.environ.get("ProgramW6432", "C:/Program Files")) /
+                        "NVIDIA Corporation/NVSMI/nvidia-smi.exe")
+        nv_smi = next(path for path in nv_locations if path.is_file())
+        return {
+            "power_plan": _run(system / "powercfg.exe", "/getactivescheme"),
+            "pcie_power": _run(system / "powercfg.exe", "/query", "SCHEME_CURRENT", "SUB_PCIEXPRESS", "ASPM"),
+            "nvidia_smi_xml": _run(nv_smi, "-q", "-x"),
+            "nvidia_power_profiles": _power_profiles(system, executables),
+        }
+    except (OSError, AttributeError, ValueError, StopIteration, subprocess.SubprocessError) as exc:
+        return {"unavailable": str(exc)}
+
+
 def observe(executables: Path) -> dict[str, Any]:
     """Collect OS and NVIDIA driver telemetry using installed runtime tools."""
-    system = Path(os.environ["SystemRoot"]) / "System32"
-
-    def run(exe: Path, *args: str, timeout: int = 20) -> str:
-        return subprocess.run([str(exe), *args], capture_output=True, text=True,
-                              timeout=timeout, check=True,
-                              creationflags=subprocess.CREATE_NO_WINDOW).stdout
-
-    result = {}
+    system = _system()
+    result = observe_operating(executables)
     try:
         query = """
 $ErrorActionPreference = 'Stop'
@@ -122,20 +144,11 @@ $ErrorActionPreference = 'Stop'
   motherboard = @(Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer,Product)
 } | ConvertTo-Json -Compress -Depth 4
 """
-        result["cim"] = json.loads(run(system / "WindowsPowerShell/v1.0/powershell.exe",
+        result["cim"] = json.loads(_run(system / "WindowsPowerShell/v1.0/powershell.exe",
                                        "-NoProfile", "-NonInteractive", "-Command", query))
-        result["power_plan"] = run(system / "powercfg.exe", "/getactivescheme")
-        result["pcie_power"] = run(system / "powercfg.exe", "/query", "SCHEME_CURRENT",
-                                   "SUB_PCIEXPRESS", "ASPM")
-        nv_locations = (system / "nvidia-smi.exe",
-                        Path(os.environ.get("ProgramW6432", "C:/Program Files")) /
-                        "NVIDIA Corporation/NVSMI/nvidia-smi.exe")
-        nv_smi = next(path for path in nv_locations if path.is_file())
-        result["nvidia_smi_xml"] = run(nv_smi, "-q", "-x")
-        result["nvidia_power_profiles"] = _power_profiles(system, executables)
         with tempfile.TemporaryDirectory(prefix="nw11-dxdiag-") as directory:
             xml = Path(directory) / "dxdiag.xml"
-            run(system / "dxdiag.exe", "/whql:off", "/x", str(xml), timeout=60)
+            _run(system / "dxdiag.exe", "/whql:off", "/x", str(xml), timeout=60)
             result["display_devices"] = [
                 {child.tag: child.text for child in item
                  if child.tag in {"DeviceID", "VendorID", "SubSysID", "DriverModel"}}

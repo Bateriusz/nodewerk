@@ -34,6 +34,7 @@ namespace {
 
 constexpr int kExitOk = 0;
 constexpr int kExitMalformedArgs = 2;
+constexpr int kExitUnsupported = 3;
 constexpr int kExitInitializationFailed = 4;
 
 struct Options {
@@ -307,9 +308,10 @@ std::string JsonNumber(unsigned int value) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc == 4 && std::strcmp(argv[1], "--capture-release-pid") == 0) {
+    if (argc == 6 && std::strcmp(argv[1], "--capture-release-pid") == 0) {
         const auto pid = static_cast<DWORD>(std::strtoul(argv[2], nullptr, 10));
-        return nw11::CaptureReleaseFrame(pid, argv[3]) ? kExitOk : kExitInitializationFailed;
+        return nw11::CaptureReleaseFrame(pid, argv[3], argv[4], std::strtod(argv[5], nullptr))
+            ? kExitOk : kExitInitializationFailed;
     }
     Options options;
     if (!ParseArguments(argc, argv, options)) {
@@ -418,9 +420,11 @@ int main(int argc, char** argv) {
     DXGI_ADAPTER_DESC1 description = best_desc;
 
     ComPtr<ID3D12Device> device;
-    hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device));
+    // A successful device at the D3D12 minimum lets the feature query prove
+    // whether FL12.0 is missing. Creation failure alone says nothing about it.
+    hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
     if (FAILED(hr) || device == nullptr) {
-        return fail("D3D12CreateDevice(D3D_FEATURE_LEVEL_12_0)", FAILED(hr) ? hr : E_POINTER);
+        return fail("D3D12CreateDevice(D3D_FEATURE_LEVEL_11_0)", FAILED(hr) ? hr : E_POINTER);
     }
 
     D3D12_FEATURE_DATA_FEATURE_LEVELS levels{};
@@ -428,12 +432,19 @@ int main(int argc, char** argv) {
         D3D_FEATURE_LEVEL_12_2,
         D3D_FEATURE_LEVEL_12_1,
         D3D_FEATURE_LEVEL_12_0,
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
     };
     levels.NumFeatureLevels = static_cast<UINT>(sizeof(requested_levels) / sizeof(requested_levels[0]));
     levels.pFeatureLevelsRequested = requested_levels;
     D3D_FEATURE_LEVEL feature_level = D3D_FEATURE_LEVEL_11_0;
-    const bool has_feature_level = SUCCEEDED(device->CheckFeatureSupport(
-            D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels)));
+    hr = device->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels));
+    if (hr == E_INVALIDARG) {
+        ++levels.pFeatureLevelsRequested;
+        --levels.NumFeatureLevels;
+        hr = device->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels));
+    }
+    const bool has_feature_level = SUCCEEDED(hr);
     if (has_feature_level) {
         feature_level = levels.MaxSupportedFeatureLevel;
     }
@@ -550,5 +561,6 @@ int main(int argc, char** argv) {
     payload += "  \"initialization\": {\"status\": \"ok\", \"stage\": \"device_and_capability_query\"}\n";
     payload += "}\n";
     WriteOutput(options.json_path, payload);
-    return kExitOk;
+    return has_feature_level && feature_level < D3D_FEATURE_LEVEL_12_0
+        ? kExitUnsupported : kExitOk;
 }

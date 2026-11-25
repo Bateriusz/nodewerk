@@ -43,6 +43,11 @@ try {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($manifest.commit -ne $trusted.commit -or $manifest.bundle_id -ne $trusted.bundle_id -or
         ($ExpectedCommit -and $manifest.commit -ne $ExpectedCommit)) { throw "Unexpected bundle identity" }
+    $launchers = @($manifest.artifacts | Where-Object { $_.path -ceq "run-validation.ps1" })
+    if ($launchers.Count -ne 1 -or
+        (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash -ne $launchers[0].sha256) {
+        throw "Trusted launcher differs from the CI-bound launcher"
+    }
 
     $verifiedFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     [void]$verifiedFiles.Add("bundle-manifest.json")

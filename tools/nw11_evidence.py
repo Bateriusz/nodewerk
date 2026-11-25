@@ -613,6 +613,12 @@ def _decide_group(
     except ExperimentError as exc:
         raise EvidenceError(f"invalid matched measurement: {exc}") from exc
     evaluation["aggregate"]["fallback"] = {**fallback_measurement, "process_runs": fallback_runs}
+    if any(run["measurement"].get("operating_conditions_matched") is False
+           for run in (baseline, variant, fallback)):
+        evaluation["status"] = "pending"
+        evaluation["satisfies_completion"] = False
+        evaluation["reasons"].append({"code": "NW11-OPERATING-CONDITIONS-PENDING",
+                                       "message": "Measured operating conditions were unavailable or changed"})
     if fallback_failures and evaluation["status"] == "accepted":
         evaluation["status"] = "rejected"
         evaluation["reasons"].extend({"code": "NW11-FALLBACK-REFERENCE-GATE", "message": reason}
@@ -768,6 +774,8 @@ def aggregate_verified_decisions(documents: list[dict[str, Any]], *,
     result["fallback_tested"] = all(item.get("fallback_tested") is True for item in devices)
     if cross_device_equivalence is not None:
         result["cross_device_equivalence"] = cross_device_equivalence
+        if cross_device_equivalence.get("status") == "failed":
+            result["aggregate_status"] = "failed"
     result["satisfies_completion"] = (
         _cross_device_verified(cross_device_equivalence or {}, devices)
         and {item["device_tier"] for item in devices} == set(DEVICE_TIERS)
@@ -781,12 +789,23 @@ def aggregate_verified_decisions(documents: list[dict[str, Any]], *,
 
 
 def _cross_device_verified(comparison: Mapping[str, Any], devices: list[dict[str, Any]]) -> bool:
-    from nw07_contract import REQUIRED_FIXED_TICKS
+    from nw07_contract import IMAGE_ABSOLUTE_TOLERANCE, REQUIRED_FIXED_TICKS
 
-    return (comparison.get("status") == "verified"
-            and set(comparison.get("rows", {})) == {str(tick) for tick in REQUIRED_FIXED_TICKS}
-            and all(item.get("canonical_release_correctness", {}).get("numeric_loop_boundary", {})
-                    .get("status") == "verified" for item in devices))
+    if comparison.get("status") != "verified":
+        return False
+    rows = _mapping(comparison.get("rows"), "cross-device comparison rows")
+    if (comparison.get("tolerance") != IMAGE_ABSOLUTE_TOLERANCE
+            or set(rows) != {str(tick) for tick in REQUIRED_FIXED_TICKS}):
+        raise EvidenceError("cross-device comparison changed the frozen ticks or image tolerance")
+    for tick, result in rows.items():
+        row = _mapping(result, f"cross-device comparison at tick {tick}")
+        for key in ("maximum_error", "maximum_relative_error"):
+            value = row.get(key)
+            ceiling = IMAGE_ABSOLUTE_TOLERANCE if key == "maximum_error" else float("inf")
+            if type(value) not in (int, float) or not 0 <= value <= ceiling or value == float("inf"):
+                raise EvidenceError(f"cross-device comparison has invalid {key} at tick {tick}")
+    return all(item.get("canonical_release_correctness", {}).get("numeric_loop_boundary", {})
+               .get("status") == "verified" for item in devices)
 
 
 def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -823,8 +842,12 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
             raise EvidenceError(
                 "a rejected bundle distribution budget cannot contain an accepted device"
             )
+    comparison = _mapping(record.get("cross_device_equivalence", {}), "cross-device comparison")
+    cross_verified = _cross_device_verified(comparison, devices)
+    if comparison.get("status") == "failed" and aggregate != "failed":
+        raise EvidenceError("aggregate status must preserve a cross-device correctness failure")
     if record.get("satisfies_completion") is True:
-        if not _cross_device_verified(record.get("cross_device_equivalence", {}), devices):
+        if not cross_verified:
             raise EvidenceError("completion requires verified crossed canonical release captures")
         if ({item["device_tier"] for item in devices} != set(DEVICE_TIERS)
                 or any(item["status"] not in {"accepted", "rejected"} for item in devices)):

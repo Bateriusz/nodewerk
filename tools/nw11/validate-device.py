@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import nw11_bundle as bundle
 import nw11_contract as contract
+import nw11_cold_start
 import nw11_host
 import nw11_measurements as measurements
 import nw11_verify as verifier
@@ -71,6 +72,12 @@ def presentmon(exe: Path, target: Path, output: Path, launch_id: str):
                 trace.wait(timeout=10)
 
 
+def operating_sample(root: Path) -> dict:
+    begin = qpc_ms()
+    sample = nw11_host.observe_operating(root / "bin")
+    return {"start_qpc_ms": begin, "end_qpc_ms": qpc_ms(), "observation": sample}
+
+
 def launch_renderer(root: Path, manifest: dict, settings: dict, decision: dict,
                     folder: Path, role: str, relative: str, *,
                     mode: str, capture: bool = False) -> dict:
@@ -107,12 +114,22 @@ def launch_renderer(root: Path, manifest: dict, settings: dict, decision: dict,
         if measured else contextlib.nullcontext()
     )
     with monitor, (folder / "renderer.log").open("wb") as log:
+        before = operating_sample(root) if role in measurements.ROLE_ORDER else None
+        windows = []
         start = filetime()
         start_qpc = qpc_ms()
         with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as player:
             timed_out = False
             try:
-                code = player.wait(timeout=105 if measured else 40)
+                if measured:
+                    for offset in (10, 25, 40, 55):
+                        try:
+                            player.wait(timeout=max(0, start_qpc / 1000 + offset - time.perf_counter()))
+                            break
+                        except subprocess.TimeoutExpired:
+                            windows.append(operating_sample(root))
+                deadline = 105 if measured else 40
+                code = player.wait(timeout=max(0, start_qpc / 1000 + deadline - time.perf_counter()))
             except subprocess.TimeoutExpired:
                 player.kill()
                 code = player.wait(timeout=10)
@@ -126,72 +143,42 @@ def launch_renderer(root: Path, manifest: dict, settings: dict, decision: dict,
                 "command": command, "timed_out": timed_out,
             }
             write_json(folder / "launch.json", launch)
+            if before is not None:
+                write_json(folder / "operating-conditions.json", {
+                    "launch_id": launch_id, "process_id": player.pid, "executable_sha256": artifact["sha256"],
+                    "before": before, "window": windows, "after": operating_sample(root),
+                })
             if timed_out or code != 0:
                 raise ValidationError(f"{role} {mode} exited {code}; see {folder / 'renderer.log'}")
     return launch
-
-
-@contextlib.contextmanager
-def release_trace(presentmon_exe: Path, target: Path, trace_path: Path):
-    # Legacy metrics emit the first presented frame without needing a second
-    # Present. The pinned collector flushes stdout after each CSV row.
-    command = [str(presentmon_exe), "--process_name", target.name, "--output_stdout",
-               "--v1_metrics", "--exclude_dropped", "--qpc_time_ms", "--session_name",
-               f"NW11-release-{uuid.uuid4().hex}", "--terminate_on_proc_exit",
-               "--timed", "12", "--terminate_after_timed"]
-    with trace_path.open("wb") as out, trace_path.with_suffix(".log").open("wb") as log:
-        with subprocess.Popen(command, stdout=out, stderr=log) as trace:
-            try:
-                time.sleep(0.3)
-                if trace.poll() is not None:
-                    raise ValidationError("Release presentation trace exited before launch")
-                yield
-                if trace.wait(timeout=14) != 0:
-                    raise ValidationError("Release presentation trace failed")
-            finally:
-                if trace.poll() is None:
-                    trace.kill()
-
-
-def wait_for_release_presentation(trace_path: Path, process: subprocess.Popen, started_qpc: float) -> dict:
-    deadline = started_qpc + contract.PROCESS_START_TO_FIRST_PRESENT_MS
-    while process.poll() is None and qpc_ms() <= deadline:
-        try:
-            present = measurements.first_release_present(trace_path, process.pid, started_qpc)
-        except LookupError:
-            time.sleep(0.01)
-            continue
-        if present["displayed_qpc_ms"] <= deadline:
-            return present
-        break
-    raise ValidationError("First visible release presentation was not observed within the startup ceiling")
 
 
 def capture_release(root: Path, manifest: dict, output: Path) -> None:
     relative = "bin/canonical_release.exe"
     release = checked_path(root, manifest, relative)
     probe = checked_path(root, manifest, "bin/nw11_capability_probe.exe")
-    monitor = checked_path(root, manifest, "runtime/presentmon.exe")
     output.mkdir()
     ticks = [*contract.REFERENCE_FIXED_TICKS, contract.LOOP_TICKS]
     images = []
     for tick in ticks:
         path = output / f"{tick}.rgba"
         command = [str(release), "--tick", str(tick), "--frames", "1"]
-        trace_path = output / f"{tick}-present.csv"
-        with release_trace(monitor, release, trace_path), (output / f"{tick}.log").open("wb") as log:
+        reference = output.parent / "canonical-reference" / f"{tick}.rgba"
+        capture_path = output / f"{tick}-display.json"
+        with (output / f"{tick}.log").open("wb") as log, capture_path.open("wb") as capture_log:
             start = filetime()
             started_qpc = qpc_ms()
             with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as player:
                 try:
-                    presentation = wait_for_release_presentation(trace_path, player, started_qpc)
-                    capture_started_qpc = qpc_ms()
-                    capture = subprocess.run([str(probe), "--capture-release-pid", str(player.pid), str(path)],
-                                             check=False, timeout=8)
+                    capture = subprocess.run(
+                        [str(probe), "--capture-release-pid", str(player.pid), str(path), str(reference),
+                         str(started_qpc + contract.PROCESS_START_TO_FIRST_PRESENT_MS)],
+                        stdout=capture_log, check=False, timeout=8)
                     exit_code = player.wait(timeout=10)
                 finally:
                     if player.poll() is None:
                         player.kill()
+                        player.wait(timeout=10)
         execution = {
             "commit": manifest["commit"], "bundle_id": manifest["bundle_id"],
             "executable_sha256": contract.sha256_file(release),
@@ -199,14 +186,16 @@ def capture_release(root: Path, manifest: dict, output: Path) -> None:
             "start_filetime": start, "end_filetime": filetime(),
             "player_exit_code": exit_code, "capture_exit_code": capture.returncode,
             "player_log_sha256": contract.sha256_file(output / f"{tick}.log"),
-            "trace_sha256": contract.sha256_file(trace_path),
+            "display_observation_sha256": contract.sha256_file(capture_path),
+            "capture_probe_sha256": contract.sha256_file(probe),
+            "reference_sha256": contract.sha256_file(reference),
             "process_started_qpc_ms": started_qpc,
-            "capture_started_qpc_ms": capture_started_qpc,
-            "first_presentation": presentation,
         }
         write_json(output / f"{tick}-execution.json", execution)
-        if capture.returncode != 0 or exit_code != 0:
-            raise ValidationError(f"Canonical release capture failed at tick {tick}")
+        if exit_code != 0:
+            raise ValidationError(f"Canonical release exited {exit_code} at tick {tick}")
+        if capture.returncode != 0:
+            raise ValidationError(f"Canonical release scene was not observed by the startup deadline at tick {tick}")
         images.append({"tick": tick, "path": path.name, "sha256": contract.sha256_file(path),
                        "width": contract.OUTPUT_WIDTH, "height": contract.OUTPUT_HEIGHT,
                        "format": "rgba32f"})
@@ -234,10 +223,15 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
         "process_id": probe_pid, "start_filetime": probe_start, "end_filetime": filetime(),
         "exit_code": probe_code,
     })
-    if probe_code != 0:
+    if probe_code not in (0, 3):
         result = measurements.load_json(observation_path)
         raise ValidationError(f"Capability probe failed: {result.get('initialization')}")
     observation = measurements.load_json(observation_path)
+    if probe_code == 3:
+        common, _ = measurements.evaluate_profiles(root, manifest, observation)
+        if common["status"] != "unsupported":
+            raise ValidationError("Probe shortfall did not match the queried production requirements")
+        raise ValidationError(f"Required common capability is unsupported: {common['diagnostics']}", 3)
     host = nw11_host.observe(root / "bin")
     write_json(output / "host-observation.json", host)
     common, optional = measurements.evaluate_profiles(root, manifest, observation, host)
@@ -259,31 +253,21 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
     measurements.validate_release_adapter(observation)
     settings = measurements.load_json(root / manifest["experiment_definition"]["path"])
     roles = measurements.role_paths(manifest, optional)
+    # All exact executables get their first-use launch before warming any arm.
+    for role, relative in roles.items():
+        decision = optional if role == "variant" else common
+        launch_renderer(root, manifest, settings, decision, output / "raw" / role / "startup",
+                        role, relative, mode="startup")
+    audit_start = filetime()
+    audit = nw11_cold_start.observe()
+    write_json(output / "reboot-audit.json", {
+        "commit": manifest["commit"], "bundle_id": manifest["bundle_id"],
+        "collected_by_process_id": os.getpid(), "start_filetime": audit_start, "end_filetime": filetime(),
+        "observation": audit,
+    })
     for role, relative in roles.items():
         directory = output / "raw" / role
-        directory.mkdir(parents=True)
         decision = optional if role == "variant" else common
-        cache_record = directory / "cache-preparation.json"
-        executable = checked_path(root, manifest, relative)
-        launch_id = uuid.uuid4().hex
-        reset_started = filetime()
-        with subprocess.Popen([str(executable), "--prepare-cache", str(cache_record),
-                               "--adapter-luid", decision["adapter"]["adapter_luid"],
-                               "--commit", manifest["commit"], "--launch-id", launch_id]) as process:
-            try:
-                cache_code = process.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                raise
-        if cache_code != 0:
-            raise ValidationError(f"{role} cache preparation could not produce an observation")
-        write_json(directory / "cache-execution.json",
-                   {"executable_sha256": contract.sha256_file(executable), "launch_id": launch_id,
-                    "artifact_path": relative, "commit": manifest["commit"], "process_id": process.pid,
-                    "start_filetime": reset_started, "end_filetime": filetime(),
-                    "exit_code": cache_code, "result_sha256": contract.sha256_file(cache_record)})
-        launch_renderer(root, manifest, settings, decision, directory / "startup",
-                        role, relative, mode="startup")
         for index in range(1, settings["protocol"]["runs"] + 1):
             launch_renderer(root, manifest, settings, decision,
                             directory / f"run-{index}", role, relative, mode="warm",

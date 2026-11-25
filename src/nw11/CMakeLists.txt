@@ -161,7 +161,7 @@ add_custom_target(nw11_all_shaders DEPENDS
 add_executable(nw11_capability_probe capability_probe.cpp)
 target_compile_features(nw11_capability_probe PRIVATE cxx_std_17)
 target_compile_definitions(nw11_capability_probe PRIVATE UNICODE _UNICODE)
-target_link_libraries(nw11_capability_probe PRIVATE d3d12 dxgi version gdi32 user32)
+target_link_libraries(nw11_capability_probe PRIVATE d3d12 dxgi version gdi32 user32 dwmapi)
 if(MSVC)
     target_compile_options(nw11_capability_probe PRIVATE /W4 /permissive- /EHsc /Brepro)
     target_link_options(nw11_capability_probe PRIVATE /Brepro /INCREMENTAL:NO)

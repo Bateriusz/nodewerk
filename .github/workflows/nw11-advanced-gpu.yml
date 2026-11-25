@@ -4,8 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       experiment_id:
-        description: "NW-11 experiment to validate physically (mesh or ray)"
-        required: false
+        description: "NW-11 experiment to validate after a full restart of both audited validation hosts"
+        type: choice
+        options:
+          - nw11.mesh-shader-vs-indexed.v1
+          - nw11.ray-query-vs-analytic-reflection.v1
+        required: true
         default: "nw11.mesh-shader-vs-indexed.v1"
   push:
     branches: [ main ]
@@ -65,7 +69,7 @@ jobs:
           tools/nw11_build_bundle.py tools/nw11_verify.py tools/nw11_graph_scene.py
           tools/nw11_toolchain_identity.py tools/nw11_shader_payloads.py
           tools/nw11_pe_dependencies.py tools/nw11_pack_python_runtime.py
-          tools/nw11_host.py tools/nw11_measurements.py tools/nw11_production_binding.py
+          tools/nw11_host.py tools/nw11_cold_start.py tools/nw11_measurements.py tools/nw11_production_binding.py
           tools/nw11/validate-device.py
           tools/nw11/collect-evidence.py tools/nw11/compare-captures.py
       - name: Validate schemas and tracked evidence state
@@ -318,7 +322,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/nw11_embed_production.py --proof build/nw11-common-proof --executables build/nw11-artifacts/independent --commit "${{ github.event.pull_request.head.sha || github.sha }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Exercise common and fallback D3D12 paths on WARP
+      - name: Exercise headless common and fallback D3D12 commands on WARP
         shell: pwsh
         run: |
           foreach ($name in @("nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic")) {
@@ -329,6 +333,19 @@ jobs:
             if ($report.measurement.gpu_time_samples.Count -lt 1) {
               throw "$name WARP smoke produced no GPU timestamp samples"
             }
+          }
+
+      - name: Exercise a windowed WARP swap chain and require Present
+        shell: pwsh
+        run: |
+          $reportPath = "build/nw11-windowed-warp.json"
+          & "build/nw11-artifacts/nw11_common_baseline.exe" --allow-software --benchmark-json $reportPath --warmup-seconds 0 --runs 1 --run-seconds 1
+          if ($LASTEXITCODE -ne 0) { throw "Windowed WARP command-path smoke failed" }
+          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          if ($report.measurement.presented_frames -lt 1 -or
+              $report.measurement.process_start_to_first_present_ms -le 0 -or
+              $report.measurement.cpu_submit_samples.Count -lt 1) {
+            throw "Windowed WARP did not observe a successful Present and CPU submission sample"
           }
 
       - name: Exercise eligible advanced paths on WARP and check absent features
@@ -439,31 +456,6 @@ jobs:
           if ($first.bundle_id -ne $second.bundle_id -or $first.manifest_sha256 -ne $second.manifest_sha256) {
             throw "Independent native build changed the validation bundle"
           }
-      - name: Prove the validation bundle runs with its bundled Python runtime
-        shell: pwsh
-        run: |
-          $bundle = "build/nw11-bundle-${{ matrix.slug }}"
-          $output = "build/nw11-bundle-${{ matrix.slug }}-dry-run"
-          & pwsh -NoProfile -File (Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1") -BundleRoot $bundle -ExpectedCommit "${{ steps.revision.outputs.commit }}" -OutputDirectory $output -TrustRecord "$bundle-verification.json" -DryRun
-          if ($LASTEXITCODE -ne 0) { throw "self-contained validation bundle dry-run failed with exit code $LASTEXITCODE" }
-          $summaries = @(Get-ChildItem -Recurse $output -Filter "summary.json")
-          if ($summaries.Count -ne 1) { throw "dry run must emit exactly one summary" }
-          $summaryPath = $summaries[0].FullName
-          $summary = Get-Content $summaryPath -Raw | ConvertFrom-Json
-          if ($summary.status -ne "dry_run") { throw "self-contained validation bundle did not complete dry-run verification" }
-      - name: Reject an unlisted Python import before starting the runtime
-        shell: pwsh
-        run: |
-          $bundle = "build/nw11-bundle-${{ matrix.slug }}"
-          $unexpected = Join-Path $bundle "tools/nw11/nw11_evidence.pyc"
-          try {
-            Set-Content -LiteralPath $unexpected -Value "unexpected bytecode"
-            $launcher = Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1"
-            $process = Start-Process pwsh -ArgumentList @("-NoProfile", "-File", $launcher, "-BundleRoot", $bundle, "-OutputDirectory", "$bundle-unlisted-test", "-TrustRecord", "$bundle-verification.json", "-DryRun") -Wait -PassThru -NoNewWindow
-            if ($process.ExitCode -ne 6) { throw "launcher did not reject the unlisted Python import; exit code $($process.ExitCode)" }
-          } finally {
-            Remove-Item -LiteralPath $unexpected -Force
-          }
       - name: Report integrity and actual distribution sizes
         shell: pwsh
         run: |
@@ -478,11 +470,18 @@ jobs:
           if ($accounting.adoption_budget_status -ne "accepted") {
             Write-Host "::warning::NW-11 ${{ matrix.slug }} bundle is identity-verified but adoption is rejected by the declared distribution budget."
           }
+      - name: Stage the CI trust record and its exact launcher
+        shell: pwsh
+        run: |
+          $trust = "build/nw11-trust-${{ matrix.slug }}"
+          New-Item -ItemType Directory -Path $trust | Out-Null
+          Copy-Item -LiteralPath "tools/nw11/run-validation.ps1" -Destination $trust
+          Copy-Item -LiteralPath "build/nw11-bundle-${{ matrix.slug }}-verification.json" -Destination $trust
       - name: Publish a separate CI trust record
         uses: actions/upload-artifact@v4
         with:
           name: nw11-validation-trust-${{ matrix.slug }}-${{ steps.revision.outputs.commit }}
-          path: build/nw11-bundle-${{ matrix.slug }}-verification.json
+          path: build/nw11-trust-${{ matrix.slug }}/
           if-no-files-found: error
       - name: Upload immutable bundle
         uses: actions/upload-artifact@v4
@@ -491,33 +490,63 @@ jobs:
           path: build/nw11-bundle-${{ matrix.slug }}/**
           if-no-files-found: error
 
+  verify-downloaded-validation:
+    name: Exercise downloaded CI validation artifacts (${{ matrix.slug }})
+    needs: build-validation-bundles
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        slug: [mesh, ray-query]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-trust-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/nw11 runner with spaces/trusted CI
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/nw11 runner with spaces/validation bundle
+      - name: Run the downloaded launcher and reject an unlisted import
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $root = Join-Path $env:RUNNER_TEMP "nw11 runner with spaces"
+          $bundle = Join-Path $root "validation bundle"
+          $launcher = Join-Path $root "trusted CI/run-validation.ps1"
+          $trust = Join-Path $root "trusted CI/nw11-bundle-${{ matrix.slug }}-verification.json"
+          $output = Join-Path $root "dry run evidence"
+          $arguments = @("-NoProfile", "-File", $launcher, "-BundleRoot", $bundle, "-TrustRecord", $trust,
+                         "-ExpectedCommit", "${{ github.event.pull_request.head.sha || github.sha }}",
+                         "-OutputDirectory", $output, "-DryRun")
+          & pwsh @arguments
+          if ($LASTEXITCODE -ne 0) { throw "downloaded validation dry-run failed with exit code $LASTEXITCODE" }
+          $summaries = @(Get-ChildItem -LiteralPath $output -Recurse -Filter "summary.json")
+          if ($summaries.Count -ne 1) { throw "dry run must emit exactly one summary" }
+          $summary = Get-Content -LiteralPath $summaries[0].FullName -Raw | ConvertFrom-Json
+          if ($summary.status -ne "dry_run") { throw "downloaded validation bundle did not complete dry-run verification" }
+          $unexpected = Join-Path $bundle "tools/nw11/nw11_evidence.pyc"
+          try {
+            Set-Content -LiteralPath $unexpected -Value "unexpected bytecode"
+            & pwsh @arguments
+            if ($LASTEXITCODE -ne 6) { throw "launcher did not reject the unlisted Python import" }
+          } finally {
+            Remove-Item -LiteralPath $unexpected -Force
+          }
+
   physical-validation:
     name: Physical validation (${{ matrix.device_tier }} / ${{ matrix.slug }})
     if: github.event_name == 'workflow_dispatch'
-    needs: build-validation-bundles
+    needs: [build-validation-bundles, verify-downloaded-validation]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - device_tier: desktop_ada_representative
-            slug: mesh
-          - device_tier: desktop_ada_representative
-            slug: ray-query
-          - device_tier: desktop_blackwell_representative
-            slug: mesh
-          - device_tier: desktop_blackwell_representative
-            slug: ray-query
+        device_tier: [desktop_ada_representative, desktop_blackwell_representative]
+        slug: ${{ fromJSON(inputs.experiment_id == 'nw11.ray-query-vs-analytic-reflection.v1' && '["ray-query"]' || '["mesh"]') }}
     runs-on:
       - self-hosted
       - windows
       - nw11-${{ matrix.device_tier }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          sparse-checkout: tools/nw11/run-validation.ps1
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
       - name: Download the trusted CI verification record
         uses: actions/download-artifact@v4
         with:
@@ -533,7 +562,7 @@ jobs:
         shell: pwsh
         run: |
           $bundle = Join-Path $env:RUNNER_TEMP "nw11-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}"
-          $launcher = Join-Path $env:GITHUB_WORKSPACE "tools/nw11/run-validation.ps1"
+          $launcher = Join-Path $env:RUNNER_TEMP "nw11-trust-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}/run-validation.ps1"
           $trust = Join-Path $env:RUNNER_TEMP "nw11-trust-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}/nw11-bundle-${{ matrix.slug }}-verification.json"
           if (-not (Test-Path -LiteralPath $launcher)) { throw "bundle launcher is missing" }
           $evidenceDirectory = Join-Path $env:RUNNER_TEMP "nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}"
@@ -545,8 +574,9 @@ jobs:
             "-DeviceTier", "${{ matrix.device_tier }}",
             "-OutputDirectory", $evidenceDirectory
           )
-          $process = Start-Process pwsh -ArgumentList $arguments -Wait -PassThru -NoNewWindow
-          $code = $process.ExitCode
+          $PSNativeCommandUseErrorActionPreference = $false
+          & pwsh @arguments
+          $code = $LASTEXITCODE
           if ($code -eq 0) { exit 0 }
           if ($code -eq 3) {
             $files = @(Get-ChildItem -LiteralPath $evidenceDirectory -Recurse -File -Filter "summary.json")
@@ -580,7 +610,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        slug: [mesh, ray-query]
+        slug: ${{ fromJSON(inputs.experiment_id == 'nw11.ray-query-vs-analytic-reflection.v1' && '["ray-query"]' || '["mesh"]') }}
     steps:
       - uses: actions/checkout@v4
         with:

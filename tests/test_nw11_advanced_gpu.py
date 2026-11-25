@@ -495,6 +495,12 @@ def test_nw11_capability_absence_is_explicitly_unsupported() -> None:
     eligible = capability.evaluate_observation(ray, _observation())
     assert eligible["status"] == "eligible"
     assert eligible["satisfies_optional_profile"] is True
+    older = _observation()
+    older["features"]["d3d_feature_level"] = "D3D_FEATURE_LEVEL_11_1"
+    common = capability.profile_manifest_template(contract.COMMON_PROFILE_ID)
+    shortfall = capability.evaluate_observation(common, older)
+    assert shortfall["status"] == "unsupported"
+    assert any(item.get("query_id") == "d3d_feature_level" for item in shortfall["diagnostics"])
 
 
 def test_nw11_derive_profile_emits_the_bundle_schema(tmp_path: Path) -> None:
@@ -782,16 +788,29 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
     both = evidence.aggregate_verified_decisions([decisions, rejected])
     assert [item["status"] for item in both["devices"]] == ["accepted", "rejected"]
     assert both["satisfies_completion"] is False
-    crossed = evidence.aggregate_verified_decisions([decisions, rejected],
-                                                    cross_device_equivalence={"status": "verified"})
-    assert crossed["satisfies_completion"] is False
+    failed = evidence.aggregate_verified_decisions(
+        [decisions, blackwell_decisions], cross_device_equivalence={"status": "failed"})
+    assert failed["aggregate_status"] == "failed"
+    assert [item["status"] for item in failed["devices"]] == ["accepted", "accepted"]
+    assert failed["satisfies_completion"] is False
+    with pytest.raises(evidence.EvidenceError, match="comparison rows"):
+        evidence.aggregate_verified_decisions([decisions, rejected],
+                                             cross_device_equivalence={"status": "verified"})
     for item in (decisions, rejected):
         item["devices"][0]["canonical_release_correctness"] = {"numeric_loop_boundary": {"status": "verified"}}
         item["decision_id"] = evidence.decision_id(item)
-    crossed = evidence.aggregate_verified_decisions(
-        [decisions, rejected], cross_device_equivalence={"status": "verified",
-            "rows": {str(tick): {"maximum_error": 0} for tick in contract.REFERENCE_FIXED_TICKS}})
+    comparison = {"status": "verified", "tolerance": nw07_contract.IMAGE_ABSOLUTE_TOLERANCE,
+                  "rows": {str(tick): {"maximum_error": 0, "maximum_relative_error": 0}
+                           for tick in contract.REFERENCE_FIXED_TICKS}}
+    crossed = evidence.aggregate_verified_decisions([decisions, rejected], cross_device_equivalence=comparison)
     assert crossed["satisfies_completion"] is True
+    for bad_row in (None, {"maximum_error": 1, "maximum_relative_error": 0},
+                    {"maximum_error": 0, "maximum_relative_error": float("inf")},
+                    {"maximum_error": 0}):
+        malformed = copy.deepcopy(comparison)
+        malformed["rows"]["0"] = bad_row
+        with pytest.raises(evidence.EvidenceError, match="comparison"):
+            evidence.validate_decision_document(dict(crossed, cross_device_equivalence=malformed))
 
 
     mismatched = _evidence(
@@ -1988,8 +2007,15 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
         put(folder / "launch.json", {
             **session, **identity, "mode": mode, "role": role, "artifact_path": relative, "command": command,
             "start_filetime": start, "end_filetime": start + 900_000_000,
-            "start_qpc_ms": 0, "end_qpc_ms": 70000, "exit_code": 0,
+            "start_qpc_ms": 50, "end_qpc_ms": 70000, "exit_code": 0,
         })
+        if role in measurements.ROLE_ORDER:
+            def point(begin):
+                return {"start_qpc_ms": begin, "end_qpc_ms": begin + 5,
+                        "observation": observation["host_observation"]}
+            put(folder / "operating-conditions.json",
+                {**identity, "before": point(10), "after": point(70001),
+                 "window": [point(value) for value in (10000, 25000, 40000, 55000)] if mode == "warm" else []})
         ids = manifest["shader_inventory"]["roles"].get(role, [])
         report_identity = {**identity, "process_creation_filetime": start + 1,
                            "tested_commit": COMMIT, "package_sha256": package_sha}
@@ -2015,21 +2041,15 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
             rows.append(f"{identity['process_id']},60000,0,abc,{gpu},NA,NA")
             (folder / "presentmon.csv").write_text("\n".join(rows) + "\n")
 
-    for role, relative in measurements.role_paths(manifest, optional).items():
+    roles = measurements.role_paths(manifest, optional)
+    for role, relative in roles.items():
+        process(output / "raw" / role / "startup", role, relative, "startup")
+    audit_start = 3_950_000_000
+    put(output / "reboot-audit.json", {**session, "collected_by_process_id": 90,
+        "start_filetime": audit_start, "end_filetime": audit_start + 1,
+        "observation": {"unavailable": "No access to audit log"}})
+    for role, relative in roles.items():
         folder = output / "raw" / role
-        process(folder / "startup", role, relative, "startup")
-        prepare = folder / "cache-preparation.json"
-        cache_identity = {"commit": COMMIT, "executable_sha256": contract.sha256_file(root / relative),
-                          "launch_id": f"{sequence + 1000:032x}", "process_id": 999 + sequence}
-        put(prepare, {**cache_identity, "format": "nw11-executable-cache-preparation.v1",
-                      "adapter_luid": observation["adapter"]["adapter_luid"],
-                      "process_creation_filetime": sequence * 1_000_000_000 - 5,
-                      "driver_cache_state": "unverified", "windows_cache_hresult": 0, "driver_hint_hresult": 0})
-        put(folder / "cache-execution.json", {
-            **cache_identity, "artifact_path": relative,
-            "result_sha256": contract.sha256_file(prepare), "exit_code": 0,
-            "start_filetime": sequence * 1_000_000_000 - 10, "end_filetime": sequence * 1_000_000_000 - 1,
-        })
         for index in range(1, 4):
             process(folder / f"run-{index}", role, relative, "warm", has_capture=index == 3)
 
@@ -2041,12 +2061,12 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     for index, tick in enumerate((*contract.REFERENCE_FIXED_TICKS, contract.LOOP_TICKS), 1):
         player_log = release / f"{tick}.log"
         player_log.write_text(f"NW05_EXPLICIT_TICK={tick}\n", encoding="utf-8")
-        trace = release / f"{tick}-present.csv"
-        trace.write_text(f"ProcessID,QPCTime,msUntilDisplayed\n{1000 + index},900,20\n", encoding="utf-8")
+        display = release / f"{tick}-display.json"
+        put(display, {"source": "dwm_composed_client", "process_id": 1000 + index, "observed_qpc_ms": 920})
         put(release / f"{tick}-execution.json", {
-            "trace_sha256": contract.sha256_file(trace), "process_started_qpc_ms": 100,
-            "capture_started_qpc_ms": 925,
-            "first_presentation": {"submitted_qpc_ms": 900, "displayed_qpc_ms": 920},
+            "display_observation_sha256": contract.sha256_file(display), "process_started_qpc_ms": 100,
+            "capture_probe_sha256": probe_sha,
+            "reference_sha256": contract.sha256_file(output / "canonical-reference" / f"{tick}.rgba"),
             "player_log_sha256": contract.sha256_file(player_log),
             **session, "executable_sha256": contract.sha256_file(root / "bin/canonical_release.exe"),
             "process_id": 1000 + index, "tick": tick, "start_filetime": 2000 + index,
@@ -2070,9 +2090,55 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     assert decision["devices"][0]["canonical_release_correctness"]["numeric_loop_boundary"]["status"] == "verified"
     assert not decision["satisfies_completion"]
 
+    audit_path = output / "reboot-audit.json"
+    audit = measurements.load_json(audit_path)
+    boot = 400_000_000
+    audit["observation"] = {
+        "boot_type": "0", "boot_record": 3, "boot_time": boot, "system_started": boot,
+        "oldest_security": boot - 100, "previous_process_audit": boot - 10, "disruptions": [],
+        "process_creation_audit_flags": 1,
+        "launches": [],
+    }
+    for index, role in enumerate(roles, 1):
+        launch = measurements.load_json(output / "raw" / role / "startup/launch.json")
+        audit["observation"]["launches"].append({
+            "record_id": index * 12, "time": launch["start_filetime"] + 1,
+            "path": launch["command"][0], "pid": hex(launch["process_id"]),
+        })
+    put(audit_path, audit)
+    cold = measurements.collect(root, manifest, output, "evidence.json")
+    assert [run["measurement"]["cold_initialization_ms"] for run in cold["runs"]] == [900] * 3
+    put(output / "evidence.json", cold)
+    assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
+
+    first = audit["observation"]["launches"][0]
+    audit["observation"]["launches"].append(dict(first, record_id=1, time=boot + 100, pid="0xbeef"))
+    put(audit_path, audit)
+    pre_run = measurements.collect(root, manifest, output, "evidence.json")
+    assert pre_run["runs"][0]["measurement"]["cold_initialization_ms"] is None
+    audit["observation"]["launches"].pop()
+    put(audit_path, audit)
+
+    settings_path = output / "raw/variant/run-2/operating-conditions.json"
+    original = measurements.load_json(settings_path)
+    settings = copy.deepcopy(original)
+    settings["window"][1]["observation"]["power_plan"] = "Power Scheme GUID: 12345678-1234-1234-1234-123456789abc"
+    settings["window"][1]["observation"]["nvidia_smi_xml"] = (
+        settings["window"][1]["observation"]["nvidia_smi_xml"].replace("165 W", "150 W"))
+    put(settings_path, settings)
+    changed = measurements.collect(root, manifest, output, "evidence.json")
+    telemetry = changed["runs"][1]["measurement"]["operating_conditions"][2]
+    assert telemetry["status"] == "pending"
+    assert set(telemetry["reasons"]) == {"windows_power_plan changed after preflight",
+                                         "GPU enforced power limit changed after preflight"}
+    assert telemetry["samples"][2]["environment"]["temperature_c"] == 38
+    put(output / "evidence.json", changed)
+    assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_PENDING
+    put(settings_path, original)
+
     # Editing only the derived aggregate must not change a decision.
-    record["runs"][0]["measurement"]["process_runs"][0]["gpu_time_samples"][0] = 3
-    put(output / "evidence.json", record)
+    cold["runs"][0]["measurement"]["process_runs"][0]["gpu_time_samples"][0] = 3
+    put(output / "evidence.json", cold)
     assert verify.main(arguments) == verify.EXIT_MALFORMED
     # Reusing an earlier launch under a new role-run path also fails raw regeneration.
     role = output / "raw" / "baseline"

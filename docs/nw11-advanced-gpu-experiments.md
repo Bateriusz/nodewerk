@@ -306,11 +306,11 @@ carries the canonical NW-07 production contract, so the bundle binds the
 actual toolchain, shader payloads, dependencies, and production contract rather
 than restating static profile values.
 
-Hosted Windows CI also runs the common baseline on the software adapter through
-the real D3D12 command list and presentation path, with a short warm-up and
-sample loop, so descriptor-heap binding, `ExecuteIndirect`, post-processing,
-resource transitions, timestamp queries, and swap-chain presentation are
-exercised before physical evidence is requested.
+Hosted Windows CI runs headless WARP checks for descriptor heaps, draw and
+dispatch commands, resource transitions, and GPU timestamps. The separate
+windowed WARP regression runs the common baseline and requires a successful
+swap-chain Present and a CPU-submission sample. The physical workflow tests
+the one-frame canonical release and its composed desktop capture.
 
 The bundle manifest also enforces zero-cost stripping:
 
@@ -327,9 +327,9 @@ the entire 1920×1080 client area at native scale. The release capture reads the
 visible window, and desktop overlays or occlusion affect the comparison.
 
 From the authenticated GitHub Actions run for the tested commit, download the
-validation bundle and its separate `nw11-validation-trust-*` artifact. Get
-`tools/nw11/run-validation.ps1` from the same commit through the authenticated
-repository and run that copy as the bootstrap.
+validation bundle and its separate `nw11-validation-trust-*` artifact. Run
+the launcher from the trust artifact, which also contains the verification
+record. Hosted CI exercises these downloaded files from paths containing spaces.
 
 ```powershell
 pwsh -NoProfile -File C:\trusted\run-validation.ps1 -BundleRoot C:\validation\bundle -TrustRecord C:\trusted\nw11-bundle-mesh-verification.json
@@ -344,9 +344,12 @@ performance state and power limit, and the observed clocks and temperature.
 The launcher reads these values using Windows inbox tools and the installed
 NVIDIA driver's `nvidia-smi.exe` and `nvapi64.dll`. These driver components
 carry zero distributed bytes and are used only during physical validation.
-A different power mode on the baseline and variant leaves the matched
-optional result pending. Observations with a detected hypervisor remain pending by this
-launcher. Use `-DeviceTier` to assert the expected board on an assigned runner.
+The launcher collects operating conditions before and after each renderer,
+and four times inside each warm measurement window. The collected files retain
+core and memory clocks, GPU temperature, power state, and configured controls
+with process and executable identities. A change in required controls or
+unavailable telemetry leaves the optional result pending. Physical coverage
+also remains pending when the launcher detects a hypervisor. Use `-DeviceTier` to assert the expected board on an assigned runner.
 Preflight checks Windows build 22631 or later, the NVIDIA driver floor of
 610.88, inbox runtime versions, and the queried capabilities, including
 production format support. [NVIDIA board IDs](https://download.nvidia.com/XFree86/Linux-x86_64/615.78.08/README/supportedchips.html)
@@ -358,14 +361,17 @@ Each invocation writes a fresh evidence directory containing the probe snapshot,
 raw reports, presentation traces, capture pixels, `evidence.json`,
 `decisions.json`, and a short `summary.txt`.
 
-The executable measured for startup issues its own D3D12 cache-clear requests
-in a preceding, separately bound invocation. The verifier records the
-executable-local Windows result and the driver-managed hint independently.
-The hint cannot establish driver cache state, so startup observations remain
-unqualified and cold coverage stays pending until the cache state can be
-established. Warm measurements run in three fresh 60-second uncapped processes
-with a five-second warm-up each.
-[Microsoft shader cache specification](https://microsoft.github.io/DirectX-Specs/d3d/ShaderCache.html)
+Cold startup uses the NW-07 full-reboot preparation. Enable successful
+Windows Audit Process Creation on the validation host before restarting.
+Use Restart, then run the launcher before starting any renderer for the
+bundle. The launcher reads the Kernel-Boot and Security logs and verifies
+continuous audit coverage and first use of each exact executable since the
+reboot. It needs permission to read the Security log and query the system
+audit policy. Incomplete audit
+coverage, a prior launch, or an unverified boot leaves cold startup pending.
+The launcher runs each cold process before any warm process. Warm
+measurements use three fresh 60-second uncapped processes with a five-second
+warm-up each. [Microsoft Audit Process Creation](https://learn.microsoft.com/windows/security/threat-protection/auditing/audit-process-creation)
 
 The per-process windows bind production CPU command-recording and submission
 samples through DXGI Present with PresentMon GPU frame times and displayed intervals. Dropped
@@ -377,10 +383,15 @@ in every run. The Blackwell comparison uses its own matched measurements.
 
 The canonical correctness check launches the exact NW-07 release executable
 covered by the byte-equivalence proof. It uses the release fixed-tick
-`--tick N --frames 1` interface and waits for the target's first displayed
-presentation before the bounded external desktop capture. It compares
-the normalized SDR presentation bytes with a separately linked NW-07 package
-reference. It checks the numeric scene state and retained pixels at the
+`--tick N --frames 1` interface. The capture probe uses a DWM composition
+flush and the visible foreground client pixels to observe the held frame within
+the startup ceiling. It recognizes the scene using sample pixels and records
+the target PID and observation timestamp. The verifier checks the complete
+normalized SDR frame against a separately linked NW-07 package reference and
+checks the release's successful fixed-tick marker.
+[Microsoft DwmFlush](https://learn.microsoft.com/windows/win32/api/dwmapi/nf-dwmapi-dwmflush)
+
+The verifier checks the numeric scene state and retained pixels at the
 `0 / 960000` loop boundary under the NW-07 tolerances. Optional arm comparisons
 retain the RGBA32F production readback. The verifier recomputes the comparisons
 from the bound pixels, including the Ada and Blackwell release captures at the
@@ -420,8 +431,9 @@ tracked `evidence-status.v1.json` keeps physical evidence
 implementation is verified by pytest and does not substitute for physical
 evidence.
 
-After ordinary CI is green, collect both devices for each experiment from
-the same tested bundle. Pass `--evidence` twice to the bundled verifier's
+After ordinary CI is green, restart both audited hosts and dispatch one
+experiment for both devices from the same tested bundle. Repeat the restart
+and dispatch for the other experiment. Pass `--evidence` twice to the bundled verifier's
 `evidence` command and use `--require-complete` when generating the aggregate.
 The verifier reopens each record's raw evidence, derives the matching device
 and environment, and binds the two evidence-file hashes to the bundle. It
