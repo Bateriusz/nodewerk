@@ -323,7 +323,7 @@ jobs:
         run: |
           foreach ($name in @("nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic")) {
             $reportPath = "build/$name-warp-smoke.json"
-            & "build/nw11-artifacts/$name.exe" --allow-software --benchmark-json $reportPath --warmup-seconds 0 --runs 1 --run-seconds 1
+            & "build/nw11-artifacts/$name.exe" --allow-software --headless --benchmark-json $reportPath --warmup-seconds 0 --runs 1 --run-seconds 1
             if ($LASTEXITCODE -ne 0) { throw "$name WARP command-path smoke failed" }
             $report = Get-Content $reportPath -Raw | ConvertFrom-Json
             if ($report.measurement.gpu_time_samples.Count -lt 1) {
@@ -336,7 +336,7 @@ jobs:
         run: |
           foreach ($name in @("nw11_optional_mesh", "nw11_optional_ray")) {
             $report = "build/$name-warp-smoke.json"
-            & "build/nw11-artifacts/$name.exe" --allow-software --benchmark-json $report --warmup-seconds 0 --runs 1 --run-seconds 1
+            & "build/nw11-artifacts/$name.exe" --allow-software --headless --benchmark-json $report --warmup-seconds 0 --runs 1 --run-seconds 1
             $code = $LASTEXITCODE
             if ($code -eq 3) {
               if (Test-Path $report) { throw "$name produced samples on an unsupported path" }
