@@ -13,6 +13,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
+import hardware_evidence_host as hardware_host  # noqa: E402
 import nw07_contract  # noqa: E402
 import nw07_export  # noqa: E402
 import nw11_bundle as bundle  # noqa: E402
@@ -80,6 +81,20 @@ def _host_observation(device_id: int = 0x2805, *, hypervisor: bool = False) -> d
                            "TotalPhysicalMemory": 32 * 1024**3, "NumberOfLogicalProcessors": 16},
                 "processor": [{"Name": "Desktop CPU", "NumberOfCores": 8}],
                 "motherboard": [{"Manufacturer": "Example", "Product": "Desktop board"}]},
+        "virtualization_probe": {
+            "available": True,
+            "manufacturer": "Example Computers",
+            "model": "Desktop",
+            "product_vendor": "Example Computers",
+            "product_name": "Example Desktop",
+            "bios_manufacturer": "Example Firmware",
+            "bios_version": "1.0",
+            "baseboard_manufacturer": "Example",
+            "baseboard_product": "Desktop board",
+            "hypervisor_present": hypervisor,
+            "virtualization_based_security_status": 2 if hypervisor else 0,
+            "error": "",
+        },
         "power_plan": "Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
         "pcie_power": "Current AC setting: 0x00000000\nCurrent DC setting: 0x00000000",
         "nvidia_power_profiles": {name: {"value": 1, "location": 1} for name in MEASURED_APPLICATIONS},
@@ -562,6 +577,7 @@ def test_nw11_physical_tier_and_environment_bind_host_provenance(tmp_path: Path)
     assert hypervisor["physical_provenance"]["execution_environment"]["hypervisor_present"] is True
     assert hypervisor["physical_provenance"]["execution_environment"]["gpu_virtualization_mode"] == "None"
     observation["host_observation"]["cim"]["system"]["Manufacturer"] = "VMware, Inc."
+    observation["host_observation"]["virtualization_probe"]["manufacturer"] = "VMware, Inc."
     virtual_machine = capability.evaluate_observation(profile, observation)
     assert virtual_machine["physical_device_tier"] is None
     assert virtual_machine["status"] == "eligible"  # Capabilities and coverage are independent.
@@ -586,6 +602,7 @@ def test_nw11_bundle_is_deterministic_and_self_contained(tmp_path: Path) -> None
         "manifests/capability-profile.json",
         "manifests/experiment.json",
         "tools/nw11/nw11_verify.py",
+        "tools/nw11/hardware_evidence_host.py",
         "tools/nw11/collect-evidence.py",
     ):
         assert required in paths
@@ -944,6 +961,15 @@ def test_nw11_runtime_floors_and_future_dxr_tier() -> None:
     assert capability.evaluate_observation(ray, observation)["status"] == "unsupported"
 
 
+def test_nw11_host_requires_vbs_to_explain_active_hypervisor() -> None:
+    raw = _host_observation(hypervisor=True)
+    raw["virtualization_probe"]["virtualization_based_security_status"] = 0
+    qualified = host.qualify(
+        raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE}
+    )
+    assert qualified is None
+
+
 def test_nw11_host_accepts_nvidia_pci_ids_without_0x_prefix() -> None:
     raw = _host_observation(hypervisor=True)
     raw["nvidia_smi_xml"] = raw["nvidia_smi_xml"].replace("<pci_device_id>0x", "<pci_device_id>")
@@ -954,9 +980,9 @@ def test_nw11_host_accepts_nvidia_pci_ids_without_0x_prefix() -> None:
 
 
 def test_nw11_host_output_decoding_is_independent_of_cp1250(monkeypatch) -> None:
-    monkeypatch.setattr(host, "_windows_code_pages", lambda: ("cp852", "cp1250"))
+    monkeypatch.setattr(hardware_host, "_windows_code_pages", lambda: ("cp852", "cp1250"))
     payload = b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c " + bytes([0x98])
-    decoded = host._decode_process_output(payload)
+    decoded = hardware_host.decode_windows_output(payload)
     assert decoded.endswith("ś")
 
 
