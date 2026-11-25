@@ -940,7 +940,7 @@ def test_nw11_runtime_floors_and_future_dxr_tier() -> None:
 
 def test_nw11_host_output_decoding_is_independent_of_cp1250(monkeypatch) -> None:
     monkeypatch.setattr(host, "_windows_code_pages", lambda: ("cp852", "cp1250"))
-    payload = b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c \\x98"
+    payload = b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c " + bytes([0x98])
     decoded = host._decode_process_output(payload)
     assert decoded.endswith("ś")
 
